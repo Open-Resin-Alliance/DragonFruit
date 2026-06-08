@@ -626,7 +626,7 @@ export function TopBar({
 
   return (
     <div
-      className="ui-topbar fixed top-0 left-0 right-0 z-50 flex items-center relative"
+      className="ui-topbar px-2 xl:px-4 fixed top-0 left-0 right-0 z-50 flex items-center relative"
       onMouseDownCapture={handleTopBarPointerDown}
     >
       <div
@@ -665,7 +665,7 @@ export function TopBar({
         </button>
 
         <div
-          className="h-6 w-px mx-0.5 shrink-0"
+          className="h-6 w-px mx-0 shrink-0 hidden xl:block"
           style={{ background: 'color-mix(in srgb, var(--border-subtle), transparent 24%)' }}
           aria-hidden="true"
         />
@@ -685,7 +685,7 @@ export function TopBar({
             }
             requestOpenProfileSettings('printer');
           }}
-          className="group inline-flex h-10 max-w-[300px] items-center gap-2 rounded-md px-2 transition-colors"
+          className="group inline-flex h-10 max-w-[300px] items-center gap-2 rounded-md xl:px-2 transition-colors"
           style={{
             background: 'transparent',
           }}
@@ -925,7 +925,7 @@ export function TopBar({
 
       <div className="pointer-events-none absolute inset-x-0 flex justify-center px-2">
         <div
-          className={`relative w-full max-w-[760px] transition-opacity ${topbarActionsDisabled ? 'opacity-45' : ''}`}
+          className={`relative max-w-[760px] transition-opacity ${topbarActionsDisabled ? 'opacity-45' : ''}`}
           aria-disabled={topbarActionsDisabled}
         >
           <div
@@ -933,7 +933,7 @@ export function TopBar({
             style={{ background: 'color-mix(in srgb, var(--border-subtle), transparent 10%)' }}
           />
 
-          <div className={`relative grid grid-cols-5 gap-2 ${topbarActionsDisabled ? 'pointer-events-none' : 'pointer-events-auto'}`}>
+          <div className={`relative grid grid-cols-5 gap-1 xl:gap-2 ${topbarActionsDisabled ? 'pointer-events-none' : 'pointer-events-auto'}`}>
             {steps.map((item) => {
               const active = mode === item.mode;
               const locked = item.locked;
@@ -953,7 +953,7 @@ export function TopBar({
                   }}
                   disabled={nativeDisabled}
                   aria-disabled={disabled}
-                  className={`group relative flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 transition-all duration-180 ${
+                  className={`group relative flex cursor-pointer items-center gap-2 rounded-lg border px-1 xl:px-2.5 py-2 transition-all duration-180 ${
                     active
                       ? 'shadow-[0_6px_16px_rgba(0,0,0,0.25)]'
                       : 'hover:-translate-y-[1px] hover:shadow-[0_6px_14px_rgba(0,0,0,0.18)]'
@@ -1037,7 +1037,7 @@ export function TopBar({
       </div>
 
       <div className="ml-auto flex w-[320px] items-center justify-end gap-2 pr-2">
-        <div className={`flex items-center gap-2 transition-opacity ${topbarActionsDisabled ? 'opacity-45 pointer-events-none' : ''}`}>
+        <div className={`flex items-center gap-1 xl:gap-2 transition-opacity ${topbarActionsDisabled ? 'opacity-45 pointer-events-none' : ''}`}>
           {showLayoutWarning && (
             <div className="relative group" data-no-window-drag="true">
               <Button
