@@ -815,7 +815,6 @@ if (uDitherAmount > 0.0) {
           else if (actualMeshRef) (actualMeshRef as React.MutableRefObject<THREE.Mesh | null>).current = node;
           if (node) applyRaycastDisabledState();
         }}
-        visible={!(interiorView && cavityGeometry)}
         userData={{ modelId, thumbnailTintTarget: 'modelMesh' }}
         geometry={geometry}
         position={meshLocalOffset}
@@ -858,15 +857,20 @@ if (uDitherAmount > 0.0) {
             }
 
             let clickHit: THREE.Intersection = e as unknown as THREE.Intersection;
-            if (
+            const isClippedHit =
               (clipUpper != null && e.point.z > clipUpper) ||
-              (clipLower != null && e.point.z < clipLower)
-            ) {
-              const fallback = findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
+              (clipLower != null && e.point.z < clipLower);
+            if (isClippedHit || (interiorView && cavityGeometry)) {
+              const fallback = findClipAwareHit(
+                e.ray, e.object,
+                interiorView && cavityGeometry ? null : clipLower,
+                interiorView && cavityGeometry ? null : clipUpper,
+                e.distance,
+              );
               if (!fallback) return;
               clickHit = fallback;
             }
-            e.stopPropagation();
+            if (!isClippedHit) e.stopPropagation();
             onHolePunchClick(clickHit);
             return;
           }
@@ -913,13 +917,16 @@ if (uDitherAmount > 0.0) {
             }
 
             let clickHit: THREE.Intersection = e as unknown as THREE.Intersection;
-            if (
+            const isClippedHit =
               (clipUpper != null && e.point.z > clipUpper) ||
-              (clipLower != null && e.point.z < clipLower)
-            ) {
-              // Primary hit is in the clipped (hidden) zone. Cast directly
-              // against this mesh to find the nearest visible-zone hit.
-              const fallback = findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
+              (clipLower != null && e.point.z < clipLower);
+            if (isClippedHit || (interiorView && cavityGeometry)) {
+              const fallback = findClipAwareHit(
+                e.ray, e.object,
+                interiorView && cavityGeometry ? null : clipLower,
+                interiorView && cavityGeometry ? null : clipUpper,
+                e.distance,
+              );
               if (!fallback) return;
               clickHit = fallback;
             }
@@ -1008,6 +1015,7 @@ if (uDitherAmount > 0.0) {
             e.stopPropagation();
           }
 
+          const interiorViewRedirect = interiorView && cavityGeometry;
           if (primaryInClippedZone) {
             // Primary hit is invisible — suppress model hover highlight but
             // continue to the placement-preview section below.
@@ -1015,6 +1023,13 @@ if (uDitherAmount > 0.0) {
             onModelHoverPointChange?.(null);
             onModelHoverModelChange?.(null);
             emitImmediateModelHover(null);
+          } else if (interiorViewRedirect) {
+            // Interior View: redirect hover to the cavity surface behind the X-Ray front face
+            if (!hasExternalHoverSource) schedulePointerHover(true);
+            onModelHoverModelChange?.(modelId);
+            emitImmediateModelHover(modelId);
+            const interiorHit = findClipAwareHit(e.ray, e.object, null, null, e.distance);
+            onModelHoverPointChange?.(interiorHit?.point.clone() ?? e.point.clone());
           } else {
             if (!hasExternalHoverSource) schedulePointerHover(true);
             onModelHoverPointChange?.(e.point.clone());
@@ -1027,6 +1042,8 @@ if (uDitherAmount > 0.0) {
             if (primaryInClippedZone) {
               const fallback = findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
               hoverHit = fallback ?? null;
+            } else if (interiorViewRedirect) {
+              hoverHit = findClipAwareHit(e.ray, e.object, null, null, e.distance) ?? null;
             }
             onHolePunchHover(hoverHit);
           }
@@ -1071,15 +1088,17 @@ if (uDitherAmount > 0.0) {
             }
 
             let hoverHit: THREE.Intersection = e as unknown as THREE.Intersection;
-            if (
+            const isClippedHit =
               (clipUpper != null && e.point.z > clipUpper) ||
-              (clipLower != null && e.point.z < clipLower)
-            ) {
-              // Primary hit is in the clipped (hidden) zone. Cast directly
-              // against this mesh to find the nearest visible-zone hit.
-              // (R3F + BVH may only provide one intersection per mesh via
-              // firstHitOnly, so we cannot rely on e.intersections here.)
-              const fallback = findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
+              (clipLower != null && e.point.z < clipLower);
+            if (isClippedHit || (interiorView && cavityGeometry)) {
+              // Redirect to interior surface (cross-section clip zone or interior view)
+              const fallback = findClipAwareHit(
+                e.ray, e.object,
+                interiorView && cavityGeometry ? null : clipLower,
+                interiorView && cavityGeometry ? null : clipUpper,
+                e.distance,
+              );
               if (!fallback) {
                 onSupportHover(null);
                 return;
@@ -1180,7 +1199,19 @@ if (uDitherAmount > 0.0) {
           }
         }}
       >
-        {typeof revealGhostOpacity === 'number' ? (
+        {interiorView && cavityGeometry ? (
+          <meshStandardMaterial
+            color={meshColor ?? '#c8c8ce'}
+            transparent
+            opacity={0.12}
+            roughness={0.55}
+            metalness={0.02}
+            clippingPlanes={planes}
+            side={THREE.FrontSide}
+            depthWrite={false}
+            depthTest={true}
+          />
+        ) : typeof revealGhostOpacity === 'number' ? (
           <meshStandardMaterial
             color={meshColor ?? '#c8c8ce'}
             transparent
@@ -1216,25 +1247,11 @@ if (uDitherAmount > 0.0) {
         )}
       </mesh>
 
-      {/* ── Interior View Mode: x-ray original + solid cavity ── */}
+      {/* ── Interior View Mode: cavity shell visual-only ── */}
       {interiorView && cavityGeometry && (
         <>
-          {/* X-Ray original model: transparent, non-accumulating alpha */}
-          <mesh geometry={geometry} position={meshLocalOffset} renderOrder={0} raycast={() => null}>
-            <meshStandardMaterial
-              color={meshColor ?? '#c8c8ce'}
-              transparent
-              opacity={0.12}
-              roughness={0.55}
-              metalness={0.02}
-              clippingPlanes={planes}
-              side={THREE.FrontSide}
-              depthWrite={false}
-              depthTest={true}
-            />
-          </mesh>
-          {/* Cavity interior: rendered with user's shader */}
-          <mesh geometry={cavityGeometry} position={meshLocalOffset} renderOrder={1}>
+          {/* Cavity interior rendered with user's shader — visual-only, main mesh handles interaction */}
+          <mesh geometry={cavityGeometry} position={meshLocalOffset} renderOrder={1} raycast={() => null}>
             <MeshShaderMaterial
               shaderType={baseShaderType}
               isSelected={!!isSelected}
