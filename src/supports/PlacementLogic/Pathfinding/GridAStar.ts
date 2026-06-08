@@ -50,7 +50,7 @@ export interface GridAStarOptions {
      * but the roots volume at that XY may intersect the mesh. The validator
      * rejects those positions so the A* keeps searching.
      */
-    goalValidator?: (wx: number, wy: number, wz: number) => boolean;
+    goalValidator?: (wx: number, wy: number, wz: number, parentPos: Vec3 | null) => boolean;
     /**
      * When true, each neighbor edge collision check uses `sdf.isBlocked` on
      * the endpoint cell only instead of the full `sdf.segmentBlocked` sweep.
@@ -71,6 +71,10 @@ export interface GridAStarOptions {
      * Acceptable for hover preview — click-time always uses full resolution.
      */
     endpointOnlyCollisionCheck?: boolean;
+    /** Optional label used by the pathfinding debug overlay. */
+    debugLabel?: string;
+    /** When true, capture expanded/frontier/path snapshots for the debug overlay. */
+    captureDebug?: boolean;
 }
 
 export interface GridAStarResult {
@@ -88,6 +92,8 @@ export interface GridAStarResult {
     hitExpansionLimit: boolean;
     /** Reusable warm-start state for the next frame. */
     warmState: WarmStartState | null;
+    /** Optional debug snapshot of the explored cells and solved path. */
+    debug?: GridAStarDebugSnapshot;
 }
 
 export interface WarmStartState {
@@ -99,6 +105,19 @@ export interface WarmStartState {
     cameFrom: Map<number, number>;
 }
 
+export interface GridAStarDebugSnapshot {
+    label: string;
+    searchStepMm: number;
+    expansions: number;
+    reached: boolean;
+    stagnated: boolean;
+    hitExpansionLimit: boolean;
+    expandedNodes: Vec3[];
+    frontierNodes: Vec3[];
+    rawPath: Vec3[];
+    simplifiedPath: Vec3[];
+}
+
 // ---------- Internal ----------
 
 interface AStarEntry {
@@ -108,6 +127,12 @@ interface AStarEntry {
     z: number;
     f: number; // g + h
     g: number;
+}
+
+interface NodeRuntimeState {
+    g: number;
+    cameFrom?: number;
+    closed: boolean;
 }
 
 interface NeighborRuntime {
@@ -188,6 +213,84 @@ function heapPop(heap: AStarEntry[]): AStarEntry | undefined {
     return top;
 }
 
+type HeapCompare = (a: AStarEntry, b: AStarEntry) => number;
+
+function heapSwap(heap: AStarEntry[], heapIndexByKey: Map<number, number>, i: number, j: number): void {
+    const a = heap[i];
+    const b = heap[j];
+    heap[i] = b;
+    heap[j] = a;
+    heapIndexByKey.set(a.key, j);
+    heapIndexByKey.set(b.key, i);
+}
+
+function heapSiftUp(heap: AStarEntry[], heapIndexByKey: Map<number, number>, startIndex: number, compare: HeapCompare): void {
+    let i = startIndex;
+    while (i > 0) {
+        const pi = (i - 1) >> 1;
+        if (compare(heap[pi], heap[i]) <= 0) break;
+        heapSwap(heap, heapIndexByKey, pi, i);
+        i = pi;
+    }
+}
+
+function heapSiftDown(heap: AStarEntry[], heapIndexByKey: Map<number, number>, startIndex: number, compare: HeapCompare): void {
+    let i = startIndex;
+    const len = heap.length;
+    while (true) {
+        const l = i * 2 + 1;
+        const r = l + 1;
+        let smallest = i;
+        if (l < len && compare(heap[l], heap[smallest]) < 0) smallest = l;
+        if (r < len && compare(heap[r], heap[smallest]) < 0) smallest = r;
+        if (smallest === i) break;
+        heapSwap(heap, heapIndexByKey, i, smallest);
+        i = smallest;
+    }
+}
+
+function heapPushOrUpdate(
+    heap: AStarEntry[],
+    heapIndexByKey: Map<number, number>,
+    entry: AStarEntry,
+    compare: HeapCompare,
+): void {
+    const existingIndex = heapIndexByKey.get(entry.key);
+    if (existingIndex !== undefined) {
+        const existing = heap[existingIndex];
+        if (compare(entry, existing) >= 0) {
+            return;
+        }
+        heap[existingIndex] = entry;
+        heapIndexByKey.set(entry.key, existingIndex);
+        heapSiftUp(heap, heapIndexByKey, existingIndex, compare);
+        heapSiftDown(heap, heapIndexByKey, heapIndexByKey.get(entry.key)!, compare);
+        return;
+    }
+
+    heap.push(entry);
+    const index = heap.length - 1;
+    heapIndexByKey.set(entry.key, index);
+    heapSiftUp(heap, heapIndexByKey, index, compare);
+}
+
+function heapPopIndexed(heap: AStarEntry[], heapIndexByKey: Map<number, number>, compare: HeapCompare): AStarEntry | undefined {
+    if (heap.length === 0) return undefined;
+    const top = heap[0];
+    heapIndexByKey.delete(top.key);
+
+    if (heap.length === 1) {
+        heap.pop();
+        return top;
+    }
+
+    const last = heap.pop()!;
+    heap[0] = last;
+    heapIndexByKey.set(last.key, 0);
+    heapSiftDown(heap, heapIndexByKey, 0, compare);
+    return top;
+}
+
 // ---------- Heuristic ----------
 
 /** Octile-distance heuristic in 3D (admissible for 26-connected grids). */
@@ -232,12 +335,14 @@ export function gridAStar(
     const occupancy = opts.occupancy;
     const ignoreSupportId = opts.ignoreSupportId;
     const endpointOnlyCollisionCheck = !!opts.endpointOnlyCollisionCheck;
+    const captureDebug = !!opts.captureDebug;
 
     // Angle constraint: minimum angle from vertical in degrees
     // Converted to maximum lateral-per-vertical ratio
     const minAngleFromVertDeg = opts.minAngleFromVerticalDeg ?? 15;
     const maxLateralPerDrop = Math.tan((minAngleFromVertDeg * Math.PI) / 180);
     const goalValidator = opts.goalValidator;
+    const goalPlaneHeuristic = (qz: number): number => Math.max(0, qz - gqz) * step;
 
     // Per-neighbor static costs (independent of node position).
     const neighborStaticCosts = new Array<number>(NEIGHBOR_RUNTIME.length);
@@ -264,6 +369,17 @@ export function gridAStar(
     const maxClimbCells = Math.max(5, Math.ceil(20 / step)); // up to ~20mm above start
 
     const q = (v: number) => Math.round(v * invStep);
+    const compareHeapEntries: HeapCompare = (a, b) => {
+        const fDiff = a.f - b.f;
+        if (Math.abs(fDiff) > 1e-12) return fDiff;
+
+        const zDiff = a.z - b.z;
+        if (zDiff !== 0) return zDiff;
+
+        const aLatSq = (a.x - sqx) * (a.x - sqx) + (a.y - sqy) * (a.y - sqy);
+        const bLatSq = (b.x - sqx) * (b.x - sqx) + (b.y - sqy) * (b.y - sqy);
+        return aLatSq - bLatSq;
+    };
 
     // Quantized start / goal
     const sqx = q(startPos.x);
@@ -273,9 +389,8 @@ export function gridAStar(
 
     // ---- Warm-start or fresh ----
     let openSet: AStarEntry[];
-    const gScore: Map<number, number> = new Map();
-    const cameFrom: Map<number, number> = new Map();
-    const closedSet = new Set<number>();
+    const openSetIndexByKey = new Map<number, number>();
+    const nodeState = new Map<number, NodeRuntimeState>();
 
     const canWarmStart = warmStart &&
         Math.abs(warmStart.socketPos.x - startPos.x) < step * 2 &&
@@ -284,29 +399,104 @@ export function gridAStar(
 
     if (canWarmStart && warmStart) {
         // Re-seed from previous search state
-        openSet = [...warmStart.openEntries];
-        for (const [k, v] of warmStart.gScores) gScore.set(k, v);
-        for (const [k, v] of warmStart.cameFrom) cameFrom.set(k, v);
+        openSet = [];
+        for (const [k, v] of warmStart.gScores) {
+            const existing = nodeState.get(k);
+            if (existing) {
+                existing.g = v;
+            } else {
+                nodeState.set(k, { g: v, closed: false });
+            }
+        }
+        for (const [k, v] of warmStart.cameFrom) {
+            const existing = nodeState.get(k);
+            if (existing) {
+                existing.cameFrom = v;
+            } else {
+                nodeState.set(k, { g: Infinity, cameFrom: v, closed: false });
+            }
+        }
+        for (const entry of warmStart.openEntries) {
+            heapPushOrUpdate(openSet, openSetIndexByKey, entry, compareHeapEntries);
+        }
     } else {
         const startKey = cellKeyInt(sqx, sqy, sqz);
-        const h = Math.max(0, sqz - gqz); // pure vertical heuristic
+        const h = goalPlaneHeuristic(sqz);
         openSet = [];
-        heapPush(openSet, { key: startKey, x: sqx, y: sqy, z: sqz, g: 0, f: h });
-        gScore.set(startKey, 0);
+        heapPushOrUpdate(openSet, openSetIndexByKey, { key: startKey, x: sqx, y: sqy, z: sqz, g: 0, f: h }, compareHeapEntries);
+        nodeState.set(startKey, { g: 0, closed: false });
     }
 
     let expansions = 0;
     let goalEntry: AStarEntry | null = null;
+    const debugExpandedNodes: Vec3[] = [];
+    const edgeBlockedCache = new Map<number, Map<number, boolean>>();
+    const nodeDistanceCache = new Map<number, number>();
+    const occupancyCache = new Map<number, boolean>();
 
     const STAGNATION_LIMIT = 600;
     let bestZReached = sqz;
     let lastZProgressAt = 0;
 
+    function decodeKey(key: number): { x: number; y: number; z: number } {
+        const uz = key % 0x8000;
+        const rem = (key - uz) / 0x8000;
+        const uy = rem % 0x8000;
+        const ux = (rem - uy) / 0x8000;
+        return { x: ux - 0x4000, y: uy - 0x4000, z: uz - 0x4000 };
+    }
+
+    function getNodeDistance(key: number, wx: number, wy: number, wz: number): number {
+        const cached = nodeDistanceCache.get(key);
+        if (cached !== undefined) return cached;
+        const distance = sdf.distanceAt(wx, wy, wz);
+        nodeDistanceCache.set(key, distance);
+        return distance;
+    }
+
+    function getEdgeBlocked(
+        aKey: number,
+        bKey: number,
+        compute: () => boolean,
+    ): boolean {
+        const lowKey = aKey < bKey ? aKey : bKey;
+        const highKey = aKey < bKey ? bKey : aKey;
+        let highMap = edgeBlockedCache.get(lowKey);
+        if (!highMap) {
+            highMap = new Map<number, boolean>();
+            edgeBlockedCache.set(lowKey, highMap);
+        } else {
+            const cached = highMap.get(highKey);
+            if (cached !== undefined) return cached;
+        }
+        const blocked = compute();
+        highMap.set(highKey, blocked);
+        return blocked;
+    }
+
+    function getNodeOccupied(key: number, wx: number, wy: number, wz: number): boolean {
+        const cached = occupancyCache.get(key);
+        if (cached !== undefined) return cached;
+        const occupied = occupancy ? occupancy.isOccupied(wx, wy, wz, ignoreSupportId) : false;
+        occupancyCache.set(key, occupied);
+        return occupied;
+    }
+
     while (openSet.length > 0 && expansions < maxExp) {
-        const current = heapPop(openSet)!;
-        if (closedSet.has(current.key)) continue;
-        closedSet.add(current.key);
+        const current = heapPopIndexed(openSet, openSetIndexByKey, compareHeapEntries)!;
+        const currentState = nodeState.get(current.key);
+        if (!currentState) continue;
+        if (current.g > currentState.g) continue;
+        if (currentState.closed) continue;
+        currentState.closed = true;
         expansions++;
+        if (captureDebug) {
+            debugExpandedNodes.push({
+                x: current.x * step,
+                y: current.y * step,
+                z: current.z * step,
+            });
+        }
 
         if (current.z < bestZReached) {
             bestZReached = current.z;
@@ -315,7 +505,18 @@ export function gridAStar(
         if (expansions - lastZProgressAt > STAGNATION_LIMIT) break;
 
         if (current.z <= gqz) {
-            if (!goalValidator || goalValidator(current.x * step, current.y * step, current.z * step)) {
+            const parentKey = currentState.cameFrom;
+            const parentPos = parentKey === undefined
+                ? null
+                : (() => {
+                    const parent = decodeKey(parentKey);
+                    return {
+                        x: parent.x * step,
+                        y: parent.y * step,
+                        z: parent.z * step,
+                    };
+                })();
+            if (!goalValidator || goalValidator(current.x * step, current.y * step, current.z * step, parentPos)) {
                 goalEntry = current;
                 break;
             }
@@ -334,7 +535,8 @@ export function gridAStar(
             if (n.dz > 0 && nz > sqz + maxClimbCells) continue;
 
             const nKey = cellKeyInt(nx, ny, nz);
-            if (closedSet.has(nKey)) continue;
+            const existingState = nodeState.get(nKey);
+            if (existingState?.closed) continue;
 
             const latX = (nx - sqx) * step;
             const latY = (ny - sqy) * step;
@@ -347,30 +549,59 @@ export function gridAStar(
             const wy = ny * step;
             const wz = nz * step;
 
-            if (endpointOnlyCollisionCheck
-                ? sdf.isBlocked(wx, wy, wz, clearance)
-                : sdf.segmentBlocked(cwx, cwy, cwz, wx, wy, wz, clearance)
-            ) continue;
+            if (occupancy && getNodeOccupied(nKey, wx, wy, wz)) continue;
 
-            if (occupancy && occupancy.isOccupied(wx, wy, wz, ignoreSupportId)) continue;
+            const dist = getNodeDistance(nKey, wx, wy, wz);
+            if (endpointOnlyCollisionCheck) {
+                if (dist < clearance) continue;
+            } else if (getEdgeBlocked(
+                current.key,
+                nKey,
+                () => sdf.segmentBlocked(cwx, cwy, cwz, wx, wy, wz, clearance),
+            )) {
+                continue;
+            }
 
-            const dist = sdf.distanceAt(wx, wy, wz);
             const clearancePenalty = dist < clearance * 2 ? (clearance * 2 - dist) * 0.5 : 0;
             const tentativeG = current.g + neighborStaticCosts[ni] + clearancePenalty;
 
-            const existingG = gScore.get(nKey);
+            const existingG = existingState?.g;
             if (existingG !== undefined && tentativeG >= existingG) continue;
 
-            gScore.set(nKey, tentativeG);
-            cameFrom.set(nKey, current.key);
+            if (existingState) {
+                existingState.g = tentativeG;
+                existingState.cameFrom = current.key;
+            } else {
+                nodeState.set(nKey, { g: tentativeG, cameFrom: current.key, closed: false });
+            }
 
-            const h = Math.max(0, nz - gqz);
-            heapPush(openSet, { key: nKey, x: nx, y: ny, z: nz, g: tentativeG, f: tentativeG + h });
+            const h = goalPlaneHeuristic(nz);
+            heapPushOrUpdate(openSet, openSetIndexByKey, { key: nKey, x: nx, y: ny, z: nz, g: tentativeG, f: tentativeG + h }, compareHeapEntries);
         }
     }
 
     const stagnated = !goalEntry && (expansions - lastZProgressAt > STAGNATION_LIMIT);
     const hitExpansionLimit = !goalEntry && !stagnated && expansions >= maxExp;
+    const toDebugSnapshot = (
+        reached: boolean,
+        rawPath: Vec3[],
+        simplifiedPath: Vec3[],
+    ): GridAStarDebugSnapshot | undefined => captureDebug ? ({
+        label: opts.debugLabel ?? 'astar',
+        searchStepMm: step,
+        expansions,
+        reached,
+        stagnated,
+        hitExpansionLimit,
+        expandedNodes: debugExpandedNodes,
+        frontierNodes: openSet.slice(0, 128).map((entry) => ({
+            x: entry.x * step,
+            y: entry.y * step,
+            z: entry.z * step,
+        })),
+        rawPath,
+        simplifiedPath,
+    }) : undefined;
 
     if (!goalEntry) {
         return {
@@ -379,25 +610,24 @@ export function gridAStar(
             reached: false,
             stagnated,
             hitExpansionLimit,
+            debug: toDebugSnapshot(false, [], []),
             warmState: stagnated ? null : {
                 socketPos: { ...startPos },
                 openEntries: openSet.slice(0, 64),
-                gScores: gScore,
-                cameFrom,
+                gScores: new Map(
+                    Array.from(nodeState.entries(), ([key, state]) => [key, state.g]),
+                ),
+                cameFrom: new Map(
+                    Array.from(nodeState.entries(), ([key, state]) =>
+                        state.cameFrom === undefined ? null : ([key, state.cameFrom] as [number, number]),
+                    ).filter((entry): entry is [number, number] => entry !== null),
+                ),
             },
         };
     }
 
     const rawPath: Vec3[] = [];
     let traceKey = goalEntry.key;
-
-    function decodeKey(key: number): { x: number; y: number; z: number } {
-        const uz = key % 0x8000;
-        const rem = (key - uz) / 0x8000;
-        const uy = rem % 0x8000;
-        const ux = (rem - uy) / 0x8000;
-        return { x: ux - 0x4000, y: uy - 0x4000, z: uz - 0x4000 };
-    }
 
     while (traceKey !== undefined) {
         const coords = decodeKey(traceKey);
@@ -406,7 +636,7 @@ export function gridAStar(
             y: coords.y * step,
             z: coords.z * step,
         });
-        const parent = cameFrom.get(traceKey);
+        const parent = nodeState.get(traceKey)?.cameFrom;
         if (parent === undefined) break;
         traceKey = parent;
     }
@@ -421,11 +651,18 @@ export function gridAStar(
         reached: true,
         stagnated: false,
         hitExpansionLimit: false,
+        debug: toDebugSnapshot(true, rawPath, simplified),
         warmState: {
             socketPos: { ...startPos },
             openEntries: [],
-            gScores: gScore,
-            cameFrom,
+            gScores: new Map(
+                Array.from(nodeState.entries(), ([key, state]) => [key, state.g]),
+            ),
+            cameFrom: new Map(
+                Array.from(nodeState.entries(), ([key, state]) =>
+                    state.cameFrom === undefined ? null : ([key, state.cameFrom] as [number, number]),
+                ).filter((entry): entry is [number, number] => entry !== null),
+            ),
         },
     };
 }

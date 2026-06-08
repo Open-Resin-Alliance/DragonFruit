@@ -14,6 +14,7 @@ export const ATHENA_NANODLP_FORMAT_DEFINITION: SlicingFormatDefinition = {
   ownership: 'plugin',
   layerDataKind: 'png',
   pluginId: 'athena-builtin',
+  xPackingStrategy: 'bitdepth-packed-x',
   rustModulePath: 'formats::nanodlp',
   wasmExportName: 'encode_nanodlp_container',
   notes: 'Complex-plugin-owned container format implementation for Athena workflows.',

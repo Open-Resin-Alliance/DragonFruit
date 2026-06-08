@@ -3,12 +3,75 @@ import type { ContactCone } from '../ContactCone/types';
 import type { ContactDisk, Vec3 } from '../../types';
 import { calculateDiskThickness } from './contactDiskUtils';
 import { getFinalSocketPosition } from '../ContactCone/contactConeUtils';
+import { calculateSafeOffset } from '../../PlacementLogic/CollisionAvoidance';
+
+// Contact cones need to respect the model, but they can sit much closer than
+// shafts/roots without causing the oversized detours that a full 0.8mm margin induces.
+const CONTACT_CONE_COLLISION_SAFETY_MM = 0.3;
+const LEGACY_MAX_STANDOFF_MM = 1.5;
+const LEGACY_CLAMPED_MAX_STANDOFF_MM = 0.35;
+
+function resolveCollisionAwareDiskThickness(
+    cone: ContactCone,
+    surfaceNormal: THREE.Vector3,
+    coneAxis: THREE.Vector3,
+    socketTarget: THREE.Vector3,
+    collisionMesh?: THREE.Mesh,
+): number {
+    const angleThickness = cone.profile.type === 'disk'
+        ? calculateDiskThickness(
+            { x: surfaceNormal.x, y: surfaceNormal.y, z: surfaceNormal.z },
+            { x: coneAxis.x, y: coneAxis.y, z: coneAxis.z },
+            cone.profile,
+        )
+        : 0;
+
+    if (!collisionMesh || cone.profile.type !== 'disk') {
+        return angleThickness;
+    }
+
+    const bodyRadius = cone.profile.bodyDiameterMm / 2;
+    const rawMaxStandoff = cone.profile.maxStandoffMm ?? LEGACY_MAX_STANDOFF_MM;
+    const maxStandoff = rawMaxStandoff === LEGACY_MAX_STANDOFF_MM
+        ? LEGACY_CLAMPED_MAX_STANDOFF_MM
+        : rawMaxStandoff;
+
+    if (maxStandoff <= angleThickness + 0.000001) {
+        return angleThickness;
+    }
+
+    const safeThickness = calculateSafeOffset(
+        cone.pos,
+        { x: surfaceNormal.x, y: surfaceNormal.y, z: surfaceNormal.z },
+        { x: socketTarget.x, y: socketTarget.y, z: socketTarget.z },
+        bodyRadius + CONTACT_CONE_COLLISION_SAFETY_MM,
+        collisionMesh,
+        angleThickness,
+        maxStandoff,
+        0.2,
+        {
+            startRadius: (cone.profile.contactDiameterMm / 2) + CONTACT_CONE_COLLISION_SAFETY_MM,
+            endRadius: bodyRadius + CONTACT_CONE_COLLISION_SAFETY_MM,
+        },
+    );
+
+    const capEps = 1e-6;
+    return safeThickness >= (maxStandoff - capEps)
+        ? angleThickness
+        : safeThickness;
+}
 
 export function toVec3(vector: THREE.Vector3): Vec3 {
     return { x: vector.x, y: vector.y, z: vector.z };
 }
 
-export function recomputeContactConeForMovedDisk(cone: ContactCone, nextContactPos: Vec3, nextSurfaceNormal: Vec3, fixedSocketPos?: Vec3): ContactCone {
+export function recomputeContactConeForMovedDisk(
+    cone: ContactCone,
+    nextContactPos: Vec3,
+    nextSurfaceNormal: Vec3,
+    fixedSocketPos?: Vec3,
+    collisionMesh?: THREE.Mesh,
+): ContactCone {
     const socketTarget = fixedSocketPos
         ? new THREE.Vector3(fixedSocketPos.x, fixedSocketPos.y, fixedSocketPos.z)
         : (() => { const p = getFinalSocketPosition(cone); return new THREE.Vector3(p.x, p.y, p.z); })();
@@ -30,9 +93,13 @@ export function recomputeContactConeForMovedDisk(cone: ContactCone, nextContactP
     }
     approxAxis.normalize();
 
-    const thickness = cone.profile.type === 'disk'
-        ? calculateDiskThickness(nextSurfaceNormal, toVec3(approxAxis), cone.profile)
-        : 0;
+    const thickness = resolveCollisionAwareDiskThickness(
+        cone,
+        surfaceNormal,
+        approxAxis,
+        socketTarget,
+        collisionMesh,
+    );
 
     // Cone body starts after the disk offset along surface normal
     const coneStart = contactPos.clone().add(surfaceNormal.clone().multiplyScalar(thickness));

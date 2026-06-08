@@ -24,4 +24,4 @@ When opening an issue, include:
 - Repository: https://github.com/Open-Resin-Alliance/DragonFruit
 
 !!! note
-If the issue blocks printing, include printer profile, resin profile, and export format in your report.
+      If the issue blocks printing, include printer profile, resin profile, and export format in your report.

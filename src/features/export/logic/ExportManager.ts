@@ -859,8 +859,6 @@ export class ExportManager {
     sceneContext?: ExportSceneContext,
     saveTarget?: ExportSceneSaveTarget,
   ): Promise<string | null> {
-    console.log('[ExportManager] Starting export...', options);
-
     const scopedModelIds = new Set((sceneContext?.models ?? []).map((model) => model.id));
     const hasScopedModelFilter = scopedModelIds.size > 0;
 
@@ -921,11 +919,27 @@ export class ExportManager {
       const globalRaftSettings = getRaftSettings();
       if (globalRaftSettings.bottomMode !== 'off') {
         const supportState = getSnapshot();
+        const kickstandState = getKickstandSnapshot();
         const allRoots = Object.values(supportState.roots);
+        const allKickstandRoots = Object.values(kickstandState.roots);
 
         // Group roots by modelId so each model gets a separate raft
         const rootsByModel = new Map<string, typeof allRoots>();
         for (const root of allRoots) {
+          const rootModelId = root.modelId ?? null;
+          if (hasScopedModelFilter) {
+            if (!rootModelId || !scopedModelIds.has(rootModelId)) {
+              continue;
+            }
+          }
+
+          const mid = rootModelId ?? '__orphan__';
+          let arr = rootsByModel.get(mid);
+          if (!arr) { arr = []; rootsByModel.set(mid, arr); }
+          arr.push(root);
+        }
+
+        for (const root of allKickstandRoots) {
           const rootModelId = root.modelId ?? null;
           if (hasScopedModelFilter) {
             if (!rootModelId || !scopedModelIds.has(rootModelId)) {

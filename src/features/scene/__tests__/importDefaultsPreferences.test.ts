@@ -67,6 +67,50 @@ function makePayload(): DragonfruitImportFormat {
     sticks: [],
     braces: [],
     knots: [],
+    kickstands: [
+      {
+        root: {
+          id: 'kick-root-a',
+          modelId: 'm1',
+          transform: { pos: { x: -5, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
+          diameter: 5,
+          diskHeight: 1,
+          coneHeight: 1,
+        },
+        hostKnot: {
+          id: 'kick-knot-a',
+          parentShaftId: 'seg-a',
+          t: 0.5,
+          pos: { x: 0, y: 0, z: 4 },
+          diameter: 1,
+        },
+        kickstand: {
+          id: 'kickstand-a',
+          modelId: 'm1',
+          rootId: 'kick-root-a',
+          hostKnotId: 'kick-knot-a',
+          hostSegmentId: 'seg-a',
+          hostMinT: 0,
+          segments: [
+            {
+              id: 'kick-seg-a',
+              type: 'straight',
+              diameter: 0.9,
+              topJoint: {
+                id: 'kick-ja',
+                pos: { x: -2, y: 0, z: 4 },
+                diameter: 0.9,
+              },
+            },
+          ],
+          profile: {
+            bodyDiameterMm: 0.9,
+            terminalStartDiameterMm: 0.9,
+            terminalEndDiameterMm: 1,
+          },
+        },
+      },
+    ],
   };
 }
 
@@ -75,12 +119,14 @@ test('normalizeImportDefaultsSettings falls back to safe defaults', () => {
     raftBottomMode: 'invalid',
     raftWallEnabled: 'yes',
     rootsEnabled: 123,
+    autoRepair: 'no',
     autoRepairScenes: 'no',
   });
 
   assert.equal(normalized.raftBottomMode, 'solid');
   assert.equal(normalized.raftWallEnabled, true);
   assert.equal(normalized.rootsEnabled, true);
+  assert.equal(normalized.autoRepair, false);
   assert.equal(normalized.autoRepairScenes, false);
 });
 
@@ -89,9 +135,11 @@ test('normalizeImportDefaultsSettings preserves explicit auto repair toggle', ()
     raftBottomMode: 'solid',
     raftWallEnabled: true,
     rootsEnabled: true,
+    autoRepair: false,
     autoRepairScenes: false,
   });
 
+  assert.equal(normalized.autoRepair, false);
   assert.equal(normalized.autoRepairScenes, false);
 });
 
@@ -100,12 +148,14 @@ test('normalizeImportDefaultsSettings enforces roots enabled for line raft mode 
     raftBottomMode: 'line',
     raftWallEnabled: true,
     rootsEnabled: false,
+    autoRepair: false,
     autoRepairScenes: false,
   });
 
   assert.equal(normalized.raftBottomMode, 'line');
   assert.equal(normalized.raftWallEnabled, true);
   assert.equal(normalized.rootsEnabled, true);
+  assert.equal(normalized.autoRepair, false);
   assert.equal(normalized.autoRepairScenes, false);
 });
 
@@ -114,11 +164,13 @@ test('normalizeImportDefaultsSettings keeps wall preference when raft mode is no
     raftBottomMode: 'off',
     raftWallEnabled: false,
     rootsEnabled: true,
+    autoRepair: true,
     autoRepairScenes: true,
   });
 
   assert.equal(normalized.raftBottomMode, 'off');
   assert.equal(normalized.raftWallEnabled, false);
+  assert.equal(normalized.autoRepair, true);
   assert.equal(normalized.autoRepairScenes, true);
 });
 
@@ -128,6 +180,7 @@ test('applyImportDefaultsToSupportPayload keeps payload unchanged when roots are
     raftBottomMode: 'line',
     raftWallEnabled: true,
     rootsEnabled: true,
+    autoRepair: true,
     autoRepairScenes: true,
   };
 
@@ -141,6 +194,7 @@ test('applyImportDefaultsToSupportPayload aligns root diameter to trunk diameter
     raftBottomMode: 'line',
     raftWallEnabled: true,
     rootsEnabled: false,
+    autoRepair: true,
     autoRepairScenes: true,
   };
 
@@ -149,8 +203,10 @@ test('applyImportDefaultsToSupportPayload aligns root diameter to trunk diameter
   assert.notEqual(next, payload);
   assert.equal(next.roots[0].diameter, 1.25);
   assert.equal(next.roots[1].diameter, 2.1);
+  assert.equal(next.kickstands?.[0]?.root.diameter, 0.9);
   assert.equal(payload.roots[0].diameter, 4, 'original payload must not be mutated');
   assert.equal(payload.roots[1].diameter, 7, 'original payload must not be mutated');
+  assert.equal(payload.kickstands?.[0]?.root.diameter, 5, 'original kickstand root must not be mutated');
 });
 
 test('getImportDefaultsRaftPatch disables wall when raft base is off', () => {
@@ -158,6 +214,7 @@ test('getImportDefaultsRaftPatch disables wall when raft base is off', () => {
     raftBottomMode: 'off',
     raftWallEnabled: true,
     rootsEnabled: false,
+    autoRepair: true,
     autoRepairScenes: true,
   });
 
@@ -170,6 +227,7 @@ test('getImportDefaultsRaftPatch disables wall when raft base is line', () => {
     raftBottomMode: 'line',
     raftWallEnabled: true,
     rootsEnabled: true,
+    autoRepair: true,
     autoRepairScenes: true,
   });
 

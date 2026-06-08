@@ -18,10 +18,12 @@ import { checkShaftCollision } from '../CollisionUtils';
 import * as THREE from 'three';
 import { generateUuid } from '../../../utils/uuid';
 import { buildAnchorData } from '../../SupportTypes/Anchor/anchorBuilder';
+import { buildLeafData } from '../../SupportTypes/Leaf/leafBuilder';
 
-const MIN_TRUNK_CLEARANCE_MM = 0.5;
+const MIN_TRUNK_CLEARANCE_MM = 0.8;
 const MAX_NEAREST_NODE_SEARCH_RINGS = 4;
 const ANCHOR_HEIGHT_THRESHOLD_MM = 5.0;
+const MAX_AUTO_LEAF_SPAN_MM = 2.5;
 
 function withResolvedSnappedRoute(
     candidate: TrunkBuildResult,
@@ -240,7 +242,7 @@ function branchCollidesWithMesh(
     mesh: THREE.Mesh,
     shaftDiameterMm: number
 ): boolean {
-    const { branch } = buildBranchData({ tipPos, tipNormal, modelId, parentKnot: knot });
+    const { branch } = buildBranchData({ tipPos, tipNormal, modelId, parentKnot: knot, mesh });
     const radius = shaftDiameterMm / 2 + 0.25;
 
     const raycaster = new THREE.Raycaster();
@@ -262,6 +264,56 @@ function branchCollidesWithMesh(
     }
 
     return false;
+}
+
+function getHostDiameterMmFromKnot(knot: Knot, settings: DecideGridPlacementArgs['settings']): number {
+    return Math.max(0.001, (knot.diameter ?? (settings.shaft.diameterMm + 0.1)) - 0.1);
+}
+
+function tryBuildAutoLeafDecision(args: {
+    nodeKey: string;
+    hostTrunkId: string;
+    knot: Knot;
+    tipPos: Vec3;
+    tipNormal: Vec3;
+    modelId: string;
+    settings: DecideGridPlacementArgs['settings'];
+    mesh?: THREE.Mesh;
+}): GridPlacementDecision | null {
+    const { nodeKey, hostTrunkId, knot, tipPos, tipNormal, modelId, settings, mesh } = args;
+    const dx = tipPos.x - knot.pos.x;
+    const dy = tipPos.y - knot.pos.y;
+    const dz = tipPos.z - knot.pos.z;
+    const spanSq = dx * dx + dy * dy + dz * dz;
+    const spanMm = Math.sqrt(spanSq);
+    const epsilonZ = 0.0001;
+    if (knot.pos.z > tipPos.z + epsilonZ) return null;
+    if (spanMm > MAX_AUTO_LEAF_SPAN_MM) return null;
+
+    const angleFromUpDeg = spanSq < 0.000001
+        ? 0
+        : THREE.MathUtils.radToDeg(Math.acos(Math.min(1, Math.max(-1, dz / spanMm))));
+    const maxAngleDeg = settings.shaft.maxAngleDeg ?? 80;
+    if (angleFromUpDeg > maxAngleDeg) return null;
+
+    const hostDiameterMm = getHostDiameterMmFromKnot(knot, settings);
+    const { leaf, supportData } = buildLeafData({
+        tipPos,
+        surfaceNormal: tipNormal,
+        modelId,
+        parentKnot: knot,
+        hostDiameterMm,
+        mesh,
+    });
+
+    return {
+        kind: 'place_leaf',
+        nodeKey,
+        hostTrunkId,
+        knot,
+        leaf,
+        supportData,
+    };
 }
 
 function selectHighestValidAttachment(args: {
@@ -446,7 +498,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
 
     // Near-plate contacts get a minimal anchor support instead of trunk/branch
     if (tipPos.z < ANCHOR_HEIGHT_THRESHOLD_MM) {
-        const { anchor, supportData } = buildAnchorData({ tipPos, tipNormal, modelId });
+        const { anchor, supportData } = buildAnchorData({ tipPos, tipNormal, modelId, mesh });
         return { kind: 'place_anchor', anchor, supportData };
     }
 
@@ -531,11 +583,25 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
             tipNormal,
         });
         if (fallbackHost) {
+            const leafDecision = tryBuildAutoLeafDecision({
+                nodeKey: fallbackHost.nodeKey,
+                hostTrunkId: fallbackHost.trunkId,
+                knot: fallbackHost.knot,
+                tipPos,
+                tipNormal,
+                modelId,
+                settings,
+            });
+            if (leafDecision) {
+                return leafDecision;
+            }
+
             const { branch, supportData } = buildBranchData({
                 tipPos,
                 tipNormal,
                 modelId,
                 parentKnot: fallbackHost.knot,
+                mesh,
             });
             return {
                 kind: 'place_branch',
@@ -606,6 +672,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
                 tipNormal,
                 modelId,
                 parentKnot: fallbackHost.knot,
+                mesh,
             });
             return {
                 kind: 'place_branch',
@@ -635,6 +702,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
         tipNormal,
         modelId,
         parentKnot: selectedKnot,
+        mesh,
     });
 
     const hostTrunkContactZ = host.trunk.contactCone?.pos.z ?? Number.NEGATIVE_INFINITY;
@@ -654,6 +722,19 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
             oldTrunkKnot: null,
             oldTrunkBranch: null,
         };
+    }
+
+    const leafDecision = tryBuildAutoLeafDecision({
+        nodeKey,
+        hostTrunkId: host.trunkId,
+        knot: selectedKnot,
+        tipPos,
+        tipNormal,
+        modelId,
+        settings,
+    });
+    if (leafDecision) {
+        return leafDecision;
     }
 
     return {

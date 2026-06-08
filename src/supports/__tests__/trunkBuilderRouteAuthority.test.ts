@@ -65,3 +65,39 @@ test('buildTrunkDataFromPlacement still inserts a construction joint for straigh
     assert.equal(built.route.constructionJoints.length, 1);
     assert.equal(built.trunk.segments.length, 2);
 });
+
+test('buildTrunkDataFromPlacement preserves a solver-authored offset socket in the cone geometry', () => {
+    const built = buildTrunkDataFromPlacement(
+        makeInput(),
+        makePlacement({
+            socketPos: { x: 2, y: 0, z: 10 },
+        }),
+    );
+
+    assert.deepEqual(built.route.socketPos, { x: 2, y: 0, z: 10 });
+    assert.equal(built.trunk.contactCone.pos.x, 0);
+    assert.equal(built.trunk.contactCone.pos.y, 0);
+    assert.equal(built.trunk.contactCone.normal.x > 0, true);
+});
+
+    test('buildTrunkDataFromPlacement normalizes routed joints into a strictly rising base-to-socket chain', () => {
+        const built = buildTrunkDataFromPlacement(
+            makeInput(),
+            makePlacement({
+                socketPos: { x: 0, y: 0, z: 15 },
+                joints: [
+                    { x: 0, y: 0, z: 10 },
+                    { x: 0, y: 0, z: 5 },
+                ],
+                constructionJoints: [],
+            }),
+        );
+
+        assert.deepEqual(built.route.joints, [
+            { x: 0, y: 0, z: 5 },
+            { x: 0, y: 0, z: 10 },
+        ]);
+
+        const segmentTops = built.trunk.segments.map((segment) => segment.topJoint?.pos.z ?? built.route.socketPos.z);
+        assert.deepEqual(segmentTops, [5, 10, 15]);
+    });

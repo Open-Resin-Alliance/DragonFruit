@@ -6,6 +6,7 @@ import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
 export interface ContactDiskDragHit {
     point: Vec3;
     surfaceNormal: Vec3;
+    mesh?: THREE.Mesh;
 }
 
 export interface ContactDiskDragSession {
@@ -101,6 +102,7 @@ export function startContactDiskDragSession(options: ContactDiskDragSessionOptio
         onHit({
             point: { x: hit.point.x, y: hit.point.y, z: hit.point.z },
             surfaceNormal: calculateSmoothedNormal(hit),
+            mesh: hit.object instanceof THREE.Mesh ? hit.object : undefined,
         });
     };
 

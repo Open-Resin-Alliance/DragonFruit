@@ -2,10 +2,10 @@
   "version": 1,
   "builtinComplexPlugins": [
     {
-      "id": "athena"
+      "id": "anycubic"
     },
     {
-      "id": "anycubic"
+      "id": "athena"
     },
     {
       "id": "ctb"

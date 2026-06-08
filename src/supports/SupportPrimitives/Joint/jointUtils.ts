@@ -649,7 +649,7 @@ export function moveJoint(
                 // If mesh is provided, ensure we have physical clearance.
                 if (mesh && trunk.contactCone.profile.type === 'disk') {
                     const bodyRadius = trunk.contactCone.profile.bodyDiameterMm / 2;
-                    const safetyMargin = 0.25;
+                    const safetyMargin = 0.8;
                     const testRadius = bodyRadius + safetyMargin;
 
                     // Legacy Fix: Treat 1.5 as 0.35, else respect user value
@@ -664,7 +664,12 @@ export function moveJoint(
                         testRadius,
                         mesh,
                         angleThickness, // minOffset (start at angle-based)
-                        maxStandoff
+                        maxStandoff,
+                        0.2,
+                        {
+                            startRadius: (trunk.contactCone.profile.contactDiameterMm / 2) + safetyMargin,
+                            endRadius: testRadius,
+                        },
                     );
 
                     // If we hit the cap, treat it as "solver couldn't prove clearance" rather than

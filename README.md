@@ -71,11 +71,19 @@ For release-style builds and bundles:
 
 1. **Frontend Build:** Run `npm run build` (or `npm run build:tauri` for prepared Tauri frontend artifacts).
 2. **Desktop Build:** Build desktop binaries with `npm run tauri:build`.
-3. **Bundle Targets:** Use `npm run tauri:bundle` or platform-specific scripts:
+3. **Bundle Targets:** Use `npm run tauri:bundle` (builds Windows, Linux, and a
+   universal macOS DMG) or platform-specific scripts:
    - `npm run tauri:bundle:windows`
    - `npm run tauri:bundle:linux`
-   - `npm run tauri:bundle:macos`
-   - `npm run tauri:bundle:macos:arm64`
+   - `npm run tauri:bundle:macos:universal` — **canonical macOS / release target.**
+     Produces one fat `.dmg` that runs natively on both Intel and Apple Silicon.
+     It builds via `tauri-build.mjs --universal`, which sets
+     `CMAKE_OSX_ARCHITECTURES="arm64;x86_64"` so manifold's C++ links fat, embeds
+     the universal QuickLook extension, code-signs, and verifies the bundle is fat
+     - signed. See [ADR 0005](../Dragonfruit-kb/ADR/0005-macos-universal-distribution.md).
+   - `npm run tauri:bundle:macos` / `npm run tauri:bundle:macos:arm64` — single-arch
+     shortcuts for fast local dev only (these do **not** embed the QuickLook
+     extension and are not suitable for release).
 
 ## Project Structure
 

@@ -1,6 +1,6 @@
 import type { SnapTarget } from '../../../SnappingManager';
 import type { SupportState, Vec3, Brace, Knot } from '../../../../types';
-import { getSocketPosition } from '../../../../SupportPrimitives/ContactCone';
+import { getFinalSocketPosition } from '../../../../SupportPrimitives/ContactCone';
 import type { ContactCone } from '../../../../SupportPrimitives/ContactCone/types';
 import { calculateDiskThickness } from '../../../../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../../../constants';
@@ -106,11 +106,7 @@ export function buildSupportPathSnapTargets(
                 const endPoint = segment.topJoint
                     ? cloneVec3(segment.topJoint.pos)
                     : trunk.contactCone
-                        ? getSocketPosition(
-                            trunk.contactCone.pos,
-                            trunk.contactCone.normal,
-                            trunk.contactCone.profile
-                        )
+                        ? getFinalSocketPosition(trunk.contactCone)
                         : { x: currentStart.x, y: currentStart.y, z: currentStart.z + 10 };
 
                 if (!shouldExclude(segment.id, excludeSegmentIds)) {
@@ -144,11 +140,7 @@ export function buildSupportPathSnapTargets(
                 const endPoint = segment.topJoint
                     ? cloneVec3(segment.topJoint.pos)
                     : branch.contactCone
-                        ? getSocketPosition(
-                            branch.contactCone.pos,
-                            branch.contactCone.normal,
-                            branch.contactCone.profile
-                        )
+                        ? getFinalSocketPosition(branch.contactCone)
                         : { x: currentStart.x, y: currentStart.y, z: currentStart.z + 5 };
 
                 if (!shouldExclude(segment.id, excludeSegmentIds)) {

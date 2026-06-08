@@ -334,6 +334,37 @@ export function GeneralSettingsTab({
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Auto-Repair
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Automatically runs native mesh auto-repair for standard mesh imports.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => onImportDefaultsChange({ ...importDefaults, autoRepair: !importDefaults.autoRepair })}
+              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+              style={importDefaults.autoRepair
+                ? {
+                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
+                  }
+                : {
+                    borderColor: 'var(--border-subtle)',
+                    background: 'var(--surface-1)',
+                    color: 'var(--text-muted)',
+                  }}
+            >
+              {importDefaults.autoRepair ? 'ON' : 'OFF'}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Auto-Repair Scenes
               </div>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>

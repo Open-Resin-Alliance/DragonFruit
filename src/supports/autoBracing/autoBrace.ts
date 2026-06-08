@@ -37,12 +37,10 @@ import { buildBraceProfile } from './braceDiameter';
 import { linePassesMeshClearance } from './meshClearance';
 
 const EPS = 0.000001;
-const SQRT2 = Math.SQRT2;
-
 type SupportKind = 'trunk' | 'branch' | 'kickstand';
 
 function maxHorizontalRunFromBraceLen(maxBraceLenMm: number): number {
-    return maxBraceLenMm / SQRT2;
+    return maxBraceLenMm;
 }
 
 type SegmentSample = {
@@ -427,6 +425,17 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     const activeGridSettings = getSettings().grid;
     const maxRun = maxHorizontalRunFromBraceLen(settings.maxBraceLengthMm);
     const trunkSamples = buildSupportSamples(snapshot).filter(s => s.supportKind === 'trunk');
+
+    if (trunkSamples.length < AUTO_BRACING_HARD_RULES.minGroupSize) {
+        return {
+            snapshot,
+            generatedBraceCount: 0,
+            removedBraceCount: 0,
+            skippedSupportCount: trunkSamples.length,
+            changed: false,
+            message: "No eligible supports found for Auto Bracing.",
+        };
+    }
 
     let kickstandState = getKickstandSnapshot();
     {
@@ -893,8 +902,8 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
                     if (!ignoreMaxDistance && !isCardinalDelta(dx, dy, activeGridSettings.spacingMm)) return;
                 }
 
-                const braceLen = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                if (!ignoreMaxDistance && braceLen > settings.maxBraceLengthMm + EPS) return;
+                const horizontalSpan = Math.sqrt(dx * dx + dy * dy);
+                if (!ignoreMaxDistance && horizontalSpan > settings.maxBraceLengthMm + EPS) return;
 
                 if (!linePassesMeshClearance(lowAnchor.pos, highAnchor.pos, lowAnchor.modelId, settings.braceDiameterMm)) return;
 

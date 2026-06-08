@@ -18,6 +18,7 @@ import {
 } from '@/features/slicing/formats/registry';
 import {
   getAvailablePrinterPresets,
+  DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
   getInstalledPlugins,
   getProfileStoreServerSnapshot,
   getProfileStoreSnapshot,
@@ -232,6 +233,7 @@ const DEFAULT_MATERIAL_DRAFT: MaterialDraft = {
   liftSpeedMmMin: 60,
   retractSpeedMmMin: 150,
   minimumAaAlphaPercent: 35,
+  antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
 };
 
 const ACCENT_SECONDARY_BUTTON_STYLE_92: React.CSSProperties = {

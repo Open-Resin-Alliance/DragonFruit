@@ -164,7 +164,6 @@ function StlMeshComponent({
   hoverTintStrength,
   selectedTintStrength,
   supportNonSelectedOpacity,
-  interactionLodActive,
   showOutOfBoundsOverlay,
   outOfBoundsMin,
   outOfBoundsMax,
@@ -248,7 +247,6 @@ function StlMeshComponent({
   // Note: This works because StlMesh is rendered inside PickingProvider
   const { hit } = usePicking(); // Import usePicking at top if not already used inside StlMesh
   const [isPointerHovered, setIsPointerHovered] = React.useState(false);
-  const [isOrbitInteracting, setIsOrbitInteracting] = React.useState(false);
   const { camera } = useThree();
 
   const smoothingScratchLocalPointRef = React.useRef(new THREE.Vector3());
@@ -298,10 +296,6 @@ function StlMeshComponent({
       ensureMeshSmoothingEngineReady(geometry);
     }
   }, [geometry, isActiveModel, mode, transformMode]);
-
-  useEffect(() => {
-    console.log(`[${new Date().toISOString()}] [SceneCanvas] StlMesh received new geometry for ${modelId}`);
-  }, [geometry, modelId]);
 
   // Calculate center offset for positioning
   const centerOffset = React.useMemo(() => {
@@ -358,6 +352,25 @@ function StlMeshComponent({
 
   // Toggle raycasting based on camera movement to optimize performance
   const previousDisableState = React.useRef<boolean | undefined>(undefined);
+  const disableRaycastPropRef = React.useRef(!!disableRaycast);
+  const orbitInteractionRaycastDisabledRef = React.useRef(false);
+  const raycastDisabledRef = React.useRef<THREE.Mesh['raycast']>(() => undefined);
+
+  const applyRaycastDisabledState = React.useCallback(() => {
+    const mesh = internalMeshRef.current;
+    if (!mesh) return;
+
+    const shouldDisable = disableRaycastPropRef.current || orbitInteractionRaycastDisabledRef.current;
+    if (previousDisableState.current === shouldDisable) return;
+
+    previousDisableState.current = shouldDisable;
+    mesh.raycast = shouldDisable ? raycastDisabledRef.current : supportDimRaycastRef.current;
+  }, []);
+
+  React.useEffect(() => {
+    disableRaycastPropRef.current = !!disableRaycast;
+    applyRaycastDisabledState();
+  }, [applyRaycastDisabledState, disableRaycast]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -375,81 +388,50 @@ function StlMeshComponent({
       clearPendingResume();
 
       if (resumeAfterMs <= 0) {
-        setIsOrbitInteracting(false);
+        orbitInteractionRaycastDisabledRef.current = false;
+        applyRaycastDisabledState();
         return;
       }
 
       resumeInteractionTimeoutId = window.setTimeout(() => {
         resumeInteractionTimeoutId = null;
-        setIsOrbitInteracting(false);
+        orbitInteractionRaycastDisabledRef.current = false;
+        applyRaycastDisabledState();
       }, resumeAfterMs);
     };
 
-    const handleOrbitStartOrChange = () => {
+    const handleInteractionStart = () => {
       clearPendingResume();
-      setIsOrbitInteracting(true);
+      orbitInteractionRaycastDisabledRef.current = true;
+      applyRaycastDisabledState();
     };
     const handleOrbitEnd = (event: Event) => scheduleInteractionResume(event);
-    const handlePanStartOrChange = () => {
-      clearPendingResume();
-      setIsOrbitInteracting(true);
-    };
     const handlePanEnd = (event: Event) => scheduleInteractionResume(event);
-    const handleZoomStartOrChange = () => {
-      clearPendingResume();
-      setIsOrbitInteracting(true);
-    };
     const handleZoomEnd = (event: Event) => scheduleInteractionResume(event);
 
-    window.addEventListener('picking-orbit-start', handleOrbitStartOrChange);
-    window.addEventListener('picking-orbit-change', handleOrbitStartOrChange);
+    window.addEventListener('picking-orbit-start', handleInteractionStart);
     window.addEventListener('picking-orbit-end', handleOrbitEnd);
-    window.addEventListener('picking-pan-start', handlePanStartOrChange);
-    window.addEventListener('picking-pan-change', handlePanStartOrChange);
+    window.addEventListener('picking-pan-start', handleInteractionStart);
     window.addEventListener('picking-pan-end', handlePanEnd);
-    window.addEventListener('picking-zoom-start', handleZoomStartOrChange);
-    window.addEventListener('picking-zoom-change', handleZoomStartOrChange);
+    window.addEventListener('picking-zoom-start', handleInteractionStart);
     window.addEventListener('picking-zoom-end', handleZoomEnd);
     window.addEventListener('pointerup', handleOrbitEnd, true);
     window.addEventListener('pointercancel', handleOrbitEnd, true);
     window.addEventListener('blur', handleOrbitEnd);
 
     return () => {
-      window.removeEventListener('picking-orbit-start', handleOrbitStartOrChange);
-      window.removeEventListener('picking-orbit-change', handleOrbitStartOrChange);
+      window.removeEventListener('picking-orbit-start', handleInteractionStart);
       window.removeEventListener('picking-orbit-end', handleOrbitEnd);
-      window.removeEventListener('picking-pan-start', handlePanStartOrChange);
-      window.removeEventListener('picking-pan-change', handlePanStartOrChange);
+      window.removeEventListener('picking-pan-start', handleInteractionStart);
       window.removeEventListener('picking-pan-end', handlePanEnd);
-      window.removeEventListener('picking-zoom-start', handleZoomStartOrChange);
-      window.removeEventListener('picking-zoom-change', handleZoomStartOrChange);
+      window.removeEventListener('picking-zoom-start', handleInteractionStart);
       window.removeEventListener('picking-zoom-end', handleZoomEnd);
       window.removeEventListener('pointerup', handleOrbitEnd, true);
       window.removeEventListener('pointercancel', handleOrbitEnd, true);
       window.removeEventListener('blur', handleOrbitEnd);
       clearPendingResume();
     };
-  }, []);
-
-  const effectiveDisableRaycast = !!disableRaycast || isOrbitInteracting;
-
-  React.useEffect(() => {
-    // Always use internalMeshRef - meshRef points to the group, not the mesh
-    const mesh = internalMeshRef.current;
-    if (mesh && previousDisableState.current !== effectiveDisableRaycast) {
-      previousDisableState.current = effectiveDisableRaycast;
-
-      if (effectiveDisableRaycast) {
-        // Disable raycasting during camera movement (no-op function)
-        console.log('[Raycast] DISABLED - performance mode active');
-        mesh.raycast = () => { };
-      } else {
-        // Restore to our stable shim (which checks proximity-block ref internally).
-        console.log('[Raycast] ENABLED - normal interaction mode');
-        mesh.raycast = supportDimRaycastRef.current;
-      }
-    }
-  }, [effectiveDisableRaycast]);
+  }, [applyRaycastDisabledState]);
 
   React.useLayoutEffect(() => {
     const group = groupRef.current;
@@ -625,25 +607,6 @@ if (uDitherAmount > 0.0) {
       supportDimRaycastBlockedRef.current = shouldBlockRaycast;
     }
   });
-
-  const interactionLodColor = React.useMemo(() => {
-    const base = new THREE.Color(meshColor ?? '#a3a3a3');
-    const hoverTint = new THREE.Color(hoverTintColor ?? meshColor ?? '#a3a3a3');
-    const selectedTint = new THREE.Color(selectedTintColor ?? meshColor ?? '#a3a3a3');
-
-    const selectionStrength = Math.min(1, Math.max(0, selectedTintStrength ?? 0.75));
-    const hoverStrength = Math.min(1, Math.max(0, hoverTintStrength ?? 0.5));
-
-    if (isSelected) {
-      return base.clone().lerp(selectedTint, selectionStrength).getStyle();
-    }
-
-    if (isHoveredModel || isMarqueeHovered) {
-      return base.clone().lerp(hoverTint, hoverStrength).getStyle();
-    }
-
-    return base.getStyle();
-  }, [hoverTintColor, hoverTintStrength, isHoveredModel, isMarqueeHovered, isSelected, meshColor, selectedTintColor, selectedTintStrength]);
 
   const supportSectionTintColor = React.useMemo(() => {
     const base = new THREE.Color('#a3a3a3');
@@ -840,6 +803,7 @@ if (uDitherAmount > 0.0) {
           internalMeshRef.current = node;
           if (typeof actualMeshRef === 'function') actualMeshRef(node);
           else if (actualMeshRef) (actualMeshRef as React.MutableRefObject<THREE.Mesh | null>).current = node;
+          if (node) applyRaycastDisabledState();
         }}
         userData={{ modelId, thumbnailTintTarget: 'modelMesh' }}
         geometry={geometry}
@@ -865,8 +829,6 @@ if (uDitherAmount > 0.0) {
             e.stopPropagation();
             return;
           }
-
-          console.log('[SceneCanvas] Mesh clicked, mode:', mode, 'id:', modelId);
 
           // Prepare mode selection is handled on pointer-down for lower latency.
           if (mode === 'prepare') {
@@ -1159,15 +1121,6 @@ if (uDitherAmount > 0.0) {
           />
         ) : typeof supportNonSelectedOpacity === 'number' ? (
           supportDimMaterialObj ? <primitive object={supportDimMaterialObj} attach="material" /> : null
-        ) : interactionLodActive ? (
-          <meshStandardMaterial
-            vertexColors={hasVertexColorAttribute}
-            color={interactionLodColor}
-            roughness={materialRoughness ?? 0.9}
-            metalness={0.0}
-            clippingPlanes={planes}
-            side={THREE.FrontSide}
-          />
         ) : (
           <MeshShaderMaterial
             shaderType={baseShaderType}

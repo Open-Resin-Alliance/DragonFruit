@@ -42,7 +42,7 @@ The header consists of 5 unsigned 32-bit integers (`uint32`).
 | **Padding**       | 16-19       | `uint32` | Zero padding / reserved.                       |
 
 !!! warning
-Data starts at byte 20. Reading from byte 16 shifts the index buffer and scrambles mesh topology.
+      Data starts at byte 20. Reading from byte 16 shifts the index buffer and scrambles mesh topology.
 
 ### Index buffer
 

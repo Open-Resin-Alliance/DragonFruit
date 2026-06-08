@@ -95,19 +95,6 @@ export const LeafRenderer = React.memo(function LeafRenderer({
         const branchFamilyHeld = branchPlacementStore.getSnapshot().altActive
             || isSupportPlacementBindingSatisfiedByModifierState(branchFamilyBinding, getSupportPlacementModifierState(e));
         if (branchFamilyHeld) {
-            e.stopPropagation();
-            if (e.nativeEvent) {
-                e.nativeEvent.stopPropagation?.();
-                e.nativeEvent.stopImmediatePropagation?.();
-            }
-
-            window.dispatchEvent(new CustomEvent('brace-leaf-click', {
-                detail: {
-                    leafId: leaf.id,
-                    point: e.point ? { x: e.point.x, y: e.point.y, z: e.point.z } : null,
-                    intersection: e,
-                },
-            }));
             return;
         }
 
@@ -129,10 +116,10 @@ export const LeafRenderer = React.memo(function LeafRenderer({
             scene,
             initialEvent: e,
             modelId: leaf.modelId,
-            onHit: ({ point, surfaceNormal }: ContactDiskDragHit) => {
+            onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
                 const latest = getSnapshot().leaves[leaf.id];
                 if (!latest?.contactCone) return;
-                liveDragConeRef.current = recomputeContactConeForMovedDisk(latest.contactCone, point, surfaceNormal, socketAnchor);
+                liveDragConeRef.current = recomputeContactConeForMovedDisk(latest.contactCone, point, surfaceNormal, socketAnchor, mesh);
                 setDragTick(t => t + 1);
             },
             onEnd: () => {

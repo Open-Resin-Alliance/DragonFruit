@@ -8,13 +8,19 @@
  * - Signing certificates for macOS (if creating production bundles)
  * 
  * Usage:
- *   npm run tauri:bundle                          # Build all targets (requires full setup)
+ *   npm run tauri:bundle                          # Build all default targets
  *   npm run tauri:bundle -- --dry-run             # Preview targets without building
+ *   npm run tauri:bundle -- --only=<triple,...>   # Build specific targets only
  *   npm run tauri:bundle:windows                  # Windows only (fastest locally)
  *   npm run tauri:bundle:linux                    # Linux only
- *   npm run tauri:bundle:macos                    # macOS x64 only
- *   npm run tauri:bundle:macos:arm64              # macOS arm64 only
- * 
+ *   npm run tauri:bundle:macos:universal          # macOS universal (Intel + Apple Silicon)
+ *   npm run tauri:bundle:macos                    # macOS x64 only (fast local dev)
+ *   npm run tauri:bundle:macos:arm64              # macOS arm64 only (fast local dev)
+ *
+ * The default (no-arg) macOS target is now universal-apple-darwin — a single fat
+ * DMG, not two per-arch DMGs. The per-arch triples remain available via --only=
+ * (and the :macos / :macos:arm64 scripts) as fast local-dev shortcuts.
+ *
  * For most use cases, push to main/create a tag to trigger GitHub Actions workflows.
  */
 
@@ -26,13 +32,14 @@ const dryRun = args.includes("--dry-run");
 const defaultTargets = [
       "x86_64-pc-windows-msvc",
       "x86_64-unknown-linux-gnu",
-      "x86_64-apple-darwin",
-      "aarch64-apple-darwin",
+      "universal-apple-darwin",
 ];
 
 const bundlesByTarget = {
       "x86_64-pc-windows-msvc": "msi,nsis",
       "x86_64-unknown-linux-gnu": "deb,rpm",
+      "universal-apple-darwin": "app,dmg",
+      // Per-arch Mac targets stay available via --only=<triple> for fast local dev.
       "x86_64-apple-darwin": "app,dmg",
       "aarch64-apple-darwin": "app,dmg",
 };
@@ -60,42 +67,50 @@ if (dryRun) {
 const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
 const failures = [];
 
-function rustflagsForTarget(targetTriple) {
-      return targetTriple.startsWith("x86_64") ? "-C target-feature=+avx2,+fma" : undefined;
-}
+// x86_64 codegen flags (+avx2,+fma) live in .cargo/config.toml now, so there is
+// no RUSTFLAGS injection here — they apply to every cargo invocation, including
+// each arch of the universal build.
 
 for (const target of targets) {
       const bundleArg = bundlesByTarget[target];
-      let cmdArgs = bundleArg
-            ? ["tauri", "build", "--target", target, "--bundles", bundleArg]
-            : ["tauri", "build", "--target", target];
 
-      // Linux builds use CEF instead of WebKitGTK (issue #83). Pass cargo
-      // feature flags after "--" so the binary links against tauri-cef.
-      if (target.includes("linux")) {
-            cmdArgs.push("--", "--no-default-features", "--features", "custom-protocol,tauri-cef");
+      // The universal macOS target routes through the dedicated wrapper, which
+      // builds via tauri-build.mjs --universal (running the QuickLook .appex
+      // embed + codesign + DMG rebuild that `npx tauri build` skips) and then
+      // verifies the bundle is fat + signed. Every other target invokes tauri
+      // directly.
+      const isUniversal = target === "universal-apple-darwin";
+      const cmd = isUniversal ? "node" : npxCmd;
+      let cmdArgs;
+      if (isUniversal) {
+            cmdArgs = ["scripts/tauri-bundle-macos-universal.mjs"];
+      } else {
+            cmdArgs = bundleArg
+                  ? ["tauri", "build", "--target", target, "--bundles", bundleArg]
+                  : ["tauri", "build", "--target", target];
+            // Linux builds use CEF instead of WebKitGTK (issue #83). Pass cargo
+            // feature flags after "--" so the binary links against tauri-cef.
+            if (target.includes("linux")) {
+                  cmdArgs.push("--", "--no-default-features", "--features", "custom-protocol,tauri-cef");
+            }
       }
+
       console.log(`\n=== Building target: ${target} ===`);
-      console.log(`${npxCmd} ${cmdArgs.join(" ")}`);
+      console.log(`${cmd} ${cmdArgs.join(" ")}`);
 
       if (dryRun) {
             continue;
       }
 
-      const rustflags = rustflagsForTarget(target);
       const tauriEnv = {
             ...process.env,
-            ...(rustflags ? { RUSTFLAGS: rustflags } : {}),
             ...(target.includes("linux")
                   ? { APPIMAGE_EXTRACT_AND_RUN: process.env.APPIMAGE_EXTRACT_AND_RUN ?? "1" }
                   : {}),
       };
 
-      const result = spawnSync(npxCmd, cmdArgs, {
+      const result = spawnSync(cmd, cmdArgs, {
             stdio: "inherit",
-            // Use +avx2 (supported on all CPUs since ~2013) for good vectorization
-            // without the illegal-instruction crashes that "target-cpu=native" causes
-            // on older hardware (STATUS_ILLEGAL_INSTRUCTION / 0xC000001D).
             env: tauriEnv,
       });
 

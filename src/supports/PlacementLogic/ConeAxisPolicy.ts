@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { Vec3 } from '../types';
 
+const MAX_CONE_AXIS_DEVIATION_FROM_SURFACE_NORMAL_DEG = 35;
+
 export interface ConeAxisPolicyInput {
     surfaceNormal: Vec3;
     coneAngleMode: 'normal' | 'locked' | 'adaptive';
@@ -89,6 +91,20 @@ export function resolveConeAxisPolicy(input: ConeAxisPolicyInput): ConeAxisPolic
                     .normalize();
             }
         }
+    }
+
+    const maxDeviationRad = THREE.MathUtils.degToRad(MAX_CONE_AXIS_DEVIATION_FROM_SURFACE_NORMAL_DEG);
+    const deviationRad = coneAxisVec.angleTo(normal);
+    if (deviationRad > maxDeviationRad + 1e-6) {
+        const rotationAxis = new THREE.Vector3().crossVectors(normal, coneAxisVec);
+        if (rotationAxis.lengthSq() < 1e-10) {
+            rotationAxis.copy(new THREE.Vector3(0, 0, 1).cross(normal));
+            if (rotationAxis.lengthSq() < 1e-10) {
+                rotationAxis.copy(new THREE.Vector3(1, 0, 0).cross(normal));
+            }
+        }
+        rotationAxis.normalize();
+        coneAxisVec = normal.clone().applyAxisAngle(rotationAxis, maxDeviationRad).normalize();
     }
 
     const coneAxis: Vec3 = { x: coneAxisVec.x, y: coneAxisVec.y, z: coneAxisVec.z };

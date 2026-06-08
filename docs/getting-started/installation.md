@@ -2,6 +2,8 @@
 
 For most users, the easiest way to get started is installing a prebuilt release.
 
+**Need help getting set up? [Join our Discord](https://discord.com/invite/beFeTaPH6v).**
+
 ## Install prebuilt releases (recommended)
 
 DragonFruit publishes desktop installers/packages for both:
@@ -20,7 +22,7 @@ Download page:
 - https://github.com/Open-Resin-Alliance/DragonFruit/releases
 
 !!! note
-For general usage, prefer stable releases. Use pre-releases if you want earlier fixes/features.
+      For general usage, prefer stable releases. Use pre-releases if you want earlier fixes/features.
 
 If you want to build the latest bleeding-edge version instead, follow [Building from Source](building-from-source.md).
 

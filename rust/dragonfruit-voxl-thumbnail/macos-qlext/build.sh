@@ -26,20 +26,44 @@ REPO_BUILD_DIR="$SCRIPT_DIR/build"
 rm -rf "$APPEX"
 mkdir -p "$MACOS_DIR"
 
-echo "Compiling ThumbnailProvider.swift..."
-swiftc \
-    -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
-    -target arm64-apple-macos12.0 \
-    -framework QuickLookThumbnailing \
-    -framework CoreGraphics \
-    -framework ImageIO \
-    -framework AppKit \
-    -framework Foundation \
-    -module-name VoxlThumbnailExtension \
-    -parse-as-library \
-    -Xlinker -e -Xlinker _NSExtensionMain \
-    -o "$MACOS_DIR/VoxlThumbnailExtension" \
-    "$SCRIPT_DIR/Sources/VoxlThumbnailExtension/ThumbnailProvider.swift"
+# Compile the Swift extension once per arch, then lipo-merge into a single fat
+# Mach-O. This must be universal: the .appex is embedded verbatim into the
+# universal .app, so an arm64-only binary here silently breaks QuickLook
+# thumbnails for Intel users of the universal DMG (the QL host can't load a
+# thin-arm64 extension on an x86_64 machine).
+SDK_PATH="$(xcrun --show-sdk-path --sdk macosx)"
+SWIFT_SRC="$SCRIPT_DIR/Sources/VoxlThumbnailExtension/ThumbnailProvider.swift"
+
+# shellcheck disable=SC2086  # framework flags are fixed, no word-splitting risk
+compile_appex_arch() {
+    local arch_target="$1"
+    local out="$2"
+    swiftc \
+        -sdk "$SDK_PATH" \
+        -target "$arch_target" \
+        -framework QuickLookThumbnailing \
+        -framework CoreGraphics \
+        -framework ImageIO \
+        -framework AppKit \
+        -framework Foundation \
+        -module-name VoxlThumbnailExtension \
+        -parse-as-library \
+        -Xlinker -e -Xlinker _NSExtensionMain \
+        -o "$out" \
+        "$SWIFT_SRC"
+}
+
+echo "Compiling ThumbnailProvider.swift for arm64..."
+compile_appex_arch "arm64-apple-macos12.0" "$MACOS_DIR/VoxlThumbnailExtension.arm64"
+echo "Compiling ThumbnailProvider.swift for x86_64..."
+compile_appex_arch "x86_64-apple-macos12.0" "$MACOS_DIR/VoxlThumbnailExtension.x86_64"
+
+echo "Merging into a universal (fat) Mach-O with lipo..."
+lipo -create \
+    "$MACOS_DIR/VoxlThumbnailExtension.arm64" \
+    "$MACOS_DIR/VoxlThumbnailExtension.x86_64" \
+    -output "$MACOS_DIR/VoxlThumbnailExtension"
+rm -f "$MACOS_DIR/VoxlThumbnailExtension.arm64" "$MACOS_DIR/VoxlThumbnailExtension.x86_64"
 
 echo "Copying Info.plist..."
 cp "$SCRIPT_DIR/Sources/VoxlThumbnailExtension/Info.plist" "$CONTENTS/Info.plist"

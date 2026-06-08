@@ -1,0 +1,36 @@
+# Cargo configuration for DragonFruit.
+#
+# Placed at the project root (the parent of both src-tauri/ and rust/) so it is
+# picked up by EVERY cargo invocation in the repo — cargo walks up from the
+# invocation cwd, and the project root is the only directory reached by all of
+# them (the Tauri shell in src-tauri/, the slicing/mesh/island crates, and the
+# voxl-thumbnailer in rust/dragonfruit-voxl-thumbnail/).
+#
+# x86_64 codegen tuning
+# ---------------------
+# +avx2,+fma is enabled for the three x86_64 targets we ship. AVX2 has been
+# present on every shipping x86 CPU since ~2013, so this is safe for the broad
+# install base while still giving the slicer good auto-vectorization. We
+# deliberately do NOT use `target-cpu=native`: that bakes in whatever the build
+# machine supports and causes STATUS_ILLEGAL_INSTRUCTION (0xC000001D) crashes on
+# older hardware.
+#
+# These per-target `rustflags` replace the RUSTFLAGS env-var injection that used
+# to live in scripts/tauri-build.mjs and scripts/tauri-bundle-all.mjs. Config and
+# the RUSTFLAGS env var are mutually exclusive in cargo (env wins and clobbers
+# the lot), so the env injection had to go for these flags to take effect.
+#
+# There is intentionally NO aarch64-apple-darwin entry: AVX2/FMA are x86-only.
+# Apple Silicon uses its own NEON SIMD via the default codegen. A universal
+# (`--target universal-apple-darwin`) build compiles both the x86_64-apple-darwin
+# half (which picks up the flags below) and the aarch64-apple-darwin half (which
+# does not), which is exactly what we want.
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "target-feature=+avx2,+fma"]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+avx2,+fma"]
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=+avx2,+fma"]

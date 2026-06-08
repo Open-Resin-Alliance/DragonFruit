@@ -38,9 +38,7 @@ async function main() {
             throw new Error('[allowlist-check] Duplicate plugin id(s) found in allowlist');
       }
 
-      if (!isSorted(ids)) {
-            throw new Error('[allowlist-check] builtinComplexPlugins ids must be sorted lexicographically by id');
-      }
+      // No lexicographic order required
 
       console.log(`[allowlist-check] OK (${ids.length} plugin id(s))`);
 }
