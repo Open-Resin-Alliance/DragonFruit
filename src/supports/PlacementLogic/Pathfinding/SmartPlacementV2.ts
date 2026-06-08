@@ -25,6 +25,7 @@ import { gridNodeKeyFromXY, gridSnappedXYFromKey } from '../Grid/gridMath';
 import { buildNearestCandidateNodeKeys } from '../Grid/nearestCandidateNodeKeys';
 import { SDFCache } from './SDFCache';
 import { gridAStar, type GridAStarDebugSnapshot, type WarmStartState } from './GridAStar';
+import { checkShaftCollision } from '../CollisionUtils';
 import type { SupportOccupancy } from './SupportOccupancy';
 import {
     getSupportPathfindingDebugEnabled,
@@ -599,6 +600,7 @@ function resolveContactConeGeometry(args: {
 function contactConeBlocked(args: {
     sdf: SDFCache;
     cone: ContactConeGeometry;
+    mesh?: THREE.Mesh;
 }): boolean {
     const cone = args.cone;
     const length = cone.coneLengthMm;
@@ -611,6 +613,20 @@ function contactConeBlocked(args: {
     const dirX = end.x - start.x;
     const dirY = end.y - start.y;
     const dirZ = end.z - start.z;
+
+    // Optional physical raycast gate
+    if (args.mesh) {
+        const avgRadius = (cone.coneStartRadiusMm + cone.coneEndRadiusMm) / 2 + CONTACT_CONE_COLLISION_SAFETY_MM;
+        const normX = dirX / length;
+        const normY = dirY / length;
+        const normZ = dirZ / length;
+        const tipIgnoreOffset = new THREE.Vector3(normX, normY, normZ).multiplyScalar(CONTACT_CONE_TIP_IGNORE_MM);
+        const rayStart = new THREE.Vector3(start.x, start.y, start.z).add(tipIgnoreOffset);
+        const rayEnd = new THREE.Vector3(end.x, end.y, end.z);
+        if (checkShaftCollision(rayStart, rayEnd, avgRadius, args.mesh).hit) {
+            return true;
+        }
+    }
 
     const minStep = Math.max(
         Math.min(CONTACT_CONE_COLLISION_SAMPLE_STEP_MM, args.sdf.cellSize * 0.8),
@@ -638,6 +654,7 @@ function createContactConeBlockedMemo(args: {
     tipPos: Vec3;
     tipNormal: Vec3;
     tipProfile: SupportTipProfile;
+    mesh?: THREE.Mesh;
 }): ContactConeBlockedAt {
     const cache = new Map<string, boolean>();
 
@@ -650,6 +667,7 @@ function createContactConeBlockedMemo(args: {
 
         const blocked = contactConeBlocked({
             sdf: args.sdf,
+            mesh: args.mesh,
             cone: resolveContactConeGeometry({
                 tipPos: args.tipPos,
                 tipNormal: args.tipNormal,
@@ -1814,11 +1832,15 @@ export function calculateSmartPlacementV2(
         shaftRadius,
     });
     const segmentBlockedBetween = createSegmentBlockedMemo({ sdf, clearance });
+    const raycastSegmentBlockedBetween = (start: Vec3, end: Vec3): boolean => {
+        return segmentBlockedBetween(start, end) || checkShaftCollision(start, end, clearance, mesh).hit;
+    };
     const contactConeBlockedAt = createContactConeBlockedMemo({
         sdf,
         tipPos: input.tipPos,
         tipNormal: input.tipNormal,
         tipProfile: input.tipProfile,
+        mesh,
     });
 
     const coneClear = !contactConeBlockedAt(nominalSocketPos);
@@ -1890,7 +1912,7 @@ export function calculateSmartPlacementV2(
                 y: input.tipPos.y - Math.round(input.tipPos.y / FINE_ASTAR_STEP_MM) * FINE_ASTAR_STEP_MM,
             } : null,
             rootsDiskBlockedAt,
-            segmentBlockedBetween,
+            segmentBlockedBetween: raycastSegmentBlockedBetween,
             contactConeBlockedAt,
             coneTuning: debugConeTuning,
         });
@@ -1935,7 +1957,7 @@ export function calculateSmartPlacementV2(
                 y: input.tipPos.y - Math.round(input.tipPos.y / FINE_ASTAR_STEP_MM) * FINE_ASTAR_STEP_MM,
             } : null,
             rootsDiskBlockedAt,
-            segmentBlockedBetween,
+            segmentBlockedBetween: raycastSegmentBlockedBetween,
             contactConeBlockedAt,
             coneTuning: debugConeTuning,
         });
@@ -1972,7 +1994,7 @@ export function calculateSmartPlacementV2(
                 y: input.tipPos.y - Math.round(input.tipPos.y / FINE_ASTAR_STEP_MM) * FINE_ASTAR_STEP_MM,
             } : null,
             rootsDiskBlockedAt,
-            segmentBlockedBetween,
+            segmentBlockedBetween: raycastSegmentBlockedBetween,
             contactConeBlockedAt,
             requireJoint: true,
             coneTuning: debugConeTuning,
@@ -2147,7 +2169,7 @@ export function calculateSmartPlacementV2(
     let rootsFitStandard = false;
     // early-outs, so preview no longer needs the old coarse approximations —
     // the accurate versions are fast in open space and equally accurate.
-    straightClear = !segmentBlockedBetween(socketPos, { x: socketPos.x, y: socketPos.y, z: rootTopZ });
+    straightClear = !raycastSegmentBlockedBetween(socketPos, { x: socketPos.x, y: socketPos.y, z: rootTopZ });
     const baseXY: Vec3 = { x: socketPos.x, y: socketPos.y, z: 0 };
     rootsFitStandard = !rootsDiskBlockedAt(baseXY.x, baseXY.y);
 
@@ -3266,7 +3288,7 @@ export function calculateSmartPlacementV2(
         const a = finalChainPoints[i];
         const b = finalChainPoints[i + 1];
 
-        if (segmentBlockedBetween(a, b)) {
+        if (raycastSegmentBlockedBetween(a, b)) {
             const straightRescueFallback = buildStraightRescueFallback();
             if (straightRescueFallback) {
                 return straightRescueFallback;
