@@ -13,7 +13,6 @@ export function XrayMaterial({
   materialRoughness,
   clippingPlanes,
   opacity,
-  invertNormals = false,
 }: {
   isSelected: boolean;
   isHovered: boolean;
@@ -26,7 +25,6 @@ export function XrayMaterial({
   materialRoughness?: number;
   clippingPlanes: THREE.Plane[];
   opacity?: number;
-  invertNormals?: boolean;
 }) {
   const baseColor = meshColor ?? '#a3a3a3';
   const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
@@ -49,7 +47,7 @@ export function XrayMaterial({
       opacity={opacity ?? 0.25}
       depthWrite={false}
       clippingPlanes={clippingPlanes}
-      side={invertNormals ? THREE.BackSide : THREE.DoubleSide}
+      side={THREE.DoubleSide}
     />
   );
 }

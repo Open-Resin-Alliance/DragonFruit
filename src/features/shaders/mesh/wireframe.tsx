@@ -10,7 +10,6 @@ export function WireframeMaterial({
   hoverTintStrength,
   selectedTintStrength,
   clippingPlanes,
-  invertNormals = false,
 }: {
   isSelected: boolean;
   isHovered: boolean;
@@ -20,7 +19,6 @@ export function WireframeMaterial({
   hoverTintStrength?: number;
   selectedTintStrength?: number;
   clippingPlanes: THREE.Plane[];
-  invertNormals?: boolean;
 }) {
   const baseWireColor = meshColor ?? '#a3a3a3';
   const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
@@ -35,7 +33,7 @@ export function WireframeMaterial({
     <meshBasicMaterial
       color={wireColor}
       clippingPlanes={clippingPlanes}
-      side={invertNormals ? THREE.BackSide : THREE.FrontSide}
+      side={THREE.FrontSide}
       wireframe
       polygonOffset
       polygonOffsetFactor={-1}

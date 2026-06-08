@@ -94,7 +94,7 @@ import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
 import { useDeleteHotkey } from '@/features/delete/useDeleteHotkey';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { useCameraProjectionHotkey } from '@/hotkeys/useCameraProjectionHotkey';
-import { useInvertNormalsHotkey } from '@/hotkeys/useInvertNormalsHotkey';
+import { useInteriorViewHotkey } from '@/hotkeys/useInteriorViewHotkey';
 import { usePrepareTransformHotkeys } from '@/hotkeys/usePrepareTransformHotkeys';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
@@ -328,6 +328,11 @@ type HollowPreviewCacheEntry = {
 };
 
 type HollowingSourceEntry = {
+  geometry: THREE.BufferGeometry;
+};
+
+/** Stores the per-model interior cavity surface mesh for Interior View Mode. */
+type CavityGeometryEntry = {
   geometry: THREE.BufferGeometry;
 };
 
@@ -1613,7 +1618,7 @@ export default function Home() {
   }, []);
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
-  const [invertNormals, setInvertNormals] = React.useState(false);
+  const [interiorView, setInteriorView] = React.useState(false);
   const [isPreviewingHollowing, setIsPreviewingHollowing] = React.useState(false);
   const [hollowPreview, setHollowPreview] = React.useState<HollowPreviewState | null>(null);
   const shouldForceHollowingXray = scene.mode === 'prepare'
@@ -1744,6 +1749,7 @@ export default function Home() {
     [hollowingState.shellThicknessMm],
   );
   const hollowingSourceByModelIdRef = React.useRef<Map<string, HollowingSourceEntry>>(new Map());
+  const cavityGeometryByModelIdRef = React.useRef<Map<string, CavityGeometryEntry>>(new Map());
   const [printingPreviewZoom, setPrintingPreviewZoom] = React.useState(1);
   const [printingPreviewPan, setPrintingPreviewPan] = React.useState({ x: 0, y: 0 });
   const [isPrintingPreviewPanning, setIsPrintingPreviewPanning] = React.useState(false);
@@ -13278,7 +13284,13 @@ export default function Home() {
   useUndoRedoHotkeys();
   useDeleteHotkey();
   useCameraProjectionHotkey();
-  useInvertNormalsHotkey(() => setInvertNormals((prev) => !prev));
+  const hasCavityGeometry = scene.activeModel
+    ? cavityGeometryByModelIdRef.current.has(scene.activeModel.id)
+    : false;
+  useInteriorViewHotkey(
+    () => setInteriorView((prev) => !prev),
+    hasCavityGeometry,
+  );
   usePrepareTransformHotkeys({
     appMode: scene.mode,
     hasModels: scene.models.length > 0,
@@ -14960,6 +14972,26 @@ export default function Home() {
         nextGeometry.computeBoundingBox();
         nextGeometry.computeBoundingSphere();
 
+        // Store cavity geometry for Interior View Mode
+        if (result.cavityPositions) {
+          const existingCavity = cavityGeometryByModelIdRef.current.get(activeModel.id);
+          if (existingCavity) {
+            existingCavity.geometry.dispose();
+          }
+          const cavityGeometry = new THREE.BufferGeometry();
+          cavityGeometry.setAttribute('position', new THREE.BufferAttribute(result.cavityPositions, 3));
+          cavityGeometry.computeVertexNormals();
+          cavityGeometry.computeBoundingBox();
+          cavityGeometry.computeBoundingSphere();
+          cavityGeometryByModelIdRef.current.set(activeModel.id, { geometry: cavityGeometry });
+        } else {
+          const existingCavity = cavityGeometryByModelIdRef.current.get(activeModel.id);
+          if (existingCavity) {
+            existingCavity.geometry.dispose();
+            cavityGeometryByModelIdRef.current.delete(activeModel.id);
+          }
+        }
+
         const modeLabel = hollowingState.mode === 'shell_open_face'
           ? 'Shell Hollowing'
           : hollowingState.mode === 'infill'
@@ -15071,6 +15103,14 @@ export default function Home() {
         restoredGeometry.dispose();
       }
     }
+
+    // Clear cavity geometry and auto-disable interior view on hollowing reset
+    const existingCavity = cavityGeometryByModelIdRef.current.get(activeModel.id);
+    if (existingCavity) {
+      existingCavity.geometry.dispose();
+      cavityGeometryByModelIdRef.current.delete(activeModel.id);
+    }
+    setInteriorView(false);
 
     setHollowingState(defaultHollowingState);
     setIsShellOpenFaceSelected(true);
@@ -16882,6 +16922,12 @@ export default function Home() {
       hollowingSourceByModelIdRef.current.delete(modelId);
     }
 
+    for (const [modelId, entry] of cavityGeometryByModelIdRef.current.entries()) {
+      if (liveIds.has(modelId)) continue;
+      entry.geometry.dispose();
+      cavityGeometryByModelIdRef.current.delete(modelId);
+    }
+
     for (const [cacheKey, entry] of hollowPreviewResultCacheRef.current.entries()) {
       if (liveIds.has(entry.modelId)) continue;
       disposeHollowPreviewCacheEntry(entry);
@@ -16895,6 +16941,10 @@ export default function Home() {
         entry.geometry.dispose();
       }
       hollowingSourceByModelIdRef.current.clear();
+      for (const entry of cavityGeometryByModelIdRef.current.values()) {
+        entry.geometry.dispose();
+      }
+      cavityGeometryByModelIdRef.current.clear();
       for (const entry of hollowPreviewResultCacheRef.current.values()) {
         disposeHollowPreviewCacheEntry(entry);
       }
@@ -17688,8 +17738,9 @@ export default function Home() {
         hasPrintingData={hasPrintingWorkspaceData}
         viewTypeOverride={sessionShaderOverride}
         onViewTypeOverrideChange={setSessionShaderOverride}
-        invertNormals={invertNormals}
-        onInvertNormalsChange={setInvertNormals}
+        interiorView={interiorView}
+        onInteriorViewChange={setInteriorView}
+        interiorViewAvailable={hasCavityGeometry}
         heatmapColors={scene.heatmapColors}
         onHeatmapColorChange={scene.onHeatmapColorChange}
         isSlicingBusy={isSlicingBusy}
@@ -18462,7 +18513,8 @@ export default function Home() {
             xrayOpacity={scene.xrayOpacity}
             heatmapContrast={scene.heatmapContrast}
             heatmapColors={scene.heatmapColors}
-            invertNormals={invertNormals}
+            interiorView={interiorView}
+            cavityGeometryByModelId={new Map(Array.from(cavityGeometryByModelIdRef.current.entries()).map(([id, entry]) => [id, entry.geometry]))}
             disableRaycast={transformMgr.isTransforming}
             hideCrossSectionCap={false}
             onCameraChange={handleCameraChange}

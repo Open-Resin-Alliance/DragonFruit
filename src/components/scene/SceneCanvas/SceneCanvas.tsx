@@ -318,7 +318,7 @@ export function SceneCanvas({
   heatmapBlend,
   heatmapContrast,
   heatmapColors,
-  invertNormals = false,
+  interiorView = false,
   disableRaycast,
   ambientIntensity,
   directionalIntensity,
@@ -412,8 +412,10 @@ export function SceneCanvas({
   indicatorPlaneColor,
   deferCameraIntro = false,
   freezeViewportActive = false,
+  cavityGeometryByModelId,
 }: {
   models?: LoadedModel[];
+  cavityGeometryByModelId?: Map<string, THREE.BufferGeometry>;
   activeModelId?: string | null;
   visualActiveModelId?: string | null;
   selectedModelIds?: string[];
@@ -430,7 +432,7 @@ export function SceneCanvas({
   heatmapBlend?: number;
   heatmapContrast?: number;
   heatmapColors?: string[];
-  invertNormals?: boolean;
+  interiorView?: boolean;
   disableRaycast?: boolean;
   hideCrossSectionCap?: boolean;
   onCameraChange?: () => void;
@@ -5369,7 +5371,8 @@ export function SceneCanvas({
                       heatmapBlend={heatmapBlend}
                       heatmapContrast={heatmapContrast}
                       heatmapColors={heatmapColors ?? emptyHeatmapColors}
-                      invertNormals={invertNormals}
+                      interiorView={interiorView}
+                      cavityGeometry={cavityGeometryByModelId?.get(model.id) ?? null}
                       transform={animatedTransform}
                       mode={mode}
                       transformMode={transformMode}

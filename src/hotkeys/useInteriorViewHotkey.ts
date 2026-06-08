@@ -10,13 +10,14 @@ function isTextInput(element: EventTarget | null): boolean {
   return false;
 }
 
-export function useInteriorViewHotkey(onToggle: () => void) {
+export function useInteriorViewHotkey(onToggle: () => void, enabled: boolean) {
   const { getHotkey } = useHotkeyConfig();
   const toggleKey = getHotkey('CAMERA', 'INTERIOR_VIEW');
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (isTextInput(e.target)) return;
+      if (!enabled) return;
 
       const matches = matchesConfiguredHotkeyDown(e, { key: toggleKey.key, modifier: toggleKey.modifier });
       if (matches && !e.repeat) {
@@ -29,5 +30,5 @@ export function useInteriorViewHotkey(onToggle: () => void) {
     return () => {
       window.removeEventListener('keydown', down, true);
     };
-  }, [toggleKey, onToggle]);
+  }, [toggleKey, onToggle, enabled]);
 }

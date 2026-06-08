@@ -11,7 +11,6 @@ export function FlatUnlitMaterial({
   useVertexColors,
   meshColor,
   clippingPlanes,
-  invertNormals = false,
 }: {
   isSelected: boolean;
   isHovered: boolean;
@@ -22,7 +21,6 @@ export function FlatUnlitMaterial({
   useVertexColors?: boolean;
   meshColor?: string;
   clippingPlanes: THREE.Plane[];
-  invertNormals?: boolean;
 }) {
   const baseFlatColor = meshColor ?? '#a3a3a3';
   const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
@@ -43,7 +41,7 @@ export function FlatUnlitMaterial({
       vertexColors={useVertexColors ?? true}
       color={useVertexColors ?? true ? tintColor : flatColor}
       clippingPlanes={clippingPlanes}
-      side={invertNormals ? THREE.BackSide : THREE.FrontSide}
+      side={THREE.FrontSide}
     />
   );
 }

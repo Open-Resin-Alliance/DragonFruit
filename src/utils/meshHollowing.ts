@@ -51,6 +51,8 @@ export interface HollowReport {
 export interface HollowResult {
   report: HollowReport;
   positions: Float32Array;
+  /** Interior cavity surface mesh positions (for Interior View Mode). */
+  cavityPositions?: Float32Array;
   infillPositions?: Float32Array;
   removedVoxelCenters?: Float32Array;
   removedVoxelIndices?: Uint32Array;
@@ -112,7 +114,9 @@ async function readPositionsFromCommand(
     | 'mesh_hollow_preview_read_positions'
     | 'mesh_hollow_preview_read_infill_positions'
     | 'mesh_hollow_preview_read_removed_voxel_centers'
-    | 'mesh_hollow_preview_read_blocked_voxel_centers',
+    | 'mesh_hollow_preview_read_blocked_voxel_centers'
+    | 'mesh_hollow_preview_read_cavity_positions'
+    | 'mesh_hollow_staged_read_cavity_positions',
 ): Promise<Float32Array> {
   const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>(command);
   let u8: Uint8Array;
@@ -188,7 +192,13 @@ export async function hollowFromGeometry(
   const reportJson = await core.invoke<string>('mesh_hollow_staged', { optionsJson });
   const report = JSON.parse(reportJson) as HollowReport;
   const positions = await readStagedPositions(core.invoke);
-  return { report, positions };
+  let cavityPositions: Float32Array | undefined;
+  try {
+    cavityPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_staged_read_cavity_positions');
+  } catch {
+    cavityPositions = undefined;
+  }
+  return { report, positions, cavityPositions };
 }
 
 export async function stageHollowPreviewSource(
@@ -218,6 +228,12 @@ export async function hollowPreviewFromCapturedSource(
   const reportJson = await core.invoke<string>('mesh_hollow_preview_from_captured_source', { optionsJson });
   const report = JSON.parse(reportJson) as HollowReport;
   const positions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_positions');
+  let cavityPositions: Float32Array | undefined;
+  try {
+    cavityPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_cavity_positions');
+  } catch {
+    cavityPositions = undefined;
+  }
   let infillPositions: Float32Array | undefined;
   let removedVoxelCenters: Float32Array | undefined;
   let removedVoxelIndices: Uint32Array | undefined;
@@ -244,7 +260,7 @@ export async function hollowPreviewFromCapturedSource(
   } catch {
     blockedVoxelCenters = undefined;
   }
-  return { report, positions, infillPositions, removedVoxelCenters, removedVoxelIndices, blockedVoxelCenters };
+  return { report, positions, cavityPositions, infillPositions, removedVoxelCenters, removedVoxelIndices, blockedVoxelCenters };
 }
 
 export async function hollowApplyFromCapturedSource(
@@ -257,7 +273,13 @@ export async function hollowApplyFromCapturedSource(
   const reportJson = await core.invoke<string>('mesh_hollow_apply_from_captured_source', { optionsJson });
   const report = JSON.parse(reportJson) as HollowReport;
   const positions = await readStagedPositions(core.invoke);
-  return { report, positions };
+  let cavityPositions: Float32Array | undefined;
+  try {
+    cavityPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_staged_read_cavity_positions');
+  } catch {
+    cavityPositions = undefined;
+  }
+  return { report, positions, cavityPositions };
 }
 
 export function applyHollowedPositions(geometry: THREE.BufferGeometry, positions: Float32Array): void {

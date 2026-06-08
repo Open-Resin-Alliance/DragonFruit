@@ -2,16 +2,14 @@ import * as THREE from 'three';
 
 export function OpaqueWireOverlayMaterial({
   clippingPlanes,
-  invertNormals = false,
 }: {
   clippingPlanes: THREE.Plane[];
-  invertNormals?: boolean;
 }) {
   return (
     <meshBasicMaterial
       color="#AAAAAA"
       clippingPlanes={clippingPlanes}
-      side={invertNormals ? THREE.BackSide : THREE.DoubleSide}
+      side={THREE.DoubleSide}
       wireframe
       polygonOffset
       polygonOffsetFactor={-1}

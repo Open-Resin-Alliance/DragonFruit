@@ -39,7 +39,6 @@ export function ToonMaterial({
   selectedTintStrength,
   toonSteps,
   clippingPlanes,
-  invertNormals = false,
 }: {
   isSelected: boolean;
   isHovered: boolean;
@@ -51,7 +50,6 @@ export function ToonMaterial({
   selectedTintStrength?: number;
   toonSteps?: number;
   clippingPlanes: THREE.Plane[];
-  invertNormals?: boolean;
 }) {
   const baseColor = meshColor ?? '#a3a3a3';
   const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
@@ -78,7 +76,7 @@ export function ToonMaterial({
       emissive="#000000"
       emissiveIntensity={0}
       clippingPlanes={clippingPlanes}
-      side={invertNormals ? THREE.BackSide : THREE.FrontSide}
+      side={THREE.FrontSide}
     />
   );
 }

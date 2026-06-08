@@ -178,7 +178,8 @@ function StlMeshComponent({
   isExternallyHovered,
   deferExternalTransformUpdates,
   supportSectionGeometry,
-  invertNormals = false,
+  interiorView = false,
+  cavityGeometry,
   children,
 }: {
   geometry: THREE.BufferGeometry;
@@ -198,7 +199,9 @@ function StlMeshComponent({
   heatmapBlend?: number;
   heatmapContrast?: number;
   heatmapColors?: string[];
-  invertNormals?: boolean;
+  interiorView?: boolean;
+  /** Interior cavity mesh to render as solid in Interior View Mode. */
+  cavityGeometry?: THREE.BufferGeometry | null;
   transform?: ModelTransform | null;
   mode?: SupportMode;
   transformMode?: TransformMode;
@@ -812,6 +815,7 @@ if (uDitherAmount > 0.0) {
           else if (actualMeshRef) (actualMeshRef as React.MutableRefObject<THREE.Mesh | null>).current = node;
           if (node) applyRaycastDisabledState();
         }}
+        visible={!(interiorView && cavityGeometry)}
         userData={{ modelId, thumbnailTintTarget: 'modelMesh' }}
         geometry={geometry}
         position={meshLocalOffset}
@@ -1208,14 +1212,55 @@ if (uDitherAmount > 0.0) {
             xrayOpacity={xrayOpacity}
             heatmapContrast={heatmapContrast}
             heatmapColors={heatmapColors}
-            invertNormals={invertNormals}
           />
         )}
       </mesh>
 
-      {showOpaqueWireOverlay && (
+      {/* ── Interior View Mode: x-ray original + solid cavity ── */}
+      {interiorView && cavityGeometry && (
+        <>
+          {/* X-Ray original model: transparent, non-accumulating alpha */}
+          <mesh geometry={geometry} position={meshLocalOffset} renderOrder={0} raycast={() => null}>
+            <meshStandardMaterial
+              color={meshColor ?? '#c8c8ce'}
+              transparent
+              opacity={0.12}
+              roughness={0.55}
+              metalness={0.02}
+              clippingPlanes={planes}
+              side={THREE.FrontSide}
+              depthWrite={false}
+              depthTest={true}
+            />
+          </mesh>
+          {/* Cavity interior: rendered with user's shader */}
+          <mesh geometry={cavityGeometry} position={meshLocalOffset} renderOrder={1}>
+            <MeshShaderMaterial
+              shaderType={baseShaderType}
+              isSelected={!!isSelected}
+              isHovered={isHoveredModel || isMarqueeHovered}
+              useVertexColors={false}
+              hoverTintColor={hoverTintColor}
+              selectedTintColor={selectedTintColor}
+              hoverTintStrength={hoverTintStrength}
+              selectedTintStrength={selectedTintStrength}
+              meshColor={meshColor}
+              matcapVariant={matcapVariant}
+              flatUseVertexColors={flatUseVertexColors}
+              toonSteps={toonSteps}
+              materialRoughness={materialRoughness}
+              clippingPlanes={planes}
+              xrayOpacity={xrayOpacity}
+              heatmapContrast={heatmapContrast}
+              heatmapColors={heatmapColors}
+            />
+          </mesh>
+        </>
+      )}
+
+      {!interiorView && showOpaqueWireOverlay && (
         <mesh geometry={geometry} position={meshLocalOffset} renderOrder={1} raycast={() => null}>
-          <OpaqueWireOverlayMaterial clippingPlanes={planes} invertNormals={invertNormals} />
+          <OpaqueWireOverlayMaterial clippingPlanes={planes} />
         </mesh>
       )}
 

@@ -78,8 +78,9 @@ interface TopBarProps {
   hasPrintingData: boolean;
   viewTypeOverride: MeshShaderType | null;
   onViewTypeOverrideChange: (value: MeshShaderType | null) => void;
-  invertNormals: boolean;
-  onInvertNormalsChange: (value: boolean) => void;
+  interiorView: boolean;
+  onInteriorViewChange: (value: boolean) => void;
+  interiorViewAvailable?: boolean;
   heatmapColors: string[];
   onHeatmapColorChange: (index: number, color: string) => void;
   isSlicingBusy?: boolean;
@@ -140,8 +141,9 @@ export function TopBar({
   hasPrintingData,
   viewTypeOverride,
   onViewTypeOverrideChange,
-  invertNormals,
-  onInvertNormalsChange,
+  interiorView,
+  onInteriorViewChange,
+  interiorViewAvailable = true,
   heatmapColors,
   onHeatmapColorChange,
   isSlicingBusy = false,
@@ -1092,12 +1094,12 @@ export function TopBar({
           />
           <Button
             type="button"
-            variant={invertNormals ? 'primary' : 'secondary'}
+            variant={interiorView ? 'primary' : 'secondary'}
             className="!p-2"
-            onClick={() => onInvertNormalsChange(!invertNormals)}
-            disabled={topbarActionsDisabled}
-            title={invertNormals ? 'Inverted Normals: On (viewing interior)' : 'Inverted Normals: Off'}
-            aria-label={invertNormals ? 'Inverted Normals: On (viewing interior)' : 'Inverted Normals: Off'}
+            onClick={() => onInteriorViewChange(!interiorView)}
+            disabled={topbarActionsDisabled || !interiorViewAvailable}
+            title={interiorView ? 'Interior View: On' : interiorViewAvailable ? 'Interior View: Off' : 'Interior View: Unavailable (apply hollowing first)'}
+            aria-label={interiorView ? 'Interior View: On' : interiorViewAvailable ? 'Interior View: Off' : 'Interior View: Unavailable'}
             data-no-window-drag="true"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">

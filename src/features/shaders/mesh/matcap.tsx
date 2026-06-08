@@ -63,7 +63,6 @@ export function MatcapMaterial({
   selectedTintStrength,
   variant,
   clippingPlanes,
-  invertNormals = false,
 }: {
   isSelected: boolean;
   isHovered: boolean;
@@ -75,7 +74,6 @@ export function MatcapMaterial({
   selectedTintStrength?: number;
   variant?: MatcapVariant;
   clippingPlanes: THREE.Plane[];
-  invertNormals?: boolean;
 }) {
   const matcap = React.useMemo(() => createMatcapTexture(variant ?? 'neutral'), [variant]);
 
@@ -100,7 +98,7 @@ export function MatcapMaterial({
       color={tintColor}
       matcap={matcap}
       clippingPlanes={clippingPlanes}
-      side={invertNormals ? THREE.BackSide : THREE.FrontSide}
+      side={THREE.FrontSide}
     />
   );
 }

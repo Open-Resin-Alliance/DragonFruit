@@ -12,7 +12,6 @@ export function SoftClayMaterial({
   selectedTintStrength,
   materialRoughness,
   clippingPlanes,
-  invertNormals = false,
 }: {
   isSelected: boolean;
   isHovered: boolean;
@@ -24,7 +23,6 @@ export function SoftClayMaterial({
   selectedTintStrength?: number;
   materialRoughness?: number;
   clippingPlanes: THREE.Plane[];
-  invertNormals?: boolean;
 }) {
   const baseColor = meshColor ?? '#a3a3a3';
   const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
@@ -48,7 +46,7 @@ export function SoftClayMaterial({
       roughness={materialRoughness ?? 0.9}
       envMapIntensity={0.34}
       clippingPlanes={clippingPlanes}
-      side={invertNormals ? THREE.BackSide : THREE.FrontSide}
+      side={THREE.FrontSide}
       flatShading={false}
       onBeforeCompile={(shader) => {
         shader.uniforms.uFakeAoStrength = { value: AO_STRENGTH };

@@ -36,6 +36,10 @@ static HOLLOW_PREVIEW_REMOVED_VOXEL_CENTER_BYTES: OnceLock<Mutex<Option<Vec<u8>>
 static HOLLOW_PREVIEW_REMOVED_VOXEL_INDEX_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 static HOLLOW_PREVIEW_BLOCKED_VOXEL_CENTER_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> =
     OnceLock::new();
+/// Cavity interior mesh from the staged hollow path.
+static HOLLOW_STAGED_CAVITY_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+/// Cavity interior mesh from the preview hollow path.
+static HOLLOW_PREVIEW_CAVITY_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 static PUNCH_SOURCE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 static PUNCH_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 
@@ -65,6 +69,14 @@ fn hollow_preview_removed_voxel_index_bytes() -> &'static Mutex<Option<Vec<u8>>>
 
 fn hollow_preview_blocked_voxel_center_bytes() -> &'static Mutex<Option<Vec<u8>>> {
     HOLLOW_PREVIEW_BLOCKED_VOXEL_CENTER_BYTES.get_or_init(|| Mutex::new(None))
+}
+
+fn hollow_staged_cavity_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
+    HOLLOW_STAGED_CAVITY_RESULT_BYTES.get_or_init(|| Mutex::new(None))
+}
+
+fn hollow_preview_cavity_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
+    HOLLOW_PREVIEW_CAVITY_RESULT_BYTES.get_or_init(|| Mutex::new(None))
 }
 
 fn punch_source_bytes() -> &'static Mutex<Option<Vec<u8>>> {
@@ -239,13 +251,21 @@ pub async fn mesh_analyze_staged() -> Result<String, String> {
 pub async fn mesh_hollow_staged(options_json: String) -> Result<String, String> {
     let options = parse_hollow_options(&options_json);
     let bytes = read_staging_bytes()?;
-    let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
+    let (mesh, cavity_bytes, report) = tauri::async_runtime::spawn_blocking(move || {
         let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
         let outcome = hollow_voxel(mesh, &options);
-        Ok::<_, String>((outcome.mesh, outcome.report))
+        let cavity_bytes = outcome.cavity_mesh.as_ref().map(|cm| {
+            let soup = cm.to_triangle_soup();
+            bytemuck::cast_slice::<f32, u8>(&soup).to_vec()
+        });
+        Ok::<_, String>((outcome.mesh, cavity_bytes, outcome.report))
     })
     .await
     .map_err(|e| format!("hollow task panicked: {e}"))??;
+
+    *hollow_staged_cavity_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow staged cavity result lock poisoned: {e}"))? = cavity_bytes;
 
     replace_staging_with_mesh(&mesh)?;
     serde_json::to_string(&report).map_err(|e| format!("serialize hollow report: {e}"))
@@ -347,6 +367,7 @@ pub async fn mesh_hollow_preview_from_captured_source(
 
     let (
         positions_bytes,
+        cavity_bytes,
         infill_positions_bytes,
         removed_voxel_center_bytes,
         removed_voxel_index_bytes,
@@ -356,6 +377,10 @@ pub async fn mesh_hollow_preview_from_captured_source(
         let outcome = session.run(&options);
         let soup = outcome.mesh.to_triangle_soup();
         let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&soup).to_vec();
+        let cavity_bytes = outcome.cavity_mesh.as_ref().map(|cm| {
+            let soup = cm.to_triangle_soup();
+            bytemuck::cast_slice::<f32, u8>(&soup).to_vec()
+        });
         let infill_bytes = outcome.preview_infill_mesh.map(|mesh| {
             let soup = mesh.to_triangle_soup();
             bytemuck::cast_slice::<f32, u8>(&soup).to_vec()
@@ -368,6 +393,7 @@ pub async fn mesh_hollow_preview_from_captured_source(
             bytemuck::cast_slice::<f32, u8>(&outcome.blocked_voxel_centers).to_vec();
         Ok::<_, String>((
             bytes,
+            cavity_bytes,
             infill_bytes,
             removed_voxel_center_bytes,
             removed_voxel_index_bytes,
@@ -381,6 +407,11 @@ pub async fn mesh_hollow_preview_from_captured_source(
     *hollow_preview_result_bytes()
         .lock()
         .map_err(|e| format!("hollow preview result lock poisoned: {e}"))? = Some(positions_bytes);
+    if let Some(cb) = cavity_bytes {
+        *hollow_preview_cavity_result_bytes()
+            .lock()
+            .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))? = Some(cb);
+    }
     *hollow_preview_infill_result_bytes()
         .lock()
         .map_err(|e| format!("hollow preview infill result lock poisoned: {e}"))? =
@@ -458,12 +489,20 @@ pub async fn mesh_hollow_apply_from_captured_source(
         session
     };
 
-    let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
+    let (mesh, cavity_bytes, report) = tauri::async_runtime::spawn_blocking(move || {
         let outcome = session.run(&options);
-        Ok::<_, String>((outcome.mesh, outcome.report))
+        let cavity_bytes = outcome.cavity_mesh.as_ref().map(|cm| {
+            let soup = cm.to_triangle_soup();
+            bytemuck::cast_slice::<f32, u8>(&soup).to_vec()
+        });
+        Ok::<_, String>((outcome.mesh, cavity_bytes, outcome.report))
     })
     .await
     .map_err(|e| format!("hollow apply task panicked: {e}"))??;
+
+    *hollow_staged_cavity_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow staged cavity result lock poisoned: {e}"))? = cavity_bytes;
 
     replace_staging_with_mesh(&mesh)?;
     serde_json::to_string(&report).map_err(|e| format!("serialize hollow apply report: {e}"))
@@ -532,6 +571,33 @@ pub async fn mesh_hollow_preview_read_blocked_voxel_centers() -> Result<Response
         .ok_or_else(|| {
             "No hollow preview blocked voxel center result — call mesh_hollow_preview_from_captured_source first"
                 .to_string()
+        })?;
+    Ok(Response::new(bytes))
+}
+
+/// Reads the cavity interior mesh positions from the last preview hollow operation.
+#[tauri::command]
+pub async fn mesh_hollow_preview_read_cavity_positions() -> Result<Response, String> {
+    let bytes = hollow_preview_cavity_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))?
+        .clone()
+        .ok_or_else(|| {
+            "No hollow preview cavity result — call mesh_hollow_preview_from_captured_source first"
+                .to_string()
+        })?;
+    Ok(Response::new(bytes))
+}
+
+/// Reads the cavity interior mesh positions from the last staged hollow operation.
+#[tauri::command]
+pub async fn mesh_hollow_staged_read_cavity_positions() -> Result<Response, String> {
+    let bytes = hollow_staged_cavity_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow staged cavity result lock poisoned: {e}"))?
+        .clone()
+        .ok_or_else(|| {
+            "No hollow staged cavity result — call mesh_hollow_staged first".to_string()
         })?;
     Ok(Response::new(bytes))
 }
