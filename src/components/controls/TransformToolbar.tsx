@@ -1,5 +1,5 @@
 import React from 'react';
-import { Hand, Move3D, Paintbrush2, LayoutGrid, ArrowDownToLine, FlipHorizontal2, Droplets } from 'lucide-react';
+import { Hand, Move3D, Paintbrush2, LayoutGrid, ArrowDownToLine, FlipHorizontal2, Droplets, Scissors } from 'lucide-react';
 import type { TransformMode } from '@/hooks/useModelTransform';
 import { usePlatformModifier } from '@/hooks/usePlatformModifier';
 
@@ -19,6 +19,7 @@ export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformT
     { mode: 'placeOnFace', label: 'On-Face', icon: <ArrowDownToLine className="w-4 h-4" />, hint: 'Orient flat against plate' },
     { mode: 'mirror', label: 'Mirror', icon: <FlipHorizontal2 className="w-4 h-4" />, hint: 'Mirror across X, Y, or Z' },
     { mode: 'hollowing', label: 'Hollow', icon: <Droplets className="w-4 h-4" />, hint: 'Create cavity or open-face shell' },
+    { mode: 'organicCut', label: 'Cut', icon: <Scissors className="w-4 h-4" />, hint: 'Split the model along a drawn seam' },
     { mode: 'smoothing', label: 'Smooth', icon: <Paintbrush2 className="w-4 h-4" />, hint: 'Sculpt and smooth surface' },
     { mode: 'arrange', label: 'Arrange', icon: <LayoutGrid className="w-4 h-4" />, hint: 'Auto-arrange models on plate' },
   ];
@@ -56,13 +57,15 @@ export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformT
     >
       <div
         className={`relative grid items-center rounded-full px-1 py-1 ${
-          buttons.length === 7
-            ? 'grid-cols-7'
-            : buttons.length === 6
-              ? 'grid-cols-6'
-              : buttons.length === 5
-                ? 'grid-cols-5'
-                : 'grid-cols-4'
+          buttons.length === 8
+            ? 'grid-cols-8'
+            : buttons.length === 7
+              ? 'grid-cols-7'
+              : buttons.length === 6
+                ? 'grid-cols-6'
+                : buttons.length === 5
+                  ? 'grid-cols-5'
+                  : 'grid-cols-4'
         }`}
         style={{
           background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 50%)',

@@ -9,6 +9,7 @@ pub mod arrangement;
 pub mod core;
 pub mod hollowing;
 pub mod io;
+pub mod organic_cut;
 pub mod repair;
 pub mod report;
 
@@ -18,6 +19,10 @@ pub use crate::hollowing::{
     hollow_voxel, punch_cylinders, DrainHoleSpec, HolePunchOptions, HolePunchOutcome,
     HolePunchReport, HolePunchSpec, HollowMode, HollowOptions, HollowOutcome, HollowReport,
     HollowSession, OpenFace,
+};
+pub use crate::organic_cut::{
+    organic_cut, OrganicCutLoopPoint, OrganicCutOptions, OrganicCutOutcome, OrganicCutReport,
+    OrganicCutSpec,
 };
 pub use crate::repair::{classify_support_split, repair, RepairOptions, RepairOutcome};
 pub use crate::report::MeshHealthReport;

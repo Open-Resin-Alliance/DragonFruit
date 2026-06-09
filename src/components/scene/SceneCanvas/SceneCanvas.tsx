@@ -358,6 +358,7 @@ export function SceneCanvas({
   onSupportClick,
   onHolePunchClick,
   onHolePunchHover,
+  onOrganicCutClick,
   onSupportHover,
   onActiveModelChange,
   onMarqueeSelectionChange,
@@ -492,6 +493,7 @@ export function SceneCanvas({
   onSupportClick?: (hit: THREE.Intersection) => void;
   onHolePunchClick?: (hit: THREE.Intersection) => void;
   onHolePunchHover?: (hit: THREE.Intersection | null) => void;
+  onOrganicCutClick?: (hit: THREE.Intersection) => void;
   onSupportHover?: (hit: THREE.Intersection | null) => void;
   onActiveModelChange?: (id: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => void;
   onMarqueeSelectionChange?: (ids: string[]) => void;
@@ -5425,6 +5427,7 @@ export function SceneCanvas({
                       supportSectionGeometry={model.geometry.meshDefects?.supportSectionGeometry ?? null}
                       onHolePunchClick={onHolePunchClick}
                       onHolePunchHover={onHolePunchHover}
+                      onOrganicCutClick={onOrganicCutClick}
                     >
                       {useActiveModelAttachedSupportProxy && isActive && (
                         <group

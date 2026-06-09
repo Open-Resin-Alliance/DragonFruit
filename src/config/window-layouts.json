@@ -302,6 +302,53 @@
       }
     },
     {
+      "id": "prepare-organic-cut",
+      "matchPanelIds": ["prepare-models", "prepare-organic-cut-panel"],
+      "order": [
+        "prepare-models",
+        "visual-settings",
+        "prepare-organic-cut-panel"
+      ],
+      "anchors": {
+        "visual-settings": {
+          "to": "prepare-models",
+          "side": "right-edge"
+        },
+        "prepare-organic-cut-panel": {
+          "to": "visual-settings",
+          "side": "left"
+        }
+      }
+    },
+    {
+      "id": "prepare-organic-cut-debug",
+      "matchPanelIds": [
+        "prepare-models",
+        "prepare-debug-primitives",
+        "prepare-organic-cut-panel"
+      ],
+      "order": [
+        "prepare-models",
+        "prepare-debug-primitives",
+        "visual-settings",
+        "prepare-organic-cut-panel"
+      ],
+      "anchors": {
+        "prepare-debug-primitives": {
+          "to": "prepare-models",
+          "side": "below"
+        },
+        "visual-settings": {
+          "to": "prepare-models",
+          "side": "right-edge"
+        },
+        "prepare-organic-cut-panel": {
+          "to": "visual-settings",
+          "side": "left"
+        }
+      }
+    },
+    {
       "id": "analysis",
       "matchPanelIds": ["analysis-scan-card", "analysis-workflow"],
       "order": [

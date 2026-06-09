@@ -43,6 +43,7 @@ import { HollowingPanel, type HollowingPanelState } from '../features/hollowing'
 import { HolePunchPanel, type HolePunchPanelState } from '../features/hole-punching/HolePunchPanel';
 import { HolePunchPreviewCylinder } from '@/features/hole-punching/HolePunchPreviewCylinder';
 import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
+import { OrganicCutPanel, OrganicCutTool, useOrganicCutSession } from '@/features/organicCut';
 import { MirrorTool } from '@/features/mirror/MirrorTool';
 import { bakeWithFlips } from '@/features/mirror/logic/bakeWithFlips';
 import { buildMirrorSupportTransforms, reflectTransformAcrossWorldAxis } from '@/features/mirror/logic/buildMirrorSupportTransforms';
@@ -17399,6 +17400,62 @@ export default function Home() {
 
   const mirrorToolActive = scene.mode === 'prepare' && transformMgr.transformMode === 'mirror';
 
+  // Organic Cut tool session. All Cutting-Mode state and the cut round-trip live
+  // inside the feature hook; page.tsx only supplies the active geometry and
+  // renders the two mounts below. See src/features/organicCut/.
+  const organicCutToolActive = scene.mode === 'prepare' && transformMgr.transformMode === 'organicCut';
+  const organicCut = useOrganicCutSession({
+    toolActive: organicCutToolActive,
+    activeGeometry: scene.activeModel?.geometry.geometry ?? null,
+    activeGeometryKey: scene.activeModel?.id ?? null,
+    commitParts: React.useCallback((partA: THREE.BufferGeometry, partB: THREE.BufferGeometry) => {
+      const target = scene.activeModel;
+      if (!target) {
+        // eslint-disable-next-line no-console
+        console.warn('[organicCut] commitParts: no active model');
+        return false;
+      }
+      // ONE atomic split — replacing + adding as two separate calls races on
+      // stale state and deletes a piece.
+      const newId = scene.splitModelInTwo(target.id, partA, partB, 'Organic Cut');
+      // eslint-disable-next-line no-console
+      console.info(`[organicCut] commitParts OK | partB newModelId=${newId ?? 'null'}`);
+      return newId != null;
+    }, [scene]),
+  });
+
+  // Surface picking for the Cut tool rides the SAME StlMesh click pipeline as
+  // hole-punch (camera/orbit/gizmo aware), rather than a separate pick mesh.
+  // Convert the hit into a model-LOCAL loop point (matches the mesh object's own
+  // geometry space) so the stored loop is independent of the plate transform.
+  const handleOrganicCutClick = React.useCallback((hit: THREE.Intersection) => {
+    const target = scene.activeModel;
+    if (!target) return;
+    const hitModelId = (hit.object.userData?.modelId as string | undefined) ?? target.id;
+    if (hitModelId !== target.id) return;
+
+    hit.object.updateWorldMatrix(true, false);
+    const localPoint = hit.object.worldToLocal(hit.point.clone());
+    const localNormal = hit.face?.normal
+      ? hit.face.normal.clone().normalize()
+      : new THREE.Vector3(0, 0, 1);
+
+    const t = target.transform;
+    // eslint-disable-next-line no-console
+    console.info(
+      `[organicCut] pick | world=(${hit.point.x.toFixed(1)},${hit.point.y.toFixed(1)},${hit.point.z.toFixed(1)})` +
+      ` local=(${localPoint.x.toFixed(1)},${localPoint.y.toFixed(1)},${localPoint.z.toFixed(1)})` +
+      ` modelPos=(${t.position.x.toFixed(1)},${t.position.y.toFixed(1)},${t.position.z.toFixed(1)})` +
+      ` modelRot=(${t.rotation.x.toFixed(2)},${t.rotation.y.toFixed(2)},${t.rotation.z.toFixed(2)})` +
+      ` modelScale=(${t.scale.x.toFixed(2)},${t.scale.y.toFixed(2)},${t.scale.z.toFixed(2)})`,
+    );
+
+    organicCut.addPoint({
+      position: [localPoint.x, localPoint.y, localPoint.z],
+      normal: [localNormal.x, localNormal.y, localNormal.z],
+    });
+  }, [organicCut, scene.activeModel]);
+
   // Mirror session state: while the user is in Mirror mode we don't bake the
   // geometry per-click (a 2.4M-vert bake is slow on big meshes). Instead, each
   // click toggles a parity bit and applies a negative-scale transform — the GPU
@@ -18013,6 +18070,22 @@ export default function Home() {
                   interiorViewAvailable={hasCavityGeometry}
                 />
               </>
+            )}
+
+            {scene.geom && transformMgr.transformMode === 'organicCut' && (
+              <OrganicCutPanel
+                key="prepare-organic-cut-panel"
+                state={organicCut.panelState}
+                onStateChange={organicCut.setPanelState}
+                sessionStatus={organicCut.status}
+                pointCount={organicCut.pointCount}
+                onClearLoop={organicCut.clearLoop}
+                onCloseLoop={organicCut.closeLoop}
+                onApply={organicCut.apply}
+                isApplying={organicCut.isApplying}
+                canApply={organicCut.canApply}
+                canCloseLoop={organicCut.canCloseLoop}
+              />
             )}
 
             {scene.models.length > 0 && transformMgr.transformMode === 'arrange' && (
@@ -18631,6 +18704,7 @@ export default function Home() {
             onSupportClick={supports.onModelClick}
             onHolePunchClick={scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing' && !hollowingEditMode ? handleHolePunchClick : undefined}
             onHolePunchHover={scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing' && !hollowingEditMode ? handleHolePunchHover : undefined}
+            onOrganicCutClick={organicCutToolActive ? handleOrganicCutClick : undefined}
             onSupportHover={supports.onModelHover}
             onActiveModelChange={handleSceneModelSelection}
             onMarqueeSelectionChange={handleSceneMarqueeSelection}
@@ -18886,6 +18960,16 @@ export default function Home() {
                 resolveAnimatedTransform={transformMgr.resolveLiveTransform}
                 onFaceSelect={handlePlaceOnFace}
                 onBeforeFaceApply={handlePlaceOnFaceBeforeApply}
+              />
+            )}
+            {organicCutToolActive && (
+              <OrganicCutTool
+                models={scene.models}
+                activeModelId={displayActiveModelId}
+                activeTransform={transformMgr.transform}
+                active={!organicCut.isApplying}
+                loop={organicCut.loop}
+                onAddPoint={organicCut.addPoint}
               />
             )}
             {scene.mode === 'prepare' && transformMgr.transformMode === 'mirror' && (

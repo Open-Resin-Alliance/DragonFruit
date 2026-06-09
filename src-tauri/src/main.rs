@@ -3266,6 +3266,11 @@ fn main() {
             mesh_repair::mesh_punch_capture_staged_source,
             mesh_repair::mesh_punch_from_captured_source,
             mesh_repair::mesh_punch_read_positions,
+            mesh_repair::mesh_organic_cut_staged,
+            mesh_repair::mesh_organic_cut_capture_staged_source,
+            mesh_repair::mesh_organic_cut_from_captured_source,
+            mesh_repair::mesh_organic_cut_read_part_a,
+            mesh_repair::mesh_organic_cut_read_part_b,
             mesh_repair::mesh_repair_read_positions
         ])
         .run(tauri::generate_context!())

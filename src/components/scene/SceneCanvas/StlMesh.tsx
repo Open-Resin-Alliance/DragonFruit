@@ -147,6 +147,7 @@ function StlMeshComponent({
   onSupportClick,
   onHolePunchClick,
   onHolePunchHover,
+  onOrganicCutClick,
   onSupportHover,
   onActiveModelChange,
   disableRaycast,
@@ -210,6 +211,7 @@ function StlMeshComponent({
   onSupportClick?: (hit: THREE.Intersection) => void;
   onHolePunchClick?: (hit: THREE.Intersection) => void;
   onHolePunchHover?: (hit: THREE.Intersection | null) => void;
+  onOrganicCutClick?: (hit: THREE.Intersection) => void;
   onSupportHover?: (hit: THREE.Intersection | null) => void;
   onActiveModelChange?: (id: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => void;
   disableRaycast?: boolean;
@@ -837,6 +839,27 @@ if (uDitherAmount > 0.0) {
 
           if (shouldSuppressModelInteraction) {
             e.stopPropagation();
+            return;
+          }
+
+          if (mode === 'prepare' && transformMode === 'organicCut' && onOrganicCutClick) {
+            // If this isn't the active model yet, the first click just selects it
+            // (matches hole-punch behavior) so the user can pick which model to cut.
+            if (!isActiveModel) {
+              e.stopPropagation();
+              if (onActiveModelChange) {
+                onActiveModelChange(modelId, { selectionMode: 'single' });
+              }
+              return;
+            }
+
+            const firstIsGizmo = e.intersections[0]?.object.userData?.isGizmoHandle === true;
+            if (isGizmoHoverCategory || firstIsGizmo) {
+              return;
+            }
+
+            e.stopPropagation();
+            onOrganicCutClick(e as unknown as THREE.Intersection);
             return;
           }
 

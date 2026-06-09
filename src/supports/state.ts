@@ -318,7 +318,7 @@ function resolveLowerSegmentIndex(segments: Segment[], jointId: string) {
     return upper - 1;
 }
 
-function recomputeLeafContactConeAxisAndLength(
+export function recomputeLeafContactConeAxisAndLength(
     tipPos: Vec3,
     surfaceNormal: Vec3,
     knotPos: Vec3,
