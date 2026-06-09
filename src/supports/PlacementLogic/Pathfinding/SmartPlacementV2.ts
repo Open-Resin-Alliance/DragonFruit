@@ -31,6 +31,7 @@ import type { SupportOccupancy } from './SupportOccupancy';
 import {
     getSupportPathfindingDebugEnabled,
     getSupportPathfindingDebugTuningEnabled,
+    getPotentialFieldTuning,
     setSupportPathfindingDebugSnapshot,
     type SupportPathfindingDebugEvent,
     type SupportPathfindingDebugOutcome,
@@ -2374,10 +2375,14 @@ export function calculateSmartPlacementV2(
 
     let result;
     if (settings.shaft.routingAlgorithm === 'potential') {
+        const pfTuning = getSupportPathfindingDebugTuningEnabled() ? getPotentialFieldTuning() : null;
         const pfResult = solvePotentialField(sdf, socketPos, rootTopZ, {
             clearanceMm: clearance,
-            maxLateralMm: maxTotalLateralMm,
-            stepMm: 1.0,
+            maxLateralMm: pfTuning ? pfTuning.maxLateralMm : maxTotalLateralMm,
+            marginMm: pfTuning ? pfTuning.marginMm : undefined,
+            repulsionStrength: pfTuning ? pfTuning.repulsionStrength : undefined,
+            stepMm: pfTuning ? pfTuning.stepMm : 1.0,
+            tangentWeight: pfTuning ? pfTuning.tangentWeight : undefined,
             simplify: true,
         });
         result = {

@@ -16,6 +16,8 @@ export interface PotentialFieldSolverOptions {
     maxLateralMm?: number;
     /** Set to true to simplify the path to straight segments/joints. Default true. */
     simplify?: boolean;
+    /** Swirling tangent force coefficient/weight. Default 0.5. */
+    tangentWeight?: number;
 }
 
 export interface PotentialFieldSolverResult {
@@ -85,6 +87,7 @@ export function solvePotentialField(
     const maxLateral = opts.maxLateralMm ?? 30;
     const maxLateralSq = maxLateral * maxLateral;
     const simplify = opts.simplify ?? true;
+    const tangentWeight = opts.tangentWeight ?? 0.5;
 
     const path: Vec3[] = [{ ...startPos }];
     let current = { ...startPos };
@@ -171,7 +174,6 @@ export function solvePotentialField(
 
         // Transfer vertical repulsion to lateral escape force to slide out under overhangs.
         const lateralSlideWeight = grad.z > 0 ? grad.z * 0.90 : 0;
-        const tangentWeight = 0.5; // Swirl around obstacles to escape pockets and slide along walls
 
         let vx = 0 + wRepulsion * (grad.x + escapeX * lateralSlideWeight + tx * tangentWeight);
         let vy = 0 + wRepulsion * (grad.y + escapeY * lateralSlideWeight + ty * tangentWeight);
