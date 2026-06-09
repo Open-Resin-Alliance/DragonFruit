@@ -18651,6 +18651,7 @@ export default function Home() {
             gpuPickingTest={false}
             selectionHighlightMode={effectiveSelectionHighlightMode}
             higherContrastModelEdges={workspaceCameraSettings.higherContrastModelEdges}
+            blockerEditMode={hollowingEditMode}
             selectionColor={scene.selectionColor}
             hoverColor={scene.hoverColor}
             hoverTintStrength={effectiveHoverTintStrengthForScene}

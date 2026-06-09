@@ -180,6 +180,7 @@ function StlMeshComponent({
   supportSectionGeometry,
   higherContrastModelEdges = false,
   edgeGeometry,
+  blockerEditMode = false,
   interiorView = false,
   cavityGeometry,
   children,
@@ -205,6 +206,8 @@ function StlMeshComponent({
   higherContrastModelEdges?: boolean;
   /** Pre-computed hard-edge geometry for Higher Contrast Model Edges overlay. */
   edgeGeometry?: THREE.EdgesGeometry | null;
+  /** When true, suppresses the edge overlay (e.g. during voxel blocker editing). */
+  blockerEditMode?: boolean;
   interiorView?: boolean;
   /** Interior cavity mesh to render as solid in Interior View Mode. */
   cavityGeometry?: THREE.BufferGeometry | null;
@@ -1306,7 +1309,7 @@ if (uDitherAmount > 0.0) {
         </mesh>
       )}
 
-      {!interiorView && higherContrastModelEdges && !showOpaqueWireOverlay && baseShaderType !== 'wireframe' && edgeLinesGeometry && (
+      {!interiorView && higherContrastModelEdges && !showOpaqueWireOverlay && baseShaderType !== 'wireframe' && !blockerEditMode && edgeLinesGeometry && (
         <lineSegments geometry={edgeLinesGeometry} position={meshLocalOffset} renderOrder={2} raycast={() => null}>
           <lineBasicMaterial color="#000000" transparent opacity={0.55} depthTest polygonOffset polygonOffsetFactor={-1} polygonOffsetUnits={-1} clippingPlanes={planes} />
         </lineSegments>

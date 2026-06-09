@@ -370,6 +370,7 @@ export function SceneCanvas({
   gpuPickingTest,
   selectionHighlightMode,
   higherContrastModelEdges = false,
+  blockerEditMode = false,
   blockSupportPlacement,
   supportsRef,
   supportDragGroupRef,
@@ -505,6 +506,7 @@ export function SceneCanvas({
   gpuPickingTest?: boolean;
   selectionHighlightMode?: SelectionHighlightMode;
   higherContrastModelEdges?: boolean;
+  blockerEditMode?: boolean;
   blockSupportPlacement?: boolean;
   supportsRef?: React.RefObject<THREE.Group | null>;
   supportDragGroupRef?: React.RefObject<THREE.Group | null>;
@@ -5379,6 +5381,7 @@ export function SceneCanvas({
                       cavityGeometry={cavityGeometryByModelId?.get(model.id) ?? null}
                       higherContrastModelEdges={higherContrastModelEdges}
                       edgeGeometry={model.geometry.edgeGeometry}
+                      blockerEditMode={blockerEditMode}
                       transform={animatedTransform}
                       mode={mode}
                       transformMode={transformMode}
