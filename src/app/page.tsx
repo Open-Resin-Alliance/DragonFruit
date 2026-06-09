@@ -704,8 +704,12 @@ function worldMmToLocalMm(worldMm: number, scaleFactor: number): number {
   return Math.max(1e-4, worldMm / Math.max(1e-6, scaleFactor));
 }
 
-/** Convert a desired voxel size (mm) to a voxel resolution count, given the
- *  model's largest bounding-box extent in local space. Clamped to [24, 192]. */
+/** Convert a desired voxel size (mm in local space) to a voxel resolution
+ *  count, given the model's largest bounding-box extent in local space.
+ *  Clamped to [24, 192].
+ *
+ *  Callers MUST convert world-space voxel size to local space via
+ *  `worldMmToLocalMm(voxelSizeMm, scaleFactor)` before calling this. */
 function computeVoxelResolution(voxelSizeMm: number, maxExtent: number): number {
   const raw = Math.round(maxExtent / Math.max(0.05, voxelSizeMm));
   return Math.min(192, Math.max(24, raw));
@@ -14935,7 +14939,7 @@ export default function Home() {
         const maxExtent = Math.max(bboxSize.x, bboxSize.y, bboxSize.z);
         const options: HollowOptions = {
           mode: effectiveHollowMode,
-          voxelResolution: computeVoxelResolution(hollowingState.voxelSizeMm, maxExtent),
+          voxelResolution: computeVoxelResolution(worldMmToLocalMm(hollowingState.voxelSizeMm, shellScaleFactor), maxExtent),
           shellThicknessMm: worldMmToLocalMm(hollowingState.shellThicknessMm, shellScaleFactor),
           blockedVoxelIndices: blockedHollowVoxelIndices,
           infillMode: hollowingState.infillMode,
@@ -16544,7 +16548,10 @@ export default function Home() {
     const effectiveHollowMode = state.mode === 'shell_open_face'
       ? 'cavity'
       : state.mode;
-    const voxelResolution = computeVoxelResolution(state.voxelSizeMm, maxExtent);
+    const voxelResolution = computeVoxelResolution(
+      worldMmToLocalMm(state.voxelSizeMm, getUniformScaleFactorForThickness(modelScale)),
+      maxExtent,
+    );
     const shellThicknessMmWorld = preview
       ? (tuning?.previewShellThicknessMm ?? state.shellThicknessMm)
       : state.shellThicknessMm;
