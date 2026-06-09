@@ -12,9 +12,14 @@ import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
 import { isCollisionFrustumBlocked } from '../../PlacementLogic/CollisionAvoidance';
 
 const BRANCH_CONE_COLLISION_SAFETY_MM = 0.3;
-const BRANCH_SOCKET_POLAR_DEG = [0, 10, 20, 30, 40, 50, 60];
+// Branch socket search: polar angles from surface normal.  Capped at 30°
+// to match the trunk cone axis deviation limit — branches should not bend
+// the contact cone drastically away from the attachment surface.
+const BRANCH_SOCKET_POLAR_DEG = [0, 10, 20, 30];
 const BRANCH_SOCKET_AZIMUTH_DEG = [0, 25, -25, 50, -50, 85, -85, 120, -120, 155, -155, 180];
-const BRANCH_SOCKET_STRETCH_FACTORS = [1, 1.05, 1.12, 1.2, 1.32, 1.48, 1.68];
+// Stretch factors: how much to extend the cone beyond nominal length.
+// Kept conservative — long stretched cones look unnatural on branches.
+const BRANCH_SOCKET_STRETCH_FACTORS = [1, 1.05, 1.12, 1.2];
 
 function normalizeOrFallback(vector: THREE.Vector3, fallback: THREE.Vector3): THREE.Vector3 {
     if (vector.lengthSq() < 0.000001) {

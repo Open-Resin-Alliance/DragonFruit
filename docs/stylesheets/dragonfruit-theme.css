@@ -431,6 +431,174 @@
   margin-top: 0.1rem;
 }
 
+.df-show-all-nightlies {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  width: 100%;
+  border-top: 1px solid color-mix(in srgb, var(--df-accent-primary), transparent 75%);
+  color: var(--md-default-fg-color--light);
+  font-size: 0.78rem;
+}
+
+.df-show-all-nightlies .df-download-dropdown-label {
+  font-weight: 500;
+}
+
+/* Nightly modal overlay */
+.df-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, #000, transparent 35%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: df-modal-fade-in 0.15s ease;
+}
+
+.df-modal-overlay[hidden] {
+  display: none;
+}
+
+.df-modal {
+  background: color-mix(in srgb, #12161d, white 4%);
+  border: 1px solid color-mix(in srgb, var(--df-accent-primary), transparent 55%);
+  border-radius: 0.6rem;
+  box-shadow: 0 1rem 3rem color-mix(in srgb, #000, transparent 40%);
+  width: min(90vw, 42rem);
+  max-height: min(80vh, 35rem);
+  display: flex;
+  flex-direction: column;
+  animation: df-modal-slide-up 0.18s ease;
+}
+
+.df-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid color-mix(in srgb, #fff, transparent 88%);
+}
+
+.df-modal-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.df-modal-close {
+  background: none;
+  border: none;
+  color: var(--md-default-fg-color--lighter);
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  transition: color 0.15s ease;
+}
+
+.df-modal-close:hover {
+  color: #fff;
+}
+
+.df-modal-body {
+  padding: 0.5rem 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.df-modal-loading,
+.df-modal-empty {
+  padding: 2rem 1.25rem;
+  text-align: center;
+  color: var(--md-default-fg-color--lighter);
+  margin: 0;
+}
+
+.df-modal-nightly-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 1.25rem;
+}
+
+.df-modal-nightly-row + .df-modal-nightly-row {
+  border-top: 1px solid color-mix(in srgb, #fff, transparent 92%);
+}
+
+.df-modal-nightly-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.df-modal-nightly-name {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #fff;
+  text-decoration: none;
+}
+
+.df-modal-nightly-name:hover {
+  color: var(--df-accent-primary);
+  text-decoration: underline;
+}
+
+.df-modal-nightly-meta {
+  font-size: 0.72rem;
+  color: var(--md-default-fg-color--lighter);
+}
+
+.df-modal-nightly-assets {
+  display: flex;
+  gap: 0.4rem;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.df-modal-asset-link {
+  display: inline-block;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border-radius: 0.25rem;
+  background: rgba(186, 247, 46, 0.15);
+  color: #baf72e;
+  text-decoration: none;
+  transition: background 0.12s ease;
+}
+
+.df-modal-asset-link:hover {
+  background: rgba(186, 247, 46, 0.3);
+  color: #e2fe8a;
+}
+
+.df-modal-no-assets {
+  font-size: 0.72rem;
+  color: var(--md-default-fg-color--lighter);
+}
+
+body.df-modal-open {
+  overflow: hidden;
+}
+
+@keyframes df-modal-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes df-modal-slide-up {
+  from { opacity: 0; transform: translateY(0.75rem); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 @media (max-width: 720px) {
   .df-homepage-page .md-content {
     height: calc(100dvh - var(--df-home-header-height, 3.25rem));

@@ -296,14 +296,21 @@ export function useTrunkPlacementV2() {
 
         const tipPos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
 
-        // Pass mesh for collision detection
-        const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
-        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh, isPreview: true });
         const settings = getSettings();
+        const isGridMode = Boolean(settings.grid?.enabled && settings.grid.spacingMm > 0);
 
-        // Fast-path for cavity hover when stagnated (closed cavity) or budget
-        // exhausted after both V1+V2 failed — these are genuine routing dead-ends.
-        if (result.stagnated || result.exhaustedBudget) {
+        // Grid mode is intentionally grid-native: build a cheap straight
+        // candidate, then let the fixed-grid resolver snap/merge/reject it.
+        // Feeding the mesh here starts the flexible A* router, which is the
+        // wrong cost model for hover on a fixed lattice.
+        const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
+        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh: isGridMode ? undefined : mesh, isPreview: true });
+
+        // Fast-path for cavity hover when the trunk can't route to the build
+        // plate: try a stick/twig bridge to the nearest surface below the tip.
+        // This covers stagnation, budget exhaustion, AND general collision errors
+        // (e.g. tip inside a "mouth" cavity where the straight path is blocked).
+        if (!isGridMode && (result.error || result.stagnated || result.exhaustedBudget)) {
             if (mesh) {
                 const cavityStick = resolveCavityStickPreview(hit, tipPos, tipNormal, modelId, mesh);
                 if (cavityStick) {
@@ -313,10 +320,15 @@ export function useTrunkPlacementV2() {
                     return;
                 }
             }
-            setPreviewData(result.supportData);
-            setPreviewError(forcePlaceOverrideRef.current ? null : (result.error || null));
-            setPreviewWarning(null);
-            return;
+            // No cavity floor found — show the trunk error as fallback.
+            if (result.stagnated || result.exhaustedBudget) {
+                setPreviewData(result.supportData);
+                setPreviewError(forcePlaceOverrideRef.current ? null : (result.error || null));
+                setPreviewWarning(null);
+                return;
+            }
+            // For non-stagnation errors, fall through to grid placement decision
+            // (which may still place a branch or reject).
         }
 
         const decision = decideGridPlacement({
@@ -440,14 +452,18 @@ export function useTrunkPlacementV2() {
         const tipPos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
         const modelId = hit.object.userData.modelId || 'unknown';
         
-        // Pass mesh for collision detection
-        const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
-        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh });
+        const settings = getSettings();
+        const isGridMode = Boolean(settings.grid?.enabled && settings.grid.spacingMm > 0);
 
-        // When the pathfinder stagnates or exhausts both V1+V2 budgets, the tip
-        // can't route to the build plate. Fall back to a cavity stick/twig that
-        // spans straight down to the nearest suitable surface.
-        if (result.stagnated || result.exhaustedBudget) {
+        // In grid mode, avoid the flexible A* route search entirely. The grid
+        // resolver owns snapping and same-node merge behavior.
+        const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
+        const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh: isGridMode ? undefined : mesh });
+
+        // When the trunk can't route to the build plate (stagnation, budget
+        // exhaustion, or general collision), fall back to a cavity stick/twig
+        // that spans from the tip down to the nearest surface below.
+        if (!isGridMode && (result.error || result.stagnated || result.exhaustedBudget)) {
             if (mesh) {
                 const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
                 if (cavityStick) {
@@ -468,8 +484,9 @@ export function useTrunkPlacementV2() {
                     return;
                 }
             }
-            // No cavity floor found — bail silently; hover preview already shows the error.
-            if (forcePlaceOverrideRef.current) {
+            // No cavity floor found — for stagnation/budget, bail silently.
+            // For other errors (collision), let the user force-place if desired.
+            if (forcePlaceOverrideRef.current && (result.stagnated || result.exhaustedBudget || result.error)) {
                 commitTrunkBuild(result);
             }
             return;
@@ -477,7 +494,6 @@ export function useTrunkPlacementV2() {
 
         // In grid mode, decideGridPlacement may override a trunk error into a place_branch decision.
         // Only bail on trunk errors when grid is disabled (direct placement path).
-        const settings = getSettings();
         if (result.error && !settings.grid?.enabled) {
             if (forcePlaceOverrideRef.current) {
                 commitTrunkBuild(result);

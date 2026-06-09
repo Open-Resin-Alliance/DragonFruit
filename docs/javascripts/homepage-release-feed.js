@@ -4,7 +4,7 @@
       const REPO_URL = `https://github.com/${OWNER}/${REPO}`;
       const RELEASES_URL = `https://github.com/${OWNER}/${REPO}/releases`;
       const LATEST_RELEASE_URL = `${RELEASES_URL}/latest`;
-      const RELEASES_API_URL = `https://api.github.com/repos/${OWNER}/${REPO}/releases?per_page=12`;
+      const RELEASES_API_URL = `https://api.github.com/repos/${OWNER}/${REPO}/releases?per_page=30`;
       const LATEST_API_URL = `https://api.github.com/repos/${OWNER}/${REPO}/releases/latest`;
 
       const PLATFORM_DEFS = {
@@ -192,6 +192,95 @@
                   .join('');
       }
 
+      function isRecentNightly(release) {
+            if (!release?.prerelease || !release?.tag_name) return false;
+            if (!release.tag_name.startsWith('nightly_') && !release.tag_name.startsWith('dev_')) return false;
+            if (!release.published_at) return false;
+            const ageMs = Date.now() - new Date(release.published_at).getTime();
+            const cutoff = 14 * 24 * 60 * 60 * 1000;
+            return ageMs < cutoff;
+      }
+
+      function collectRecentNightlies(releases) {
+            return (releases || []).filter(isRecentNightly).slice(0, 20);
+      }
+
+      function buildNightlyRow(release) {
+            const name = release.name || release.tag_name || 'Nightly';
+            const tag = release.tag_name;
+            const date = formatDate(release.published_at);
+            const assets = release.assets || [];
+
+            const assetLinks = Object.keys(PLATFORM_DEFS).map((key) => {
+                  const asset = pickBestAsset(assets, key);
+                  if (!asset) return null;
+                  const platform = PLATFORM_DEFS[key];
+                  return `<a class="df-modal-asset-link" href="${asset.browser_download_url}" title="Download for ${platform.label}">${platform.label}</a>`;
+            }).filter(Boolean).join('');
+
+            const releaseUrl = release.html_url || `${RELEASES_URL}/tag/${tag}`;
+
+            return `<div class="df-modal-nightly-row" data-tag="${tag}">
+                  <div class="df-modal-nightly-info">
+                        <a class="df-modal-nightly-name" href="${releaseUrl}" target="_blank" rel="noopener">${name}</a>
+                        <span class="df-modal-nightly-meta">${tag} · ${date}</span>
+                  </div>
+                  <div class="df-modal-nightly-assets">${assetLinks || '<span class="df-modal-no-assets">No assets</span>'}</div>
+            </div>`;
+      }
+
+      function openNightlyModal(nightlies) {
+            const overlay = document.querySelector('#nightly-modal-overlay');
+            const body = document.querySelector('#nightly-modal-body');
+            if (!overlay || !body) return;
+
+            body.innerHTML = nightlies.length
+                  ? nightlies.map(buildNightlyRow).join('')
+                  : '<p class="df-modal-empty">No recent nightly builds available.</p>';
+
+            overlay.hidden = false;
+            document.body.classList.add('df-modal-open');
+      }
+
+      function closeNightlyModal() {
+            const overlay = document.querySelector('#nightly-modal-overlay');
+            if (!overlay) return;
+            overlay.hidden = true;
+            document.body.classList.remove('df-modal-open');
+      }
+
+      function initNightlyModal() {
+            const showAllBtn = document.querySelector('#show-all-nightlies');
+            const overlay = document.querySelector('#nightly-modal-overlay');
+            const closeBtn = document.querySelector('#nightly-modal-close');
+            if (!showAllBtn || !overlay || !closeBtn) return;
+
+            showAllBtn.addEventListener('click', () => {
+                  // Fetch the full list again so the modal is always fresh
+                  fetchJson(RELEASES_API_URL)
+                        .then((releases) => {
+                              const nightlies = collectRecentNightlies(releases);
+                              openNightlyModal(nightlies);
+                        })
+                        .catch(() => {
+                              const body = document.querySelector('#nightly-modal-body');
+                              if (body) body.innerHTML = '<p class="df-modal-empty">Failed to load nightlies.</p>';
+                              overlay.hidden = false;
+                              document.body.classList.add('df-modal-open');
+                        });
+            });
+
+            closeBtn.addEventListener('click', closeNightlyModal);
+
+            overlay.addEventListener('click', (e) => {
+                  if (e.target === overlay) closeNightlyModal();
+            });
+
+            document.addEventListener('keydown', (e) => {
+                  if (e.key === 'Escape' && !overlay.hidden) closeNightlyModal();
+            });
+      }
+
       function hydrateNightlyDownload(nightlyRelease) {
             const nightlyLink = document.querySelector('#download-nightly');
             const nightlyVersion = document.querySelector('#download-nightly-version');
@@ -202,7 +291,7 @@
                   return;
             }
 
-            const versionTag = nightlyRelease.tag_name || nightlyRelease.name || 'Nightly';
+            const versionTag = nightlyRelease.name || nightlyRelease.tag_name || 'Nightly';
             const preferredPlatform = detectPlatform();
             const preferredAsset = preferredPlatform ? pickBestAsset(nightlyRelease.assets || [], preferredPlatform) : null;
 
@@ -322,6 +411,7 @@
             if (!heroButton || !versionLine) return;
 
             initDropdownToggle();
+            initNightlyModal();
 
             fetchJson(LATEST_API_URL)
                   .then((stableRelease) => {
@@ -335,10 +425,9 @@
 
             fetchJson(RELEASES_API_URL)
                   .then((releases) => {
-                        const nightly = (releases || []).find(
-                              (r) => r.prerelease && r.tag_name && r.tag_name.startsWith('dev_'),
-                        );
-                        hydrateNightlyDownload(nightly || null);
+                        const nightlies = collectRecentNightlies(releases);
+                        const latestNightly = nightlies[0] || null;
+                        hydrateNightlyDownload(latestNightly);
                   })
                   .catch(() => {
                         const nightlyVersion = document.querySelector('#download-nightly-version');

@@ -332,7 +332,7 @@ test('decideGridPlacement replaces the preferred host trunk when the candidate t
     assert.equal(decision.hostTrunkId, preferredHost.build.trunk.id);
 });
 
-test('decideGridPlacement falls back to a different reachable host when the preferred host cannot accept an attachment', () => {
+test('decideGridPlacement rejects when the fixed preferred host cannot accept an attachment', () => {
     const settings = makeSettings();
     setSettings(settings);
 
@@ -366,8 +366,7 @@ test('decideGridPlacement falls back to a different reachable host when the pref
             topZ: 7,
         });
     });
-    const fallbackHost = fixtures.get('1,0');
-    assert.ok(fallbackHost);
+    assert.ok(fixtures.get('1,0'));
 
     const candidate = buildStraightFixture({
         x: 0,
@@ -385,7 +384,7 @@ test('decideGridPlacement falls back to a different reachable host when the pref
         modelId: MODEL_ID,
     });
 
-    assert.equal(decision.kind, 'place_branch');
-    assert.equal(decision.nodeKey, '1,0');
-    assert.equal(decision.hostTrunkId, fallbackHost.build.trunk.id);
+    assert.equal(decision.kind, 'reject');
+    assert.equal(decision.nodeKey, '0,0');
+    assert.equal(decision.reason, 'NO_VALID_ATTACHMENT');
 });

@@ -236,7 +236,7 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
         // Preview uses lower budget (1200 expansions) for responsiveness, but same
         // collision detection rigor as click. This trades slightly slower preview
         // exploration for correct collision avoidance.
-        const v2Context = isPreview ? { maxExpansions: 1200 } : undefined;
+        const v2Context = isPreview ? { maxExpansions: 800 } : undefined;
         const result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
         placement = result;
     } else {
@@ -273,11 +273,31 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
         (solverSocketPos.x - liveSocketPos.x) ** 2
         + (solverSocketPos.y - liveSocketPos.y) ** 2
         + (solverSocketPos.z - liveSocketPos.z) ** 2;
+
+    // When the solver shifted the socket (cone-clear seed, A* routing), the
+    // actual cone axis is the direction from coneStartPos to solverSocketPos —
+    // NOT the surface-normal-derived axis.  Use the actual geometric direction
+    // so the cone renderer orients the cone body to match the real geometry.
+    let actualConeAxis = effectiveConeAxis;
+    if (solverSocketDeltaSq > 0.000001) {
+        const deltaX = solverSocketPos.x - coneStartPos.x;
+        const deltaY = solverSocketPos.y - coneStartPos.y;
+        const deltaZ = solverSocketPos.z - coneStartPos.z;
+        const deltaLen = Math.sqrt(deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ);
+        if (deltaLen > 0.001) {
+            actualConeAxis = {
+                x: deltaX / deltaLen,
+                y: deltaY / deltaLen,
+                z: deltaZ / deltaLen,
+            };
+        }
+    }
+
     const contactConeTemplate: ContactCone = recomputeContactConeForMovedDisk(
         {
             id: '__solver-authored-socket__',
             pos: tipPos,
-            normal: effectiveConeAxis,
+            normal: actualConeAxis,
             surfaceNormal: tipNormal,
             diskLengthOverride: tipDiskLengthOverrideMm,
             profile: tipProfile,

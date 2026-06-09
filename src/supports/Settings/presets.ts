@@ -109,7 +109,7 @@ const DETAIL_PRESET: SupportPreset = {
         grid: {
             enabled: false,
             spacingMm: 4.0,
-            minBranchAngleDeg: 45,
+            minBranchAngleDeg: 60,
             attachSearchStepMm: 2.0,
             minRoutedTrunkAngleDeg: 60,
         },
@@ -175,7 +175,7 @@ const ANCHOR_PRESET: SupportPreset = {
         grid: {
             enabled: false,
             spacingMm: 4.0,
-            minBranchAngleDeg: 45,
+            minBranchAngleDeg: 60,
             attachSearchStepMm: 2.0,
             minRoutedTrunkAngleDeg: 60,
         },

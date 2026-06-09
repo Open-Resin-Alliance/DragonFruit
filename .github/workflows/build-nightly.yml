@@ -1,0 +1,558 @@
+name: Build Nightly
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch to build the nightly release from
+        required: true
+        type: string
+        default: dev
+      pr_run_id:
+        description: Workflow run ID of the PR check to download macOS artifacts from
+        required: false
+        type: string
+      pr_number:
+        description: PR number (for fork PR checkout)
+        required: false
+        type: string
+  issue_comment:
+    types:
+      - created
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: nightly-${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  NIGHTLY_LABEL: nightly-build
+
+jobs:
+  # ── Comment handler: /nightly or @github-actions build nightly ──────────
+  activate-nightly:
+    if: >
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      (startsWith(github.event.comment.body, '/nightly') ||
+       startsWith(github.event.comment.body, '@github-actions build nightly'))
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Check commenter has write access
+        id: check_access
+        uses: actions/github-script@v7
+        env:
+          COMMENT_USER: ${{ github.event.comment.user.login }}
+        with:
+          result-encoding: string
+          script: |
+            const commentUser = process.env.COMMENT_USER;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const ADMIN_TEAM = 'administrators';
+
+            // Check 1 — direct collaborator with write+ access
+            let hasWrite = false;
+            try {
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner,
+                repo,
+                username: commentUser,
+              });
+              hasWrite = ['write', 'admin', 'maintain'].includes(data.permission);
+              core.info(`Repo permission: ${data.permission} → ${hasWrite ? 'granted' : 'denied'}.`);
+            } catch (e) {
+              if (e.status !== 404) throw e;
+              core.info(`User is not a direct collaborator.`);
+            }
+
+            // Check 2 — override: member of the administrators team
+            let isAdmin = false;
+            try {
+              const { data } = await github.rest.teams.getMembershipForUserInOrg({
+                org: owner,
+                team_slug: ADMIN_TEAM,
+                username: commentUser,
+              });
+              isAdmin = data.state === 'active' || data.state === 'pending';
+              if (isAdmin) core.info(`User is a member of @${owner}/${ADMIN_TEAM} — override granted.`);
+            } catch (e) {
+              if (e.status !== 404) throw e;
+              core.info(`User is not a member of @${owner}/${ADMIN_TEAM}.`);
+            }
+
+            if (hasWrite || isAdmin) return 'granted';
+            return 'denied';
+
+      - name: Abort if not authorized
+        if: steps.check_access.outputs.result != 'granted'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          gh issue comment "$PR" \
+            --repo "${{ github.repository }}" \
+            --body $'### ❌ Access Denied\n\nSorry, only **collaborators with write access** can trigger nightly builds.\n\nIf you believe this is a mistake, please contact a maintainer.'
+
+      - name: Fetch PR branch info
+        id: pr_info
+        if: steps.check_access.outputs.result == 'granted'
+        uses: actions/github-script@v7
+        env:
+          PR: ${{ github.event.issue.number }}
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: parseInt(process.env.PR),
+            });
+            core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('base_ref', pr.base.ref);
+            if (pr.head.repo?.fork) {
+              core.info(`PR is from a fork (${pr.head.repo.full_name}) — will dispatch on base ref.`);
+            }
+
+      - name: Add nightly-build label
+        if: steps.check_access.outputs.result == 'granted'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          gh issue edit "$PR" --add-label "${{ env.NIGHTLY_LABEL }}" --repo "${{ github.repository }}"
+
+      - name: Trigger immediate nightly build
+        if: steps.check_access.outputs.result == 'granted'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_BRANCH: ${{ steps.pr_info.outputs.head_ref }}
+          BASE_BRANCH: ${{ steps.pr_info.outputs.base_ref }}
+        run: |
+          gh workflow run build-nightly.yml \
+            --repo "${{ github.repository }}" \
+            --ref "$BASE_BRANCH" \
+            -f branch="$HEAD_BRANCH" \
+            -f pr_number="${{ github.event.issue.number }}"
+
+      - name: Acknowledge activation
+        if: steps.check_access.outputs.result == 'granted'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.issue.number }}
+          BRANCH: ${{ steps.pr_info.outputs.head_ref }}
+        run: |
+          gh issue comment "$PR" \
+            --repo "${{ github.repository }}" \
+            --body $'### 🚀 Nightly Build Triggered\n\nA nightly build has been dispatched for branch **`'"${BRANCH}"$'**\n\n| What | How |\n|------|-----|\n| **This build** | Check the [Actions tab]('"${{ github.server_url }}/${{ github.repository }}/actions/workflows/build-nightly.yml"$') for progress |\n| **Future commits** | Each new push will rebuild after macOS check passes |\n| **Deactivate** | Remove the `nightly-build` label to stop auto-builds |\n\n> The pre-release tag will be updated in-place so the download link stays the same.'
+
+  # ── Derive metadata (branch, tag, names) ────────────────────────────────
+  derive:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.branch.outputs.branch }}
+      safe_branch: ${{ steps.meta.outputs.safe_branch }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      release_name: ${{ steps.meta.outputs.release_name }}
+      version: ${{ steps.meta.outputs.version }}
+      commit_hash: ${{ steps.meta.outputs.commit_hash }}
+      commit_sha: ${{ steps.meta.outputs.commit_sha }}
+      checkout_ref: ${{ steps.checkout_ref.outputs.ref }}
+    steps:
+      - name: Determine branch
+        id: branch
+        run: |
+          echo "branch=${{ inputs.branch }}" >> "$GITHUB_OUTPUT"
+
+      - name: Determine checkout ref
+        id: checkout_ref
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+        with:
+          script: |
+            const prNumber = process.env.PR_NUMBER;
+            const branch = process.env.BRANCH;
+            if (prNumber) {
+              const ref = `refs/pull/${prNumber}/head`;
+              core.info(`PR #${prNumber} provided — using checkout ref ${ref}`);
+              core.setOutput('ref', ref);
+            } else {
+              core.info(`No PR number — using branch ref: ${branch}`);
+              core.setOutput('ref', branch);
+            }
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.checkout_ref.outputs.ref }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Derive release metadata
+        id: meta
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          commit_hash="$(git rev-parse --short HEAD)"
+          commit_sha="$(git rev-parse HEAD)"
+          branch_name="${{ steps.branch.outputs.branch }}"
+
+          # Sanitize branch name for tags / filenames
+          safe_branch="${branch_name//\//_}"
+
+          # Human-readable release name
+          human_name="$branch_name"
+          case "$branch_name" in
+            feat/*) human_name="Feature: ${branch_name#feat/}" ;;
+            fix/*)  human_name="Fix: ${branch_name#fix/}" ;;
+            chore/*) human_name="Chore: ${branch_name#chore/}" ;;
+            refactor/*) human_name="Refactor: ${branch_name#refactor/}" ;;
+            docs/*) human_name="Docs: ${branch_name#docs/}" ;;
+            perf/*) human_name="Perf: ${branch_name#perf/}" ;;
+            ci/*)   human_name="CI: ${branch_name#ci/}" ;;
+            *)      human_name="Nightly: ${branch_name}" ;;
+          esac
+
+          # Capitalize the descriptive part
+          rest="${human_name#*: }"
+          prefix="${human_name%%: *}"
+          first_char="$(printf '%s' "${rest:0:1}" | tr '[:lower:]' '[:upper:]')"
+          capitalized="${first_char}${rest:1}"
+          human_name="${prefix}: ${capitalized}"
+
+          release_tag="nightly_${safe_branch}"
+
+          echo "branch=${branch_name}" >> "$GITHUB_OUTPUT"
+          echo "safe_branch=${safe_branch}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
+          echo "release_name=${human_name}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "commit_hash=${commit_hash}" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
+
+  # ── Fetch macOS DMG from PR check run ──────────────────────────────────
+  fetch-macos-artifacts:
+    if: github.event_name == 'workflow_dispatch' && inputs.pr_run_id
+    needs:
+      - derive
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download macOS DMG from PR check
+        uses: actions/download-artifact@v4
+        with:
+          path: macos-artifacts
+          run-id: ${{ inputs.pr_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Rename DMG to nightly convention
+        shell: bash
+        env:
+          SAFE_BRANCH: ${{ needs.derive.outputs.safe_branch }}
+          COMMIT_HASH: ${{ needs.derive.outputs.commit_hash }}
+          VERSION: ${{ needs.derive.outputs.version }}
+        run: |
+          find macos-artifacts -name "*.dmg" -type f 2>/dev/null || echo "No .dmg files found"
+          nightly_tag="${SAFE_BRANCH}_${COMMIT_HASH}_${VERSION}_DragonFruit_nightly"
+          src="$(find macos-artifacts -name "*.dmg" -type f | head -1)"
+          if [ -n "$src" ]; then
+            cp -v "$src" "macos-artifacts/${nightly_tag}.dmg"
+          else
+            echo "No DMG file found in downloaded artifacts"
+            exit 1
+          fi
+
+      - name: Upload renamed DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: dragonfruit-macos-universal
+          path: macos-artifacts/*_DragonFruit_nightly.dmg
+          if-no-files-found: error
+
+  # ── Build matrix ────────────────────────────────────────────────────────
+  build-tauri:
+    name: Build ${{ matrix.artifact_name }}
+    needs:
+      - derive
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            build_kind: tauri
+            args: --target x86_64-pc-windows-msvc --bundles nsis
+            artifact_name: dragonfruit-windows-x64
+          - platform: ubuntu-22.04
+            build_kind: flatpak
+            artifact_name: dragonfruit-linux-flatpak-x64
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.derive.outputs.checkout_ref }}
+          submodules: recursive
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.18.0"
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri bundle (Windows)
+        if: matrix.build_kind == 'tauri'
+        uses: tauri-apps/tauri-action@v0
+        with:
+          tauriScript: npx tauri
+          args: ${{ matrix.args }}
+
+      - name: Install Flatpak build tooling
+        if: matrix.build_kind == 'flatpak'
+        run: sudo apt-get install -y flatpak flatpak-builder appstream desktop-file-utils
+
+      - name: Prepare XDG runtime directory
+        if: matrix.build_kind == 'flatpak'
+        run: |
+          mkdir -p "$RUNNER_TEMP/xdg-runtime"
+          chmod 700 "$RUNNER_TEMP/xdg-runtime"
+          echo "XDG_RUNTIME_DIR=$RUNNER_TEMP/xdg-runtime" >> "$GITHUB_ENV"
+
+      - name: Configure Flathub remote
+        if: matrix.build_kind == 'flatpak'
+        run: |
+          flatpak remote-add --user --if-not-exists \
+            flathub https://flathub.org/repo/flathub.flatpakrepo
+
+      - name: Install Flatpak runtime dependencies (user)
+        if: matrix.build_kind == 'flatpak'
+        run: |
+          flatpak --user install -y --noninteractive flathub \
+            org.freedesktop.Sdk//24.08 \
+            org.freedesktop.Platform//24.08
+
+      - name: Build Tauri app for Flatpak
+        if: matrix.build_kind == 'flatpak'
+        run: node scripts/tauri-build.mjs --target x86_64-unknown-linux-gnu --no-bundle
+
+      - name: Rename Windows installer
+        if: matrix.build_kind == 'tauri'
+        shell: bash
+        env:
+          SAFE_BRANCH: ${{ needs.derive.outputs.safe_branch }}
+          COMMIT_HASH: ${{ needs.derive.outputs.commit_hash }}
+          VERSION: ${{ needs.derive.outputs.version }}
+        run: |
+          nightly_tag="${SAFE_BRANCH}_${COMMIT_HASH}_${VERSION}_DragonFruit_nightly"
+
+          for f in src-tauri/target/*/release/bundle/nsis/*-setup.exe; do
+            [ -e "$f" ] && mv -v "$f" "$(dirname "$f")/${nightly_tag}.exe"
+          done
+
+      - name: Rename flatpak artifact
+        if: matrix.build_kind == 'flatpak'
+        shell: bash
+        env:
+          SAFE_BRANCH: ${{ needs.derive.outputs.safe_branch }}
+          COMMIT_HASH: ${{ needs.derive.outputs.commit_hash }}
+          VERSION: ${{ needs.derive.outputs.version }}
+        run: |
+          nightly_tag="${SAFE_BRANCH}_${COMMIT_HASH}_${VERSION}_DragonFruit_nightly"
+
+          for f in src-tauri/target/release/bundle/flatpak/*.flatpak; do
+            [ -e "$f" ] && mv -v "$f" "$(dirname "$f")/${nightly_tag}.flatpak"
+          done
+
+      - name: Upload Windows installer
+        if: matrix.build_kind == 'tauri'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: src-tauri/target/*/release/bundle/nsis/*_DragonFruit_nightly.exe
+          if-no-files-found: error
+
+      - name: Upload flatpak artifact
+        if: matrix.build_kind == 'flatpak'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: src-tauri/target/release/bundle/flatpak/*_DragonFruit_nightly.flatpak
+          if-no-files-found: error
+
+  # ── Fallback: build macOS Universal natively (manual dispatch, no PR check) ─
+  build-macos-fallback:
+    name: Build macOS Universal (fallback)
+    if: always() && github.event_name == 'workflow_dispatch' && (!inputs.pr_run_id || needs.fetch-macos-artifacts.result != 'success')
+    needs:
+      - derive
+      - fetch-macos-artifacts
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.derive.outputs.checkout_ref }}
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.18.0"
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri universal macOS bundle
+        uses: tauri-apps/tauri-action@v0
+        env:
+          CMAKE_OSX_ARCHITECTURES: "arm64;x86_64"
+          DF_BUILD_TARGET_TRIPLE: universal-apple-darwin
+        with:
+          tauriScript: npx tauri
+          args: --target universal-apple-darwin --bundles app,dmg
+
+      - name: Embed QuickLook extension + verify universal bundle
+        run: |
+          node scripts/macos-embed-appex.mjs --target universal-apple-darwin
+          node scripts/verify-universal-bundle.mjs
+
+      - name: Rename DMG for nightly release
+        shell: bash
+        env:
+          SAFE_BRANCH: ${{ needs.derive.outputs.safe_branch }}
+          COMMIT_HASH: ${{ needs.derive.outputs.commit_hash }}
+          VERSION: ${{ needs.derive.outputs.version }}
+        run: |
+          nightly_tag="${SAFE_BRANCH}_${COMMIT_HASH}_${VERSION}_DragonFruit_nightly"
+
+          for f in src-tauri/target/*/release/bundle/dmg/*.dmg; do
+            [ -e "$f" ] && mv -v "$f" "$(dirname "$f")/${nightly_tag}.dmg"
+          done
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dragonfruit-macos-universal
+          path: src-tauri/target/*/release/bundle/dmg/*_DragonFruit_nightly.dmg
+          if-no-files-found: error
+
+  # ── Publish nightly prerelease ──────────────────────────────────────────
+  publish-nightly:
+    name: Publish nightly prerelease
+    if: always() && !cancelled() && needs.derive.result == 'success' && needs.build-tauri.result == 'success'
+    needs:
+      - derive
+      - build-tauri
+      - fetch-macos-artifacts
+      - build-macos-fallback
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Remove old nightly release if exists
+        uses: actions/github-script@v7
+        env:
+          TAG: ${{ needs.derive.outputs.release_tag }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const tag = process.env.TAG;
+
+            try {
+              const { data: release } = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+              console.log(`Found existing release id=${release.id}, deleting...`);
+              await github.rest.repos.deleteRelease({ owner, repo, release_id: release.id });
+
+              try {
+                await github.rest.git.deleteRef({ owner, repo, ref: `tags/${tag}` });
+                console.log(`Deleted tag ${tag}`);
+              } catch (e) {
+                if (e.status !== 422) throw e;
+                console.log(`Tag ${tag} did not exist (422).`);
+              }
+            } catch (e) {
+              if (e.status === 404) {
+                console.log(`No existing release for tag ${tag}, clean slate.`);
+              } else {
+                throw e;
+              }
+            }
+
+      - name: Create tag
+        uses: actions/github-script@v7
+        env:
+          TAG_NAME: ${{ needs.derive.outputs.release_tag }}
+          COMMIT_SHA: ${{ needs.derive.outputs.commit_sha }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const tag = process.env.TAG_NAME;
+            const sha = process.env.COMMIT_SHA;
+
+            await github.rest.git.createRef({
+              owner,
+              repo,
+              ref: `refs/tags/${tag}`,
+              sha
+            });
+
+      - name: Publish nightly prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.derive.outputs.release_tag }}
+          name: ${{ needs.derive.outputs.release_name }}
+          body: |
+            🌙 **Nightly build** from branch \`${{ needs.derive.outputs.branch }}\`
+
+            | Attribute | Value |
+            |---|---|
+            | Version | ${{ needs.derive.outputs.version }} |
+            | Commit | ${{ needs.derive.outputs.commit_hash }} |
+            | Branch | ${{ needs.derive.outputs.branch }} |
+
+            ⚠️ This is an automated pre-release built from a feature branch. It is intended for testing purposes only.
+          prerelease: true
+          draft: false
+          target_commitish: ${{ needs.derive.outputs.commit_sha }}
+          files: |
+            release-assets/**/*
