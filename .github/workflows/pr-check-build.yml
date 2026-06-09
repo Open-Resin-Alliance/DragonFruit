@@ -33,33 +33,18 @@ jobs:
           node-version: "20.18.0"
           cache: npm
 
-      # dtolnay/rust-toolchain's internal "create cachekey" step can't find rustc
-      # on self-hosted runners because $CARGO_HOME/bin may differ from the actual
-      # rustc location — use raw rustup commands so we can discover the exact path.
-      - name: Install Rust stable (self-hosted)
-        if: runner.environment == 'self-hosted'
-        shell: bash
-        run: |
-          rustup toolchain install stable \
-            --target aarch64-apple-darwin \
-            --target x86_64-apple-darwin \
-            --profile minimal \
-            --no-self-update
-          rustup default stable
-          echo "$(dirname "$(rustup which rustc)")" >> "$GITHUB_PATH"
-
       - name: Install Rust stable
-        if: runner.environment == 'github-hosted'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      # Self-hosted runners are persistent — no need to upload/download cache
+      # Self-hosted runners: restore cache but skip upload (hangs on upload action)
+      # GitHub-hosted runners: full save/restore as normal
       - name: Rust cache
-        if: runner.environment == 'github-hosted'
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ./src-tauri -> target
+          save-if: ${{ runner.environment == 'github-hosted' }}
 
       - name: Install frontend dependencies
         run: npm ci
@@ -70,11 +55,6 @@ jobs:
         run: |
           echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
           echo "commit_hash=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-
-      # Self-hosted runner likely doesn't have create-dmg globally installed
-      - name: Install DMG bundling tools (self-hosted)
-        if: runner.environment == 'self-hosted'
-        run: npm install -g create-dmg
 
       - name: Build Tauri universal macOS bundle
         uses: tauri-apps/tauri-action@v0
