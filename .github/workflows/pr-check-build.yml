@@ -33,11 +33,23 @@ jobs:
           node-version: "20.18.0"
           cache: npm
 
-      - name: Ensure cargo bin in PATH (self-hosted)
+      # dtolnay/rust-toolchain's internal "create cachekey" step can't find rustc
+      # on self-hosted runners because $CARGO_HOME/bin may differ from the actual
+      # rustc location — use raw rustup commands so we can discover the exact path.
+      - name: Install Rust stable (self-hosted)
         if: runner.environment == 'self-hosted'
-        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        shell: bash
+        run: |
+          rustup toolchain install stable \
+            --target aarch64-apple-darwin \
+            --target x86_64-apple-darwin \
+            --profile minimal \
+            --no-self-update
+          rustup default stable
+          echo "$(dirname "$(rustup which rustc)")" >> "$GITHUB_PATH"
 
       - name: Install Rust stable
+        if: runner.environment == 'github-hosted'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
