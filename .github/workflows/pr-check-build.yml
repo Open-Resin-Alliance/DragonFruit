@@ -33,6 +33,16 @@ jobs:
           node-version: "20.18.0"
           cache: npm
 
+      # dtolnay/rust-toolchain's internal "create cachekey" step runs rustc in a
+      # non-interactive bash shell that doesn't inherit GITHUB_PATH changes within
+      # composite actions — set BASH_ENV so those shells can find rustc.
+      - name: Ensure rustc in PATH for dtolnay cache key
+        run: |
+          bashrc="${HOME}/.bashrc"
+          touch "$bashrc"
+          echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$bashrc"
+          echo "BASH_ENV=$bashrc" >> "$GITHUB_ENV"
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
