@@ -15,9 +15,7 @@ permissions:
 jobs:
   macos-build:
     name: macOS compile check (Universal)
-    # Internal PRs (same-repo branches) → self-hosted Mac Mini M4 (faster)
-    # Fork PRs → GitHub-hosted macOS runner (security: never run fork code on self-hosted)
-    runs-on: ${{ github.event.pull_request.head.repo.full_name == github.repository && 'self-hosted' || 'macos-latest' }}
+    runs-on: macos-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
       commit_hash: ${{ steps.version.outputs.commit_hash }}
@@ -33,28 +31,15 @@ jobs:
           node-version: "20.18.0"
           cache: npm
 
-      # dtolnay/rust-toolchain's internal "create cachekey" step runs rustc in a
-      # non-interactive bash shell that doesn't inherit GITHUB_PATH changes within
-      # composite actions — set BASH_ENV so those shells can find rustc.
-      - name: Ensure rustc in PATH for dtolnay cache key
-        run: |
-          bashrc="${HOME}/.bashrc"
-          touch "$bashrc"
-          echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$bashrc"
-          echo "BASH_ENV=$bashrc" >> "$GITHUB_ENV"
-
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      # Self-hosted runners: restore cache but skip upload (hangs on upload action)
-      # GitHub-hosted runners: full save/restore as normal
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ./src-tauri -> target
-          save-if: ${{ runner.environment == 'github-hosted' }}
 
       - name: Install frontend dependencies
         run: npm ci
