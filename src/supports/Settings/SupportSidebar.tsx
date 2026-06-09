@@ -16,6 +16,7 @@ import {
     updateRootsProfile,
     updateGridSettings,
     updateAutoBracingSettings,
+    updateDevToolsEnabled,
 } from './state';
 import {
     subscribe as subscribeToSupportState,
@@ -34,6 +35,7 @@ import {
     RaftSettingsCard,
     GridSettingsCard,
     SupportKindTabs,
+    DevToolsPanel,
 } from './components';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { NumberInput } from '@/components/ui/NumberInput';
@@ -173,6 +175,7 @@ export function SupportSidebar() {
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
     const [autoBraceStatus, setAutoBraceStatus] = useState<{ kind: 'success' | 'warning' | 'error'; message: string } | null>(null);
     const [expanded, setExpanded] = React.useState(true);
+    const [devToolsOpen, setDevToolsOpen] = useState(false);
     const saveStatusTimeoutRef = React.useRef<number | null>(null);
     const autoBraceStatusTimeoutRef = React.useRef<number | null>(null);
     const isAdaptiveConeAngle = (settings.tip.coneAngleMode ?? 'normal') === 'adaptive';
@@ -1039,6 +1042,22 @@ export function SupportSidebar() {
 
     return (
         <>
+        {settings.devToolsEnabled && (
+            <div className="fixed left-4 top-[calc(var(--topbar-height)+24px)] z-[100] flex items-start">
+                {devToolsOpen && <DevToolsPanel />}
+                <button
+                    onClick={() => setDevToolsOpen(!devToolsOpen)}
+                    className={`w-6 h-20 bg-neutral-800 border border-neutral-700 flex items-center justify-center cursor-pointer hover:bg-neutral-750 transition-colors text-[9px] font-bold text-neutral-300 uppercase tracking-widest shadow-md ${
+                        devToolsOpen ? 'border-l-0 rounded-r' : 'rounded'
+                    }`}
+                    style={{ writingMode: 'vertical-lr', textOrientation: 'mixed' }}
+                    title={devToolsOpen ? "Collapse Dev Tools" : "Expand Dev Tools"}
+                >
+                    Dev Tools
+                </button>
+            </div>
+        )}
+
         <div ref={supportSidebarAnchorRef}>
         <Card className={expanded ? 'max-h-[calc(100dvh-var(--topbar-height)-24px)] overflow-hidden flex flex-col' : undefined}>
             <CardHeader
@@ -1093,6 +1112,19 @@ export function SupportSidebar() {
                                             setActiveSupportKind(kind);
                                         }}
                                     />
+
+                                    <div className="flex items-center justify-between p-2 bg-neutral-750 rounded-md border border-neutral-700 my-1">
+                                        <span className="text-xs font-semibold text-neutral-300">Show Dev Tools</span>
+                                        <label className="relative inline-flex items-center cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={settings.devToolsEnabled}
+                                                onChange={(e) => updateDevToolsEnabled(e.target.checked)}
+                                                className="sr-only peer"
+                                            />
+                                            <div className="w-9 h-5 bg-neutral-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-300 after:border-neutral-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 peer-checked:after:bg-white"></div>
+                                        </label>
+                                    </div>
 
                                     {activeKind === 'raft' ? (
                                         <>

@@ -1,10 +1,11 @@
 import * as THREE from 'three';
-import { Joint, Segment, Stick, Vec3 } from '../../types';
+import { Joint, Segment, Stick, Vec3, LimitationCode } from '../../types';
 import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
 import { getSocketPosition } from '../../SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getSettings } from '../../Settings';
 import { getJointDiameter } from '../../constants';
+import { checkShaftCollision } from '../../PlacementLogic/CollisionUtils';
 
 function uuid() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -19,14 +20,16 @@ export interface StickBuildInput {
     aNormal: Vec3;
     bPos: Vec3;
     bNormal: Vec3;
+    mesh?: THREE.Mesh;
 }
 
 export interface StickBuildResult {
     stick: Stick;
+    error?: LimitationCode;
 }
 
 export function buildStick(input: StickBuildInput): StickBuildResult {
-    const { modelId, aPos, aNormal, bPos, bNormal } = input;
+    const { modelId, aPos, aNormal, bPos, bNormal, mesh } = input;
 
     const settings = getSettings();
 
@@ -107,7 +110,7 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
     };
 
     // Normalize ordering so the ID/joint ordering is deterministic across equivalent inputs.
-    const a = new THREE.Vector3(aPos.x, aPos.y, aPos.z);
+        const a = new THREE.Vector3(aPos.x, aPos.y, aPos.z);
     const b = new THREE.Vector3(bPos.x, bPos.y, bPos.z);
     const swap = a.z > b.z || (a.z === b.z && (a.y > b.y || (a.y === b.y && a.x > b.x)));
 
@@ -120,5 +123,31 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
         contactConeB: swap ? contactConeA : contactConeB,
     };
 
-    return { stick };
+    let error: LimitationCode | undefined = undefined;
+    if (mesh) {
+        const shaftRadius = shaftDiameter / 2;
+        const avgConeRadius = (tipProfile.contactDiameterMm + tipProfile.bodyDiameterMm) / 4;
+        
+        // 1. Check segment
+        const segmentBlocked = checkShaftCollision(socketA, socketB, shaftRadius, mesh).hit;
+        
+        // 2. Check contact cones with tip-ignore offset
+        const normalA = new THREE.Vector3(aNormal.x, aNormal.y, aNormal.z).normalize();
+        const distA = new THREE.Vector3(socketA.x - aPos.x, socketA.y - aPos.y, socketA.z - aPos.z).length();
+        const offsetA = Math.min(0.25, distA * 0.5);
+        const startA = new THREE.Vector3(aPos.x, aPos.y, aPos.z).add(normalA.multiplyScalar(offsetA));
+        const coneABlocked = checkShaftCollision(startA, socketA, avgConeRadius, mesh).hit;
+
+        const normalB = new THREE.Vector3(bNormal.x, bNormal.y, bNormal.z).normalize();
+        const distB = new THREE.Vector3(socketB.x - bPos.x, socketB.y - bPos.y, socketB.z - bPos.z).length();
+        const offsetB = Math.min(0.25, distB * 0.5);
+        const startB = new THREE.Vector3(bPos.x, bPos.y, bPos.z).add(normalB.multiplyScalar(offsetB));
+        const coneBBlocked = checkShaftCollision(startB, socketB, avgConeRadius, mesh).hit;
+        
+        if (segmentBlocked || coneABlocked || coneBBlocked) {
+            error = 'COLLISION_WITH_MODEL';
+        }
+    }
+
+    return { stick, error };
 }

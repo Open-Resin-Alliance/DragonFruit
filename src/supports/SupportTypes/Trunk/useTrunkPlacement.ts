@@ -7,10 +7,12 @@ import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { buildTrunkData } from './trunkBuilder';
 import { applyTrunkReplacement, computeAndApplyTrunkDiameterProfile, planTrunkReplacement } from './TrunkReplacement';
 import type { SupportData } from '../../rendering/SupportBuilder';
-import type { LimitationCode, WarningCode } from '../../types';
+import type { LimitationCode, WarningCode, Trunk, Branch, Stick } from '../../types';
+import { getSegmentEndpoints } from '../../PlacementLogic/proximityPlacement';
 import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { getSettings } from '../../Settings';
 import { decideGridPlacement } from '../../PlacementLogic/Grid';
+import { decideOrganicPlacement } from '../../PlacementLogic/proximityPlacement';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { buildStick } from '../Stick/stickBuilder';
@@ -34,65 +36,137 @@ const CAVITY_PREVIEW_CACHE_MISS_MAX_AGE_MS = 220;
  * cavity floor by raycasting straight down.  Returns a buildStick result +
  * a SupportData preview object, or null if no lower surface is found.
  */
+function getClosestPointOnSegment2D(px: number, py: number, ax: number, ay: number, bx: number, by: number): { x: number; y: number; t: number } {
+    const abx = bx - ax;
+    const aby = by - ay;
+    const lenSq = abx * abx + aby * aby;
+    if (lenSq < 1e-8) {
+        return { x: ax, y: ay, t: 0 };
+    }
+    const apx = px - ax;
+    const apy = py - ay;
+    let t = (apx * abx + apy * aby) / lenSq;
+    t = Math.max(0, Math.min(1, t));
+    return {
+        x: ax + t * abx,
+        y: ay + t * aby,
+        t,
+    };
+}
+
 function buildCavityStick(
     tipPos: { x: number; y: number; z: number },
     tipNormal: { x: number; y: number; z: number },
     modelId: string,
     mesh: THREE.Mesh,
 ): (
-    | { kind: 'stick'; supportData: SupportData; stick: ReturnType<typeof buildStick>['stick'] }
-    | { kind: 'twig'; supportData: SupportData; twig: ReturnType<typeof buildTwig>['twig'] }
+    | { kind: 'stick'; supportData: SupportData; stick: ReturnType<typeof buildStick>['stick']; error?: LimitationCode }
+    | { kind: 'twig'; supportData: SupportData; twig: ReturnType<typeof buildTwig>['twig']; error?: LimitationCode }
 ) | null {
-    _cavityRaycaster.set(
-        new THREE.Vector3(tipPos.x, tipPos.y, tipPos.z),
-        _downDir,
-    );
-    // Offset origin slightly inward along tip normal so we don't self-hit the
-    // surface we just clicked.
-    const OFFSET_MM = 0.5;
-    _cavityRaycaster.ray.origin.addScaledVector(
-        new THREE.Vector3(tipNormal.x, tipNormal.y, tipNormal.z),
-        OFFSET_MM,
-    );
-    _cavityRaycaster.ray.origin.z -= OFFSET_MM * 0.1; // nudge down past origin surface
+    const snapshot = getSnapshot();
+    const settings = getSettings();
+    let bestSnappedPos: THREE.Vector3 | null = null;
 
-    const hits = _cavityRaycaster.intersectObject(mesh, false);
-    if (hits.length === 0) return null;
+    const activeEntities: (Trunk | Branch | Stick)[] = [];
+    for (const trunk of Object.values(snapshot.trunks)) {
+        if (trunk.modelId === modelId) activeEntities.push(trunk);
+    }
+    for (const branch of Object.values(snapshot.branches)) {
+        if (branch.modelId === modelId) activeEntities.push(branch);
+    }
+    for (const stick of Object.values(snapshot.sticks)) {
+        if (stick.modelId === modelId) activeEntities.push(stick);
+    }
 
-    // Prefer a true "floor" hit (normal has meaningful +Z) so the bottom
-    // endpoint clings vertically down when possible. Only fall back to any
-    // below-tip hit (e.g. sidewall) if no floor-like surface is found.
-    const BELOW_EPS_MM = 0.1;
-    const FLOOR_Z_MIN = 0.35;
-    const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
+    for (const entity of activeEntities) {
+        for (let segIndex = 0; segIndex < entity.segments.length; segIndex++) {
+            const endpoints = getSegmentEndpoints(entity, segIndex, snapshot, settings);
+            if (!endpoints) continue;
 
-    type Candidate = { hit: THREE.Intersection; normal: THREE.Vector3 };
-    const MAX_HIT_SCAN = 64;
-    let scanned = 0;
-    let firstBelowCandidate: Candidate | null = null;
-    let floorCandidate: Candidate | null = null;
+            const res2D = getClosestPointOnSegment2D(
+                tipPos.x, tipPos.y,
+                endpoints.start.x, endpoints.start.y,
+                endpoints.end.x, endpoints.end.y
+            );
+            
+            // Reconstruct 3D point
+            const z = endpoints.start.z + res2D.t * (endpoints.end.z - endpoints.start.z);
+            if (z >= tipPos.z) continue;
 
-    for (const h of hits) {
-        scanned += 1;
-        if (scanned > MAX_HIT_SCAN) break;
-        if (h.point.z >= tipPos.z - BELOW_EPS_MM) continue;
-        if (!h.face) continue;
-        const n = h.face.normal.clone().applyNormalMatrix(normalMatrix).normalize();
-        const candidate = { hit: h, normal: n };
-        if (!firstBelowCandidate) firstBelowCandidate = candidate;
-        if (n.z >= FLOOR_Z_MIN) {
-            floorCandidate = candidate;
-            break;
+            const dx = tipPos.x - res2D.x;
+            const dy = tipPos.y - res2D.y;
+            const distSq = dx * dx + dy * dy;
+            if (distSq <= 25.0) { // 5.0mm radius
+                if (!bestSnappedPos || z > bestSnappedPos.z) {
+                    bestSnappedPos = new THREE.Vector3(res2D.x, res2D.y, z);
+                }
+            }
         }
     }
 
-    const chosen = floorCandidate ?? firstBelowCandidate;
-    if (!chosen) return null;
+    let bPos: { x: number; y: number; z: number };
+    let bNormal: { x: number; y: number; z: number };
 
-    const bPos = { x: chosen.hit.point.x, y: chosen.hit.point.y, z: chosen.hit.point.z };
-    const bNormal = { x: chosen.normal.x, y: chosen.normal.y, z: chosen.normal.z };
+    if (bestSnappedPos) {
+        bPos = { x: bestSnappedPos.x, y: bestSnappedPos.y, z: bestSnappedPos.z };
+        const normalVec = new THREE.Vector3(tipPos.x - bestSnappedPos.x, tipPos.y - bestSnappedPos.y, 0);
+        if (normalVec.lengthSq() > 1e-6) {
+            normalVec.normalize();
+        } else {
+            normalVec.set(1, 0, 0);
+        }
+        bNormal = { x: normalVec.x, y: normalVec.y, z: normalVec.z };
+    } else {
+        _cavityRaycaster.set(
+            new THREE.Vector3(tipPos.x, tipPos.y, tipPos.z),
+            _downDir,
+        );
+        // Offset origin slightly inward along tip normal so we don't self-hit the
+        // surface we just clicked.
+        const OFFSET_MM = 0.5;
+        _cavityRaycaster.ray.origin.addScaledVector(
+            new THREE.Vector3(tipNormal.x, tipNormal.y, tipNormal.z),
+            OFFSET_MM,
+        );
+        _cavityRaycaster.ray.origin.z -= OFFSET_MM * 0.1; // nudge down past origin surface
 
-    const settings = getSettings();
+        const hits = _cavityRaycaster.intersectObject(mesh, false);
+        if (hits.length === 0) return null;
+
+        // Prefer a true "floor" hit (normal has meaningful +Z) so the bottom
+        // endpoint clings vertically down when possible. Only fall back to any
+        // below-tip hit (e.g. sidewall) if no floor-like surface is found.
+        const BELOW_EPS_MM = 0.1;
+        const FLOOR_Z_MIN = 0.35;
+        const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
+
+        type Candidate = { hit: THREE.Intersection; normal: THREE.Vector3 };
+        const MAX_HIT_SCAN = 64;
+        let scanned = 0;
+        let firstBelowCandidate: Candidate | null = null;
+        let floorCandidate: Candidate | null = null;
+
+        for (const h of hits) {
+            scanned += 1;
+            if (scanned > MAX_HIT_SCAN) break;
+            if (h.point.z >= tipPos.z - BELOW_EPS_MM) continue;
+            if (!h.face) continue;
+            const n = h.face.normal.clone().applyNormalMatrix(normalMatrix).normalize();
+            const candidate = { hit: h, normal: n };
+            if (!firstBelowCandidate) firstBelowCandidate = candidate;
+            if (n.z >= FLOOR_Z_MIN) {
+                floorCandidate = candidate;
+                break;
+            }
+        }
+
+        const chosen = floorCandidate ?? firstBelowCandidate;
+        if (!chosen) return null;
+
+        bPos = { x: chosen.hit.point.x, y: chosen.hit.point.y, z: chosen.hit.point.z };
+        bNormal = { x: chosen.normal.x, y: chosen.normal.y, z: chosen.normal.z };
+    }
+
     const cutoff = settings.meshToMesh?.stickVsTwigCutoffMm ?? 5;
     const dx = tipPos.x - bPos.x;
     const dy = tipPos.y - bPos.y;
@@ -101,24 +175,26 @@ function buildCavityStick(
     const kind: 'twig' | 'stick' = dist > cutoff ? 'stick' : 'twig';
 
     if (kind === 'twig') {
-        const { twig } = buildTwig({ modelId, aPos: tipPos, aNormal: tipNormal, bPos, bNormal });
+        const { twig, error } = buildTwig({ modelId, aPos: tipPos, aNormal: tipNormal, bPos, bNormal, mesh });
         const supportData: SupportData = {
             id: twig.id,
             segments: twig.segments,
             contactDisks: [twig.contactDiskA, twig.contactDiskB],
+            error,
         };
-        return { kind, twig, supportData };
+        return { kind, twig, supportData, error };
     }
 
-    const { stick } = buildStick({ modelId, aPos: tipPos, aNormal: tipNormal, bPos, bNormal });
+    const { stick, error } = buildStick({ modelId, aPos: tipPos, aNormal: tipNormal, bPos, bNormal, mesh });
 
     const supportData: SupportData = {
         id: stick.id,
         segments: stick.segments,
         contactCones: [stick.contactConeA, stick.contactConeB],
+        error,
     };
 
-    return { kind: 'stick', stick, supportData };
+    return { kind: 'stick', stick, supportData, error };
 }
 
 type CavityStickBuildResult = NonNullable<ReturnType<typeof buildCavityStick>>;
@@ -315,7 +391,7 @@ export function useTrunkPlacementV2() {
                 const cavityStick = resolveCavityStickPreview(hit, tipPos, tipNormal, modelId, mesh);
                 if (cavityStick) {
                     setPreviewData(cavityStick.supportData);
-                    setPreviewError(null);
+                    setPreviewError(forcePlaceOverrideRef.current ? null : (cavityStick.error || null));
                     setPreviewWarning(null);
                     return;
                 }
@@ -331,15 +407,25 @@ export function useTrunkPlacementV2() {
             // (which may still place a branch or reject).
         }
 
-        const decision = decideGridPlacement({
-            settings,
-            snapshot: getSnapshot(),
-            candidate: result,
-            tipPos,
-            tipNormal,
-            modelId,
-            mesh,
-        });
+        const decision = isGridMode
+            ? decideGridPlacement({
+                settings,
+                snapshot: getSnapshot(),
+                candidate: result,
+                tipPos,
+                tipNormal,
+                modelId,
+                mesh,
+            })
+            : decideOrganicPlacement({
+                settings,
+                snapshot: getSnapshot(),
+                candidate: result,
+                tipPos,
+                tipNormal,
+                modelId,
+                mesh,
+            });
 
         if (decision.kind === 'place_trunk') {
             setPreviewData(decision.trunkBuild.supportData);
@@ -467,6 +553,9 @@ export function useTrunkPlacementV2() {
             if (mesh) {
                 const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
                 if (cavityStick) {
+                    if (cavityStick.error && !forcePlaceOverrideRef.current) {
+                        return; // Block placement!
+                    }
                     if (cavityStick.kind === 'twig') {
                         addTwig(cavityStick.twig);
                         pushHistory({
@@ -503,15 +592,25 @@ export function useTrunkPlacementV2() {
             return;
         }
 
-        const decision = decideGridPlacement({
-            settings,
-            snapshot: getSnapshot(),
-            candidate: result,
-            tipPos,
-            tipNormal,
-            modelId,
-            mesh,
-        });
+        const decision = isGridMode
+            ? decideGridPlacement({
+                settings,
+                snapshot: getSnapshot(),
+                candidate: result,
+                tipPos,
+                tipNormal,
+                modelId,
+                mesh,
+            })
+            : decideOrganicPlacement({
+                settings,
+                snapshot: getSnapshot(),
+                candidate: result,
+                tipPos,
+                tipNormal,
+                modelId,
+                mesh,
+            });
 
         if (decision.kind === 'place_anchor') {
             addAnchor(decision.anchor);

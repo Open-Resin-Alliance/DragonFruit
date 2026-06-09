@@ -600,25 +600,27 @@ export function BranchPlacementController() {
                         if (lastPreviewSignatureRef.current !== meshLinkSignature) {
                             lastPreviewSignatureRef.current = meshLinkSignature;
 
-                            if (kind === 'twig') {
-                                const { twig } = buildTwig({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal });
-                                const startPos = twig.segments[0]?.bottomJoint?.pos ?? tipPosition;
-                                branchPlacementStore.setPreviewData({
-                                    id: 'preview-meshlink',
-                                    startPos,
-                                    segments: twig.segments,
-                                    contactDisks: [twig.contactDiskA, twig.contactDiskB],
-                                });
-                            } else {
-                                const { stick } = buildStick({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal });
-                                const startPos = stick.segments[0]?.bottomJoint?.pos ?? tipPosition;
-                                branchPlacementStore.setPreviewData({
-                                    id: 'preview-meshlink',
-                                    startPos,
-                                    segments: stick.segments,
-                                    contactCones: [stick.contactConeA, stick.contactConeB],
-                                });
-                            }
+                             if (kind === 'twig') {
+                                 const { twig, error } = buildTwig({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal, mesh: resolveTipMesh() });
+                                 const startPos = twig.segments[0]?.bottomJoint?.pos ?? tipPosition;
+                                 branchPlacementStore.setPreviewData({
+                                     id: 'preview-meshlink',
+                                     startPos,
+                                     segments: twig.segments,
+                                     contactDisks: [twig.contactDiskA, twig.contactDiskB],
+                                     error,
+                                 });
+                             } else {
+                                 const { stick, error } = buildStick({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal, mesh: resolveTipMesh() });
+                                 const startPos = stick.segments[0]?.bottomJoint?.pos ?? tipPosition;
+                                 branchPlacementStore.setPreviewData({
+                                     id: 'preview-meshlink',
+                                     startPos,
+                                     segments: stick.segments,
+                                     contactCones: [stick.contactConeA, stick.contactConeB],
+                                     error,
+                                 });
+                             }
                         }
                         return;
                     }
@@ -698,26 +700,30 @@ export function BranchPlacementController() {
                 if (meshHover.modelId !== modelId) return;
 
                 if (kind === 'twig') {
-                    const { twig } = buildTwig({
+                    const { twig, error } = buildTwig({
                         modelId,
                         aPos: tipPosition,
                         aNormal: tipNormal,
                         bPos: meshHover.pos,
                         bNormal: meshHover.normal,
+                        mesh: resolveTipMesh(),
                     });
+                    if (error) return;
                     addTwig(twig);
                     pushHistory({
                         type: SUPPORT_ADD_TWIG,
                         payload: { twig },
                     });
                 } else {
-                    const { stick } = buildStick({
+                    const { stick, error } = buildStick({
                         modelId,
                         aPos: tipPosition,
                         aNormal: tipNormal,
                         bPos: meshHover.pos,
                         bNormal: meshHover.normal,
+                        mesh: resolveTipMesh(),
                     });
+                    if (error) return;
                     addStick(stick);
                     pushHistory({
                         type: SUPPORT_ADD_STICK,

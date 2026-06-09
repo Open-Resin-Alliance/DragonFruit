@@ -3,6 +3,7 @@
 import React from 'react';
 import { ShaftProfile } from '../types';
 import { NumberInput } from '@/components/ui/NumberInput';
+import { SelectDropdown } from '@/components/ui/SelectDropdown';
 
 interface ShaftSettingsCardProps {
     shaft: ShaftProfile;
@@ -16,7 +17,7 @@ export function ShaftSettingsCard({ shaft, onChange }: ShaftSettingsCardProps) {
                 <span className="text-xs font-semibold text-neutral-300">Shaft</span>
                 <span className="text-[9px] text-neutral-500 uppercase tracking-wide">{shaft.shape}</span>
             </div>
-            <div className="grid grid-cols-2 gap-1.5">
+            <div className="grid grid-cols-2 gap-1.5 mb-1.5">
                 <label className="flex flex-col gap-0.5">
                     <span className="text-[9px] text-neutral-400">Diameter</span>
                     <NumberInput

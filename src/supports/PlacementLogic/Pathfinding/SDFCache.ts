@@ -91,7 +91,7 @@ export class SDFCache {
         this.mesh = mesh;
 
         const geom = mesh.geometry as THREE.BufferGeometry & { boundsTree?: MeshBVHLike };
-        this.bvh = geom.boundsTree;
+        this.bvh = geom.boundsTree as MeshBVHLike;
         if (!this.bvh) {
             throw new Error('SDFCache: mesh geometry has no boundsTree (BVH). Ensure BVH is computed before constructing the cache.');
         }
@@ -158,6 +158,162 @@ export class SDFCache {
         const dist = this._computeSignedDistanceAtQuantizedCell(qx, qy, qz);
         this.cache.set(key, dist);
         return dist;
+    }
+
+    private _getOrCreateQuantizedDistance(qx: number, qy: number, qz: number, maxDistance = Infinity): number {
+        const key = cellKey(qx, qy, qz);
+        const cached = this.cache.get(key);
+        if (cached !== undefined) return cached;
+
+        const cs = this.cellSize;
+        const cX = qx * cs;
+        const cY = qy * cs;
+        const cZ = qz * cs;
+        if (maxDistance !== Infinity && !this._expandedWorldBoundsContains(cX, cY, cZ, maxDistance)) {
+            return Infinity;
+        }
+
+        const canBeInterior = this._expandedWorldBoundsContains(cX, cY, cZ, 0);
+        const dist = this._computeSignedDistanceAtQuantizedCell(
+            qx,
+            qy,
+            qz,
+            canBeInterior ? Infinity : maxDistance,
+        );
+        if (canBeInterior || dist !== Infinity) {
+            this.cache.set(key, dist);
+        }
+        return dist;
+    }
+
+    distanceAtTrilinear(wx: number, wy: number, wz: number): number {
+        const cs = this.cellSize;
+        const fx = wx / cs;
+        const fy = wy / cs;
+        const fz = wz / cs;
+
+        const x0 = Math.floor(fx);
+        const y0 = Math.floor(fy);
+        const z0 = Math.floor(fz);
+
+        const tx = fx - x0;
+        const ty = fy - y0;
+        const tz = fz - z0;
+
+        const d000 = this._getOrCreateQuantizedDistance(x0, y0, z0);
+        const d100 = this._getOrCreateQuantizedDistance(x0 + 1, y0, z0);
+        const d010 = this._getOrCreateQuantizedDistance(x0, y0 + 1, z0);
+        const d110 = this._getOrCreateQuantizedDistance(x0 + 1, y0 + 1, z0);
+        const d001 = this._getOrCreateQuantizedDistance(x0, y0, z0 + 1);
+        const d101 = this._getOrCreateQuantizedDistance(x0 + 1, y0, z0 + 1);
+        const d011 = this._getOrCreateQuantizedDistance(x0, y0 + 1, z0 + 1);
+        const d111 = this._getOrCreateQuantizedDistance(x0 + 1, y0 + 1, z0 + 1);
+
+        if (
+            d000 === Infinity || d100 === Infinity || d010 === Infinity || d110 === Infinity ||
+            d001 === Infinity || d101 === Infinity || d011 === Infinity || d111 === Infinity
+        ) {
+            return this.distanceAt(wx, wy, wz);
+        }
+
+        // Interpolate along X
+        const d00 = d000 * (1 - tx) + d100 * tx;
+        const d10 = d010 * (1 - tx) + d110 * tx;
+        const d01 = d001 * (1 - tx) + d101 * tx;
+        const d11 = d011 * (1 - tx) + d111 * tx;
+
+        // Interpolate along Y
+        const d0 = d00 * (1 - ty) + d10 * ty;
+        const d1 = d01 * (1 - ty) + d11 * ty;
+
+        // Interpolate along Z
+        return d0 * (1 - tz) + d1 * tz;
+    }
+
+    distanceAndGradientAt(wx: number, wy: number, wz: number, maxDistance = Infinity): { distance: number; gradient: { x: number; y: number; z: number } } {
+        const cs = this.cellSize;
+        if (maxDistance !== Infinity && !this._expandedWorldBoundsContains(wx, wy, wz, maxDistance + cs * 2)) {
+            return { distance: Infinity, gradient: { x: 0, y: 0, z: 0 } };
+        }
+
+        const fx = wx / cs;
+        const fy = wy / cs;
+        const fz = wz / cs;
+
+        const x0 = Math.floor(fx);
+        const y0 = Math.floor(fy);
+        const z0 = Math.floor(fz);
+
+        const tx = fx - x0;
+        const ty = fy - y0;
+        const tz = fz - z0;
+
+        const d000 = this._getOrCreateQuantizedDistance(x0, y0, z0, maxDistance);
+        const d100 = this._getOrCreateQuantizedDistance(x0 + 1, y0, z0, maxDistance);
+        const d010 = this._getOrCreateQuantizedDistance(x0, y0 + 1, z0, maxDistance);
+        const d110 = this._getOrCreateQuantizedDistance(x0 + 1, y0 + 1, z0, maxDistance);
+        const d001 = this._getOrCreateQuantizedDistance(x0, y0, z0 + 1, maxDistance);
+        const d101 = this._getOrCreateQuantizedDistance(x0 + 1, y0, z0 + 1, maxDistance);
+        const d011 = this._getOrCreateQuantizedDistance(x0, y0 + 1, z0 + 1, maxDistance);
+        const d111 = this._getOrCreateQuantizedDistance(x0 + 1, y0 + 1, z0 + 1, maxDistance);
+
+        if (
+            d000 === Infinity || d100 === Infinity || d010 === Infinity || d110 === Infinity ||
+            d001 === Infinity || d101 === Infinity || d011 === Infinity || d111 === Infinity
+        ) {
+            const distance = this.distanceAtWithin(wx, wy, wz, maxDistance);
+            const h = 0.1;
+            const dXPlus = this.distanceAtWithin(wx + h, wy, wz, maxDistance);
+            const dXMinus = this.distanceAtWithin(wx - h, wy, wz, maxDistance);
+            const dYPlus = this.distanceAtWithin(wx, wy + h, wz, maxDistance);
+            const dYMinus = this.distanceAtWithin(wx, wy - h, wz, maxDistance);
+            const dZPlus = this.distanceAtWithin(wx, wy, wz + h, maxDistance);
+            const dZMinus = this.distanceAtWithin(wx, wy, wz - h, maxDistance);
+
+            let gx = 0, gy = 0, gz = 0;
+            if (dXPlus !== Infinity && dXMinus !== Infinity) gx = (dXPlus - dXMinus) / (2 * h);
+            if (dYPlus !== Infinity && dYMinus !== Infinity) gy = (dYPlus - dYMinus) / (2 * h);
+            if (dZPlus !== Infinity && dZMinus !== Infinity) gz = (dZPlus - dZMinus) / (2 * h);
+
+            const len = Math.sqrt(gx * gx + gy * gy + gz * gz);
+            const gradient = len > 1e-6 ? { x: gx / len, y: gy / len, z: gz / len } : { x: 0, y: 0, z: 0 };
+            return { distance, gradient };
+        }
+
+        const d00 = d000 * (1 - tx) + d100 * tx;
+        const d10 = d010 * (1 - tx) + d110 * tx;
+        const d01 = d001 * (1 - tx) + d101 * tx;
+        const d11 = d011 * (1 - tx) + d111 * tx;
+
+        const d0 = d00 * (1 - ty) + d10 * ty;
+        const d1 = d01 * (1 - ty) + d11 * ty;
+
+        const distance = d0 * (1 - tz) + d1 * tz;
+
+        const dD_dtx = (d100 - d000) * (1 - ty) * (1 - tz) +
+                       (d110 - d010) * ty * (1 - tz) +
+                       (d101 - d001) * (1 - ty) * tz +
+                       (d111 - d011) * ty * tz;
+
+        const dD_dty = (d010 - d000) * (1 - tx) * (1 - tz) +
+                       (d110 - d100) * tx * (1 - tz) +
+                       (d011 - d001) * (1 - tx) * tz +
+                       (d111 - d101) * tx * tz;
+
+        const dD_dtz = (d001 - d000) * (1 - tx) * (1 - ty) +
+                       (d101 - d100) * tx * (1 - ty) +
+                       (d011 - d010) * (1 - tx) * ty +
+                       (d111 - d110) * tx * ty;
+
+        const invCs = 1 / cs;
+        const gx = dD_dtx * invCs;
+        const gy = dD_dty * invCs;
+        const gz = dD_dtz * invCs;
+
+        const len = Math.sqrt(gx * gx + gy * gy + gz * gz);
+        const gradient = len > 1e-6 ? { x: gx / len, y: gy / len, z: gz / len } : { x: 0, y: 0, z: 0 };
+
+        return { distance, gradient };
     }
 
     /**
@@ -351,7 +507,7 @@ export class SDFCache {
         const dy = by - ay;
         const dz = bz - az;
         const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (len < 0.01) return this.distanceAt(ax, ay, az) < clearance;
+        if (len < 0.01) return this.distanceAtTrilinear(ax, ay, az) < clearance;
         if (!this._segmentIntersectsExpandedWorldBounds(ax, ay, az, bx, by, bz, clearance)) {
             return false;
         }
@@ -375,7 +531,7 @@ export class SDFCache {
             const px = ax + ux * t;
             const py = ay + uy * t;
             const pz = az + uz * t;
-            const d = this.distanceAt(px, py, pz);
+            const d = this.distanceAtTrilinear(px, py, pz);
             if (d < clearance) return true;
             const safeAdvance = d - clearance;
             const step = safeAdvance > minStep ? safeAdvance : minStep;
@@ -384,7 +540,7 @@ export class SDFCache {
         }
         // Always check the exact endpoint — the adaptive loop may exit with
         // t > len before sampling the terminal cell.
-        return this.distanceAt(bx, by, bz) < clearance;
+        return this.distanceAtTrilinear(bx, by, bz) < clearance;
     }
 
     /** Number of cached cells (for diagnostics). */

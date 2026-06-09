@@ -35,8 +35,9 @@ test('buildStraightSocketRescueCandidates caps pure straight rescue stretch befo
     });
 
     const maxRadius = Math.max(...candidates.map((candidate) => Math.hypot(candidate.x, candidate.y)));
-    assert.ok(maxRadius <= 4.000001, `expected straight rescue max radius <= 4mm, got ${maxRadius.toFixed(2)}mm`);
+    assert.ok(maxRadius <= 8.000001, `expected straight rescue max radius <= 8mm, got ${maxRadius.toFixed(2)}mm`);
 });
+
 
 test('findStraightSocketRescueCandidate finds a nearby clear straight support when the default socket column is blocked', () => {
     const sdf = makeOpenSdf({

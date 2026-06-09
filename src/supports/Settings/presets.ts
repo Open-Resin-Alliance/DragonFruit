@@ -117,6 +117,8 @@ const DETAIL_PRESET: SupportPreset = {
             stickVsTwigCutoffMm: 5.0,
         },
         autoBracing: createDefaultAutoBracingSettings(),
+        devToolsEnabled: false,
+        devTools: createDefaultSettings().devTools,
     },
 };
 
@@ -183,6 +185,8 @@ const ANCHOR_PRESET: SupportPreset = {
             stickVsTwigCutoffMm: 5.0,
         },
         autoBracing: createDefaultAutoBracingSettings(),
+        devToolsEnabled: false,
+        devTools: createDefaultSettings().devTools,
     },
 };
 
