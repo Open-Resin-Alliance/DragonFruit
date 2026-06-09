@@ -698,90 +698,117 @@ function findContactConeClearSocketSeed(args: {
     coneScoring: ContactConeRescueScoringInput;
     contactConeBlockedAt: ContactConeBlockedAt;
     coneTuning?: ConeAutoTuneProfile | null;
+    sdf: SDFCache;
+    clearance: number;
 }): ContactConeClearSocketSeed | null {
-    const maxRadius = Math.max(0, Math.min(args.maxTotalLateralMm, MIXED_SOCKET_RESCUE_RADII_MM[MIXED_SOCKET_RESCUE_RADII_MM.length - 1]));
-    const baselineConePenaltyMetrics = getContactConeRescuePenaltyMetrics({
-        socketPos: args.socketPos,
-        coneScoring: args.coneScoring,
-        tuning: args.coneTuning,
-    });
+    const T = args.coneScoring.tipPos;
+    const N = new THREE.Vector3(args.coneScoring.tipNormal.x, args.coneScoring.tipNormal.y, args.coneScoring.tipNormal.z).normalize();
+    const L_nominal = distance3D(T, args.socketPos);
+    const L_max = L_nominal * (1 + CONTACT_CONE_MAX_STRETCH_RATIO);
+    const maxRadius = args.maxTotalLateralMm;
 
-    let best: ContactConeClearSocketSeed | null = null;
-    const eps = 0.000001;
+    let currentPos = { ...args.socketPos };
+    let iterations = 0;
+    const maxIterations = 10;
+    const stepAlpha = 0.5;
 
-    const tipNormal = args.coneScoring.tipNormal;
-    const thetaIdeal = (Math.abs(tipNormal.x) > 0.000001 || Math.abs(tipNormal.y) > 0.000001)
-        ? Math.atan2(tipNormal.y, tipNormal.x)
-        : 0;
+    while (iterations < maxIterations) {
+        iterations++;
 
-    const angleOffsetsDeg = [0, 5, -5, 10, -10, 22.5, -22.5, 45, -45, 90, -90, 135, -135, 180];
+        // 1. Get SDF distance and gradient at current position
+        const { distance: D, gradient: grad } = args.sdf.distanceAndGradientAt(currentPos.x, currentPos.y, currentPos.z, args.clearance);
 
-    for (const radius of MIXED_SOCKET_RESCUE_RADII_MM) {
-        if (radius > maxRadius + 0.000001) continue;
-
-        let foundClearAtRadius = false;
-
-        for (const offsetDeg of angleOffsetsDeg) {
-            if (radius === 0 && offsetDeg !== 0) {
-                continue;
-            }
-
-            const angle = thetaIdeal + (offsetDeg * Math.PI / 180);
-            const candidateSocketPos = radius === 0
-                ? { ...args.socketPos }
-                : {
-                    x: args.socketPos.x + Math.cos(angle) * radius,
-                    y: args.socketPos.y + Math.sin(angle) * radius,
-                    z: args.socketPos.z,
-                };
-
-            if (args.contactConeBlockedAt(candidateSocketPos)) {
-                continue;
-            }
-
-            const metrics = getContactConeRescuePenaltyMetrics({
-                socketPos: candidateSocketPos,
-                coneScoring: args.coneScoring,
-                reference: baselineConePenaltyMetrics,
-                tuning: args.coneTuning,
-            });
-            if (metrics.exceedsStretchLimit || metrics.exceedsDiskAngleLimit) {
-                continue;
-            }
-            const candidate: ContactConeClearSocketSeed = {
-                socketPos: candidateSocketPos,
-                addedLengthMm: metrics.addedLengthMm,
-                score: metrics.score,
-                socketShiftMm: distanceXY(candidateSocketPos, args.socketPos),
-            };
-
-            let isBetter = false;
-            if (!best) {
-                isBetter = true;
-            } else if (candidate.addedLengthMm < best.addedLengthMm - eps) {
-                isBetter = true;
-            } else if (candidate.addedLengthMm > best.addedLengthMm + eps) {
-                isBetter = false;
-            } else if (candidate.score < best.score - eps) {
-                isBetter = true;
-            } else if (candidate.score > best.score + eps) {
-                isBetter = false;
-            } else if (candidate.socketShiftMm < best.socketShiftMm - eps) {
-                isBetter = true;
-            }
-
-            if (isBetter) {
-                best = candidate;
-                foundClearAtRadius = true;
+        // 2. If we are inside clearance, calculate repulsion force
+        let fx = 0, fy = 0, fz = 0;
+        if (D < args.clearance) {
+            const mag = stepAlpha * (args.clearance - D);
+            const gLen = Math.sqrt(grad.x * grad.x + grad.y * grad.y + grad.z * grad.z);
+            if (gLen > 1e-6) {
+                fx = (grad.x / gLen) * mag;
+                fy = (grad.y / gLen) * mag;
+                fz = (grad.z / gLen) * mag;
+            } else {
+                fx = N.x * mag;
+                fy = N.y * mag;
+                fz = N.z * mag;
             }
         }
 
-        if (foundClearAtRadius) {
+        // 3. Move candidate position
+        let px = currentPos.x + fx;
+        let py = currentPos.y + fy;
+        let pz = currentPos.z + fz;
+
+        // 4. Project relative to tip
+        const uVec = new THREE.Vector3(px - T.x, py - T.y, pz - T.z);
+        const uLen = uVec.length();
+        if (uLen > 1e-6) {
+            const dot = uVec.dot(N);
+            const uParallel = N.clone().multiplyScalar(dot);
+            const uOrthogonal = uVec.clone().sub(uParallel);
+            const orthLen = uOrthogonal.length();
+
+            const maxAngleRad = (CONTACT_DISK_MAX_CONE_AXIS_ANGLE_DEG * Math.PI) / 180;
+            const maxOrthLen = Math.max(0, dot * Math.tan(maxAngleRad));
+
+            if (dot < 0) {
+                uParallel.copy(N).multiplyScalar(1e-3);
+                uOrthogonal.set(0, 0, 0);
+            } else if (orthLen > maxOrthLen) {
+                uOrthogonal.normalize().multiplyScalar(maxOrthLen);
+            }
+
+            uVec.copy(uParallel).add(uOrthogonal);
+        }
+
+        // Clamp length
+        let newLen = uVec.length();
+        if (newLen < L_nominal) {
+            uVec.normalize().multiplyScalar(L_nominal);
+        } else if (newLen > L_max) {
+            uVec.normalize().multiplyScalar(L_max);
+        }
+
+        // Clamp lateral shift
+        const lateralShift = Math.sqrt(uVec.x * uVec.x + uVec.y * uVec.y);
+        if (lateralShift > maxRadius) {
+            uVec.x = (uVec.x / lateralShift) * maxRadius;
+            uVec.y = (uVec.y / lateralShift) * maxRadius;
+        }
+
+        const nextPos = {
+            x: T.x + uVec.x,
+            y: T.y + uVec.y,
+            z: T.z + uVec.z,
+        };
+
+        const distSq = (nextPos.x - currentPos.x) ** 2 + (nextPos.y - currentPos.y) ** 2 + (nextPos.z - currentPos.z) ** 2;
+        currentPos = nextPos;
+        if (distSq < 0.0001) {
             break;
         }
     }
 
-    return best;
+    if (args.contactConeBlockedAt(currentPos)) {
+        return null; // still blocked after gradient march
+    }
+
+    const metrics = getContactConeRescuePenaltyMetrics({
+        socketPos: currentPos,
+        coneScoring: args.coneScoring,
+        tuning: args.coneTuning,
+    });
+
+    if (metrics.exceedsStretchLimit || metrics.exceedsDiskAngleLimit) {
+        return null;
+    }
+
+    return {
+        socketPos: currentPos,
+        addedLengthMm: metrics.addedLengthMm,
+        score: metrics.score,
+        socketShiftMm: distanceXY(currentPos, args.socketPos),
+    };
 }
 
 function isMixedSocketRescueCandidateBetter(
@@ -1970,6 +1997,8 @@ export function calculateSmartPlacementV2(
             },
             contactConeBlockedAt,
             coneTuning: debugConeTuning,
+            sdf,
+            clearance,
         });
 
         return coneClearSocketSeedCache;
@@ -2388,8 +2417,10 @@ export function calculateSmartPlacementV2(
     let result;
     const routingAlgorithm = settings.devToolsEnabled && settings.devTools
         ? settings.devTools.routingAlgorithm
-        : (settings.shaft.routingAlgorithm ?? 'astar');
-    const fieldDeterministic = settings.devToolsEnabled && settings.devTools && settings.devTools.fieldDeterministic;
+        : (settings.shaft.routingAlgorithm ?? 'potential');
+    const fieldDeterministic = settings.devToolsEnabled && settings.devTools
+        ? settings.devTools.fieldDeterministic
+        : (routingAlgorithm === 'potential');
 
     if (fieldDeterministic) {
         const detResult = solveDeterministicFieldPath(sdf, socketPos, rootTopZ, {

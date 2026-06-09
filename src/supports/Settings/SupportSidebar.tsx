@@ -35,7 +35,6 @@ import {
     RaftSettingsCard,
     GridSettingsCard,
     SupportKindTabs,
-    DevToolsPanel,
 } from './components';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { NumberInput } from '@/components/ui/NumberInput';
@@ -1042,21 +1041,7 @@ export function SupportSidebar() {
 
     return (
         <>
-        {settings.devToolsEnabled && (
-            <div className="fixed left-4 top-[calc(var(--topbar-height)+24px)] z-[100] flex items-start">
-                {devToolsOpen && <DevToolsPanel />}
-                <button
-                    onClick={() => setDevToolsOpen(!devToolsOpen)}
-                    className={`w-6 h-20 bg-neutral-800 border border-neutral-700 flex items-center justify-center cursor-pointer hover:bg-neutral-750 transition-colors text-[9px] font-bold text-neutral-300 uppercase tracking-widest shadow-md ${
-                        devToolsOpen ? 'border-l-0 rounded-r' : 'rounded'
-                    }`}
-                    style={{ writingMode: 'vertical-lr', textOrientation: 'mixed' }}
-                    title={devToolsOpen ? "Collapse Dev Tools" : "Expand Dev Tools"}
-                >
-                    Dev Tools
-                </button>
-            </div>
-        )}
+
 
         <div ref={supportSidebarAnchorRef}>
         <Card className={expanded ? 'max-h-[calc(100dvh-var(--topbar-height)-24px)] overflow-hidden flex flex-col' : undefined}>
@@ -1113,17 +1098,23 @@ export function SupportSidebar() {
                                         }}
                                     />
 
-                                    <div className="flex items-center justify-between p-2 bg-neutral-750 rounded-md border border-neutral-700 my-1">
-                                        <span className="text-xs font-semibold text-neutral-300">Show Dev Tools</span>
-                                        <label className="relative inline-flex items-center cursor-pointer">
-                                            <input
-                                                type="checkbox"
-                                                checked={settings.devToolsEnabled}
-                                                onChange={(e) => updateDevToolsEnabled(e.target.checked)}
-                                                className="sr-only peer"
-                                            />
-                                            <div className="w-9 h-5 bg-neutral-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-300 after:border-neutral-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 peer-checked:after:bg-white"></div>
-                                        </label>
+                                    {/* TEMPORARY: Switch between A* Swim-Walk and Potential Gradient modes */}
+                                    <div className="flex items-center justify-between p-2 bg-neutral-750 rounded-md border border-neutral-700 my-1 gap-2">
+                                        <div className="flex flex-col min-w-0">
+                                            <span className="text-xs font-semibold text-neutral-300 truncate">Solver Mode (Temporary)</span>
+                                            <span className="text-[9px] text-neutral-400 truncate">Switch path solver algorithm</span>
+                                        </div>
+                                        <SelectDropdown
+                                            value={settings.shaft.routingAlgorithm ?? 'potential'}
+                                            onChange={(value) => updateShaftProfile({ routingAlgorithm: value as 'astar' | 'potential' })}
+                                            options={[
+                                                { value: 'potential', label: 'Potential Gradient' },
+                                                { value: 'astar', label: 'A* Swim-Walk' },
+                                            ]}
+                                            className="w-[140px] space-y-0"
+                                            selectClassName="w-full h-8 px-2 pr-8 text-xs truncate"
+                                            menuClassName="!min-w-[140px]"
+                                        />
                                     </div>
 
                                     {activeKind === 'raft' ? (

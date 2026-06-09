@@ -166,7 +166,7 @@ export function createDefaultSettings(): SupportSettings {
             secondaryDiameterMm: DEFAULT_SHAFT_DIAMETER_MM,
             isStraight: true,
             maxAngleDeg: DEFAULT_SHAFT_MAX_ANGLE_DEG,
-            routingAlgorithm: 'astar',
+            routingAlgorithm: 'potential',
         },
         roots: {
             shape: 'cylinder',
@@ -199,8 +199,8 @@ export function createDefaultSettings(): SupportSettings {
         autoBracing: createDefaultAutoBracingSettings(),
         devToolsEnabled: false,
         devTools: {
-            routingAlgorithm: 'astar',
-            fieldDeterministic: false,
+            routingAlgorithm: 'potential',
+            fieldDeterministic: true,
             clearanceMm: 1.5,
             marginMm: 2.5,
             repulsionStrength: 8.0,

@@ -53,7 +53,7 @@ function mergeWithDefaults(settings: SupportSettings): SupportSettings {
         shaft: {
             ...defaults.shaft,
             ...settings.shaft,
-            routingAlgorithm: (settings.shaft?.routingAlgorithm === 'potential') ? 'potential' : 'astar',
+            routingAlgorithm: (settings.shaft?.routingAlgorithm === 'astar') ? 'astar' : 'potential',
         },
         roots: { ...defaults.roots, ...settings.roots },
         baseFlare: { ...defaults.baseFlare, ...settings.baseFlare },
