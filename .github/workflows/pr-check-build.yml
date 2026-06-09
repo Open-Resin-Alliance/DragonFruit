@@ -17,7 +17,7 @@ jobs:
     name: macOS compile check (Universal)
     # Internal PRs (same-repo branches) → self-hosted Mac Mini M4 (faster)
     # Fork PRs → GitHub-hosted macOS runner (security: never run fork code on self-hosted)
-    runs-on: ${{ github.event.pull_request.head.repo.full_name == github.repository && fromJSON('self-hosted') || 'macos-latest' }}
+    runs-on: ${{ github.event.pull_request.head.repo.full_name == github.repository && 'self-hosted' || 'macos-latest' }}
     outputs:
       version: ${{ steps.version.outputs.version }}
       commit_hash: ${{ steps.version.outputs.commit_hash }}
