@@ -38,7 +38,9 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
+      # Self-hosted runners are persistent — no need to upload/download cache
       - name: Rust cache
+        if: runner.environment == 'github-hosted'
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ./src-tauri -> target
