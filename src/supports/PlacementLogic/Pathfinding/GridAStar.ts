@@ -717,11 +717,13 @@ export function gridAStar(
             warmState: stagnated ? null : {
                 socketPos: { ...startPos },
                 openEntries: openSet.slice(0, 64),
+                // Cap at 256 entries — the warm-start only needs enough state
+                // to seed the next frame's frontier, not the full visited set.
                 gScores: new Map(
-                    Array.from(nodeState.entries(), ([key, state]) => [key, state.g]),
+                    Array.from(nodeState.entries()).slice(0, 256).map(([key, state]) => [key, state.g]),
                 ),
                 cameFrom: new Map(
-                    Array.from(nodeState.entries(), ([key, state]) =>
+                    Array.from(nodeState.entries()).slice(0, 256).map(([key, state]) =>
                         state.cameFrom === undefined ? null : ([key, state.cameFrom] as [number, number]),
                     ).filter((entry): entry is [number, number] => entry !== null),
                 ),
@@ -768,11 +770,12 @@ export function gridAStar(
         warmState: {
             socketPos: { ...startPos },
             openEntries: [],
+            // Cap at 256 entries — same rationale as stagnation path.
             gScores: new Map(
-                Array.from(nodeState.entries(), ([key, state]) => [key, state.g]),
+                Array.from(nodeState.entries()).slice(0, 256).map(([key, state]) => [key, state.g]),
             ),
             cameFrom: new Map(
-                Array.from(nodeState.entries(), ([key, state]) =>
+                Array.from(nodeState.entries()).slice(0, 256).map(([key, state]) =>
                     state.cameFrom === undefined ? null : ([key, state.cameFrom] as [number, number]),
                 ).filter((entry): entry is [number, number] => entry !== null),
             ),

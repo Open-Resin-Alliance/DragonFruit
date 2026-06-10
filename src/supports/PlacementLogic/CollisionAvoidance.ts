@@ -24,7 +24,7 @@ function getOrCreateCollisionSdf(mesh: THREE.Mesh): SDFCache | null {
         return existing;
     }
 
-    const sdf = new SDFCache(mesh, { cellSize: 0.25 });
+    const sdf = new SDFCache(mesh, { cellSize: 0.5 });
     sdf.refreshMatrix();
     sdfCacheByMeshUuid.set(mesh.uuid, sdf);
     return sdf;

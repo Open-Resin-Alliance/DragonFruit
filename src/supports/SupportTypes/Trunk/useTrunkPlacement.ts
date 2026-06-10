@@ -125,9 +125,11 @@ function buildCavityStick(
 type CavityStickBuildResult = NonNullable<ReturnType<typeof buildCavityStick>>;
 
 export function useTrunkPlacementV2() {
-    const HOVER_MIN_INTERVAL_MS = 9;
-    const HOVER_POS_EPSILON_MM = 0.1;
-    const HOVER_NORMAL_DOT_MIN = 0.998;
+    // Debounce tuned for human hand drift (~1-2mm) and 60fps target.
+    // Values tight enough to feel responsive, loose enough to skip micro-jitter.
+    const HOVER_MIN_INTERVAL_MS = 12;
+    const HOVER_POS_EPSILON_MM = 0.5;
+    const HOVER_NORMAL_DOT_MIN = 0.995;
     const { getHotkey } = useHotkeyConfig();
     const forcePlaceBinding = getHotkey('SUPPORTS', 'FORCE_PLACE_SUPPORT');
 
@@ -340,6 +342,16 @@ export function useTrunkPlacementV2() {
             // (which may still place a branch or reject).
         }
 
+        // When grid is disabled, the trunk candidate is already final — skip
+        // the grid snapping/branch logic entirely.
+        if (!isGridMode) {
+            setPreviewData(result.supportData);
+            setPreviewError(forcePlaceOverrideRef.current ? null : (result.error || null));
+            setPreviewWarning(result.warning || null);
+            perfEndFrame();
+            return;
+        }
+
         perfMark('hover:grid-decision');
         const decision = decideGridPlacement({
             settings,
@@ -349,6 +361,7 @@ export function useTrunkPlacementV2() {
             tipNormal,
             modelId,
             mesh,
+            isPreview: true,
         });
         perfMeasureWithSpike('hover:grid-decision', 'grid:decision');
 

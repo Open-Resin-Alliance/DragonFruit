@@ -207,10 +207,6 @@ export function clearPlacementCache(modelId?: string): void {
 export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
     const { tipPos, tipNormal, modelId, mesh, overrides, isPreview } = input;
 
-    // Placement computation always runs (no cache). This ensures preview and click
-    // use consistent logic and settings, preventing the mismatches that occurred
-    // when coarse preview results were cached and reused for click placement.
-
     // Read current settings
     const settings = getSettings();
     const tipProfile = buildTipProfile(settings, overrides);
@@ -234,14 +230,26 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
     if (mesh) {
         // V2 grid A* pathfinder (SDF-backed).
         // Both preview and click use FULL collision checks to ensure consistent safety.
-        // Preview uses lower budget (1200 expansions) for responsiveness, but same
-        // collision detection rigor as click. This trades slightly slower preview
-        // exploration for correct collision avoidance.
+        // Preview uses lower budget (800 expansions) for responsiveness.
         const v2Context = isPreview ? { maxExpansions: 800 } : undefined;
-        perfMark('trunk:v2-placement');
-        const result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
-        perfMeasureWithSpike('trunk:v2-placement', 'trunk:v2-placement');
-        placement = result;
+
+        // Cache key: position + normal quantised at 0.5mm / 0.05 normal.
+        // Only used for preview → preview reuse; click-time bypasses cache
+        // to ensure fresh collision validation against any moved models.
+        const cacheKey = isPreview ? placementCacheKey(tipPos, tipNormal) : null;
+        const cached = cacheKey ? getPlacementCache(modelId, cacheKey) : undefined;
+
+        if (cached) {
+            placement = cached;
+        } else {
+            perfMark('trunk:v2-placement');
+            const result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
+            perfMeasureWithSpike('trunk:v2-placement', 'trunk:v2-placement');
+            placement = result;
+            if (cacheKey) {
+                setPlacementCache(modelId, cacheKey, placement);
+            }
+        }
     } else {
         placement = calculateStandardPlacement(placementInput);
     }
