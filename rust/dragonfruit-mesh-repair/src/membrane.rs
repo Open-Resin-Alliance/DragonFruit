@@ -79,13 +79,28 @@ pub fn build_membrane(loop_pts: &[Vec3], subdivisions: u32) -> Option<Membrane> 
         return None;
     }
 
-    let mut membrane = seed_fan(&loop_pts)?;
-    for _ in 0..subdivisions {
-        subdivide(&mut membrane);
-    }
-    // Simple minimal-surface relaxation (the working "cut worked" path). The
-    // isotropic remesh (relax_and_remesh) is kept below but disabled — it improved
-    // triangle quality but destabilised the membrane on real loops. Revisit later.
+    // Grid seed (constrained Delaunay over a uniform interior point grid) →
+    // well-shaped, near-uniform triangles with NO fan apex. Falls back to the
+    // centroid fan + subdivision only if CDT fails (degenerate/odd loop).
+    let mut membrane = match seed_grid(&loop_pts) {
+        Some(m) => m,
+        None => {
+            let mut fan = seed_fan(&loop_pts)?;
+            for _ in 0..subdivisions {
+                subdivide(&mut fan);
+            }
+            fan
+        }
+    };
+    // Unify triangle winding across the whole patch. CDT orients each triangle by
+    // its 2D sign, which can leave NEIGHBOURING triangles inconsistently wound on
+    // a bowed/non-convex membrane. A mixed-winding surface is closed and non-self-
+    // intersecting yet still `NotManifold` to the boolean engine — this was the
+    // dragon failure (topology 0/0/0, no self-X, still rejected). Flood-fill from
+    // one triangle so every neighbour agrees.
+    orient_membrane(&mut membrane);
+    // Minimal-surface relaxation bows the (flat) grid to follow the loop contour.
+    // The isotropic remesh (relax_and_remesh) is kept below but disabled.
     relax(&mut membrane, 60, 0.5);
     Some(membrane)
 }
@@ -165,6 +180,318 @@ fn seed_fan(loop_pts: &[Vec3]) -> Option<Membrane> {
     // Boundary ring = the loop vertices in order (0..n).
     let boundary = (0..n as u32).collect();
     Some(Membrane { vertices, triangles, boundary })
+}
+
+/// An orthonormal frame for the loop's best-fit plane: `origin` + axes `u`,`v`
+/// (in-plane) and `n` (normal). Projects 3D → 2D `(u,v)` and back.
+struct PlaneFrame {
+    origin: Vec3,
+    u: Vec3,
+    v: Vec3,
+    n: Vec3,
+}
+
+impl PlaneFrame {
+    /// Build from a point cloud via PCA-style best-fit normal (same math family
+    /// as organic_cut's `best_fit_plane_normal`), with an arbitrary in-plane basis.
+    fn fit(pts: &[Vec3]) -> Option<Self> {
+        let n_pts = pts.len();
+        if n_pts < 3 {
+            return None;
+        }
+        let mut origin = Vec3::ZERO;
+        for &p in pts {
+            origin = origin.add(p);
+        }
+        origin = origin.scale(1.0 / n_pts as f32);
+
+        // Covariance (symmetric) → smallest-eigenvector normal via the classic
+        // "largest cross product of covariance rows" trick.
+        let (mut xx, mut xy, mut xz, mut yy, mut yz, mut zz) = (0f64, 0f64, 0f64, 0f64, 0f64, 0f64);
+        for &p in pts {
+            let d = p.sub(origin);
+            let (dx, dy, dz) = (d.x as f64, d.y as f64, d.z as f64);
+            xx += dx * dx;
+            xy += dx * dy;
+            xz += dx * dz;
+            yy += dy * dy;
+            yz += dy * dz;
+            zz += dz * dz;
+        }
+        let det_x = yy * zz - yz * yz;
+        let det_y = xx * zz - xz * xz;
+        let det_z = xx * yy - xy * xy;
+        let det_max = det_x.max(det_y).max(det_z);
+        if det_max <= 1e-12 {
+            return None; // collinear / degenerate
+        }
+        let normal = if det_max == det_x {
+            Vec3::new(det_x as f32, (xz * yz - xy * zz) as f32, (xy * yz - xz * yy) as f32)
+        } else if det_max == det_y {
+            Vec3::new((xz * yz - xy * zz) as f32, det_y as f32, (xy * xz - yz * xx) as f32)
+        } else {
+            Vec3::new((xy * yz - xz * yy) as f32, (xy * xz - yz * xx) as f32, det_z as f32)
+        };
+        let nlen = normal.length();
+        if nlen < 1e-9 {
+            return None;
+        }
+        let n = normal.scale(1.0 / nlen);
+
+        // Pick an in-plane u axis not parallel to n, then v = n × u.
+        let seed = if n.x.abs() < 0.9 { Vec3::new(1.0, 0.0, 0.0) } else { Vec3::new(0.0, 1.0, 0.0) };
+        let mut u = seed.sub(n.scale(seed.dot(n)));
+        let ulen = u.length();
+        if ulen < 1e-9 {
+            return None;
+        }
+        u = u.scale(1.0 / ulen);
+        let v = n.cross(u);
+        Some(Self { origin, u, v, n })
+    }
+
+    #[inline]
+    fn to_2d(&self, p: Vec3) -> (f64, f64) {
+        let d = p.sub(self.origin);
+        (d.dot(self.u) as f64, d.dot(self.v) as f64)
+    }
+
+    #[inline]
+    fn to_3d(&self, uv: (f64, f64)) -> Vec3 {
+        self.origin
+            .add(self.u.scale(uv.0 as f32))
+            .add(self.v.scale(uv.1 as f32))
+    }
+}
+
+/// True if 2D point `p` is strictly inside the polygon `poly` (ray-casting).
+fn point_in_polygon(p: (f64, f64), poly: &[(f64, f64)]) -> bool {
+    let n = poly.len();
+    let mut inside = false;
+    let (px, py) = p;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = poly[i];
+        let (xj, yj) = poly[j];
+        // Does the edge (j→i) straddle the horizontal ray at py, and is the
+        // crossing to the right of px?
+        if ((yi > py) != (yj > py))
+            && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)
+        {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// Grid seed: triangulate the loop with a uniform interior point grid via
+/// constrained Delaunay (the `cdt` crate, as in `arrangement.rs`). Produces
+/// well-shaped, near-uniform triangles — NO fan apex, NO slivers — which is what
+/// makes the cut face a clean grid instead of a pinwheel.
+///
+/// Steps: best-fit plane → project loop to 2D → drop a uniform grid of interior
+/// points (target spacing) inside the loop polygon → CDT with the loop as a
+/// closed constraint (CDT returns only interior triangles) → lift back to 3D.
+/// Returns `None` (caller falls back to `seed_fan`) if the loop is degenerate or
+/// CDT fails.
+fn seed_grid(loop_pts: &[Vec3]) -> Option<Membrane> {
+    let n = loop_pts.len();
+    if n < 3 {
+        return None;
+    }
+    let frame = PlaneFrame::fit(loop_pts)?;
+
+    // Raw loop in 2D + its bbox (for spacing).
+    let raw2d: Vec<(f64, f64)> = loop_pts.iter().map(|&p| frame.to_2d(p)).collect();
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for &(x, y) in &raw2d {
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+    }
+
+    // Target grid spacing = a fraction of the loop's extent, so even a coarse
+    // 4-point loop gets a real interior grid. ~`GRID_DIVISIONS` cells across the
+    // larger bbox dimension. Independent of how many points the user clicked.
+    const GRID_DIVISIONS: f64 = 24.0;
+    let extent = (max_x - min_x).max(max_y - min_y).max(1e-4);
+    let spacing = (extent / GRID_DIVISIONS).max(1e-4);
+
+    // Densify the boundary to ~`spacing` resolution so CDT has short rim edges
+    // (otherwise long loop edges with no interior points force slivers). Each
+    // densified boundary point also carries its 3D position (linear interpolation
+    // of the loop verts → lies EXACTLY on the loop edge in 3D, keeping the seam
+    // precise). These become the membrane's boundary ring, in order.
+    let mut bnd2d: Vec<(f64, f64)> = Vec::new();
+    let mut bnd3d: Vec<Vec3> = Vec::new();
+    for i in 0..n {
+        let a2 = raw2d[i];
+        let b2 = raw2d[(i + 1) % n];
+        let a3 = loop_pts[i];
+        let b3 = loop_pts[(i + 1) % n];
+        let seg_len = ((a2.0 - b2.0).powi(2) + (a2.1 - b2.1).powi(2)).sqrt();
+        let steps = ((seg_len / spacing).floor() as usize).max(1);
+        // Emit the start vertex + interior subdivisions; the next segment emits
+        // its own start, so we don't duplicate the shared corner.
+        for s in 0..steps {
+            let t = s as f64 / steps as f64;
+            bnd2d.push((a2.0 + (b2.0 - a2.0) * t, a2.1 + (b2.1 - a2.1) * t));
+            bnd3d.push(a3.add(b3.sub(a3).scale(t as f32)));
+        }
+    }
+    let bn = bnd2d.len();
+
+    // Points list: densified boundary first (indices 0..bn = the boundary ring),
+    // then interior grid points strictly inside, off the boundary (no rim slivers).
+    let mut pts2d: Vec<(f64, f64)> = bnd2d.clone();
+    let inset = spacing * 0.5;
+    let mut y = min_y + spacing;
+    let mut grid_row = 0;
+    while y < max_y {
+        let x_start = min_x + spacing + if grid_row % 2 == 1 { spacing * 0.5 } else { 0.0 };
+        let mut x = x_start;
+        while x < max_x {
+            let p = (x, y);
+            if point_in_polygon(p, &raw2d) && dist_to_polygon(p, &raw2d) > inset {
+                pts2d.push(p);
+            }
+            x += spacing;
+        }
+        y += spacing;
+        grid_row += 1;
+    }
+
+    // Densified boundary as closed constraint edges (i → i+1, wrapping the ring).
+    let edges: Vec<(usize, usize)> = (0..bn).map(|i| (i, (i + 1) % bn)).collect();
+
+    // Run CDT defensively (the crate can panic on tricky inputs).
+    let tris = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cdt::triangulate_with_edges(&pts2d, &edges)
+    }))
+    .ok()?
+    .ok()?;
+    if tris.is_empty() {
+        return None;
+    }
+
+    // Lift every point back to 3D. Boundary points (0..bn) use their precise 3D
+    // positions on the loop edges (bnd3d); interior points lift from the plane.
+    let mut vertices: Vec<Vec3> = Vec::with_capacity(pts2d.len());
+    for (i, &uv) in pts2d.iter().enumerate() {
+        if i < bn {
+            vertices.push(bnd3d[i]);
+        } else {
+            vertices.push(frame.to_3d(uv));
+        }
+    }
+
+    // Orient triangles consistently (CCW in 2D → +n in 3D). Flip any CW ones.
+    let mut triangles: Vec<[u32; 3]> = Vec::with_capacity(tris.len());
+    for (a, b, c) in tris {
+        let pa = pts2d[a];
+        let pb = pts2d[b];
+        let pc = pts2d[c];
+        let cross = (pb.0 - pa.0) * (pc.1 - pa.1) - (pb.1 - pa.1) * (pc.0 - pa.0);
+        if cross.abs() < 1e-18 {
+            continue; // degenerate
+        }
+        if cross > 0.0 {
+            triangles.push([a as u32, b as u32, c as u32]);
+        } else {
+            triangles.push([a as u32, c as u32, b as u32]);
+        }
+    }
+    if triangles.is_empty() {
+        return None;
+    }
+
+    let boundary = (0..bn as u32).collect();
+    Some(Membrane { vertices, triangles, boundary })
+}
+
+/// Unify triangle winding across the membrane by flood-fill. Two triangles
+/// sharing an edge are consistently wound iff they traverse that edge in OPPOSITE
+/// directions; if they traverse it the same way, one must be flipped. BFS from
+/// triangle 0, flipping neighbours as needed so the whole patch agrees.
+fn orient_membrane(m: &mut Membrane) {
+    let n = m.triangles.len();
+    if n == 0 {
+        return;
+    }
+    // Map each undirected edge → the (up to 2) triangles using it.
+    let mut edge_tris: ahash::AHashMap<(u32, u32), smallvec::SmallVec<[usize; 2]>> =
+        ahash::AHashMap::with_capacity(n * 3);
+    for (fi, t) in m.triangles.iter().enumerate() {
+        for &(a, b) in &[(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            let k = if a < b { (a, b) } else { (b, a) };
+            edge_tris.entry(k).or_default().push(fi);
+        }
+    }
+    // Does triangle `fi` traverse directed edge (a→b)? (i.e. (a,b) appears in
+    // winding order). Used to compare neighbour orientations.
+    let traverses = |tri: [u32; 3], a: u32, b: u32| -> bool {
+        (tri[0] == a && tri[1] == b)
+            || (tri[1] == a && tri[2] == b)
+            || (tri[2] == a && tri[0] == b)
+    };
+
+    let mut visited = vec![false; n];
+    let mut queue = std::collections::VecDeque::new();
+    visited[0] = true;
+    queue.push_back(0usize);
+
+    while let Some(fi) = queue.pop_front() {
+        let tri = m.triangles[fi];
+        for &(a, b) in &[(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+            let k = if a < b { (a, b) } else { (b, a) };
+            if let Some(neighbours) = edge_tris.get(&k) {
+                for &nf in neighbours {
+                    if nf == fi || visited[nf] {
+                        continue;
+                    }
+                    visited[nf] = true;
+                    // `fi` traverses a→b; a CONSISTENT neighbour must traverse b→a.
+                    // If it ALSO traverses a→b, it's wound the same way → flip it.
+                    let nt = m.triangles[nf];
+                    if traverses(nt, a, b) {
+                        m.triangles[nf] = [nt[0], nt[2], nt[1]];
+                    }
+                    queue.push_back(nf);
+                }
+            }
+        }
+    }
+
+    // The flood-fill makes winding CONSISTENT (all triangles agree with their
+    // neighbours). Whether the patch faces "up" or "down" overall doesn't matter:
+    // the slab copies this winding for the top sheet and reverses it for the
+    // bottom, and the side wall is keyed to the boundary ring — all consistent
+    // regardless of the global facing. (An earlier global-flip heuristic here was
+    // buggy and inverted correctly-wound patches → removed.)
+}
+
+/// Shortest distance from 2D point `p` to any edge of the polygon.
+fn dist_to_polygon(p: (f64, f64), poly: &[(f64, f64)]) -> f64 {
+    let n = poly.len();
+    let mut best = f64::MAX;
+    for i in 0..n {
+        let a = poly[i];
+        let b = poly[(i + 1) % n];
+        best = best.min(dist_point_segment_2d(p, a, b));
+    }
+    best
+}
+
+/// Distance from `p` to segment `a`–`b` in 2D.
+fn dist_point_segment_2d(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (abx, aby) = (b.0 - a.0, b.1 - a.1);
+    let (apx, apy) = (p.0 - a.0, p.1 - a.1);
+    let len2 = abx * abx + aby * aby;
+    let t = if len2 > 0.0 { ((apx * abx + apy * aby) / len2).clamp(0.0, 1.0) } else { 0.0 };
+    let (cx, cy) = (a.0 + t * abx, a.1 + t * aby);
+    ((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt()
 }
 
 /// One round of 1→4 midpoint subdivision. Each triangle is split into four by
@@ -990,8 +1317,23 @@ pub fn thicken_to_slab(
     boundary_overshoot_mm: f32,
 ) -> IndexedMesh {
     let half = (thickness_mm.max(1e-4)) * 0.5;
-    let normals = vertex_normals(m);
     let n_verts = m.vertices.len();
+
+    // Offset direction: a SINGLE consistent vector (the membrane's average normal),
+    // NOT per-vertex normals. Per-vertex normals diverge on a curved surface, so
+    // the +offset (top) and -offset (bottom) sheets can cross each other → a
+    // self-intersecting slab that manifold rejects as NotManifold (topology is
+    // clean but geometry folds). A uniform offset keeps the two sheets parallel
+    // and congruent, so they can never intersect, no matter how the membrane bows.
+    let mut avg_n = Vec3::ZERO;
+    for t in &m.triangles {
+        let a = m.vertices[t[0] as usize];
+        let b = m.vertices[t[1] as usize];
+        let c = m.vertices[t[2] as usize];
+        avg_n = avg_n.add(b.sub(a).cross(c.sub(a))); // area-weighted face normal
+    }
+    let alen = avg_n.length();
+    let offset_dir = if alen > 1e-9 { avg_n.scale(1.0 / alen) } else { Vec3::new(0.0, 0.0, 1.0) };
 
     // Loop centroid (over the boundary ring) → outward radial direction per
     // boundary vertex, used to push the ring PAST the model surface.
@@ -1016,13 +1358,15 @@ pub fn thicken_to_slab(
         }
     }
 
-    // Top sheet = base + half*normal ; bottom sheet = base - half*normal.
+    // Top sheet = base + half*offset_dir ; bottom sheet = base - half*offset_dir.
+    // Uniform direction (see above) → the two sheets never cross.
+    let up = offset_dir.scale(half);
     let mut positions: Vec<Vec3> = Vec::with_capacity(n_verts * 2);
     for i in 0..n_verts {
-        positions.push(base[i].add(normals[i].scale(half)));
+        positions.push(base[i].add(up));
     }
     for i in 0..n_verts {
-        positions.push(base[i].sub(normals[i].scale(half)));
+        positions.push(base[i].sub(up));
     }
     let bottom = n_verts as u32; // index offset of the bottom sheet
 
@@ -1036,20 +1380,33 @@ pub fn thicken_to_slab(
     for t in &m.triangles {
         triangles.push([bottom + t[0], bottom + t[2], bottom + t[1]]);
     }
-    // Side wall: stitch the full ordered boundary ring (closed) top→bottom.
-    //
-    // WINDING: the top sheet traverses each boundary edge in the ring direction
-    // a→b (the seed/subdivision keeps this), so the side wall MUST traverse it
-    // b→a, or that edge is used twice in the same direction → non-manifold.
-    // The quad is therefore wound (b, a, a2, b2):
+    // Side wall: stitch the boundary ring top→bottom. The wall must traverse each
+    // top boundary edge OPPOSITE to how the top sheet traverses it (or the edge is
+    // used twice in the same direction → non-manifold). Rather than ASSUME the top
+    // sheet goes a→b (it depends on the membrane's global winding, which the
+    // orientation flood-fill leaves arbitrary), DETECT the top sheet's direction
+    // per edge and wind the wall accordingly. This makes the slab valid regardless
+    // of the membrane's facing.
+    let mut top_dir: ahash::AHashSet<(u32, u32)> = ahash::AHashSet::new();
+    for t in &m.triangles {
+        top_dir.insert((t[0], t[1]));
+        top_dir.insert((t[1], t[2]));
+        top_dir.insert((t[2], t[0]));
+    }
     for i in 0..bn {
-        let a = m.boundary[i]; // top, this boundary vertex
-        let b = m.boundary[(i + 1) % bn]; // top, next boundary vertex
-        let a2 = bottom + a; // bottom, this
-        let b2 = bottom + b; // bottom, next
-        // Quad (b, a, a2, b2) → two triangles, traversing the top edge b→a.
-        triangles.push([b, a, a2]);
-        triangles.push([b, a2, b2]);
+        let a = m.boundary[i];
+        let b = m.boundary[(i + 1) % bn];
+        let a2 = bottom + a;
+        let b2 = bottom + b;
+        // If the top sheet traverses this boundary edge a→b, the wall traverses
+        // b→a (quad b,a,a2,b2). If the top sheet goes b→a, mirror it (a,b,b2,a2).
+        if top_dir.contains(&(a, b)) {
+            triangles.push([b, a, a2]);
+            triangles.push([b, a2, b2]);
+        } else {
+            triangles.push([a, b, b2]);
+            triangles.push([a, b2, a2]);
+        }
     }
 
     IndexedMesh { positions, triangles }
@@ -1101,12 +1458,157 @@ pub fn axis_aligned_slab(lo: Vec3, hi: Vec3) -> IndexedMesh {
 pub fn to_manifold(mesh: &IndexedMesh) -> Result<manifold_csg::Manifold, String> {
     let positions: Vec<f32> = mesh.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
     let indices: Vec<u32> = mesh.triangles.iter().flat_map(|t| *t).collect();
-    let m = manifold_csg::Manifold::from_mesh_f32(&positions, 3, &indices)
-        .map_err(|e| format!("manifold rejected mesh: {e:?} (tris={})", mesh.triangles.len()))?;
+    let m = manifold_csg::Manifold::from_mesh_f32(&positions, 3, &indices).map_err(|e| {
+        // Enrich the error so we can SEE the defect on the real model: how many
+        // edges aren't shared by exactly 2 faces (open boundary / non-manifold
+        // junction), how many duplicate directed edges (winding flip), etc.
+        let (open, nonmanifold, degenerate) = mesh_edge_defects(mesh);
+        format!(
+            "manifold rejected mesh: {e:?} (tris={}, openEdges={open}, \
+             nonManifoldEdges={nonmanifold}, degenerateTris={degenerate})",
+            mesh.triangles.len()
+        )
+    })?;
     if m.is_empty() || m.num_tri() == 0 {
         return Err("mesh produced an empty manifold (non-watertight?)".to_string());
     }
     Ok(m)
+}
+
+/// Count pairs of triangles that intersect but DON'T share a vertex (true self-
+/// intersections / folds). Brute force O(n²) with an AABB pre-filter — fine for a
+/// diagnostic on a ~2k-tri membrane. A clean surface returns 0.
+fn count_self_intersections(mesh: &IndexedMesh) -> usize {
+    let tris = &mesh.triangles;
+    let n = tris.len();
+    // Per-triangle AABB for cheap rejection.
+    let aabb: Vec<(Vec3, Vec3)> = tris
+        .iter()
+        .map(|t| {
+            let a = mesh.positions[t[0] as usize];
+            let b = mesh.positions[t[1] as usize];
+            let c = mesh.positions[t[2] as usize];
+            (a.min(b).min(c), a.max(b).max(c))
+        })
+        .collect();
+    let shares_vertex = |t0: &[u32; 3], t1: &[u32; 3]| t0.iter().any(|v| t1.contains(v));
+    let mut count = 0usize;
+    for i in 0..n {
+        let (lo_i, hi_i) = aabb[i];
+        for j in (i + 1)..n {
+            let (lo_j, hi_j) = aabb[j];
+            // AABB overlap test.
+            if hi_i.x < lo_j.x || lo_i.x > hi_j.x
+                || hi_i.y < lo_j.y || lo_i.y > hi_j.y
+                || hi_i.z < lo_j.z || lo_i.z > hi_j.z
+            {
+                continue;
+            }
+            if shares_vertex(&tris[i], &tris[j]) {
+                continue;
+            }
+            let ta = [
+                mesh.positions[tris[i][0] as usize],
+                mesh.positions[tris[i][1] as usize],
+                mesh.positions[tris[i][2] as usize],
+            ];
+            let tb = [
+                mesh.positions[tris[j][0] as usize],
+                mesh.positions[tris[j][1] as usize],
+                mesh.positions[tris[j][2] as usize],
+            ];
+            if tris_intersect(ta, tb) {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Möller triangle-triangle intersection test (do two triangles overlap in 3D?).
+fn tris_intersect(t1: [Vec3; 3], t2: [Vec3; 3]) -> bool {
+    // Plane of t2.
+    let n2 = t2[1].sub(t2[0]).cross(t2[2].sub(t2[0]));
+    let d2 = -n2.dot(t2[0]);
+    let dist1: [f32; 3] = [
+        n2.dot(t1[0]) + d2,
+        n2.dot(t1[1]) + d2,
+        n2.dot(t1[2]) + d2,
+    ];
+    const EPS: f32 = 1e-6;
+    if dist1[0].abs() < EPS && dist1[1].abs() < EPS && dist1[2].abs() < EPS {
+        return false; // coplanar — ignore (shared seams etc.)
+    }
+    if (dist1[0] > EPS && dist1[1] > EPS && dist1[2] > EPS)
+        || (dist1[0] < -EPS && dist1[1] < -EPS && dist1[2] < -EPS)
+    {
+        return false; // t1 entirely on one side of t2's plane
+    }
+    // Plane of t1.
+    let n1 = t1[1].sub(t1[0]).cross(t1[2].sub(t1[0]));
+    let d1 = -n1.dot(t1[0]);
+    let dist2: [f32; 3] = [
+        n1.dot(t2[0]) + d1,
+        n1.dot(t2[1]) + d1,
+        n1.dot(t2[2]) + d1,
+    ];
+    if (dist2[0] > EPS && dist2[1] > EPS && dist2[2] > EPS)
+        || (dist2[0] < -EPS && dist2[1] < -EPS && dist2[2] < -EPS)
+    {
+        return false;
+    }
+    // Both straddle each other's planes → compute the intersection intervals on
+    // the line L = plane1 ∩ plane2 and test overlap.
+    let dir = n1.cross(n2);
+    let axis = {
+        let (ax, ay, az) = (dir.x.abs(), dir.y.abs(), dir.z.abs());
+        if ax >= ay && ax >= az { 0 } else if ay >= az { 1 } else { 2 }
+    };
+    let proj = |p: Vec3| match axis {
+        0 => p.x,
+        1 => p.y,
+        _ => p.z,
+    };
+    let interval = |t: [Vec3; 3], dist: [f32; 3]| -> Option<(f32, f32)> {
+        // Vertices on opposite sides; find the two edge crossings.
+        let mut pts = Vec::new();
+        for (a, b) in [(0usize, 1usize), (1, 2), (2, 0)] {
+            if (dist[a] > 0.0) != (dist[b] > 0.0) {
+                let s = dist[a] / (dist[a] - dist[b]);
+                let p = t[a].add(t[b].sub(t[a]).scale(s));
+                pts.push(proj(p));
+            }
+        }
+        if pts.len() < 2 {
+            return None;
+        }
+        Some((pts[0].min(pts[1]), pts[0].max(pts[1])))
+    };
+    match (interval(t1, dist1), interval(t2, dist2)) {
+        (Some((lo1, hi1)), Some((lo2, hi2))) => lo1 <= hi2 && lo2 <= hi1,
+        _ => false,
+    }
+}
+
+/// Diagnose why a mesh might be rejected: returns (open edges used by exactly 1
+/// face, non-manifold edges used by >2 faces, degenerate triangles). For a closed
+/// orientable manifold all three are 0.
+fn mesh_edge_defects(mesh: &IndexedMesh) -> (usize, usize, usize) {
+    let mut counts: ahash::AHashMap<(u32, u32), u32> = ahash::AHashMap::new();
+    let mut degenerate = 0;
+    for t in &mesh.triangles {
+        if t[0] == t[1] || t[1] == t[2] || t[2] == t[0] {
+            degenerate += 1;
+            continue;
+        }
+        for &(a, b) in &[(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            let k = if a < b { (a, b) } else { (b, a) };
+            *counts.entry(k).or_insert(0) += 1;
+        }
+    }
+    let open = counts.values().filter(|&&c| c == 1).count();
+    let nonmanifold = counts.values().filter(|&&c| c > 2).count();
+    (open, nonmanifold, degenerate)
 }
 
 /// Split a model solid by a thin watertight cutter and return the raw connected
@@ -1305,7 +1807,21 @@ pub fn contour_split(
     let membrane_tris = membrane.triangles.len();
 
     let slab = thicken_to_slab(&membrane, thickness_mm, overshoot);
-    let cutter = to_manifold(&slab).map_err(|e| format!("cutter slab invalid: {e}"))?;
+    let cutter = to_manifold(&slab).map_err(|e| {
+        // Diagnose: does the MEMBRANE itself self-intersect (grid relaxation folded
+        // it), or is it only the thickening? Count membrane triangle-triangle
+        // intersections so the real cut tells us which.
+        let mem_mesh = IndexedMesh {
+            positions: membrane.vertices.clone(),
+            triangles: membrane.triangles.clone(),
+        };
+        let mem_xsect = count_self_intersections(&mem_mesh);
+        let slab_xsect = count_self_intersections(&slab);
+        format!(
+            "cutter slab invalid: {e} | membraneSelfX={mem_xsect} slabSelfX={slab_xsect} memTris={}",
+            membrane.triangles.len()
+        )
+    })?;
     let model = to_manifold(mesh).map_err(|e| format!("model invalid: {e}"))?;
 
     // Sever → islands. A real organic model gives MORE than 2 islands (the cut
@@ -1444,7 +1960,12 @@ mod tests {
     #[test]
     fn target_edge_length_matches_boundary_spacing() {
         // The target should equal the average boundary edge length (isotropic).
-        let m = build_membrane(&square_loop(12.0), 2).expect("membrane");
+        // Test the helper directly on a fan+subdivided mesh (build_membrane now
+        // uses the grid seed; target_edge_length belongs to the parked remesh).
+        let mut m = seed_fan(&square_loop(12.0)).expect("seed");
+        for _ in 0..2 {
+            subdivide(&mut m);
+        }
         let t = target_edge_length(&m);
         // Boundary ring after 2 subdivisions samples each side into 4 → spacing 3.
         assert!((t - 3.0).abs() < 0.5, "target {t} should be ~3 (12/4 per side)");
@@ -1657,6 +2178,125 @@ mod tests {
         assert!(worst > 0.08, "worst angle {worst} rad too small — remesh didn't improve quality");
     }
 
+    /// Worst (smallest) triangle angle in radians, over the whole membrane.
+    fn worst_angle(m: &Membrane) -> f32 {
+        m.triangles
+            .iter()
+            .map(|t| {
+                min_angle(
+                    m.vertices[t[0] as usize],
+                    m.vertices[t[1] as usize],
+                    m.vertices[t[2] as usize],
+                )
+            })
+            .fold(f32::INFINITY, f32::min)
+    }
+
+    #[test]
+    fn grid_seed_makes_a_clean_uniform_disk() {
+        // The grid seed must be a valid disk, with the loop as its exact boundary,
+        // many interior vertices, and NO fan slivers (worst angle well above the
+        // fan's ~0°).
+        let loop_pts = square_loop(20.0);
+        let m = seed_grid(&loop_pts).expect("grid seed should build");
+        check_membrane_valid(&m).expect("grid seed must be a valid disk");
+
+        // Boundary ring is the DENSIFIED loop (more points than the 4 corners),
+        // and every boundary vertex lies on the z=0 plane of the square loop.
+        assert!(m.boundary.len() >= loop_pts.len(), "boundary should densify");
+        for &b in &m.boundary {
+            assert!(m.vertices[b as usize].z.abs() < 1e-4, "boundary left the loop plane");
+        }
+        // The 4 original corners are all present on the boundary.
+        for &corner in &loop_pts {
+            let found = m
+                .boundary
+                .iter()
+                .any(|&b| m.vertices[b as usize].sub(corner).length() < 1e-4);
+            assert!(found, "corner {corner:?} missing from densified boundary");
+        }
+        // Real interior grid (not a single apex).
+        assert!(m.vertices.len() > m.boundary.len() + 8, "grid should add many interior pts");
+        // No slivers: worst angle should be comfortably positive (> ~10°).
+        let w = worst_angle(&m);
+        assert!(w > 0.15, "grid worst angle {w} rad too small (slivers present)");
+    }
+
+    #[test]
+    fn grid_seed_beats_the_fan_on_an_irregular_loop() {
+        // On an IRREGULAR loop the centroid fan makes long thin slivers (apex far
+        // from a stretched edge); the grid stays uniform. Use a tall thin
+        // rectangle where the fan apex is far from the short edges.
+        let loop_pts = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(40.0, 0.0, 0.0),
+            Vec3::new(40.0, 4.0, 0.0),
+            Vec3::new(0.0, 4.0, 0.0),
+        ];
+        let fan = seed_fan(&loop_pts).expect("fan");
+        let grid = seed_grid(&loop_pts).expect("grid");
+        // The fan of a 40×4 rectangle has very thin triangles (worst angle small);
+        // the grid should be far better.
+        assert!(
+            worst_angle(&grid) > worst_angle(&fan),
+            "grid ({}) should beat fan ({}) on a stretched loop",
+            worst_angle(&grid),
+            worst_angle(&fan),
+        );
+        // And the grid's worst angle should be a usable value, not a sliver.
+        assert!(worst_angle(&grid) > 0.1, "grid worst {} too small", worst_angle(&grid));
+    }
+
+    #[test]
+    fn build_membrane_uses_grid_and_is_clean() {
+        // The full build (grid seed + relax) must be a valid disk with good angles.
+        let m = build_membrane(&square_loop(20.0), 2).expect("membrane");
+        check_membrane_valid(&m).expect("built membrane must be valid");
+        assert!(worst_angle(&m) > 0.1, "built membrane still has slivers");
+    }
+
+    /// Count edges traversed in the SAME direction by two triangles (inconsistent
+    /// winding). 0 ⇒ the whole patch is consistently wound.
+    fn inconsistent_winding_edges(m: &Membrane) -> usize {
+        use std::collections::HashMap;
+        let mut dir: HashMap<(u32, u32), u32> = HashMap::new();
+        for t in &m.triangles {
+            for &(a, b) in &[(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                *dir.entry((a, b)).or_insert(0) += 1;
+            }
+        }
+        // For each undirected edge, both directions should appear once (opposite
+        // winding). A directed edge appearing twice = two tris wound the same way.
+        dir.values().filter(|&&c| c > 1).count()
+    }
+
+    #[test]
+    fn membrane_winding_is_consistent_after_orient() {
+        // The orientation flood-fill must leave EVERY interior edge with opposite
+        // winding between its two triangles (the condition manifold needs). This
+        // was the dragon failure: clean topology + no self-X but mixed winding.
+        for loop_pts in [square_loop(20.0), saddle_loop(20.0, 6.0)] {
+            let m = build_membrane(&loop_pts, 2).expect("membrane");
+            assert_eq!(
+                inconsistent_winding_edges(&m),
+                0,
+                "membrane has inconsistent winding after orient"
+            );
+        }
+    }
+
+    #[test]
+    fn grid_seed_handles_a_nonplanar_loop() {
+        // A saddle loop (no plane contains it) must still triangulate cleanly via
+        // the best-fit-plane projection, then relax bows it.
+        let loop_pts = saddle_loop(20.0, 6.0);
+        let m = seed_grid(&loop_pts).expect("grid seed on saddle");
+        check_membrane_valid(&m).expect("saddle grid must be valid");
+        for v in &m.vertices {
+            assert!(v.finite(), "non-finite vertex in saddle grid");
+        }
+    }
+
     #[test]
     fn relaxation_decreases_area_and_pins_boundary() {
         let loop_pts = square_loop(10.0);
@@ -1748,6 +2388,38 @@ mod tests {
         assert_eq!(open_edge_count(&slab), 0, "thickened slab must be closed (no open edges)");
         let solid = to_manifold(&slab).expect("manifold should accept the thickened slab");
         assert!(solid.volume() > 0.0, "slab should enclose positive volume");
+    }
+
+    #[test]
+    fn thickened_grid_slab_on_a_dense_wiggly_loop_is_valid() {
+        // Reproduce the dragon failure: a dense, irregular, NON-PLANAR loop (like
+        // the real geodesic). The grid membrane is clean, but its thickened slab
+        // must ALSO be watertight + manifold-acceptable, or the contour cut falls
+        // back to the plane (which is what happened: NotManifold on tris=2576).
+        // NON-CONVEX loop with a deep concave notch (like the dragon's tail bay)
+        // + vertical wiggle. The concavity is the key: the radial boundary
+        // overshoot and the grid both behave differently on concave polygons.
+        let n = 120;
+        let mut loop_pts = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / n as f32 * std::f32::consts::TAU;
+            // Deep inward dent over part of the loop → genuine concavity.
+            let dent = if (t - 1.0).abs() < 0.9 { -18.0 * (1.0 - ((t - 1.0) / 0.9).abs()) } else { 0.0 };
+            let r = 30.0 + dent + 4.0 * (3.0 * t).sin();
+            let x = r * t.cos();
+            let y = r * t.sin();
+            let z = 5.0 * (2.0 * t).sin();
+            loop_pts.push(Vec3::new(x, y, z));
+        }
+        let m = build_membrane(&loop_pts, 2).expect("grid membrane");
+        check_membrane_valid(&m).expect("membrane itself must be valid");
+        // The membrane must not self-intersect (a fold would make the slab invalid).
+        let m_mesh = IndexedMesh { positions: m.vertices.clone(), triangles: m.triangles.clone() };
+        assert_eq!(count_self_intersections(&m_mesh), 0, "membrane self-intersects");
+
+        let slab = thicken_to_slab(&m, DEFAULT_CUTTER_THICKNESS_MM, 0.3);
+        assert_eq!(open_edge_count(&slab), 0, "grid slab not watertight");
+        assert!(to_manifold(&slab).is_ok(), "manifold rejected the grid slab");
     }
 
     #[test]

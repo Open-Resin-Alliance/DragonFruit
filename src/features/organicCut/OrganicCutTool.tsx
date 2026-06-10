@@ -162,6 +162,15 @@ export function OrganicCutTool({
     return geom;
   }, [cutMode, membranePreview]);
 
+  // Wireframe of the membrane so we can SEE the triangulation (verify the grid
+  // remesh / spot slivers). Edges-only overlay on the translucent surface.
+  const membraneWireframe = useMemo(() => {
+    if (!membraneGeometry) return null;
+    const wire = new THREE.WireframeGeometry(membraneGeometry);
+    wire.computeBoundingSphere();
+    return wire;
+  }, [membraneGeometry]);
+
   // Marker radius proportional to the model so it's a small, precise dot on any
   // model size (a fixed mm value is wrong for small/large models). Also divided
   // by the model's max scale so on-plate scaling doesn't inflate the markers.
@@ -194,11 +203,24 @@ export function OrganicCutTool({
             <meshBasicMaterial
               color={0x37ff7a}
               transparent
-              opacity={0.35}
+              opacity={0.25}
               side={THREE.DoubleSide}
               depthWrite={false}
             />
           </mesh>
+        )}
+
+        {/* Wireframe overlay so the triangulation (grid remesh) is visible. */}
+        {membraneWireframe && (
+          <lineSegments geometry={membraneWireframe} renderOrder={998} frustumCulled={false}>
+            <lineBasicMaterial
+              color={0x0a3d1f}
+              transparent
+              opacity={0.6}
+              depthTest={false}
+              depthWrite={false}
+            />
+          </lineSegments>
         )}
 
         {/* Live translucent cut-plane preview (what the slice will look like). */}
