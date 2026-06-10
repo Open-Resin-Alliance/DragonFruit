@@ -23,10 +23,11 @@ use crate::core::mesh::{IndexedMesh, Vec3};
 /// (a) below print resolution so the mate is physically negligible, and (b) thick
 /// enough that the boolean engine resolves the two slab faces apart.
 ///
-/// TEMPORARY: set to 1.0 mm (way more than needed) to prove the cut works end to
-/// end and is clearly visible. Dial down toward a true sub-resolution minimum
-/// (~0.05-0.1 mm) once the pipeline is verified.
-pub const DEFAULT_CUTTER_THICKNESS_MM: f32 = 1.0;
+/// 0.1 mm: thin enough that the slice looks like a near-zero-thickness cut (the
+/// goal — parts mate cleanly), yet thick enough that the boolean engine resolves
+/// the two slab faces apart at model scale. (0.01 mm went degenerate on large
+/// models; 1.0 mm was a too-thick proving value.)
+pub const DEFAULT_CUTTER_THICKNESS_MM: f32 = 0.1;
 
 /// A triangulated open surface (a "patch") whose boundary is the user's loop.
 ///
@@ -1335,8 +1336,8 @@ pub fn thicken_to_slab(
     let alen = avg_n.length();
     let offset_dir = if alen > 1e-9 { avg_n.scale(1.0 / alen) } else { Vec3::new(0.0, 0.0, 1.0) };
 
-    // Loop centroid (over the boundary ring) → outward radial direction per
-    // boundary vertex, used to push the ring PAST the model surface.
+    // Loop centroid (over the boundary ring) — used only to sign the outward
+    // direction (push AWAY from the interior, never toward it).
     let mut loop_centroid = Vec3::ZERO;
     for &b in &m.boundary {
         loop_centroid = loop_centroid.add(m.vertices[b as usize]);
@@ -1345,15 +1346,40 @@ pub fn thicken_to_slab(
         loop_centroid = loop_centroid.scale(1.0 / m.boundary.len() as f32);
     }
 
-    // Base positions with the boundary pushed radially outward by the overshoot.
+    // Push each boundary vertex OUTWARD so the wafer extends past the model
+    // surface all around (required to fully sever the body — otherwise a bridge
+    // of material survives and decompose yields 1 component, not 2).
+    //
+    // Outward direction = perpendicular to the boundary curve, IN the membrane
+    // plane: (boundary tangent) × (membrane normal). This is the true local
+    // outward normal of the loop — correct even on concave loops, where
+    // radial-from-centroid points the wrong way. Sign it to face away from the
+    // centroid as a robust fallback.
+    let bn_ring = m.boundary.len();
     let mut base = m.vertices.clone();
-    if boundary_overshoot_mm > 0.0 {
-        for &b in &m.boundary {
+    if boundary_overshoot_mm > 0.0 && bn_ring >= 3 {
+        for i in 0..bn_ring {
+            let b = m.boundary[i];
+            let prev = m.vertices[m.boundary[(i + bn_ring - 1) % bn_ring] as usize];
+            let next = m.vertices[m.boundary[(i + 1) % bn_ring] as usize];
             let v = m.vertices[b as usize];
-            let radial = v.sub(loop_centroid);
-            let len = radial.length();
-            if len > 1e-6 {
-                base[b as usize] = v.add(radial.scale(boundary_overshoot_mm / len));
+            // Boundary tangent (prev→next), then in-plane perpendicular.
+            let tangent = next.sub(prev);
+            let mut outward = tangent.cross(offset_dir);
+            let olen = outward.length();
+            if olen < 1e-6 {
+                // Degenerate; fall back to radial-from-centroid.
+                outward = v.sub(loop_centroid);
+            } else {
+                outward = outward.scale(1.0 / olen);
+            }
+            // Ensure it points AWAY from the interior (centroid).
+            if outward.dot(v.sub(loop_centroid)) < 0.0 {
+                outward = outward.scale(-1.0);
+            }
+            let olen2 = outward.length();
+            if olen2 > 1e-6 {
+                base[b as usize] = v.add(outward.scale(boundary_overshoot_mm / olen2));
             }
         }
     }
@@ -1795,9 +1821,14 @@ pub fn contour_split(
     let bbox = mesh.bbox();
     let diag = bbox.diag().max(1e-3);
 
-    // Overshoot: push the cutter boundary ~1% of the model diagonal PAST the
-    // surface so the difference fully severs the body (the M4c requirement).
-    let overshoot = diag * 0.01;
+    // Overshoot: push the cutter boundary well PAST the model surface so the
+    // difference fully severs the body (otherwise a bridge survives and decompose
+    // yields 1 component → fall back to plane). Extra overshoot is harmless: the
+    // wafer is zero-thickness and parts regroup by membrane side, so over-reaching
+    // past the silhouette doesn't change the result, it only guarantees severance.
+    // Overshoot: push the cutter boundary past the model surface so the difference
+    // fully severs the body. ~2% of the model diagonal.
+    let overshoot = diag * 0.02;
 
     // Subdivisions: enough to give the relaxation room to form a smooth surface
     // without exploding triangle count. 3 → each seed triangle becomes 64.
@@ -1806,27 +1837,22 @@ pub fn contour_split(
         .ok_or_else(|| format!("could not build a membrane from the loop ({} points)", loop_pts.len()))?;
     let membrane_tris = membrane.triangles.len();
 
+    let model = to_manifold(mesh).map_err(|e| format!("model invalid: {e}"))?;
+
     let slab = thicken_to_slab(&membrane, thickness_mm, overshoot);
     let cutter = to_manifold(&slab).map_err(|e| {
-        // Diagnose: does the MEMBRANE itself self-intersect (grid relaxation folded
-        // it), or is it only the thickening? Count membrane triangle-triangle
-        // intersections so the real cut tells us which.
         let mem_mesh = IndexedMesh {
             positions: membrane.vertices.clone(),
             triangles: membrane.triangles.clone(),
         };
-        let mem_xsect = count_self_intersections(&mem_mesh);
-        let slab_xsect = count_self_intersections(&slab);
         format!(
-            "cutter slab invalid: {e} | membraneSelfX={mem_xsect} slabSelfX={slab_xsect} memTris={}",
+            "cutter slab invalid: {e} | membraneSelfX={} slabSelfX={} memTris={}",
+            count_self_intersections(&mem_mesh),
+            count_self_intersections(&slab),
             membrane.triangles.len()
         )
     })?;
-    let model = to_manifold(mesh).map_err(|e| format!("model invalid: {e}"))?;
 
-    // Sever → islands. A real organic model gives MORE than 2 islands (the cut
-    // crosses thin/concave features in several places). Group them by which side
-    // of the membrane each island sits on → two clean parts.
     let islands = split_by_cutter(&model, &cutter);
     let component_count = islands.len();
     if component_count < 2 {
