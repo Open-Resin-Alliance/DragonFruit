@@ -15,12 +15,32 @@
 import React from 'react';
 import type { OrganicCutLoopPoint, OrganicCutResult, OrganicCutSessionStatus } from './types';
 import type { OrganicCutPanelState } from './OrganicCutPanel';
-import { computeGeodesicLoop, cutFromCapturedSource, partToGeometry, stageCutSource } from './meshOrganicCut';
+import {
+  computeGeodesicLoop,
+  computeMembranePreview,
+  cutFromCapturedSource,
+  partToGeometry,
+  stageCutSource,
+} from './meshOrganicCut';
 import { cutPlaneFromPoints } from './cutPlane';
 import type * as THREE from 'three';
 
 /** Minimum points before a cut is possible. 2 = the simplest flat plane cut. */
 const MIN_LOOP_POINTS = 2;
+
+/**
+ * Convert a flat on-surface geodesic polyline (xyz triples, model-local) into
+ * loop points for the contour cut. Normals are left zero — the membrane builder
+ * computes its own surface normals, so only positions matter here. Rust dedupes
+ * a trailing point that repeats the first, so a closed polyline is fine as-is.
+ */
+function geodesicPolylineToLoopPoints(poly: Float32Array): OrganicCutLoopPoint[] {
+  const out: OrganicCutLoopPoint[] = [];
+  for (let i = 0; i + 2 < poly.length; i += 3) {
+    out.push({ position: [poly[i], poly[i + 1], poly[i + 2]], normal: [0, 0, 0] });
+  }
+  return out;
+}
 
 export interface UseOrganicCutSessionArgs {
   /** True when the Cut tool is the active transform mode in Prepare. */
@@ -62,13 +82,23 @@ export interface OrganicCutSession {
    * straight chords. Null until ≥2 points / outside Tauri.
    */
   geodesicPolyline: Float32Array | null;
+  /**
+   * Contour-cut membrane preview (flat triangle soup, model-local). The exact
+   * curved cutter surface the contour cut will use. Null unless in contour mode
+   * with ≥3 points / outside Tauri.
+   */
+  membranePreview: Float32Array | null;
 }
 
 const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
   drawMode: 'waypoint',
+  cutMode: 'plane',
   thicknessMm: 1.0,
   smoothing: 0.5,
 };
+
+/** Minimum points before a CONTOUR cut is possible (a real loop needs ≥3). */
+const MIN_CONTOUR_POINTS = 3;
 
 export function useOrganicCutSession({
   toolActive,
@@ -82,6 +112,9 @@ export function useOrganicCutSession({
   const [isApplying, setIsApplying] = React.useState(false);
   const [lastResult, setLastResult] = React.useState<OrganicCutResult | null>(null);
   const [geodesicPolyline, setGeodesicPolyline] = React.useState<Float32Array | null>(null);
+  // Contour-cut membrane preview (flat triangle soup, model-local). Shows the
+  // exact cutter surface so the user sees where the curved cut will land.
+  const [membranePreview, setMembranePreview] = React.useState<Float32Array | null>(null);
 
   // Mirror loop in a ref so `apply` always reads the CURRENT points regardless of
   // whether the panel is holding a stale memoized `apply` closure. This is the
@@ -105,6 +138,10 @@ export function useOrganicCutSession({
   React.useEffect(() => { activeGeometryRef.current = activeGeometry; }, [activeGeometry]);
   const activeGeometryKeyRef = React.useRef(activeGeometryKey);
   React.useEffect(() => { activeGeometryKeyRef.current = activeGeometryKey; }, [activeGeometryKey]);
+  // The latest on-surface geodesic polyline, so a contour cut sends the DENSE
+  // surface-following loop (not just the sparse waypoints) to the membrane.
+  const geodesicPolylineRef = React.useRef(geodesicPolyline);
+  React.useEffect(() => { geodesicPolylineRef.current = geodesicPolyline; }, [geodesicPolyline]);
 
   // Reset the session whenever the tool is deactivated or the model changes,
   // so a stale loop never bleeds across tools/models.
@@ -126,6 +163,7 @@ export function useOrganicCutSession({
   // Recompute the surface-following loop whenever the points change. Stages the
   // source mesh (cheap no-op if already staged for this geometry) then asks Rust
   // for the on-surface polyline. Cancelled if points change again mid-flight.
+  const cutMode = panelState.cutMode;
   React.useEffect(() => {
     if (!toolActive || loop.length < 2 || !activeGeometry || !activeGeometryKey) {
       setGeodesicPolyline(null);
@@ -144,6 +182,39 @@ export function useOrganicCutSession({
       cancelled = true;
     };
   }, [toolActive, loop, activeGeometry, activeGeometryKey]);
+
+  // Membrane preview (contour mode). Separate, DEBOUNCED effect so it doesn't
+  // fight the geodesic computation or thrash on rapid clicks. It reads the
+  // already-computed geodesic from state (the same dense loop the cut uses) and
+  // asks Rust to build the membrane, rendered translucent in OrganicCutTool.
+  React.useEffect(() => {
+    if (
+      cutMode !== 'contour' ||
+      !toolActive ||
+      loop.length < 3 ||
+      !activeGeometry ||
+      !activeGeometryKey
+    ) {
+      setMembranePreview(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        const staged = await stageCutSource(activeGeometry, activeGeometryKey);
+        if (cancelled || !staged) return;
+        const poly = geodesicPolyline;
+        const previewLoop =
+          poly && poly.length >= 9 ? geodesicPolylineToLoopPoints(poly) : loop;
+        const membrane = await computeMembranePreview(previewLoop);
+        if (!cancelled) setMembranePreview(membrane);
+      })();
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [toolActive, loop, activeGeometry, activeGeometryKey, cutMode, geodesicPolyline]);
 
   const addPoint = React.useCallback((point: OrganicCutLoopPoint) => {
     setLoop((prev) => [...prev, point]);
@@ -170,9 +241,12 @@ export function useOrganicCutSession({
     const geom = activeGeometryRef.current;
     const geomKey = activeGeometryKeyRef.current;
     const ps = panelStateRef.current;
-    if (currentLoop.length < MIN_LOOP_POINTS) return;
+    const isContour = ps.cutMode === 'contour';
+    const minPoints = isContour ? MIN_CONTOUR_POINTS : MIN_LOOP_POINTS;
+    if (currentLoop.length < minPoints) return;
     if (!geom || !geomKey) return;
     const loopSnapshot = currentLoop.slice();
+    const geodesic = geodesicPolylineRef.current;
     let cancelled = false;
     setIsApplying(true);
     void (async () => {
@@ -182,19 +256,41 @@ export function useOrganicCutSession({
           // Not in the Tauri runtime (e.g. browser dev) — nothing to do.
           return;
         }
-        // Compute the plane from the SAME helper the preview uses, so the cut is
-        // exactly the plane the user saw. Sent explicitly; Rust splits by it.
-        const plane = cutPlaneFromPoints(loopSnapshot);
-        const result = await cutFromCapturedSource({
-          cut: {
+
+        // Contour: send the DENSE on-surface geodesic polyline as the loop so the
+        // membrane traces the real surface crossing (the sparse waypoints alone
+        // wouldn't sever the body). Falls back to the waypoints if the geodesic
+        // hasn't computed yet. No explicit plane — contour ignores it.
+        // Flat: send the waypoints + the exact plane the preview showed.
+        let cutSpec;
+        if (isContour) {
+          const contourLoop =
+            geodesic && geodesic.length >= MIN_CONTOUR_POINTS * 3
+              ? geodesicPolylineToLoopPoints(geodesic)
+              : loopSnapshot;
+          cutSpec = {
+            loopPoints: contourLoop,
+            thicknessMm: ps.thicknessMm,
+            smoothing: ps.smoothing,
+            mode: 'contour' as const,
+            // Omit cutterThicknessMm so the Rust default (the single source of
+            // truth for the minimum cutter thickness) governs.
+          };
+        } else {
+          // Compute the plane from the SAME helper the preview uses, so the cut
+          // is exactly the plane the user saw. Sent explicitly; Rust splits by it.
+          const plane = cutPlaneFromPoints(loopSnapshot);
+          cutSpec = {
             loopPoints: loopSnapshot,
             thicknessMm: ps.thicknessMm,
             smoothing: ps.smoothing,
+            mode: 'plane' as const,
             plane: plane
-              ? { normal: [plane.normal.x, plane.normal.y, plane.normal.z], offset: plane.offset }
+              ? { normal: [plane.normal.x, plane.normal.y, plane.normal.z] as [number, number, number], offset: plane.offset }
               : undefined,
-          },
-        });
+          };
+        }
+        const result = await cutFromCapturedSource({ cut: cutSpec });
         if (cancelled || !result) return;
         setLastResult(result);
 
@@ -239,8 +335,10 @@ export function useOrganicCutSession({
   }, []); // stable: all inputs read from refs
 
   const pointCount = loop.length;
+  // Contour needs a real loop (≥3 points); flat works with 2.
+  const minPointsForMode = panelState.cutMode === 'contour' ? MIN_CONTOUR_POINTS : MIN_LOOP_POINTS;
   const canCloseLoop = status === 'drawing' && pointCount >= MIN_LOOP_POINTS;
-  const canApply = pointCount >= MIN_LOOP_POINTS && !isApplying;
+  const canApply = pointCount >= minPointsForMode && !isApplying;
 
   return {
     panelState,
@@ -257,5 +355,6 @@ export function useOrganicCutSession({
     canApply,
     pointCount,
     geodesicPolyline,
+    membranePreview,
   };
 }

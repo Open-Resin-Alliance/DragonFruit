@@ -22,6 +22,16 @@ export interface OrganicCutLoopPoint {
   normal: [number, number, number];
 }
 
+/**
+ * Which kind of cut to perform.
+ * - `plane`: the flat planar cut (slices along a single plane).
+ * - `contour`: the curved "wafer" cut — a soap-film membrane that follows the
+ *   drawn loop, splitting along the contoured seam.
+ *
+ * MUST match the Rust `CutMode` serde names (lowercase): `plane` | `contour`.
+ */
+export type OrganicCutMode = 'plane' | 'contour';
+
 /** One organic cut: a closed loop plus the parameters that drive the wafer. */
 export interface OrganicCutSpec {
   /**
@@ -46,6 +56,16 @@ export interface OrganicCutSpec {
     normal: [number, number, number];
     offset: number;
   };
+  /**
+   * Flat (`plane`) vs curved (`contour`). Omitted/`plane` → the flat cut.
+   * Serialized to the Rust `OrganicCutSpec.mode` field (camelCase `mode`).
+   */
+  mode?: OrganicCutMode;
+  /**
+   * Contour cutter thickness in mm. <=0 / omitted → Rust uses its default
+   * (~0.01 mm = physically zero). Serde field: `cutterThicknessMm`.
+   */
+  cutterThicknessMm?: number;
 }
 
 export interface OrganicCutOptions {
@@ -57,7 +77,7 @@ export interface OrganicCutReport {
   partATriangleCount: number;
   partBTriangleCount: number;
   /** Which backend produced the result. */
-  engine: 'noop' | 'plane' | 'manifold' | 'voxel';
+  engine: 'noop' | 'plane' | 'membrane' | 'manifold' | 'voxel';
   /** Why we fell back to no-op, if we did (diagnostics). Empty on success. */
   detail?: string;
 }

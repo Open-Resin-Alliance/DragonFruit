@@ -18961,6 +18961,8 @@ export default function Home() {
                 loop={organicCut.loop}
                 onAddPoint={organicCut.addPoint}
                 geodesicPolyline={organicCut.geodesicPolyline}
+                cutMode={organicCut.panelState.cutMode}
+                membranePreview={organicCut.membranePreview}
               />
             )}
             {scene.mode === 'prepare' && transformMgr.transformMode === 'mirror' && (

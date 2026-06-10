@@ -36,6 +36,19 @@ pub struct CutPlaneSpec {
     pub offset: f32,
 }
 
+/// Which kind of cut to perform.
+///
+/// - `Plane` (default): the flat planar cut (M2) — slices along a single plane.
+/// - `Contour`: the curved "wafer" cut (M4) — builds a soap-film membrane that
+///   follows the drawn loop and splits along that contoured seam.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CutMode {
+    #[default]
+    Plane,
+    Contour,
+}
+
 /// One organic cut: a closed loop plus the wafer parameters.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,11 +62,18 @@ pub struct OrganicCutSpec {
     /// Path-fairing strength 0..1. Unused by the M2 planar cut.
     #[serde(default)]
     pub smoothing: f32,
-    /// Explicit cutting plane. When present, the cut uses THIS plane directly
-    /// (the exact plane the frontend previewed), instead of deriving one from
-    /// the points — guaranteeing preview == cut.
+    /// Explicit cutting plane. When present AND mode is `Plane`, the cut uses
+    /// THIS plane directly (the exact plane the frontend previewed), instead of
+    /// deriving one from the points — guaranteeing preview == cut.
     #[serde(default)]
     pub plane: Option<CutPlaneSpec>,
+    /// Flat (`plane`) vs curved (`contour`). Default `plane` for back-compat.
+    #[serde(default)]
+    pub mode: CutMode,
+    /// Contour cutter thickness in mm. Default ~0.01 (physically zero) when
+    /// unset/<=0. Only used by the contour cut.
+    #[serde(default)]
+    pub cutter_thickness_mm: f32,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -241,6 +261,31 @@ fn noop_outcome(mesh: IndexedMesh, detail: String) -> OrganicCutOutcome {
 pub fn organic_cut(mesh: IndexedMesh, options: &OrganicCutOptions) -> OrganicCutOutcome {
     #[cfg(feature = "manifold")]
     {
+        // Contour mode: try the curved membrane cut first. On ANY failure (loop
+        // doesn't wrap through the body, membrane invalid, etc.) fall back to the
+        // flat plane cut so the user still gets *a* cut. The plane itself then
+        // falls back to no-op if it also fails.
+        if options.cut.mode == CutMode::Contour {
+            match organic_cut_contour(&mesh, options) {
+                Ok(outcome) => return outcome,
+                Err(reason) => {
+                    eprintln!("[dragonfruit-mesh-repair] contour cut fell back to plane: {reason}");
+                    // Fall through to the plane path, preserving WHY in the detail.
+                    return match organic_cut_plane(&mesh, options) {
+                        Ok(mut outcome) => {
+                            outcome.report.detail =
+                                format!("contour fell back to plane: {reason}");
+                            outcome
+                        }
+                        Err(plane_reason) => noop_outcome(
+                            mesh,
+                            format!("contour failed ({reason}); plane also failed ({plane_reason})"),
+                        ),
+                    };
+                }
+            }
+        }
+
         match organic_cut_plane(&mesh, options) {
             Ok(outcome) => return outcome,
             Err(reason) => {
@@ -254,6 +299,48 @@ pub fn organic_cut(mesh: IndexedMesh, options: &OrganicCutOptions) -> OrganicCut
         let _ = options;
         noop_outcome(mesh, "manifold feature disabled".to_string())
     }
+}
+
+/// Curved "wafer" cut (M4): build a soap-film membrane following the drawn loop,
+/// thicken it into a razor-thin cutter, and split the mesh into two mating parts.
+/// Delegates the geometry to [`crate::membrane::contour_split`]; returns `Err`
+/// (so the caller can fall back to the plane) on any failure.
+#[cfg(feature = "manifold")]
+fn organic_cut_contour(
+    mesh: &IndexedMesh,
+    options: &OrganicCutOptions,
+) -> Result<OrganicCutOutcome, String> {
+    let source_triangle_count = mesh.triangle_count();
+    let loop_pts: Vec<Vec3> = options
+        .cut
+        .loop_points
+        .iter()
+        .map(|p| Vec3::new(p.position[0], p.position[1], p.position[2]))
+        .collect();
+    if loop_pts.len() < 3 {
+        return Err(format!("contour cut needs >=3 loop points (got {})", loop_pts.len()));
+    }
+
+    let thickness = if options.cut.cutter_thickness_mm > 0.0 {
+        options.cut.cutter_thickness_mm
+    } else {
+        crate::membrane::DEFAULT_CUTTER_THICKNESS_MM
+    };
+
+    let split = crate::membrane::contour_split(mesh, &loop_pts, thickness)?;
+
+    let report = OrganicCutReport {
+        source_triangle_count,
+        part_a_triangle_count: split.part_a.triangle_count(),
+        part_b_triangle_count: split.part_b.triangle_count(),
+        engine: "membrane".to_string(),
+        detail: format!("membrane tris={}", split.membrane_tris),
+    };
+    Ok(OrganicCutOutcome {
+        part_a: split.part_a,
+        part_b: split.part_b,
+        report,
+    })
 }
 
 #[cfg(feature = "manifold")]
@@ -478,6 +565,7 @@ mod tests {
                 thickness_mm: 0.0,
                 smoothing: 0.0,
                 plane: None,
+                ..Default::default()
             },
         };
         let outcome = organic_cut(mesh, &options);
@@ -498,12 +586,80 @@ mod tests {
                 thickness_mm: 0.0,
                 smoothing: 0.0,
                 plane: Some(CutPlaneSpec { normal: [0.0, 0.0, 1.0], offset: 5.0 }),
+                ..Default::default()
             },
         };
         let outcome = organic_cut(mesh, &options);
         assert_eq!(outcome.report.engine, "plane");
         assert!(outcome.part_a.triangle_count() > 0, "part A empty (explicit)");
         assert!(outcome.part_b.triangle_count() > 0, "part B empty (explicit)");
+    }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn contour_mode_splits_cube_with_membrane_engine() {
+        // Contour mode + a loop tracing the cube's equator → membrane cut →
+        // two parts, engine="membrane".
+        let mesh = IndexedMesh::from_triangle_soup(&cube_soup(10.0), 1e-6);
+        let loop_points = vec![
+            OrganicCutLoopPoint { position: [0.0, 0.0, 5.0], normal: [0.0; 3] },
+            OrganicCutLoopPoint { position: [10.0, 0.0, 5.0], normal: [0.0; 3] },
+            OrganicCutLoopPoint { position: [10.0, 10.0, 5.0], normal: [0.0; 3] },
+            OrganicCutLoopPoint { position: [0.0, 10.0, 5.0], normal: [0.0; 3] },
+        ];
+        let options = OrganicCutOptions {
+            cut: OrganicCutSpec {
+                loop_points,
+                mode: CutMode::Contour,
+                ..Default::default()
+            },
+        };
+        let outcome = organic_cut(mesh, &options);
+        assert_eq!(outcome.report.engine, "membrane", "should use the membrane engine");
+        assert!(outcome.part_a.triangle_count() > 0, "part A empty");
+        assert!(outcome.part_b.triangle_count() > 0, "part B empty");
+    }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn contour_mode_falls_back_to_plane_when_membrane_cannot_sever() {
+        // A diamond loop through the four FACE CENTERS at z=5. The membrane spans
+        // only the inner diamond, so the cube's corner prisms stay bridged →
+        // contour can't sever (1 component) → falls back to the plane cut. The
+        // best-fit plane of these points IS z=5, which cleanly divides the cube,
+        // so the fallback succeeds with engine="plane" and records the reason.
+        let mesh = IndexedMesh::from_triangle_soup(&cube_soup(10.0), 1e-6);
+        let loop_points = vec![
+            OrganicCutLoopPoint { position: [0.0, 5.0, 5.0], normal: [0.0; 3] },
+            OrganicCutLoopPoint { position: [5.0, 0.0, 5.0], normal: [0.0; 3] },
+            OrganicCutLoopPoint { position: [10.0, 5.0, 5.0], normal: [0.0; 3] },
+            OrganicCutLoopPoint { position: [5.0, 10.0, 5.0], normal: [0.0; 3] },
+        ];
+        let options = OrganicCutOptions {
+            cut: OrganicCutSpec {
+                loop_points,
+                mode: CutMode::Contour,
+                ..Default::default()
+            },
+        };
+        let outcome = organic_cut(mesh, &options);
+        // It fell back to the plane (the loop still defines a best-fit plane).
+        assert_eq!(outcome.report.engine, "plane", "should fall back to the plane engine");
+        assert!(
+            outcome.report.detail.contains("contour fell back"),
+            "detail should record the fallback: {}",
+            outcome.report.detail
+        );
+    }
+
+    #[test]
+    fn cut_mode_defaults_to_plane() {
+        // serde: an OrganicCutSpec with no `mode` field deserializes to Plane.
+        let spec: OrganicCutSpec = serde_json::from_str("{}").expect("empty spec");
+        assert_eq!(spec.mode, CutMode::Plane);
+        let spec2: OrganicCutSpec =
+            serde_json::from_str(r#"{"mode":"contour"}"#).expect("contour spec");
+        assert_eq!(spec2.mode, CutMode::Contour);
     }
 
     #[test]

@@ -10,6 +10,7 @@ pub mod core;
 pub mod geodesic;
 pub mod hollowing;
 pub mod io;
+pub mod membrane;
 pub mod organic_cut;
 pub mod repair;
 pub mod report;

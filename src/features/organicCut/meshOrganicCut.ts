@@ -43,7 +43,8 @@ async function loadTauriCore(): Promise<TauriCoreModule | null> {
 type OrganicCutReadCommand =
   | 'mesh_organic_cut_read_part_a'
   | 'mesh_organic_cut_read_part_b'
-  | 'mesh_organic_cut_read_geodesic';
+  | 'mesh_organic_cut_read_geodesic'
+  | 'mesh_organic_cut_read_membrane';
 
 async function readPositionsFromCommand(
   invoke: TauriInvoke,
@@ -194,6 +195,35 @@ export async function computeGeodesicLoop(
     if (!report.pointCount) return null;
     return await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_geodesic');
   } catch {
+    return null;
+  }
+}
+
+/**
+ * Builds the contour-cut MEMBRANE for the given loop and returns it as a flat
+ * triangle soup (9 floats per triangle, model-local), for previewing the cutter
+ * surface in the scene. Requires the source already staged + captured. Returns
+ * null outside Tauri / on failure / <3 points.
+ */
+export async function computeMembranePreview(
+  loopPoints: OrganicCutLoopPoint[],
+): Promise<Float32Array | null> {
+  const core = await loadTauriCore();
+  if (!core) return null;
+  if (loopPoints.length < 3) return null;
+
+  const requestJson = JSON.stringify({
+    points: loopPoints.map((p) => ({ position: p.position })),
+    close: true,
+  });
+  try {
+    const reportJson = await core.invoke<string>('mesh_organic_cut_membrane_preview', { requestJson });
+    const report = JSON.parse(reportJson) as { triangleCount: number };
+    if (!report.triangleCount) return null;
+    return await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_membrane');
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[organicCut] membrane preview command failed', err);
     return null;
   }
 }

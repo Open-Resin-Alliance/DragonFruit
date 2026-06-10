@@ -50,6 +50,8 @@ static ORGANIC_CUT_PART_A_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::ne
 static ORGANIC_CUT_PART_B_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// Most recent geodesic loop polyline (LE f32 positions, 3 per point).
 static ORGANIC_CUT_GEODESIC_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+/// Most recent contour-cut membrane preview (LE f32 triangle soup, 9 per tri).
+static ORGANIC_CUT_MEMBRANE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 
 fn hollow_preview_source_mesh() -> &'static Mutex<Option<Arc<IndexedMesh>>> {
     HOLLOW_PREVIEW_SOURCE_MESH.get_or_init(|| Mutex::new(None))
@@ -109,6 +111,10 @@ fn organic_cut_part_b_bytes() -> &'static Mutex<Option<Vec<u8>>> {
 
 fn organic_cut_geodesic_bytes() -> &'static Mutex<Option<Vec<u8>>> {
     ORGANIC_CUT_GEODESIC_BYTES.get_or_init(|| Mutex::new(None))
+}
+
+fn organic_cut_membrane_bytes() -> &'static Mutex<Option<Vec<u8>>> {
+    ORGANIC_CUT_MEMBRANE_BYTES.get_or_init(|| Mutex::new(None))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -894,6 +900,55 @@ pub async fn mesh_organic_cut_read_geodesic() -> Result<Response, String> {
     let bytes = organic_cut_geodesic_bytes()
         .lock()
         .map_err(|e| format!("geodesic lock poisoned: {e}"))?
+        .clone()
+        .unwrap_or_default();
+    Ok(Response::new(bytes))
+}
+
+/// Builds the contour-cut MEMBRANE for the given loop and stashes it as a
+/// triangle soup for previewing. Uses the same loop the cut would (the dense
+/// geodesic points the frontend passes here), so what's rendered IS the cutter
+/// surface. Returns `{"triangleCount":N}`; read the bytes via
+/// `mesh_organic_cut_read_membrane`.
+#[tauri::command]
+pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<String, String> {
+    let req = parse_geodesic_request(&request_json);
+    if req.points.len() < 3 {
+        *organic_cut_membrane_bytes()
+            .lock()
+            .map_err(|e| format!("membrane lock poisoned: {e}"))? = None;
+        return Ok("{\"triangleCount\":0}".to_string());
+    }
+
+    let loop_pts: Vec<Vec3> = req
+        .points
+        .iter()
+        .map(|p| Vec3::new(p.position[0], p.position[1], p.position[2]))
+        .collect();
+
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let soup = dragonfruit_mesh_repair::membrane::build_membrane_preview_soup(&loop_pts)
+            .ok_or_else(|| "membrane could not be built from the loop".to_string())?;
+        let tri_count = soup.len() / 9;
+        let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&soup).to_vec();
+        Ok::<_, String>((bytes, tri_count))
+    })
+    .await
+    .map_err(|e| format!("membrane preview task panicked: {e}"))??;
+
+    let (bytes, tri_count) = result;
+    *organic_cut_membrane_bytes()
+        .lock()
+        .map_err(|e| format!("membrane lock poisoned: {e}"))? = Some(bytes);
+    Ok(format!("{{\"triangleCount\":{tri_count}}}"))
+}
+
+/// Returns the most recent membrane preview as raw LE f32 triangle-soup bytes.
+#[tauri::command]
+pub async fn mesh_organic_cut_read_membrane() -> Result<Response, String> {
+    let bytes = organic_cut_membrane_bytes()
+        .lock()
+        .map_err(|e| format!("membrane lock poisoned: {e}"))?
         .clone()
         .unwrap_or_default();
     Ok(Response::new(bytes))

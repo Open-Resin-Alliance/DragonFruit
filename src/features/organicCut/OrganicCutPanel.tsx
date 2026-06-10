@@ -2,10 +2,12 @@ import React from 'react';
 import { Loader2 } from 'lucide-react';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
-import type { OrganicCutDrawMode, OrganicCutSessionStatus } from './types';
+import type { OrganicCutDrawMode, OrganicCutMode, OrganicCutSessionStatus } from './types';
 
 export interface OrganicCutPanelState {
   drawMode: OrganicCutDrawMode;
+  /** Flat planar cut vs curved contour ("wafer") cut along the drawn loop. */
+  cutMode: OrganicCutMode;
   thicknessMm: number;
   smoothing: number;
 }
@@ -78,8 +80,12 @@ export function OrganicCutPanel({
     ? { opacity: 0.45, filter: 'grayscale(0.7)' }
     : undefined;
 
-  const statusLabel =
-    pointCount === 0
+  const isContour = state.cutMode === 'contour';
+  const statusLabel = isContour
+    ? pointCount < 3
+      ? `Click points around the model to trace the seam (${pointCount}/3+)`
+      : `${pointCount} points — ready to cut (contour seam)`
+    : pointCount === 0
       ? 'Click 2 points across the model to set a flat cut'
       : pointCount === 1
         ? '1 point — click one more on the other side'
@@ -129,6 +135,33 @@ export function OrganicCutPanel({
             }}
           >
             {statusLabel}
+          </div>
+
+          {/* Cut mode: flat plane vs curved contour seam */}
+          <div className="rounded-md border p-2 space-y-1.5" style={accentCardStyle}>
+            <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Cut Mode</div>
+            <div className="grid grid-cols-2 gap-1">
+              <button
+                type="button"
+                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                onClick={() => setState({ cutMode: 'plane' })}
+                disabled={disabled || isApplying}
+                style={state.cutMode === 'plane' ? activeModeStyle : undefined}
+                title="Slice along a single flat plane derived from your points."
+              >
+                Flat
+              </button>
+              <button
+                type="button"
+                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                onClick={() => setState({ cutMode: 'contour' })}
+                disabled={disabled || isApplying}
+                style={state.cutMode === 'contour' ? activeModeStyle : undefined}
+                title="Split along a curved seam that follows your drawn loop (zero-thickness mate)."
+              >
+                Contour
+              </button>
+            </div>
           </div>
 
           {/* Draw mode */}

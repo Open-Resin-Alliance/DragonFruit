@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
-import type { OrganicCutLoopPoint } from './types';
+import type { OrganicCutLoopPoint, OrganicCutMode } from './types';
 import { cutPlaneFromPoints } from './cutPlane';
 
 interface OrganicCutToolProps {
@@ -22,6 +22,18 @@ interface OrganicCutToolProps {
    * the surface. Null until ≥2 points / outside Tauri.
    */
   geodesicPolyline?: Float32Array | null;
+  /**
+   * Flat vs contour cut. In `contour` mode the flat-plane preview is hidden (the
+   * cut follows the curved seam, so a flat quad would be misleading) and only the
+   * on-surface geodesic loop is shown.
+   */
+  cutMode?: OrganicCutMode;
+  /**
+   * Contour-cut membrane preview as a flat triangle soup (model-local). When
+   * present (contour mode), it's rendered translucent so the user sees the exact
+   * curved cutter surface the cut will use.
+   */
+  membranePreview?: Float32Array | null;
 }
 
 /** Marker radius as a fraction of the model's bbox diagonal (small = precise). */
@@ -52,6 +64,8 @@ export function OrganicCutTool({
   activeTransform,
   loop,
   geodesicPolyline,
+  cutMode = 'plane',
+  membranePreview,
 }: OrganicCutToolProps) {
   const activeModel = useMemo(() => models.find((m) => m.id === activeModelId), [models, activeModelId]);
   const transform = activeTransform || activeModel?.transform;
@@ -111,6 +125,8 @@ export function OrganicCutTool({
   // lands, from the same plane formula the cut uses. Sized to span the model.
   const planePreview = useMemo(() => {
     if (!activeModel) return null;
+    // In contour mode the cut is curved — a flat quad would mislead. Hide it.
+    if (cutMode === 'contour') return null;
     const plane = cutPlaneFromPoints(loop);
     if (!plane) return null;
 
@@ -130,7 +146,21 @@ export function OrganicCutTool({
       plane.normal.clone().normalize(),
     );
     return { span, quat, position: plane.point };
-  }, [activeModel, loop]);
+  }, [activeModel, loop, cutMode]);
+
+  // Translucent membrane (curved cutter surface) for contour mode. Built from the
+  // flat triangle soup Rust returns, so it's EXACTLY the surface the cut uses.
+  const membraneGeometry = useMemo(() => {
+    if (cutMode !== 'contour' || !membranePreview || membranePreview.length < 9) return null;
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(membranePreview, 3));
+    geom.computeVertexNormals();
+    // Without a bounding sphere three.js frustum-culls the mesh (treats it as
+    // off-screen) → it never draws. Compute it so the membrane is visible.
+    geom.computeBoundingBox();
+    geom.computeBoundingSphere();
+    return geom;
+  }, [cutMode, membranePreview]);
 
   // Marker radius proportional to the model so it's a small, precise dot on any
   // model size (a fixed mm value is wrong for small/large models). Also divided
@@ -158,6 +188,19 @@ export function OrganicCutTool({
       scale={transform.scale}
     >
       <group position={meshLocalOffset}>
+        {/* Contour membrane preview: the exact curved cutter surface. */}
+        {membraneGeometry && (
+          <mesh geometry={membraneGeometry} renderOrder={997} frustumCulled={false}>
+            <meshBasicMaterial
+              color={0x37ff7a}
+              transparent
+              opacity={0.35}
+              side={THREE.DoubleSide}
+              depthWrite={false}
+            />
+          </mesh>
+        )}
+
         {/* Live translucent cut-plane preview (what the slice will look like). */}
         {planePreview && (
           <mesh
