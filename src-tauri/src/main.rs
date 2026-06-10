@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod astar;
 mod mesh_repair;
 mod network;
 mod sdf;
@@ -3255,7 +3256,8 @@ fn main() {
             mesh_repair::mesh_repair_read_positions,
             sdf::compute_sdf_from_staged,
             sdf::compute_heightmap_from_staged,
-            sdf::invalidate_sdf_cache
+            sdf::invalidate_sdf_cache,
+            astar::run_astar_pathfinding
         ])
         .run(tauri::generate_context!())
         .expect("error while running DragonFruit desktop app");

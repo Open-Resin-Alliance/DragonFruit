@@ -19,7 +19,7 @@ use crate::{staged_mesh, staged_mesh_stats, StageMeshStats};
 /// frontend can avoid recomputing if the model hasn't changed.
 static SDF_CACHE: OnceLock<Mutex<Option<(StageMeshStats, SparseSdfGrid)>>> = OnceLock::new();
 
-fn sdf_cache() -> &'static Mutex<Option<(StageMeshStats, SparseSdfGrid)>> {
+pub(crate) fn sdf_cache() -> &'static Mutex<Option<(StageMeshStats, SparseSdfGrid)>> {
     SDF_CACHE.get_or_init(|| Mutex::new(None))
 }
 
