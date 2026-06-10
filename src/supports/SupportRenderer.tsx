@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import React, { useSyncExternalStore, forwardRef, useImperativeHandle, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
@@ -477,7 +477,7 @@ function buildSupportPlacementPreviewBatch(
     }
 
     if (preview.knot) {
-        // Leaves carry preview.knot but have no shaft segments — without
+        // Leaves carry preview.knot but have no shaft segments â€” without
         // including the knot here the preview's parent ball is invisible
         // when snapping a leaf onto another support (trunk, twig, etc.).
         jointsMap.set(preview.knot.id, {
@@ -509,7 +509,7 @@ function buildSupportPlacementPreviewBatch(
 
     // Twig taper: precompute per-segment start/end diameters lerped along the
     // cumulative-length parameter so a multi-segment twig still presents one
-    // continuous A→B taper.
+    // continuous Aâ†’B taper.
     let twigSegmentDiameters: Array<{ start: number; end: number }> | null = null;
     if (isTwigPreview) {
         const segLengths: number[] = [];
@@ -799,7 +799,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const branchList = useMemo(() => Object.values(state.branches), [state.branches]);
     const leafList = useMemo(() => Object.values(state.leaves), [state.leaves]);
     const twigList = useMemo(() => Object.values(state.twigs), [state.twigs]);
-    // Reverse lookup: twig segment id → owning twig. Used during knot drag to
+    // Reverse lookup: twig segment id â†’ owning twig. Used during knot drag to
     // resolve a Leaf's wide-end (bodyDiameterMm) against the twig taper so the
     // cone visibly tapers with the knot. While a disk drag is in flight, the
     // live (not-yet-committed) twig is substituted so taper math reflects the
@@ -2053,7 +2053,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!isModelVisible(brace.modelId, brace.id)) continue;
 
             // braceRenderKnotsById uses live preview overrides whenever any
-            // brace endpoint knot is being reflowed by an upstream drag — so
+            // brace endpoint knot is being reflowed by an upstream drag â€” so
             // braces follow live as their host moves (twig curve reshape, twig
             // disk drag, trunk/branch joint drag, direct brace knot drag).
             const startKnot = braceRenderKnotsById[brace.startKnotId];
@@ -3648,14 +3648,51 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             emitSupportModelPointerSelect(cone.modelId ?? null);
             return;
         }
+
+        // Brace tool: an unselected leaf's cone is rendered in this batched mesh
+        // (not LeafRenderer), so the leaf's own onClick never fires. Mirror the
+        // batched-shaft brace branch here and emit brace-leaf-click for leaf cones
+        // so the brace tool can start/end an endpoint on a leaf. cone.supportId is
+        // the leaf id (see contactConesBySupport).
+        if ((supportSelectionAndHoverSuppressed || braceAltActive) && cone.supportId && state.leaves[cone.supportId]) {
+            const e = event as unknown as { point?: THREE.Vector3 | { x: number; y: number; z: number } };
+            const point = e.point
+                ? { x: (e.point as any).x, y: (e.point as any).y, z: (e.point as any).z }
+                : null;
+            window.dispatchEvent(new CustomEvent('brace-leaf-click', {
+                detail: {
+                    leafId: cone.supportId,
+                    point,
+                    intersection: event,
+                },
+            }));
+            return;
+        }
+
         if (supportSelectionAndHoverSuppressed) return;
         if (!cone.supportId) return;
         handleSupportClick(event, cone.supportId, isInteractable);
-    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed]);
+    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed, braceAltActive, state.leaves]);
 
-    const handleSceneBatchedConePointerMove = React.useCallback((cone: InstancedContactCone) => {
+    const handleSceneBatchedConePointerMove = React.useCallback((cone: InstancedContactCone, event?: { point?: { x: number; y: number; z: number } | THREE.Vector3 } | null) => {
         if (!isPointerInteractable) return;
         if (orbitInteractionActiveRef.current) return;
+
+        // Brace tool: emit brace-leaf-hover for an unselected leaf's batched cone
+        // so the brace placement preview can track it (counterpart to the batched
+        // shaft hover path). cone.supportId is the leaf id. Without this the leaf
+        // is unhoverable for braces (its own LeafRenderer handlers only mount when
+        // the leaf is selected â€” the cone is otherwise drawn in this batched mesh).
+        const jointDragInteractionActive = typeof window !== 'undefined' && !!(window as any).__jointGizmoDragging;
+        const allowLeafHoverForPlacementPreview = braceAltActive && mode === 'support' && !jointDragInteractionActive;
+        if (allowLeafHoverForPlacementPreview && cone.supportId && state.leaves[cone.supportId]) {
+            const point = event?.point
+                ? { x: (event.point as any).x, y: (event.point as any).y, z: (event.point as any).z }
+                : null;
+            window.dispatchEvent(new CustomEvent('brace-leaf-hover', {
+                detail: { leafId: cone.supportId, point, intersection: event },
+            }));
+        }
 
         applySceneHoverWriteDecision(
             resolveSceneBatchedSupportHoverWriteDecision({
@@ -3672,7 +3709,19 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             setSceneHoveredSupportId,
             emitSupportModelPointerHover,
         );
-    }, [isPointerInteractable, primitiveHoverOnSelectedSupport, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
+    }, [isPointerInteractable, mode, braceAltActive, state.leaves, primitiveHoverOnSelectedSupport, selectedCategory, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
+
+    // Cone pointer-out: clear the brace tool's leaf hover (so a leaf preview
+    // doesn't stick once the cursor leaves the cone), then fall through to the
+    // shared shaft pointer-out cleanup for the rest of the hover state.
+    const handleSceneBatchedConePointerOut = React.useCallback((cone: InstancedContactCone | null) => {
+        if (braceAltActive && cone?.supportId && state.leaves[cone.supportId]) {
+            window.dispatchEvent(new CustomEvent('brace-leaf-leave', {
+                detail: { leafId: cone.supportId },
+            }));
+        }
+        handleSceneBatchedShaftPointerOut(cone ? { id: cone.id } : null);
+    }, [braceAltActive, state.leaves, handleSceneBatchedShaftPointerOut]);
 
     const handleSceneBatchedJointClick = React.useCallback((joint: InstancedJoint, event: { nativeEvent?: Event }) => {
         if (!isPointerInteractable) return;
@@ -3908,7 +3957,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         opacity={ghostOpacityClamped}
                         onConeClick={isPointerInteractable ? handleSceneBatchedConeClick : undefined}
                         onConePointerMove={isPointerInteractable ? handleSceneBatchedConePointerMove : undefined}
-                        onConePointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                        onConePointerOut={isPointerInteractable ? handleSceneBatchedConePointerOut : undefined}
                     />
                 </group>
             ))}
@@ -4039,7 +4088,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     opacity={ghostOpacityClamped}
                     onConeClick={isPointerInteractable ? handleSceneBatchedConeClick : undefined}
                     onConePointerMove={isPointerInteractable ? handleSceneBatchedConePointerMove : undefined}
-                    onConePointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    onConePointerOut={isPointerInteractable ? handleSceneBatchedConePointerOut : undefined}
                 />
             )}
 
@@ -4102,7 +4151,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     opacity={ghostOpacityClamped}
                     onConeClick={isPointerInteractable ? handleSceneBatchedConeClick : undefined}
                     onConePointerMove={isPointerInteractable ? handleSceneBatchedConePointerMove : undefined}
-                    onConePointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    onConePointerOut={isPointerInteractable ? handleSceneBatchedConePointerOut : undefined}
                 />
             )}
 
@@ -4152,7 +4201,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const deferTrunkInteractionToSceneBatch = !effectiveSelected;
 
                 return (
-                    // noClipping: this trunk is actively selected/edited — exempt it
+                    // noClipping: this trunk is actively selected/edited â€” exempt it
                     // from cross-section clipping so it always renders fully visible.
                     <group key={trunk.id} userData={{ noClipping: true }}>
                     <TrunkRenderer

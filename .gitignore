@@ -46,6 +46,7 @@ next-env.d.ts
 /supports_legacy
 conversion/
 Scratch/
+.scratch/
 todo_list
 tsc_output.txt
 
