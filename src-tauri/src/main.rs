@@ -2,6 +2,7 @@
 
 mod mesh_repair;
 mod network;
+mod sdf;
 fn default_minimum_aa_alpha_percent() -> f32 {
     35.0
 }
@@ -231,6 +232,7 @@ pub(crate) struct StageFileAppender {
 }
 
 #[derive(Default)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct StageMeshStats {
     pub chunks_received: u64,
     pub append_ns_total: u64,
@@ -3251,7 +3253,9 @@ fn main() {
             mesh_repair::mesh_repair_from_path,
             mesh_repair::mesh_repair_staged,
             mesh_repair::mesh_classify_staged,
-            mesh_repair::mesh_repair_read_positions
+            mesh_repair::mesh_repair_read_positions,
+            sdf::compute_sdf_from_staged,
+            sdf::invalidate_sdf_cache
         ])
         .run(tauri::generate_context!())
         .expect("error while running DragonFruit desktop app");

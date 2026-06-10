@@ -35,6 +35,7 @@ dragonfruit-slicing-engine = { path = "../rust/dragonfruit-slicing-engine" }
 dragonfruit-rtsp-relay = { path = "../rust/dragonfruit-rtsp-relay" }
 dragonfruit-islands = { path = "../rust/dragonfruit-islands" }
 dragonfruit-mesh-repair = { path = "../rust/dragonfruit-mesh-repair", features = ["manifold"] }
+dragonfruit-sdf = { path = "../rust/dragonfruit-sdf" }
 flate2 = "1.1.9"
 bytemuck = "1"
 

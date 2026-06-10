@@ -1632,6 +1632,9 @@ export function resolveCommittedBaseCandidate(args: {
  */
 const sdfCachePool = new Map<string, SDFCache>();
 
+/** Tracks which mesh UUIDs have a precomputation already in-flight or completed. */
+const precomputationInFlight = new Set<string>();
+
 export function getOrCreateSDFCache(mesh: THREE.Mesh, cellSize?: number): SDFCache {
     const key = mesh.uuid;
     const existing = sdfCachePool.get(key);
@@ -1639,6 +1642,25 @@ export function getOrCreateSDFCache(mesh: THREE.Mesh, cellSize?: number): SDFCac
 
     const cache = new SDFCache(mesh, { cellSize: cellSize ?? 0.5 });
     sdfCachePool.set(key, cache);
+
+    // Fire-and-forget: kick off Rust SDF precomputation in the background.
+    // When it completes, the precomputed grid is injected into this cache
+    // and all subsequent pathfinding lookups become O(1) hash hits.
+    if (!precomputationInFlight.has(key)) {
+        precomputationInFlight.add(key);
+        tryLoadPrecomputedSDFForMesh(mesh).then((cellCount) => {
+            if (cellCount > 0) {
+                console.log(
+                    `[SDF] Precomputed ${cellCount.toLocaleString()} cells ` +
+                    `(cellSize=${cache.cellSize}mm) for mesh ${key.slice(0, 8)}…`
+                );
+            }
+        }).catch(() => {
+            // Silently fall back to lazy BVH-backed SDF
+            precomputationInFlight.delete(key);
+        });
+    }
+
     return cache;
 }
 
@@ -1650,6 +1672,7 @@ export function clearSDFCacheForMesh(meshUuid: string): void {
     }
     stagnationCache.delete(meshUuid);
     previewExhaustedCache.delete(meshUuid);
+    precomputationInFlight.delete(meshUuid);
 }
 
 export function clearAllSDFCaches(): void {
@@ -1657,6 +1680,47 @@ export function clearAllSDFCaches(): void {
     sdfCachePool.clear();
     stagnationCache.clear();
     previewExhaustedCache.clear();
+}
+
+/**
+ * Attempt to load a pre-computed signed distance field from the Rust backend
+ * and inject it into the SDFCache for the given mesh.
+ *
+ * Call this after mesh repair/replacement, once per model. The pre-computed
+ * grid replaces BVH queries with O(1) hash lookups for all subsequent
+ * pathfinding operations.
+ *
+ * Safe to call when running in the browser (non-Tauri) — it returns silently.
+ *
+ * @returns The number of pre-computed cells, or 0 if unavailable.
+ */
+export async function tryLoadPrecomputedSDFForMesh(
+    mesh: THREE.Mesh,
+): Promise<number> {
+    const cache = getOrCreateSDFCache(mesh);
+    if (cache.hasPrecomputed) return 0; // already loaded
+
+    try {
+        // Dynamic import to avoid bundling the Tauri IPC module in browser builds
+        const { computePrecomputedSDF } = await import(
+            '../../../utils/precomputedSDF'
+        );
+        const result = await computePrecomputedSDF({
+            cellSize: cache.cellSize,
+        });
+
+        if (result) {
+            cache.loadPrecomputed(result.grid);
+            return result.cellCount;
+        }
+    } catch (err) {
+        // In browser or if Tauri IPC fails, fall back to lazy BVH-backed SDF
+        if (process.env.NODE_ENV === 'development') {
+            console.debug('SDF precomputation not available, using BVH fallback:', err);
+        }
+    }
+
+    return 0;
 }
 
 // ---------- Main API ----------

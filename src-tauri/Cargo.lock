@@ -1365,6 +1365,7 @@ dependencies = [
  "dragonfruit-islands",
  "dragonfruit-mesh-repair",
  "dragonfruit-rtsp-relay",
+ "dragonfruit-sdf",
  "dragonfruit-slicing-engine",
  "flate2",
  "futures-util",
@@ -1426,6 +1427,18 @@ dependencies = [
  "serde_json",
  "tungstenite",
  "url",
+]
+
+[[package]]
+name = "dragonfruit-sdf"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "bytemuck",
+ "rayon",
+ "serde",
+ "serde_json",
+ "smallvec",
 ]
 
 [[package]]

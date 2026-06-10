@@ -17,6 +17,7 @@
  */
 
 import * as THREE from 'three';
+import { PrecomputedSDFGrid } from './PrecomputedSDFGrid';
 
 // ---------- Types ----------
 
@@ -86,6 +87,11 @@ export class SDFCache {
     /** Last seen matrixWorld — used to detect stale cache. */
     private readonly _lastMatrix = new THREE.Matrix4();
 
+    /** Optional pre-computed sparse SDF grid from Rust. When set, lookups
+     *  check this grid first (zero BVH overhead) and only fall back to BVH
+     *  for cells outside the pre-computed shell. */
+    private precomputedGrid: PrecomputedSDFGrid | null = null;
+
     constructor(mesh: THREE.Mesh, opts?: SDFCacheOptions) {
         this.cellSize = opts?.cellSize ?? 0.5;
         this.mesh = mesh;
@@ -130,6 +136,27 @@ export class SDFCache {
         }
     }
 
+    /**
+     * Load a pre-computed sparse SDF grid from the Rust backend.
+     * Once set, all `distanceAt` / `isBlocked` / `segmentBlocked` calls
+     * check this grid first — zero BVH overhead for pre-computed cells.
+     * Cells outside the pre-computed shell still fall back to BVH.
+     */
+    loadPrecomputed(grid: PrecomputedSDFGrid): void {
+        if (grid.cellSize !== this.cellSize) {
+            console.warn(
+                `SDFCache: precomputed cellSize ${grid.cellSize} != cache cellSize ${this.cellSize}. ` +
+                `The precomputed grid will be used but quantisation may differ.`
+            );
+        }
+        this.precomputedGrid = grid;
+    }
+
+    /** True if a pre-computed grid has been loaded. */
+    get hasPrecomputed(): boolean {
+        return this.precomputedGrid !== null;
+    }
+
     // ---- Public API ----
 
     /**
@@ -146,6 +173,13 @@ export class SDFCache {
      * point is on the interior side of the surface.
      */
     distanceAt(wx: number, wy: number, wz: number): number {
+        // Fast path: check pre-computed grid first (zero BVH overhead).
+        const pg = this.precomputedGrid;
+        if (pg) {
+            const dist = this._lookupPrecomputed(wx, wy, wz, pg);
+            if (dist !== undefined) return dist;
+        }
+
         const cs = this.cellSize;
         const qx = quantize(wx, cs);
         const qy = quantize(wy, cs);
@@ -160,6 +194,35 @@ export class SDFCache {
         return dist;
     }
 
+    /**
+     * Look up a signed distance in the pre-computed grid.
+     * Transforms world-space coords to model-local, quantises, and
+     * retrieves the pre-computed distance. Returns undefined if the
+     * cell is outside the pre-computed shell.
+     */
+    private _lookupPrecomputed(
+        wx: number, wy: number, wz: number,
+        pg: PrecomputedSDFGrid,
+    ): number | undefined {
+        // Transform world → local
+        this._localPoint.set(wx, wy, wz).applyMatrix4(this.inverseMatrix);
+        const lx = this._localPoint.x;
+        const ly = this._localPoint.y;
+        const lz = this._localPoint.z;
+
+        // Quantise in local space using the pre-computed cell size
+        const cs = pg.cellSize;
+        const qx = quantize(lx, cs);
+        const qy = quantize(ly, cs);
+        const qz = quantize(lz, cs);
+
+        const dist = pg.get(qx, qy, qz);
+        if (dist === undefined) return undefined;
+
+        // Scale back to world-space mm
+        return dist * this.worldScale;
+    }
+
     private _getOrCreateQuantizedDistance(qx: number, qy: number, qz: number, maxDistance = Infinity): number {
         const key = cellKey(qx, qy, qz);
         const cached = this.cache.get(key);
@@ -169,6 +232,25 @@ export class SDFCache {
         const cX = qx * cs;
         const cY = qy * cs;
         const cZ = qz * cs;
+
+        // Check pre-computed grid in local space
+        const pg = this.precomputedGrid;
+        if (pg) {
+            this._localPoint.set(cX, cY, cZ).applyMatrix4(this.inverseMatrix);
+            const lx = this._localPoint.x;
+            const ly = this._localPoint.y;
+            const lz = this._localPoint.z;
+            const lqx = quantize(lx, pg.cellSize);
+            const lqy = quantize(ly, pg.cellSize);
+            const lqz = quantize(lz, pg.cellSize);
+            const preDist = pg.get(lqx, lqy, lqz);
+            if (preDist !== undefined) {
+                const dist = preDist * this.worldScale;
+                this.cache.set(key, dist);
+                return dist;
+            }
+        }
+
         if (maxDistance !== Infinity && !this._expandedWorldBoundsContains(cX, cY, cZ, maxDistance)) {
             return Infinity;
         }

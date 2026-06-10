@@ -1,0 +1,134 @@
+//! Tauri IPC surface for `dragonfruit-sdf`.
+//!
+//! Commands:
+//! - `compute_sdf_from_staged` — compute a sparse SDF from the staged mesh
+//!   and return it as a raw binary blob (the frontend parses it into the
+//!   pre-computed SDF cache).
+
+use std::sync::{Mutex, OnceLock};
+
+use dragonfruit_sdf::{compute_sdf_grid, SdfMeshInput, SdfOptions, SparseSdfGrid};
+use tauri::ipc::Response;
+
+use crate::{staged_mesh, staged_mesh_stats, StageMeshStats};
+
+/// In-memory cache of the last computed SDF grid, keyed by mesh stats so the
+/// frontend can avoid recomputing if the model hasn't changed.
+static SDF_CACHE: OnceLock<Mutex<Option<(StageMeshStats, SparseSdfGrid)>>> = OnceLock::new();
+
+fn sdf_cache() -> &'static Mutex<Option<(StageMeshStats, SparseSdfGrid)>> {
+    SDF_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+/// Compute a signed distance field from the current staged mesh.
+///
+/// The result is a raw binary blob in the `SparseSdfGrid` wire format.
+/// The frontend is responsible for deserialising it into the `SDFCache`.
+///
+/// If the staged mesh hasn't changed since the last call, the cached grid
+/// is returned immediately (no recomputation).
+#[tauri::command]
+pub async fn compute_sdf_from_staged(
+    cell_size: Option<f32>,
+    shell_thickness: Option<f32>,
+) -> Result<Response, String> {
+    // Read current mesh stats for cache key
+    let current_stats = staged_mesh_stats()
+        .lock()
+        .map_err(|e| format!("staged mesh stats lock poisoned: {e}"))?
+        .clone();
+
+    // Check cache
+    {
+        let cache = sdf_cache()
+            .lock()
+            .map_err(|e| format!("sdf cache lock poisoned: {e}"))?;
+        if let Some((ref cached_stats, ref cached_grid)) = *cache {
+            if *cached_stats == current_stats {
+                log::info!(
+                    "sdf: cache hit — {} cells, cell_size={}",
+                    cached_grid.len(),
+                    cached_grid.cell_size
+                );
+                return Ok(Response::new(cached_grid.to_bytes()));
+            }
+        }
+    }
+
+    // Read the staged mesh bytes
+    let bytes = {
+        staged_mesh()
+            .lock()
+            .map_err(|e| format!("staged mesh lock poisoned: {e}"))?
+            .clone()
+            .ok_or_else(|| "no staged mesh available".to_string())?
+    };
+
+    let options = SdfOptions {
+        cell_size: cell_size.unwrap_or(0.5),
+        shell_thickness: shell_thickness.unwrap_or(8.0),
+        ..SdfOptions::default()
+    };
+
+    log::info!(
+        "sdf: computing (cell_size={}, shell={}, inner={}, coarse={})...",
+        options.cell_size,
+        options.shell_thickness,
+        options.inner_shell,
+        options.coarse_factor,
+    );
+
+    let grid = tauri::async_runtime::spawn_blocking(move || {
+        // Parse the staged positions into our lightweight mesh format.
+        // The staging buffer is f32 LE, 9 per triangle (raw soup).
+        let floats: &[f32] = bytemuck::try_cast_slice(&bytes)
+            .map_err(|e| format!("staged positions cast: {e}"))?;
+        if floats.len() % 9 != 0 {
+            return Err(format!(
+                "staged positions not a multiple of 9 floats: {}",
+                floats.len()
+            ));
+        }
+        let tri_count = floats.len() / 9;
+
+        let mesh = SdfMeshInput {
+            positions: floats.to_vec(),
+            triangles: (0..tri_count as u32)
+                .map(|i| [i * 3, i * 3 + 1, i * 3 + 2])
+                .collect(),
+        };
+
+        Ok::<_, String>(compute_sdf_grid(&mesh, &options))
+    })
+    .await
+    .map_err(|e| format!("sdf task panicked: {e}"))??;
+
+    log::info!(
+        "sdf: computed {} cells in model-local space (cell_size={}mm)",
+        grid.len(),
+        grid.cell_size,
+    );
+
+    let blob = grid.to_bytes();
+
+    // Update cache
+    {
+        let mut cache = sdf_cache()
+            .lock()
+            .map_err(|e| format!("sdf cache lock poisoned: {e}"))?;
+        *cache = Some((current_stats, grid));
+    }
+
+    Ok(Response::new(blob))
+}
+
+/// Invalidate the SDF cache (e.g. after model repair or replacement).
+#[tauri::command]
+pub fn invalidate_sdf_cache() -> Result<(), String> {
+    let mut cache = sdf_cache()
+        .lock()
+        .map_err(|e| format!("sdf cache lock poisoned: {e}"))?;
+    *cache = None;
+    log::info!("sdf: cache invalidated");
+    Ok(())
+}
