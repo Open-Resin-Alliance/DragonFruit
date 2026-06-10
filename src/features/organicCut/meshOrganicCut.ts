@@ -10,7 +10,7 @@
  * M1: the backend cut is a no-op, so both parts come back equal to the source.
  */
 import * as THREE from 'three';
-import type { OrganicCutOptions, OrganicCutReport, OrganicCutResult } from './types';
+import type { OrganicCutLoopPoint, OrganicCutOptions, OrganicCutReport, OrganicCutResult } from './types';
 
 type TauriInvoke = <T>(
   cmd: string,
@@ -42,7 +42,8 @@ async function loadTauriCore(): Promise<TauriCoreModule | null> {
 
 type OrganicCutReadCommand =
   | 'mesh_organic_cut_read_part_a'
-  | 'mesh_organic_cut_read_part_b';
+  | 'mesh_organic_cut_read_part_b'
+  | 'mesh_organic_cut_read_geodesic';
 
 async function readPositionsFromCommand(
   invoke: TauriInvoke,
@@ -167,6 +168,34 @@ export async function cutFromGeometry(
   const report = JSON.parse(reportJson) as OrganicCutReport;
   const { partA, partB } = await readBothParts(core.invoke);
   return { report, partA, partB };
+}
+
+/**
+ * Computes a surface-following (Stage-1 edge-path) loop polyline through the
+ * given waypoints, against the captured cut source. Requires that the source has
+ * already been staged + captured (via stageCutSource). Returns the polyline as a
+ * flat Float32Array (3 per point), or null outside Tauri / on failure.
+ */
+export async function computeGeodesicLoop(
+  loopPoints: OrganicCutLoopPoint[],
+  close: boolean,
+): Promise<Float32Array | null> {
+  const core = await loadTauriCore();
+  if (!core) return null;
+  if (loopPoints.length < 2) return null;
+
+  const requestJson = JSON.stringify({
+    points: loopPoints.map((p) => ({ position: p.position })),
+    close,
+  });
+  try {
+    const reportJson = await core.invoke<string>('mesh_organic_cut_geodesic_loop', { requestJson });
+    const report = JSON.parse(reportJson) as { pointCount: number };
+    if (!report.pointCount) return null;
+    return await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_geodesic');
+  } catch {
+    return null;
+  }
 }
 
 /** Builds a position-only BufferGeometry from a returned triangle-soup part. */

@@ -3271,6 +3271,8 @@ fn main() {
             mesh_repair::mesh_organic_cut_from_captured_source,
             mesh_repair::mesh_organic_cut_read_part_a,
             mesh_repair::mesh_organic_cut_read_part_b,
+            mesh_repair::mesh_organic_cut_geodesic_loop,
+            mesh_repair::mesh_organic_cut_read_geodesic,
             mesh_repair::mesh_repair_read_positions
         ])
         .run(tauri::generate_context!())

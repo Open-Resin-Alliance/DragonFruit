@@ -17440,16 +17440,6 @@ export default function Home() {
       ? hit.face.normal.clone().normalize()
       : new THREE.Vector3(0, 0, 1);
 
-    const t = target.transform;
-    // eslint-disable-next-line no-console
-    console.info(
-      `[organicCut] pick | world=(${hit.point.x.toFixed(1)},${hit.point.y.toFixed(1)},${hit.point.z.toFixed(1)})` +
-      ` local=(${localPoint.x.toFixed(1)},${localPoint.y.toFixed(1)},${localPoint.z.toFixed(1)})` +
-      ` modelPos=(${t.position.x.toFixed(1)},${t.position.y.toFixed(1)},${t.position.z.toFixed(1)})` +
-      ` modelRot=(${t.rotation.x.toFixed(2)},${t.rotation.y.toFixed(2)},${t.rotation.z.toFixed(2)})` +
-      ` modelScale=(${t.scale.x.toFixed(2)},${t.scale.y.toFixed(2)},${t.scale.z.toFixed(2)})`,
-    );
-
     organicCut.addPoint({
       position: [localPoint.x, localPoint.y, localPoint.z],
       normal: [localNormal.x, localNormal.y, localNormal.z],
@@ -18970,6 +18960,7 @@ export default function Home() {
                 active={!organicCut.isApplying}
                 loop={organicCut.loop}
                 onAddPoint={organicCut.addPoint}
+                geodesicPolyline={organicCut.geodesicPolyline}
               />
             )}
             {scene.mode === 'prepare' && transformMgr.transformMode === 'mirror' && (

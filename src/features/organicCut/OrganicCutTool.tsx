@@ -16,9 +16,19 @@ interface OrganicCutToolProps {
   loop: OrganicCutLoopPoint[];
   /** Append a point picked on the surface. Reserved for future in-canvas hooks. */
   onAddPoint: (point: OrganicCutLoopPoint) => void;
+  /**
+   * Surface-following loop polyline (flat xyz, model-local) from the Rust geodesic
+   * engine. When present, it's drawn instead of straight chords so the seam hugs
+   * the surface. Null until ≥2 points / outside Tauri.
+   */
+  geodesicPolyline?: Float32Array | null;
 }
 
-const LOOP_POINT_RADIUS_MM = 0.8;
+/** Marker radius as a fraction of the model's bbox diagonal (small = precise). */
+const MARKER_RADIUS_FRACTION = 0.0015;
+/** Clamp the marker radius (model-local units) so it's usable on any model size. */
+const MARKER_RADIUS_MIN = 0.01;
+const MARKER_RADIUS_MAX = 0.6;
 const LOOP_LINE_BIAS_MM = 0.2;
 
 /**
@@ -41,6 +51,7 @@ export function OrganicCutTool({
   activeModelId,
   activeTransform,
   loop,
+  geodesicPolyline,
 }: OrganicCutToolProps) {
   const activeModel = useMemo(() => models.find((m) => m.id === activeModelId), [models, activeModelId]);
   const transform = activeTransform || activeModel?.transform;
@@ -64,26 +75,37 @@ export function OrganicCutTool({
 
   // Build the connecting polyline as a concrete THREE.Line so we can render it via
   // <primitive>, avoiding the JSX <line> ambiguity with SVG line elements.
+  //
+  // PREFER the surface-following geodesic polyline from Rust when available; only
+  // fall back to straight chords between points if it hasn't computed yet.
   const loopLine = useMemo(() => {
-    if (loop.length < 2) return null;
-    const positions: number[] = [];
-    const pushBiased = (p: OrganicCutLoopPoint) => {
-      positions.push(
-        p.position[0] + p.normal[0] * LOOP_LINE_BIAS_MM,
-        p.position[1] + p.normal[1] * LOOP_LINE_BIAS_MM,
-        p.position[2] + p.normal[2] * LOOP_LINE_BIAS_MM,
-      );
-    };
-    for (const p of loop) pushBiased(p);
-    // Close the loop visually back to the first point.
-    if (loop.length >= 3) pushBiased(loop[0]);
+    let positions: number[] | null = null;
+
+    if (geodesicPolyline && geodesicPolyline.length >= 6) {
+      // The geodesic polyline already hugs the surface; nudge slightly outward is
+      // unnecessary (it sits on vertices). Use as-is.
+      positions = Array.from(geodesicPolyline);
+    } else if (loop.length >= 2) {
+      positions = [];
+      const pushBiased = (p: OrganicCutLoopPoint) => {
+        positions!.push(
+          p.position[0] + p.normal[0] * LOOP_LINE_BIAS_MM,
+          p.position[1] + p.normal[1] * LOOP_LINE_BIAS_MM,
+          p.position[2] + p.normal[2] * LOOP_LINE_BIAS_MM,
+        );
+      };
+      for (const p of loop) pushBiased(p);
+      if (loop.length >= 3) pushBiased(loop[0]);
+    }
+
+    if (!positions || positions.length < 6) return null;
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     const material = new THREE.LineBasicMaterial({ color: 0x37ff7a, depthTest: false, transparent: true });
     const line = new THREE.Line(geom, material);
     line.renderOrder = 999;
     return line;
-  }, [loop]);
+  }, [loop, geodesicPolyline]);
 
   // Live cut-plane preview: a translucent quad showing EXACTLY where the slice
   // lands, from the same plane formula the cut uses. Sized to span the model.
@@ -109,6 +131,23 @@ export function OrganicCutTool({
     );
     return { span, quat, position: plane.point };
   }, [activeModel, loop]);
+
+  // Marker radius proportional to the model so it's a small, precise dot on any
+  // model size (a fixed mm value is wrong for small/large models). Also divided
+  // by the model's max scale so on-plate scaling doesn't inflate the markers.
+  const markerRadius = useMemo(() => {
+    if (!activeModel) return MARKER_RADIUS_MIN;
+    const geometry = activeModel.geometry.geometry;
+    const bbox =
+      geometry.boundingBox ??
+      new THREE.Box3().setFromBufferAttribute(geometry.getAttribute('position') as THREE.BufferAttribute);
+    const diag = bbox.getSize(new THREE.Vector3()).length();
+    const maxScale = transform
+      ? Math.max(Math.abs(transform.scale.x), Math.abs(transform.scale.y), Math.abs(transform.scale.z), 1e-3)
+      : 1;
+    const r = (diag * MARKER_RADIUS_FRACTION) / maxScale;
+    return Math.min(MARKER_RADIUS_MAX, Math.max(MARKER_RADIUS_MIN, r));
+  }, [activeModel, transform]);
 
   if (!activeModelId || !activeModel || !transform) return null;
 
@@ -140,7 +179,7 @@ export function OrganicCutTool({
         {/* Placed loop points. First point is green (closure target), rest amber. */}
         {loop.map((p, idx) => (
           <mesh key={idx} position={[p.position[0], p.position[1], p.position[2]]} renderOrder={999}>
-            <sphereGeometry args={[LOOP_POINT_RADIUS_MM, 14, 14]} />
+            <sphereGeometry args={[markerRadius, 16, 16]} />
             <meshBasicMaterial color={idx === 0 ? 0x37ff7a : 0xffd24a} depthTest={false} transparent opacity={0.95} />
           </mesh>
         ))}

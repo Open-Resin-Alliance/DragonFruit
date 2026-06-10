@@ -7,6 +7,7 @@
 pub mod analysis;
 pub mod arrangement;
 pub mod core;
+pub mod geodesic;
 pub mod hollowing;
 pub mod io;
 pub mod organic_cut;
@@ -20,6 +21,7 @@ pub use crate::hollowing::{
     HolePunchReport, HolePunchSpec, HollowMode, HollowOptions, HollowOutcome, HollowReport,
     HollowSession, OpenFace,
 };
+pub use crate::geodesic::{surface_loop_from_mesh, surface_loop_positions};
 pub use crate::organic_cut::{
     organic_cut, OrganicCutLoopPoint, OrganicCutOptions, OrganicCutOutcome, OrganicCutReport,
     OrganicCutSpec,

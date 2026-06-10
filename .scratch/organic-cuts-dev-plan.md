@@ -288,6 +288,29 @@ The literal "click every point of a closed loop" interaction is **unworkable**: 
 
 ---
 
+## 8.5 Geodesic loop plan (M3) — current focus
+
+**Status:** flat planar cut works end-to-end (2 points → live plane preview → manifold split → two parts). Now building the surface-following seam.
+
+**Research findings (codebase):**
+- Rust ALREADY has a complete half-edge topology system: `core/halfedge.rs` `Topology::build()` → `edges: AHashMap<EdgeKey, EdgeInfo>` (faces per edge) + `vertex_faces` (one-ring). Every `EdgeKey` is a connected vertex pair → free vertex graph.
+- NO geodesic / surface-walking / barycentric code exists — that's the new work.
+- Frontend has three-mesh-bvh `closestPointToPoint` (point → nearest surface point + faceIndex) for snapping clicks.
+
+**Decisions (locked):**
+- **Two-stage build** (de-risk): Stage 1 = surface-following path via Dijkstra over existing `Topology` (kills the chord-through-mesh problem; slightly faceted, follows edges). Stage 2 = straighten toward a smooth true geodesic (edge-flip / local relaxation) on top of the working pipeline.
+- **Engine = Rust**, reusing `Topology`. New Tauri command returns the loop polyline; frontend renders it + sends it forward to the cut.
+
+**Stage 1 steps (M3a):**
+1. Rust: new `geodesic.rs` — build vertex adjacency from `Topology.edges`, Dijkstra (BinaryHeap) start→goal vertex, Euclidean edge weights. Snap clicked points to nearest vertex (or use faceIndex barycentric later).
+2. Rust: chain waypoints (geodesic segment per consecutive pair) + close loop (last→first).
+3. Tauri command `mesh_geodesic_path(points) -> polyline` (or fold into the cut capture flow).
+4. Frontend: send clicked points (with faceIndex) ; render returned on-surface polyline instead of straight chords.
+
+**Stage 2 steps (M3b):** path-straightening (pull the edge-path taut across faces toward the true geodesic), surface-walking kernel (barycentric + edge crossing).
+
+---
+
 ## 9. Open questions / risks (to resolve as we build)
 
 1. **Geodesic vs. projected chords** between waypoints — start projected; revisit if loops look unnatural.

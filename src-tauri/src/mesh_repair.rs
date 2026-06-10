@@ -17,7 +17,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use dragonfruit_mesh_repair::{
     analyze, classify_support_split, hollow_voxel, io, organic_cut, punch_cylinders, repair,
-    HolePunchOptions, HollowOptions, HollowSession, IndexedMesh, OrganicCutOptions, RepairOptions,
+    surface_loop_from_mesh, HolePunchOptions, HollowOptions, HollowSession, IndexedMesh,
+    OrganicCutOptions, RepairOptions, Vec3,
 };
 use serde::Deserialize;
 use tauri::ipc::Response;
@@ -47,6 +48,8 @@ static ORGANIC_CUT_SOURCE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::ne
 /// Result of the most recent organic cut: the two split parts (LE f32 soup).
 static ORGANIC_CUT_PART_A_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 static ORGANIC_CUT_PART_B_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+/// Most recent geodesic loop polyline (LE f32 positions, 3 per point).
+static ORGANIC_CUT_GEODESIC_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 
 fn hollow_preview_source_mesh() -> &'static Mutex<Option<Arc<IndexedMesh>>> {
     HOLLOW_PREVIEW_SOURCE_MESH.get_or_init(|| Mutex::new(None))
@@ -102,6 +105,10 @@ fn organic_cut_part_a_bytes() -> &'static Mutex<Option<Vec<u8>>> {
 
 fn organic_cut_part_b_bytes() -> &'static Mutex<Option<Vec<u8>>> {
     ORGANIC_CUT_PART_B_BYTES.get_or_init(|| Mutex::new(None))
+}
+
+fn organic_cut_geodesic_bytes() -> &'static Mutex<Option<Vec<u8>>> {
+    ORGANIC_CUT_GEODESIC_BYTES.get_or_init(|| Mutex::new(None))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -178,6 +185,27 @@ fn parse_organic_cut_options(options_json: &str) -> OrganicCutOptions {
     }
 
     serde_json::from_str::<OrganicCutOptions>(options_json).unwrap_or_default()
+}
+
+#[derive(Deserialize)]
+struct GeodesicWaypointDto {
+    position: [f32; 3],
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct GeodesicRequestDto {
+    #[serde(default)]
+    points: Vec<GeodesicWaypointDto>,
+    #[serde(default)]
+    close: bool,
+}
+
+fn parse_geodesic_request(json: &str) -> GeodesicRequestDto {
+    if json.trim().is_empty() {
+        return GeodesicRequestDto::default();
+    }
+    serde_json::from_str::<GeodesicRequestDto>(json).unwrap_or_default()
 }
 
 #[tauri::command]
@@ -806,6 +834,68 @@ pub async fn mesh_organic_cut_read_part_b() -> Result<Response, String> {
         .map_err(|e| format!("organic cut part B lock poisoned: {e}"))?
         .clone()
         .ok_or_else(|| "No organic cut result — run a cut first".to_string())?;
+    Ok(Response::new(bytes))
+}
+
+/// Computes a surface-following (Stage-1 edge-path) loop through the given
+/// waypoints against the captured organic-cut source mesh, and stores the
+/// resulting polyline for read-back. Returns the point count as JSON.
+///
+/// The frontend sends `{ points: [{position:[x,y,z]}...], close: bool }` in the
+/// model's local space (same space as the cut). The returned polyline is LE f32
+/// (3 floats per point) and can be rendered directly as the on-surface seam.
+#[tauri::command]
+pub async fn mesh_organic_cut_geodesic_loop(request_json: String) -> Result<String, String> {
+    let req = parse_geodesic_request(&request_json);
+    if req.points.len() < 2 {
+        // Not enough points yet — clear any stale polyline and report 0.
+        *organic_cut_geodesic_bytes()
+            .lock()
+            .map_err(|e| format!("geodesic lock poisoned: {e}"))? = None;
+        return Ok("{\"pointCount\":0}".to_string());
+    }
+
+    let source_bytes = organic_cut_source_bytes()
+        .lock()
+        .map_err(|e| format!("organic cut source lock poisoned: {e}"))?
+        .clone()
+        .ok_or_else(|| {
+            "No captured source — call mesh_organic_cut_capture_staged_source first".to_string()
+        })?;
+
+    let waypoints: Vec<Vec3> = req
+        .points
+        .iter()
+        .map(|p| Vec3::new(p.position[0], p.position[1], p.position[2]))
+        .collect();
+    let close = req.close;
+
+    let polyline_bytes = tauri::async_runtime::spawn_blocking(move || {
+        let mesh = io::staged::load_positions_le(&source_bytes).map_err(|e| e.to_string())?;
+        let loop_pts = surface_loop_from_mesh(&mesh, &waypoints, close)
+            .ok_or_else(|| "geodesic loop could not be computed".to_string())?;
+        let flat: Vec<f32> = loop_pts.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
+        let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&flat).to_vec();
+        Ok::<_, String>((bytes, loop_pts.len()))
+    })
+    .await
+    .map_err(|e| format!("geodesic task panicked: {e}"))??;
+
+    let (bytes, count) = polyline_bytes;
+    *organic_cut_geodesic_bytes()
+        .lock()
+        .map_err(|e| format!("geodesic lock poisoned: {e}"))? = Some(bytes);
+    Ok(format!("{{\"pointCount\":{count}}}"))
+}
+
+/// Returns the most recent geodesic loop polyline as raw LE f32 bytes.
+#[tauri::command]
+pub async fn mesh_organic_cut_read_geodesic() -> Result<Response, String> {
+    let bytes = organic_cut_geodesic_bytes()
+        .lock()
+        .map_err(|e| format!("geodesic lock poisoned: {e}"))?
+        .clone()
+        .unwrap_or_default();
     Ok(Response::new(bytes))
 }
 

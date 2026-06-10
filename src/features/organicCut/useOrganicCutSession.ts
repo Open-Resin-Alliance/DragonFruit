@@ -15,7 +15,7 @@
 import React from 'react';
 import type { OrganicCutLoopPoint, OrganicCutResult, OrganicCutSessionStatus } from './types';
 import type { OrganicCutPanelState } from './OrganicCutPanel';
-import { cutFromCapturedSource, partToGeometry, stageCutSource } from './meshOrganicCut';
+import { computeGeodesicLoop, cutFromCapturedSource, partToGeometry, stageCutSource } from './meshOrganicCut';
 import { cutPlaneFromPoints } from './cutPlane';
 import type * as THREE from 'three';
 
@@ -56,6 +56,12 @@ export interface OrganicCutSession {
   canCloseLoop: boolean;
   canApply: boolean;
   pointCount: number;
+  /**
+   * Surface-following loop polyline (flat xyz, model-local space) computed by the
+   * Rust geodesic engine, for rendering the seam ON the surface instead of as
+   * straight chords. Null until ≥2 points / outside Tauri.
+   */
+  geodesicPolyline: Float32Array | null;
 }
 
 const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
@@ -75,6 +81,7 @@ export function useOrganicCutSession({
   const [status, setStatus] = React.useState<OrganicCutSessionStatus>('idle');
   const [isApplying, setIsApplying] = React.useState(false);
   const [lastResult, setLastResult] = React.useState<OrganicCutResult | null>(null);
+  const [geodesicPolyline, setGeodesicPolyline] = React.useState<Float32Array | null>(null);
 
   // Mirror loop in a ref so `apply` always reads the CURRENT points regardless of
   // whether the panel is holding a stale memoized `apply` closure. This is the
@@ -113,7 +120,30 @@ export function useOrganicCutSession({
     setLoop([]);
     setStatus('idle');
     setLastResult(null);
+    setGeodesicPolyline(null);
   }, [activeGeometryKey]);
+
+  // Recompute the surface-following loop whenever the points change. Stages the
+  // source mesh (cheap no-op if already staged for this geometry) then asks Rust
+  // for the on-surface polyline. Cancelled if points change again mid-flight.
+  React.useEffect(() => {
+    if (!toolActive || loop.length < 2 || !activeGeometry || !activeGeometryKey) {
+      setGeodesicPolyline(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const staged = await stageCutSource(activeGeometry, activeGeometryKey);
+      if (cancelled || !staged) return;
+      // Close the loop only once there are enough points to form one.
+      const close = loop.length >= 3;
+      const poly = await computeGeodesicLoop(loop, close);
+      if (!cancelled) setGeodesicPolyline(poly);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [toolActive, loop, activeGeometry, activeGeometryKey]);
 
   const addPoint = React.useCallback((point: OrganicCutLoopPoint) => {
     setLoop((prev) => [...prev, point]);
@@ -140,8 +170,6 @@ export function useOrganicCutSession({
     const geom = activeGeometryRef.current;
     const geomKey = activeGeometryKeyRef.current;
     const ps = panelStateRef.current;
-    // eslint-disable-next-line no-console
-    console.info(`[organicCut] apply() entry | loop.length=${currentLoop.length} key=${geomKey} hasGeom=${!!geom}`);
     if (currentLoop.length < MIN_LOOP_POINTS) return;
     if (!geom || !geomKey) return;
     const loopSnapshot = currentLoop.slice();
@@ -150,8 +178,6 @@ export function useOrganicCutSession({
     void (async () => {
       try {
         const staged = await stageCutSource(geom, geomKey);
-        // eslint-disable-next-line no-console
-        console.info(`[organicCut] after stage | staged=${staged} loopSnapshot=${loopSnapshot.length}`);
         if (!staged) {
           // Not in the Tauri runtime (e.g. browser dev) — nothing to do.
           return;
@@ -230,5 +256,6 @@ export function useOrganicCutSession({
     canCloseLoop,
     canApply,
     pointCount,
+    geodesicPolyline,
   };
 }

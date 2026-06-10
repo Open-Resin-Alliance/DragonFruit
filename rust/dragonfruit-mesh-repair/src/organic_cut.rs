@@ -87,7 +87,10 @@ pub struct OrganicCutOutcome {
 struct CutPlane {
     normal: Vec3,
     offset: f32,
-    /// The loop centroid the plane passes through (for diagnostics).
+    /// A representative point the plane passes through (loop centroid/midpoint).
+    /// Kept for diagnostics and future use (e.g. positioning a cutter); not read
+    /// by the current split math.
+    #[allow(dead_code)]
     point: Vec3,
 }
 
@@ -286,19 +289,6 @@ fn organic_cut_plane(
             )
         })?,
     };
-
-    // Diagnostics: report the derived plane and the loop/mesh extents so we can
-    // see at a glance whether the plane actually passes through the body.
-    let bbox = mesh.bbox();
-    let loop_centroid = plane.point;
-    eprintln!(
-        "[dragonfruit-mesh-repair] organic cut: plane n=({:.3},{:.3},{:.3}) offset={:.3} \
-         centroid=({:.2},{:.2},{:.2}) meshBBox min=({:.2},{:.2},{:.2}) max=({:.2},{:.2},{:.2})",
-        plane.normal.x, plane.normal.y, plane.normal.z, plane.offset,
-        loop_centroid.x, loop_centroid.y, loop_centroid.z,
-        bbox.min.x, bbox.min.y, bbox.min.z,
-        bbox.max.x, bbox.max.y, bbox.max.z,
-    );
 
     let src_positions: Vec<f32> = mesh.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
     let src_indices: Vec<u32> = mesh.triangles.iter().flat_map(|t| *t).collect();
