@@ -1364,6 +1364,11 @@ export default function Home() {
 
   // Ref for supports group (used for export)
   const supportsRef = React.useRef<THREE.Group | null>(null);
+  // Hide support geometry in hollowing mode — it just gets in the way.
+  React.useEffect(() => {
+    const hidden = scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing';
+    if (supportsRef.current) supportsRef.current.visible = !hidden;
+  }, [scene.mode, transformMgr.transformMode]);
   // Ref for the drag-wrapper group around supports/rafts (live gizmo transform)
   const supportDragGroupRef = React.useRef<THREE.Group | null>(null);
   const exportThumbnailCaptureRef = React.useRef<(() => Promise<Uint8Array | null>) | null>(null);

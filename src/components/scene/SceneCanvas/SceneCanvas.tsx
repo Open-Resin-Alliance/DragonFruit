@@ -4008,8 +4008,8 @@ export function SceneCanvas({
     });
   }, [buildPlateOpacity, isCameraBelowBuildPlate]);
 
-  const hidePlateContactPrimitives = plateContactCullActive;
-  const hideRaftPrimitives = mode === 'support' && plateContactCullActive;
+  const hidePlateContactPrimitives = plateContactCullActive || (mode === 'prepare' && transformMode === 'hollowing');
+  const hideRaftPrimitives = (mode === 'support' && plateContactCullActive) || (mode === 'prepare' && transformMode === 'hollowing');
   const hideGridHelpers = false;
   const modifyToolActive = mode === 'prepare' && transformMode === 'transform';
   const navigationLodActive = isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting || isLayerScrubbing;
