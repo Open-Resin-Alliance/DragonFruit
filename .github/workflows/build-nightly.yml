@@ -16,6 +16,10 @@ on:
         description: PR number (for fork PR checkout)
         required: false
         type: string
+      release_name:
+        description: Override release name (e.g. "Feature: Test"). Inferred from branch if empty.
+        required: false
+        type: string
   issue_comment:
     types:
       - created
@@ -120,6 +124,26 @@ jobs:
               core.info(`PR is from a fork (${pr.head.repo.full_name}) — will dispatch on base ref.`);
             }
 
+      - name: Extract custom release name from comment
+        id: extract_name
+        if: steps.check_access.outputs.result == 'granted'
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            const body = context.payload.comment.body;
+            // Everything after "/nightly " (with trailing space) is the custom name
+            const prefix = '/nightly';
+            if (body.startsWith(prefix)) {
+              const rest = body.slice(prefix.length).trim();
+              if (rest) {
+                core.info(`Custom release name detected: "${rest}"`);
+                return rest;
+              }
+            }
+            core.info('No custom release name in comment.');
+            return '';
+
       - name: Add nightly-build label
         if: steps.check_access.outputs.result == 'granted'
         env:
@@ -134,12 +158,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_BRANCH: ${{ steps.pr_info.outputs.head_ref }}
           BASE_BRANCH: ${{ steps.pr_info.outputs.base_ref }}
+          RELEASE_NAME: ${{ steps.extract_name.outputs.result }}
         run: |
-          gh workflow run build-nightly.yml \
-            --repo "${{ github.repository }}" \
-            --ref "$BASE_BRANCH" \
-            -f branch="$HEAD_BRANCH" \
-            -f pr_number="${{ github.event.issue.number }}"
+          CMD="gh workflow run build-nightly.yml \
+            --repo \"${{ github.repository }}\" \
+            --ref \"$BASE_BRANCH\" \
+            -f branch=\"$HEAD_BRANCH\" \
+            -f pr_number=\"${{ github.event.issue.number }}\""
+
+          if [[ -n "$RELEASE_NAME" ]]; then
+            CMD="$CMD -f release_name=\"$RELEASE_NAME\""
+          fi
+
+          eval "$CMD"
 
       - name: Acknowledge activation
         if: steps.check_access.outputs.result == 'granted'
@@ -200,6 +231,8 @@ jobs:
       - name: Derive release metadata
         id: meta
         shell: bash
+        env:
+          RELEASE_NAME_OVERRIDE: ${{ inputs.release_name }}
         run: |
           version="$(node -p "require('./package.json').version")"
           commit_hash="$(git rev-parse --short HEAD)"
@@ -210,24 +243,34 @@ jobs:
           safe_branch="${branch_name//\//_}"
 
           # Human-readable release name
-          human_name="$branch_name"
-          case "$branch_name" in
-            feat/*) human_name="Feature: ${branch_name#feat/}" ;;
-            fix/*)  human_name="Fix: ${branch_name#fix/}" ;;
-            chore/*) human_name="Chore: ${branch_name#chore/}" ;;
-            refactor/*) human_name="Refactor: ${branch_name#refactor/}" ;;
-            docs/*) human_name="Docs: ${branch_name#docs/}" ;;
-            perf/*) human_name="Perf: ${branch_name#perf/}" ;;
-            ci/*)   human_name="CI: ${branch_name#ci/}" ;;
-            *)      human_name="Nightly: ${branch_name}" ;;
-          esac
+          if [[ -n "$RELEASE_NAME_OVERRIDE" ]]; then
+            human_name="$RELEASE_NAME_OVERRIDE"
+          else
+            human_name="$branch_name"
+            case "$branch_name" in
+              feat/*) human_name="Feature: ${branch_name#feat/}" ;;
+              fix/*)  human_name="Fix: ${branch_name#fix/}" ;;
+              chore/*) human_name="Chore: ${branch_name#chore/}" ;;
+              refactor/*) human_name="Refactor: ${branch_name#refactor/}" ;;
+              docs/*) human_name="Docs: ${branch_name#docs/}" ;;
+              perf/*) human_name="Perf: ${branch_name#perf/}" ;;
+              ci/*)   human_name="CI: ${branch_name#ci/}" ;;
+              *)      human_name="Nightly: ${branch_name}" ;;
+            esac
 
-          # Capitalize the descriptive part
-          rest="${human_name#*: }"
-          prefix="${human_name%%: *}"
-          first_char="$(printf '%s' "${rest:0:1}" | tr '[:lower:]' '[:upper:]')"
-          capitalized="${first_char}${rest:1}"
-          human_name="${prefix}: ${capitalized}"
+            # Replace underscores and hyphens with spaces, then title-case each word
+            rest="${human_name#*: }"
+            prefix="${human_name%%: *}"
+            rest="${rest//_/ }"
+            rest="${rest//-/ }"
+            capitalized=""
+            for word in $rest; do
+              first="$(printf '%s' "${word:0:1}" | tr '[:lower:]' '[:upper:]')"
+              capitalized="${capitalized}${first}${word:1} "
+            done
+            capitalized="${capitalized% }"
+            human_name="${prefix}: ${capitalized}"
+          fi
 
           release_tag="nightly_${safe_branch}"
 
