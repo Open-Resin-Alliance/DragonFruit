@@ -95,6 +95,23 @@ export const LeafRenderer = React.memo(function LeafRenderer({
         const branchFamilyHeld = branchPlacementStore.getSnapshot().altActive
             || isSupportPlacementBindingSatisfiedByModifierState(branchFamilyBinding, getSupportPlacementModifierState(e));
         if (branchFamilyHeld) {
+            // Brace tool: dispatch brace-leaf-click so a brace endpoint can attach
+            // to this leaf's cone. (For an unselected leaf the cone is in the batched
+            // scene mesh and SupportRenderer dispatches this; a selected leaf renders
+            // its own cone here, so dispatch from this handler too.)
+            e.stopPropagation();
+            if (e.nativeEvent) {
+                e.nativeEvent.stopPropagation?.();
+                e.nativeEvent.stopImmediatePropagation?.();
+            }
+
+            window.dispatchEvent(new CustomEvent('brace-leaf-click', {
+                detail: {
+                    leafId: leaf.id,
+                    point: e.point ? { x: e.point.x, y: e.point.y, z: e.point.z } : null,
+                    intersection: e,
+                },
+            }));
             return;
         }
 
