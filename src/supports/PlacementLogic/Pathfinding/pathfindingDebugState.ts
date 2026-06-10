@@ -181,3 +181,12 @@ export function setPotentialFieldTuning(tuning: Partial<PotentialFieldDebugTunin
     };
     emit();
 }
+
+// ---------- Performance diagnostics bridge ----------
+
+export {
+    getPerfReport,
+    getPerfSummary,
+    configurePerf as setPathfindingPerfConfig,
+    resetPerf as resetPathfindingPerf,
+} from './pathfindingPerf';

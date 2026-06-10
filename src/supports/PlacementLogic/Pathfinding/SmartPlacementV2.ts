@@ -37,6 +37,7 @@ import {
     type SupportPathfindingDebugEvent,
     type SupportPathfindingDebugOutcome,
 } from './pathfindingDebugState';
+import { perfMark, perfMeasureWithSpike } from './pathfindingPerf';
 import {
     distanceXY,
     distance3D,
@@ -103,11 +104,11 @@ const STRAIGHT_SOCKET_RESCUE_RADII_MM = [0, 0.5, 1, 1.5, 2, 3, 4, 6, 8];
 const STRAIGHT_SOCKET_RESCUE_DIRECTIONS = 16;
 const MIXED_SOCKET_RESCUE_RADII_MM = [0, 0.5, 1, 1.5, 2, 3, 4, 5, 6, 8, 10, 12];
 const MIXED_SOCKET_RESCUE_DIRECTIONS = 8;
-const MIXED_SOCKET_RESCUE_JOINT_RADII_MM = [0, 0.6, 1.2, 1.8];
-const MIXED_SOCKET_RESCUE_JOINT_DIRECTIONS = 12;
-const MIXED_SOCKET_RESCUE_JOINT_Z_STEP_MM = 2.0;
-const MIXED_SOCKET_RESCUE_NOMINAL_JOINT_RADII_MM = [0, 0.5, 1, 1.5, 2.2, 3.0, 3.8];
-const MIXED_SOCKET_RESCUE_NOMINAL_JOINT_Z_STEP_MM = 1.0;
+const MIXED_SOCKET_RESCUE_JOINT_RADII_MM = [0, 0.8, 1.6];
+const MIXED_SOCKET_RESCUE_JOINT_DIRECTIONS = 8;
+const MIXED_SOCKET_RESCUE_JOINT_Z_STEP_MM = 4.0;
+const MIXED_SOCKET_RESCUE_NOMINAL_JOINT_RADII_MM = [0, 0.6, 1.2, 2.0];
+const MIXED_SOCKET_RESCUE_NOMINAL_JOINT_Z_STEP_MM = 1.5;
 const BASE_WIDE_PASS_EXPANSIONS_AT_2MM = 400;
 const BASE_PREVIEW_WIDE_PASS_EXPANSIONS_AT_2MM = 150;
 const ENABLE_AGGRESSIVE_POST_PATH_STRAIGHTENING = false;
@@ -625,20 +626,13 @@ function contactConeBlocked(args: {
     const dirY = end.y - start.y;
     const dirZ = end.z - start.z;
 
-    // Optional physical raycast gate
-    if (args.mesh) {
-        const avgRadius = (cone.coneStartRadiusMm + cone.coneEndRadiusMm) / 2 + CONTACT_CONE_COLLISION_SAFETY_MM;
-        const normX = dirX / length;
-        const normY = dirY / length;
-        const normZ = dirZ / length;
-        const tipIgnoreOffset = new THREE.Vector3(normX, normY, normZ).multiplyScalar(CONTACT_CONE_TIP_IGNORE_MM);
-        const rayStart = new THREE.Vector3(start.x, start.y, start.z).add(tipIgnoreOffset);
-        const rayEnd = new THREE.Vector3(end.x, end.y, end.z);
-        if (checkShaftCollision(rayStart, rayEnd, avgRadius, args.mesh).hit) {
-            return true;
-        }
-    }
-
+    // SDF sample loop — samples points along the cone axis and checks each
+    // against the signed distance field.  The old raycast gate (checkShaftCollision
+    // with THREE.Raycaster) was removed: it swapped the mesh material on every
+    // call, modifying the scene graph, and this was called up to 168 times per
+    // cone rescue frame (168 material swaps + 1500+ ray intersection tests).
+    // The signed-distance check is sufficient — it correctly detects inside/outside
+    // via face-normal dot product, and is fast (1 cached BVH query per sample).
     const minStep = Math.max(
         Math.min(CONTACT_CONE_COLLISION_SAMPLE_STEP_MM, args.sdf.cellSize * 0.8),
         0.1,
@@ -1050,7 +1044,7 @@ export function findMixedSocketRescueCandidate(args: {
                 : MIXED_SOCKET_RESCUE_JOINT_Z_STEP_MM;
             const jointRadii = preferNominalReachAround
                 ? MIXED_SOCKET_RESCUE_NOMINAL_JOINT_RADII_MM
-                : MIXED_SOCKET_RESCUE_NOMINAL_JOINT_RADII_MM;
+                : MIXED_SOCKET_RESCUE_JOINT_RADII_MM;
             const availableDrop = candidateSocketPos.z - args.rootTopZ;
 
             if (availableDrop > jointZStepMm + 0.000001 && !skipJointSearch) {
@@ -1850,6 +1844,7 @@ export function calculateSmartPlacementV2(
     const ROUTING_ANGLE_FROM_VERTICAL_DEG = 60;
 
     // 1. Standard placement (baseline — no collision check)
+    perfMark('trunk:v2-setup');
     const standard = calculateStandardPlacement(input);
     if (standard.error === 'ANGLE_TOO_STEEP') {
         return standard;
@@ -2188,9 +2183,13 @@ export function calculateSmartPlacementV2(
     };
 
     let activeConeClear = coneClear;
+    perfMeasureWithSpike('trunk:v2-setup', 'trunk:v2-setup');
     if (!coneClear) {
+        perfMark('trunk:cone-rescue');
         const skipDiscreteRescues = routingAlgorithm === 'potential';
+        perfMark('trunk:cone-rescue:jointed');
         const mixedSocketRescue = skipDiscreteRescues ? null : getJointedMixedSocketRescueFallback();
+        perfMeasureWithSpike('trunk:cone-rescue:jointed', 'trunk:cone-rescue:jointed');
         if (mixedSocketRescue) {
             setDebugOutcome('fallback', 'cone-blocked jointed rescue');
             if (debugEnabled) {
@@ -2225,7 +2224,9 @@ export function calculateSmartPlacementV2(
             };
         }
 
+        perfMark('trunk:cone-rescue:seed');
         const coneClearSeed = getConeClearSocketSeed();
+        perfMeasureWithSpike('trunk:cone-rescue:seed', 'trunk:cone-rescue:seed');
         const rescuedSocketPos = coneClearSeed?.socketPos ?? null;
 
         if (rescuedSocketPos) {
@@ -2277,6 +2278,7 @@ export function calculateSmartPlacementV2(
             }));
         }
     }
+    perfMeasureWithSpike('trunk:cone-rescue', 'trunk:cone-rescue');
 
     // Preflight check results — declared early so the debug snapshot closure
     // can capture them.  Initialised to false; overwritten before A* runs.
@@ -2284,9 +2286,11 @@ export function calculateSmartPlacementV2(
     let rootsFitStandard = false;
     // early-outs, so preview no longer needs the old coarse approximations —
     // the accurate versions are fast in open space and equally accurate.
+    perfMark('trunk:preflight');
     straightClear = !raycastSegmentBlockedBetween(socketPos, { x: socketPos.x, y: socketPos.y, z: rootTopZ });
     const baseXY: Vec3 = { x: socketPos.x, y: socketPos.y, z: 0 };
     rootsFitStandard = !rootsDiskBlockedAt(baseXY.x, baseXY.y);
+    perfMeasureWithSpike('trunk:preflight', 'trunk:preflight');
 
     if (!isPreview) {
         console.log(`[SmartPlacementV2] called — nominalSocket=(${nominalSocketPos.x.toFixed(2)},${nominalSocketPos.y.toFixed(2)},${nominalSocketPos.z.toFixed(2)}) activeSocket=(${socketPos.x.toFixed(2)},${socketPos.y.toFixed(2)},${socketPos.z.toFixed(2)}) rootTopZ=${rootTopZ.toFixed(2)} nominalConeClear=${coneClear} activeConeClear=${activeConeClear} straightClear=${straightClear} rootsFit=${rootsFitStandard}`);
@@ -2328,7 +2332,9 @@ export function calculateSmartPlacementV2(
     //     This catches interior positions where the cone-clear seed search
     //     already failed and A* is very unlikely to escape the cavity within
     //     the preview budget.  Single SDF query vs ~15k for a full A* run.
+    perfMark('trunk:pre-a-star');
     if (isPreview && sdf.distanceAt(socketPos.x, socketPos.y, socketPos.z) < -1.5) {
+        perfMeasureWithSpike('trunk:pre-a-star', 'trunk:pre-a-star');
         addBlockedReason('Socket deep inside model — preview fast-fail');
         setDebugOutcome('blocked', 'socket deep inside model');
         recordDebugEvent(() => ({
@@ -2352,6 +2358,7 @@ export function calculateSmartPlacementV2(
     //     with a narrower search and may be stale — bypass the cache entirely.
     if (maxTotalLateralMm <= STAGNATION_CACHE_MAX_TRUSTED_ENVELOPE_MM + 0.5
         && isNearStagnationPoint(mesh.uuid, socketPos)) {
+        perfMeasureWithSpike('trunk:pre-a-star', 'trunk:pre-a-star');
         addBlockedReason('Nearby stagnation cache hit');
         setDebugOutcome('blocked', 'nearby stagnation cache');
         publishPathfindingDebugSnapshot();
@@ -2362,6 +2369,7 @@ export function calculateSmartPlacementV2(
     // Uses a tighter radius (PREVIEW_EXHAUSTED_RADIUS_SQ = 0.5mm) so we only
     // skip positions essentially identical to a previous exhausted query.
     if (context?.isPreview && isNearSpatialPoint(previewExhaustedCache, mesh.uuid, socketPos, PREVIEW_EXHAUSTED_RADIUS_SQ)) {
+        perfMeasureWithSpike('trunk:pre-a-star', 'trunk:pre-a-star');
         addBlockedReason('Nearby preview query already exhausted expansion budget');
         setDebugOutcome('blocked', 'nearby preview budget exhausted');
         publishPathfindingDebugSnapshot();
@@ -2386,6 +2394,7 @@ export function calculateSmartPlacementV2(
     // giving 600-expansion preview A* a good starting frontier without polluting
     // the full map with endpoint-only states. Parity re-runs pass warmStart:null
     // explicitly via context so they always start clean.
+    perfMeasureWithSpike('trunk:pre-a-star', 'trunk:pre-a-star');
     const warmStart = context?.warmStart !== undefined
         ? context.warmStart
         : isPreview
@@ -2477,6 +2486,7 @@ export function calculateSmartPlacementV2(
             debug: undefined,
         };
     } else {
+        perfMark('astar:fine');
         result = gridAStar(sdf, socketPos, rootTopZ, {
             clearanceMm: clearance,
             shaftRadius: shaftRadius,
@@ -2500,6 +2510,7 @@ export function calculateSmartPlacementV2(
             debugLabel: 'fine',
             captureDebug: debugEnabled,
         }, warmStart);
+        perfMeasureWithSpike('astar:fine', 'trunk:astar');
     }
     if (debugEnabled && result.debug) {
         debugPasses = [result.debug];
@@ -2528,6 +2539,7 @@ export function calculateSmartPlacementV2(
     // Only retry if we didn't already reach a goal — don't double-process successes.
     // Wide-step fallback — uses endpoint-only checks and reduced budget for speed.
     if (!result.reached && settings.shaft.routingAlgorithm !== 'potential') {
+        perfMark('astar:wide');
         const wideResult = gridAStar(sdf, socketPos, rootTopZ, {
             clearanceMm: clearance,
             shaftRadius: shaftRadius,
@@ -2546,6 +2558,7 @@ export function calculateSmartPlacementV2(
             debugLabel: 'wide',
             captureDebug: debugEnabled,
         }, null); // always cold-start wide search (different grid quantisation)
+        perfMeasureWithSpike('astar:wide', 'trunk:astar:wide');
         if (debugEnabled && wideResult.debug) {
             debugPasses = [...debugPasses, wideResult.debug];
         }

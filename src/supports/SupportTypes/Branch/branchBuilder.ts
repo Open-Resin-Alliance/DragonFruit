@@ -10,6 +10,7 @@ import { getJointDiameter } from '../../constants';
 import { resolveConeAxisPolicy } from '../../PlacementLogic/ConeAxisPolicy';
 import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
 import { isCollisionFrustumBlocked } from '../../PlacementLogic/CollisionAvoidance';
+import { perfMark, perfMeasureWithSpike } from '../../PlacementLogic/Pathfinding/pathfindingPerf';
 
 const BRANCH_CONE_COLLISION_SAFETY_MM = 0.3;
 // Branch socket search: polar angles from surface normal.  Capped at 30°
@@ -305,6 +306,7 @@ export function buildBranchData(input: BranchBuildInput): BranchBuildResult {
 
     const shaftDiameter = settings.shaft.diameterMm;
     const jointDiameter = getJointDiameter(shaftDiameter);
+    perfMark('branch:cone-search');
     const { cone: authoredCone, socketPos, rerouted } = findBestBranchConePlacement({
         tipPos,
         tipNormal,
@@ -312,6 +314,7 @@ export function buildBranchData(input: BranchBuildInput): BranchBuildResult {
         tipProfile,
         mesh,
     });
+    perfMeasureWithSpike('branch:cone-search', 'branch:cone-search');
 
     const socketJoint: Joint = {
         id: uuid(),

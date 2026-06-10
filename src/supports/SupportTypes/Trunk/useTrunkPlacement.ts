@@ -13,6 +13,7 @@ import { getSettings } from '../../Settings';
 import { decideGridPlacement } from '../../PlacementLogic/Grid';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
+import { perfMark, perfMeasureWithSpike, perfEndFrame } from '../../PlacementLogic/Pathfinding/pathfindingPerf';
 import { buildStick } from '../Stick/stickBuilder';
 import { buildTwig } from '../Twig/twigBuilder';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
@@ -296,6 +297,7 @@ export function useTrunkPlacementV2() {
 
         const tipPos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
 
+        perfMark('hover:total');
         const settings = getSettings();
         const isGridMode = Boolean(settings.grid?.enabled && settings.grid.spacingMm > 0);
 
@@ -304,7 +306,10 @@ export function useTrunkPlacementV2() {
         // Feeding the mesh here starts the flexible A* router, which is the
         // wrong cost model for hover on a fixed lattice.
         const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
+
+        perfMark('hover:trunk-build');
         const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh: isGridMode ? undefined : mesh, isPreview: true });
+        perfMeasureWithSpike('hover:trunk-build', 'trunk:build');
 
         // Fast-path for cavity hover when the trunk can't route to the build
         // plate: try a stick/twig bridge to the nearest surface below the tip.
@@ -312,11 +317,14 @@ export function useTrunkPlacementV2() {
         // (e.g. tip inside a "mouth" cavity where the straight path is blocked).
         if (!isGridMode && (result.error || result.stagnated || result.exhaustedBudget)) {
             if (mesh) {
+                perfMark('hover:cavity-stick');
                 const cavityStick = resolveCavityStickPreview(hit, tipPos, tipNormal, modelId, mesh);
+                perfMeasureWithSpike('hover:cavity-stick', 'branch:cavity-stick');
                 if (cavityStick) {
                     setPreviewData(cavityStick.supportData);
                     setPreviewError(null);
                     setPreviewWarning(null);
+                    perfEndFrame();
                     return;
                 }
             }
@@ -325,12 +333,14 @@ export function useTrunkPlacementV2() {
                 setPreviewData(result.supportData);
                 setPreviewError(forcePlaceOverrideRef.current ? null : (result.error || null));
                 setPreviewWarning(null);
+                perfEndFrame();
                 return;
             }
             // For non-stagnation errors, fall through to grid placement decision
             // (which may still place a branch or reject).
         }
 
+        perfMark('hover:grid-decision');
         const decision = decideGridPlacement({
             settings,
             snapshot: getSnapshot(),
@@ -340,11 +350,13 @@ export function useTrunkPlacementV2() {
             modelId,
             mesh,
         });
+        perfMeasureWithSpike('hover:grid-decision', 'grid:decision');
 
         if (decision.kind === 'place_trunk') {
             setPreviewData(decision.trunkBuild.supportData);
             setPreviewError(forcePlaceOverrideRef.current ? null : (decision.trunkBuild.error || null));
             setPreviewWarning(decision.trunkBuild.warning || null);
+            perfEndFrame();
             return;
         }
 
@@ -352,6 +364,7 @@ export function useTrunkPlacementV2() {
             setPreviewData(decision.trunkBuild.supportData);
             setPreviewError(forcePlaceOverrideRef.current ? null : (decision.trunkBuild.error || null));
             setPreviewWarning(decision.trunkBuild.warning || null);
+            perfEndFrame();
             return;
         }
 
@@ -359,6 +372,7 @@ export function useTrunkPlacementV2() {
             setPreviewData(decision.supportData);
             setPreviewError(null);
             setPreviewWarning(null);
+            perfEndFrame();
             return;
         }
 
@@ -366,6 +380,7 @@ export function useTrunkPlacementV2() {
             setPreviewData(decision.supportData);
             setPreviewError(null);
             setPreviewWarning(null);
+            perfEndFrame();
             return;
         }
 
@@ -373,6 +388,7 @@ export function useTrunkPlacementV2() {
             setPreviewData(decision.supportData);
             setPreviewError(null);
             setPreviewWarning(null);
+            perfEndFrame();
             return;
         }
 
@@ -381,6 +397,7 @@ export function useTrunkPlacementV2() {
             setPreviewData(decision.trunkBuild.supportData);
             setPreviewError(forcePlaceOverrideRef.current ? null : (decision.trunkBuild.error || null));
             setPreviewWarning(decision.trunkBuild.warning || null);
+            perfEndFrame();
             return;
         }
 
@@ -394,6 +411,7 @@ export function useTrunkPlacementV2() {
                     : null
         );
         setPreviewWarning((prev) => (prev === null ? prev : null));
+        perfEndFrame();
     }, [HOVER_MIN_INTERVAL_MS, HOVER_NORMAL_DOT_MIN, HOVER_POS_EPSILON_MM, clearPreview, isPlacementHardDisabled, resolveCavityStickPreview]);
 
     useEffect(() => {

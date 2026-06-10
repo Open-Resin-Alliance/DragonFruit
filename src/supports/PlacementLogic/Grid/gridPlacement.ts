@@ -19,6 +19,7 @@ import * as THREE from 'three';
 import { generateUuid } from '../../../utils/uuid';
 import { buildAnchorData } from '../../SupportTypes/Anchor/anchorBuilder';
 import { buildLeafData } from '../../SupportTypes/Leaf/leafBuilder';
+import { perfMark, perfMeasureWithSpike } from '../Pathfinding/pathfindingPerf';
 
 const MIN_TRUNK_CLEARANCE_MM = 0.05;
 const ANCHOR_HEIGHT_THRESHOLD_MM = 5.0;
@@ -471,7 +472,9 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
             nodeKey,
         );
     if (!host) {
+        perfMark('grid:trunk-collision');
         const collidesWithGroundRoute = Boolean(mesh && trunkCollidesWithMesh(snappedCandidate, settings, mesh));
+        perfMeasureWithSpike('grid:trunk-collision', 'grid:collision-check');
         if (!collidesWithGroundRoute) {
             return {
                 kind: 'place_trunk',
@@ -521,6 +524,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
     }
 
     // --- Step 1: Attach to the co-located host. ---
+    perfMark('grid:attach-search');
     const selectedKnot = selectHighestValidAttachment({
         hostTrunk: host.trunk,
         hostRoot: host.root,
@@ -532,6 +536,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
         tipNormal,
         modelId,
     });
+    perfMeasureWithSpike('grid:attach-search', 'grid:attachment-search');
 
     if (!selectedKnot) {
         return {
@@ -548,6 +553,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
     }
 
     // --- Step 2: Build branch on the fixed node. ---
+    perfMark('grid:branch-build');
     const { branch, supportData } = buildBranchData({
         tipPos,
         tipNormal,
@@ -555,6 +561,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
         parentKnot: selectedKnot,
         mesh,
     });
+    perfMeasureWithSpike('grid:branch-build', 'branch:build');
 
     const hostTrunkContactZ = host.trunk.contactCone?.pos.z ?? Number.NEGATIVE_INFINITY;
     const candidateContactZ = tipPos.z;
