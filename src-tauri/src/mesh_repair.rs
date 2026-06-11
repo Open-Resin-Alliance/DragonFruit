@@ -227,10 +227,18 @@ struct GeodesicRequestDto {
     /// the cut density live.
     #[serde(default = "default_density_one")]
     density: f32,
+    /// Cutter thickness in mm. Default 0.1 (the cut's default kerf). Lets the
+    /// cutter preview show the REAL slab thickness, not a zero-width sheet.
+    #[serde(default = "default_thickness_tenth")]
+    thickness_mm: f32,
 }
 
 fn default_density_one() -> f32 {
     1.0
+}
+
+fn default_thickness_tenth() -> f32 {
+    0.1
 }
 
 impl Default for GeodesicRequestDto {
@@ -241,6 +249,7 @@ impl Default for GeodesicRequestDto {
             smoothing: 0.5,
             membrane_smoothing: 0.5,
             density: 1.0,
+            thickness_mm: 0.1,
         }
     }
 }
@@ -1022,14 +1031,36 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
         .collect();
     let membrane_smoothing = req.membrane_smoothing;
     let density = req.density;
+    let thickness_mm = req.thickness_mm;
+
+    // Use the captured cut SOURCE mesh so the preview can apply the real loop
+    // offset (needs surface normals) and show the REAL cutter slab — exactly what
+    // cuts. Falls back to the bare-membrane preview if no source is captured yet.
+    let source_bytes = organic_cut_source_bytes()
+        .lock()
+        .map_err(|e| format!("organic cut source lock poisoned: {e}"))?
+        .clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let soup = dragonfruit_mesh_repair::membrane::build_membrane_preview_soup_full(
-            &loop_pts,
-            membrane_smoothing,
-            density,
-        )
-        .ok_or_else(|| "membrane could not be built from the loop".to_string())?;
+        let soup = if let Some(bytes) = source_bytes {
+            let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+            dragonfruit_mesh_repair::membrane::build_cutter_preview_soup(
+                &mesh,
+                &loop_pts,
+                thickness_mm,
+                membrane_smoothing,
+                density,
+            )
+            .ok_or_else(|| "cutter could not be built from the loop".to_string())?
+        } else {
+            // No captured source yet → bare membrane on the raw loop (no offset).
+            dragonfruit_mesh_repair::membrane::build_membrane_preview_soup_full(
+                &loop_pts,
+                membrane_smoothing,
+                density,
+            )
+            .ok_or_else(|| "membrane could not be built from the loop".to_string())?
+        };
         let tri_count = soup.len() / 9;
         let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&soup).to_vec();
         Ok::<_, String>((bytes, tri_count))

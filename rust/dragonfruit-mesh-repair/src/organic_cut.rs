@@ -624,15 +624,18 @@ mod tests {
     #[cfg(feature = "manifold")]
     #[test]
     fn contour_mode_splits_cube_with_membrane_engine() {
-        // Contour mode + a loop tracing the cube's equator → membrane cut →
-        // two parts, engine="membrane".
+        // Contour mode + a DENSE loop tracing the cube's equator (like a real
+        // surface loop, not 4 points on hard edges) → membrane cut → two parts,
+        // engine="membrane".
         let mesh = IndexedMesh::from_triangle_soup(&cube_soup(10.0), 1e-6);
-        let loop_points = vec![
-            OrganicCutLoopPoint { position: [0.0, 0.0, 5.0], normal: [0.0; 3] },
-            OrganicCutLoopPoint { position: [10.0, 0.0, 5.0], normal: [0.0; 3] },
-            OrganicCutLoopPoint { position: [10.0, 10.0, 5.0], normal: [0.0; 3] },
-            OrganicCutLoopPoint { position: [0.0, 10.0, 5.0], normal: [0.0; 3] },
-        ];
+        let steps = 8;
+        let z = 5.0_f32;
+        let f = |i: usize| 10.0_f32 * i as f32 / steps as f32;
+        let mut loop_points = Vec::new();
+        for i in 0..steps { loop_points.push(OrganicCutLoopPoint { position: [f(i), 0.0, z], normal: [0.0; 3] }); }
+        for i in 0..steps { loop_points.push(OrganicCutLoopPoint { position: [10.0, f(i), z], normal: [0.0; 3] }); }
+        for i in 0..steps { loop_points.push(OrganicCutLoopPoint { position: [10.0 - f(i), 10.0, z], normal: [0.0; 3] }); }
+        for i in 0..steps { loop_points.push(OrganicCutLoopPoint { position: [0.0, 10.0 - f(i), z], normal: [0.0; 3] }); }
         let options = OrganicCutOptions {
             cut: OrganicCutSpec {
                 loop_points,

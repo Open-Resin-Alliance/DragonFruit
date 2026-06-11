@@ -134,8 +134,8 @@ pub fn build_membrane_full(
     // one triangle so every neighbour agrees.
     orient_membrane(&mut membrane);
     // Minimal-surface relaxation bows the (flat) grid to follow the loop contour.
-    // `smoothing` scales the pass count: 0.5 → 60 (original), 0 → none, 1 → 120.
-    let passes = (smoothing.clamp(0.0, 1.0) * 120.0).round() as usize;
+    // `smoothing` scales the pass count: 0.5 → 60 (original), 1 → 120, 2 → 240.
+    let passes = (smoothing.clamp(0.0, 2.0) * 120.0).round() as usize;
     if passes > 0 {
         relax(&mut membrane, passes, 0.5);
     }
@@ -1831,6 +1831,137 @@ fn concat_meshes(meshes: Vec<IndexedMesh>) -> IndexedMesh {
 }
 
 
+/// Band half-width for [`refine_model_near_slab`], as a fraction of the model
+/// bbox diagonal — how far from the cutter slab a model triangle must be to get
+/// subdivided. Wide enough to catch every triangle the cut crosses.
+pub const DEFAULT_REFINE_BAND_FRACTION: f32 = 0.02;
+
+/// Target edge length for refined band triangles, as a fraction of the model bbox
+/// diagonal. Band edges are split until below this (or the level cap). Smaller =
+/// smoother cut edge, more triangles.
+pub const DEFAULT_REFINE_TARGET_FRACTION: f32 = 0.006;
+
+/// Max subdivision levels [`refine_model_near_slab`] applies — a hard cap so a
+/// coarse model near a small cut can't explode the triangle count.
+pub const DEFAULT_REFINE_MAX_LEVELS: u32 = 4;
+
+/// Subdivide the model's triangles in a thin band around the cutter SLAB, BEFORE
+/// the boolean, so the boolean has fine model triangles to clip → a smoother cut
+/// edge (less of the coarse low-poly ridge along the seam).
+///
+/// This is pure conforming 1→4 midpoint subdivision: an edge is split iff BOTH
+/// endpoints lie within `band` of the slab AND it is longer than `target`. The
+/// midpoint of each split edge is created ONCE in a map keyed by the undirected
+/// edge, so every triangle sharing that edge uses the SAME midpoint — the result
+/// is watertight by construction (no T-junctions, no cross-mesh stitching, so it
+/// cannot break the manifold boolean the way conforming-to-the-cutter would).
+/// Only band triangles change; the rest of the model is returned verbatim.
+pub fn refine_model_near_slab(
+    mesh: &IndexedMesh,
+    slab: &IndexedMesh,
+    band: f32,
+    target: f32,
+    max_levels: u32,
+) -> IndexedMesh {
+    if mesh.triangles.is_empty() || slab.positions.is_empty() || max_levels == 0 {
+        return mesh.clone();
+    }
+    let band = band.max(1e-5);
+    let target = target.max(1e-5);
+    let band_sq = band * band;
+
+    // Spatial hash of the slab vertices (cell = band) for an O(1) "is this point
+    // within `band` of the slab?" test. The slab densely samples exactly where the
+    // cut crosses the surface, so proximity to a slab vertex ≈ "the cut passes
+    // near here".
+    let inv_cell = 1.0 / band;
+    let mut grid: ahash::AHashMap<(i32, i32, i32), smallvec::SmallVec<[Vec3; 4]>> =
+        ahash::AHashMap::new();
+    for &p in &slab.positions {
+        let key = (
+            (p.x * inv_cell).floor() as i32,
+            (p.y * inv_cell).floor() as i32,
+            (p.z * inv_cell).floor() as i32,
+        );
+        grid.entry(key).or_default().push(p);
+    }
+    let near_slab = |p: Vec3| -> bool {
+        let (cx, cy, cz) = (
+            (p.x * inv_cell).floor() as i32,
+            (p.y * inv_cell).floor() as i32,
+            (p.z * inv_cell).floor() as i32,
+        );
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(bucket) = grid.get(&(cx + dx, cy + dy, cz + dz)) {
+                        for &q in bucket {
+                            if p.sub(q).dot(p.sub(q)) <= band_sq {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        false
+    };
+
+    let mut positions = mesh.positions.clone();
+    let mut triangles = mesh.triangles.clone();
+
+    for _level in 0..max_levels {
+        // Split set: undirected edge → its (single, shared) midpoint vertex index.
+        // The split decision is a property of the EDGE alone (its midpoint near the
+        // slab + length), so every triangle sharing the edge makes the same call —
+        // that's what keeps the result watertight. We test the MIDPOINT (not the
+        // endpoints): a big model triangle can straddle the cut with both corners
+        // far away, so endpoint-proximity would miss it — the midpoint lands on the
+        // seam, which is exactly where we want the resolution.
+        let mut mid_of: ahash::AHashMap<(u32, u32), u32> = ahash::AHashMap::new();
+        for t in &triangles {
+            for &(u, v) in &[(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                let k = if u < v { (u, v) } else { (v, u) };
+                if mid_of.contains_key(&k) {
+                    continue;
+                }
+                let pu = positions[u as usize];
+                let pv = positions[v as usize];
+                let len = pu.sub(pv).length();
+                if len <= target {
+                    continue;
+                }
+                let mp = pu.add(pv).scale(0.5);
+                if !near_slab(mp) {
+                    continue; // edge doesn't pass near the cut → leave it
+                }
+                let idx = positions.len() as u32;
+                positions.push(mp);
+                mid_of.insert(k, idx);
+            }
+        }
+        if mid_of.is_empty() {
+            break;
+        }
+
+        // Rebuild every triangle by how many of its edges were split (adaptive
+        // 1→2/3/4, conforming — shared split edges use the SAME midpoint).
+        let old = std::mem::take(&mut triangles);
+        let mut next: Vec<[u32; 3]> = Vec::with_capacity(old.len() * 2);
+        for t in old {
+            let (a, b, c) = (t[0], t[1], t[2]);
+            let key = |x: u32, y: u32| if x < y { (x, y) } else { (y, x) };
+            let mab = mid_of.get(&key(a, b)).copied();
+            let mbc = mid_of.get(&key(b, c)).copied();
+            let mca = mid_of.get(&key(c, a)).copied();
+            emit_split_triangle(&mut next, a, b, c, mab, mbc, mca);
+        }
+        triangles = next;
+    }
+
+    IndexedMesh { positions, triangles }
+}
+
 /// The result of a successful contour split: two parts that mate along the
 /// curved seam, plus diagnostics.
 pub struct ContourSplit {
@@ -1846,17 +1977,24 @@ pub struct ContourSplit {
 /// moved this far along the model's outward surface normal there, so the membrane
 /// built on the loop sits just outside the body and the cut runs clean to the
 /// edge. One fixed distance — the only offset in the contour cut.
-pub const DEFAULT_LOOP_OFFSET_MM: f32 = 0.05;
+pub const DEFAULT_LOOP_OFFSET_MM: f32 = 0.1;
+
+/// Number of ring-smoothing passes applied to the offset directions. Enough to
+/// take the jaggedness out of low-poly per-vertex normals without flattening the
+/// overall outward direction.
+const OFFSET_DIR_SMOOTH_PASSES: u32 = 12;
 
 /// Move each loop point `offset_mm` OFF the model's faces, along the model's
-/// outward surface normal at that point (found via the BVH: nearest model
-/// triangle's face normal, which points away from the outward-wound body). This
-/// makes the membrane built on the loop sit just outside the surface, so the cut
-/// face runs clean all the way to the edge with no rim landing on the skin.
+/// outward surface normal there. The per-point surface normals are first SMOOTHED
+/// around the loop ring (Laplacian average with ring neighbours), because on a
+/// low-poly model the raw nearest-triangle normals jump wildly between adjacent
+/// loop points — offsetting along those raw directions shoots neighbouring points
+/// in scattered directions and makes a JAGGED, spiky boundary ring (and the
+/// membrane boundary is pinned, so relaxation can never smooth it out). Smoothing
+/// the directions first gives a smooth offset ring → a smooth membrane.
 ///
-/// The move is perpendicular to the faces and tiny (sub-mm), so it cannot tangle
-/// the loop. Returns the offset loop in the same order; an empty/degenerate model
-/// returns the loop unchanged.
+/// Returns the offset loop in the same order; an empty/degenerate model returns
+/// the loop unchanged.
 fn offset_loop_off_faces(model: &IndexedMesh, loop_pts: &[Vec3], offset_mm: f32) -> Vec<Vec3> {
     if loop_pts.is_empty() || model.triangles.is_empty() || offset_mm <= 0.0 {
         return loop_pts.to_vec();
@@ -1865,13 +2003,13 @@ fn offset_loop_off_faces(model: &IndexedMesh, loop_pts: &[Vec3], offset_mm: f32)
     let diag = model.bbox().diag().max(1e-3);
     let base_r = (diag * 0.01).max(1e-4);
 
-    loop_pts
+    // 1. Raw outward surface normal at each loop point (nearest model triangle's
+    //    face normal). Fallback to +Z where nothing is found.
+    let mut normals: Vec<Vec3> = loop_pts
         .iter()
         .map(|&p| {
-            // Nearest model triangle's outward face normal at p (widen the AABB a
-            // few times for sparse meshes). Fallback: leave the point put.
             let mut best_d2 = f32::INFINITY;
-            let mut normal: Option<Vec3> = None;
+            let mut normal = Vec3::new(0.0, 0.0, 1.0);
             let mut r = base_r;
             for _ in 0..4 {
                 let query = Aabb {
@@ -1887,7 +2025,7 @@ fn offset_loop_off_faces(model: &IndexedMesh, loop_pts: &[Vec3], offset_mm: f32)
                         let nrm = b.sub(a).cross(c.sub(a));
                         let nl = nrm.length();
                         if nl > 1e-12 {
-                            normal = Some(nrm.scale(1.0 / nl));
+                            normal = nrm.scale(1.0 / nl);
                         }
                     }
                     found = true;
@@ -1897,12 +2035,88 @@ fn offset_loop_off_faces(model: &IndexedMesh, loop_pts: &[Vec3], offset_mm: f32)
                 }
                 r *= 3.0;
             }
-            match normal {
-                Some(n) => p.add(n.scale(offset_mm)),
-                None => p,
-            }
+            normal
         })
+        .collect();
+
+    // 2. Smooth the directions around the loop ring so neighbours vary gently
+    //    (kills the low-poly zigzag that makes a spiky boundary). Each pass:
+    //    n[i] ← normalize(n[i-1] + 2·n[i] + n[i+1]) cyclically.
+    let n = normals.len();
+    if n >= 3 {
+        for _ in 0..OFFSET_DIR_SMOOTH_PASSES {
+            let mut next = normals.clone();
+            for i in 0..n {
+                let prev = normals[(i + n - 1) % n];
+                let here = normals[i];
+                let nxt = normals[(i + 1) % n];
+                let avg = prev.add(here.scale(2.0)).add(nxt);
+                let len = avg.length();
+                next[i] = if len > 1e-9 { avg.scale(1.0 / len) } else { here };
+            }
+            normals = next;
+        }
+    }
+
+    // 3. Offset each loop point along its smoothed direction.
+    loop_pts
+        .iter()
+        .zip(normals.iter())
+        .map(|(&p, &nrm)| p.add(nrm.scale(offset_mm)))
         .collect()
+}
+
+/// Build the contour-cut CUTTER (membrane + thickened slab) from the model and
+/// loop, EXACTLY as the cut does — the single source of truth shared by
+/// [`contour_split`] (the real cut) and [`build_cutter_preview_soup`] (the live
+/// preview), so what the user sees is precisely what cuts: the loop offset off
+/// the faces, the membrane built on it, thickened to the real `thickness_mm`.
+///
+/// Returns `(membrane, slab)`. `density` is the already-clamped resolution
+/// multiplier. `Err` if the membrane can't be built from the loop.
+fn build_contour_cutter(
+    mesh: &IndexedMesh,
+    loop_pts: &[Vec3],
+    thickness_mm: f32,
+    membrane_smoothing: f32,
+    density: f64,
+) -> Result<(Membrane, IndexedMesh), String> {
+    let grid_divisions = DEFAULT_GRID_DIVISIONS * density;
+    // Move the loop OFF the model's faces (along the surface normal), then build
+    // the membrane on the offset loop so it sits just outside the body — the cut
+    // runs clean to the edge with no border/lip. This is the ONLY offset.
+    let offset_loop = offset_loop_off_faces(mesh, loop_pts, DEFAULT_LOOP_OFFSET_MM);
+    let membrane = build_membrane_full(&offset_loop, CONTOUR_SUBDIVISIONS, membrane_smoothing, grid_divisions)
+        .ok_or_else(|| format!("could not build a membrane from the loop ({} points)", loop_pts.len()))?;
+    // Thicken straight into the slab — no boundary lift (the loop is already off
+    // the surface), so the cut face is pure membrane edge to edge.
+    let slab = thicken_to_slab(&membrane, thickness_mm, 0.0, &[]);
+    Ok((membrane, slab))
+}
+
+/// Build the REAL cutter slab the contour cut would use and return it as a flat
+/// triangle soup (9 f32 per triangle, model-local) for previewing in the scene.
+/// Unlike the bare-membrane preview, this reflects the loop OFFSET (the slab sits
+/// off the surface) AND the THICKNESS (it's a closed slab, not a sheet) — so the
+/// preview shows exactly what cuts. `None` if the membrane can't be built.
+pub fn build_cutter_preview_soup(
+    mesh: &IndexedMesh,
+    loop_pts: &[Vec3],
+    thickness_mm: f32,
+    membrane_smoothing: f32,
+    density: f32,
+) -> Option<Vec<f32>> {
+    let density = density.clamp(1.0, 4.0) as f64;
+    let (_, slab) = build_contour_cutter(mesh, loop_pts, thickness_mm, membrane_smoothing, density).ok()?;
+    // Flatten the slab triangles into a soup.
+    let mut soup = Vec::with_capacity(slab.triangles.len() * 9);
+    for t in &slab.triangles {
+        for &vi in t {
+            let v = slab.positions[vi as usize];
+            soup.extend_from_slice(&[v.x, v.y, v.z]);
+        }
+    }
+    Some(soup)
 }
 
 /// End-to-end contour cut: build a soap-film membrane spanning `loop_pts`,
@@ -1925,28 +2139,13 @@ pub fn contour_split(
     membrane_smoothing: f32,
     density: f32,
 ) -> Result<ContourSplit, String> {
-    // Density (>=1) multiplies the grid resolution to raise the cutter poly
-    // count. The CUT uses this; the live preview stays at 1× so editing is light.
-    // Clamped to a sane ceiling so the boolean doesn't crawl on big models.
     let density = density.clamp(1.0, 4.0) as f64;
-    let grid_divisions = DEFAULT_GRID_DIVISIONS * density;
 
-    // Move the loop 0.05 mm OFF the model's faces (along the surface normal), then
-    // build the membrane on the offset loop. The membrane sits just outside the
-    // body, so the cut runs clean all the way to the edge — no rim lands on the
-    // skin, so there's no border, lip, or wall of any kind. This is the ONLY
-    // offset in the cut.
-    let offset_loop = offset_loop_off_faces(mesh, loop_pts, DEFAULT_LOOP_OFFSET_MM);
-    let membrane = build_membrane_full(&offset_loop, CONTOUR_SUBDIVISIONS, membrane_smoothing, grid_divisions)
-        .ok_or_else(|| format!("could not build a membrane from the loop ({} points)", loop_pts.len()))?;
+    // Build the cutter slab EXACTLY as the preview does (single source of truth):
+    // offset the loop off the faces → membrane → thicken into the slab.
+    let (membrane, slab) = build_contour_cutter(mesh, loop_pts, thickness_mm, membrane_smoothing, density)?;
     let membrane_tris = membrane.triangles.len();
 
-    let model = to_manifold(mesh).map_err(|e| format!("model invalid: {e}"))?;
-
-    // Thicken the membrane straight into the cutter slab — no boundary lift (the
-    // loop is already off the surface), so the boundary ring stays exactly on the
-    // membrane and the cut face is pure membrane edge to edge.
-    let slab = thicken_to_slab(&membrane, thickness_mm, 0.0, &[]);
     let cutter = to_manifold(&slab).map_err(|e| {
         let mem_mesh = IndexedMesh {
             positions: membrane.vertices.clone(),
@@ -1959,6 +2158,18 @@ pub fn contour_split(
             membrane.triangles.len()
         )
     })?;
+
+    // Subdivide the model's triangles in a band around the cutter slab BEFORE the
+    // boolean, so the cut crosses fine triangles → a smoother cut edge instead of
+    // the coarse low-poly ridge. Pure conforming subdivision (watertight by
+    // construction), so it never breaks the boolean. Cut Resolution (`density`)
+    // drives the target: higher density → smaller target edge + an extra level.
+    let diag = mesh.bbox().diag().max(1e-3);
+    let band = diag * DEFAULT_REFINE_BAND_FRACTION;
+    let target = diag * DEFAULT_REFINE_TARGET_FRACTION / density as f32;
+    let max_levels = DEFAULT_REFINE_MAX_LEVELS + (density.round() as u32).saturating_sub(1);
+    let refined = refine_model_near_slab(mesh, &slab, band, target, max_levels);
+    let model = to_manifold(&refined).map_err(|e| format!("model invalid: {e}"))?;
 
     let islands = split_by_cutter(&model, &cutter);
     let component_count = islands.len();
@@ -2000,6 +2211,21 @@ mod tests {
     /// Axis-aligned cube [0,size]^3 as an `IndexedMesh` (12 tris), wound outward.
     fn cube(size: f32) -> IndexedMesh {
         axis_aligned_slab(Vec3::ZERO, Vec3::new(size, size, size))
+    }
+
+    /// A DENSE loop around a `size`-cube's equator at z=`size`/2 — `steps` points
+    /// per side, wrapping the four vertical faces. This is how a real cut loop
+    /// looks (many surface points), unlike a 4-corner loop sitting on hard edges
+    /// (which is degenerate for the surface-normal offset).
+    fn dense_equator_loop(size: f32, steps: usize) -> Vec<Vec3> {
+        let z = size / 2.0;
+        let mut pts = Vec::with_capacity(steps * 4);
+        let f = |i: usize| size * i as f32 / steps as f32;
+        for i in 0..steps { pts.push(Vec3::new(f(i), 0.0, z)); }       // y=0
+        for i in 0..steps { pts.push(Vec3::new(size, f(i), z)); }      // x=size
+        for i in 0..steps { pts.push(Vec3::new(size - f(i), size, z)); } // y=size
+        for i in 0..steps { pts.push(Vec3::new(0.0, size - f(i), z)); } // x=0
+        pts
     }
 
     /// A flat square loop (4 points) in the z=0 plane, side `s`, ordered CCW.
@@ -2652,17 +2878,11 @@ mod tests {
 
     #[test]
     fn contour_split_severs_a_cube_with_a_built_membrane() {
-        // CAPSTONE: the full pipeline on a REAL membrane (not an axis-aligned
-        // box). The loop traces the cube's actual equatorial cross-section
-        // boundary at z=5 (the four vertical edges), so the membrane spanning it
-        // is the full z=5 square → build membrane → thicken → split → 2 parts.
+        // CAPSTONE: the full pipeline on a REAL membrane (not an axis-aligned box).
+        // A DENSE loop around the cube's z=5 equator (like a real surface loop, not
+        // 4 points on hard edges) → build membrane → thicken → split → 2 parts.
         let model = cube(10.0);
-        let loop_pts = vec![
-            Vec3::new(0.0, 0.0, 5.0), // edge x=0,y=0
-            Vec3::new(10.0, 0.0, 5.0), // edge x=10,y=0
-            Vec3::new(10.0, 10.0, 5.0), // edge x=10,y=10
-            Vec3::new(0.0, 10.0, 5.0), // edge x=0,y=10
-        ];
+        let loop_pts = dense_equator_loop(10.0, 8);
         let split = contour_split(&model, &loop_pts, DEFAULT_CUTTER_THICKNESS_MM, DEFAULT_MEMBRANE_SMOOTHING, 1.0)
             .expect("contour split should sever the cube into 2 parts");
         assert_eq!(split.component_count, 2);
@@ -2743,17 +2963,12 @@ mod tests {
 
     #[test]
     fn contour_split_severs_with_loop_offset_off_the_faces() {
-        // End-to-end: the loop is offset 0.05mm off the model faces, the membrane
-        // is built on the offset loop, and the cube still severs into 2 at every
+        // End-to-end: the loop is offset off the model faces (DEFAULT_LOOP_OFFSET_MM),
+        // the membrane is built on the offset loop, and the cube still severs at every
         // density — the cut sits just outside the surface and runs clean to the
         // edge with no border/lip.
         let model = cube(10.0);
-        let loop_pts = vec![
-            Vec3::new(0.0, 0.0, 5.0),
-            Vec3::new(10.0, 0.0, 5.0),
-            Vec3::new(10.0, 10.0, 5.0),
-            Vec3::new(0.0, 10.0, 5.0),
-        ];
+        let loop_pts = dense_equator_loop(10.0, 8);
         for density in [1.0_f32, 2.0, 4.0] {
             let split = contour_split(
                 &model,
@@ -2791,5 +3006,62 @@ mod tests {
         let model = cube(10.0);
         let loop_pts = square_loop(10.0);
         assert_eq!(offset_loop_off_faces(&model, &loop_pts, 0.0), loop_pts);
+    }
+
+    // ── refine_model_near_slab (watertight seam-band subdivision) ───────────
+
+    #[test]
+    fn refine_model_near_slab_densifies_the_band() {
+        // A closed cube with a thin slab through z=5: the band near the slab must
+        // gain triangles, and the result must STAY WATERTIGHT (the whole point —
+        // pure conforming subdivision can't open the mesh).
+        let cube = cube(10.0);
+        let slab = axis_aligned_slab(Vec3::new(-1.0, -1.0, 4.9), Vec3::new(11.0, 11.0, 5.1));
+        assert_eq!(open_edge_count(&cube), 0, "cube starts closed");
+
+        let before = cube.triangle_count();
+        let refined = refine_model_near_slab(&cube, &slab, /*band*/ 2.0, /*target*/ 2.0, /*levels*/ 3);
+        assert!(
+            refined.triangle_count() > before,
+            "band near the slab should be subdivided ({} → {})",
+            before,
+            refined.triangle_count()
+        );
+        assert_eq!(
+            open_edge_count(&refined),
+            0,
+            "conforming subdivision MUST keep the mesh watertight (got {} open edges)",
+            open_edge_count(&refined)
+        );
+    }
+
+    #[test]
+    fn refine_model_near_slab_leaves_far_triangles_alone() {
+        let cube = cube(10.0);
+        // Slab far above the cube → nothing in band → unchanged.
+        let slab = axis_aligned_slab(Vec3::new(-1.0, -1.0, 99.9), Vec3::new(11.0, 11.0, 100.1));
+        let refined = refine_model_near_slab(&cube, &slab, 2.0, 2.0, 3);
+        assert_eq!(refined.triangle_count(), cube.triangle_count(), "far slab must not subdivide");
+        assert_eq!(open_edge_count(&refined), 0);
+    }
+
+    #[test]
+    fn contour_split_severs_with_seam_refinement_across_densities() {
+        // End-to-end with the seam-band subdivision wired in: the cube severs into
+        // 2 at every density and the refinement never breaks the boolean.
+        let model = cube(10.0);
+        let loop_pts = dense_equator_loop(10.0, 8);
+        for density in [1.0_f32, 2.0, 4.0] {
+            let split = contour_split(
+                &model,
+                &loop_pts,
+                DEFAULT_CUTTER_THICKNESS_MM,
+                DEFAULT_MEMBRANE_SMOOTHING,
+                density,
+            )
+            .unwrap_or_else(|e| panic!("refined contour split should sever the cube at density {density}: {e}"));
+            assert_eq!(split.component_count, 2, "density {density} should give 2 parts");
+            assert!(split.part_a.triangle_count() > 0 && split.part_b.triangle_count() > 0);
+        }
     }
 }

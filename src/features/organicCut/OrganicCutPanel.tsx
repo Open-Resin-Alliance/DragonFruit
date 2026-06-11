@@ -201,9 +201,9 @@ export function OrganicCutPanel({
             <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Seam Smoothing</label>
             <ScrollableNumberField
               value={state.smoothing}
-              onChange={(value) => setState({ smoothing: clampFloat(value, 0, 1, 2) })}
+              onChange={(value) => setState({ smoothing: clampFloat(value, 0, 2, 2) })}
               min={0}
-              max={1}
+              max={2}
               step={0.05}
               unit=""
               ariaLabel="Seam line smoothing strength"
@@ -235,9 +235,9 @@ export function OrganicCutPanel({
               <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Cut Smoothing</label>
               <ScrollableNumberField
                 value={state.membraneSmoothing}
-                onChange={(value) => setState({ membraneSmoothing: clampFloat(value, 0, 1, 2) })}
+                onChange={(value) => setState({ membraneSmoothing: clampFloat(value, 0, 2, 2) })}
                 min={0}
-                max={1}
+                max={2}
                 step={0.05}
                 unit=""
                 ariaLabel="Cut surface smoothing strength"

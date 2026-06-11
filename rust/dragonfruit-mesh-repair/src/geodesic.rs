@@ -605,9 +605,9 @@ fn smooth_through_anchors(
     // capped per-anchor to a fraction of the gap to its neighbouring anchors so
     // adjacent fillets never overlap and fight each other.
     //
-    // `smoothing` (0..1) scales the window: 0 → no rounding (sharp corners), 0.5
-    // → ~4 points/side (the original default), 1 → ~8 (very rounded).
-    let max_window = (smoothing.clamp(0.0, 1.0) * 8.0).round() as isize;
+    // `smoothing` (0..2) scales the window: 0 → no rounding (sharp corners), 0.5
+    // → ~4 points/side (the original default), 1 → ~8, 2 → ~16 (very rounded).
+    let max_window = (smoothing.clamp(0.0, 2.0) * 8.0).round() as isize;
     if max_window < 1 {
         return pts; // smoothing ~0: leave the sharp straightened corners as-is
     }

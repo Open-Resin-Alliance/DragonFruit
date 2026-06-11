@@ -130,11 +130,13 @@ const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
   // 0.1mm matches the Rust default kerf (the value the contour cut used before
   // the slider was wired up) — the proven-good out-of-box thickness.
   thicknessMm: 0.1,
-  // 0.5 reproduces the original smoothing for both seam line and membrane.
-  smoothing: 0.5,
-  membraneSmoothing: 0.5,
-  // 1× = default cutter resolution (matches the preview). Raised only at cut time.
-  density: 1.0,
+  // Default to full smoothing (1) on both the seam line and the cut surface —
+  // the smoothest out-of-box result. The sliders go to 2 for extra rounding.
+  smoothing: 1.0,
+  membraneSmoothing: 1.0,
+  // 4× = densest cutter + finest seam-band model refinement by default, for the
+  // cleanest cut edge out of the box.
+  density: 4.0,
 };
 
 /** Minimum points before a CONTOUR cut is possible (a real loop needs ≥3). */
@@ -348,6 +350,7 @@ export function useOrganicCutSession({
           previewLoop,
           panelState.membraneSmoothing,
           panelState.density,
+          panelState.thicknessMm,
         );
         if (!cancelled) setMembranePreview(membrane);
       })();
@@ -356,7 +359,7 @@ export function useOrganicCutSession({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [toolActive, loop, activeGeometry, activeGeometryKey, cutMode, geodesicPolyline, isDraggingPoint, panelState.membraneSmoothing, panelState.density]);
+  }, [toolActive, loop, activeGeometry, activeGeometryKey, cutMode, geodesicPolyline, isDraggingPoint, panelState.membraneSmoothing, panelState.density, panelState.thicknessMm]);
 
   const addPoint = React.useCallback((point: OrganicCutLoopPoint) => {
     setLoop((prev) => [...prev, point]);

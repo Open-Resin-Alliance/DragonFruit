@@ -247,6 +247,7 @@ export async function computeMembranePreview(
   loopPoints: OrganicCutLoopPoint[],
   membraneSmoothing = 0.5,
   density = 1.0,
+  thicknessMm = 0.1,
 ): Promise<Float32Array | null> {
   const core = await loadTauriCore();
   if (!core) return null;
@@ -257,6 +258,7 @@ export async function computeMembranePreview(
     close: true,
     membraneSmoothing,
     density,
+    thicknessMm,
   });
   try {
     const reportJson = await core.invoke<string>('mesh_organic_cut_membrane_preview', { requestJson });
