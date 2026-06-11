@@ -10,6 +10,10 @@ import type { GizmoAxis } from '../types';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
 
+const ROTATION_CENTER_DEADZONE_PX = 24;
+const ROTATION_NEAR_CENTER_JUMP_GUARD_PX = 56;
+const ROTATION_NEAR_CENTER_MAX_DELTA = Math.PI / 2;
+
 interface GizmoRotationProps {
   axis: GizmoAxis;
   isHovered?: boolean;
@@ -272,7 +276,7 @@ export function GizmoRotation({
     shouldFlipRef.current = computeShouldFlip();
     
     // Calculate initial mouse angle
-    lastMouseAngle.current = getMouseAngle(e.clientX, e.clientY);
+    lastMouseAngle.current = getMousePolar(e.clientX, e.clientY).angle;
     
     const allowed = onDragStart();
     if (allowed === false) {
@@ -300,9 +304,14 @@ export function GizmoRotation({
     window.dispatchEvent(new CustomEvent('dragonfruit:rotation-hint', { detail: { visible: false } }));
   };
 
-  const getMouseAngle = useCallback((clientX: number, clientY: number): number => {
+  const getMousePolar = useCallback((clientX: number, clientY: number): { angle: number; distance: number } => {
     const center = getGizmoScreenCenter();
-    return Math.atan2(clientY - center.y, clientX - center.x);
+    const dx = clientX - center.x;
+    const dy = clientY - center.y;
+    return {
+      angle: Math.atan2(dy, dx),
+      distance: Math.hypot(dx, dy),
+    };
   }, [getGizmoScreenCenter]);
 
   // Global pointer move and up listeners during drag
@@ -310,12 +319,24 @@ export function GizmoRotation({
     if (!isDragging) return;
 
     const handleGlobalPointerMove = (e: PointerEvent) => {
-      const currentMouseAngle = getMouseAngle(e.clientX, e.clientY);
+      const mousePolar = getMousePolar(e.clientX, e.clientY);
+      const currentMouseAngle = mousePolar.angle;
       let deltaAngle = currentMouseAngle - lastMouseAngle.current;
 
       // Handle angle wrapping (crossing -π/π boundary)
       if (deltaAngle > Math.PI) deltaAngle -= 2 * Math.PI;
       if (deltaAngle < -Math.PI) deltaAngle += 2 * Math.PI;
+
+      if (
+        mousePolar.distance < ROTATION_CENTER_DEADZONE_PX
+        || (
+          mousePolar.distance < ROTATION_NEAR_CENTER_JUMP_GUARD_PX
+          && Math.abs(deltaAngle) > ROTATION_NEAR_CENTER_MAX_DELTA
+        )
+      ) {
+        lastMouseAngle.current = currentMouseAngle;
+        return;
+      }
 
       // Compute sign factors for axis inversion and camera flip
       const flipMult = shouldFlipRef.current ? -1 : 1;
@@ -387,7 +408,7 @@ export function GizmoRotation({
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
     };
-  }, [isDragging, getMouseAngle, axis]);
+  }, [isDragging, getMousePolar, axis]);
 
   // Use GPU picking hover state OR prop-based hover (fallback)
   const effectiveHovered = !suppressHover && (isPickingHovered || isHovered);

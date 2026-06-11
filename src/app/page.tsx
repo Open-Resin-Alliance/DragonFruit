@@ -16108,25 +16108,46 @@ export default function Home() {
    * Gizmo-based placement move — applies the delta directly without snapping
    * to surface normals, giving the user precise axis-constrained control.
    */
-  const holePunchGizmoDragRef = React.useRef<{ placementId: string } | null>(null);
+  const holePunchGizmoDragRef = React.useRef<{
+    placementId: string;
+    startWorldPoint: THREE.Vector3;
+    startLocalPoint: THREE.Vector3;
+    accumulatedDelta: THREE.Vector3;
+  } | null>(null);
 
   const handleHolePunchGizmoMoveStart = React.useCallback((placementId: string) => {
-    holePunchGizmoDragRef.current = { placementId };
+    const placement = holePunchPlacementsRef.current.find((candidate) => candidate.id === placementId);
+    if (!placement) {
+      holePunchGizmoDragRef.current = null;
+      return;
+    }
+
+    holePunchGizmoDragRef.current = {
+      placementId,
+      startWorldPoint: placement.worldPoint.clone(),
+      startLocalPoint: placement.localPoint.clone(),
+      accumulatedDelta: new THREE.Vector3(),
+    };
   }, []);
 
   const handleHolePunchGizmoMove = React.useCallback((
     placementId: string,
     delta: THREE.Vector3,
   ) => {
-    if (!holePunchGizmoDragRef.current || holePunchGizmoDragRef.current.placementId !== placementId) return;
+    const drag = holePunchGizmoDragRef.current;
+    if (!drag || drag.placementId !== placementId) return;
+
+    drag.accumulatedDelta.add(delta);
+    const nextWorldPoint = drag.startWorldPoint.clone().add(drag.accumulatedDelta);
+    const nextLocalPoint = drag.startLocalPoint.clone().add(drag.accumulatedDelta);
 
     setHolePunchPlacements((previous) => {
       const nextPlacements = previous.map((placement) => {
         if (placement.id !== placementId) return placement;
         return {
           ...placement,
-          worldPoint: placement.worldPoint.clone().add(delta),
-          localPoint: placement.localPoint.clone().add(delta),
+          worldPoint: nextWorldPoint.clone(),
+          localPoint: nextLocalPoint.clone(),
         };
       });
       holePunchPlacementsRef.current = nextPlacements;
