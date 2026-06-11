@@ -2506,9 +2506,14 @@ fn filter_source_mesh_for_openings(
 }
 
 fn point_in_drain_hole_cylinder(p: Vec3, hole: &DrainHoleSpec, bbox: &Aabb, voxel_mm: f32) -> bool {
-    let cx = hole.center_norm[0].clamp(0.0, 1.0);
-    let cy = hole.center_norm[1].clamp(0.0, 1.0);
-    let cz = hole.center_norm[2].clamp(0.0, 1.0);
+    // If the hole center is outside the bbox, the cylinder cannot contain
+    // any point inside the mesh — bail early.
+    if hole.center_norm.iter().any(|&c| c < 0.0 || c > 1.0) {
+        return false;
+    }
+    let cx = hole.center_norm[0];
+    let cy = hole.center_norm[1];
+    let cz = hole.center_norm[2];
     let center = Vec3::new(
         bbox.min.x + (bbox.max.x - bbox.min.x) * cx,
         bbox.min.y + (bbox.max.y - bbox.min.y) * cy,
@@ -2541,9 +2546,13 @@ fn apply_drain_hole_corridor(
     bbox: &Aabb,
     voxel_mm: f32,
 ) {
-    let cx = hole.center_norm[0].clamp(0.0, 1.0);
-    let cy = hole.center_norm[1].clamp(0.0, 1.0);
-    let cz = hole.center_norm[2].clamp(0.0, 1.0);
+    // If the hole center is outside the bbox, no corridor to carve.
+    if hole.center_norm.iter().any(|&c| c < 0.0 || c > 1.0) {
+        return;
+    }
+    let cx = hole.center_norm[0];
+    let cy = hole.center_norm[1];
+    let cz = hole.center_norm[2];
     let center = Vec3::new(
         bbox.min.x + (bbox.max.x - bbox.min.x) * cx,
         bbox.min.y + (bbox.max.y - bbox.min.y) * cy,
@@ -3067,9 +3076,13 @@ fn punch_cylinders_manifold(
             continue;
         }
 
-        let cx = punch.center_norm[0].clamp(0.0, 1.0);
-        let cy = punch.center_norm[1].clamp(0.0, 1.0);
-        let cz = punch.center_norm[2].clamp(0.0, 1.0);
+        // Do not clamp center_norm to [0,1] — the gizmo allows pulling holes
+        // outside the model bbox, and the cylinder should remain exactly where
+        // the user placed it. If the cylinder does not intersect the mesh the
+        // boolean is a no-op (correct), and partial intersections cut correctly.
+        let cx = punch.center_norm[0];
+        let cy = punch.center_norm[1];
+        let cz = punch.center_norm[2];
         let center = Vec3::new(
             bbox.min.x + (bbox.max.x - bbox.min.x) * cx,
             bbox.min.y + (bbox.max.y - bbox.min.y) * cy,
@@ -3295,9 +3308,13 @@ fn refine_solid_near_punches_with_parity(
     let mut parity_cache: Vec<Option<bool>> = vec![None; solid.len()];
 
     for hole in punches {
-        let cx = hole.center_norm[0].clamp(0.0, 1.0);
-        let cy = hole.center_norm[1].clamp(0.0, 1.0);
-        let cz = hole.center_norm[2].clamp(0.0, 1.0);
+        // Skip holes positioned outside the bbox — they cannot intersect the mesh.
+        if hole.center_norm.iter().any(|&c| c < 0.0 || c > 1.0) {
+            continue;
+        }
+        let cx = hole.center_norm[0];
+        let cy = hole.center_norm[1];
+        let cz = hole.center_norm[2];
         let center = Vec3::new(
             bbox.min.x + (bbox.max.x - bbox.min.x) * cx,
             bbox.min.y + (bbox.max.y - bbox.min.y) * cy,
@@ -3570,9 +3587,13 @@ fn triangle_overlaps_drain_hole_cylinder(
     bbox: &Aabb,
     voxel_mm: f32,
 ) -> bool {
-    let cx = hole.center_norm[0].clamp(0.0, 1.0);
-    let cy = hole.center_norm[1].clamp(0.0, 1.0);
-    let cz = hole.center_norm[2].clamp(0.0, 1.0);
+    // If the hole center is outside the bbox, no triangle can overlap it.
+    if hole.center_norm.iter().any(|&c| c < 0.0 || c > 1.0) {
+        return false;
+    }
+    let cx = hole.center_norm[0];
+    let cy = hole.center_norm[1];
+    let cz = hole.center_norm[2];
     let center = Vec3::new(
         bbox.min.x + (bbox.max.x - bbox.min.x) * cx,
         bbox.min.y + (bbox.max.y - bbox.min.y) * cy,

@@ -401,7 +401,7 @@ function normalizeDirectionTuple(x: number, y: number, z: number): [number, numb
 }
 
 function toPersistedHolePunchPlacements(
-  model: { geometry: GeometryWithBounds },
+  model: { geometry: GeometryWithBounds; transform?: ModelTransform },
   placements: HolePunchPlacementState[],
 ): ModelHolePunchPlacement[] {
   const geometry = model.geometry.geometry;
@@ -411,18 +411,55 @@ function toPersistedHolePunchPlacements(
   const size = bbox.getSize(new THREE.Vector3());
   const toNorm = (value: number, min: number, span: number) => (span <= 1e-9 ? 0.5 : (value - min) / span);
 
+  // When a model transform is available, derive localPoint/localNormal from
+  // worldPoint/worldNormal at serialization time so they always stay consistent
+  // with the model's current transform — even if the draft state has drifted
+  // (e.g. after gizmo manipulation). When transform is unavailable (legacy
+  // callers like hollow-apply that only pass a bare geometry), fall back to
+  // the stored localPoint/localNormal in the draft state.
+  let inverseModelMatrix: THREE.Matrix4 | null = null;
+  let inverseNormalMatrix: THREE.Matrix3 | null = null;
+  if (model.transform) {
+    const meshMatrix = new THREE.Matrix4()
+      .compose(
+        model.transform.position.clone(),
+        quaternionFromGlobalEuler(model.transform.rotation),
+        model.transform.scale.clone(),
+      )
+      .multiply(new THREE.Matrix4().makeTranslation(
+        -model.geometry.center.x,
+        -model.geometry.center.y,
+        -model.geometry.center.z,
+      ));
+    inverseModelMatrix = meshMatrix.clone().invert();
+
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(meshMatrix);
+    inverseNormalMatrix = normalMatrix.clone().invert();
+  }
+
   return placements.map((placement) => {
-    const direction = normalizeDirectionTuple(
-      placement.localNormal.x,
-      placement.localNormal.y,
-      placement.localNormal.z,
-    );
+    let localPoint: THREE.Vector3;
+    let localNormal: THREE.Vector3;
+    if (inverseModelMatrix && inverseNormalMatrix) {
+      // Derive from world-space values — always consistent with current transform.
+      localPoint = placement.worldPoint.clone().applyMatrix4(inverseModelMatrix);
+      localNormal = placement.worldNormal
+        .clone()
+        .applyMatrix3(inverseNormalMatrix)
+        .normalize();
+    } else {
+      // Fallback: use stored values (legacy path).
+      localPoint = placement.localPoint;
+      localNormal = placement.localNormal;
+    }
+
+    const direction = normalizeDirectionTuple(localNormal.x, localNormal.y, localNormal.z);
     return {
       id: placement.id,
       centerNorm: [
-        toNorm(placement.localPoint.x, bbox.min.x, size.x),
-        toNorm(placement.localPoint.y, bbox.min.y, size.y),
-        toNorm(placement.localPoint.z, bbox.min.z, size.z),
+        toNorm(localPoint.x, bbox.min.x, size.x),
+        toNorm(localPoint.y, bbox.min.y, size.y),
+        toNorm(localPoint.z, bbox.min.z, size.z),
       ],
       radiusMm: placement.radiusMm,
       radiusYMm: placement.radiusYMm,
@@ -16113,6 +16150,10 @@ export default function Home() {
     startWorldPoint: THREE.Vector3;
     startLocalPoint: THREE.Vector3;
     accumulatedDelta: THREE.Vector3;
+    /** Inverse model matrix (world→local) captured at drag start, used to
+     *  convert the world-space gizmo delta into the model's local coordinate
+     *  space so the persisted localPoint stays accurate for Rust. */
+    inverseModelMatrix: THREE.Matrix4;
   } | null>(null);
 
   const handleHolePunchGizmoMoveStart = React.useCallback((placementId: string) => {
@@ -16122,13 +16163,38 @@ export default function Home() {
       return;
     }
 
+    // Compute the inverse model matrix so we can convert the world-space
+    // gizmo delta into the model's local coordinate space. This keeps
+    // localPoint accurate for Rust serialization even when the model is
+    // rotated.
+    let inverseModelMatrix: THREE.Matrix4;
+    const activeModel = scene.activeModel;
+    if (activeModel && placement.modelId === activeModel.id) {
+      const meshMatrix = new THREE.Matrix4()
+        .compose(
+          activeModel.transform.position.clone(),
+          quaternionFromGlobalEuler(activeModel.transform.rotation),
+          activeModel.transform.scale.clone(),
+        )
+        .multiply(new THREE.Matrix4().makeTranslation(
+          -activeModel.geometry.center.x,
+          -activeModel.geometry.center.y,
+          -activeModel.geometry.center.z,
+        ));
+      inverseModelMatrix = meshMatrix.invert();
+    } else {
+      // Fallback: identity matrix (world = local), preserves old behavior.
+      inverseModelMatrix = new THREE.Matrix4();
+    }
+
     holePunchGizmoDragRef.current = {
       placementId,
       startWorldPoint: placement.worldPoint.clone(),
       startLocalPoint: placement.localPoint.clone(),
       accumulatedDelta: new THREE.Vector3(),
+      inverseModelMatrix,
     };
-  }, []);
+  }, [scene.activeModel]);
 
   const handleHolePunchGizmoMove = React.useCallback((
     placementId: string,
@@ -16139,7 +16205,10 @@ export default function Home() {
 
     drag.accumulatedDelta.add(delta);
     const nextWorldPoint = drag.startWorldPoint.clone().add(drag.accumulatedDelta);
-    const nextLocalPoint = drag.startLocalPoint.clone().add(drag.accumulatedDelta);
+    // Convert the new world point back to model local space using the
+    // inverse matrix captured at drag start. Directly adding the world-space
+    // delta to the local point would be wrong when the model has a rotation.
+    const nextLocalPoint = nextWorldPoint.clone().applyMatrix4(drag.inverseModelMatrix);
 
     setHolePunchPlacements((previous) => {
       const nextPlacements = previous.map((placement) => {
@@ -16183,6 +16252,27 @@ export default function Home() {
   ) => {
     if (!holePunchGizmoRotateRef.current || holePunchGizmoRotateRef.current.placementId !== placementId) return;
 
+    // Convert the world-space normal to local space using the inverse
+    // normal matrix, so the persisted direction stays accurate for Rust.
+    let localNormal = newNormal.clone();
+    const activeModel = scene.activeModel;
+    if (activeModel) {
+      const meshMatrix = new THREE.Matrix4()
+        .compose(
+          activeModel.transform.position.clone(),
+          quaternionFromGlobalEuler(activeModel.transform.rotation),
+          activeModel.transform.scale.clone(),
+        )
+        .multiply(new THREE.Matrix4().makeTranslation(
+          -activeModel.geometry.center.x,
+          -activeModel.geometry.center.y,
+          -activeModel.geometry.center.z,
+        ));
+      const normalMatrix = new THREE.Matrix3().getNormalMatrix(meshMatrix);
+      const inverseNormalMatrix = normalMatrix.clone().invert();
+      localNormal = newNormal.clone().applyMatrix3(inverseNormalMatrix).normalize();
+    }
+
     setHolePunchPlacements((previous) => {
       const nextPlacements = previous.map((placement) => {
         if (placement.id !== placementId) return placement;
@@ -16190,13 +16280,13 @@ export default function Home() {
           ...placement,
           worldNormal: newNormal.clone(),
           worldFrame: cloneHolePunchWorldFrame(worldFrame),
-          localNormal: newNormal.clone(),
+          localNormal,
         };
       });
       holePunchPlacementsRef.current = nextPlacements;
       return nextPlacements;
     });
-  }, []);
+  }, [scene.activeModel]);
 
   const handleHolePunchGizmoRotateEnd = React.useCallback((placementId: string) => {
     if (!holePunchGizmoRotateRef.current || holePunchGizmoRotateRef.current.placementId !== placementId) return;
@@ -16559,27 +16649,25 @@ export default function Home() {
               toNorm(shiftedStartMm.z, sourceBbox.min.z, sourceSize.z),
             ];
 
-            // Backend currently clamps centerNorm to [0,1]. Mirror that here so
-            // we can compensate length and keep inside depth exact.
-            const clampedStartNorm: [number, number, number] = [
-              Math.max(0, Math.min(1, shiftedStartNorm[0])),
-              Math.max(0, Math.min(1, shiftedStartNorm[1])),
-              Math.max(0, Math.min(1, shiftedStartNorm[2])),
-            ];
-
-            const clampedStartMm = new THREE.Vector3(
-              toMm(clampedStartNorm[0], sourceBbox.min.x, sourceSize.x),
-              toMm(clampedStartNorm[1], sourceBbox.min.y, sourceSize.y),
-              toMm(clampedStartNorm[2], sourceBbox.min.z, sourceSize.z),
+            // No longer clamp centerNorm to [0,1] — the Rust backend now
+            // accepts out-of-bounds values so holes pulled outside the model
+            // bbox via the gizmo stay exactly where the user positioned them.
+            // The outside-protrusion shift may push the start past the bbox
+            // boundary; compute the effective extra length from the actual
+            // (unclamped) offset between surface center and shifted start.
+            const shiftedStartMmActual = new THREE.Vector3(
+              toMm(shiftedStartNorm[0], sourceBbox.min.x, sourceSize.x),
+              toMm(shiftedStartNorm[1], sourceBbox.min.y, sourceSize.y),
+              toMm(shiftedStartNorm[2], sourceBbox.min.z, sourceSize.z),
             );
 
             const effectiveOutsideMm = Math.max(
               0,
-              surfaceCenterMm.clone().sub(clampedStartMm).dot(axis),
+              surfaceCenterMm.clone().sub(shiftedStartMmActual).dot(axis),
             );
 
             return {
-              centerNorm: clampedStartNorm,
+              centerNorm: shiftedStartNorm,
               radiusMm: localRadiusMm,
               radiusYMm: localRadiusYMm,
               direction: [axis.x, axis.y, axis.z] as [number, number, number],
