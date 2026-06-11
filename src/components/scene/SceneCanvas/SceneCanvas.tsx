@@ -2453,6 +2453,23 @@ export function SceneCanvas({
     return Array.from(new Set(ids));
   }, [activeModelId, multiGizmoSupportPreviewIds]);
 
+  // World-to-local inverse matrices per model, used by interior support
+  // filtering to transform world-space support positions into the cavity
+  // geometry's local space for BVH closest-point queries.
+  const modelWorldInverseById = React.useMemo(() => {
+    const map = new Map<string, THREE.Matrix4>();
+    for (const model of models) {
+      const t = model.transform;
+      const mat = new THREE.Matrix4().compose(
+        t.position,
+        quaternionFromGlobalEuler(t.rotation),
+        t.scale,
+      );
+      map.set(model.id, mat.invert());
+    }
+    return map;
+  }, [models]);
+
   const resolveMarqueeSelectedIds = React.useCallback((selection: {
     start: { x: number; y: number };
     current: { x: number; y: number };
@@ -5463,6 +5480,9 @@ export function SceneCanvas({
                             outOfBoundsMin={shaderOutOfBoundsBounds?.min ?? null}
                             outOfBoundsMax={shaderOutOfBoundsBounds?.max ?? null}
                             outOfBoundsStripeColor={outOfBoundsStripeColor}
+                            interiorView={interiorView}
+                            cavityGeometryByModelId={cavityGeometryByModelId}
+                            modelWorldInverseById={modelWorldInverseById}
                           />
                         </group>
                       )}
@@ -5764,6 +5784,9 @@ export function SceneCanvas({
                   leafPlacementPreview={leafPlacementPreviewForRenderer}
                   bracePlacementPreview={bracePlacementPreviewForRenderer}
                   kickstandPlacementPreview={kickstandPlacementPreviewForRenderer}
+                  interiorView={interiorView}
+                  cavityGeometryByModelId={cavityGeometryByModelId}
+                  modelWorldInverseById={modelWorldInverseById}
                 />
               )}
               </group>{/* end supportDragGroupRef */}
@@ -5871,6 +5894,9 @@ export function SceneCanvas({
                   raftHoverized={raftHoverized}
                   passive
                   supportRenderRefreshNonce={supportRenderRefreshNonce}
+                  interiorView={interiorView}
+                  cavityGeometryByModelId={cavityGeometryByModelId}
+                  modelWorldInverseById={modelWorldInverseById}
                 />
               )}
 
