@@ -217,9 +217,9 @@ export function OrganicCutPanel({
             <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Cut Thickness</label>
             <ScrollableNumberField
               value={state.thicknessMm}
-              onChange={(value) => setState({ thicknessMm: clampFloat(value, 0.05, 1, 2) })}
+              onChange={(value) => setState({ thicknessMm: clampFloat(value, 0.05, 1.5, 2) })}
               min={0.05}
-              max={1}
+              max={1.5}
               step={0.05}
               unit="mm"
               ariaLabel="Cut thickness in millimeters"

@@ -1352,7 +1352,10 @@ fn vertex_normals(m: &Membrane) -> Vec<Vec3> {
 /// clean sever; well below print resolution so the mate stays physically zero.
 pub const DEFAULT_BOUNDARY_CLEARANCE_MM: f32 = 0.05;
 
-/// The membrane's single area-weighted average normal (a fallback direction).
+/// The membrane's single area-weighted average normal. Only the slab unit tests
+/// use it now (the cut no longer lifts the boundary — the loop is offset off the
+/// faces instead), so it's test-only.
+#[cfg(test)]
 fn membrane_average_normal(m: &Membrane) -> Vec3 {
     let mut avg = Vec3::ZERO;
     for t in &m.triangles {
@@ -1363,59 +1366,6 @@ fn membrane_average_normal(m: &Membrane) -> Vec3 {
     }
     let l = avg.length();
     if l > 1e-9 { avg.scale(1.0 / l) } else { Vec3::new(0.0, 0.0, 1.0) }
-}
-
-/// Outward SURFACE normal of `model` at each membrane boundary vertex, found via
-/// the BVH: for each boundary point, query a small AABB and take the nearest
-/// model triangle's face normal. The model is outward-wound, so the face normal
-/// points away from the body. Used to lift the cutter boundary a hair OFF the
-/// surface (clearance) so the slab fully clears it — replacing the old in-plane
-/// "overshoot", which lifted unevenly on curved surfaces and left a coarse rim.
-///
-/// Returns one unit normal per boundary vertex (in `m.boundary` order). Falls
-/// back to the membrane's average normal where no nearby triangle is found.
-fn boundary_surface_normals(model: &IndexedMesh, bvh: &Bvh, m: &Membrane, avg_normal: Vec3) -> Vec<Vec3> {
-    // Search radius: a small fraction of the model so the AABB catches the local
-    // surface triangles around each (on-surface) boundary point without scanning
-    // far. Grown a couple times if nothing is found (sparse/large triangles).
-    let diag = model.bbox().diag().max(1e-3);
-    let base_r = (diag * 0.01).max(1e-4);
-
-    m.boundary
-        .iter()
-        .map(|&bi| {
-            let p = m.vertices[bi as usize];
-            let mut best_d2 = f32::INFINITY;
-            let mut best_n = avg_normal;
-            let mut r = base_r;
-            for _attempt in 0..4 {
-                let query = Aabb {
-                    min: Vec3::new(p.x - r, p.y - r, p.z - r),
-                    max: Vec3::new(p.x + r, p.y + r, p.z + r),
-                };
-                let mut found = false;
-                bvh.query_aabb(&query, |face| {
-                    let [a, b, c] = model.tri_positions(face);
-                    let (cp, d2) = closest_on_tri(p, a, b, c);
-                    if d2 < best_d2 {
-                        best_d2 = d2;
-                        let nrm = b.sub(a).cross(c.sub(a));
-                        let nl = nrm.length();
-                        if nl > 1e-12 {
-                            best_n = nrm.scale(1.0 / nl);
-                        }
-                        let _ = cp;
-                    }
-                    found = true;
-                });
-                if found {
-                    break;
-                }
-                r *= 3.0; // widen and retry for sparse meshes
-            }
-            best_n
-        })
-        .collect()
 }
 
 /// Thicken a membrane into a closed, watertight ~`thickness_mm` slab — the cutter.
@@ -1880,6 +1830,7 @@ fn concat_meshes(meshes: Vec<IndexedMesh>) -> IndexedMesh {
     IndexedMesh { positions, triangles }
 }
 
+
 /// The result of a successful contour split: two parts that mate along the
 /// curved seam, plus diagnostics.
 pub struct ContourSplit {
@@ -1889,6 +1840,69 @@ pub struct ContourSplit {
     pub component_count: usize,
     /// Membrane triangle count (for diagnostics / reporting).
     pub membrane_tris: usize,
+}
+
+/// How far the cut loop sits OFF the model's faces, in mm. Each loop point is
+/// moved this far along the model's outward surface normal there, so the membrane
+/// built on the loop sits just outside the body and the cut runs clean to the
+/// edge. One fixed distance — the only offset in the contour cut.
+pub const DEFAULT_LOOP_OFFSET_MM: f32 = 0.05;
+
+/// Move each loop point `offset_mm` OFF the model's faces, along the model's
+/// outward surface normal at that point (found via the BVH: nearest model
+/// triangle's face normal, which points away from the outward-wound body). This
+/// makes the membrane built on the loop sit just outside the surface, so the cut
+/// face runs clean all the way to the edge with no rim landing on the skin.
+///
+/// The move is perpendicular to the faces and tiny (sub-mm), so it cannot tangle
+/// the loop. Returns the offset loop in the same order; an empty/degenerate model
+/// returns the loop unchanged.
+fn offset_loop_off_faces(model: &IndexedMesh, loop_pts: &[Vec3], offset_mm: f32) -> Vec<Vec3> {
+    if loop_pts.is_empty() || model.triangles.is_empty() || offset_mm <= 0.0 {
+        return loop_pts.to_vec();
+    }
+    let bvh = Bvh::build(model);
+    let diag = model.bbox().diag().max(1e-3);
+    let base_r = (diag * 0.01).max(1e-4);
+
+    loop_pts
+        .iter()
+        .map(|&p| {
+            // Nearest model triangle's outward face normal at p (widen the AABB a
+            // few times for sparse meshes). Fallback: leave the point put.
+            let mut best_d2 = f32::INFINITY;
+            let mut normal: Option<Vec3> = None;
+            let mut r = base_r;
+            for _ in 0..4 {
+                let query = Aabb {
+                    min: Vec3::new(p.x - r, p.y - r, p.z - r),
+                    max: Vec3::new(p.x + r, p.y + r, p.z + r),
+                };
+                let mut found = false;
+                bvh.query_aabb(&query, |face| {
+                    let [a, b, c] = model.tri_positions(face);
+                    let (_, d2) = closest_on_tri(p, a, b, c);
+                    if d2 < best_d2 {
+                        best_d2 = d2;
+                        let nrm = b.sub(a).cross(c.sub(a));
+                        let nl = nrm.length();
+                        if nl > 1e-12 {
+                            normal = Some(nrm.scale(1.0 / nl));
+                        }
+                    }
+                    found = true;
+                });
+                if found {
+                    break;
+                }
+                r *= 3.0;
+            }
+            match normal {
+                Some(n) => p.add(n.scale(offset_mm)),
+                None => p,
+            }
+        })
+        .collect()
 }
 
 /// End-to-end contour cut: build a soap-film membrane spanning `loop_pts`,
@@ -1916,26 +1930,23 @@ pub fn contour_split(
     // Clamped to a sane ceiling so the boolean doesn't crawl on big models.
     let density = density.clamp(1.0, 4.0) as f64;
     let grid_divisions = DEFAULT_GRID_DIVISIONS * density;
-    let membrane = build_membrane_full(loop_pts, CONTOUR_SUBDIVISIONS, membrane_smoothing, grid_divisions)
+
+    // Move the loop 0.05 mm OFF the model's faces (along the surface normal), then
+    // build the membrane on the offset loop. The membrane sits just outside the
+    // body, so the cut runs clean all the way to the edge — no rim lands on the
+    // skin, so there's no border, lip, or wall of any kind. This is the ONLY
+    // offset in the cut.
+    let offset_loop = offset_loop_off_faces(mesh, loop_pts, DEFAULT_LOOP_OFFSET_MM);
+    let membrane = build_membrane_full(&offset_loop, CONTOUR_SUBDIVISIONS, membrane_smoothing, grid_divisions)
         .ok_or_else(|| format!("could not build a membrane from the loop ({} points)", loop_pts.len()))?;
     let membrane_tris = membrane.triangles.len();
 
     let model = to_manifold(mesh).map_err(|e| format!("model invalid: {e}"))?;
 
-    // Lift the cutter boundary a hair off the surface along the model's OUTWARD
-    // SURFACE normal so the slab fully clears the surface (guaranteeing severance)
-    // without the old flat overshoot band that left a coarse rim. The lift follows
-    // the surface contour, so the cut edge stays clean.
-    let avg_normal = membrane_average_normal(&membrane);
-    let bvh = Bvh::build(mesh);
-    let boundary_normals = boundary_surface_normals(mesh, &bvh, &membrane, avg_normal);
-
-    let slab = thicken_to_slab(
-        &membrane,
-        thickness_mm,
-        DEFAULT_BOUNDARY_CLEARANCE_MM,
-        &boundary_normals,
-    );
+    // Thicken the membrane straight into the cutter slab — no boundary lift (the
+    // loop is already off the surface), so the boundary ring stays exactly on the
+    // membrane and the cut face is pure membrane edge to edge.
+    let slab = thicken_to_slab(&membrane, thickness_mm, 0.0, &[]);
     let cutter = to_manifold(&slab).map_err(|e| {
         let mem_mesh = IndexedMesh {
             positions: membrane.vertices.clone(),
@@ -2728,5 +2739,57 @@ mod tests {
 
         let parts = split_by_cutter(&model, &wafer);
         assert_eq!(parts.len(), 1, "a wafer above the cube should leave 1 part");
+    }
+
+    #[test]
+    fn contour_split_severs_with_loop_offset_off_the_faces() {
+        // End-to-end: the loop is offset 0.05mm off the model faces, the membrane
+        // is built on the offset loop, and the cube still severs into 2 at every
+        // density — the cut sits just outside the surface and runs clean to the
+        // edge with no border/lip.
+        let model = cube(10.0);
+        let loop_pts = vec![
+            Vec3::new(0.0, 0.0, 5.0),
+            Vec3::new(10.0, 0.0, 5.0),
+            Vec3::new(10.0, 10.0, 5.0),
+            Vec3::new(0.0, 10.0, 5.0),
+        ];
+        for density in [1.0_f32, 2.0, 4.0] {
+            let split = contour_split(
+                &model,
+                &loop_pts,
+                DEFAULT_CUTTER_THICKNESS_MM,
+                DEFAULT_MEMBRANE_SMOOTHING,
+                density,
+            )
+            .unwrap_or_else(|e| panic!("contour split should sever the cube at density {density}: {e}"));
+            assert_eq!(split.component_count, 2, "density {density} should give 2 parts");
+            assert!(split.part_a.triangle_count() > 0 && split.part_b.triangle_count() > 0);
+        }
+    }
+
+    #[test]
+    fn offset_loop_off_faces_pushes_points_along_the_surface_normal() {
+        // A loop on the cube's z=5 side-face midlines must each move OUT along that
+        // face's outward normal by the offset amount (off the faces).
+        let model = cube(10.0);
+        let loop_pts = vec![
+            Vec3::new(5.0, 0.0, 5.0),  // face y=0  → normal -y
+            Vec3::new(10.0, 5.0, 5.0), // face x=10 → normal +x
+            Vec3::new(5.0, 10.0, 5.0), // face y=10 → normal +y
+            Vec3::new(0.0, 5.0, 5.0),  // face x=0  → normal -x
+        ];
+        let off = offset_loop_off_faces(&model, &loop_pts, 0.5);
+        assert!((off[0].y - (-0.5)).abs() < 1e-3, "y=0 point should move to y=-0.5, got {:?}", off[0]);
+        assert!((off[1].x - 10.5).abs() < 1e-3, "x=10 point should move to x=10.5, got {:?}", off[1]);
+        assert!((off[2].y - 10.5).abs() < 1e-3, "y=10 point should move to y=10.5, got {:?}", off[2]);
+        assert!((off[3].x - (-0.5)).abs() < 1e-3, "x=0 point should move to x=-0.5, got {:?}", off[3]);
+    }
+
+    #[test]
+    fn offset_loop_off_faces_is_a_noop_for_zero_offset() {
+        let model = cube(10.0);
+        let loop_pts = square_loop(10.0);
+        assert_eq!(offset_loop_off_faces(&model, &loop_pts, 0.0), loop_pts);
     }
 }
