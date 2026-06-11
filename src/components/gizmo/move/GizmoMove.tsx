@@ -31,6 +31,7 @@ interface GizmoMoveProps {
    * Falls back to world X/Y/Z when not provided (existing behavior).
    */
   worldAxisDir?: THREE.Vector3;
+  disableArrowFlip?: boolean;
   onDragStart: () => boolean | void;
   onDrag: (delta: THREE.Vector3) => void;
   onDragEnd: () => void;
@@ -57,6 +58,7 @@ export function GizmoMove({
   moveHandleLengthScale = 1.0,
   moveHandleThicknessScale = 1.0,
   worldAxisDir,
+  disableArrowFlip = false,
   onDragStart,
   onDrag,
   onDragEnd,
@@ -109,15 +111,21 @@ export function GizmoMove({
   const headRadius = Math.max(0.03, GIZMO_SIZES.arrowHeadRadius * moveHandleThicknessScale);
   const headLength = Math.max(0.08, GIZMO_SIZES.arrowHeadLength * moveHandleLengthScale);
 
-  const shouldFlipX = axis === 'x' && (camera.position.x - gizmoPosition.x > 0);
-  const shouldFlipY = axis === 'y' && (camera.position.y - gizmoPosition.y > 0);
-  const shouldFlipZ = axis === 'z' && (camera.position.z - gizmoPosition.z > 0);
+  const shouldFlipX = axis === 'x' && !disableArrowFlip && (camera.position.x - gizmoPosition.x > 0);
+  const shouldFlipY = axis === 'y' && !disableArrowFlip && (camera.position.y - gizmoPosition.y > 0);
+  const shouldFlipZ = axis === 'z' && !disableArrowFlip && (camera.position.z - gizmoPosition.z > 0);
 
-  const rotation: [number, number, number] =
-    axis === 'x' ? [0, 0, shouldFlipX ? -Math.PI / 2 : Math.PI / 2]
-    : axis === 'y' ? [0, 0, shouldFlipY ? 0 : Math.PI]
-    : axis === 'z' ? (shouldFlipZ ? [Math.PI / 2, 0, 0] : [-Math.PI / 2, 0, 0])
-    : [0, 0, 0];
+  const positiveAxisRotation: [number, number, number] =
+    axis === 'x' ? [0, 0, -Math.PI / 2]
+    : axis === 'y' ? [0, 0, 0]
+    : [Math.PI / 2, 0, 0];
+
+  const rotation: [number, number, number] = disableArrowFlip
+    ? positiveAxisRotation
+    : axis === 'x' ? [0, 0, shouldFlipX ? -Math.PI / 2 : Math.PI / 2]
+      : axis === 'y' ? [0, 0, shouldFlipY ? 0 : Math.PI]
+        : axis === 'z' ? (shouldFlipZ ? [Math.PI / 2, 0, 0] : [-Math.PI / 2, 0, 0])
+          : [0, 0, 0];
 
   const getAxisParamFromMouse = useCallback((clientX: number, clientY: number): number | null => {
     const rect = gl.domElement.getBoundingClientRect();
@@ -164,8 +172,6 @@ export function GizmoMove({
 
     return ((axisDotRay * rayDotAxisToRay) - axisDotAxisToRay) / denom;
   // gizmoPosition intentionally excluded — we use dragAxisOriginRef (stable).
-  // worldAxisDir intentionally excluded — it's captured via closure ref or prop.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [axis, camera, gl, worldAxisDir]);
 
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {

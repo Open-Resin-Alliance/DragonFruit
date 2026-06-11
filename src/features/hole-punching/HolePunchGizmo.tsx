@@ -1,10 +1,36 @@
 "use client";
 
-import React, { useRef, useCallback, useLayoutEffect } from 'react';
+import React, { useCallback, useRef } from 'react';
 import * as THREE from 'three';
-import { ScreenSpaceGizmo } from '@/components/gizmo/ScreenSpaceGizmo';
+import { LocalSpaceGizmo } from '@/components/gizmo/LocalSpaceGizmo';
+import type { GizmoAxis } from '@/components/gizmo/types';
 
 const UP = new THREE.Vector3(0, 1, 0);
+
+type FrozenFrame = {
+  quaternion: THREE.Quaternion;
+  initialNormal: THREE.Vector3;
+  accumulatedAngle: number;
+};
+
+type VisualPlacement = {
+  worldPoint: THREE.Vector3;
+  worldNormal: THREE.Vector3;
+};
+
+function getSafeNormal(normal: THREE.Vector3): THREE.Vector3 {
+  const next = normal.clone();
+  if (next.lengthSq() <= 1e-10) {
+    next.set(0, 0, 1);
+  } else {
+    next.normalize();
+  }
+  return next;
+}
+
+function getDisplayNormal(normal: THREE.Vector3): THREE.Vector3 {
+  return getSafeNormal(normal).negate();
+}
 
 interface HolePunchGizmoProps {
   /** The selected hole punch placement to show the gizmo for */
@@ -19,99 +45,166 @@ interface HolePunchGizmoProps {
   onMove?: (delta: THREE.Vector3) => void;
   /** Called when the gizmo drag ends */
   onMoveEnd?: () => void;
+  /** Called when the gizmo rotation starts */
+  onRotateStart?: () => void;
+  /** Called when the gizmo is rotated. New normal is provided. */
+  onRotate?: (newNormal: THREE.Vector3) => void;
+  /** Called when the gizmo rotation ends */
+  onRotateEnd?: () => void;
 }
 
 /**
  * HolePunchGizmo - A positioning gizmo for hole punch cylinders
  *
- * Renders a ScreenSpaceGizmo at the cylinder's position, oriented
- * along its normal (Y axis matches the cylinder axis). The center XY
+ * Renders a LocalSpaceGizmo at the cylinder's position, oriented
+ * along its outward display axis (opposite the cutter normal). The center XY
  * drag circle is removed so only the axis arrows remain for precise
  * positioning. When using the gizmo, snapping to surface normals is
  * disabled for that cylinder.
  *
- * The gizmo is rotated so its Y axis aligns with the cylinder normal.
- * The TransformGizmo now propagates its rotation into GizmoMove's
- * worldAxisDir prop, so the drag delta is computed along the visual
- * arrow direction — fully decoupled from world axes.
+ * Uses LocalSpaceGizmo (not ScreenSpaceGizmo) so the axes stay
+ * relative to the cylinder without any camera-dependent offsets,
+ * flips, or billboarding.
  */
 export function HolePunchGizmo({
   placement,
   onMoveStart,
   onMove,
   onMoveEnd,
+  onRotateStart,
+  onRotate,
+  onRotateEnd,
 }: HolePunchGizmoProps) {
-  const gizmoTargetRef = useRef<THREE.Group>(null);
-  // Track whether we're mid-drag so the sync effect skips during drag.
-  const isDraggingRef = useRef(false);
+  // Freeze the gizmo rotation and axis frame during a rotation stroke
+  // so the axes don't drift as the normal changes.
+  const [frozenFrame, setFrozenFrame] = React.useState<FrozenFrame | null>(null);
+  const [visualPlacement, setVisualPlacement] = React.useState<VisualPlacement>(() => ({
+    worldPoint: placement.worldPoint.clone(),
+    worldNormal: getSafeNormal(placement.worldNormal),
+  }));
+  const frozenFrameRef = useRef<FrozenFrame | null>(null);
+  const livePointRef = useRef(placement.worldPoint.clone());
+  const liveNormalRef = useRef(getSafeNormal(placement.worldNormal));
+  const isMovingRef = useRef(false);
+  const isRotatingRef = useRef(false);
 
-  // Compute the gizmo rotation so Y aligns with the cylinder normal.
+  React.useEffect(() => {
+    if (isMovingRef.current || isRotatingRef.current) return;
+
+    const nextPoint = placement.worldPoint.clone();
+    const nextNormal = getSafeNormal(placement.worldNormal);
+    livePointRef.current.copy(nextPoint);
+    liveNormalRef.current.copy(nextNormal);
+    setVisualPlacement({
+      worldPoint: nextPoint,
+      worldNormal: nextNormal,
+    });
+  }, [placement.worldPoint, placement.worldNormal]);
+
+  // Compute the gizmo rotation so Y points outward from the surface while the
+  // stored cutter normal can continue pointing inward through the model.
+  // Frozen during rotation to keep axes stable.
   const gizmoEuler = React.useMemo((): THREE.Euler => {
-    const normal = placement.worldNormal.clone();
-    if (normal.lengthSq() <= 1e-10) {
-      normal.set(0, 0, 1);
-    } else {
-      normal.normalize();
+    if (frozenFrame) {
+      return new THREE.Euler().setFromQuaternion(frozenFrame.quaternion);
     }
-
+    const normal = getDisplayNormal(visualPlacement.worldNormal);
     const q = new THREE.Quaternion();
     q.setFromUnitVectors(UP, normal);
     return new THREE.Euler().setFromQuaternion(q);
-  }, [placement.worldNormal]);
+  }, [frozenFrame, visualPlacement.worldNormal]);
 
   const handleMoveStart = useCallback(() => {
-    isDraggingRef.current = true;
+    isMovingRef.current = true;
+    livePointRef.current.copy(visualPlacement.worldPoint);
     onMoveStart?.();
-  }, [onMoveStart]);
+  }, [onMoveStart, visualPlacement.worldPoint]);
 
   const handleMove = useCallback((delta: THREE.Vector3) => {
-    // Compute the new position directly from the current React state
-    // (placement.worldPoint) plus the delta. This is the same formula
-    // used by page.tsx, so the gizmo visual and the cylinder visual
-    // always agree — no accumulator drift.
-    const newPos = new THREE.Vector3(
-      placement.worldPoint.x + delta.x,
-      placement.worldPoint.y + delta.y,
-      placement.worldPoint.z + delta.z,
-    );
-
-    // Sync the target group position so the ScreenSpaceGizmo follows.
-    if (gizmoTargetRef.current) {
-      gizmoTargetRef.current.position.copy(newPos);
-    }
-
+    livePointRef.current.add(delta);
+    const nextPoint = livePointRef.current.clone();
+    setVisualPlacement((previous) => ({
+      ...previous,
+      worldPoint: nextPoint,
+    }));
     onMove?.(delta);
-  }, [placement.worldPoint, onMove]);
+  }, [onMove]);
 
   const handleMoveEnd = useCallback(() => {
-    isDraggingRef.current = false;
+    isMovingRef.current = false;
     onMoveEnd?.();
   }, [onMoveEnd]);
 
-  // Sync gizmo group position to the placement position when not dragging.
-  useLayoutEffect(() => {
-    if (!gizmoTargetRef.current) return;
-    if (isDraggingRef.current) return;
-    gizmoTargetRef.current.position.copy(placement.worldPoint);
-  }, [placement.worldPoint.x, placement.worldPoint.y, placement.worldPoint.z]);
+  const handleRotateStart = useCallback(() => {
+    // Capture the current gizmo frame so the axes stay fixed for the
+    // whole rotation stroke, preventing axis-drift as the normal changes.
+    const initialNormal = getSafeNormal(visualPlacement.worldNormal);
+    const displayNormal = initialNormal.clone().negate();
+    liveNormalRef.current.copy(initialNormal);
+    const q = new THREE.Quaternion().setFromUnitVectors(
+      UP,
+      displayNormal,
+    );
+    const frame = {
+      quaternion: q,
+      initialNormal,
+      accumulatedAngle: 0,
+    };
+    isRotatingRef.current = true;
+    frozenFrameRef.current = frame;
+    setFrozenFrame(frame);
+    onRotateStart?.();
+  }, [onRotateStart, visualPlacement.worldNormal]);
+
+  const handleRotate = useCallback((axis: GizmoAxis, angleDelta: number) => {
+    // Use the frozen frame's quaternion for a stable world-axis direction.
+    const frame = frozenFrameRef.current;
+    if (!frame) return;
+
+    const basis = axis === 'x' ? new THREE.Vector3(1, 0, 0)
+      : axis === 'z' ? new THREE.Vector3(0, 0, 1)
+      : new THREE.Vector3(0, 1, 0);
+    const worldAxis = basis.applyQuaternion(frame.quaternion);
+
+    // Accumulate against the drag-start normal instead of repeatedly rotating
+    // the already-updated normal. This keeps the reference axis fixed for the
+    // whole stroke and avoids direction flips around the midpoint.
+    frame.accumulatedAngle += angleDelta;
+    const deltaQuat = new THREE.Quaternion().setFromAxisAngle(worldAxis, -frame.accumulatedAngle);
+    const newNormal = frame.initialNormal.clone().applyQuaternion(deltaQuat);
+    newNormal.normalize();
+    liveNormalRef.current.copy(newNormal);
+    setVisualPlacement((previous) => ({
+      ...previous,
+      worldNormal: newNormal.clone(),
+    }));
+
+    onRotate?.(newNormal);
+  }, [onRotate]);
+
+  const handleRotateEnd = useCallback(() => {
+    isRotatingRef.current = false;
+    frozenFrameRef.current = null;
+    setFrozenFrame(null);
+    onRotateEnd?.();
+  }, [onRotateEnd]);
 
   return (
-    <>
-      <group ref={gizmoTargetRef} />
-      <ScreenSpaceGizmo
-        meshRef={gizmoTargetRef as React.RefObject<THREE.Group>}
-        position={[placement.worldPoint.x, placement.worldPoint.y, placement.worldPoint.z]}
-        rotation={gizmoEuler}
-        enableMove
-        enableRotate={false}
-        enableScale={false}
-        showCenter={false}
-        onMoveStart={handleMoveStart}
-        onMove={handleMove}
-        onMoveEnd={handleMoveEnd}
-        scaleFactor={0.025}
-        handleScale={2.5}
-      />
-    </>
+    <LocalSpaceGizmo
+      position={[visualPlacement.worldPoint.x, visualPlacement.worldPoint.y, visualPlacement.worldPoint.z]}
+      rotation={gizmoEuler}
+      size={1.0}
+      enableMove
+      enableRotate
+      showCenter={false}
+      handleScale={1.5}
+      moveHandleThicknessScale={1}
+      onMoveStart={handleMoveStart}
+      onMove={handleMove}
+      onMoveEnd={handleMoveEnd}
+      onRotateStart={handleRotateStart}
+      onRotate={handleRotate}
+      onRotateEnd={handleRotateEnd}
+    />
   );
 }

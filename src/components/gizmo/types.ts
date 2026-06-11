@@ -90,6 +90,11 @@ export interface GizmoConfig {
   constrainToSurface?: boolean;
   constrainToPlane?: boolean;
   axisLock?: GizmoAxis | null;
+
+  // Suppress face-camera behaviors
+  disableArrowFlip?: boolean;
+  disableRingBillboard?: boolean;
+  disableViewCull?: boolean;
   
   // Callbacks
   onMoveStart?: (axis?: GizmoAxis) => boolean | void;

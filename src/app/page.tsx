@@ -1684,6 +1684,7 @@ export default function Home() {
     moved: boolean;
   } | null>(null);
   const suppressHolePunchClickPlacementIdRef = React.useRef<string | null>(null);
+  const suppressHolePunchGizmoReleaseClickUntilRef = React.useRef(0);
   const [isApplyingHollowing, setIsApplyingHollowing] = React.useState(false);
   const [pendingModifierResetAction, setPendingModifierResetAction] = React.useState<PendingModifierResetAction | null>(null);
   const [pendingBlockerResetState, setPendingBlockerResetState] = React.useState<HollowingPanelState | null>(null);
@@ -15879,6 +15880,11 @@ export default function Home() {
     const hitModelId = (hit.object.userData?.modelId as string | undefined) ?? activeModel.id;
     if (hitModelId !== activeModel.id) return;
 
+    if (selectedHolePunchPlacementIds.length > 0 && Date.now() < suppressHolePunchGizmoReleaseClickUntilRef.current) {
+      setHolePunchHoverPlacement(null);
+      return;
+    }
+
     if (hollowingState.mode === 'shell_open_face' && !isShellOpenFaceSelected) {
       const pickedOpenFace = inferOpenFaceFromHit(hit, hollowingState.openFace);
         const nextHollowingState: HollowingPanelState = {
@@ -16074,18 +16080,66 @@ export default function Home() {
   ) => {
     if (!holePunchGizmoDragRef.current || holePunchGizmoDragRef.current.placementId !== placementId) return;
 
-    setHolePunchPlacements((previous) => previous.map((placement) => {
-      if (placement.id !== placementId) return placement;
-      return {
-        ...placement,
-        worldPoint: placement.worldPoint.clone().add(delta),
-        localPoint: placement.localPoint.clone().add(delta),
-      };
-    }));
+    setHolePunchPlacements((previous) => {
+      const nextPlacements = previous.map((placement) => {
+        if (placement.id !== placementId) return placement;
+        return {
+          ...placement,
+          worldPoint: placement.worldPoint.clone().add(delta),
+          localPoint: placement.localPoint.clone().add(delta),
+        };
+      });
+      holePunchPlacementsRef.current = nextPlacements;
+      return nextPlacements;
+    });
   }, []);
 
   const handleHolePunchGizmoMoveEnd = React.useCallback((placementId: string) => {
+    if (!holePunchGizmoDragRef.current || holePunchGizmoDragRef.current.placementId !== placementId) return;
+
+    suppressHolePunchGizmoReleaseClickUntilRef.current = Date.now() + 250;
     holePunchGizmoDragRef.current = null;
+    const activeModel = scene.activeModel;
+    if (activeModel) {
+      persistHolePunchPlacementsForModel(activeModel, holePunchPlacementsRef.current);
+    }
+  }, [persistHolePunchPlacementsForModel, scene.activeModel]);
+
+  /**
+   * Gizmo-based placement rotation — updates the cylinder normal without
+   * snapping, giving the user precise rotational control via the gizmo rings.
+   */
+  const holePunchGizmoRotateRef = React.useRef<{ placementId: string } | null>(null);
+
+  const handleHolePunchGizmoRotateStart = React.useCallback((placementId: string) => {
+    holePunchGizmoRotateRef.current = { placementId };
+  }, []);
+
+  const handleHolePunchGizmoRotate = React.useCallback((
+    placementId: string,
+    newNormal: THREE.Vector3,
+  ) => {
+    if (!holePunchGizmoRotateRef.current || holePunchGizmoRotateRef.current.placementId !== placementId) return;
+
+    setHolePunchPlacements((previous) => {
+      const nextPlacements = previous.map((placement) => {
+        if (placement.id !== placementId) return placement;
+        return {
+          ...placement,
+          worldNormal: newNormal.clone(),
+          localNormal: newNormal.clone(),
+        };
+      });
+      holePunchPlacementsRef.current = nextPlacements;
+      return nextPlacements;
+    });
+  }, []);
+
+  const handleHolePunchGizmoRotateEnd = React.useCallback((placementId: string) => {
+    if (!holePunchGizmoRotateRef.current || holePunchGizmoRotateRef.current.placementId !== placementId) return;
+
+    suppressHolePunchGizmoReleaseClickUntilRef.current = Date.now() + 250;
+    holePunchGizmoRotateRef.current = null;
     const activeModel = scene.activeModel;
     if (activeModel) {
       persistHolePunchPlacementsForModel(activeModel, holePunchPlacementsRef.current);
@@ -18834,6 +18888,9 @@ export default function Home() {
                         onMoveStart={() => handleHolePunchGizmoMoveStart(selectedPlacement.id)}
                         onMove={(delta) => handleHolePunchGizmoMove(selectedPlacement.id, delta)}
                         onMoveEnd={() => handleHolePunchGizmoMoveEnd(selectedPlacement.id)}
+                        onRotateStart={() => handleHolePunchGizmoRotateStart(selectedPlacement.id)}
+                        onRotate={(newNormal) => handleHolePunchGizmoRotate(selectedPlacement.id, newNormal)}
+                        onRotateEnd={() => handleHolePunchGizmoRotateEnd(selectedPlacement.id)}
                       />
                     );
                   })()}

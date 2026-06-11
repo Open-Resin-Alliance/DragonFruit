@@ -21,6 +21,7 @@ type ViewCullState = {
 
 const VIEW_CULL_HIDE_THRESHOLD = 0.02;
 const VIEW_CULL_INTERACTION_THRESHOLD = 0.8;
+const GIZMO_RENDER_ORDER = 1_000_000;
 
 function createAxisVisibility(value = 1): AxisVisibility {
   return { x: value, y: value, z: value };
@@ -178,6 +179,9 @@ export function TransformGizmo({
   onScaleEnd,
   onDragStateChange,
   rootRef,
+  disableArrowFlip,
+  disableRingBillboard,
+  disableViewCull,
 }: TransformGizmoProps) {
   const { isDragging: isGlobalDragging } = usePicking();
   const { camera } = useThree();
@@ -214,16 +218,14 @@ export function TransformGizmo({
       y: new THREE.Vector3(0, 1, 0).applyQuaternion(quat),
       z: new THREE.Vector3(0, 0, 1).applyQuaternion(quat),
     };
-  }, [rotEuler.x, rotEuler.y, rotEuler.z]);
+  }, [rotEuler]);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (!gizmoRootRef.current) return;
 
     gizmoRootRef.current.traverse((obj) => {
       obj.frustumCulled = false;
-      // Cross-section stencil cap renders at ~9800. Gizmo must be above
-      // that so handles are never obscured by the cap fill.
-      obj.renderOrder = 9900;
+      obj.renderOrder = GIZMO_RENDER_ORDER;
       // Mark only renderable gizmo handle geometry so pointer handlers can detect
       // gizmo involvement from intersections. Do NOT tag lights/targets; those
       // should not be hidden during thumbnail capture because it changes lighting.
@@ -250,7 +252,7 @@ export function TransformGizmo({
         applyOverlayMaterial(material);
       }
     });
-  }, []);
+  });
 
   React.useEffect(() => {
     return () => {
@@ -263,6 +265,10 @@ export function TransformGizmo({
 
   const setGizmoRootRef = React.useCallback((node: THREE.Group | null) => {
     gizmoRootRef.current = node;
+    if (node) {
+      node.frustumCulled = false;
+      node.renderOrder = GIZMO_RENDER_ORDER;
+    }
     if (rootRef) {
       rootRef.current = node;
     }
@@ -270,6 +276,7 @@ export function TransformGizmo({
 
   useFrame(() => {
     if (!visible) return;
+    if (disableViewCull) return;
 
     const nextViewCullState = computeViewCullState(camera, posVec, rotEuler);
     if (viewCullStatesEqual(viewCullStateRef.current, nextViewCullState)) {
@@ -279,8 +286,6 @@ export function TransformGizmo({
     viewCullStateRef.current = nextViewCullState;
     setViewCullState(nextViewCullState);
   });
-
-  if (!visible) return null;
 
   const handlePointerEnter = (part: string) => {
     if (isGlobalDragging) return;
@@ -405,6 +410,10 @@ export function TransformGizmo({
   const dragOpacityScale = isGlobalDragging ? 0.6 : 1;
 
   const getViewCullOpacity = (part: string): number => {
+    if (disableViewCull) {
+      return 1;
+    }
+
     if (part === activePart) {
       return 1;
     }
@@ -430,6 +439,10 @@ export function TransformGizmo({
   };
 
   const isViewHidden = (part: string) => {
+    if (disableViewCull) {
+      return false;
+    }
+
     if (part === activePart) {
       return false;
     }
@@ -458,8 +471,17 @@ export function TransformGizmo({
     setHoveredPart(null);
   }, [suppressHover]);
 
+  if (!visible) return null;
+
   return (
-    <group ref={setGizmoRootRef} position={posArray} rotation={rotArray} scale={size} renderOrder={9900}>
+    <group
+      ref={setGizmoRootRef}
+      position={posArray}
+      rotation={rotArray}
+      scale={size}
+      renderOrder={GIZMO_RENDER_ORDER}
+      frustumCulled={false}
+    >
       {enableMove && showCenter && (
         <GizmoCenter
           isHovered={!suppressHover && hoveredPart === 'center'}
@@ -483,6 +505,7 @@ export function TransformGizmo({
             <GizmoMove
               axis="x"
               worldAxisDir={worldAxisDirs.x}
+              disableArrowFlip={disableArrowFlip}
               isHovered={!suppressHover && hoveredPart === 'axis-x'}
               isActive={activePart === 'axis-x'}
               isDimmed={isDimmed('axis-x')}
@@ -507,6 +530,7 @@ export function TransformGizmo({
             <GizmoMove
               axis="y"
               worldAxisDir={worldAxisDirs.y}
+              disableArrowFlip={disableArrowFlip}
               isHovered={!suppressHover && hoveredPart === 'axis-y'}
               isActive={activePart === 'axis-y'}
               isDimmed={isDimmed('axis-y')}
@@ -531,6 +555,7 @@ export function TransformGizmo({
             <GizmoMove
               axis="z"
               worldAxisDir={worldAxisDirs.z}
+              disableArrowFlip={disableArrowFlip}
               isHovered={!suppressHover && hoveredPart === 'axis-z'}
               isActive={activePart === 'axis-z'}
               isDimmed={isDimmed('axis-z')}
@@ -559,6 +584,7 @@ export function TransformGizmo({
           {shouldRenderPart('ring-x') && (
             <GizmoRotation
               axis="x"
+              worldAxisDir={worldAxisDirs.x}
               isHovered={!suppressHover && hoveredPart === 'ring-x'}
               isActive={activePart === 'ring-x'}
               isDimmed={isDimmed('ring-x')}
@@ -567,7 +593,9 @@ export function TransformGizmo({
               opacityScale={partOpacityScale('ring-x')}
               interactionsEnabled={partIsInteractable('ring-x')}
               suppressAxisAnimations={suppressAxisAnimations}
+              disableRingBillboard={disableRingBillboard}
               gizmoPosition={posVec}
+              handleScale={handleScale}
               onDragStart={() => handleDragStart('ring-x')}
               onDrag={(angle: number) => handleRotate('x', angle)}
               onDragEnd={handleDragEnd}
@@ -578,6 +606,7 @@ export function TransformGizmo({
           {shouldRenderPart('ring-y') && (
             <GizmoRotation
               axis="y"
+              worldAxisDir={worldAxisDirs.y}
               isHovered={!suppressHover && hoveredPart === 'ring-y'}
               isActive={activePart === 'ring-y'}
               isDimmed={isDimmed('ring-y')}
@@ -586,7 +615,9 @@ export function TransformGizmo({
               opacityScale={partOpacityScale('ring-y')}
               interactionsEnabled={partIsInteractable('ring-y')}
               suppressAxisAnimations={suppressAxisAnimations}
+              disableRingBillboard={disableRingBillboard}
               gizmoPosition={posVec}
+              handleScale={handleScale}
               onDragStart={() => handleDragStart('ring-y')}
               onDrag={(angle: number) => handleRotate('y', angle)}
               onDragEnd={handleDragEnd}
@@ -597,6 +628,7 @@ export function TransformGizmo({
           {shouldRenderPart('ring-z') && (
             <GizmoRotation
               axis="z"
+              worldAxisDir={worldAxisDirs.z}
               isHovered={!suppressHover && hoveredPart === 'ring-z'}
               isActive={activePart === 'ring-z'}
               isDimmed={isDimmed('ring-z')}
@@ -605,7 +637,9 @@ export function TransformGizmo({
               opacityScale={partOpacityScale('ring-z')}
               interactionsEnabled={partIsInteractable('ring-z')}
               suppressAxisAnimations={suppressAxisAnimations}
+              disableRingBillboard={disableRingBillboard}
               gizmoPosition={posVec}
+              handleScale={handleScale}
               onDragStart={() => handleDragStart('ring-z')}
               onDrag={(angle: number) => handleRotate('z', angle)}
               onDragEnd={handleDragEnd}
