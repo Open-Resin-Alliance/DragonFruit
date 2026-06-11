@@ -45,8 +45,15 @@ export interface OrganicCutSpec {
   loopPoints: OrganicCutLoopPoint[];
   /** Wafer thickness in mm ("consistent thickness"). Unused by the M1 no-op. */
   thicknessMm: number;
-  /** Path-fairing strength 0..1. Unused by the M1 no-op. */
+  /** Seam-line smoothing 0..1 (how much the cut line rounds through waypoints). */
   smoothing: number;
+  /** Membrane smoothing 0..1 (how smooth/taut the curved cutter surface is). */
+  membraneSmoothing?: number;
+  /**
+   * Wafer density multiplier (1..4) — cutter poly count. Sent only with the CUT
+   * (not the preview), so editing stays light. Serde field: `density`.
+   */
+  density?: number;
   /**
    * Explicit cutting plane in model-local space. When present, Rust splits by
    * THIS plane directly (it's the exact plane the preview showed), instead of

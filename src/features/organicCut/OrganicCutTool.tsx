@@ -1,5 +1,6 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
+import type { ThreeEvent } from '@react-three/fiber';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -16,6 +17,42 @@ interface OrganicCutToolProps {
   loop: OrganicCutLoopPoint[];
   /** Append a point picked on the surface. Reserved for future in-canvas hooks. */
   onAddPoint: (point: OrganicCutLoopPoint) => void;
+  /**
+   * Reposition an existing waypoint (drag-to-edit). Called live as the marker is
+   * dragged across the surface, with the new model-local surface point.
+   */
+  onUpdatePoint?: (index: number, point: OrganicCutLoopPoint) => void;
+  /**
+   * Notifies the host that a marker drag started/ended so it can disable
+   * OrbitControls (and any marquee selection) for the duration of the drag.
+   */
+  onDragStateChange?: (dragging: boolean) => void;
+  /**
+   * Hover state over the seam line (hover-to-arm for right-click insertion). Null
+   * when not hovering. When set, carries the model-local point under the cursor
+   * and the chain index AFTER which a new waypoint should be inserted (so it lands
+   * between waypoints `afterIndex` and `afterIndex+1`). The host arms its
+   * right-click "Add waypoint here" menu from this.
+   */
+  onLineHoverChange?: (
+    info: { localPoint: [number, number, number]; afterIndex: number } | null,
+  ) => void;
+  /**
+   * Left-click on the seam line → insert a waypoint at the clicked point (between
+   * waypoints `afterIndex` and `afterIndex+1`). Same result as the right-click
+   * "Add waypoint here", but more discoverable.
+   */
+  onLineClick?: (info: { localPoint: [number, number, number]; afterIndex: number }) => void;
+  /** Index of the currently selected waypoint (highlighted), or null. */
+  selectedIndex?: number | null;
+  /** Select a waypoint (click a marker), or null to clear (click elsewhere). */
+  onSelectPoint?: (index: number | null) => void;
+  /**
+   * Hover state over a WAYPOINT marker (hover-to-arm for right-click delete).
+   * Null when not over a marker; otherwise the hovered waypoint index. The host
+   * arms a "Delete waypoint" menu from this on right-click.
+   */
+  onMarkerHoverChange?: (index: number | null) => void;
   /**
    * Surface-following loop polyline (flat xyz, model-local) from the Rust geodesic
    * engine. When present, it's drawn instead of straight chords so the seam hugs
@@ -37,10 +74,10 @@ interface OrganicCutToolProps {
 }
 
 /** Marker radius as a fraction of the model's bbox diagonal (small = precise). */
-const MARKER_RADIUS_FRACTION = 0.0015;
+const MARKER_RADIUS_FRACTION = 0.00075;
 /** Clamp the marker radius (model-local units) so it's usable on any model size. */
-const MARKER_RADIUS_MIN = 0.01;
-const MARKER_RADIUS_MAX = 0.6;
+const MARKER_RADIUS_MIN = 0.005;
+const MARKER_RADIUS_MAX = 0.3;
 const LOOP_LINE_BIAS_MM = 0.2;
 
 /**
@@ -63,6 +100,13 @@ export function OrganicCutTool({
   activeModelId,
   activeTransform,
   loop,
+  onUpdatePoint,
+  onDragStateChange,
+  onLineHoverChange,
+  onLineClick,
+  selectedIndex = null,
+  onSelectPoint,
+  onMarkerHoverChange,
   geodesicPolyline,
   cutMode = 'plane',
   membranePreview,
@@ -92,13 +136,28 @@ export function OrganicCutTool({
   //
   // PREFER the surface-following geodesic polyline from Rust when available; only
   // fall back to straight chords between points if it hasn't computed yet.
-  const loopLine = useMemo(() => {
+  // Flat xyz positions of the rendered seam polyline (geodesic when available,
+  // else straight chords). Shared by the visible line and the pickable tube.
+  const loopPositions = useMemo<number[] | null>(() => {
     let positions: number[] | null = null;
-
     if (geodesicPolyline && geodesicPolyline.length >= 6) {
-      // The geodesic polyline already hugs the surface; nudge slightly outward is
-      // unnecessary (it sits on vertices). Use as-is.
       positions = Array.from(geodesicPolyline);
+      // The Rust geodesic for a CLOSED loop omits the final point (it equals the
+      // first), so the rendered line would have a visible gap at the start point.
+      // Append the first vertex to draw the loop fully closed. (Only for a real
+      // loop — ≥3 waypoints — which is when the Rust side closes it.)
+      if (loop.length >= 3) {
+        const first = positions.slice(0, 3);
+        const lastIdx = positions.length - 3;
+        const dx = positions[lastIdx] - first[0];
+        const dy = positions[lastIdx + 1] - first[1];
+        const dz = positions[lastIdx + 2] - first[2];
+        // Only append if the end isn't already at the start (avoid a zero-length
+        // duplicate segment).
+        if (dx * dx + dy * dy + dz * dz > 1e-10) {
+          positions.push(first[0], first[1], first[2]);
+        }
+      }
     } else if (loop.length >= 2) {
       positions = [];
       const pushBiased = (p: OrganicCutLoopPoint) => {
@@ -111,7 +170,11 @@ export function OrganicCutTool({
       for (const p of loop) pushBiased(p);
       if (loop.length >= 3) pushBiased(loop[0]);
     }
+    return positions && positions.length >= 6 ? positions : null;
+  }, [loop, geodesicPolyline]);
 
+  const loopLine = useMemo(() => {
+    const positions = loopPositions;
     if (!positions || positions.length < 6) return null;
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -119,7 +182,34 @@ export function OrganicCutTool({
     const line = new THREE.Line(geom, material);
     line.renderOrder = 999;
     return line;
-  }, [loop, geodesicPolyline]);
+  }, [loopPositions]);
+
+  // Two tubes along the seam from a shared curve: a THIN visible `glow` tube (the
+  // hover highlight) and a WIDER invisible `hit` tube (the pointer/right-click
+  // target). Separating them lets the hitbox be comfortably grabbable without
+  // fattening the visible highlight. Radii scale with the model.
+  const seamTubes = useMemo(() => {
+    if (!loopPositions || loopPositions.length < 6 || !activeModel) return null;
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i + 2 < loopPositions.length; i += 3) {
+      pts.push(new THREE.Vector3(loopPositions[i], loopPositions[i + 1], loopPositions[i + 2]));
+    }
+    if (pts.length < 2) return null;
+    const geometry = activeModel.geometry.geometry;
+    const bbox =
+      geometry.boundingBox ??
+      new THREE.Box3().setFromBufferAttribute(geometry.getAttribute('position') as THREE.BufferAttribute);
+    const diag = bbox.getSize(new THREE.Vector3()).length();
+    const segments = Math.max(8, pts.length);
+    const curve = new THREE.CatmullRomCurve3(pts, false);
+    const glowRadius = Math.max(0.01, diag * 0.00045);
+    const hitRadius = Math.max(0.025, diag * 0.0014); // ~3x the glow, for easy hovering
+    const glow = new THREE.TubeGeometry(curve, segments, glowRadius, 6, false);
+    glow.computeBoundingSphere();
+    const hit = new THREE.TubeGeometry(curve, segments, hitRadius, 6, false);
+    hit.computeBoundingSphere();
+    return { glow, hit };
+  }, [loopPositions, activeModel]);
 
   // Live cut-plane preview: a translucent quad showing EXACTLY where the slice
   // lands, from the same plane formula the cut uses. Sized to span the model.
@@ -188,6 +278,216 @@ export function OrganicCutTool({
     return Math.min(MARKER_RADIUS_MAX, Math.max(MARKER_RADIUS_MIN, r));
   }, [activeModel, transform]);
 
+  // --- Drag-to-edit waypoints ------------------------------------------------
+  // Invisible mesh carrying the model geometry, mounted in the SAME nested group
+  // as the markers (so its local space == the loop-point space). We raycast the
+  // dragged pointer against it to keep the waypoint glued to the surface, then
+  // convert the world hit straight back to loop-point space via worldToLocal.
+  const raycastMeshRef = useRef<THREE.Mesh | null>(null);
+  const raycasterRef = useRef(new THREE.Raycaster());
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  // Whether the in-progress marker drag actually moved (vs a click-in-place). A
+  // press that doesn't move is treated as a SELECT on release, not a drag.
+  const dragMovedRef = useRef(false);
+  // True while the cursor is over the seam tube (arms right-click insertion).
+  const [lineHovered, setLineHovered] = useState(false);
+
+  // Highlight the seam line while hovered (the hover-to-arm affordance): brighten
+  // the colour so the user sees it's targetable for "Add waypoint here".
+  React.useEffect(() => {
+    if (!loopLine) return;
+    const mat = loopLine.material as THREE.LineBasicMaterial;
+    mat.color.set(lineHovered ? 0xc8ffd8 : 0x37ff7a);
+  }, [loopLine, lineHovered]);
+
+  const modelGeometry = activeModel?.geometry.geometry ?? null;
+
+  const handleMarkerPointerDown = useCallback(
+    (index: number) => (e: ThreeEvent<PointerEvent>) => {
+      // LEFT button only. Right-click (button 2) must fall through to the camera
+      // (it's the orbit/rotate button) and middle (1) to pan — never start a drag.
+      if (e.button !== 0) return;
+      // Capture the pointer on the marker so every subsequent move/up routes here
+      // regardless of what's under the cursor, and stop the event from reaching
+      // the model-click / selection / orbit pipeline beneath. R3F augments the
+      // event target (the marker object3D) with setPointerCapture.
+      e.stopPropagation();
+      try {
+        (e.currentTarget as unknown as { setPointerCapture?: (id: number) => void })
+          .setPointerCapture?.(e.pointerId);
+      } catch {
+        /* capture is best-effort; the drag still works via draggingIndex state */
+      }
+      dragMovedRef.current = false;
+      setDraggingIndex(index);
+      onDragStateChange?.(true);
+      document.body.style.cursor = 'grabbing';
+    },
+    [onDragStateChange],
+  );
+
+  const handleMarkerPointerMove = useCallback(
+    (e: ThreeEvent<PointerEvent>) => {
+      if (draggingIndex === null) return;
+      const mesh = raycastMeshRef.current;
+      if (!mesh || !onUpdatePoint) return;
+      e.stopPropagation();
+
+      // e.ray is the world-space camera ray through the current pointer — valid
+      // even though the event is captured by the marker. Re-raycast it against
+      // the model surface to find where the dragged waypoint should land.
+      const raycaster = raycasterRef.current;
+      raycaster.set(e.ray.origin, e.ray.direction);
+      const hits = raycaster.intersectObject(mesh, false);
+      if (hits.length === 0) return; // off the model — keep the last good spot
+
+      const hit = hits[0];
+      mesh.updateWorldMatrix(true, false);
+      const local = mesh.worldToLocal(hit.point.clone());
+      const n = hit.face?.normal
+        ? hit.face.normal.clone().normalize()
+        : new THREE.Vector3(0, 0, 1);
+      dragMovedRef.current = true; // an actual reposition happened → it's a drag
+      onUpdatePoint(draggingIndex, {
+        position: [local.x, local.y, local.z],
+        normal: [n.x, n.y, n.z],
+      });
+    },
+    [draggingIndex, onUpdatePoint],
+  );
+
+  const endDrag = useCallback(
+    (e: ThreeEvent<PointerEvent>) => {
+      if (draggingIndex === null) return;
+      e.stopPropagation();
+      try {
+        const target = e.currentTarget as unknown as {
+          hasPointerCapture?: (id: number) => boolean;
+          releasePointerCapture?: (id: number) => void;
+        };
+        if (target.hasPointerCapture?.(e.pointerId)) {
+          target.releasePointerCapture?.(e.pointerId);
+        }
+      } catch {
+        /* best-effort release */
+      }
+      // A press that never moved is a CLICK → select this waypoint.
+      if (!dragMovedRef.current) {
+        onSelectPoint?.(draggingIndex);
+      }
+      setDraggingIndex(null);
+      onDragStateChange?.(false);
+      document.body.style.cursor = '';
+    },
+    [draggingIndex, onDragStateChange, onSelectPoint],
+  );
+
+  // Hover affordance: a grab cursor over a marker, grabbing while dragging.
+  const handleMarkerPointerOver = useCallback((e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    if (draggingIndex === null) document.body.style.cursor = 'grab';
+  }, [draggingIndex]);
+  const handleMarkerPointerOut = useCallback(() => {
+    if (draggingIndex === null) document.body.style.cursor = '';
+  }, [draggingIndex]);
+
+  // Compute the seam-insertion target for a pointer over the seam tube: the
+  // model-local point ON THE SURFACE under the cursor (re-raycast the model, not
+  // the floating tube — an off-surface point would mislocate the geodesic) and
+  // the waypoint SEGMENT it falls on (afterIndex). Shared by hover (right-click
+  // arm) and left-click (direct insert). Returns null if it can't resolve.
+  const computeLineInsertion = useCallback(
+    (e: ThreeEvent<PointerEvent>): { localPoint: [number, number, number]; afterIndex: number } | null => {
+      const mesh = raycastMeshRef.current;
+      if (!mesh) return null;
+      mesh.updateWorldMatrix(true, false);
+      const raycaster = raycasterRef.current;
+      raycaster.set(e.ray.origin, e.ray.direction);
+      const hits = raycaster.intersectObject(mesh, false);
+      const worldHit = hits.length > 0 ? hits[0].point : e.point;
+      const local = mesh.worldToLocal(worldHit.clone());
+
+      // Nearest waypoint-pair segment to the point. For a closed loop the final
+      // segment wraps last→first, so afterIndex === n-1 inserts at the end.
+      const n = loop.length;
+      let bestAfter = Math.max(0, n - 1);
+      if (n >= 2) {
+        const segCount = n >= 3 ? n : n - 1;
+        let bestD = Infinity;
+        const a = new THREE.Vector3();
+        const b = new THREE.Vector3();
+        const ab = new THREE.Vector3();
+        for (let i = 0; i < segCount; i += 1) {
+          const p0 = loop[i].position;
+          const p1 = loop[(i + 1) % n].position;
+          a.set(p0[0], p0[1], p0[2]);
+          b.set(p1[0], p1[1], p1[2]);
+          ab.copy(b).sub(a);
+          const t = THREE.MathUtils.clamp(
+            local.clone().sub(a).dot(ab) / Math.max(ab.lengthSq(), 1e-9),
+            0,
+            1,
+          );
+          const d = a.clone().addScaledVector(ab, t).distanceToSquared(local);
+          if (d < bestD) {
+            bestD = d;
+            bestAfter = i;
+          }
+        }
+      }
+      return { localPoint: [local.x, local.y, local.z], afterIndex: bestAfter };
+    },
+    [loop],
+  );
+
+  const reportLineHover = useCallback(
+    (e: ThreeEvent<PointerEvent>) => {
+      if (!onLineHoverChange) return;
+      onLineHoverChange(computeLineInsertion(e));
+    },
+    [onLineHoverChange, computeLineInsertion],
+  );
+
+  const handleLinePointerOver = useCallback(
+    (e: ThreeEvent<PointerEvent>) => {
+      e.stopPropagation();
+      setLineHovered(true);
+      document.body.style.cursor = 'context-menu';
+      reportLineHover(e);
+    },
+    [reportLineHover],
+  );
+  const handleLinePointerMove = useCallback(
+    (e: ThreeEvent<PointerEvent>) => {
+      if (draggingIndex !== null) return; // ignore while dragging a marker
+      e.stopPropagation();
+      // Also set hover here: R3F's onPointerOver doesn't always fire (e.g. when
+      // the tube first appears under a stationary cursor), but move is reliable.
+      setLineHovered(true);
+      document.body.style.cursor = 'context-menu';
+      reportLineHover(e);
+    },
+    [reportLineHover, draggingIndex],
+  );
+  const handleLinePointerOut = useCallback(() => {
+    setLineHovered(false);
+    document.body.style.cursor = '';
+    onLineHoverChange?.(null);
+  }, [onLineHoverChange]);
+
+  // Left-click on the seam → insert a waypoint at the clicked point.
+  const handleLineClick = useCallback(
+    (e: ThreeEvent<MouseEvent>) => {
+      if (!onLineClick) return;
+      if (e.button !== undefined && e.button !== 0) return; // left only
+      if (draggingIndex !== null) return;
+      e.stopPropagation();
+      const info = computeLineInsertion(e as unknown as ThreeEvent<PointerEvent>);
+      if (info) onLineClick(info);
+    },
+    [onLineClick, computeLineInsertion, draggingIndex],
+  );
+
   if (!activeModelId || !activeModel || !transform) return null;
 
   return (
@@ -197,6 +497,48 @@ export function OrganicCutTool({
       scale={transform.scale}
     >
       <group position={meshLocalOffset}>
+        {/* Invisible copy of the model geometry used ONLY as a manual raycast
+            target for dragging waypoints. Sharing this group's local space means
+            a world hit converts straight back to loop-point space via
+            worldToLocal. `visible={false}` keeps it from rendering AND keeps R3F's
+            event system from dispatching to it — we intersect it by hand with our
+            own raycaster (intersectObject works on invisible meshes). */}
+        {modelGeometry && (
+          <mesh ref={raycastMeshRef} geometry={modelGeometry} visible={false} />
+        )}
+
+        {/* Seam hover: a WIDE invisible hit tube (carries the pointer handlers /
+            arms the right-click menu) plus a THIN visible glow tube (the
+            highlight). Both must stay `visible` for R3F events; the hit tube
+            paints nothing (colorWrite off), and the glow tube only shows when
+            hovered. Separating them keeps the hitbox comfortably grabbable
+            without fattening the visible highlight. */}
+        {seamTubes && onLineHoverChange && (
+          <>
+            <mesh
+              geometry={seamTubes.hit}
+              renderOrder={995}
+              frustumCulled={false}
+              onPointerOver={handleLinePointerOver}
+              onPointerMove={handleLinePointerMove}
+              onPointerOut={handleLinePointerOut}
+              onClick={handleLineClick}
+            >
+              <meshBasicMaterial transparent opacity={0} depthWrite={false} colorWrite={false} />
+            </mesh>
+            <mesh geometry={seamTubes.glow} renderOrder={996} frustumCulled={false}>
+              <meshBasicMaterial
+                color={0xeafff0}
+                transparent
+                opacity={lineHovered ? 0.85 : 0}
+                depthTest={false}
+                depthWrite={false}
+                side={THREE.DoubleSide}
+              />
+            </mesh>
+          </>
+        )}
+
         {/* Contour membrane preview: the exact curved cutter surface. */}
         {membraneGeometry && (
           <mesh geometry={membraneGeometry} renderOrder={997} frustumCulled={false}>
@@ -214,9 +556,9 @@ export function OrganicCutTool({
         {membraneWireframe && (
           <lineSegments geometry={membraneWireframe} renderOrder={998} frustumCulled={false}>
             <lineBasicMaterial
-              color={0x0a3d1f}
+              color={0xcccccc}
               transparent
-              opacity={0.6}
+              opacity={0.15}
               depthTest={false}
               depthWrite={false}
             />
@@ -241,13 +583,46 @@ export function OrganicCutTool({
           </mesh>
         )}
 
-        {/* Placed loop points. First point is green (closure target), rest amber. */}
-        {loop.map((p, idx) => (
-          <mesh key={idx} position={[p.position[0], p.position[1], p.position[2]]} renderOrder={999}>
-            <sphereGeometry args={[markerRadius, 16, 16]} />
-            <meshBasicMaterial color={idx === 0 ? 0x37ff7a : 0xffd24a} depthTest={false} transparent opacity={0.95} />
-          </mesh>
-        ))}
+        {/* Placed loop points. First point is green (closure target), rest amber.
+            Dragging → cyan. SELECTED → blue (the waypoint Delete/right-click will
+            remove). Each marker is draggable: a press that moves repositions it; a
+            press that doesn't is a select. */}
+        {loop.map((p, idx) => {
+          const isDragging = draggingIndex === idx;
+          const isSelected = selectedIndex === idx;
+          const color = isSelected
+            ? 0x0091ff
+            : isDragging
+              ? 0x35e3ff
+              : idx === 0
+                ? 0x37ff7a
+                : 0xffd24a;
+          const scale = isDragging ? 1.5 : 1;
+          // A larger invisible hit-sphere makes the small dots easy to grab.
+          const hitRadius = markerRadius * 4;
+          return (
+            <group key={idx} position={[p.position[0], p.position[1], p.position[2]]}>
+              {/* Generous invisible grab/click/hover target. */}
+              <mesh
+                renderOrder={1000}
+                onPointerDown={handleMarkerPointerDown(idx)}
+                onPointerMove={handleMarkerPointerMove}
+                onPointerUp={endDrag}
+                onPointerCancel={endDrag}
+                onPointerOver={(e) => { handleMarkerPointerOver(e); onMarkerHoverChange?.(idx); }}
+                onPointerOut={() => { handleMarkerPointerOut(); onMarkerHoverChange?.(null); }}
+              >
+                <sphereGeometry args={[hitRadius, 12, 12]} />
+                <meshBasicMaterial transparent opacity={0} depthTest={false} depthWrite={false} />
+              </mesh>
+              {/* Visible dot. */}
+              <mesh renderOrder={1002} scale={scale}>
+                <sphereGeometry args={[markerRadius, 16, 16]} />
+                <meshBasicMaterial color={color} depthTest={false} transparent opacity={0.95} />
+              </mesh>
+            </group>
+          );
+        })}
 
         {/* Connecting polyline through the points (and closing segment). */}
         {loopLine && <primitive object={loopLine} />}

@@ -22,7 +22,7 @@ pub use crate::hollowing::{
     HolePunchReport, HolePunchSpec, HollowMode, HollowOptions, HollowOutcome, HollowReport,
     HollowSession, OpenFace,
 };
-pub use crate::geodesic::{surface_loop_from_mesh, surface_loop_positions};
+pub use crate::geodesic::{surface_loop_from_mesh, surface_loop_positions, GeodesicSolver};
 pub use crate::organic_cut::{
     organic_cut, OrganicCutLoopPoint, OrganicCutOptions, OrganicCutOutcome, OrganicCutReport,
     OrganicCutSpec,

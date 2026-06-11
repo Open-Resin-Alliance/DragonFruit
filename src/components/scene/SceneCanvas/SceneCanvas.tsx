@@ -359,6 +359,7 @@ export function SceneCanvas({
   onHolePunchClick,
   onHolePunchHover,
   onOrganicCutClick,
+  organicCutDragging,
   onSupportHover,
   onActiveModelChange,
   onMarqueeSelectionChange,
@@ -494,6 +495,8 @@ export function SceneCanvas({
   onHolePunchClick?: (hit: THREE.Intersection) => void;
   onHolePunchHover?: (hit: THREE.Intersection | null) => void;
   onOrganicCutClick?: (hit: THREE.Intersection) => void;
+  /** True while an organic-cut waypoint is being dragged — disables OrbitControls. */
+  organicCutDragging?: boolean;
   onSupportHover?: (hit: THREE.Intersection | null) => void;
   onActiveModelChange?: (id: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => void;
   onMarqueeSelectionChange?: (ids: string[]) => void;
@@ -6530,6 +6533,7 @@ export function SceneCanvas({
             && !isGizmoDragging
             && !isMarqueeSelecting
             && !customPrepareMarqueeSelection?.enabled
+            && !organicCutDragging
           }
           onStart={handleOrbitStart}
           onChange={handleOrbitChange}

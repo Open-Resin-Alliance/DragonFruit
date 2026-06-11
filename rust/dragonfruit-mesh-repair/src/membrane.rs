@@ -16,7 +16,8 @@
 
 #![cfg(feature = "manifold")]
 
-use crate::core::mesh::{IndexedMesh, Vec3};
+use crate::core::bvh::Bvh;
+use crate::core::mesh::{Aabb, IndexedMesh, Vec3};
 
 /// Default cutter thickness in mm. This is an ABSOLUTE minimum, independent of
 /// model size — a bigger model must NOT lose a bigger chunk. It only needs to be
@@ -75,6 +76,38 @@ impl Membrane {
 /// point at the end — closure is implicit). Returns `None` if the loop is
 /// degenerate (< 3 distinct points).
 pub fn build_membrane(loop_pts: &[Vec3], subdivisions: u32) -> Option<Membrane> {
+    build_membrane_smoothed(loop_pts, subdivisions, DEFAULT_MEMBRANE_SMOOTHING)
+}
+
+/// Default membrane smoothing (0..1). 0.5 reproduces the original 60 relaxation
+/// passes; 0 = no relaxation (raw faceted grid), 1 = very smooth/taut surface.
+pub const DEFAULT_MEMBRANE_SMOOTHING: f32 = 0.5;
+
+/// Default membrane grid resolution (cells across the loop's larger bbox dim).
+/// The preview and a 1× cut use this; higher values give a denser cutter mesh.
+pub const DEFAULT_GRID_DIVISIONS: f64 = 24.0;
+
+/// As [`build_membrane`] but with explicit `smoothing` (0..1) controlling the
+/// soap-film relaxation strength (how smooth/taut the cutter surface is). Uses
+/// the default grid resolution.
+pub fn build_membrane_smoothed(
+    loop_pts: &[Vec3],
+    subdivisions: u32,
+    smoothing: f32,
+) -> Option<Membrane> {
+    build_membrane_full(loop_pts, subdivisions, smoothing, DEFAULT_GRID_DIVISIONS)
+}
+
+/// As [`build_membrane_smoothed`] but with explicit `grid_divisions` controlling
+/// the membrane mesh density (poly count of the cutter). Higher = denser. Only
+/// the contour CUT raises this; the live preview stays at the default so editing
+/// is light.
+pub fn build_membrane_full(
+    loop_pts: &[Vec3],
+    subdivisions: u32,
+    smoothing: f32,
+    grid_divisions: f64,
+) -> Option<Membrane> {
     let loop_pts = dedupe_loop(loop_pts);
     if loop_pts.len() < 3 {
         return None;
@@ -83,7 +116,7 @@ pub fn build_membrane(loop_pts: &[Vec3], subdivisions: u32) -> Option<Membrane> 
     // Grid seed (constrained Delaunay over a uniform interior point grid) →
     // well-shaped, near-uniform triangles with NO fan apex. Falls back to the
     // centroid fan + subdivision only if CDT fails (degenerate/odd loop).
-    let mut membrane = match seed_grid(&loop_pts) {
+    let mut membrane = match seed_grid(&loop_pts, grid_divisions) {
         Some(m) => m,
         None => {
             let mut fan = seed_fan(&loop_pts)?;
@@ -101,8 +134,11 @@ pub fn build_membrane(loop_pts: &[Vec3], subdivisions: u32) -> Option<Membrane> 
     // one triangle so every neighbour agrees.
     orient_membrane(&mut membrane);
     // Minimal-surface relaxation bows the (flat) grid to follow the loop contour.
-    // The isotropic remesh (relax_and_remesh) is kept below but disabled.
-    relax(&mut membrane, 60, 0.5);
+    // `smoothing` scales the pass count: 0.5 → 60 (original), 0 → none, 1 → 120.
+    let passes = (smoothing.clamp(0.0, 1.0) * 120.0).round() as usize;
+    if passes > 0 {
+        relax(&mut membrane, passes, 0.5);
+    }
     Some(membrane)
 }
 
@@ -115,7 +151,24 @@ pub const CONTOUR_SUBDIVISIONS: u32 = 3;
 /// scene. `None` if the loop is degenerate. This is the single source of truth
 /// for "what surface will the contour cut use" — render it to see the cutter.
 pub fn build_membrane_preview_soup(loop_pts: &[Vec3]) -> Option<Vec<f32>> {
-    let membrane = build_membrane(loop_pts, CONTOUR_SUBDIVISIONS)?;
+    build_membrane_preview_soup_smoothed(loop_pts, DEFAULT_MEMBRANE_SMOOTHING)
+}
+
+/// As [`build_membrane_preview_soup`] but with explicit membrane `smoothing`, so
+/// the preview reflects the slider value.
+pub fn build_membrane_preview_soup_smoothed(loop_pts: &[Vec3], smoothing: f32) -> Option<Vec<f32>> {
+    build_membrane_preview_soup_full(loop_pts, smoothing, 1.0)
+}
+
+/// As [`build_membrane_preview_soup_smoothed`] but also reflecting the cut
+/// `density` multiplier, so the preview matches the cut resolution live.
+pub fn build_membrane_preview_soup_full(
+    loop_pts: &[Vec3],
+    smoothing: f32,
+    density: f32,
+) -> Option<Vec<f32>> {
+    let grid_divisions = DEFAULT_GRID_DIVISIONS * (density.clamp(1.0, 4.0) as f64);
+    let membrane = build_membrane_full(loop_pts, CONTOUR_SUBDIVISIONS, smoothing, grid_divisions)?;
     Some(membrane_to_soup(&membrane))
 }
 
@@ -296,7 +349,7 @@ fn point_in_polygon(p: (f64, f64), poly: &[(f64, f64)]) -> bool {
 /// closed constraint (CDT returns only interior triangles) → lift back to 3D.
 /// Returns `None` (caller falls back to `seed_fan`) if the loop is degenerate or
 /// CDT fails.
-fn seed_grid(loop_pts: &[Vec3]) -> Option<Membrane> {
+fn seed_grid(loop_pts: &[Vec3], grid_divisions: f64) -> Option<Membrane> {
     let n = loop_pts.len();
     if n < 3 {
         return None;
@@ -314,11 +367,11 @@ fn seed_grid(loop_pts: &[Vec3]) -> Option<Membrane> {
     }
 
     // Target grid spacing = a fraction of the loop's extent, so even a coarse
-    // 4-point loop gets a real interior grid. ~`GRID_DIVISIONS` cells across the
+    // 4-point loop gets a real interior grid. ~`grid_divisions` cells across the
     // larger bbox dimension. Independent of how many points the user clicked.
-    const GRID_DIVISIONS: f64 = 24.0;
+    let grid_divisions = grid_divisions.max(1.0);
     let extent = (max_x - min_x).max(max_y - min_y).max(1e-4);
-    let spacing = (extent / GRID_DIVISIONS).max(1e-4);
+    let spacing = (extent / grid_divisions).max(1e-4);
 
     // Densify the boundary to ~`spacing` resolution so CDT has short rim edges
     // (otherwise long loop edges with no interior points force slivers). Each
@@ -1294,6 +1347,77 @@ fn vertex_normals(m: &Membrane) -> Vec<Vec3> {
     normals
 }
 
+/// How far to lift the cutter boundary off the model surface (along the surface
+/// normal) so the slab fully clears it. Small + fixed: just enough to guarantee a
+/// clean sever; well below print resolution so the mate stays physically zero.
+pub const DEFAULT_BOUNDARY_CLEARANCE_MM: f32 = 0.05;
+
+/// The membrane's single area-weighted average normal (a fallback direction).
+fn membrane_average_normal(m: &Membrane) -> Vec3 {
+    let mut avg = Vec3::ZERO;
+    for t in &m.triangles {
+        let a = m.vertices[t[0] as usize];
+        let b = m.vertices[t[1] as usize];
+        let c = m.vertices[t[2] as usize];
+        avg = avg.add(b.sub(a).cross(c.sub(a)));
+    }
+    let l = avg.length();
+    if l > 1e-9 { avg.scale(1.0 / l) } else { Vec3::new(0.0, 0.0, 1.0) }
+}
+
+/// Outward SURFACE normal of `model` at each membrane boundary vertex, found via
+/// the BVH: for each boundary point, query a small AABB and take the nearest
+/// model triangle's face normal. The model is outward-wound, so the face normal
+/// points away from the body. Used to lift the cutter boundary a hair OFF the
+/// surface (clearance) so the slab fully clears it — replacing the old in-plane
+/// "overshoot", which lifted unevenly on curved surfaces and left a coarse rim.
+///
+/// Returns one unit normal per boundary vertex (in `m.boundary` order). Falls
+/// back to the membrane's average normal where no nearby triangle is found.
+fn boundary_surface_normals(model: &IndexedMesh, bvh: &Bvh, m: &Membrane, avg_normal: Vec3) -> Vec<Vec3> {
+    // Search radius: a small fraction of the model so the AABB catches the local
+    // surface triangles around each (on-surface) boundary point without scanning
+    // far. Grown a couple times if nothing is found (sparse/large triangles).
+    let diag = model.bbox().diag().max(1e-3);
+    let base_r = (diag * 0.01).max(1e-4);
+
+    m.boundary
+        .iter()
+        .map(|&bi| {
+            let p = m.vertices[bi as usize];
+            let mut best_d2 = f32::INFINITY;
+            let mut best_n = avg_normal;
+            let mut r = base_r;
+            for _attempt in 0..4 {
+                let query = Aabb {
+                    min: Vec3::new(p.x - r, p.y - r, p.z - r),
+                    max: Vec3::new(p.x + r, p.y + r, p.z + r),
+                };
+                let mut found = false;
+                bvh.query_aabb(&query, |face| {
+                    let [a, b, c] = model.tri_positions(face);
+                    let (cp, d2) = closest_on_tri(p, a, b, c);
+                    if d2 < best_d2 {
+                        best_d2 = d2;
+                        let nrm = b.sub(a).cross(c.sub(a));
+                        let nl = nrm.length();
+                        if nl > 1e-12 {
+                            best_n = nrm.scale(1.0 / nl);
+                        }
+                        let _ = cp;
+                    }
+                    found = true;
+                });
+                if found {
+                    break;
+                }
+                r *= 3.0; // widen and retry for sparse meshes
+            }
+            best_n
+        })
+        .collect()
+}
+
 /// Thicken a membrane into a closed, watertight ~`thickness_mm` slab — the cutter.
 ///
 /// Construction (handoff §4 step 4):
@@ -1303,11 +1427,12 @@ fn vertex_normals(m: &Membrane) -> Vec<Vec3> {
 ///   - **Side wall**: a ring of quads (2 tris each) stitching top→bottom around
 ///     the boundary loop, closing the slab.
 ///
-/// `boundary_overshoot_mm` pushes the boundary ring OUTWARD (away from the loop
-/// centroid, in the loop's average plane) so the slab pokes PAST the model
-/// surface. This is required: a slab flush with the surface can leave a hairline
-/// bridge that prevents `decompose` from severing the body (proven necessary by
-/// the M4c crux test, where the wafer had to extend past the cube).
+/// `boundary_clearance_mm` lifts the boundary ring a hair OFF the model surface,
+/// each vertex along its own `boundary_normals[i]` (the model's outward surface
+/// normal there). This makes the slab fully clear the surface so the difference
+/// always severs, WITHOUT the old flat in-plane "overshoot" that lifted unevenly
+/// on curved surfaces and left a coarse faceted rim. `boundary_normals` must be
+/// one unit normal per boundary vertex, in `m.boundary` order (empty = no lift).
 ///
 /// Returns an `IndexedMesh` ready for `to_manifold`. The side wall is stitched
 /// around the membrane's full ordered `boundary` ring (which, after subdivision,
@@ -1315,7 +1440,8 @@ fn vertex_normals(m: &Membrane) -> Vec<Vec3> {
 pub fn thicken_to_slab(
     m: &Membrane,
     thickness_mm: f32,
-    boundary_overshoot_mm: f32,
+    boundary_clearance_mm: f32,
+    boundary_normals: &[Vec3],
 ) -> IndexedMesh {
     let half = (thickness_mm.max(1e-4)) * 0.5;
     let n_verts = m.vertices.len();
@@ -1336,51 +1462,18 @@ pub fn thicken_to_slab(
     let alen = avg_n.length();
     let offset_dir = if alen > 1e-9 { avg_n.scale(1.0 / alen) } else { Vec3::new(0.0, 0.0, 1.0) };
 
-    // Loop centroid (over the boundary ring) — used only to sign the outward
-    // direction (push AWAY from the interior, never toward it).
-    let mut loop_centroid = Vec3::ZERO;
-    for &b in &m.boundary {
-        loop_centroid = loop_centroid.add(m.vertices[b as usize]);
-    }
-    if !m.boundary.is_empty() {
-        loop_centroid = loop_centroid.scale(1.0 / m.boundary.len() as f32);
-    }
-
-    // Push each boundary vertex OUTWARD so the wafer extends past the model
-    // surface all around (required to fully sever the body — otherwise a bridge
-    // of material survives and decompose yields 1 component, not 2).
-    //
-    // Outward direction = perpendicular to the boundary curve, IN the membrane
-    // plane: (boundary tangent) × (membrane normal). This is the true local
-    // outward normal of the loop — correct even on concave loops, where
-    // radial-from-centroid points the wrong way. Sign it to face away from the
-    // centroid as a robust fallback.
+    // Lift each boundary vertex a hair OFF the surface along the model's outward
+    // SURFACE normal there. This makes the slab boundary sit just outside the
+    // body so the difference fully severs it, while the lift FOLLOWS the surface
+    // contour (it's the real surface normal) — so there's no flat in-plane band
+    // and no coarse rim left on the parts. Interior membrane vertices are NOT
+    // moved (the cut face stays exactly on the smooth membrane).
     let bn_ring = m.boundary.len();
     let mut base = m.vertices.clone();
-    if boundary_overshoot_mm > 0.0 && bn_ring >= 3 {
+    if boundary_clearance_mm > 0.0 && boundary_normals.len() == bn_ring {
         for i in 0..bn_ring {
-            let b = m.boundary[i];
-            let prev = m.vertices[m.boundary[(i + bn_ring - 1) % bn_ring] as usize];
-            let next = m.vertices[m.boundary[(i + 1) % bn_ring] as usize];
-            let v = m.vertices[b as usize];
-            // Boundary tangent (prev→next), then in-plane perpendicular.
-            let tangent = next.sub(prev);
-            let mut outward = tangent.cross(offset_dir);
-            let olen = outward.length();
-            if olen < 1e-6 {
-                // Degenerate; fall back to radial-from-centroid.
-                outward = v.sub(loop_centroid);
-            } else {
-                outward = outward.scale(1.0 / olen);
-            }
-            // Ensure it points AWAY from the interior (centroid).
-            if outward.dot(v.sub(loop_centroid)) < 0.0 {
-                outward = outward.scale(-1.0);
-            }
-            let olen2 = outward.length();
-            if olen2 > 1e-6 {
-                base[b as usize] = v.add(outward.scale(boundary_overshoot_mm / olen2));
-            }
+            let b = m.boundary[i] as usize;
+            base[b] = m.vertices[b].add(boundary_normals[i].scale(boundary_clearance_mm));
         }
     }
 
@@ -1815,31 +1908,34 @@ pub fn contour_split(
     mesh: &IndexedMesh,
     loop_pts: &[Vec3],
     thickness_mm: f32,
+    membrane_smoothing: f32,
+    density: f32,
 ) -> Result<ContourSplit, String> {
-    // Scale membrane density + boundary overshoot to the model so the cut works
-    // on tiny and huge models alike.
-    let bbox = mesh.bbox();
-    let diag = bbox.diag().max(1e-3);
-
-    // Overshoot: push the cutter boundary well PAST the model surface so the
-    // difference fully severs the body (otherwise a bridge survives and decompose
-    // yields 1 component → fall back to plane). Extra overshoot is harmless: the
-    // wafer is zero-thickness and parts regroup by membrane side, so over-reaching
-    // past the silhouette doesn't change the result, it only guarantees severance.
-    // Overshoot: push the cutter boundary past the model surface so the difference
-    // fully severs the body. ~2% of the model diagonal.
-    let overshoot = diag * 0.02;
-
-    // Subdivisions: enough to give the relaxation room to form a smooth surface
-    // without exploding triangle count. 3 → each seed triangle becomes 64.
-    // Shared with the preview so what you SEE is what gets cut.
-    let membrane = build_membrane(loop_pts, CONTOUR_SUBDIVISIONS)
+    // Density (>=1) multiplies the grid resolution to raise the cutter poly
+    // count. The CUT uses this; the live preview stays at 1× so editing is light.
+    // Clamped to a sane ceiling so the boolean doesn't crawl on big models.
+    let density = density.clamp(1.0, 4.0) as f64;
+    let grid_divisions = DEFAULT_GRID_DIVISIONS * density;
+    let membrane = build_membrane_full(loop_pts, CONTOUR_SUBDIVISIONS, membrane_smoothing, grid_divisions)
         .ok_or_else(|| format!("could not build a membrane from the loop ({} points)", loop_pts.len()))?;
     let membrane_tris = membrane.triangles.len();
 
     let model = to_manifold(mesh).map_err(|e| format!("model invalid: {e}"))?;
 
-    let slab = thicken_to_slab(&membrane, thickness_mm, overshoot);
+    // Lift the cutter boundary a hair off the surface along the model's OUTWARD
+    // SURFACE normal so the slab fully clears the surface (guaranteeing severance)
+    // without the old flat overshoot band that left a coarse rim. The lift follows
+    // the surface contour, so the cut edge stays clean.
+    let avg_normal = membrane_average_normal(&membrane);
+    let bvh = Bvh::build(mesh);
+    let boundary_normals = boundary_surface_normals(mesh, &bvh, &membrane, avg_normal);
+
+    let slab = thicken_to_slab(
+        &membrane,
+        thickness_mm,
+        DEFAULT_BOUNDARY_CLEARANCE_MM,
+        &boundary_normals,
+    );
     let cutter = to_manifold(&slab).map_err(|e| {
         let mem_mesh = IndexedMesh {
             positions: membrane.vertices.clone(),
@@ -2224,7 +2320,7 @@ mod tests {
         // many interior vertices, and NO fan slivers (worst angle well above the
         // fan's ~0°).
         let loop_pts = square_loop(20.0);
-        let m = seed_grid(&loop_pts).expect("grid seed should build");
+        let m = seed_grid(&loop_pts, DEFAULT_GRID_DIVISIONS).expect("grid seed should build");
         check_membrane_valid(&m).expect("grid seed must be a valid disk");
 
         // Boundary ring is the DENSIFIED loop (more points than the 4 corners),
@@ -2260,7 +2356,7 @@ mod tests {
             Vec3::new(0.0, 4.0, 0.0),
         ];
         let fan = seed_fan(&loop_pts).expect("fan");
-        let grid = seed_grid(&loop_pts).expect("grid");
+        let grid = seed_grid(&loop_pts, DEFAULT_GRID_DIVISIONS).expect("grid");
         // The fan of a 40×4 rectangle has very thin triangles (worst angle small);
         // the grid should be far better.
         assert!(
@@ -2316,7 +2412,7 @@ mod tests {
         // A saddle loop (no plane contains it) must still triangulate cleanly via
         // the best-fit-plane projection, then relax bows it.
         let loop_pts = saddle_loop(20.0, 6.0);
-        let m = seed_grid(&loop_pts).expect("grid seed on saddle");
+        let m = seed_grid(&loop_pts, DEFAULT_GRID_DIVISIONS).expect("grid seed on saddle");
         check_membrane_valid(&m).expect("saddle grid must be valid");
         for v in &m.vertices {
             assert!(v.finite(), "non-finite vertex in saddle grid");
@@ -2404,12 +2500,19 @@ mod tests {
         counts.values().filter(|&&c| c != 2).count()
     }
 
+    /// Uniform boundary normals (= the membrane's average normal) for tests that
+    /// thicken a slab without a model mesh to pull surface normals from.
+    fn uniform_boundary_normals(m: &Membrane) -> Vec<Vec3> {
+        let n = membrane_average_normal(m);
+        vec![n; m.boundary.len()]
+    }
+
     #[test]
     fn thickened_slab_is_closed_and_manifold_accepts_it() {
         // Flat loop first: thicken → must be a closed watertight solid.
         let loop_pts = square_loop(10.0);
         let m = build_membrane(&loop_pts, 3).expect("membrane");
-        let slab = thicken_to_slab(&m, DEFAULT_CUTTER_THICKNESS_MM, 0.05);
+        let slab = thicken_to_slab(&m, DEFAULT_CUTTER_THICKNESS_MM, DEFAULT_BOUNDARY_CLEARANCE_MM, &uniform_boundary_normals(&m));
 
         assert_eq!(open_edge_count(&slab), 0, "thickened slab must be closed (no open edges)");
         let solid = to_manifold(&slab).expect("manifold should accept the thickened slab");
@@ -2443,7 +2546,7 @@ mod tests {
         let m_mesh = IndexedMesh { positions: m.vertices.clone(), triangles: m.triangles.clone() };
         assert_eq!(count_self_intersections(&m_mesh), 0, "membrane self-intersects");
 
-        let slab = thicken_to_slab(&m, DEFAULT_CUTTER_THICKNESS_MM, 0.3);
+        let slab = thicken_to_slab(&m, DEFAULT_CUTTER_THICKNESS_MM, DEFAULT_BOUNDARY_CLEARANCE_MM, &uniform_boundary_normals(&m));
         assert_eq!(open_edge_count(&slab), 0, "grid slab not watertight");
         assert!(to_manifold(&slab).is_ok(), "manifold rejected the grid slab");
     }
@@ -2454,7 +2557,7 @@ mod tests {
         // valid watertight cutter (this is what feeds the real contour split).
         let loop_pts = saddle_loop(10.0, 4.0);
         let m = build_membrane(&loop_pts, 3).expect("saddle membrane");
-        let slab = thicken_to_slab(&m, DEFAULT_CUTTER_THICKNESS_MM, 0.05);
+        let slab = thicken_to_slab(&m, DEFAULT_CUTTER_THICKNESS_MM, DEFAULT_BOUNDARY_CLEARANCE_MM, &uniform_boundary_normals(&m));
 
         assert_eq!(open_edge_count(&slab), 0, "saddle slab must be closed");
         let solid = to_manifold(&slab).expect("manifold should accept the saddle slab");
@@ -2463,21 +2566,28 @@ mod tests {
     }
 
     #[test]
-    fn boundary_overshoot_pushes_the_loop_outward() {
-        // The overshoot must move boundary vertices AWAY from the loop centroid
-        // (so the slab pokes past the model surface — the M4c requirement).
+    fn boundary_clearance_lifts_along_the_surface_normal() {
+        // The clearance must lift each boundary vertex along its given surface
+        // normal by the clearance amount (so the slab clears the surface), and
+        // leave it put when clearance is 0.
         let loop_pts = square_loop(10.0);
         let m = build_membrane(&loop_pts, 1).expect("membrane");
-        let slab_none = thicken_to_slab(&m, DEFAULT_CUTTER_THICKNESS_MM, 0.0);
-        let slab_over = thicken_to_slab(&m, DEFAULT_CUTTER_THICKNESS_MM, 0.5);
+        // Flat loop in z=0 → surface normal is +Z.
+        let normals = vec![Vec3::new(0.0, 0.0, 1.0); m.boundary.len()];
 
-        // Loop centroid is (5,5,0). A boundary corner like (0,0,0) should move
-        // further from the centroid with overshoot than without.
-        let centroid = Vec3::new(5.0, 5.0, 0.0);
-        let corner_idx = 0; // (0,0,0)
-        let d_none = slab_none.positions[corner_idx].sub(centroid).length();
-        let d_over = slab_over.positions[corner_idx].sub(centroid).length();
-        assert!(d_over > d_none + 0.1, "overshoot should push the boundary outward ({d_over} vs {d_none})");
+        let no_lift = thicken_to_slab(&m, DEFAULT_CUTTER_THICKNESS_MM, 0.0, &normals);
+        let lifted = thicken_to_slab(&m, DEFAULT_CUTTER_THICKNESS_MM, 0.5, &normals);
+
+        // A boundary vertex's TOP-sheet position rises by clearance along +Z.
+        // (Top sheet = base + half*offset_dir; both slabs share the same offset,
+        // so the delta between them is exactly the clearance lift.)
+        let b0 = m.boundary[0] as usize;
+        let dz = lifted.positions[b0].z - no_lift.positions[b0].z;
+        assert!((dz - 0.5).abs() < 1e-4, "boundary should lift 0.5 along +Z, got {dz}");
+
+        // The lifted slab is still a valid watertight cutter.
+        assert_eq!(open_edge_count(&lifted), 0, "lifted slab must stay closed");
+        assert!(to_manifold(&lifted).is_ok(), "manifold must accept the lifted slab");
     }
 
     #[test]
@@ -2542,7 +2652,7 @@ mod tests {
             Vec3::new(10.0, 10.0, 5.0), // edge x=10,y=10
             Vec3::new(0.0, 10.0, 5.0), // edge x=0,y=10
         ];
-        let split = contour_split(&model, &loop_pts, DEFAULT_CUTTER_THICKNESS_MM)
+        let split = contour_split(&model, &loop_pts, DEFAULT_CUTTER_THICKNESS_MM, DEFAULT_MEMBRANE_SMOOTHING, 1.0)
             .expect("contour split should sever the cube into 2 parts");
         assert_eq!(split.component_count, 2);
         assert!(split.part_a.triangle_count() > 0, "part A empty");
@@ -2599,7 +2709,7 @@ mod tests {
             Vec3::new(0.0, 1.0, 1.0),
             Vec3::new(0.0, 0.5, 1.0),
         ];
-        let result = contour_split(&model, &loop_pts, DEFAULT_CUTTER_THICKNESS_MM);
+        let result = contour_split(&model, &loop_pts, DEFAULT_CUTTER_THICKNESS_MM, DEFAULT_MEMBRANE_SMOOTHING, 1.0);
         assert!(result.is_err(), "a loop that misses the body should error, not split");
     }
 

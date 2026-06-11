@@ -9,7 +9,12 @@ export interface OrganicCutPanelState {
   /** Flat planar cut vs curved contour ("wafer") cut along the drawn loop. */
   cutMode: OrganicCutMode;
   thicknessMm: number;
+  /** Seam-line smoothing 0..1 — how much the cut line rounds through waypoints. */
   smoothing: number;
+  /** Membrane smoothing 0..1 — how smooth/taut the curved cutter surface is. */
+  membraneSmoothing: number;
+  /** Wafer density multiplier (1..4) — cutter poly count, applied only at cut. */
+  density: number;
 }
 
 interface OrganicCutPanelProps {
@@ -144,22 +149,22 @@ export function OrganicCutPanel({
               <button
                 type="button"
                 className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
-                onClick={() => setState({ cutMode: 'plane' })}
-                disabled={disabled || isApplying}
-                style={state.cutMode === 'plane' ? activeModeStyle : undefined}
-                title="Slice along a single flat plane derived from your points."
-              >
-                Flat
-              </button>
-              <button
-                type="button"
-                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => setState({ cutMode: 'contour' })}
                 disabled={disabled || isApplying}
                 style={state.cutMode === 'contour' ? activeModeStyle : undefined}
                 title="Split along a curved seam that follows your drawn loop (zero-thickness mate)."
               >
                 Contour
+              </button>
+              <button
+                type="button"
+                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                onClick={() => setState({ cutMode: 'plane' })}
+                disabled={disabled || isApplying}
+                style={state.cutMode === 'plane' ? activeModeStyle : undefined}
+                title="Slice along a single flat plane derived from your points."
+              >
+                Flat
               </button>
             </div>
           </div>
@@ -191,23 +196,7 @@ export function OrganicCutPanel({
             </div>
           </div>
 
-          {/* Wafer thickness */}
-          <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
-            <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Wafer Thickness</label>
-            <ScrollableNumberField
-              value={state.thicknessMm}
-              onChange={(value) => setState({ thicknessMm: clampFloat(value, 0.2, 10, 2) })}
-              min={0.2}
-              max={10}
-              step={0.1}
-              unit="mm"
-              ariaLabel="Cut wafer thickness in millimeters"
-              disabled={disabled || isApplying}
-              className="mt-1"
-            />
-          </div>
-
-          {/* Smoothing */}
+          {/* Seam-line smoothing (how much the cut line rounds through waypoints) */}
           <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
             <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Seam Smoothing</label>
             <ScrollableNumberField
@@ -217,11 +206,65 @@ export function OrganicCutPanel({
               max={1}
               step={0.05}
               unit=""
-              ariaLabel="Seam smoothing strength"
+              ariaLabel="Seam line smoothing strength"
               disabled={disabled || isApplying}
               className="mt-1"
             />
           </div>
+
+          {/* Cut thickness (the kerf the cut removes). */}
+          <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
+            <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Cut Thickness</label>
+            <ScrollableNumberField
+              value={state.thicknessMm}
+              onChange={(value) => setState({ thicknessMm: clampFloat(value, 0.05, 1, 2) })}
+              min={0.05}
+              max={1}
+              step={0.05}
+              unit="mm"
+              ariaLabel="Cut thickness in millimeters"
+              disabled={disabled || isApplying}
+              className="mt-1"
+            />
+          </div>
+
+          {/* Cut smoothing (how smooth/taut the curved cutter surface is).
+              Only meaningful for the contour cut. */}
+          {isContour && (
+            <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
+              <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Cut Smoothing</label>
+              <ScrollableNumberField
+                value={state.membraneSmoothing}
+                onChange={(value) => setState({ membraneSmoothing: clampFloat(value, 0, 1, 2) })}
+                min={0}
+                max={1}
+                step={0.05}
+                unit=""
+                ariaLabel="Cut surface smoothing strength"
+                disabled={disabled || isApplying}
+                className="mt-1"
+              />
+            </div>
+          )}
+
+          {/* Cut resolution (cutter poly count). Higher = denser cut mesh. The
+              preview reflects this live so the user sees the change. Contour-only. */}
+          {isContour && (
+            <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
+              <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Cut Resolution</label>
+              <ScrollableNumberField
+                value={state.density}
+                onChange={(value) => setState({ density: clampFloat(value, 1, 4, 2) })}
+                min={1}
+                max={4}
+                step={0.5}
+                unit="×"
+                ariaLabel="Cut mesh resolution multiplier (applied at cut)"
+                disabled={disabled || isApplying}
+                className="mt-1"
+              />
+            </div>
+          )}
 
           {/* Actions */}
           <div className="flex gap-2">

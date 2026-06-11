@@ -7,8 +7,30 @@ import {
   Scissors,
   ClipboardPaste,
   Trash2,
+  Plus,
   type LucideIcon,
 } from 'lucide-react';
+
+/** Menu item shape, re-exported so feature callers can build custom item lists. */
+export type EditorMenuItemDef = {
+  id: EditorMenuAction;
+  label: string;
+  icon: LucideIcon;
+};
+
+/** Convenience: the "Add waypoint here" item for the Organic Cut tool. */
+export const ORGANIC_CUT_ADD_WAYPOINT_ITEM: EditorMenuItemDef = {
+  id: 'organic-cut-add-waypoint',
+  label: 'Add waypoint here',
+  icon: Plus,
+};
+
+/** Convenience: the "Delete waypoint" item for the Organic Cut tool. */
+export const ORGANIC_CUT_DELETE_WAYPOINT_ITEM: EditorMenuItemDef = {
+  id: 'organic-cut-delete-waypoint',
+  label: 'Delete waypoint',
+  icon: Trash2,
+};
 
 export type EditorMenuAction =
   | 'delete'
@@ -17,7 +39,10 @@ export type EditorMenuAction =
   | 'paste'
   | 'repair'
   | 'supports-toggle-curve'
-  | 'supports-add-joint';
+  | 'supports-add-joint'
+  // Organic-cut tool actions.
+  | 'organic-cut-add-waypoint'
+  | 'organic-cut-delete-waypoint';
 
 export type EditorContextMenuPosition = {
   x: number;
@@ -32,11 +57,7 @@ type EditorContextMenuProps = {
   items?: MenuItemDef[];
 };
 
-type MenuItemDef = {
-  id: EditorMenuAction;
-  label: string;
-  icon: LucideIcon;
-};
+type MenuItemDef = EditorMenuItemDef;
 
 const MENU_ITEMS: MenuItemDef[] = [
   { id: 'delete', label: 'Delete', icon: Trash2 },

@@ -59,9 +59,14 @@ pub struct OrganicCutSpec {
     /// Wafer thickness in mm. Unused by the M2 planar cut.
     #[serde(default)]
     pub thickness_mm: f32,
-    /// Path-fairing strength 0..1. Unused by the M2 planar cut.
-    #[serde(default)]
+    /// SEAM smoothing 0..1 — how much the cut line rounds through each waypoint.
+    /// Defaults to 0.5 (the original behavior) when the field is absent.
+    #[serde(default = "default_half")]
     pub smoothing: f32,
+    /// MEMBRANE smoothing 0..1 — how smooth/taut the curved cutter surface is.
+    /// Defaults to 0.5 (the original 60 relaxation passes) when absent.
+    #[serde(default = "default_half")]
+    pub membrane_smoothing: f32,
     /// Explicit cutting plane. When present AND mode is `Plane`, the cut uses
     /// THIS plane directly (the exact plane the frontend previewed), instead of
     /// deriving one from the points — guaranteeing preview == cut.
@@ -74,6 +79,20 @@ pub struct OrganicCutSpec {
     /// unset/<=0. Only used by the contour cut.
     #[serde(default)]
     pub cutter_thickness_mm: f32,
+    /// Membrane density multiplier (>=1) — raises the cutter poly count for the
+    /// CUT. 1.0 = default resolution. Clamped to 4 in `contour_split`.
+    #[serde(default = "default_one")]
+    pub density: f32,
+}
+
+/// serde default for the 0..1 smoothing fields (0.5 = original behavior).
+fn default_half() -> f32 {
+    0.5
+}
+
+/// serde default for the density multiplier (1.0 = default resolution).
+fn default_one() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -327,7 +346,14 @@ fn organic_cut_contour(
         crate::membrane::DEFAULT_CUTTER_THICKNESS_MM
     };
 
-    let split = crate::membrane::contour_split(mesh, &loop_pts, thickness)?;
+    let split =
+        crate::membrane::contour_split(
+            mesh,
+            &loop_pts,
+            thickness,
+            options.cut.membrane_smoothing,
+            options.cut.density,
+        )?;
 
     let report = OrganicCutReport {
         source_triangle_count,

@@ -2523,6 +2523,43 @@ export function useSceneCollectionManager() {
     const source = currentModels.find((m) => m.id === sourceId);
     if (!source) return null;
 
+    // KEEP BOTH PARTS EXACTLY WHERE THEY WERE CUT (nothing moves in 3D space).
+    //
+    // The render layer (StlMesh) draws each model's mesh at `-geometryBboxCenter`
+    // inside the model's transform group, so a vertex renders at
+    //     world = R · S · (vertex - partCenter) + partPosition
+    // (R = rotation, S = scale). For the original model it was
+    //     world = R · S · (vertex - sourceCenter) + sourcePosition.
+    // Since the cut parts share the SAME vertices as the source (same space), to
+    // keep every vertex at its original world spot we must satisfy
+    //     R·S·(v - partCenter) + partPosition = R·S·(v - sourceCenter) + sourcePos
+    // ⇒ partPosition = sourcePosition + R·S·(partCenter - sourceCenter).
+    //
+    // So we DON'T move the geometry (translating vertices would shift them by
+    // R·S·delta under any rotation — the bug that made parts jump). Instead we
+    // leave each part's bbox where it is and COMPENSATE its transform.position by
+    // the rotated+scaled center delta. Vertices stay put; the part lands exactly
+    // where it was cut, for any source rotation/scale.
+    const sourceGeom = source.geometry.geometry;
+    if (!sourceGeom.boundingBox) sourceGeom.computeBoundingBox();
+    const sourceCenter = sourceGeom.boundingBox
+      ? sourceGeom.boundingBox.getCenter(new THREE.Vector3())
+      : source.geometry.center.clone();
+
+    const srcQuat = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(source.transform.rotation.x, source.transform.rotation.y, source.transform.rotation.z),
+    );
+    const srcScale = source.transform.scale;
+
+    // Position that keeps `partCenter` at the same world spot the source frame put
+    // it: sourcePosition + R·S·(partCenter - sourceCenter).
+    const positionForPart = (partCenter: THREE.Vector3): THREE.Vector3 => {
+      const d = partCenter.clone().sub(sourceCenter);
+      d.multiply(srcScale); // component-wise scale
+      d.applyQuaternion(srcQuat); // then rotate
+      return source.transform.position.clone().add(d);
+    };
+
     const buildBounds = (g: THREE.BufferGeometry): GeometryWithBounds => {
       if (!g.boundingBox) g.computeBoundingBox();
       const bbox = g.boundingBox ? g.boundingBox.clone() : new THREE.Box3();
@@ -2543,6 +2580,10 @@ export function useSceneCollectionManager() {
     const partBGeom = buildBounds(partBGeometry);
     const newId = generateId();
 
+    // Compensated positions keep each part exactly where it was cut.
+    const partAPosition = positionForPart(partAGeom.center);
+    const partBPosition = positionForPart(partBGeom.center);
+
     const partBModel: LoadedModel = {
       id: newId,
       name: `${source.name} Cut`,
@@ -2552,7 +2593,7 @@ export function useSceneCollectionManager() {
       fileSizeBytes: source.fileSizeBytes,
       geometry: partBGeom,
       transform: {
-        position: source.transform.position.clone(),
+        position: partBPosition,
         rotation: source.transform.rotation.clone(),
         scale: source.transform.scale.clone(),
       },
@@ -2564,11 +2605,21 @@ export function useSceneCollectionManager() {
 
     const before = captureSceneSnapshot(currentModels, activeModelIdRef.current, selectedModelIdsRef.current, { includeSupportState: false });
 
-    // ONE atomic update: source becomes part A, part B is appended.
+    // ONE atomic update: source becomes part A (geometry swapped + position
+    // compensated so it doesn't shift), part B is appended.
     const nextModels = [
       ...currentModels.map((m) => (
         m.id === sourceId
-          ? { ...m, geometry: partAGeom, polygonCount: polyCount(partAGeometry) }
+          ? {
+              ...m,
+              geometry: partAGeom,
+              polygonCount: polyCount(partAGeometry),
+              transform: {
+                position: partAPosition,
+                rotation: m.transform.rotation.clone(),
+                scale: m.transform.scale.clone(),
+              },
+            }
           : m
       )),
       partBModel,

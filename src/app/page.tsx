@@ -51,7 +51,7 @@ import type { MirrorAxis } from '@/features/mirror/types';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
 import { IconButton, Toast, ToastViewport } from '@/components/ui/primitives';
-import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
+import { EditorContextMenu, ORGANIC_CUT_ADD_WAYPOINT_ITEM, ORGANIC_CUT_DELETE_WAYPOINT_ITEM, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
@@ -10451,6 +10451,11 @@ export default function Home() {
     };
   }, [cancelPendingHistoryTransformResyncFrames]);
 
+  // Latest "is the Cut tool active" flag, for the right-click-up handler below
+  // (declared here so it precedes that handler; updated once organicCutToolActive
+  // is computed later in the component).
+  const organicCutToolActiveRef = React.useRef(false);
+
   const handleEditorPointerDownCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 2) return;
     rightClickGestureRef.current = { x: e.clientX, y: e.clientY, moved: false };
@@ -10473,6 +10478,29 @@ export default function Home() {
     const moved = Boolean(gesture?.moved);
     const shouldSuppress = performance.now() < suppressEditorContextMenuUntilRef.current;
     if (!moved && !shouldSuppress) {
+      // Cut tool: a hovered waypoint MARKER arms "Delete waypoint"; otherwise a
+      // hovered seam LINE arms "Add waypoint here". Either opens the cut menu
+      // instead of the model/support menu. Marker takes priority over line.
+      if (organicCutToolActiveRef.current) {
+        const markerHover = organicCutMarkerHoverRef.current;
+        if (markerHover != null) {
+          setOrganicCutLineMenu({ kind: 'delete', x: e.clientX, y: e.clientY, index: markerHover });
+          window.setTimeout(() => { rightClickGestureRef.current = null; }, 0);
+          return;
+        }
+        const seamHover = organicCutLineHoverRef.current;
+        if (seamHover) {
+          setOrganicCutLineMenu({
+            kind: 'add',
+            x: e.clientX,
+            y: e.clientY,
+            localPoint: seamHover.localPoint,
+            afterIndex: seamHover.afterIndex,
+          });
+          window.setTimeout(() => { rightClickGestureRef.current = null; }, 0);
+          return;
+        }
+      }
       if (scene.mode === 'support' && supportShaftHoverDebug.segmentId && supportShaftHoverDebug.point) {
         setEditorContextMenuSupportTarget({
           segmentId: supportShaftHoverDebug.segmentId,
@@ -17404,10 +17432,24 @@ export default function Home() {
   // inside the feature hook; page.tsx only supplies the active geometry and
   // renders the two mounts below. See src/features/organicCut/.
   const organicCutToolActive = scene.mode === 'prepare' && transformMgr.transformMode === 'organicCut';
+  React.useEffect(() => { organicCutToolActiveRef.current = organicCutToolActive; }, [organicCutToolActive]);
+  // True while a cut waypoint is being dragged, so OrbitControls stays disabled
+  // for the duration of the drag (camera must not move while editing the seam).
+  const [organicCutDragging, setOrganicCutDragging] = React.useState(false);
+  // Timestamp of the most recent drag end. A pointer-up after a drag still
+  // synthesizes a `click` on the model beneath, which would call addPoint and
+  // duplicate the just-moved waypoint. We swallow any organic-cut click that
+  // lands within a short window after a drag ends.
+  const organicCutLastDragEndRef = React.useRef(0);
+  const handleOrganicCutDragStateChange = React.useCallback((dragging: boolean) => {
+    if (!dragging) organicCutLastDragEndRef.current = Date.now();
+    setOrganicCutDragging(dragging);
+  }, []);
   const organicCut = useOrganicCutSession({
     toolActive: organicCutToolActive,
     activeGeometry: scene.activeModel?.geometry.geometry ?? null,
     activeGeometryKey: scene.activeModel?.id ?? null,
+    isDraggingPoint: organicCutDragging,
     commitParts: React.useCallback((partA: THREE.BufferGeometry, partB: THREE.BufferGeometry) => {
       const target = scene.activeModel;
       if (!target) {
@@ -17429,10 +17471,23 @@ export default function Home() {
   // Convert the hit into a model-LOCAL loop point (matches the mesh object's own
   // geometry space) so the stored loop is independent of the plate transform.
   const handleOrganicCutClick = React.useCallback((hit: THREE.Intersection) => {
+    // Ignore the click synthesized by a waypoint drag's pointer-up — it would
+    // add a duplicate point on top of the one we just moved. (Also covers the
+    // brief moment after the drag where `organicCutDragging` has already reset.)
+    if (organicCutDragging || Date.now() - organicCutLastDragEndRef.current < 250) {
+      return;
+    }
     const target = scene.activeModel;
     if (!target) return;
     const hitModelId = (hit.object.userData?.modelId as string | undefined) ?? target.id;
     if (hitModelId !== target.id) return;
+
+    // If a waypoint is selected, an empty-surface click just DESELECTS it — it
+    // does NOT place a new point. (Click away to dismiss the selection.)
+    if (organicCut.selectedIndex != null) {
+      organicCut.selectPoint(null);
+      return;
+    }
 
     hit.object.updateWorldMatrix(true, false);
     const localPoint = hit.object.worldToLocal(hit.point.clone());
@@ -17444,7 +17499,142 @@ export default function Home() {
       position: [localPoint.x, localPoint.y, localPoint.z],
       normal: [localNormal.x, localNormal.y, localNormal.z],
     });
-  }, [organicCut, scene.activeModel]);
+  }, [organicCut, scene.activeModel, organicCutDragging]);
+
+  // Cut-tool right-click menus, hover-to-arm. The OrganicCutTool reports when the
+  // cursor is over the seam (→ "Add waypoint here") or over a waypoint marker (→
+  // "Delete waypoint"). We stash the armed target in refs; the existing
+  // right-click-up pipeline opens the appropriate menu instead of the
+  // model/support one, and on confirm we insert or delete.
+  // Left-click on the seam line inserts a waypoint at the clicked point (the more
+  // discoverable counterpart to the right-click "Add waypoint here").
+  const handleOrganicCutLineClick = React.useCallback(
+    (info: { localPoint: [number, number, number]; afterIndex: number }) => {
+      organicCut.selectPoint(null);
+      organicCut.insertPoint(info.afterIndex, { position: info.localPoint, normal: [0, 0, 0] });
+    },
+    [organicCut],
+  );
+  const organicCutLineHoverRef = React.useRef<
+    { localPoint: [number, number, number]; afterIndex: number } | null
+  >(null);
+  const handleOrganicCutLineHoverChange = React.useCallback(
+    (info: { localPoint: [number, number, number]; afterIndex: number } | null) => {
+      organicCutLineHoverRef.current = info;
+    },
+    [],
+  );
+  const organicCutMarkerHoverRef = React.useRef<number | null>(null);
+  const handleOrganicCutMarkerHoverChange = React.useCallback((index: number | null) => {
+    organicCutMarkerHoverRef.current = index;
+  }, []);
+  // One menu for both actions; `kind` selects which item/handler.
+  const [organicCutLineMenu, setOrganicCutLineMenu] = React.useState<
+    | { kind: 'add'; x: number; y: number; localPoint: [number, number, number]; afterIndex: number }
+    | { kind: 'delete'; x: number; y: number; index: number }
+    | null
+  >(null);
+  const handleOrganicCutLineMenuAction = React.useCallback(
+    (action: EditorMenuAction) => {
+      if (action === 'organic-cut-add-waypoint' && organicCutLineMenu?.kind === 'add') {
+        organicCut.insertPoint(organicCutLineMenu.afterIndex, {
+          position: organicCutLineMenu.localPoint,
+          normal: [0, 0, 0],
+        });
+      } else if (action === 'organic-cut-delete-waypoint' && organicCutLineMenu?.kind === 'delete') {
+        organicCut.removePoint(organicCutLineMenu.index);
+      }
+      setOrganicCutLineMenu(null);
+    },
+    [organicCut, organicCutLineMenu],
+  );
+  // Dismiss the cut line menu on outside click / Escape / scroll, like the editor
+  // context menu.
+  React.useEffect(() => {
+    if (!organicCutLineMenu) return;
+    const onDown = () => setOrganicCutLineMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOrganicCutLineMenu(null); };
+    // Defer so the opening right-click doesn't immediately close it.
+    const id = window.setTimeout(() => {
+      window.addEventListener('pointerdown', onDown);
+      window.addEventListener('keydown', onKey);
+    }, 0);
+    return () => {
+      window.clearTimeout(id);
+      window.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [organicCutLineMenu]);
+
+  // Cut-tool keyboard hotkeys (capture phase, so they win over the global
+  // model-history undo and model-delete handlers):
+  //  - Ctrl/Cmd+Z / Shift+Z / Ctrl+Y → undo/redo a waypoint (else fall through).
+  //  - Delete/Backspace → delete the SELECTED waypoint. While the Cut tool is
+  //    active we ALWAYS swallow Delete so it can never delete the whole model.
+  const organicCutHotkeyRef = React.useRef({
+    active: organicCutToolActive,
+    undoPoint: organicCut.undoPoint,
+    redoPoint: organicCut.redoPoint,
+    canUndoPoint: organicCut.canUndoPoint,
+    canRedoPoint: organicCut.canRedoPoint,
+    removePoint: organicCut.removePoint,
+    selectedIndex: organicCut.selectedIndex,
+  });
+  React.useEffect(() => {
+    organicCutHotkeyRef.current = {
+      active: organicCutToolActive,
+      undoPoint: organicCut.undoPoint,
+      redoPoint: organicCut.redoPoint,
+      canUndoPoint: organicCut.canUndoPoint,
+      canRedoPoint: organicCut.canRedoPoint,
+      removePoint: organicCut.removePoint,
+      selectedIndex: organicCut.selectedIndex,
+    };
+  }, [organicCutToolActive, organicCut.undoPoint, organicCut.redoPoint, organicCut.canUndoPoint, organicCut.canRedoPoint, organicCut.removePoint, organicCut.selectedIndex]);
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const s = organicCutHotkeyRef.current;
+      if (!s.active) return;
+      const target = event.target;
+      if (target instanceof HTMLElement) {
+        const tag = target.tagName.toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || target.isContentEditable) return;
+      }
+
+      // Delete/Backspace: delete the selected waypoint; ALWAYS swallow in cut mode
+      // so the model is never deleted while cutting.
+      if (!event.metaKey && !event.ctrlKey && (event.key === 'Delete' || event.key === 'Backspace')) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (s.selectedIndex != null) {
+          s.removePoint(s.selectedIndex);
+        }
+        return;
+      }
+
+      const isMeta = event.metaKey || event.ctrlKey;
+      if (!isMeta) return;
+      const key = event.key.toLowerCase();
+      const isRedo = key === 'y' || (key === 'z' && event.shiftKey);
+      const isUndo = key === 'z' && !event.shiftKey;
+      if (!isUndo && !isRedo) return;
+
+      // Only consume the event if we actually have something to act on; otherwise
+      // let the global undo/redo handle it.
+      if (isRedo && s.canRedoPoint) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        s.redoPoint();
+      } else if (isUndo && s.canUndoPoint) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        s.undoPoint();
+      }
+    };
+    // Capture phase so we run before the global (bubble-phase) undo/redo hotkey.
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, []);
 
   // Mirror session state: while the user is in Mirror mode we don't bake the
   // geometry per-click (a 2.4M-vert bake is slow on big meshes). Instead, each
@@ -18695,6 +18885,7 @@ export default function Home() {
             onHolePunchClick={scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing' && !hollowingEditMode ? handleHolePunchClick : undefined}
             onHolePunchHover={scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing' && !hollowingEditMode ? handleHolePunchHover : undefined}
             onOrganicCutClick={organicCutToolActive ? handleOrganicCutClick : undefined}
+            organicCutDragging={organicCutDragging}
             onSupportHover={supports.onModelHover}
             onActiveModelChange={handleSceneModelSelection}
             onMarqueeSelectionChange={handleSceneMarqueeSelection}
@@ -18960,6 +19151,13 @@ export default function Home() {
                 active={!organicCut.isApplying}
                 loop={organicCut.loop}
                 onAddPoint={organicCut.addPoint}
+                onUpdatePoint={organicCut.updatePoint}
+                onDragStateChange={handleOrganicCutDragStateChange}
+                onLineHoverChange={handleOrganicCutLineHoverChange}
+                onLineClick={handleOrganicCutLineClick}
+                selectedIndex={organicCut.selectedIndex}
+                onSelectPoint={organicCut.selectPoint}
+                onMarkerHoverChange={handleOrganicCutMarkerHoverChange}
                 geodesicPolyline={organicCut.geodesicPolyline}
                 cutMode={organicCut.panelState.cutMode}
                 membranePreview={organicCut.membranePreview}
@@ -19216,6 +19414,19 @@ export default function Home() {
         title={editorContextMenuTitle}
         items={editorContextMenuItems}
         disabledActions={editorContextMenuDisabledActions}
+      />
+
+      {/* Organic-cut right-click menu: "Add waypoint here" (seam) or "Delete
+          waypoint" (marker), depending on what was hovered when right-clicked. */}
+      <EditorContextMenu
+        position={organicCutLineMenu ? { x: organicCutLineMenu.x, y: organicCutLineMenu.y } : null}
+        onAction={handleOrganicCutLineMenuAction}
+        title={organicCutLineMenu?.kind === 'delete' ? 'Waypoint' : 'Cut Seam'}
+        items={
+          organicCutLineMenu?.kind === 'delete'
+            ? [ORGANIC_CUT_DELETE_WAYPOINT_ITEM]
+            : [ORGANIC_CUT_ADD_WAYPOINT_ITEM]
+        }
       />
 
       <DiagnosticsModal

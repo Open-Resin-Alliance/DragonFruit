@@ -24,6 +24,11 @@ interface TauriCoreModule {
 
 let tauriCorePromise: Promise<TauriCoreModule | null> | null = null;
 let stagedCutSourceKey: string | null = null;
+// The geometry OBJECT last staged. Tracked alongside the key so that if a model's
+// geometry is replaced under the SAME id (e.g. a cut then undo restores the
+// original geometry reference), we detect the change and re-stage instead of
+// reusing the stale captured source.
+let stagedCutSourceGeometry: THREE.BufferGeometry | null = null;
 
 export function isTauriRuntime(): boolean {
   if (typeof window === 'undefined') return false;
@@ -116,6 +121,19 @@ async function readBothParts(invoke: TauriInvoke): Promise<{ partA: Float32Array
  * Captures the given geometry as the non-mutating cut source for repeated
  * previews. Keyed so re-staging the same geometry is a cheap no-op.
  */
+/**
+ * True if the given source key is already staged + captured, so callers on a hot
+ * path (e.g. the per-frame geodesic during a waypoint drag) can skip the
+ * `stageCutSource` await entirely.
+ */
+export function isCutSourceStaged(sourceKey: string, geometry?: THREE.BufferGeometry): boolean {
+  if (stagedCutSourceKey !== sourceKey) return false;
+  // Same key but a different geometry object → the mesh was replaced (cut/undo);
+  // treat as not staged so callers re-stage the current geometry.
+  if (geometry && stagedCutSourceGeometry !== geometry) return false;
+  return true;
+}
+
 export async function stageCutSource(
   geometry: THREE.BufferGeometry,
   sourceKey: string,
@@ -123,13 +141,16 @@ export async function stageCutSource(
   const core = await loadTauriCore();
   if (!core) return false;
 
-  if (stagedCutSourceKey === sourceKey) {
+  // Re-stage if either the key OR the geometry object changed (same id can carry
+  // new geometry after a cut/undo).
+  if (stagedCutSourceKey === sourceKey && stagedCutSourceGeometry === geometry) {
     return true;
   }
 
   await stageGeometryToStagedMesh(core.invoke, geometry);
   await core.invoke('mesh_organic_cut_capture_staged_source');
   stagedCutSourceKey = sourceKey;
+  stagedCutSourceGeometry = geometry;
   return true;
 }
 
@@ -163,6 +184,7 @@ export async function cutFromGeometry(
 
   await stageGeometryToStagedMesh(core.invoke, geometry);
   stagedCutSourceKey = null;
+  stagedCutSourceGeometry = null;
 
   const optionsJson = JSON.stringify(options);
   const reportJson = await core.invoke<string>('mesh_organic_cut_staged', { optionsJson });
@@ -180,6 +202,7 @@ export async function cutFromGeometry(
 export async function computeGeodesicLoop(
   loopPoints: OrganicCutLoopPoint[],
   close: boolean,
+  smoothing = 0.5,
 ): Promise<Float32Array | null> {
   const core = await loadTauriCore();
   if (!core) return null;
@@ -188,12 +211,27 @@ export async function computeGeodesicLoop(
   const requestJson = JSON.stringify({
     points: loopPoints.map((p) => ({ position: p.position })),
     close,
+    smoothing,
   });
   try {
-    const reportJson = await core.invoke<string>('mesh_organic_cut_geodesic_loop', { requestJson });
-    const report = JSON.parse(reportJson) as { pointCount: number };
-    if (!report.pointCount) return null;
-    return await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_geodesic');
+    // Single IPC round-trip: the command computes the loop AND returns the raw
+    // LE f32 polyline bytes as the response body (no separate read-back call).
+    // This is the hot path while dragging a waypoint — one hop per frame.
+    const bytes = await core.invoke<ArrayBuffer | Uint8Array | number[]>(
+      'mesh_organic_cut_geodesic_loop_bytes',
+      { requestJson },
+    );
+    let u8: Uint8Array;
+    if (bytes instanceof ArrayBuffer) u8 = new Uint8Array(bytes);
+    else if (bytes instanceof Uint8Array) u8 = bytes;
+    else if (Array.isArray(bytes)) u8 = new Uint8Array(bytes);
+    else return null;
+    if (u8.byteLength < 24) return null; // < 2 points (3 floats each = 24 bytes)
+    // Copy into an aligned buffer before viewing as f32 (the IPC buffer may be a
+    // non-zero byteOffset view, which Float32Array can't wrap directly).
+    const copy = new Uint8Array(u8.byteLength);
+    copy.set(u8);
+    return new Float32Array(copy.buffer);
   } catch {
     return null;
   }
@@ -207,6 +245,8 @@ export async function computeGeodesicLoop(
  */
 export async function computeMembranePreview(
   loopPoints: OrganicCutLoopPoint[],
+  membraneSmoothing = 0.5,
+  density = 1.0,
 ): Promise<Float32Array | null> {
   const core = await loadTauriCore();
   if (!core) return null;
@@ -215,6 +255,8 @@ export async function computeMembranePreview(
   const requestJson = JSON.stringify({
     points: loopPoints.map((p) => ({ position: p.position })),
     close: true,
+    membraneSmoothing,
+    density,
   });
   try {
     const reportJson = await core.invoke<string>('mesh_organic_cut_membrane_preview', { requestJson });

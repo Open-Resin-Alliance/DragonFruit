@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use dragonfruit_mesh_repair::{
     analyze, classify_support_split, hollow_voxel, io, organic_cut, punch_cylinders, repair,
-    surface_loop_from_mesh, HolePunchOptions, HollowOptions, HollowSession, IndexedMesh,
-    OrganicCutOptions, RepairOptions, Vec3,
+    GeodesicSolver, HolePunchOptions, HollowOptions, HollowSession, IndexedMesh, OrganicCutOptions,
+    RepairOptions, Vec3,
 };
 use serde::Deserialize;
 use tauri::ipc::Response;
@@ -50,6 +50,10 @@ static ORGANIC_CUT_PART_A_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::ne
 static ORGANIC_CUT_PART_B_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// Most recent geodesic loop polyline (LE f32 positions, 3 per point).
 static ORGANIC_CUT_GEODESIC_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+/// Cached geodesic solver (mesh + topology + vertex graph) for the captured
+/// source. Built once per source so dragging a waypoint re-queries the loop
+/// without rebuilding the O(mesh) graphs each call. Cleared on (re)capture.
+static ORGANIC_CUT_GEODESIC_SOLVER: OnceLock<Mutex<Option<Arc<GeodesicSolver>>>> = OnceLock::new();
 /// Most recent contour-cut membrane preview (LE f32 triangle soup, 9 per tri).
 static ORGANIC_CUT_MEMBRANE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 
@@ -111,6 +115,10 @@ fn organic_cut_part_b_bytes() -> &'static Mutex<Option<Vec<u8>>> {
 
 fn organic_cut_geodesic_bytes() -> &'static Mutex<Option<Vec<u8>>> {
     ORGANIC_CUT_GEODESIC_BYTES.get_or_init(|| Mutex::new(None))
+}
+
+fn organic_cut_geodesic_solver() -> &'static Mutex<Option<Arc<GeodesicSolver>>> {
+    ORGANIC_CUT_GEODESIC_SOLVER.get_or_init(|| Mutex::new(None))
 }
 
 fn organic_cut_membrane_bytes() -> &'static Mutex<Option<Vec<u8>>> {
@@ -198,13 +206,43 @@ struct GeodesicWaypointDto {
     position: [f32; 3],
 }
 
-#[derive(Deserialize, Default)]
+fn default_smoothing_half() -> f32 {
+    0.5
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GeodesicRequestDto {
     #[serde(default)]
     points: Vec<GeodesicWaypointDto>,
     #[serde(default)]
     close: bool,
+    /// Seam smoothing 0..1 (line corner-rounding). Default 0.5.
+    #[serde(default = "default_smoothing_half")]
+    smoothing: f32,
+    /// Membrane smoothing 0..1 (cutter-surface relaxation). Default 0.5.
+    #[serde(default = "default_smoothing_half")]
+    membrane_smoothing: f32,
+    /// Cut resolution multiplier (1..4). Default 1.0. Lets the preview reflect
+    /// the cut density live.
+    #[serde(default = "default_density_one")]
+    density: f32,
+}
+
+fn default_density_one() -> f32 {
+    1.0
+}
+
+impl Default for GeodesicRequestDto {
+    fn default() -> Self {
+        Self {
+            points: Vec::new(),
+            close: false,
+            smoothing: 0.5,
+            membrane_smoothing: 0.5,
+            density: 1.0,
+        }
+    }
 }
 
 fn parse_geodesic_request(json: &str) -> GeodesicRequestDto {
@@ -784,6 +822,11 @@ pub async fn mesh_organic_cut_capture_staged_source() -> Result<(), String> {
     *organic_cut_part_b_bytes()
         .lock()
         .map_err(|e| format!("organic cut part B lock poisoned: {e}"))? = None;
+    // Invalidate the cached geodesic solver — it belongs to the previous source.
+    // The next geodesic call rebuilds it lazily for the new mesh.
+    *organic_cut_geodesic_solver()
+        .lock()
+        .map_err(|e| format!("organic cut solver lock poisoned: {e}"))? = None;
     Ok(())
 }
 
@@ -861,6 +904,47 @@ pub async fn mesh_organic_cut_geodesic_loop(request_json: String) -> Result<Stri
         return Ok("{\"pointCount\":0}".to_string());
     }
 
+    let (bytes, count) = compute_geodesic_loop_bytes(&req).await?;
+    *organic_cut_geodesic_bytes()
+        .lock()
+        .map_err(|e| format!("geodesic lock poisoned: {e}"))? = Some(bytes);
+    Ok(format!("{{\"pointCount\":{count}}}"))
+}
+
+/// Single-round-trip geodesic: computes the loop and returns the raw LE f32
+/// polyline bytes DIRECTLY as the response body, skipping the separate
+/// stash + read-back command pair. This is the hot path used while dragging a
+/// waypoint — one IPC hop per frame instead of two. Returns an empty body for
+/// <2 points. (Also stashes the bytes so a later `read_geodesic` still works.)
+#[tauri::command]
+pub async fn mesh_organic_cut_geodesic_loop_bytes(request_json: String) -> Result<Response, String> {
+    let req = parse_geodesic_request(&request_json);
+    if req.points.len() < 2 {
+        *organic_cut_geodesic_bytes()
+            .lock()
+            .map_err(|e| format!("geodesic lock poisoned: {e}"))? = None;
+        return Ok(Response::new(Vec::new()));
+    }
+
+    let (bytes, _count) = compute_geodesic_loop_bytes(&req).await?;
+    *organic_cut_geodesic_bytes()
+        .lock()
+        .map_err(|e| format!("geodesic lock poisoned: {e}"))? = Some(bytes.clone());
+    Ok(Response::new(bytes))
+}
+
+/// Fetches the cached geodesic solver, building it once from the captured source
+/// if absent. Building (parse + topology + vertex graph) is O(mesh) and dominates
+/// a single query, so caching it makes dragging a waypoint cheap — each query is
+/// then only Dijkstra + path straightening.
+async fn geodesic_solver_or_build() -> Result<Arc<GeodesicSolver>, String> {
+    let cached = organic_cut_geodesic_solver()
+        .lock()
+        .map_err(|e| format!("organic cut solver lock poisoned: {e}"))?
+        .clone();
+    if let Some(s) = cached {
+        return Ok(s);
+    }
     let source_bytes = organic_cut_source_bytes()
         .lock()
         .map_err(|e| format!("organic cut source lock poisoned: {e}"))?
@@ -868,30 +952,41 @@ pub async fn mesh_organic_cut_geodesic_loop(request_json: String) -> Result<Stri
         .ok_or_else(|| {
             "No captured source — call mesh_organic_cut_capture_staged_source first".to_string()
         })?;
+    let built = tauri::async_runtime::spawn_blocking(move || {
+        let mesh = io::staged::load_positions_le(&source_bytes).map_err(|e| e.to_string())?;
+        Ok::<_, String>(Arc::new(GeodesicSolver::build(mesh)))
+    })
+    .await
+    .map_err(|e| format!("geodesic solver build panicked: {e}"))??;
+    *organic_cut_geodesic_solver()
+        .lock()
+        .map_err(|e| format!("organic cut solver lock poisoned: {e}"))? = Some(built.clone());
+    Ok(built)
+}
 
+/// Computes the geodesic loop for a request against the cached solver, returning
+/// the flat LE f32 polyline bytes plus the point count. Shared by the JSON and
+/// raw-bytes command variants. Caller must have validated `points.len() >= 2`.
+async fn compute_geodesic_loop_bytes(req: &GeodesicRequestDto) -> Result<(Vec<u8>, usize), String> {
+    let solver = geodesic_solver_or_build().await?;
     let waypoints: Vec<Vec3> = req
         .points
         .iter()
         .map(|p| Vec3::new(p.position[0], p.position[1], p.position[2]))
         .collect();
     let close = req.close;
+    let smoothing = req.smoothing;
 
-    let polyline_bytes = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&source_bytes).map_err(|e| e.to_string())?;
-        let loop_pts = surface_loop_from_mesh(&mesh, &waypoints, close)
+    tauri::async_runtime::spawn_blocking(move || {
+        let loop_pts = solver
+            .surface_loop_smoothed(&waypoints, close, smoothing)
             .ok_or_else(|| "geodesic loop could not be computed".to_string())?;
         let flat: Vec<f32> = loop_pts.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
         let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&flat).to_vec();
         Ok::<_, String>((bytes, loop_pts.len()))
     })
     .await
-    .map_err(|e| format!("geodesic task panicked: {e}"))??;
-
-    let (bytes, count) = polyline_bytes;
-    *organic_cut_geodesic_bytes()
-        .lock()
-        .map_err(|e| format!("geodesic lock poisoned: {e}"))? = Some(bytes);
-    Ok(format!("{{\"pointCount\":{count}}}"))
+    .map_err(|e| format!("geodesic task panicked: {e}"))?
 }
 
 /// Returns the most recent geodesic loop polyline as raw LE f32 bytes.
@@ -925,10 +1020,16 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
         .iter()
         .map(|p| Vec3::new(p.position[0], p.position[1], p.position[2]))
         .collect();
+    let membrane_smoothing = req.membrane_smoothing;
+    let density = req.density;
 
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let soup = dragonfruit_mesh_repair::membrane::build_membrane_preview_soup(&loop_pts)
-            .ok_or_else(|| "membrane could not be built from the loop".to_string())?;
+        let soup = dragonfruit_mesh_repair::membrane::build_membrane_preview_soup_full(
+            &loop_pts,
+            membrane_smoothing,
+            density,
+        )
+        .ok_or_else(|| "membrane could not be built from the loop".to_string())?;
         let tri_count = soup.len() / 9;
         let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&soup).to_vec();
         Ok::<_, String>((bytes, tri_count))
