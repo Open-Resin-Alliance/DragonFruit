@@ -1292,7 +1292,10 @@ if (uDitherAmount > 0.0) {
           if (mode === 'supportPainter') {
             lastSharpCornerFaceRef.current = null;
             lastSharpCornerPointRef.current = null;
-            supportPainterStore.setPointPathPoints([]);
+            const snap = supportPainterStore.getSnapshot();
+            if (snap.activeBrush === 'SharpCorner') {
+              supportPainterStore.setPointPathPoints([]);
+            }
             supportPainterStore.setHoveredTriangle(null);
             supportPainterStore.setInteractionPhase('Idle');
           }
