@@ -8,8 +8,7 @@
 use std::sync::{Mutex, OnceLock};
 
 use dragonfruit_sdf::{
-    compute_heightmap, compute_sdf_grid, ClearanceHeightmap, SdfMeshInput, SdfOptions,
-    SparseSdfGrid,
+    compute_heightmap, compute_sdf_grid, SdfMeshInput, SdfOptions, SparseSdfGrid,
 };
 use tauri::ipc::Response;
 
