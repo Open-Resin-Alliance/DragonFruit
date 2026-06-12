@@ -120,14 +120,24 @@ export function getAutoBracingSettings() {
 // --- Setters ---
 
 export function setSettings(settings: SupportSettings): void {
-    currentSettings = mergeWithDefaults(settings);
+    const merged = mergeWithDefaults(settings);
+    // Clamp contact cone body diameter so it never exceeds the trunk diameter
+    if (merged.tip.bodyDiameterMm > merged.shaft.diameterMm) {
+        merged.tip.bodyDiameterMm = merged.shaft.diameterMm;
+    }
+    currentSettings = merged;
     notify();
 }
 
 export function updateTipProfile(tip: Partial<SupportSettings['tip']>): void {
+    const mergedTip = { ...currentSettings.tip, ...tip };
+    // Clamp contact cone body diameter so it never exceeds the trunk diameter
+    if (mergedTip.bodyDiameterMm > currentSettings.shaft.diameterMm) {
+        mergedTip.bodyDiameterMm = currentSettings.shaft.diameterMm;
+    }
     currentSettings = {
         ...currentSettings,
-        tip: { ...currentSettings.tip, ...tip },
+        tip: mergedTip,
     };
     notify();
 }

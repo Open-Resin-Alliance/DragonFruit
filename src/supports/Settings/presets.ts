@@ -166,7 +166,7 @@ const ANCHOR_PRESET: SupportPreset = {
         tip: {
             shape: 'cone',
             contactDiameterMm: 0.4,
-            bodyDiameterMm: 1.5,
+            bodyDiameterMm: 1.2,
             lengthMm: 2.5,
             penetrationMm: 0,
             coneAngleMode: 'adaptive',
