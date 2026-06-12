@@ -557,16 +557,19 @@ export function samplePoissonDiscWarped(
   maxZ: number,
   op: CustomSupportOperation,
   triangles: WeldedTriangle[],
-  opTrunkWidth: number
+  opTrunkWidth: number,
+  triangleIdsOverride?: Set<number>
 ): BasicSampledPoint[] {
   const baseSpacing = Math.max(0.25, op.spacing.baseSpacingMm);
   const r = baseSpacing; // uniform radius in warped space
+
+  const activeTriangleIds = triangleIdsOverride || region.triangleIds;
 
   // 1. Calculate the 2D centroid/center of the ROI to prevent global coordinate shift during warping
   let sumX = 0;
   let sumY = 0;
   let count = 0;
-  for (const triId of region.triangleIds) {
+  for (const triId of activeTriangleIds) {
     const tri = triangles[triId];
     if (!tri) continue;
     sumX += tri.v0.x + tri.v1.x + tri.v2.x;
@@ -593,7 +596,7 @@ export function samplePoissonDiscWarped(
     return baseSpacing / Math.max(0.1, s);
   };
 
-  for (const triId of region.triangleIds) {
+  for (const triId of activeTriangleIds) {
     const tri = triangles[triId];
     if (!tri) continue;
 
@@ -1346,6 +1349,7 @@ export async function generateSupportsFromPainter(
   const regionBoundaryLoops = new Map<string, VoxlROIBoundaryLoop[]>();
   const regionSpines = new Map<string, { points: THREE.Vector3[]; normals: THREE.Vector3[] }>();
   const regionMinimaPoints = new Map<string, { pos: THREE.Vector3; idx: number }[]>();
+  const regionTriangleIds = new Map<string, Set<number>>();
 
   const allRegions = new Map<string, ROIRegion>(regions.map(r => [r.id, r]));
 
@@ -1368,6 +1372,7 @@ export async function generateSupportsFromPainter(
         triangleIds.add(id);
       }
     }
+    regionTriangleIds.set(region.id, triangleIds);
 
     const regionLoops: VoxlROIBoundaryLoop[] = [];
 
@@ -1408,11 +1413,16 @@ export async function generateSupportsFromPainter(
     );
 
     if (isVectorBrush) {
-      const worldPts = region.vectorPath!.map(p => new THREE.Vector3(...p.point).applyMatrix4(mesh.matrixWorld));
       const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
       const worldNorms = region.vectorPath!.map(p => {
         const n = p.normal ? new THREE.Vector3(...p.normal) : new THREE.Vector3(0, 0, 1);
         return n.applyMatrix3(normalMatrix).normalize();
+      });
+      const worldPts = region.vectorPath!.map((p, idx) => {
+        const v = new THREE.Vector3(...p.point).applyMatrix4(mesh.matrixWorld);
+        const norm = worldNorms[idx];
+        v.addScaledVector(norm, 0.05); // Offset outward by 0.05mm along normal to ensure strictly outside mesh volume
+        return v;
       });
 
       if (region.brushType === 'PointPerimeter') {
@@ -1883,6 +1893,7 @@ export async function generateSupportsFromPainter(
   for (const region of regions) {
     const vertexNormals = regionVertexNormals.get(region.id);
     if (!vertexNormals) continue;
+    const triangleIds = regionTriangleIds.get(region.id) || new Set<number>();
 
     // Scan all vertices of the region's triangles to find absolute ROI Z span boundaries once per region
     let regionMinZ = Infinity;
@@ -1893,8 +1904,8 @@ export async function generateSupportsFromPainter(
         regionMinZ = Math.min(regionMinZ, worldPos.z);
         regionMaxZ = Math.max(regionMaxZ, worldPos.z);
       }
-    } else if (region.triangleIds && region.triangleIds.size > 0) {
-      for (const triId of region.triangleIds) {
+    } else if (triangleIds && triangleIds.size > 0) {
+      for (const triId of triangleIds) {
         const tri = triangles[triId];
         if (!tri) continue;
         regionMinZ = Math.min(regionMinZ, tri.v0.z, tri.v1.z, tri.v2.z);
@@ -1954,7 +1965,7 @@ export async function generateSupportsFromPainter(
             normal: (vertexNormals.get(m.idx) || new THREE.Vector3(0, 0, 1)).clone(),
             regionId: region.id,
             regionType: region.brushType,
-            regionTriCount: region.triangleIds.size,
+            regionTriCount: triangleIds.size,
             stage: 'minima',
             attemptLeafCreation: stage.spacing.attemptLeafCreation,
             leafInterval: stage.spacing.leafInterval ?? stage.spacing.baseSpacingMm,
@@ -2083,7 +2094,7 @@ export async function generateSupportsFromPainter(
                 normal: sample.normal,
                 regionId: region.id,
                 regionType: region.brushType,
-                regionTriCount: region.triangleIds.size,
+                regionTriCount: triangleIds.size,
                 stage: 'perimeter',
                 attemptLeafCreation: stage.spacing.attemptLeafCreation,
                 leafInterval: stage.spacing.leafInterval ?? stage.spacing.baseSpacingMm,
@@ -2164,12 +2175,15 @@ export async function generateSupportsFromPainter(
           }
 
           for (const sample of samples) {
+            if (sample.normal.z > 0.1) {
+              continue; // Reject candidate tips that are facing upwards to prevent placing on top
+            }
             candidates.push({
               pos: sample.pos,
               normal: sample.normal,
               regionId: region.id,
               regionType: region.brushType,
-              regionTriCount: region.triangleIds.size,
+              regionTriCount: triangleIds.size,
               stage: 'centerline',
               attemptLeafCreation: stage.spacing.attemptLeafCreation,
               leafInterval: stage.spacing.leafInterval ?? stage.spacing.baseSpacingMm,
@@ -2179,12 +2193,12 @@ export async function generateSupportsFromPainter(
         }
         rawCenterline.push(...candidates);
       } else if (stage.type === 'infill') {
-        if (region.triangleIds.size > 0) {
+        if (triangleIds.size > 0) {
           const spacing = Math.max(0.1, stage.spacing.baseSpacingMm);
           const minXY = new THREE.Vector2(Infinity, Infinity);
           const maxXY = new THREE.Vector2(-Infinity, -Infinity);
 
-          for (const triId of region.triangleIds) {
+          for (const triId of triangleIds) {
             const tri = triangles[triId];
             if (!tri) continue;
             for (const v of [tri.v0, tri.v1, tri.v2]) {
@@ -2222,7 +2236,7 @@ export async function generateSupportsFromPainter(
                 let matchingTri: WeldedTriangle | null = null;
                 let bary: { u: number; v: number; w: number } | null = null;
 
-                for (const triId of region.triangleIds) {
+                for (const triId of triangleIds) {
                   const tri = triangles[triId];
                   if (!tri) continue;
 
@@ -2243,7 +2257,7 @@ export async function generateSupportsFromPainter(
                     normal: matchingTri.normal.clone(),
                     regionId: region.id,
                     regionType: region.brushType,
-                    regionTriCount: region.triangleIds.size,
+                    regionTriCount: triangleIds.size,
                     stage: 'infill',
                     attemptLeafCreation: stage.spacing.attemptLeafCreation,
                     leafInterval: stage.spacing.leafInterval ?? stage.spacing.baseSpacingMm,
@@ -2270,7 +2284,7 @@ export async function generateSupportsFromPainter(
                 let matchingTri: WeldedTriangle | null = null;
                 let bary: { u: number; v: number; w: number } | null = null;
 
-                for (const triId of region.triangleIds) {
+                for (const triId of triangleIds) {
                   const tri = triangles[triId];
                   if (!tri) continue;
 
@@ -2291,7 +2305,7 @@ export async function generateSupportsFromPainter(
                     normal: matchingTri.normal.clone(),
                     regionId: region.id,
                     regionType: region.brushType,
-                    regionTriCount: region.triangleIds.size,
+                    regionTriCount: triangleIds.size,
                     stage: 'infill',
                     attemptLeafCreation: stage.spacing.attemptLeafCreation,
                     leafInterval: stage.spacing.leafInterval ?? stage.spacing.baseSpacingMm,
@@ -2310,7 +2324,8 @@ export async function generateSupportsFromPainter(
               regionMaxZ,
               stage as any,
               triangles,
-              opTrunkWidth
+              opTrunkWidth,
+              triangleIds
             );
 
             for (const pt of results3D) {
@@ -2319,7 +2334,7 @@ export async function generateSupportsFromPainter(
                 normal: pt.normal,
                 regionId: region.id,
                 regionType: region.brushType,
-                regionTriCount: region.triangleIds.size,
+                regionTriCount: triangleIds.size,
                 stage: 'infill',
                 attemptLeafCreation: stage.spacing.attemptLeafCreation,
                 leafInterval: stage.spacing.leafInterval ?? stage.spacing.baseSpacingMm,
@@ -2341,7 +2356,7 @@ export async function generateSupportsFromPainter(
                 let matchingTri: WeldedTriangle | null = null;
                 let bary: { u: number; v: number; w: number } | null = null;
 
-                for (const triId of region.triangleIds) {
+                for (const triId of triangleIds) {
                   const tri = triangles[triId];
                   if (!tri) continue;
 
@@ -2362,7 +2377,7 @@ export async function generateSupportsFromPainter(
                     normal: matchingTri.normal.clone(),
                     regionId: region.id,
                     regionType: region.brushType,
-                    regionTriCount: region.triangleIds.size,
+                    regionTriCount: triangleIds.size,
                     stage: 'infill',
                     attemptLeafCreation: stage.spacing.attemptLeafCreation,
                     leafInterval: stage.spacing.leafInterval ?? stage.spacing.baseSpacingMm,

@@ -98,10 +98,10 @@ describe('Support Painter Option 1B - Direct Coordinate Binding, Crease Walks & 
       ],
       faceCentroids: [
         new THREE.Vector3(1/3, 1/3, 0),
-        -1/3, 2/3, 0,
-        -1/3, 0, 1/3,
-        1/3, 0, 2/3
-      ].map(p => new THREE.Vector3(p[0], p[1], p[2])),
+        new THREE.Vector3(-1/3, 2/3, 0),
+        new THREE.Vector3(-1/3, 0, 1/3),
+        new THREE.Vector3(1/3, 0, 2/3)
+      ],
       faceZBounds: [
         { min: 0, max: 0 },
         { min: 0, max: 0 },

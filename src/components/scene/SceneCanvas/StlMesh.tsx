@@ -1105,9 +1105,10 @@ if (uDitherAmount > 0.0) {
                   const clickPoint = e.point.clone();
                   supportPainterStore.setHoveredTriangle(faceIndex, [clickPoint.x, clickPoint.y, clickPoint.z]);
 
-                   // Continuous drag painting/erasing when click-and-dragging
+                  // Continuous drag painting/erasing when click-and-dragging
                   const snap = supportPainterStore.getSnapshot();
-                  if (snap.activeBrush !== 'PointPath' && (e.buttons & 1) === 1 && (snap.interactionPhase === 'Expand' || snap.interactionPhase === 'Subtract')) {
+                  const isVectorBrush = snap.activeBrush === 'PointPath' || snap.activeBrush === 'PointPerimeter' || snap.activeBrush === 'SharpCorner';
+                  if (!isVectorBrush && (e.buttons & 1) === 1 && (snap.interactionPhase === 'Expand' || snap.interactionPhase === 'Subtract')) {
                     const map = supportPainterStore.getClientAdjacencyMap();
                     if (map) {
                       const mesh = e.object as THREE.Mesh;
@@ -1337,7 +1338,10 @@ if (uDitherAmount > 0.0) {
                   }
                 }
 
-                supportPainterStore.addPointPathPoint([localPoint.x, localPoint.y, localPoint.z], faceIndex);
+                const normal = e.face?.normal
+                  ? [e.face.normal.x, e.face.normal.y, e.face.normal.z] as [number, number, number]
+                  : undefined;
+                supportPainterStore.addPointPathPoint([localPoint.x, localPoint.y, localPoint.z], faceIndex, normal);
                 return;
               }
 
@@ -1369,7 +1373,7 @@ if (uDitherAmount > 0.0) {
                   if (walkedPath && walkedPath.length > 0) {
                     supportPainterStore.clearPointPathPoints();
                     for (const pt of walkedPath) {
-                      supportPainterStore.addPointPathPoint(pt.point, pt.faceIndex ?? faceIndex);
+                      supportPainterStore.addPointPathPoint(pt.point, pt.faceIndex ?? faceIndex, pt.normal);
                     }
 
                     const newId = supportPainterStore.commitPointPathRegion({
@@ -1626,9 +1630,11 @@ if (uDitherAmount > 0.0) {
         </mesh>
       )}
 
-      {isActiveModel && mode === 'supportPainter' && (
+      {(mode === 'supportPainter' || mode === 'support') && (
         <group position={meshLocalOffset}>
-          <PointPathOverlay matrixWorld={calculatedMatrixWorld} />
+          {isActiveModel && mode === 'supportPainter' && (
+            <PointPathOverlay matrixWorld={calculatedMatrixWorld} />
+          )}
           <VectorPathOverlay modelId={modelId} />
         </group>
       )}

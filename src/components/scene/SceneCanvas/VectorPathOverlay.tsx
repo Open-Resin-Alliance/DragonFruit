@@ -9,21 +9,30 @@ interface VectorPathOverlayProps {
 }
 
 export default function VectorPathOverlay({ modelId }: VectorPathOverlayProps) {
-  const { regions } = useSupportPainterState();
+  const { regionsByModel } = useSupportPainterState();
 
   // Get all committed regions for this model that have vectorPath
   const committedVectorRegions = useMemo(() => {
-    return Array.from(regions.values()).filter(
-      (r) => r.modelId === modelId && !r.proposedOnly && r.vectorPath && r.vectorPath.length > 0
+    const modelRegions = regionsByModel?.get(modelId);
+    if (!modelRegions) return [];
+    return Array.from(modelRegions.values()).filter(
+      (r) => !r.proposedOnly && r.vectorPath && r.vectorPath.length > 0
     );
-  }, [regions, modelId]);
+  }, [regionsByModel, modelId]);
 
   if (committedVectorRegions.length === 0) return null;
 
   return (
     <group renderOrder={9999}>
       {committedVectorRegions.map((region) => {
-        const pts = region.vectorPath!.map((pt) => new THREE.Vector3(...pt.point));
+        const pts = region.vectorPath!.map((pt) => {
+          const v = new THREE.Vector3(...pt.point);
+          if (pt.normal) {
+            const n = new THREE.Vector3(...pt.normal).normalize();
+            v.addScaledVector(n, 0.05); // Offset by 0.05mm along surface normal to prevent Z-fighting
+          }
+          return v;
+        });
         
         // If it's a PointPerimeter (closed loop), append the first point to close the path
         if (region.brushType === 'PointPerimeter' && pts.length >= 3) {

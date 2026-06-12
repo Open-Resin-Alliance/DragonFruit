@@ -602,7 +602,7 @@ let markerEraserMode = false;
 let markerCollisionMode: 'fence' | 'push' | 'merge' = 'merge';
 
 // ─── Point Path Brush State ───
-let pointPathPoints: { point: [number, number, number]; faceIndex: number }[] = [];
+let pointPathPoints: { point: [number, number, number]; faceIndex: number; normal?: [number, number, number] }[] = [];
 let pointPathWidthMm = 0.2;
 let pointPathMode: 'line' | 'polygon' = 'line';
 let pointPathClosed = false;
@@ -739,6 +739,7 @@ function updateSnapshot() {
     interactionPhase,
     modifierKeys,
     regions: new Map(regions),
+    regionsByModel: new Map(Array.from(regionsByModel.entries()).map(([k, v]) => [k, new Map(v)])),
     scannedMinima: [...scannedMinima],
     triangleColorMap: new Map(triangleColorMap),
     hoveredTriangleId,
@@ -908,6 +909,10 @@ function _recomputeTriangleColorMap(): TriangleColorMap {
   const map: TriangleColorMap = new Map();
   // 1. Committed regions
   for (const region of regions.values()) {
+    const isVectorBrush = region.brushType === 'PointPath' || region.brushType === 'PointPerimeter' || region.brushType === 'SharpCorner';
+    if (isVectorBrush) {
+      continue;
+    }
     const rgb = hexToRgb(region.color);
     const isSelected = selectedRegionIds.has(region.id);
     const alpha = isSelected ? 200 : 255;
@@ -916,10 +921,13 @@ function _recomputeTriangleColorMap(): TriangleColorMap {
     }
   }
   // 2. Proposed/hover preview
-  const activeColor = BRUSH_COLORS[activeBrush];
-  const rgbActive = hexToRgb(activeColor);
-  for (const triId of proposedTriangleIds) {
-    map.set(triId, [rgbActive[0], rgbActive[1], rgbActive[2], 128]);
+  const isVectorActive = activeBrush === 'PointPath' || activeBrush === 'PointPerimeter' || activeBrush === 'SharpCorner';
+  if (!isVectorActive) {
+    const activeColor = BRUSH_COLORS[activeBrush];
+    const rgbActive = hexToRgb(activeColor);
+    for (const triId of proposedTriangleIds) {
+      map.set(triId, [rgbActive[0], rgbActive[1], rgbActive[2], 128]);
+    }
   }
   return map;
 }
@@ -1059,11 +1067,14 @@ export const supportPainterStore = {
     }
     
     if (changed) {
-      if (faceChanged && activeBrush !== 'PointPath') {
+      const isVectorBrush = activeBrush === 'PointPath' || activeBrush === 'PointPerimeter' || activeBrush === 'SharpCorner';
+      if (faceChanged && !isVectorBrush) {
         proposedTriangleIds.clear();
         if (id !== null) {
           proposedTriangleIds.add(id);
         }
+      } else if (isVectorBrush) {
+        proposedTriangleIds.clear();
       }
       triangleColorMap = _recomputeTriangleColorMap();
       updateSnapshot();
@@ -1141,6 +1152,7 @@ export const supportPainterStore = {
       createdAt: Date.now(),
       customBrush: customBrushOverride,
       placementScriptId: scriptId,
+      modelId: activeModelId ?? undefined,
     };
 
     regions.set(id, newRegion);
@@ -2027,6 +2039,7 @@ export const supportPainterStore = {
       color: BRUSH_COLORS.MinimaIslands,
       proposedOnly: false,
       createdAt: Date.now(),
+      modelId: activeModelId ?? undefined,
     };
 
     nextRegions.set(regionId, newRegion);
@@ -2060,8 +2073,8 @@ export const supportPainterStore = {
     notify();
   },
 
-  addPointPathPoint(point: [number, number, number], faceIndex: number) {
-    pointPathPoints = [...pointPathPoints, { point, faceIndex }];
+  addPointPathPoint(point: [number, number, number], faceIndex: number, normal?: [number, number, number]) {
+    pointPathPoints = [...pointPathPoints, { point, faceIndex, normal }];
     updateSnapshot();
     notify();
   },
@@ -2160,8 +2173,13 @@ export const supportPainterStore = {
       createdAt: Date.now(),
       customBrush: customBrushOverride,
       placementScriptId: scriptId,
+      modelId: activeModelId ?? undefined,
       vectorPath: isVectorBrush
-        ? pointPathPoints.map(p => ({ point: [...p.point] as [number, number, number], faceIndex: p.faceIndex }))
+        ? pointPathPoints.map(p => ({
+            point: [...p.point] as [number, number, number],
+            normal: p.normal ? [...p.normal] as [number, number, number] : undefined,
+            faceIndex: p.faceIndex
+          }))
         : undefined,
     };
 

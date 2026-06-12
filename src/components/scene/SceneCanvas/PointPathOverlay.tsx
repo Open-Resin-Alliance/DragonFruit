@@ -56,7 +56,14 @@ export default function PointPathOverlay({ matrixWorld }: { matrixWorld?: THREE.
 
   // Line segment path rendering setup
   const linePoints = useMemo(() => {
-    const pts = pointPathPoints.map((pt) => new THREE.Vector3(...pt.point));
+    const pts = pointPathPoints.map((pt) => {
+      const v = new THREE.Vector3(...pt.point);
+      if (pt.normal) {
+        const n = new THREE.Vector3(...pt.normal).normalize();
+        v.addScaledVector(n, 0.05); // Offset by 0.05mm along normal to prevent Z-fighting
+      }
+      return v;
+    });
     if ((pointPathMode === 'polygon' || activeBrush === 'PointPerimeter') && pts.length >= 3) {
       pts.push(pts[0].clone());
     }
@@ -108,10 +115,16 @@ export default function PointPathOverlay({ matrixWorld }: { matrixWorld?: THREE.
         const isFirst = index === 0;
         const color = isFirst ? firstPointColor : standardOrangeColor;
 
+        const pos = new THREE.Vector3(...pt.point);
+        if (pt.normal) {
+          const n = new THREE.Vector3(...pt.normal).normalize();
+          pos.addScaledVector(n, 0.05); // Offset by 0.05mm along normal
+        }
+
         return (
           <PointPathMarker
             key={index}
-            position={pt.point}
+            position={[pos.x, pos.y, pos.z]}
             color={color}
             isFirst={isFirst}
             firstPointShaderRef={firstPointShaderRef}

@@ -249,6 +249,7 @@ export interface SupportPainterState {
   interactionPhase:       BrushInteractionPhase;
   modifierKeys:           BrushModifierKeys;
   regions:                Map<string, ROIRegion>;
+  regionsByModel?:        Map<string, Map<string, ROIRegion>>;
   scannedMinima:          LocalMinimum[];
 
   // Derived / cached — recomputed by the store whenever `regions` changes.
@@ -295,7 +296,7 @@ export interface SupportPainterState {
   markerCollisionMode:    'fence' | 'push' | 'merge';
 
   // ─── Point Path Brush State ───
-  pointPathPoints:        { point: [number, number, number]; faceIndex: number }[];
+  pointPathPoints:        { point: [number, number, number]; faceIndex: number; normal?: [number, number, number] }[];
   pointPathWidthMm:       number;
   pointPathMode:          'line' | 'polygon';
   pointPathClosed:        boolean;
