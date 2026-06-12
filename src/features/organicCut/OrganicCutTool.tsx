@@ -79,14 +79,6 @@ const MARKER_RADIUS_FRACTION = 0.00075;
 const MARKER_RADIUS_MIN = 0.005;
 const MARKER_RADIUS_MAX = 0.3;
 const LOOP_LINE_BIAS_MM = 0.2;
-/**
- * How far the wafer's boundary sits off the model surface (along the surface
- * normal). MUST match Rust `membrane::DEFAULT_LOOP_OFFSET_MM`. The rendered seam
- * line is lifted by this so it sits exactly on the wafer's TOP EDGE instead of
- * floating on the surface below it (the wafer boundary is offset by this amount;
- * the seam IS that top edge).
- */
-const WAFER_TOP_EDGE_OFFSET_MM = 0.1;
 
 /**
  * In-canvas visualization for the Cutting Mode loop.
@@ -149,56 +141,11 @@ export function OrganicCutTool({
   const loopPositions = useMemo<number[] | null>(() => {
     let positions: number[] | null = null;
     if (geodesicPolyline && geodesicPolyline.length >= 6) {
-      // The geodesic polyline lies ON the surface, but the WAFER boundary is
-      // offset off the surface by WAFER_TOP_EDGE_OFFSET_MM. Lift each rendered
-      // line vertex by that amount along the model surface normal there, so the
-      // line sits exactly on the wafer's top edge (not floating below it). We use
-      // the nearest placed waypoint's surface normal — the loop is dense and the
-      // normals vary smoothly, so this hugs the wafer edge. (Render-only: the raw
-      // geodesicPolyline still feeds the membrane, so the wafer isn't double-
-      // offset.)
-      const raw = geodesicPolyline;
-      const haveNormals = loop.length > 0 && loop.some((p) => p.normal[0] !== 0 || p.normal[1] !== 0 || p.normal[2] !== 0);
-      positions = [];
-      for (let i = 0; i + 2 < raw.length; i += 3) {
-        const x = raw[i];
-        const y = raw[i + 1];
-        const z = raw[i + 2];
-        if (haveNormals) {
-          // Smoothly BLEND all waypoint normals by inverse-distance weighting,
-          // instead of snapping to the single nearest one (which kinks the line
-          // where the "nearest" waypoint changes). A continuously-varying lift
-          // direction keeps the lifted line as smooth as the polyline itself.
-          let nx = 0;
-          let ny = 0;
-          let nz = 0;
-          let wsum = 0;
-          for (const p of loop) {
-            const ddx = p.position[0] - x;
-            const ddy = p.position[1] - y;
-            const ddz = p.position[2] - z;
-            const d2 = ddx * ddx + ddy * ddy + ddz * ddz;
-            const w = 1 / (d2 + 1e-6); // inverse-square, softened near zero
-            nx += p.normal[0] * w;
-            ny += p.normal[1] * w;
-            nz += p.normal[2] * w;
-            wsum += w;
-          }
-          if (wsum > 0) {
-            nx /= wsum;
-            ny /= wsum;
-            nz /= wsum;
-          }
-          const nlen = Math.hypot(nx, ny, nz) || 1;
-          positions.push(
-            x + (nx / nlen) * WAFER_TOP_EDGE_OFFSET_MM,
-            y + (ny / nlen) * WAFER_TOP_EDGE_OFFSET_MM,
-            z + (nz / nlen) * WAFER_TOP_EDGE_OFFSET_MM,
-          );
-        } else {
-          positions.push(x, y, z);
-        }
-      }
+      // The seam line is the SOURCE OF TRUTH: render it exactly where it is, on
+      // the surface, so it's accurate for the cut and stays connected to the
+      // waypoints (which are also on the surface). The wafer is built to meet this
+      // line, not the other way around.
+      positions = Array.from(geodesicPolyline);
       // The Rust geodesic for a CLOSED loop omits the final point (it equals the
       // first), so the rendered line would have a visible gap at the start point.
       // Append the first vertex to draw the loop fully closed. (Only for a real
@@ -657,18 +604,13 @@ export function OrganicCutTool({
           const scale = isDragging ? 1.5 : 1;
           // A larger invisible hit-sphere makes the small dots easy to grab.
           const hitRadius = markerRadius * 4;
-          // Lift the rendered marker onto the wafer's top edge (same offset as the
-          // seam line) so the dots stay hooked to the line instead of sitting on
-          // the surface 0.1mm below it. Render-only — the loop point used for the
-          // cut stays on the surface. Skip the lift if the point has no normal (an
-          // inserted point may lack one) so it doesn't drift to the wrong place.
-          const hasN = p.normal[0] !== 0 || p.normal[1] !== 0 || p.normal[2] !== 0;
-          const off = hasN ? WAFER_TOP_EDGE_OFFSET_MM : 0;
-          const mx = p.position[0] + p.normal[0] * off;
-          const my = p.position[1] + p.normal[1] * off;
-          const mz = p.position[2] + p.normal[2] * off;
+          // Markers stay at the TRUE surface position (NOT lifted to the wafer
+          // edge): the click/drag pipeline raycasts the surface and stores the
+          // surface point, so the interactive geometry must sit exactly there or
+          // grabbing/placing drifts from the cursor. The 0.1mm gap to the lifted
+          // seam line is sub-pixel and not noticeable.
           return (
-            <group key={idx} position={[mx, my, mz]}>
+            <group key={idx} position={[p.position[0], p.position[1], p.position[2]]}>
               {/* Generous invisible grab/click/hover target. */}
               <mesh
                 renderOrder={1000}

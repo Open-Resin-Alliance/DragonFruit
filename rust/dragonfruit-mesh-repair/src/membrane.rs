@@ -1995,6 +1995,11 @@ const OFFSET_DIR_SMOOTH_PASSES: u32 = 12;
 ///
 /// Returns the offset loop in the same order; an empty/degenerate model returns
 /// the loop unchanged.
+///
+/// Currently UNUSED: the cut builds the membrane on the raw seam loop so the
+/// wafer's top edge sits on the on-surface seam line. Kept (with its tests) in
+/// case a real model needs the off-surface offset back for robust severance.
+#[allow(dead_code)]
 fn offset_loop_off_faces(model: &IndexedMesh, loop_pts: &[Vec3], offset_mm: f32) -> Vec<Vec3> {
     if loop_pts.is_empty() || model.triangles.is_empty() || offset_mm <= 0.0 {
         return loop_pts.to_vec();
@@ -2066,6 +2071,97 @@ fn offset_loop_off_faces(model: &IndexedMesh, loop_pts: &[Vec3], offset_mm: f32)
         .collect()
 }
 
+/// How much WIDER than the seam the wafer's footprint is, in mm. The membrane's
+/// boundary ring is pushed outward (in the local membrane plane) by this — so the
+/// wafer is `0.1 mm` wider than the model's cross-section (poking just past the
+/// body wall so the cut severs cleanly), while the rim stays at the SAME height,
+/// on the seam line. Wider, not taller.
+pub const DEFAULT_WAFER_WIDEN_MM: f32 = 0.1;
+
+/// Push the membrane's BOUNDARY ring outward by `amount` mm so the wafer is
+/// `amount` wider than the model's cross-section — without lifting it (the rim
+/// stays at the same height, on the seam). Operates on a membrane already built on
+/// the RAW seam loop, so the input can't self-intersect; we only nudge its rim.
+///
+/// The outward direction at each boundary vertex is computed from LOCAL 3D
+/// geometry (NOT a global best-fit plane, which flattens a bent loop and tangles
+/// at concave/folded spots — the self-intersection bug): take the direction from
+/// the vertex's INTERIOR neighbours toward the vertex (points away from the
+/// membrane body), then remove the component along the local boundary tangent so
+/// it's purely outward in the local surface. Directions are smoothed around the
+/// ring so low-poly zigzag doesn't roughen the rim. Because each direction is
+/// local, a bent loop can't fold — the widened membrane stays a valid mesh.
+fn widen_membrane_boundary(m: &mut Membrane, amount: f32) {
+    let bn = m.boundary.len();
+    if bn < 3 || amount <= 0.0 {
+        return;
+    }
+    let neighbours = one_ring(m);
+    let is_boundary = {
+        let mut s = vec![false; m.vertices.len()];
+        for &b in &m.boundary {
+            s[b as usize] = true;
+        }
+        s
+    };
+
+    // 1. Per-boundary-vertex outward direction (local, in 3D).
+    let mut dirs: Vec<Vec3> = Vec::with_capacity(bn);
+    for i in 0..bn {
+        let b = m.boundary[i] as usize;
+        let p = m.vertices[b];
+        let prev = m.vertices[m.boundary[(i + bn - 1) % bn] as usize];
+        let next = m.vertices[m.boundary[(i + 1) % bn] as usize];
+        // Local boundary tangent.
+        let mut t = next.sub(prev);
+        let tl = t.length();
+        if tl > 1e-9 {
+            t = t.scale(1.0 / tl);
+        }
+        // Average of interior (non-boundary) neighbours → the membrane body side.
+        let mut interior_avg = Vec3::ZERO;
+        let mut count = 0u32;
+        for &nb in &neighbours[b] {
+            if !is_boundary[nb as usize] {
+                interior_avg = interior_avg.add(m.vertices[nb as usize]);
+                count += 1;
+            }
+        }
+        // Gross outward = from interior toward the boundary vertex.
+        let mut out = if count > 0 {
+            p.sub(interior_avg.scale(1.0 / count as f32))
+        } else {
+            // No interior neighbour (tiny membrane): use the boundary normal proxy
+            // perpendicular to the tangent via the prev→next chord midpoint.
+            p.sub(prev.add(next).scale(0.5))
+        };
+        // Remove the tangent component → purely outward, in the local surface.
+        out = out.sub(t.scale(out.dot(t)));
+        let ol = out.length();
+        dirs.push(if ol > 1e-9 { out.scale(1.0 / ol) } else { Vec3::ZERO });
+    }
+
+    // 2. Smooth the directions around the ring (kills low-poly zigzag).
+    for _ in 0..6 {
+        let mut next = dirs.clone();
+        for i in 0..bn {
+            let prev = dirs[(i + bn - 1) % bn];
+            let here = dirs[i];
+            let nxt = dirs[(i + 1) % bn];
+            let avg = prev.add(here.scale(2.0)).add(nxt);
+            let l = avg.length();
+            next[i] = if l > 1e-9 { avg.scale(1.0 / l) } else { here };
+        }
+        dirs = next;
+    }
+
+    // 3. Push each boundary vertex outward by `amount`.
+    for i in 0..bn {
+        let b = m.boundary[i] as usize;
+        m.vertices[b] = m.vertices[b].add(dirs[i].scale(amount));
+    }
+}
+
 /// Build the contour-cut CUTTER (membrane + thickened slab) from the model and
 /// loop, EXACTLY as the cut does — the single source of truth shared by
 /// [`contour_split`] (the real cut) and [`build_cutter_preview_soup`] (the live
@@ -2075,21 +2171,21 @@ fn offset_loop_off_faces(model: &IndexedMesh, loop_pts: &[Vec3], offset_mm: f32)
 /// Returns `(membrane, slab)`. `density` is the already-clamped resolution
 /// multiplier. `Err` if the membrane can't be built from the loop.
 fn build_contour_cutter(
-    mesh: &IndexedMesh,
+    _mesh: &IndexedMesh,
     loop_pts: &[Vec3],
     thickness_mm: f32,
     membrane_smoothing: f32,
     density: f64,
 ) -> Result<(Membrane, IndexedMesh), String> {
     let grid_divisions = DEFAULT_GRID_DIVISIONS * density;
-    // Move the loop OFF the model's faces (along the surface normal), then build
-    // the membrane on the offset loop so it sits just outside the body — the cut
-    // runs clean to the edge with no border/lip. This is the ONLY offset.
-    let offset_loop = offset_loop_off_faces(mesh, loop_pts, DEFAULT_LOOP_OFFSET_MM);
-    let membrane = build_membrane_full(&offset_loop, CONTOUR_SUBDIVISIONS, membrane_smoothing, grid_divisions)
+    // Build the membrane on the RAW seam loop (boundary exactly on the line — the
+    // source of truth, and a raw loop can't self-intersect), THEN push only its
+    // boundary ring 0.1 mm outward so the wafer is 0.1 mm wider than the body's
+    // cross-section (poking just past the wall → clean sever) without lifting it:
+    // the rim stays at the same height, on the seam. (`_mesh` unused now.)
+    let mut membrane = build_membrane_full(loop_pts, CONTOUR_SUBDIVISIONS, membrane_smoothing, grid_divisions)
         .ok_or_else(|| format!("could not build a membrane from the loop ({} points)", loop_pts.len()))?;
-    // Thicken straight into the slab — no boundary lift (the loop is already off
-    // the surface), so the cut face is pure membrane edge to edge.
+    widen_membrane_boundary(&mut membrane, DEFAULT_WAFER_WIDEN_MM);
     let slab = thicken_to_slab(&membrane, thickness_mm, 0.0, &[]);
     Ok((membrane, slab))
 }
@@ -3006,6 +3102,47 @@ mod tests {
         let model = cube(10.0);
         let loop_pts = square_loop(10.0);
         assert_eq!(offset_loop_off_faces(&model, &loop_pts, 0.0), loop_pts);
+    }
+
+    #[test]
+    fn widen_membrane_boundary_grows_footprint_keeps_height_no_self_x() {
+        // Build a membrane on a flat square loop at z=0, widen its boundary, and
+        // assert: (1) the boundary footprint grew outward, (2) the boundary stayed
+        // at z=0 (wider, not taller), (3) the membrane is still a valid (non-self-
+        // intersecting) mesh — the whole point of the 3D-local widen.
+        let s = 10.0;
+        let m0 = build_membrane(&square_loop(s), 2).expect("membrane");
+        // Record the boundary bbox before.
+        let bbox = |m: &Membrane| {
+            let (mut lo, mut hi) = (Vec3::new(f32::MAX, f32::MAX, f32::MAX), Vec3::new(f32::MIN, f32::MIN, f32::MIN));
+            for &bi in &m.boundary { let p = m.vertices[bi as usize]; lo = lo.min(p); hi = hi.max(p); }
+            (lo, hi)
+        };
+        let (lo0, hi0) = bbox(&m0);
+
+        let mut m = m0.clone();
+        widen_membrane_boundary(&mut m, 0.3);
+        let (lo1, hi1) = bbox(&m);
+
+        // Footprint grew outward on both axes.
+        assert!(lo1.x < lo0.x - 0.1 && lo1.y < lo0.y - 0.1, "min should move outward: {lo0:?} -> {lo1:?}");
+        assert!(hi1.x > hi0.x + 0.1 && hi1.y > hi0.y + 0.1, "max should move outward: {hi0:?} -> {hi1:?}");
+        // Height preserved: boundary stays on z=0.
+        for &bi in &m.boundary {
+            assert!(m.vertices[bi as usize].z.abs() < 1e-3, "boundary must stay at z=0 (wider, not taller)");
+        }
+        // Still a valid mesh — no self-intersections introduced.
+        let soup = IndexedMesh { positions: m.vertices.clone(), triangles: m.triangles.clone() };
+        assert_eq!(count_self_intersections(&soup), 0, "widened membrane must not self-intersect");
+    }
+
+    #[test]
+    fn widen_membrane_boundary_is_a_noop_for_zero() {
+        let mut m = build_membrane(&square_loop(10.0), 2).expect("membrane");
+        let before: Vec<Vec3> = m.boundary.iter().map(|&b| m.vertices[b as usize]).collect();
+        widen_membrane_boundary(&mut m, 0.0);
+        let after: Vec<Vec3> = m.boundary.iter().map(|&b| m.vertices[b as usize]).collect();
+        assert_eq!(before, after, "zero widen must leave the boundary unchanged");
     }
 
     // ── refine_model_near_slab (watertight seam-band subdivision) ───────────
