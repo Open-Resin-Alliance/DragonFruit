@@ -154,6 +154,10 @@ const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
   // (1.25× ratio); depth 2.5mm. The user tunes these live.
   keyWidthMm: 2.0,
   keyDepthMm: 2.5,
+  // Default key shape — the rotation-locking tapered frustum.
+  keyShape: 'frustum',
+  // Edge fillet off by default (sharp box); the user dials it in live.
+  keyFilletMm: 0.0,
 };
 
 /** Minimum points before a CONTOUR cut is possible (a real loop needs ≥3). */
@@ -382,6 +386,8 @@ export function useOrganicCutSession({
           panelState.generateKey,
           panelState.keyWidthMm,
           panelState.keyDepthMm,
+          panelState.keyShape,
+          panelState.keyFilletMm,
         );
         if (cancelled) return;
         setMembranePreview(result.membrane);
@@ -394,7 +400,7 @@ export function useOrganicCutSession({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [toolActive, loop, activeGeometry, activeGeometryKey, cutMode, geodesicPolyline, isDraggingPoint, panelState.membraneSmoothing, panelState.density, panelState.thicknessMm, panelState.generateKey, panelState.keyWidthMm, panelState.keyDepthMm]);
+  }, [toolActive, loop, activeGeometry, activeGeometryKey, cutMode, geodesicPolyline, isDraggingPoint, panelState.membraneSmoothing, panelState.density, panelState.thicknessMm, panelState.generateKey, panelState.keyWidthMm, panelState.keyDepthMm, panelState.keyShape, panelState.keyFilletMm]);
 
   const addPoint = React.useCallback((point: OrganicCutLoopPoint) => {
     setLoop((prev) => [...prev, point]);
@@ -556,6 +562,8 @@ export function useOrganicCutSession({
             generateKey: ps.generateKey,
             keyWidthMm: ps.keyWidthMm,
             keyDepthMm: ps.keyDepthMm,
+            keyShape: ps.keyShape,
+            keyFilletMm: ps.keyFilletMm,
           };
         } else {
           // Compute the plane from the SAME helper the preview uses, so the cut

@@ -95,6 +95,14 @@ pub struct OrganicCutSpec {
     /// Key depth in mm — how far the peg pokes into the body. Defaults to 5 mm.
     #[serde(default = "default_key_depth")]
     pub key_depth_mm: f32,
+    /// Requested key shape: `"frustum"` (default, rotation-locking) or `"dome"`
+    /// (round half-sphere). Unknown / absent → frustum.
+    #[serde(default = "default_key_shape")]
+    pub key_shape: String,
+    /// Edge fillet radius in mm — rounds the frustum's vertical corners + tip.
+    /// 0 = sharp box. Ignored by the dome. Defaults to 0.
+    #[serde(default)]
+    pub key_fillet_mm: f32,
 }
 
 /// serde defaults for the key size (mm). Literals (not `crate::key::` constants)
@@ -105,6 +113,9 @@ fn default_key_width() -> f32 {
 }
 fn default_key_depth() -> f32 {
     2.5
+}
+fn default_key_shape() -> String {
+    "frustum".to_string()
 }
 
 /// serde default for the 0..1 smoothing fields (0.5 = original behavior).
@@ -402,8 +413,10 @@ fn organic_cut_contour(
             part_a,
             part_b,
             &split.membrane,
+            crate::key::KeyShape::from_str_or_default(&options.cut.key_shape),
             options.cut.key_width_mm,
             options.cut.key_depth_mm,
+            options.cut.key_fillet_mm,
             crate::key::DEFAULT_KEY_TOLERANCE_MM,
         );
         part_a = keyed.part_a;

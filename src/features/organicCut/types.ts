@@ -83,6 +83,10 @@ export interface OrganicCutSpec {
   keyWidthMm?: number;
   /** Key depth in mm (how far the peg pokes in). Serde field: `keyDepthMm`. */
   keyDepthMm?: number;
+  /** Key shape: 'frustum' (default) or 'dome'. Serde field: `keyShape`. */
+  keyShape?: 'frustum' | 'dome';
+  /** Edge fillet radius in mm (rounds frustum corners + tip). Serde: `keyFilletMm`. */
+  keyFilletMm?: number;
 }
 
 export interface OrganicCutOptions {

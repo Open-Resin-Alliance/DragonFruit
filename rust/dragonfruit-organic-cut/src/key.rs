@@ -41,6 +41,13 @@ const KEY_TOP_SCALE: f32 = 0.5;
 /// butt-joint) and the socket mouth fully breaches part_b's cut face.
 const KEY_BASE_OVERLAP_MM: f32 = 0.3;
 
+/// Points used to sample EACH rounded corner of the frustum's rounded-rectangle
+/// cross-section. 4 corners × this = the per-ring point count of the side wall.
+const FILLET_CORNER_SEGS: usize = 5;
+/// Rings used to sweep the rounded-over TIP (from the side-wall shoulder up to the
+/// tip pole). More = smoother dome-over.
+const FILLET_TIP_RINGS: usize = 4;
+
 /// Sane mm clamps on the user-chosen key width + depth (model units are mm). The
 /// sliders enforce their own ranges; these are a backstop against a stray 0/huge
 /// value producing a degenerate or absurd key. The 1 mm-wall fit ladder shrinks
@@ -56,12 +63,33 @@ const KEY_DEPTH_MAX_MM: f32 = 50.0;
 pub const DEFAULT_KEY_WIDTH_MM: f32 = 2.0;
 pub const DEFAULT_KEY_DEPTH_MM: f32 = 2.5;
 
+/// The key SHAPE the user requested. Drives which rung the fit ladder starts on.
+/// (Distinct from [`KeyKind`], which is what actually got PLACED after the ladder.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KeyShape {
+    /// Tapered rectangular frustum (the default — rotation-locking).
+    #[default]
+    Frustum,
+    /// Half-sphere dome (round, locates but does not lock rotation).
+    Dome,
+}
+
+impl KeyShape {
+    /// Parse the camelCase string the frontend sends; unknown → Frustum.
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s {
+            "dome" => KeyShape::Dome,
+            _ => KeyShape::Frustum,
+        }
+    }
+}
+
 /// Which kind of key actually got placed — drives the preview and the user alert.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyKind {
     /// The primary tapered frustum (possibly shrunk to fit).
     Frustum,
-    /// Fallback half-sphere dome (the part was too thin for a full frustum).
+    /// Half-sphere dome (chosen explicitly, OR the thin-part frustum fallback).
     Dome,
     /// No key placed (the part was too thin for any key).
     None,
@@ -216,7 +244,13 @@ fn frame_extruding_toward_part_b(frame: &KeyFrame) -> KeyFrame {
 ///
 /// Output is watertight with outward winding (same convention as
 /// [`axis_aligned_slab`]) so `to_manifold` accepts it.
-pub fn build_frustum(frame: &KeyFrame, dims: FrustumDims, grow: f32) -> IndexedMesh {
+///
+/// `fillet` (mm) rounds the peg: the cross-section becomes a rounded-rectangle
+/// (the 4 vertical corners are quarter-circle arcs of radius `fillet`) and the TIP
+/// is rounded over (a quarter-round from the side wall up to the tip). `fillet = 0`
+/// gives the original sharp tapered box. The fillet is clamped so it can't exceed
+/// the smaller half-extent (which would invert the corner).
+pub fn build_frustum(frame: &KeyFrame, dims: FrustumDims, grow: f32, fillet: f32) -> IndexedMesh {
     let g = grow.max(0.0);
     // Half-extents at base and top, dilated by `grow`.
     let bw = dims.width * 0.5 + g; // base half-width
@@ -227,6 +261,22 @@ pub fn build_frustum(frame: &KeyFrame, dims: FrustumDims, grow: f32) -> IndexedM
     // overlap that pushes the base into the other half for a solid boolean.
     let z0 = -g - KEY_BASE_OVERLAP_MM;
     let z1 = dims.depth + g; // tip: past nominal depth by `grow`
+    let height = (z1 - z0).max(1e-4);
+
+    // Corner radius: the requested fillet, but never more than the smallest half-
+    // extent (a corner arc can't be bigger than the side it rounds) nor more than
+    // a third of the height (so the tip round-over fits below the tip).
+    let r = fillet
+        .max(0.0)
+        .min(tw.min(tl) * 0.999)
+        .min(bw.min(bl) * 0.999)
+        .min(height / 3.0);
+
+    // Below a tiny threshold, fall back to the sharp 8-vertex box (cheaper + the
+    // exact original geometry, so a 0 fillet is a true no-op).
+    if r < 1e-4 {
+        return build_sharp_frustum(frame, bw, bl, tw, tl, z0, z1);
+    }
 
     // Local → world: world = anchor + x·u + y·v + z·axis.
     let local = |x: f32, y: f32, z: f32| -> Vec3 {
@@ -237,38 +287,148 @@ pub fn build_frustum(frame: &KeyFrame, dims: FrustumDims, grow: f32) -> IndexedM
             .add(frame.axis.scale(z))
     };
 
-    // 8 corners: 0..3 base ring (z0), 4..7 top ring (z1). Same corner ORDER as
-    // axis_aligned_slab (lo ring CCW from below, hi ring CCW from below) so the
-    // face table's winding gives outward normals.
-    let positions = vec![
-        local(-bw, -bl, z0), // 0
-        local(bw, -bl, z0),  // 1
-        local(bw, bl, z0),   // 2
-        local(-bw, bl, z0),  // 3
-        local(-tw, -tl, z1), // 4
-        local(tw, -tl, z1),  // 5
-        local(tw, tl, z1),   // 6
-        local(-tw, tl, z1),  // 7
-    ];
+    // A rounded-rectangle ring of points (CCW seen from +axis) for half-extents
+    // (hw,hl) with corner radius `cr`, at height `z`. The 4 corners are
+    // quarter-circle arcs; straight runs collapse to the shared arc endpoints so
+    // every ring has the SAME point count (4·FILLET_CORNER_SEGS) and lofts cleanly.
+    let ring = |hw: f32, hl: f32, cr: f32, z: f32| -> Vec<Vec3> {
+        let cr = cr.min(hw).min(hl);
+        // Corner arc centers (inset by cr): order +x+y, -x+y, -x-y, +x-y → CCW.
+        let centers = [
+            (hw - cr, hl - cr, 0.0f32),               // +x+y, arc 0°→90°
+            (-(hw - cr), hl - cr, std::f32::consts::FRAC_PI_2), // -x+y, 90°→180°
+            (-(hw - cr), -(hl - cr), std::f32::consts::PI),     // -x-y, 180°→270°
+            (hw - cr, -(hl - cr), 3.0 * std::f32::consts::FRAC_PI_2), // +x-y
+        ];
+        let mut pts = Vec::with_capacity(4 * FILLET_CORNER_SEGS);
+        for &(cx, cy, a0) in &centers {
+            for k in 0..FILLET_CORNER_SEGS {
+                let t = k as f32 / (FILLET_CORNER_SEGS - 1) as f32; // 0..1 inclusive
+                let a = a0 + t * std::f32::consts::FRAC_PI_2;
+                pts.push(local(cx + cr * a.cos(), cy + cr * a.sin(), z));
+            }
+        }
+        pts
+    };
+    let ring_n = 4 * FILLET_CORNER_SEGS;
 
-    // 12 triangles, identical face table to axis_aligned_slab (outward-wound for a
-    // box whose ring 0..3 is the −Z cap and ring 4..7 is the +Z cap).
+    let mut positions: Vec<Vec3> = Vec::new();
+    let mut ring_starts: Vec<u32> = Vec::new();
+    let mut push_ring = |pts: Vec<Vec3>, positions: &mut Vec<Vec3>, starts: &mut Vec<u32>| {
+        starts.push(positions.len() as u32);
+        positions.extend(pts);
+    };
+
+    // The tip is rounded over a quarter-circle of radius `r`: the side wall ends
+    // at a "shoulder" ring (z1−r), then the surface curves inward+up to a small
+    // FLAT TOP face (the top size inset by `r`) at z1. The top stays a flat
+    // rounded-rect cap — no collapsing pole — so no degenerate triangles.
+    //
+    // Tip rings, parametrized by θ from 0 (shoulder) to π/2 (top rim):
+    //   inset(θ) = r·(1 − cos θ)   (0 → r): how far the rim pulls in
+    //   rise(θ)  = r·sin θ         (0 → r): how far it rises toward z1
+    // Each ring's half-extents shrink by inset; its corner radius STAYS `r` (the
+    // rounded-rect corners are preserved up the round-over, not flattened).
+    let z_shoulder = z1 - r;
+    // Ring 0: base (rounded-rect, base size) at z0.
+    push_ring(ring(bw, bl, r, z0), &mut positions, &mut ring_starts);
+    // Ring 1: shoulder (top size) — side wall is rings 0→1.
+    push_ring(ring(tw, tl, r, z_shoulder), &mut positions, &mut ring_starts);
+    // Rings 2..=N: the tip round-over up to the top rim (inset by r at the top).
+    for i in 1..=FILLET_TIP_RINGS {
+        let ang = (i as f32 / FILLET_TIP_RINGS as f32) * std::f32::consts::FRAC_PI_2;
+        let inset = r * (1.0 - ang.cos());
+        let rise = r * ang.sin();
+        let hw = (tw - inset).max(r + 1e-3);
+        let hl = (tl - inset).max(r + 1e-3);
+        push_ring(ring(hw, hl, r, z_shoulder + rise), &mut positions, &mut ring_starts);
+    }
+    // Top-cap center (flat top face at z1).
+    let top_center = positions.len() as u32;
+    positions.push(local(0.0, 0.0, z1));
+    // Base center point (for the flat base cap at z0).
+    let base_center = positions.len() as u32;
+    positions.push(local(0.0, 0.0, z0));
+
+    let mut triangles: Vec<[u32; 3]> = Vec::new();
+
+    // Side + tip bands between successive rings. `cur` is the LOWER ring (toward
+    // the base/−axis), `nxt` the UPPER. Rings are CCW seen from +axis, so the
+    // outward-facing winding (going low→high) is [c0,c1,n1]+[c0,n1,n0].
+    for w in 0..ring_starts.len() - 1 {
+        let cur = ring_starts[w];
+        let nxt = ring_starts[w + 1];
+        for j in 0..ring_n {
+            let j1 = ((j + 1) % ring_n) as u32;
+            let c0 = cur + j as u32;
+            let c1 = cur + j1;
+            let n0 = nxt + j as u32;
+            let n1 = nxt + j1;
+            triangles.push([c0, c1, n1]);
+            triangles.push([c0, n1, n0]);
+        }
+    }
+    // Flat top cap (top rim ring → top center). Outward normal along +axis → wind
+    // CCW seen from +axis: [center, j, j1].
+    let top = *ring_starts.last().unwrap();
+    for j in 0..ring_n {
+        let j1 = ((j + 1) % ring_n) as u32;
+        triangles.push([top_center, top + j as u32, top + j1]);
+    }
+    // Base cap (base ring → base center). Its outward normal points along −axis
+    // (the mouth), so wind CW seen from +axis.
+    let base = ring_starts[0];
+    for j in 0..ring_n {
+        let j1 = ((j + 1) % ring_n) as u32;
+        triangles.push([base_center, base + j1, base + j as u32]);
+    }
+
+    IndexedMesh { positions, triangles }
+}
+
+/// The original sharp 8-vertex tapered box (the `fillet = 0` path), factored out so
+/// both the filleted and sharp builds share the half-extent / z math above.
+fn build_sharp_frustum(
+    frame: &KeyFrame,
+    bw: f32,
+    bl: f32,
+    tw: f32,
+    tl: f32,
+    z0: f32,
+    z1: f32,
+) -> IndexedMesh {
+    let local = |x: f32, y: f32, z: f32| -> Vec3 {
+        frame
+            .anchor
+            .add(frame.u.scale(x))
+            .add(frame.v.scale(y))
+            .add(frame.axis.scale(z))
+    };
+    let positions = vec![
+        local(-bw, -bl, z0),
+        local(bw, -bl, z0),
+        local(bw, bl, z0),
+        local(-bw, bl, z0),
+        local(-tw, -tl, z1),
+        local(tw, -tl, z1),
+        local(tw, tl, z1),
+        local(-tw, tl, z1),
+    ];
     let faces: [[u32; 3]; 12] = [
         [0, 2, 1],
-        [0, 3, 2], // base (−axis cap = the mouth)
+        [0, 3, 2],
         [4, 5, 6],
-        [4, 6, 7], // top (+axis cap = the tip)
+        [4, 6, 7],
         [0, 1, 5],
-        [0, 5, 4], // side −v
+        [0, 5, 4],
         [3, 7, 6],
-        [3, 6, 2], // side +v
+        [3, 6, 2],
         [0, 4, 7],
-        [0, 7, 3], // side −u
+        [0, 7, 3],
         [1, 2, 6],
-        [1, 6, 5], // side +u
+        [1, 6, 5],
     ];
-    let triangles = faces.to_vec();
-    IndexedMesh { positions, triangles }
+    IndexedMesh { positions, triangles: faces.to_vec() }
 }
 
 /// The decided key for a cut: which rung of the fit ladder, at what size, plus a
@@ -300,39 +460,58 @@ impl KeyPlan {
     }
 }
 
-/// Run the **fit ladder** purely as a sizing decision (no booleans): a tapered
-/// frustum (shrunk to keep ≥1 mm of wall everywhere) → a half-sphere dome (if the
-/// frustum can't fit) → no key. Clearance is measured against the **socket** (the
-/// larger of peg/socket) so both halves keep ≥`KEY_WALL_MARGIN_MM` of material.
-fn decide_key(clearance: &Clearance, nominal: FrustumDims) -> KeyPlan {
-    // Rung 1: tapered frustum at the user's requested size, shrunk only if needed
-    // to keep ≥MARGIN of wall everywhere.
-    if let Some(dims) = clearance.fit_frustum(nominal) {
-        let shrunk = dims.width < nominal.width - 1e-4 || dims.depth < nominal.depth - 1e-4;
-        let detail = if shrunk {
-            format!(
-                "key shrunk to fit (1 mm wall): {:.2}×{:.2} mm base, {:.2} mm deep",
-                dims.width, dims.length, dims.depth
-            )
-        } else {
-            String::new()
-        };
-        return KeyPlan::Frustum { dims, detail };
-    }
-
-    // Rung 2: half-sphere dome, sized to keep ≥MARGIN. Its nominal radius is half
-    // the requested key width (so it fills the same lateral footprint as the peg).
+/// Run the **fit ladder** purely as a sizing decision (no booleans). The ladder's
+/// start depends on the requested `shape`:
+/// - `Frustum`: tapered frustum (shrunk to keep ≥1 mm of wall) → dome fallback →
+///   no key. The dome is an automatic safety net for a too-thin part.
+/// - `Dome`: half-sphere directly (the user chose it on purpose) → no key. No
+///   frustum fallback — a dome is the deliberately-smaller choice.
+///
+/// Clearance is measured against the **socket** (the larger of peg/socket) so both
+/// halves keep ≥`KEY_WALL_MARGIN_MM` of material.
+fn decide_key(clearance: &Clearance, nominal: FrustumDims, shape: KeyShape) -> KeyPlan {
+    // The dome's nominal radius is half the requested key width (it fills the same
+    // lateral footprint as the peg's base).
     let nominal_r = (nominal.width * 0.5).max(0.1);
-    if let Some(radius) = clearance.fit_dome(nominal_r) {
-        return KeyPlan::Dome {
-            radius,
-            detail: format!(
-                "Key fell back to a half-sphere ({radius:.2} mm radius) — the part is too thin for a full key."
-            ),
-        };
+
+    if shape == KeyShape::Frustum {
+        // Rung 1: tapered frustum at the requested size, shrunk only if needed.
+        if let Some(dims) = clearance.fit_frustum(nominal) {
+            let shrunk = dims.width < nominal.width - 1e-4 || dims.depth < nominal.depth - 1e-4;
+            let detail = if shrunk {
+                format!(
+                    "key shrunk to fit (1 mm wall): {:.2}×{:.2} mm base, {:.2} mm deep",
+                    dims.width, dims.length, dims.depth
+                )
+            } else {
+                String::new()
+            };
+            return KeyPlan::Frustum { dims, detail };
+        }
+        // Rung 2: frustum didn't fit → automatic dome fallback (with a reason).
+        if let Some(radius) = clearance.fit_dome(nominal_r) {
+            return KeyPlan::Dome {
+                radius,
+                detail: format!(
+                    "Key fell back to a half-sphere ({radius:.2} mm radius) — the part is too thin for a full key."
+                ),
+            };
+        }
+    } else {
+        // Dome chosen explicitly: place a half-sphere (shrunk to fit). No frustum
+        // fallback — the dome is the deliberately smaller, round option.
+        if let Some(radius) = clearance.fit_dome(nominal_r) {
+            let shrunk = radius < nominal_r - 1e-4;
+            let detail = if shrunk {
+                format!("dome key shrunk to fit (1 mm wall): {radius:.2} mm radius")
+            } else {
+                String::new()
+            };
+            return KeyPlan::Dome { radius, detail };
+        }
     }
 
-    // Rung 3: no key.
+    // Final rung: no key fits.
     KeyPlan::None {
         detail: "No key placed — the part is too thin for any key.".to_string(),
     }
@@ -349,8 +528,10 @@ pub fn apply_key(
     part_a: IndexedMesh,
     part_b: IndexedMesh,
     membrane: &Membrane,
+    shape: KeyShape,
     width_mm: f32,
     depth_mm: f32,
+    fillet_mm: f32,
     tolerance: f32,
 ) -> KeyOutcome {
     let frame = match frame_from_membrane(membrane) {
@@ -374,11 +555,11 @@ pub fn apply_key(
     // (This matches the preview, which probes the model and sizes correctly.)
     let clearance = Clearance::probe(&frame, model, model);
     let nominal = FrustumDims::from_width_depth(width_mm, depth_mm);
-    let plan = decide_key(&clearance, nominal);
+    let plan = decide_key(&clearance, nominal, shape);
 
     match plan {
         KeyPlan::Frustum { dims, detail } => {
-            let out = apply_frustum(part_a, part_b, &frame, dims, tolerance);
+            let out = apply_frustum(part_a, part_b, &frame, dims, fillet_mm, tolerance);
             if out.kind == KeyKind::Frustum {
                 KeyOutcome { detail, ..out }
             } else {
@@ -421,8 +602,10 @@ pub fn build_key_preview_soup(
     loop_pts: &[Vec3],
     membrane_smoothing: f32,
     density: f32,
+    shape: KeyShape,
     width_mm: f32,
     depth_mm: f32,
+    fillet_mm: f32,
     tolerance: f32,
 ) -> Option<(Vec<f32>, KeyKind, String)> {
     use crate::membrane::{build_membrane_full, CONTOUR_SUBDIVISIONS, DEFAULT_GRID_DIVISIONS};
@@ -445,14 +628,16 @@ pub fn build_key_preview_soup(
     // model on both sides (its walls are the same walls the halves will have).
     let clearance = Clearance::probe(&frame, model, model);
     let nominal = FrustumDims::from_width_depth(width_mm, depth_mm);
-    let plan = decide_key(&clearance, nominal);
+    let plan = decide_key(&clearance, nominal, shape);
     let build_frame = frame_extruding_toward_part_b(&frame);
 
     let mut soup: Vec<f32> = Vec::new();
     let (kind, detail) = match &plan {
         KeyPlan::Frustum { dims, detail } => {
-            append_soup(&mut soup, &build_frustum(&build_frame, *dims, 0.0)); // peg
-            append_soup(&mut soup, &build_frustum(&build_frame, *dims, tolerance)); // socket
+            // peg + socket, both filleted (socket fillet = peg fillet + tolerance,
+            // matching apply_frustum so the preview is exactly what cuts).
+            append_soup(&mut soup, &build_frustum(&build_frame, *dims, 0.0, fillet_mm));
+            append_soup(&mut soup, &build_frustum(&build_frame, *dims, tolerance, fillet_mm + tolerance));
             (KeyKind::Frustum, detail.clone())
         }
         KeyPlan::Dome { radius, detail } => {
@@ -490,11 +675,15 @@ fn apply_frustum(
     part_b: IndexedMesh,
     frame: &KeyFrame,
     dims: FrustumDims,
+    fillet: f32,
     tolerance: f32,
 ) -> KeyOutcome {
     let build_frame = frame_extruding_toward_part_b(frame);
-    let peg_mesh = build_frustum(&build_frame, dims, 0.0);
-    let socket_mesh = build_frustum(&build_frame, dims, tolerance);
+    let peg_mesh = build_frustum(&build_frame, dims, 0.0, fillet);
+    // The socket is the peg offset outward by `tolerance`; a uniform offset of a
+    // rounded-rect grows the corner radius by the same amount, so the socket's
+    // fillet is peg fillet + tolerance (keeps the rounded peg fully contained).
+    let socket_mesh = build_frustum(&build_frame, dims, tolerance, fillet + tolerance);
 
     let result = (|| -> Result<(IndexedMesh, IndexedMesh), String> {
         let a = to_manifold(&part_a).map_err(|e| format!("part_a invalid: {e}"))?;
@@ -838,11 +1027,35 @@ mod tests {
         let mem = flat_membrane(10.0);
         let frame = frame_from_membrane(&mem).expect("frame");
         let dims = FrustumDims::from_width_depth(5.0, 5.0);
-        let peg = build_frustum(&frame, dims, 0.0);
+        let peg = build_frustum(&frame, dims, 0.0, 0.0);
         assert_eq!(peg.positions.len(), 8, "frustum has 8 corners");
         assert_eq!(peg.triangles.len(), 12, "frustum has 12 triangles");
         let m = to_manifold(&peg).expect("frustum converts to a watertight manifold");
         assert!(m.num_tri() > 0, "non-empty manifold");
+    }
+
+    // Test 1b: a FILLETED frustum (rounded corners + tip) is watertight, and its
+    // peg still fits inside the grown filleted socket.
+    #[test]
+    fn filleted_frustum_is_watertight_and_fits() {
+        let mem = flat_membrane(10.0);
+        let frame = frame_from_membrane(&mem).expect("frame");
+        let dims = FrustumDims::from_width_depth(5.0, 5.0);
+        let fillet = 0.6;
+        let peg = build_frustum(&frame, dims, 0.0, fillet);
+        // Rounded build has many more verts/tris than the 8/12 sharp box.
+        assert!(peg.positions.len() > 8, "filleted peg has extra verts");
+        let peg_m = to_manifold(&peg).expect("filleted peg is watertight");
+        assert!(peg_m.num_tri() > 0, "non-empty");
+        // Socket = peg offset by tol with fillet grown by tol (matches apply_frustum).
+        let socket_m =
+            to_manifold(&build_frustum(&frame, dims, 0.1, fillet + 0.1)).expect("filleted socket");
+        let leftover = peg_m.difference(&socket_m);
+        assert!(
+            leftover.is_empty() || leftover.num_tri() == 0,
+            "filleted peg fits inside grown filleted socket (leftover = {})",
+            leftover.num_tri()
+        );
     }
 
     // Test 2: frustum dimensions follow the requested width/depth + shape rules.
@@ -878,8 +1091,8 @@ mod tests {
         let frame = frame_from_membrane(&mem).expect("frame");
         let dims = FrustumDims::from_width_depth(5.0, 5.0);
         let tol = 0.1;
-        let peg = build_frustum(&frame, dims, 0.0);
-        let socket = build_frustum(&frame, dims, tol);
+        let peg = build_frustum(&frame, dims, 0.0, 0.0);
+        let socket = build_frustum(&frame, dims, tol, 0.0);
 
         let (plo, phi) = bbox_of(&peg);
         let (slo, shi) = bbox_of(&socket);
@@ -914,7 +1127,7 @@ mod tests {
         let mem = flat_membrane(10.0);
 
         let a_tris_before = part_a.triangle_count();
-        let out = apply_key(&model, part_a, part_b, &mem, 5.0, 5.0, 0.1);
+        let out = apply_key(&model, part_a, part_b, &mem, KeyShape::Frustum, 5.0, 5.0, 0.0, 0.1);
 
         assert_eq!(out.kind, KeyKind::Frustum, "frustum key placed: {}", out.detail);
         assert!(
@@ -932,8 +1145,8 @@ mod tests {
         let mem = flat_membrane(10.0);
         let frame = frame_from_membrane(&mem).expect("frame");
         let dims = FrustumDims::from_width_depth(5.0, 5.0);
-        let peg = to_manifold(&build_frustum(&frame, dims, 0.0)).expect("peg");
-        let socket = to_manifold(&build_frustum(&frame, dims, 0.1)).expect("socket");
+        let peg = to_manifold(&build_frustum(&frame, dims, 0.0, 0.0)).expect("peg");
+        let socket = to_manifold(&build_frustum(&frame, dims, 0.1, 0.0)).expect("socket");
         // peg − socket should be empty: the peg lies entirely within the cavity.
         let leftover = peg.difference(&socket);
         assert!(
@@ -967,7 +1180,7 @@ mod tests {
         let key_d = 5.0;
         assert!(key_d > 4.0, "test premise: requested depth exceeds the part");
 
-        let out = apply_key(&model, part_a, part_b.clone(), &mem, key_w, key_d, 0.1);
+        let out = apply_key(&model, part_a, part_b.clone(), &mem, KeyShape::Frustum, key_w, key_d, 0.0, 0.1);
 
         assert_eq!(out.kind, KeyKind::Frustum, "still a frustum, just smaller: {}", out.detail);
         assert!(out.detail.contains("shrunk"), "reports the shrink: {:?}", out.detail);
@@ -1000,7 +1213,7 @@ mod tests {
         // ~2.0 mm deep part_b: below the frustum's depth floor (1 mm key + 1 mm
         // wall + 0.1 mm tol = 2.1 mm needed) but the shallower dome still fits.
         let (model1, pa, pb) = split_halves(20.0, 2.0);
-        let dome_out = apply_key(&model1, pa, pb, &mem, 5.0, 5.0, 0.1);
+        let dome_out = apply_key(&model1, pa, pb, &mem, KeyShape::Frustum, 5.0, 5.0, 0.0, 0.1);
         assert_eq!(dome_out.kind, KeyKind::Dome, "dome fallback: {}", dome_out.detail);
         assert!(
             dome_out.detail.contains("half-sphere"),
@@ -1012,7 +1225,7 @@ mod tests {
         // the parts come back UNCHANGED.
         let (model2, pa2, pb2) = split_halves(20.0, 0.5);
         let pb2_tris = pb2.triangle_count();
-        let none_out = apply_key(&model2, pa2, pb2, &mem, 5.0, 5.0, 0.1);
+        let none_out = apply_key(&model2, pa2, pb2, &mem, KeyShape::Frustum, 5.0, 5.0, 0.0, 0.1);
         assert_eq!(none_out.kind, KeyKind::None, "no key: {}", none_out.detail);
         assert!(none_out.detail.contains("too thin"), "no-key reason: {:?}", none_out.detail);
         assert_eq!(
@@ -1020,6 +1233,24 @@ mod tests {
             pb2_tris,
             "part_b is unchanged when no key is placed"
         );
+    }
+
+    // Test 8b: choosing Dome on a THICK part places a dome on purpose (not a
+    // frustum), proving the shape selector overrides the default frustum-first.
+    #[test]
+    fn explicit_dome_shape_places_a_dome_on_a_thick_part() {
+        let mem = flat_membrane(10.0);
+        // Plenty thick for a frustum — but we ask for a dome explicitly.
+        let (model, pa, pb) = split_halves(20.0, 20.0);
+        let out = apply_key(&model, pa, pb, &mem, KeyShape::Dome, 5.0, 5.0, 0.0, 0.1);
+        assert_eq!(
+            out.kind,
+            KeyKind::Dome,
+            "explicit dome on a thick part is a dome, not a frustum: {}",
+            out.detail
+        );
+        assert!(to_manifold(&out.part_a).is_ok(), "domed part_a watertight");
+        assert!(to_manifold(&out.part_b).is_ok(), "domed part_b watertight");
     }
 
     // Test 6: the preview soup is non-empty, finite, and a multiple of 9 floats
@@ -1035,7 +1266,7 @@ mod tests {
             Vec3::new(-5.0, 5.0, 0.0),
         ];
         let (soup, kind, _detail) =
-            build_key_preview_soup(&model, &loop_pts, DEFAULT_MEMBRANE_SMOOTHING, 1.0, 5.0, 5.0, 0.1)
+            build_key_preview_soup(&model, &loop_pts, DEFAULT_MEMBRANE_SMOOTHING, 1.0, KeyShape::Frustum, 5.0, 5.0, 0.0, 0.1)
                 .expect("preview builds");
         assert_eq!(kind, KeyKind::Frustum, "healthy box → frustum key preview");
         assert!(!soup.is_empty(), "preview soup non-empty");
@@ -1106,7 +1337,7 @@ mod tests {
         let b_before = split.part_b.triangle_count();
 
         // Now key the REAL parts — clearance probes against the original `model`.
-        let out = apply_key(&model, split.part_a, split.part_b, &split.membrane, 5.0, 5.0, 0.1);
+        let out = apply_key(&model, split.part_a, split.part_b, &split.membrane, KeyShape::Frustum, 5.0, 5.0, 0.0, 0.1);
 
         assert_eq!(
             out.kind,

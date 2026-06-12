@@ -248,6 +248,12 @@ struct GeodesicRequestDto {
     /// Key depth in mm — how far the peg pokes in. Default 2.5.
     #[serde(default = "default_key_depth")]
     key_depth_mm: f32,
+    /// Requested key shape: "frustum" (default) or "dome". Default "frustum".
+    #[serde(default = "default_key_shape")]
+    key_shape: String,
+    /// Edge fillet radius in mm (rounds the frustum corners + tip). Default 0.
+    #[serde(default)]
+    key_fillet_mm: f32,
 }
 
 fn default_density_one() -> f32 {
@@ -266,6 +272,10 @@ fn default_key_depth() -> f32 {
     2.5
 }
 
+fn default_key_shape() -> String {
+    "frustum".to_string()
+}
+
 impl Default for GeodesicRequestDto {
     fn default() -> Self {
         Self {
@@ -278,6 +288,8 @@ impl Default for GeodesicRequestDto {
             generate_key: false,
             key_width_mm: 2.0,
             key_depth_mm: 2.5,
+            key_shape: "frustum".to_string(),
+            key_fillet_mm: 0.0,
         }
     }
 }
@@ -1063,6 +1075,8 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
     let generate_key = req.generate_key;
     let key_width_mm = req.key_width_mm;
     let key_depth_mm = req.key_depth_mm;
+    let key_shape = dragonfruit_organic_cut::KeyShape::from_str_or_default(&req.key_shape);
+    let key_fillet_mm = req.key_fillet_mm;
 
     // Use the captured cut SOURCE mesh so the preview can apply the real loop
     // offset (needs surface normals) and show the REAL cutter slab — exactly what
@@ -1089,8 +1103,10 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
                         &loop_pts,
                         membrane_smoothing,
                         density,
+                        key_shape,
                         key_width_mm,
                         key_depth_mm,
+                        key_fillet_mm,
                         dragonfruit_organic_cut::DEFAULT_KEY_TOLERANCE_MM,
                     )
                 {

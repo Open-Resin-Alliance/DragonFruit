@@ -25,6 +25,10 @@ export interface OrganicCutPanelState {
   keyWidthMm: number;
   /** Key depth in mm — how far the peg pokes into the body. */
   keyDepthMm: number;
+  /** Key shape: 'frustum' (tapered box, rotation-locking) or 'dome' (half-sphere). */
+  keyShape: 'frustum' | 'dome';
+  /** Edge fillet radius (mm) — rounds the frustum's corners + tip. 0 = sharp. */
+  keyFilletMm: number;
 }
 
 interface OrganicCutPanelProps {
@@ -313,13 +317,41 @@ export function OrganicCutPanel({
                 </span>
               </button>
 
-              {/* Key size sliders (mm). Width drives the base (length = 1.25×);
-                  depth is how far the peg pokes in. Shown only when the key is on.
-                  The 1 mm-wall fit rule still shrinks below these on thin parts. */}
+              {/* Key shape + size. Shape picks frustum (tapered box, locks
+                  rotation) vs dome (half-sphere, locates only). Width drives the
+                  base; depth (frustum only) is how far the peg pokes in. The
+                  1 mm-wall fit rule still shrinks below these on thin parts. */}
               {state.generateKey && (
                 <div className="space-y-1.5 pt-0.5">
                   <div>
-                    <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Key Width</label>
+                    <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Key Shape</label>
+                    <div className="mt-1 grid grid-cols-2 gap-1">
+                      <button
+                        type="button"
+                        className="ui-button ui-button-secondary !h-7 whitespace-nowrap px-1.5 text-[10px]"
+                        onClick={() => setState({ keyShape: 'frustum' })}
+                        disabled={disabled || isApplying}
+                        style={state.keyShape === 'frustum' ? activeModeStyle : undefined}
+                        title="Tapered rectangular peg — locks the parts against rotation."
+                      >
+                        Frustum
+                      </button>
+                      <button
+                        type="button"
+                        className="ui-button ui-button-secondary !h-7 whitespace-nowrap px-1.5 text-[10px]"
+                        onClick={() => setState({ keyShape: 'dome' })}
+                        disabled={disabled || isApplying}
+                        style={state.keyShape === 'dome' ? activeModeStyle : undefined}
+                        title="Half-sphere peg — locates the parts but allows rotation."
+                      >
+                        Dome
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>
+                      {state.keyShape === 'dome' ? 'Key Diameter' : 'Key Width'}
+                    </label>
                     <ScrollableNumberField
                       value={state.keyWidthMm}
                       onChange={(value) => setState({ keyWidthMm: clampFloat(value, 1, 20, 1) })}
@@ -332,20 +364,40 @@ export function OrganicCutPanel({
                       className="mt-1"
                     />
                   </div>
-                  <div>
-                    <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Key Depth</label>
-                    <ScrollableNumberField
-                      value={state.keyDepthMm}
-                      onChange={(value) => setState({ keyDepthMm: clampFloat(value, 1, 20, 1) })}
-                      min={1}
-                      max={20}
-                      step={0.5}
-                      unit="mm"
-                      ariaLabel="Key depth in millimeters"
-                      disabled={disabled || isApplying}
-                      className="mt-1"
-                    />
-                  </div>
+                  {/* Depth + Edge Fillet only apply to the frustum (a dome is
+                      already fully round). */}
+                  {state.keyShape === 'frustum' && (
+                    <>
+                      <div>
+                        <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Key Depth</label>
+                        <ScrollableNumberField
+                          value={state.keyDepthMm}
+                          onChange={(value) => setState({ keyDepthMm: clampFloat(value, 1, 20, 1) })}
+                          min={1}
+                          max={20}
+                          step={0.5}
+                          unit="mm"
+                          ariaLabel="Key depth in millimeters"
+                          disabled={disabled || isApplying}
+                          className="mt-1"
+                        />
+                      </div>
+                      <div>
+                        <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Edge Fillet</label>
+                        <ScrollableNumberField
+                          value={state.keyFilletMm}
+                          onChange={(value) => setState({ keyFilletMm: clampFloat(value, 0, 5, 2) })}
+                          min={0}
+                          max={5}
+                          step={0.1}
+                          unit="mm"
+                          ariaLabel="Key edge fillet radius in millimeters (0 = sharp)"
+                          disabled={disabled || isApplying}
+                          className="mt-1"
+                        />
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 
