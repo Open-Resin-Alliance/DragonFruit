@@ -71,6 +71,12 @@ interface OrganicCutToolProps {
    * curved cutter surface the cut will use.
    */
   membranePreview?: Float32Array | null;
+  /**
+   * Registration-key preview as a flat triangle soup (model-local): the peg AND
+   * socket the cut will place. Rendered translucent in a distinct color so the
+   * user sees the key straddling the cut before committing.
+   */
+  keyPreview?: Float32Array | null;
 }
 
 /** Marker radius as a fraction of the model's bbox diagonal (small = precise). */
@@ -110,6 +116,7 @@ export function OrganicCutTool({
   geodesicPolyline,
   cutMode = 'plane',
   membranePreview,
+  keyPreview,
 }: OrganicCutToolProps) {
   const activeModel = useMemo(() => models.find((m) => m.id === activeModelId), [models, activeModelId]);
   const transform = activeTransform || activeModel?.transform;
@@ -255,6 +262,28 @@ export function OrganicCutTool({
     geom.computeBoundingSphere();
     return geom;
   }, [cutMode, membranePreview]);
+
+  // Registration-key preview (peg + socket) for contour mode. Built from the flat
+  // soup Rust returns, so it's EXACTLY the key the cut will place.
+  const keyGeometry = useMemo(() => {
+    if (cutMode !== 'contour' || !keyPreview || keyPreview.length < 9) return null;
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(keyPreview, 3));
+    geom.computeVertexNormals();
+    geom.computeBoundingBox();
+    geom.computeBoundingSphere();
+    return geom;
+  }, [cutMode, keyPreview]);
+
+  // Edge outline of the key so its 3D form (the tapered box / dome) reads even as
+  // a flat depth-test-off overlay. EdgesGeometry keeps only the sharp silhouette
+  // edges (not every triangle), so the peg/socket shape is clear, not a mess.
+  const keyWireframe = useMemo(() => {
+    if (!keyGeometry) return null;
+    const edges = new THREE.EdgesGeometry(keyGeometry, 20);
+    edges.computeBoundingSphere();
+    return edges;
+  }, [keyGeometry]);
 
   // Wireframe of the membrane so we can SEE the triangulation (verify the grid
   // remesh / spot slivers). Edges-only overlay on the translucent surface.
@@ -563,6 +592,36 @@ export function OrganicCutTool({
               color={0xcccccc}
               transparent
               opacity={0.15}
+              depthTest={false}
+              depthWrite={false}
+            />
+          </lineSegments>
+        )}
+
+        {/* Registration-key preview (peg + socket) — amber so it reads distinctly
+            from the green membrane. `depthTest={false}` so it always draws THROUGH
+            the model (an X-ray overlay), like the membrane wireframe — the key is
+            mostly buried inside the body, so without this it'd be hidden. */}
+        {keyGeometry && (
+          <mesh geometry={keyGeometry} renderOrder={1000} frustumCulled={false}>
+            <meshBasicMaterial
+              color={0xffa630}
+              transparent
+              opacity={0.4}
+              side={THREE.DoubleSide}
+              depthTest={false}
+              depthWrite={false}
+            />
+          </mesh>
+        )}
+
+        {/* Key edge outline so the peg/socket 3D form reads through the model. */}
+        {keyWireframe && (
+          <lineSegments geometry={keyWireframe} renderOrder={1001} frustumCulled={false}>
+            <lineBasicMaterial
+              color={0xff7a00}
+              transparent
+              opacity={0.9}
               depthTest={false}
               depthWrite={false}
             />

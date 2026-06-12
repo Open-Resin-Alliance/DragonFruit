@@ -57,6 +57,8 @@ static ORGANIC_CUT_GEODESIC_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::
 static ORGANIC_CUT_GEODESIC_SOLVER: OnceLock<Mutex<Option<Arc<GeodesicSolver>>>> = OnceLock::new();
 /// Most recent contour-cut membrane preview (LE f32 triangle soup, 9 per tri).
 static ORGANIC_CUT_MEMBRANE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+/// Most recent registration-key preview (LE f32 triangle soup, peg + socket).
+static ORGANIC_CUT_KEY_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 
 fn hollow_preview_source_mesh() -> &'static Mutex<Option<Arc<IndexedMesh>>> {
     HOLLOW_PREVIEW_SOURCE_MESH.get_or_init(|| Mutex::new(None))
@@ -124,6 +126,10 @@ fn organic_cut_geodesic_solver() -> &'static Mutex<Option<Arc<GeodesicSolver>>> 
 
 fn organic_cut_membrane_bytes() -> &'static Mutex<Option<Vec<u8>>> {
     ORGANIC_CUT_MEMBRANE_BYTES.get_or_init(|| Mutex::new(None))
+}
+
+fn organic_cut_key_bytes() -> &'static Mutex<Option<Vec<u8>>> {
+    ORGANIC_CUT_KEY_BYTES.get_or_init(|| Mutex::new(None))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -232,6 +238,16 @@ struct GeodesicRequestDto {
     /// cutter preview show the REAL slab thickness, not a zero-width sheet.
     #[serde(default = "default_thickness_tenth")]
     thickness_mm: f32,
+    /// When true, the preview also builds the registration key (peg + socket) the
+    /// cut would place, so the user sees it before cutting. Default off.
+    #[serde(default)]
+    generate_key: bool,
+    /// Key base width in mm (model units are mm). Default 2.
+    #[serde(default = "default_key_width")]
+    key_width_mm: f32,
+    /// Key depth in mm — how far the peg pokes in. Default 2.5.
+    #[serde(default = "default_key_depth")]
+    key_depth_mm: f32,
 }
 
 fn default_density_one() -> f32 {
@@ -240,6 +256,14 @@ fn default_density_one() -> f32 {
 
 fn default_thickness_tenth() -> f32 {
     0.1
+}
+
+fn default_key_width() -> f32 {
+    2.0
+}
+
+fn default_key_depth() -> f32 {
+    2.5
 }
 
 impl Default for GeodesicRequestDto {
@@ -251,6 +275,9 @@ impl Default for GeodesicRequestDto {
             membrane_smoothing: 0.5,
             density: 1.0,
             thickness_mm: 0.1,
+            generate_key: false,
+            key_width_mm: 2.0,
+            key_depth_mm: 2.5,
         }
     }
 }
@@ -1033,6 +1060,9 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
     let membrane_smoothing = req.membrane_smoothing;
     let density = req.density;
     let thickness_mm = req.thickness_mm;
+    let generate_key = req.generate_key;
+    let key_width_mm = req.key_width_mm;
+    let key_depth_mm = req.key_depth_mm;
 
     // Use the captured cut SOURCE mesh so the preview can apply the real loop
     // offset (needs surface normals) and show the REAL cutter slab — exactly what
@@ -1043,8 +1073,32 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
         .clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
+        // The key preview needs the real source mesh (to probe wall clearance);
+        // it's only available once the source is captured. Returns (soup, kind,
+        // detail) — empty soup when no key (too thin / degenerate / no source).
+        let mut key_soup: Vec<f32> = Vec::new();
+        let mut key_kind = "none".to_string();
+        let mut key_detail = String::new();
+
         let soup = if let Some(bytes) = source_bytes {
             let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+            if generate_key {
+                if let Some((ks, kind, detail)) =
+                    dragonfruit_organic_cut::build_key_preview_soup(
+                        &mesh,
+                        &loop_pts,
+                        membrane_smoothing,
+                        density,
+                        key_width_mm,
+                        key_depth_mm,
+                        dragonfruit_organic_cut::DEFAULT_KEY_TOLERANCE_MM,
+                    )
+                {
+                    key_soup = ks;
+                    key_kind = kind.as_str().to_string();
+                    key_detail = detail;
+                }
+            }
             dragonfruit_organic_cut::membrane::build_cutter_preview_soup(
                 &mesh,
                 &loop_pts,
@@ -1064,16 +1118,43 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
         };
         let tri_count = soup.len() / 9;
         let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&soup).to_vec();
-        Ok::<_, String>((bytes, tri_count))
+        let key_bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&key_soup).to_vec();
+        let key_tris = key_soup.len() / 9;
+        Ok::<_, String>((bytes, tri_count, key_bytes, key_tris, key_kind, key_detail))
     })
     .await
     .map_err(|e| format!("membrane preview task panicked: {e}"))??;
 
-    let (bytes, tri_count) = result;
+    let (bytes, tri_count, key_bytes, key_tris, key_kind, key_detail) = result;
     *organic_cut_membrane_bytes()
         .lock()
         .map_err(|e| format!("membrane lock poisoned: {e}"))? = Some(bytes);
-    Ok(format!("{{\"triangleCount\":{tri_count}}}"))
+    *organic_cut_key_bytes()
+        .lock()
+        .map_err(|e| format!("key lock poisoned: {e}"))? = Some(key_bytes);
+    // key_detail is plain ASCII status text; escape quotes/backslashes for JSON.
+    let key_detail_json = json_escape(&key_detail);
+    Ok(format!(
+        "{{\"triangleCount\":{tri_count},\"keyTriangleCount\":{key_tris},\"keyKind\":\"{key_kind}\",\"keyDetail\":\"{key_detail_json}\"}}"
+    ))
+}
+
+/// Returns the most recent registration-key preview as raw LE f32 triangle-soup
+/// bytes (peg followed by socket). Empty when no key was previewed.
+#[tauri::command]
+pub async fn mesh_organic_cut_read_key() -> Result<Response, String> {
+    let bytes = organic_cut_key_bytes()
+        .lock()
+        .map_err(|e| format!("key lock poisoned: {e}"))?
+        .clone()
+        .unwrap_or_default();
+    Ok(Response::new(bytes))
+}
+
+/// Minimal JSON string-body escaper for the short ASCII status messages we embed
+/// in hand-built response objects (quotes + backslashes only).
+fn json_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Returns the most recent membrane preview as raw LE f32 triangle-soup bytes.

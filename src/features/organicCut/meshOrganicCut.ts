@@ -49,7 +49,8 @@ type OrganicCutReadCommand =
   | 'mesh_organic_cut_read_part_a'
   | 'mesh_organic_cut_read_part_b'
   | 'mesh_organic_cut_read_geodesic'
-  | 'mesh_organic_cut_read_membrane';
+  | 'mesh_organic_cut_read_membrane'
+  | 'mesh_organic_cut_read_key';
 
 async function readPositionsFromCommand(
   invoke: TauriInvoke,
@@ -237,21 +238,50 @@ export async function computeGeodesicLoop(
   }
 }
 
+/** Which key the preview placed: a frustum, a half-sphere dome, or none. */
+export type KeyPreviewKind = 'frustum' | 'dome' | 'none';
+
 /**
- * Builds the contour-cut MEMBRANE for the given loop and returns it as a flat
- * triangle soup (9 floats per triangle, model-local), for previewing the cutter
- * surface in the scene. Requires the source already staged + captured. Returns
- * null outside Tauri / on failure / <3 points.
+ * Result of the contour-cut preview round-trip: the membrane cutter soup plus,
+ * when a key was requested, the key (peg + socket) soup and the chosen-rung kind
+ * + a human-readable reason (for the fell-back/no-key alert).
+ */
+export interface MembranePreviewResult {
+  /** The cutter membrane/slab soup (9 floats per triangle), or null. */
+  membrane: Float32Array | null;
+  /** The key (peg + socket) soup, or null when no key / not requested. */
+  keyPreview: Float32Array | null;
+  /** Which key rung was chosen. 'none' when not requested or too thin. */
+  keyKind: KeyPreviewKind;
+  /** Reason the key shrank / fell back / was skipped. Empty when nominal/off. */
+  keyDetail: string;
+}
+
+/**
+ * Builds the contour-cut MEMBRANE (and, when `generateKey`, the registration key)
+ * for the given loop, returning each as a flat triangle soup (9 floats per
+ * triangle, model-local) for previewing in the scene. Requires the source already
+ * staged + captured. Returns a result with null soups outside Tauri / on failure /
+ * <3 points.
  */
 export async function computeMembranePreview(
   loopPoints: OrganicCutLoopPoint[],
   membraneSmoothing = 0.5,
   density = 1.0,
   thicknessMm = 0.1,
-): Promise<Float32Array | null> {
+  generateKey = false,
+  keyWidthMm = 2.0,
+  keyDepthMm = 2.5,
+): Promise<MembranePreviewResult> {
+  const empty: MembranePreviewResult = {
+    membrane: null,
+    keyPreview: null,
+    keyKind: 'none',
+    keyDetail: '',
+  };
   const core = await loadTauriCore();
-  if (!core) return null;
-  if (loopPoints.length < 3) return null;
+  if (!core) return empty;
+  if (loopPoints.length < 3) return empty;
 
   const requestJson = JSON.stringify({
     points: loopPoints.map((p) => ({ position: p.position })),
@@ -259,16 +289,34 @@ export async function computeMembranePreview(
     membraneSmoothing,
     density,
     thicknessMm,
+    generateKey,
+    keyWidthMm,
+    keyDepthMm,
   });
   try {
     const reportJson = await core.invoke<string>('mesh_organic_cut_membrane_preview', { requestJson });
-    const report = JSON.parse(reportJson) as { triangleCount: number };
-    if (!report.triangleCount) return null;
-    return await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_membrane');
+    const report = JSON.parse(reportJson) as {
+      triangleCount: number;
+      keyTriangleCount?: number;
+      keyKind?: KeyPreviewKind;
+      keyDetail?: string;
+    };
+    const membrane = report.triangleCount
+      ? await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_membrane')
+      : null;
+    const keyPreview = report.keyTriangleCount
+      ? await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_key')
+      : null;
+    return {
+      membrane,
+      keyPreview,
+      keyKind: report.keyKind ?? 'none',
+      keyDetail: report.keyDetail ?? '',
+    };
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('[organicCut] membrane preview command failed', err);
-    return null;
+    return empty;
   }
 }
 

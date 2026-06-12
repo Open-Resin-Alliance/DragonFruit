@@ -83,6 +83,28 @@ pub struct OrganicCutSpec {
     /// CUT. 1.0 = default resolution. Clamped to 4 in `contour_split`.
     #[serde(default = "default_one")]
     pub density: f32,
+    /// When true (and mode is `Contour`), generate a registration key: a tapered
+    /// peg union'd onto `part_a` and a matching socket differenced from `part_b`,
+    /// so the halves socket together in one alignment. Defaults off (back-compat).
+    #[serde(default)]
+    pub generate_key: bool,
+    /// Key base width in mm (model units are mm). The base length follows the fixed
+    /// 1.25× proportion. Defaults to 5 mm when unset/<=0.
+    #[serde(default = "default_key_width")]
+    pub key_width_mm: f32,
+    /// Key depth in mm — how far the peg pokes into the body. Defaults to 5 mm.
+    #[serde(default = "default_key_depth")]
+    pub key_depth_mm: f32,
+}
+
+/// serde defaults for the key size (mm). Literals (not `crate::key::` constants)
+/// so this compiles with the `manifold` feature OFF too — the key module is gated,
+/// but the spec field isn't. Kept in sync with `key::DEFAULT_KEY_*_MM`.
+fn default_key_width() -> f32 {
+    2.0
+}
+fn default_key_depth() -> f32 {
+    2.5
 }
 
 /// serde default for the 0..1 smoothing fields (0.5 = original behavior).
@@ -113,6 +135,15 @@ pub struct OrganicCutReport {
     /// Human-readable detail of WHY we fell back (for diagnostics). Empty on success.
     #[serde(default)]
     pub detail: String,
+    /// Which kind of registration key was placed: `"frustum"`, `"dome"`, or
+    /// `"none"`. `"none"` both when no key was requested AND when the part was too
+    /// thin for any key (distinguish via `key_detail`). Always present.
+    #[serde(default)]
+    pub key_kind: String,
+    /// Human-readable reason the key fell back / was skipped (for the user alert).
+    /// Empty when a nominal key was placed or no key was requested.
+    #[serde(default)]
+    pub key_detail: String,
 }
 
 /// Result of an organic cut: the two parts plus a report.
@@ -264,6 +295,8 @@ fn noop_outcome(mesh: IndexedMesh, detail: String) -> OrganicCutOutcome {
         part_b_triangle_count: part_b.triangle_count(),
         engine: "noop".to_string(),
         detail,
+        key_kind: "none".to_string(),
+        key_detail: String::new(),
     };
     OrganicCutOutcome {
         part_a,
@@ -355,18 +388,40 @@ fn organic_cut_contour(
             options.cut.density,
         )?;
 
+    let membrane_tris = split.membrane_tris;
+    let mut part_a = split.part_a;
+    let mut part_b = split.part_b;
+    let (mut key_kind, mut key_detail) = (crate::key::KeyKind::None, String::new());
+
+    // Optional registration key: peg union'd onto part_a, socket carved from
+    // part_b. A failed/skipped key NEVER fails the cut — `apply_key` returns the
+    // parts unchanged with `KeyKind::None` + a reason in that case.
+    if options.cut.generate_key {
+        let keyed = crate::key::apply_key(
+            mesh,
+            part_a,
+            part_b,
+            &split.membrane,
+            options.cut.key_width_mm,
+            options.cut.key_depth_mm,
+            crate::key::DEFAULT_KEY_TOLERANCE_MM,
+        );
+        part_a = keyed.part_a;
+        part_b = keyed.part_b;
+        key_kind = keyed.kind;
+        key_detail = keyed.detail;
+    }
+
     let report = OrganicCutReport {
         source_triangle_count,
-        part_a_triangle_count: split.part_a.triangle_count(),
-        part_b_triangle_count: split.part_b.triangle_count(),
+        part_a_triangle_count: part_a.triangle_count(),
+        part_b_triangle_count: part_b.triangle_count(),
         engine: "membrane".to_string(),
-        detail: format!("membrane tris={}", split.membrane_tris),
+        detail: format!("membrane tris={membrane_tris}"),
+        key_kind: key_kind.as_str().to_string(),
+        key_detail,
     };
-    Ok(OrganicCutOutcome {
-        part_a: split.part_a,
-        part_b: split.part_b,
-        report,
-    })
+    Ok(OrganicCutOutcome { part_a, part_b, report })
 }
 
 #[cfg(feature = "manifold")]
@@ -438,6 +493,8 @@ fn organic_cut_plane(
         part_b_triangle_count: part_b.triangle_count(),
         engine: "plane".to_string(),
         detail: String::new(),
+        key_kind: "none".to_string(),
+        key_detail: String::new(),
     };
     Ok(OrganicCutOutcome {
         part_a,

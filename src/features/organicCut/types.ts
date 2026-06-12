@@ -73,6 +73,16 @@ export interface OrganicCutSpec {
    * (~0.01 mm = physically zero). Serde field: `cutterThicknessMm`.
    */
   cutterThicknessMm?: number;
+  /**
+   * When true (contour mode), the cut also generates a registration key: a peg
+   * union'd onto one half and a matching socket carved from the other. Omitted/
+   * false → no key. Serde field: `generateKey`.
+   */
+  generateKey?: boolean;
+  /** Key base width in mm (model units are mm). Serde field: `keyWidthMm`. */
+  keyWidthMm?: number;
+  /** Key depth in mm (how far the peg pokes in). Serde field: `keyDepthMm`. */
+  keyDepthMm?: number;
 }
 
 export interface OrganicCutOptions {
@@ -87,6 +97,14 @@ export interface OrganicCutReport {
   engine: 'noop' | 'plane' | 'membrane' | 'manifold' | 'voxel';
   /** Why we fell back to no-op, if we did (diagnostics). Empty on success. */
   detail?: string;
+  /**
+   * Which registration key the cut placed: 'frustum', 'dome' (thin-part
+   * fallback), or 'none' (not requested / too thin). Always present on a
+   * contour cut.
+   */
+  keyKind?: 'frustum' | 'dome' | 'none';
+  /** Reason the key shrank / fell back / was skipped (for an after-cut alert). */
+  keyDetail?: string;
 }
 
 export interface OrganicCutResult {

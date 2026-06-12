@@ -12,10 +12,17 @@
 
 pub mod geodesic;
 #[cfg(feature = "manifold")]
+pub mod key;
+#[cfg(feature = "manifold")]
 pub mod membrane;
 pub mod organic_cut;
 
 pub use crate::geodesic::{surface_loop_from_mesh, surface_loop_positions, GeodesicSolver};
+#[cfg(feature = "manifold")]
+pub use crate::key::{
+    apply_key, build_key_preview_soup, KeyKind, KeyOutcome, DEFAULT_KEY_DEPTH_MM,
+    DEFAULT_KEY_TOLERANCE_MM, DEFAULT_KEY_WIDTH_MM,
+};
 pub use crate::organic_cut::{
     organic_cut, OrganicCutLoopPoint, OrganicCutOptions, OrganicCutOutcome, OrganicCutReport,
     OrganicCutSpec,

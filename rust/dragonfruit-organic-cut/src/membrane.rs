@@ -1971,6 +1971,10 @@ pub struct ContourSplit {
     pub component_count: usize,
     /// Membrane triangle count (for diagnostics / reporting).
     pub membrane_tris: usize,
+    /// The RAW seam membrane (before boundary-widening), kept so the registration
+    /// key can derive its placement frame from it (centroid anchor, average-normal
+    /// axis, cross-section area). `part_a` is on this membrane's +normal side.
+    pub membrane: Membrane,
 }
 
 /// How far the cut loop sits OFF the model's faces, in mm. Each loop point is
@@ -2282,12 +2286,13 @@ pub fn contour_split(
         )
     })?;
 
-    Ok(ContourSplit { part_a, part_b, component_count, membrane_tris })
+    Ok(ContourSplit { part_a, part_b, component_count, membrane_tris, membrane })
 }
 
 /// Convert a `manifold` solid back to an `IndexedMesh`. Returns `None` only on a
 /// malformed/empty conversion (matches `organic_cut.rs::manifold_to_indexed`).
-fn manifold_to_indexed(model: &manifold_csg::Manifold) -> Option<IndexedMesh> {
+/// `pub(crate)` so the key module can convert its boolean results back too.
+pub(crate) fn manifold_to_indexed(model: &manifold_csg::Manifold) -> Option<IndexedMesh> {
     if model.is_empty() || model.num_tri() == 0 {
         return None;
     }

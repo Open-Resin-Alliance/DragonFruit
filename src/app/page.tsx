@@ -18265,6 +18265,8 @@ export default function Home() {
                 isApplying={organicCut.isApplying}
                 canApply={organicCut.canApply}
                 canCloseLoop={organicCut.canCloseLoop}
+                keyKind={organicCut.keyKind}
+                keyDetail={organicCut.keyDetail}
               />
             )}
 
@@ -19161,6 +19163,7 @@ export default function Home() {
                 geodesicPolyline={organicCut.geodesicPolyline}
                 cutMode={organicCut.panelState.cutMode}
                 membranePreview={organicCut.membranePreview}
+                keyPreview={organicCut.keyPreview}
               />
             )}
             {scene.mode === 'prepare' && transformMgr.transformMode === 'mirror' && (

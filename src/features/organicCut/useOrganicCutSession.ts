@@ -23,6 +23,7 @@ import {
   partToGeometry,
   stageCutSource,
 } from './meshOrganicCut';
+import type { KeyPreviewKind } from './meshOrganicCut';
 import { cutPlaneFromPoints } from './cutPlane';
 import type * as THREE from 'three';
 
@@ -122,6 +123,16 @@ export interface OrganicCutSession {
    * with ≥3 points / outside Tauri.
    */
   membranePreview: Float32Array | null;
+  /**
+   * Registration-key preview (peg + socket triangle soup, model-local) — the
+   * exact key the cut will place. Null unless generateKey is on with a fitting
+   * key. Render alongside the membrane.
+   */
+  keyPreview: Float32Array | null;
+  /** Which key the preview placed: 'frustum', 'dome' (fallback), or 'none'. */
+  keyKind: KeyPreviewKind;
+  /** Reason the key shrank / fell back / was skipped (for the panel alert). */
+  keyDetail: string;
 }
 
 const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
@@ -137,6 +148,12 @@ const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
   // 4× = densest cutter + finest seam-band model refinement by default, for the
   // cleanest cut edge out of the box.
   density: 4.0,
+  // Registration key off by default — the user opts in per cut.
+  generateKey: false,
+  // Default key size (mm) — model units are mm. Width 2 → length auto = 2.5mm
+  // (1.25× ratio); depth 2.5mm. The user tunes these live.
+  keyWidthMm: 2.0,
+  keyDepthMm: 2.5,
 };
 
 /** Minimum points before a CONTOUR cut is possible (a real loop needs ≥3). */
@@ -158,6 +175,12 @@ export function useOrganicCutSession({
   // Contour-cut membrane preview (flat triangle soup, model-local). Shows the
   // exact cutter surface so the user sees where the curved cut will land.
   const [membranePreview, setMembranePreview] = React.useState<Float32Array | null>(null);
+  // Registration-key preview (peg + socket soup) + the chosen rung and reason, so
+  // the scene can render the key and the panel can alert on a fallback. Built in
+  // the same preview round-trip as the membrane, only when generateKey is on.
+  const [keyPreview, setKeyPreview] = React.useState<Float32Array | null>(null);
+  const [keyKind, setKeyKind] = React.useState<KeyPreviewKind>('none');
+  const [keyDetail, setKeyDetail] = React.useState<string>('');
   // Selected waypoint index (click a marker to select; Delete removes it).
   const [selectedIndex, setSelectedIndex] = React.useState<number | null>(null);
 
@@ -335,7 +358,12 @@ export function useOrganicCutSession({
     ) {
       // Don't clear the preview just because a drag started — keep the last
       // membrane visible during the drag; only clear when truly not previewable.
-      if (!isDraggingPoint) setMembranePreview(null);
+      if (!isDraggingPoint) {
+        setMembranePreview(null);
+        setKeyPreview(null);
+        setKeyKind('none');
+        setKeyDetail('');
+      }
       return;
     }
     let cancelled = false;
@@ -346,20 +374,27 @@ export function useOrganicCutSession({
         const poly = geodesicPolyline;
         const previewLoop =
           poly && poly.length >= 9 ? geodesicPolylineToLoopPoints(poly) : loop;
-        const membrane = await computeMembranePreview(
+        const result = await computeMembranePreview(
           previewLoop,
           panelState.membraneSmoothing,
           panelState.density,
           panelState.thicknessMm,
+          panelState.generateKey,
+          panelState.keyWidthMm,
+          panelState.keyDepthMm,
         );
-        if (!cancelled) setMembranePreview(membrane);
+        if (cancelled) return;
+        setMembranePreview(result.membrane);
+        setKeyPreview(result.keyPreview);
+        setKeyKind(result.keyKind);
+        setKeyDetail(result.keyDetail);
       })();
     }, 80);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [toolActive, loop, activeGeometry, activeGeometryKey, cutMode, geodesicPolyline, isDraggingPoint, panelState.membraneSmoothing, panelState.density, panelState.thicknessMm]);
+  }, [toolActive, loop, activeGeometry, activeGeometryKey, cutMode, geodesicPolyline, isDraggingPoint, panelState.membraneSmoothing, panelState.density, panelState.thicknessMm, panelState.generateKey, panelState.keyWidthMm, panelState.keyDepthMm]);
 
   const addPoint = React.useCallback((point: OrganicCutLoopPoint) => {
     setLoop((prev) => [...prev, point]);
@@ -515,6 +550,12 @@ export function useOrganicCutSession({
             // Cut resolution multiplier — raises the cutter poly count. The live
             // preview reflects this too (so what you see is what gets cut).
             density: ps.density,
+            // When on, the cut also builds the registration key (peg union'd onto
+            // one half, socket carved from the other). The preview already showed
+            // the exact key this produces.
+            generateKey: ps.generateKey,
+            keyWidthMm: ps.keyWidthMm,
+            keyDepthMm: ps.keyDepthMm,
           };
         } else {
           // Compute the plane from the SAME helper the preview uses, so the cut
@@ -551,6 +592,8 @@ export function useOrganicCutSession({
           `[organicCut] cut applied | engine=${result.report.engine}` +
           ` committed=${committed}` +
           ` detail="${result.report.detail ?? ''}"` +
+          ` keyKind=${result.report.keyKind ?? 'n/a'}` +
+          ` keyDetail="${result.report.keyDetail ?? ''}"` +
           ` source=${result.report.sourceTriangleCount}` +
           ` partA=${result.report.partATriangleCount}` +
           ` partB=${result.report.partBTriangleCount}`,
@@ -617,5 +660,8 @@ export function useOrganicCutSession({
     pointCount,
     geodesicPolyline,
     membranePreview,
+    keyPreview,
+    keyKind,
+    keyDetail,
   };
 }

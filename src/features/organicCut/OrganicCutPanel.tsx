@@ -15,6 +15,16 @@ export interface OrganicCutPanelState {
   membraneSmoothing: number;
   /** Wafer density multiplier (1..4) — cutter poly count, applied only at cut. */
   density: number;
+  /**
+   * When true (contour mode), the cut also generates a registration key: a peg
+   * union'd onto one half and a matching socket carved from the other, so the
+   * halves socket together in one alignment. Off by default.
+   */
+  generateKey: boolean;
+  /** Key base width in mm (model units are mm). The length follows a 1.25× ratio. */
+  keyWidthMm: number;
+  /** Key depth in mm — how far the peg pokes into the body. */
+  keyDepthMm: number;
 }
 
 interface OrganicCutPanelProps {
@@ -31,6 +41,14 @@ interface OrganicCutPanelProps {
   canApply?: boolean;
   canCloseLoop?: boolean;
   disabled?: boolean;
+  /**
+   * Which key the live preview placed: 'frustum' (the full key), 'dome' (the
+   * half-sphere fallback for a thin part), or 'none'. Drives the alert below the
+   * toggle so the user knows when the cut fell back.
+   */
+  keyKind?: 'frustum' | 'dome' | 'none';
+  /** Reason the key shrank / fell back / was skipped (shown as an alert). */
+  keyDetail?: string;
 }
 
 /**
@@ -52,6 +70,8 @@ export function OrganicCutPanel({
   canApply = false,
   canCloseLoop = false,
   disabled = false,
+  keyKind = 'none',
+  keyDetail = '',
 }: OrganicCutPanelProps) {
   const [expanded, setExpanded] = React.useState(true);
 
@@ -263,6 +283,100 @@ export function OrganicCutPanel({
                 disabled={disabled || isApplying}
                 className="mt-1"
               />
+            </div>
+          )}
+
+          {/* Registration key: peg + socket so the two halves index together.
+              Contour-only (the flat plane cut has no key support yet). */}
+          {isContour && (
+            <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-2 text-left"
+                onClick={() => setState({ generateKey: !state.generateKey })}
+                disabled={disabled || isApplying}
+                title="Add a peg to one half and a matching socket to the other so the parts align when reassembled."
+              >
+                <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Generate Key</span>
+                <span
+                  className="relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors"
+                  style={{
+                    background: state.generateKey
+                      ? 'var(--accent)'
+                      : 'color-mix(in srgb, var(--text-muted), transparent 60%)',
+                  }}
+                >
+                  <span
+                    className="inline-block h-3 w-3 transform rounded-full bg-white transition-transform"
+                    style={{ transform: state.generateKey ? 'translateX(14px)' : 'translateX(2px)' }}
+                  />
+                </span>
+              </button>
+
+              {/* Key size sliders (mm). Width drives the base (length = 1.25×);
+                  depth is how far the peg pokes in. Shown only when the key is on.
+                  The 1 mm-wall fit rule still shrinks below these on thin parts. */}
+              {state.generateKey && (
+                <div className="space-y-1.5 pt-0.5">
+                  <div>
+                    <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Key Width</label>
+                    <ScrollableNumberField
+                      value={state.keyWidthMm}
+                      onChange={(value) => setState({ keyWidthMm: clampFloat(value, 1, 20, 1) })}
+                      min={1}
+                      max={20}
+                      step={0.5}
+                      unit="mm"
+                      ariaLabel="Key base width in millimeters"
+                      disabled={disabled || isApplying}
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Key Depth</label>
+                    <ScrollableNumberField
+                      value={state.keyDepthMm}
+                      onChange={(value) => setState({ keyDepthMm: clampFloat(value, 1, 20, 1) })}
+                      min={1}
+                      max={20}
+                      step={0.5}
+                      unit="mm"
+                      ariaLabel="Key depth in millimeters"
+                      disabled={disabled || isApplying}
+                      className="mt-1"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Fell-back / no-key alert. Only when the key is ON and the preview
+                  reported a non-nominal outcome (dome fallback, no key, or shrink). */}
+              {state.generateKey && keyDetail && (
+                <div
+                  className="rounded border px-2 py-1.5 text-[10px] leading-snug"
+                  style={
+                    keyKind === 'none'
+                      ? {
+                          borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 40%)',
+                          background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
+                          color: 'var(--text-strong)',
+                        }
+                      : keyKind === 'dome'
+                        ? {
+                            borderColor: 'color-mix(in srgb, #eab308, var(--border-subtle) 50%)',
+                            background: 'color-mix(in srgb, #eab308, var(--surface-1) 90%)',
+                            color: 'var(--text-strong)',
+                          }
+                        : {
+                            borderColor: 'var(--border-subtle)',
+                            background: 'var(--surface-1)',
+                            color: 'var(--text-muted)',
+                          }
+                  }
+                >
+                  {keyDetail}
+                </div>
+              )}
             </div>
           )}
 
