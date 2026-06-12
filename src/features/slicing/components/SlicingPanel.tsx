@@ -1145,6 +1145,9 @@ export function SlicingPanel({
     if (!Number.isFinite(printerBitDepth) || printerBitDepth <= 0) {
       return null;
     }
+    // 8-bit (or higher) displays don't need dithering — return null so the
+    // auto-dither gate below stays disabled.
+    if (Math.round(printerBitDepth) >= 8) return null;
     return Math.max(2, Math.min(7, Math.round(printerBitDepth)));
   }, [activePrinterProfile?.bitDepth?.bits]);
   const autoDitherRequiredForPrinter = printerDitherBitDepth != null && printerDitherBitDepth !== 8;

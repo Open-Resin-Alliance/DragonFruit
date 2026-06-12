@@ -536,6 +536,8 @@ export function ProfileSettingsModal({
     if (!Number.isFinite(printerBitDepth) || printerBitDepth <= 0) {
       return null;
     }
+    // 8-bit (or higher) displays don't need dithering.
+    if (Math.round(printerBitDepth) >= 8) return null;
     return Math.max(2, Math.min(7, Math.round(printerBitDepth)));
   }, [selectedPrinter?.bitDepth?.bits]);
 
