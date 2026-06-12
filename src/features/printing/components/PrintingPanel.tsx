@@ -1,6 +1,7 @@
 import React from 'react';
 import { ChevronDown, Download, FolderOpen, Loader2, Printer, RotateCcw, X } from 'lucide-react';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 type PrintingPanelProps = {
   outputName: string | null;
@@ -45,7 +46,7 @@ export function PrintingPanel({
   sliceIntent = null,
   savedFilePath = null,
 }: PrintingPanelProps) {
-  const [isExpanded, setIsExpanded] = React.useState(true);
+  const [isExpanded, setIsExpanded] = useFloatingPanelCollapse(true);
   const [revealingSavedPath, setRevealingSavedPath] = React.useState(false);
   const [revealSavedPathError, setRevealSavedPathError] = React.useState<string | null>(null);
 
@@ -99,7 +100,7 @@ export function PrintingPanel({
                 )}
               </svg>
             </IconButton>
-            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Printing</h2>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Printing</h3>
           </>
         )}
       />

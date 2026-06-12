@@ -6,6 +6,7 @@ import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
+import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
 import { MaterialAntiAliasingSection, type MaterialDraft } from '@/components/settings/profileFormAtoms';
 import {
@@ -774,7 +775,7 @@ export function SlicingPanel({
   onBeforeSlicingRun,
   resolveOutputPathForIntent,
 }: SlicingPanelProps) {
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useFloatingPanelCollapse(true);
   const [sliceIntent, setSliceIntent] = useState<SliceIntent>(() => {
     const id = (getActivePrinterProfile(getProfileStoreSnapshot())?.id ?? '').trim();
     if (!id) return 'file';
@@ -2492,7 +2493,7 @@ export function SlicingPanel({
                   )}
                 </svg>
               </IconButton>
-              <h2 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Slicing</h2>
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Slicing</h3>
             </>
           )}
           hideDivider={!isExpanded}
@@ -2530,7 +2531,7 @@ export function SlicingPanel({
                 )}
               </svg>
             </IconButton>
-            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Slicing</h2>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Slicing</h3>
           </>
         )}
         hideDivider={!isExpanded}

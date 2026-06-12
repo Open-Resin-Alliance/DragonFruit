@@ -112,20 +112,20 @@ export function DestructiveTransformModal({
             This transform invalidates existing supports. If you continue, all supports for this model will be deleted.
           </p>
 
-          <div className="flex items-center justify-end gap-2 pt-1">
+          <div className="grid grid-cols-2 gap-2 pt-1">
             <button
               type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
               onClick={onCancel}
             >
               Cancel
             </button>
             <button
               type="button"
-              className="ui-button ui-button-accent !h-9 px-3 text-xs"
+              className="ui-button ui-button-accent !h-9 w-full px-3 text-xs"
               onClick={onConfirm}
             >
-              Delete Supports & Continue
+              Delete & Continue
             </button>
           </div>
         </div>

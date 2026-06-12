@@ -651,6 +651,15 @@ input[type="number"].no-spinners {
   }
 }
 
+/* One-shot 360° counter-clockwise spin for the defaults icon button */
+@keyframes spinOnceCCW {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(-360deg); }
+}
+.animate-spin-once {
+  animation: spinOnceCCW 500ms ease-in-out;
+}
+
 /* Themed custom scrollbar */
 .custom-scrollbar {
   scrollbar-width: thin;

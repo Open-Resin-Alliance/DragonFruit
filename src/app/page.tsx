@@ -1122,7 +1122,6 @@ export default function Home() {
   const [isPrepareDragUnsupported, setIsPrepareDragUnsupported] = React.useState(false);
   const [isSupportSpotlightHoldActive, setIsSupportSpotlightHoldActive] = React.useState(false);
   const [allowPrepareWithoutPrinter, setAllowPrepareWithoutPrinter] = React.useState(false);
-  const [prepareSmoothingSettingsExpanded, setPrepareSmoothingSettingsExpanded] = React.useState(true);
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(false);
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
   const [editorContextMenuSupportTarget, setEditorContextMenuSupportTarget] = React.useState<{
@@ -11827,7 +11826,59 @@ export default function Home() {
 
     const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
 
-    if (visibleModels.length <= 1) return;
+    if (visibleModels.length <= 1) {
+      if (visibleModels.length === 1) {
+        const model = visibleModels[0];
+        const t = getArrangeTransform(model);
+        const dims = getModelSupportAwareDimensionsMm(model, undefined, t);
+
+        const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+        const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
+        const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+        const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
+        const sm = scene.view3dSettings.safetyMarginMm;
+        const minX = rawMinX + Math.max(0, sm?.left ?? 0);
+        const maxX = rawMaxX - Math.max(0, sm?.right ?? 0);
+        const minY = rawMinY + Math.max(0, sm?.front ?? 0);
+        const maxY = rawMaxY - Math.max(0, sm?.back ?? 0);
+
+        let centerX: number;
+        let centerY: number;
+        if (arrangeAnchorMode === 'front_left') {
+          centerX = minX + dims.width * 0.5;
+          centerY = minY + dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'front_right') {
+          centerX = maxX - dims.width * 0.5;
+          centerY = minY + dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'back_left') {
+          centerX = minX + dims.width * 0.5;
+          centerY = maxY - dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'back_right') {
+          centerX = maxX - dims.width * 0.5;
+          centerY = maxY - dims.depth * 0.5;
+        } else {
+          centerX = (minX + maxX) * 0.5;
+          centerY = (minY + maxY) * 0.5;
+        }
+
+        // Arrange and Duplicate previews should never overlap.
+        setDuplicateApplySourceModel(null);
+        setDuplicateApplySourceTransform(null);
+        setDuplicateSourcePreviewTransform(null);
+        setDuplicatePreviewTransforms([]);
+        setDuplicateTotalCopies(1);
+
+        applyArrangeTransforms([{
+          id: model.id,
+          transform: {
+            position: new THREE.Vector3(centerX, centerY, t.position.z),
+            rotation: t.rotation.clone(),
+            scale: t.scale.clone(),
+          },
+        }]);
+      }
+      return;
+    }
 
     // Arrange and Duplicate previews should never overlap.
     setDuplicateApplySourceModel(null);
@@ -12274,8 +12325,6 @@ export default function Home() {
           }),
         ],
       );
-
-      transformMgr.setTransformMode('select');
     } finally {
       const elapsed = performance.now() - startedAt;
       if (elapsed < minSpinnerMs) {
@@ -12291,7 +12340,59 @@ export default function Home() {
     if (isAutoArranging) return;
 
     const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
-    if (visibleModels.length <= 1) return;
+    if (visibleModels.length <= 1) {
+      if (visibleModels.length === 1) {
+        const model = visibleModels[0];
+        const t = getArrangeTransform(model);
+        const dims = getModelSupportAwareDimensionsMm(model, undefined, t);
+
+        const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+        const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
+        const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+        const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
+        const sm = scene.view3dSettings.safetyMarginMm;
+        const minX = rawMinX + Math.max(0, sm?.left ?? 0);
+        const maxX = rawMaxX - Math.max(0, sm?.right ?? 0);
+        const minY = rawMinY + Math.max(0, sm?.front ?? 0);
+        const maxY = rawMaxY - Math.max(0, sm?.back ?? 0);
+
+        let centerX: number;
+        let centerY: number;
+        if (arrangeAnchorMode === 'front_left') {
+          centerX = minX + dims.width * 0.5;
+          centerY = minY + dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'front_right') {
+          centerX = maxX - dims.width * 0.5;
+          centerY = minY + dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'back_left') {
+          centerX = minX + dims.width * 0.5;
+          centerY = maxY - dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'back_right') {
+          centerX = maxX - dims.width * 0.5;
+          centerY = maxY - dims.depth * 0.5;
+        } else {
+          centerX = (minX + maxX) * 0.5;
+          centerY = (minY + maxY) * 0.5;
+        }
+
+        // Arrange and Duplicate previews should never overlap.
+        setDuplicateApplySourceModel(null);
+        setDuplicateApplySourceTransform(null);
+        setDuplicateSourcePreviewTransform(null);
+        setDuplicatePreviewTransforms([]);
+        setDuplicateTotalCopies(1);
+
+        applyArrangeTransforms([{
+          id: model.id,
+          transform: {
+            position: new THREE.Vector3(centerX, centerY, t.position.z),
+            rotation: t.rotation.clone(),
+            scale: t.scale.clone(),
+          },
+        }]);
+      }
+      return;
+    }
 
     // Arrange and Duplicate previews should never overlap.
     setDuplicateApplySourceModel(null);
@@ -12331,7 +12432,6 @@ export default function Home() {
 
       if (updates.length > 1) {
         applyArrangeTransforms(updates);
-        transformMgr.setTransformMode('select');
       }
     } finally {
       const elapsed = performance.now() - startedAt;
@@ -12473,7 +12573,66 @@ export default function Home() {
     if (isAutoArranging) return;
 
     const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
-    if (visibleModels.length <= 1) return;
+    if (visibleModels.length <= 1) {
+      if (visibleModels.length === 1) {
+        const model = visibleModels[0];
+        const t = getArrangeTransform(model);
+        const dims = getModelSupportAwareDimensionsMm(model, undefined, t);
+
+        const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+        const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
+        const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+        const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
+        const sm = scene.view3dSettings.safetyMarginMm;
+        const minX = rawMinX + Math.max(0, sm?.left ?? 0);
+        const maxX = rawMaxX - Math.max(0, sm?.right ?? 0);
+        const minY = rawMinY + Math.max(0, sm?.front ?? 0);
+        const maxY = rawMaxY - Math.max(0, sm?.back ?? 0);
+
+        let centerX: number;
+        let centerY: number;
+        if (arrangeAnchorMode === 'front_left') {
+          centerX = minX + dims.width * 0.5;
+          centerY = minY + dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'front_right') {
+          centerX = maxX - dims.width * 0.5;
+          centerY = minY + dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'back_left') {
+          centerX = minX + dims.width * 0.5;
+          centerY = maxY - dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'back_right') {
+          centerX = maxX - dims.width * 0.5;
+          centerY = maxY - dims.depth * 0.5;
+        } else {
+          centerX = (minX + maxX) * 0.5;
+          centerY = (minY + maxY) * 0.5;
+        }
+
+        // Arrange and Duplicate previews should never overlap.
+        setDuplicateApplySourceModel(null);
+        setDuplicateApplySourceTransform(null);
+        setDuplicateSourcePreviewTransform(null);
+        setDuplicatePreviewTransforms([]);
+        setDuplicateTotalCopies(1);
+
+        applyArrangeTransforms([{
+          id: model.id,
+          transform: {
+            position: new THREE.Vector3(centerX, centerY, t.position.z),
+            rotation: t.rotation.clone(),
+            scale: t.scale.clone(),
+          },
+        }]);
+      }
+      return;
+    }
+
+    // Arrange and Duplicate previews should never overlap.
+    setDuplicateApplySourceModel(null);
+    setDuplicateApplySourceTransform(null);
+    setDuplicateSourcePreviewTransform(null);
+    setDuplicatePreviewTransforms([]);
+    setDuplicateTotalCopies(1);
 
     const minSpinnerMs = 220;
     const startedAt = performance.now();
@@ -12487,7 +12646,6 @@ export default function Home() {
       if (updates.length <= 1) return;
 
       applyArrangeTransforms(updates);
-      transformMgr.setTransformMode('select');
     } finally {
       const elapsed = performance.now() - startedAt;
       if (elapsed < minSpinnerMs) {
@@ -14167,8 +14325,7 @@ export default function Home() {
   const handlePlaceOnFace = React.useCallback((modelId: string) => {
     if (scene.activeModelId !== modelId) return;
     handleTransformEnd('rotate');
-    transformMgr.setTransformMode('transform');
-  }, [handleTransformEnd, scene.activeModelId, transformMgr]);
+  }, [handleTransformEnd, scene.activeModelId]);
 
   const handlePlaceOnFaceBeforeApply = React.useCallback((_normal: THREE.Vector3, continueApply: () => void) => {
     return requestDestructiveTransformSupportDeletionWithContinuation('Place On Face', continueApply);
@@ -14594,6 +14751,8 @@ export default function Home() {
         heatmapColors={scene.heatmapColors}
         onHeatmapColorChange={scene.onHeatmapColorChange}
         isSlicingBusy={isSlicingBusy}
+        onLoadMeshChange={handleLoadMeshChangeWithZip}
+        onImportSceneChange={handleImportSceneChangeWithZip}
         onSaveScene={() => { void handleTopBarSaveScene(); }}
         onOpenScene={handleTopBarOpenScene}
         onCloseProgram={handleRequestProgramClose}
@@ -14628,10 +14787,6 @@ export default function Home() {
               onOpenSupportsInfo={handleOpenModelSupportsInfo}
               onDelete={scene.deleteModel}
               onVisibilityChange={scene.setModelVisibility}
-              onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
-              onLoadMeshChange={handleLoadMeshChangeWithZip}
-              onImportSceneClick={() => { void handleOpenSceneDialog(); }}
-              onImportSceneChange={handleImportSceneChangeWithZip}
               dimmed={showEmptySceneDialog || importOverlayState.active}
               bottomClearancePx={modelStatsBottomClearancePx}
             />
@@ -14710,43 +14865,7 @@ export default function Home() {
             )}
 
             {scene.geom && transformMgr.transformMode === 'smoothing' && (
-              <div
-                key="prepare-smoothing-settings"
-                className="ui-panel rounded-lg border shadow-lg overflow-hidden"
-                style={{ borderColor: 'var(--border-subtle)' }}
-              >
-                <div
-                  className="px-2.5 py-2.5 flex items-center gap-2.5"
-                >
-                  <IconButton
-                    onClick={() => setPrepareSmoothingSettingsExpanded((prev) => !prev)}
-                    className="!p-0.5"
-                    title={prepareSmoothingSettingsExpanded ? 'Collapse card' : 'Expand card'}
-                  >
-                    <svg
-                      className="w-3 h-3 transform transition-transform"
-                      style={{ color: prepareSmoothingSettingsExpanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      {prepareSmoothingSettingsExpanded ? (
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                      ) : (
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                      )}
-                    </svg>
-                  </IconButton>
-                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    Mesh Smoothing
-                  </h3>
-                </div>
-                {prepareSmoothingSettingsExpanded && (
-                  <div className="max-h-[calc(100vh-var(--topbar-height)-88px)] overflow-hidden">
-                    <MeshSmoothingSettingsPanel />
-                  </div>
-                )}
-              </div>
+              <MeshSmoothingSettingsPanel key="prepare-smoothing-settings" />
             )}
 
             {scene.models.length > 0 && transformMgr.transformMode === 'arrange' && (
@@ -15826,17 +15945,17 @@ export default function Home() {
                 </span>
               </p>
 
-              <div className="flex items-center justify-end gap-2 pt-1">
+              <div className="grid grid-cols-2 gap-2 pt-1">
                 <button
                   type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                  className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
                   onClick={() => scene.resolveSceneImportPlacementPrompt('load_as_is')}
                 >
                   Load As-Is
                 </button>
                 <button
                   type="button"
-                  className="ui-button ui-button-accent !h-9 px-3 text-xs"
+                  className="ui-button ui-button-accent !h-9 w-full px-3 text-xs"
                   onClick={() => scene.resolveSceneImportPlacementPrompt('auto_arrange')}
                 >
                   Auto-Arrange
@@ -15953,10 +16072,10 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="flex items-center justify-end gap-2 pt-1">
+                <div className="grid grid-cols-2 gap-2 pt-1">
                   <button
                     type="button"
-                    className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                    className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
                     disabled={isManualRepairing}
                     onClick={() => setManualRepairModelId(null)}
                   >
@@ -15964,7 +16083,7 @@ export default function Home() {
                   </button>
                   <button
                     type="button"
-                    className="ui-button ui-button-accent !h-9 px-3 text-xs flex items-center gap-1.5 disabled:opacity-60"
+                    className="ui-button ui-button-accent !h-9 w-full px-3 text-xs flex items-center justify-center gap-1.5 disabled:opacity-60"
                     disabled={isManualRepairing}
                     onClick={() => {
                       const id = manualRepairModelId;
@@ -16142,15 +16261,21 @@ export default function Home() {
           <>
             <button
               type="button"
-              className="ui-button ui-button-danger !h-9 px-3 text-xs"
+              className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
+              style={{
+                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
+                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
+                color: 'var(--danger)',
+              }}
               disabled={closeUnsavedChangesBusy !== 'none'}
               onClick={handleDiscardAndCloseProgram}
             >
-              Close Without Saving
+              <Trash2 className="w-3.5 h-3.5" />
+              Discard Changes
             </button>
             <button
               type="button"
-              className="ui-button ui-button-accent !h-9 px-3 text-xs"
+              className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
               disabled={closeUnsavedChangesBusy !== 'none'}
               onClick={handleSaveAndCloseProgram}
             >
@@ -16165,7 +16290,7 @@ export default function Home() {
             : 'Close DragonFruit now?'}
         </p>
         <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-          <strong>Save &amp; Close</strong> keeps your latest edits. <strong>Close Without Saving</strong> discards them.
+          <strong>Please ensure you have saved any important work.</strong>
         </p>
       </StructuredDialogModal>
 
@@ -16372,17 +16497,17 @@ export default function Home() {
                   )}
               </p>
 
-              <div className="flex items-center justify-end gap-2 pt-1">
+              <div className="grid grid-cols-2 gap-2 pt-1">
                 <button
                   type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                  className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
                   onClick={() => setPrintingMonitorPendingConfirmation(null)}
                 >
                   {printingMonitorPendingConfirmation.kind === 'plate' ? 'Keep File' : 'Keep Printing'}
                 </button>
                 <button
                   type="button"
-                  className="ui-button !h-9 px-3 text-xs"
+                  className="ui-button !h-9 w-full px-3 text-xs"
                   style={
                     printingMonitorPendingConfirmation.kind === 'plate'
                       ? (

@@ -1346,7 +1346,9 @@ export function SettingsModal({
                   heatmapColors={draftHeatmapColors}
                   onHeatmapColorChange={handleDraftHeatmapColorChange}
                   selectionColor={draftSelectionColor}
+                  onSelectionColorChange={setDraftSelectionColor}
                   hoverColor={draftHoverColor}
+                  onHoverColorChange={setDraftHoverColor}
                   selectionHighlightMode={draftSelectionHighlightMode}
                   onSelectionHighlightModeChange={setDraftSelectionHighlightMode}
                   hoverTintStrength={draftHoverTintStrength}

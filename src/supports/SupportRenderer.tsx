@@ -44,6 +44,7 @@ import type { ContactDiskProfile } from './SupportPrimitives/ContactCone/types';
 import { getRaftSettings, subscribeToRaftStore } from './Rafts/Crenelated/RaftState';
 import { JOINT_DIAMETER_OFFSET_MM } from './constants';
 import { DEBUG_SECTION_COLORS as AUTO_BRACING_DEBUG_SECTION_COLORS } from './autoBracing/settings';
+import { getAutoBracingSettings } from './Settings/state';
 import { VoronoiSeedDebugMarkers } from './autoBracing/VoronoiSeedDebugMarkers';
 import { clearSupportMarqueeHover, setSupportMarqueeHoverBlocked, useSupportMarqueeHoverState } from './interaction/shared/hover/sceneHoverMarquee';
 import { applySceneHoverWriteDecision, resolveSceneBatchedShaftHoverWriteDecision, resolveSceneBatchedShaftPointerOutWriteDecision, resolveSceneBatchedSupportHoverWriteDecision, shouldClearSceneHoverForSelectedPrimitiveSuppression, shouldClearSceneHoverForSelectionChange } from './interaction/shared/hover/sceneHoverController';
@@ -631,8 +632,9 @@ function buildBracePlacementPreviewBatch(id: string, preview: BracePreviewData):
     const dy = end.y - start.y;
     const dz = end.z - start.z;
     const lenSq = dx * dx + dy * dy + dz * dz;
-    const startDiameter = Math.max(0.001, preview.startDiameterMm);
-    const endDiameter = Math.max(0.001, preview.endDiameterMm);
+    const braceDia = getAutoBracingSettings().braceDiameterMm;
+    const startDiameter = Math.min(braceDia, Math.max(0.001, preview.startDiameterMm));
+    const endDiameter = Math.min(braceDia, Math.max(0.001, preview.endDiameterMm));
     const knotStartDiameter = Math.max(0.001, preview.startDiameterMm + 0.1);
     const knotEndDiameter = Math.max(0.001, preview.endDiameterMm + 0.1);
 
@@ -2061,13 +2063,19 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!startKnot || !endKnot) continue;
 
             const profileDiameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
-            const startHostDiameter = Math.max(
-                0.001,
-                (startKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+            const startHostDiameter = Math.min(
+                profileDiameter,
+                Math.max(
+                    0.001,
+                    (startKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+                ),
             );
-            const endHostDiameter = Math.max(
-                0.001,
-                (endKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+            const endHostDiameter = Math.min(
+                profileDiameter,
+                Math.max(
+                    0.001,
+                    (endKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+                ),
             );
             const isTaperedBrace = Math.abs(startHostDiameter - endHostDiameter) > 1e-4;
 

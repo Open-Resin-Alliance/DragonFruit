@@ -3,6 +3,7 @@ import { CopyPlus, Loader2 } from 'lucide-react';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import type { ArrangePrecisionMode } from '@/components/controls/ArrangePanel';
+import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 export type DuplicateLayoutMode = 'auto' | 'array';
 
@@ -61,7 +62,7 @@ export function DuplicatePanel({
   previewCount,
   isApplying = false,
 }: DuplicatePanelProps) {
-  const [expanded, setExpanded] = React.useState(true);
+  const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const hasSelection = !!activeModelName;
   const panelDisabled = !hasSelection || isApplying;
 

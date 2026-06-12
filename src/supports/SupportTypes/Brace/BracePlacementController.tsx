@@ -8,7 +8,7 @@ import { pushHistory } from '@/history/historyStore';
 import type { SnapTarget } from '../../interaction/SnappingManager';
 import type { Brace, Knot, Vec3 } from '../../types';
 import { SUPPORT_ADD_BRACE } from '../../history/actionTypes';
-import { getSettings } from '../../Settings/state';
+import { getSettings, getAutoBracingSettings } from '../../Settings/state';
 import { useKickstandStoreState } from '../Kickstand/kickstandStore';
 import { bracePlacementStore, useBracePlacementState } from './bracePlacementState';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
@@ -804,8 +804,9 @@ export function BracePlacementController() {
                 if (!snap) return;
                 bracePlacementStore.setStart(snap);
                 const settings = getSettings();
+                const braceDia = getAutoBracingSettings().braceDiameterMm;
                 const fallbackDia = settings.shaft.diameterMm;
-                const startDiam = snap.hostDiameterMm ?? fallbackDia;
+                const startDiam = Math.min(snap.hostDiameterMm ?? fallbackDia, braceDia);
                 bracePlacementStore.setPreview({
                     start: snap.snappedPos,
                     end: snap.snappedPos,
@@ -826,9 +827,10 @@ export function BracePlacementController() {
                 if (!start.leafId || start.coneT === undefined) return;
 
                 const settings = getSettings();
+                const braceDia = getAutoBracingSettings().braceDiameterMm;
                 const fallback = settings.shaft.diameterMm;
-                const startDiam = start.hostDiameterMm ?? fallback;
-                const endDiam = endSnap.hostDiameterMm ?? fallback;
+                const startDiam = Math.min(start.hostDiameterMm ?? fallback, braceDia);
+                const endDiam = Math.min(endSnap.hostDiameterMm ?? fallback, braceDia);
 
                 const braceId = generateUuid();
                 const startKnotId = generateUuid();
@@ -894,9 +896,10 @@ export function BracePlacementController() {
             if (startModelId && endModelId && startModelId !== endModelId) return;
 
             const settings = getSettings();
+            const braceDia = getAutoBracingSettings().braceDiameterMm;
             const fallback = settings.shaft.diameterMm;
-            const startDiam = start.hostDiameterMm ?? fallback;
-            const endDiam = endSnap.hostDiameterMm ?? fallback;
+            const startDiam = Math.min(start.hostDiameterMm ?? fallback, braceDia);
+            const endDiam = Math.min(endSnap.hostDiameterMm ?? fallback, braceDia);
 
             const braceId = generateUuid();
             const startKnotId = generateUuid();
@@ -972,8 +975,9 @@ export function BracePlacementController() {
                 if (!snap) return;
                 bracePlacementStore.setStart(snap);
                 const settings = getSettings();
+                const braceDia = getAutoBracingSettings().braceDiameterMm;
                 const fallbackDia = settings.shaft.diameterMm;
-                const startDiam = snap.hostDiameterMm ?? fallbackDia;
+                const startDiam = Math.min(snap.hostDiameterMm ?? fallbackDia, braceDia);
                 bracePlacementStore.setPreview({
                     start: snap.snappedPos,
                     end: snap.snappedPos,
@@ -996,9 +1000,10 @@ export function BracePlacementController() {
                 if (!start.leafId || start.coneT === undefined) return;
 
                 const settings = getSettings();
+                const braceDia = getAutoBracingSettings().braceDiameterMm;
                 const fallback = settings.shaft.diameterMm;
-                const startDiam = start.hostDiameterMm ?? fallback;
-                const endDiam = endSnap.hostDiameterMm ?? fallback;
+                const startDiam = Math.min(start.hostDiameterMm ?? fallback, braceDia);
+                const endDiam = Math.min(endSnap.hostDiameterMm ?? fallback, braceDia);
 
                 const braceId = generateUuid();
                 const startKnotId = generateUuid();

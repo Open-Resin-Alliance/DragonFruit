@@ -121,17 +121,17 @@ export function MeshRepairConfirmModal({ prompt, onRepair, onLoadAsIs, onCancelI
           </div>
 
           {/* Actions */}
-          <div className="flex items-center justify-end gap-2 pt-1">
+          <div className="grid grid-cols-2 gap-2 pt-1">
             <button
               type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
               onClick={onLoadAsIs}
             >
               Load As-Is
             </button>
             <button
               type="button"
-              className="ui-button ui-button-accent !h-9 px-3 text-xs flex items-center gap-1.5"
+              className="ui-button ui-button-accent !h-9 w-full px-3 text-xs flex items-center justify-center gap-1.5"
               onClick={onRepair}
             >
               <Wrench className="h-3.5 w-3.5" />

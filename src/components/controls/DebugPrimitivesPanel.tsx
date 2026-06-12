@@ -3,6 +3,7 @@
 import React from 'react';
 import { Trash2 } from 'lucide-react';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 export type DebugPrimitiveType =
   | 'pillar'
@@ -90,7 +91,7 @@ function PrimitiveIcon({ type }: { type: DebugPrimitiveType }) {
 }
 
 export function DebugPrimitivesPanel({ onAdd, onClear }: DebugPrimitivesPanelProps) {
-  const [expanded, setExpanded] = React.useState(true);
+  const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const [sizePreset, setSizePreset] = React.useState<DebugPrimitiveSizePreset>('medium');
 
   const buttons: Array<{ type: DebugPrimitiveType; label: string }> = [

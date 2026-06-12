@@ -945,13 +945,19 @@ export function SupportProxyMeshLayer({
       // diameter + 0.1mm offset). Using profile.diameter alone produces the thin brace setting
       // value and loses the dynamic sizing that matches the attached trunk thickness.
       const profileDiameter = Math.max(0.001, brace.profile?.diameter ?? 1);
-      const startHostDiameter = Math.max(
-        0.001,
-        (startKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+      const startHostDiameter = Math.min(
+        profileDiameter,
+        Math.max(
+          0.001,
+          (startKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+        ),
       );
-      const endHostDiameter = Math.max(
-        0.001,
-        (endKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+      const endHostDiameter = Math.min(
+        profileDiameter,
+        Math.max(
+          0.001,
+          (endKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+        ),
       );
 
       const segmentId = `braceSegment:${brace.id}`;
