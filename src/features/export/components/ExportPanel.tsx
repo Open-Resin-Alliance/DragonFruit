@@ -6,6 +6,7 @@ import { ExportManager, ExportOptions } from '../logic/ExportManager';
 import { normalizeExportBaseName, resolveEntirePlateExportBaseName } from '../logic/exportFileNaming';
 import { Button, Card, CardHeader, IconButton, Input, Select } from '@/components/ui/primitives';
 import { pickDirectoryWithNativeDialog } from '@/features/slicing/tauri/nativeSlicerBridge';
+import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 interface ExportPanelProps {
   models: LoadedModel[];
@@ -38,7 +39,7 @@ export function ExportPanel({
   onExportSuccess,
   onExportError,
 }: ExportPanelProps) {
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useFloatingPanelCollapse(true);
   const [exportScope, setExportScope] = useState<ExportScope>('entire_plate');
   const [filename, setFilename] = useState(() => normalizeExportBaseName(activeModel?.name));
   const [isExporting, setIsExporting] = useState(false);

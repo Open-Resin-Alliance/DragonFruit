@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 interface TerritoryVoxelControlsProps {
     enabled: boolean;
@@ -27,7 +28,7 @@ export function TerritoryVoxelControls({
     onUseSurfaceContiguityChange,
     onRescan,
 }: TerritoryVoxelControlsProps) {
-    const [expanded, setExpanded] = React.useState(false);
+    const [expanded, setExpanded] = useFloatingPanelCollapse(false);
 
     return (
         <Card>

@@ -21,6 +21,7 @@ import {
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { formatMeshStatsForDisplay } from '@/utils/meshStatsFormatting';
+import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 type SelectMode = 'single' | 'toggle' | 'add';
 
@@ -103,7 +104,7 @@ export function ModelManagerPanel({
   dimmed = false,
   bottomClearancePx = 220,
 }: ModelManagerPanelProps) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<Record<string, boolean>>({});
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [renamingGroupName, setRenamingGroupName] = useState('');
@@ -191,15 +192,18 @@ export function ModelManagerPanel({
         : []);
   }, [models, outsidePlateModelIds]);
 
+  const contextModelId = contextMenu?.modelId;
+  const contextGroupId = contextMenu?.groupId;
+
   const contextModel = useMemo(() => {
-    if (!contextMenu?.modelId) return null;
-    return models.find((m) => m.id === contextMenu.modelId) ?? null;
-  }, [contextMenu?.modelId, models]);
+    if (!contextModelId) return null;
+    return models.find((m) => m.id === contextModelId) ?? null;
+  }, [contextModelId, models]);
 
   const contextGroup = useMemo(() => {
-    if (!contextMenu?.groupId) return null;
-    return grouped.find((g) => g.id === contextMenu.groupId) ?? null;
-  }, [contextMenu?.groupId, grouped]);
+    if (!contextGroupId) return null;
+    return grouped.find((g) => g.id === contextGroupId) ?? null;
+  }, [contextGroupId, grouped]);
 
   const selectedGroupedCount = useMemo(() => {
     if (selectedModelIds.length === 0) return 0;

@@ -5,6 +5,7 @@ import { HexColorPicker } from 'react-colorful';
 import { RotateCcw } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import {
   DEFAULT_MESH_SMOOTHING_SETTINGS,
   clampMeshSmoothingBrushSizeMm,
@@ -26,7 +27,7 @@ function SectionHeader({ title }: { title: string }) {
 }
 
 export function MeshSmoothingSettingsPanel() {
-  const [expanded, setExpanded] = React.useState(true);
+  const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const [settings, setSettings] = React.useState(() => getMeshSmoothingSettings());
 
   React.useEffect(() => {

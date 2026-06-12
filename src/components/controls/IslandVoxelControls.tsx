@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Card, CardHeader, IconButton, Select } from '@/components/ui/primitives';
+import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 interface IslandVoxelControlsProps {
   enabled: boolean;
@@ -29,7 +30,7 @@ export function IslandVoxelControls({
   onShowMergedChange,
   islandCount = 0,
 }: IslandVoxelControlsProps) {
-  const [expanded, setExpanded] = React.useState(false);
+  const [expanded, setExpanded] = useFloatingPanelCollapse(false);
 
   return (
     <Card>
