@@ -31,70 +31,73 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
 
   return (
     <div
-      className="fixed top-16 left-1/2 z-30 -translate-x-1/2 flex items-center pointer-events-auto"
-    >
-    <div
-      className="rounded-full"
-      style={{
-        padding: '2px',
-        background: 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 70%), var(--border-subtle), color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 70%))',
-        boxShadow: '0 4px 20px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(0, 0, 0, 0.2)',
-      }}
+      id="transform-toolbar"
+      className="fixed top-16 left-1/2 z-30 -translate-x-1/2 flex w-auto items-center pointer-events-auto"
     >
       <div
-        className={`relative grid items-center rounded-full px-1 py-1 ${
-          buttons.length === 6
-            ? 'grid-cols-6'
-            : buttons.length === 5
-              ? 'grid-cols-5'
-              : 'grid-cols-4'
-        }`}
+        className="rounded-full"
         style={{
-          background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 50%)',
-          backdropFilter: 'blur(12px)',
+          padding: '2px',
+          background: 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 70%), var(--border-subtle), color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 70%))',
+          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(0, 0, 0, 0.2)',
         }}
       >
         <div
-          className="pointer-events-none absolute left-1 top-1 bottom-1 rounded-full transition-transform duration-300 ease-out"
+          className={`relative rounded-full px-1 py-1`}
           style={{
-            width: `calc((100% - 8px) / ${buttons.length})`,
-            transform: `translateX(${activeIndex * 100}%)`,
-            background: 'var(--accent-secondary)',
-            boxShadow: '0 2px 12px color-mix(in srgb, var(--accent-secondary), transparent 50%)',
+            background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 50%)',
+            backdropFilter: 'blur(12px)',
           }}
-        />
+        >
+          <div
+            className="pointer-events-none absolute left-1 top-1 bottom-1 rounded-full transition-transform duration-300 ease-out"
+            style={{
+              width: `calc((100% - 8px) / ${buttons.length})`,
+              transform: `translateX(${activeIndex * 100}%)`,
+              background: 'var(--accent-secondary)',
+              boxShadow: '0 2px 12px color-mix(in srgb, var(--accent-secondary), transparent 50%)',
+            }}
+          />
 
-        {buttons.map((btn) => {
-          const active = mode === btn.mode;
-          const hovered = hoveredMode === btn.mode;
+          <div className={`grid ${
+            buttons.length === 6
+              ? 'grid-cols-6'
+              : buttons.length === 5
+                ? 'grid-cols-5'
+                : 'grid-cols-4'
+          }`}>
+            {buttons.map((btn) => {
+              const active = mode === btn.mode;
+              const hovered = hoveredMode === btn.mode;
 
-          return (
-            <button
-              key={btn.mode}
-              onClick={() => handleModeClick(btn.mode)}
-              onMouseEnter={() => setHoveredMode(btn.mode)}
-              onMouseLeave={() => setHoveredMode((prev) => (prev === btn.mode ? null : prev))}
-              className={`relative z-[1] flex w-[112px] items-center justify-center gap-1.5 rounded-full px-3.5 py-2 text-[11px] font-semibold uppercase tracking-wider transition-all duration-200 active:scale-[0.98] ${
-                active
-                  ? 'scale-[1.01]'
-                  : 'hover:-translate-y-[1px] hover:shadow-[0_4px_14px_rgba(0,0,0,0.22)]'
-              }`}
-              style={active ? {
-                color: '#000000',
-              } : {
-                background: hovered
-                  ? 'color-mix(in srgb, var(--surface-2), transparent 18%)'
-                  : 'transparent',
-                color: hovered ? 'var(--text-strong)' : 'var(--text-muted)',
-              }}
-              title={`${btn.label} • ${btn.hint}`}
-            >
-              <span>{btn.icon}</span>
-              <span>{btn.label}</span>
-            </button>
-          );
-        })}
-      </div>
+              return (
+                <button
+                  key={btn.mode}
+                  onClick={() => handleModeClick(btn.mode)}
+                  onMouseEnter={() => setHoveredMode(btn.mode)}
+                  onMouseLeave={() => setHoveredMode((prev) => (prev === btn.mode ? null : prev))}
+                  className={`z-[1] flex items-center justify-center gap-0.5 lg:gap-1.5 rounded-full px-1 lg:px-3.5 py-2 text-[11px] font-semibold uppercase xl:tracking-wider transition-all duration-200 active:scale-[0.98] ${
+                    active
+                      ? 'scale-[1.01]'
+                      : 'hover:-translate-y-[1px] hover:shadow-[0_4px_14px_rgba(0,0,0,0.22)]'
+                  }`}
+                  style={active ? {
+                    color: '#000000',
+                  } : {
+                    background: hovered
+                      ? 'color-mix(in srgb, var(--surface-2), transparent 18%)'
+                      : 'transparent',
+                    color: hovered ? 'var(--text-strong)' : 'var(--text-muted)',
+                  }}
+                  title={`${btn.label} • ${btn.hint}`}
+                >
+                  <span>{btn.icon}</span>
+                  <span style={{whiteSpace:"nowrap"}}>{btn.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
     </div>
