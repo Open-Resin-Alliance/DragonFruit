@@ -48,6 +48,14 @@ const FILLET_CORNER_SEGS: usize = 5;
 /// tip pole). More = smoother dome-over.
 const FILLET_TIP_RINGS: usize = 4;
 
+/// Dome tessellation: longitude segments (around the axis) and latitude rings
+/// (equator → pole). High enough that the half-ellipsoid reads as a smooth dome,
+/// not a faceted bullet — the key is a small, low-tri solid so this is cheap.
+/// Extra rings near the pole matter most: that's where curvature is highest, so
+/// the tip is the first place facets show.
+const DOME_SEGMENTS: usize = 64;
+const DOME_RINGS: usize = 18;
+
 /// Sane mm clamps on the user-chosen key width + depth (model units are mm). The
 /// sliders enforce their own ranges; these are a backstop against a stray 0/huge
 /// value producing a degenerate or absurd key. The 1 mm-wall fit ladder shrinks
@@ -140,6 +148,31 @@ impl FrustumDims {
         let depth = depth_mm.clamp(KEY_DEPTH_MIN_MM, KEY_DEPTH_MAX_MM);
         let length = KEY_LENGTH_TO_WIDTH * width;
         FrustumDims { width, length, depth }
+    }
+}
+
+/// Half-ellipsoid (oblong dome) semi-axes, in mm. `half_w` is along `u`, `half_l`
+/// along `v` (= `KEY_LENGTH_TO_WIDTH × half_w`, matching the frustum's footprint
+/// ratio), and `depth` is the bulge along `+axis`. Equal axes → a hemisphere.
+#[derive(Debug, Clone, Copy)]
+pub struct DomeDims {
+    pub half_w: f32,
+    pub half_l: f32,
+    pub depth: f32,
+}
+
+impl DomeDims {
+    /// From the user's requested cut-face **width** and bulge **depth** (mm). The
+    /// length follows the same 1.25× ratio the frustum uses, so a locked
+    /// width=depth dome reads as a round-ish dome. Clamped to the sane mm range.
+    pub fn from_width_depth(width_mm: f32, depth_mm: f32) -> Self {
+        let width = width_mm.clamp(KEY_WIDTH_MIN_MM, KEY_WIDTH_MAX_MM);
+        let depth = depth_mm.clamp(KEY_DEPTH_MIN_MM, KEY_DEPTH_MAX_MM);
+        DomeDims {
+            half_w: width * 0.5,
+            half_l: KEY_LENGTH_TO_WIDTH * width * 0.5,
+            depth,
+        }
     }
 }
 
@@ -439,7 +472,7 @@ fn build_sharp_frustum(
 #[derive(Debug, Clone)]
 pub enum KeyPlan {
     Frustum { dims: FrustumDims, detail: String },
-    Dome { radius: f32, detail: String },
+    Dome { dims: DomeDims, detail: String },
     None { detail: String },
 }
 
@@ -469,11 +502,12 @@ impl KeyPlan {
 ///
 /// Clearance is measured against the **socket** (the larger of peg/socket) so both
 /// halves keep ≥`KEY_WALL_MARGIN_MM` of material.
-fn decide_key(clearance: &Clearance, nominal: FrustumDims, shape: KeyShape) -> KeyPlan {
-    // The dome's nominal radius is half the requested key width (it fills the same
-    // lateral footprint as the peg's base).
-    let nominal_r = (nominal.width * 0.5).max(0.1);
-
+fn decide_key(
+    clearance: &Clearance,
+    nominal: FrustumDims,
+    nominal_dome: DomeDims,
+    shape: KeyShape,
+) -> KeyPlan {
     if shape == KeyShape::Frustum {
         // Rung 1: tapered frustum at the requested size, shrunk only if needed.
         if let Some(dims) = clearance.fit_frustum(nominal) {
@@ -488,26 +522,34 @@ fn decide_key(clearance: &Clearance, nominal: FrustumDims, shape: KeyShape) -> K
             };
             return KeyPlan::Frustum { dims, detail };
         }
-        // Rung 2: frustum didn't fit → automatic dome fallback (with a reason).
-        if let Some(radius) = clearance.fit_dome(nominal_r) {
+        // Rung 2: frustum didn't fit → automatic dome fallback. Use a round-ish
+        // hemisphere sized from the frustum width (not the oblong request) so the
+        // safety-net key fits where the frustum couldn't.
+        let fallback = DomeDims::from_width_depth(nominal.width, nominal.width);
+        if let Some(dims) = clearance.fit_dome(fallback) {
             return KeyPlan::Dome {
-                radius,
+                dims,
                 detail: format!(
-                    "Key fell back to a half-sphere ({radius:.2} mm radius) — the part is too thin for a full key."
+                    "Key fell back to a half-sphere ({:.2}×{:.2} mm, {:.2} mm deep) — the part is too thin for a full key.",
+                    dims.half_w * 2.0, dims.half_l * 2.0, dims.depth
                 ),
             };
         }
     } else {
-        // Dome chosen explicitly: place a half-sphere (shrunk to fit). No frustum
-        // fallback — the dome is the deliberately smaller, round option.
-        if let Some(radius) = clearance.fit_dome(nominal_r) {
-            let shrunk = radius < nominal_r - 1e-4;
+        // Dome chosen explicitly: place the oblong half-ellipsoid (shrunk to fit).
+        // No frustum fallback — the dome is the deliberately smaller, round option.
+        if let Some(dims) = clearance.fit_dome(nominal_dome) {
+            let shrunk = dims.half_w < nominal_dome.half_w - 1e-4
+                || dims.depth < nominal_dome.depth - 1e-4;
             let detail = if shrunk {
-                format!("dome key shrunk to fit (1 mm wall): {radius:.2} mm radius")
+                format!(
+                    "dome key shrunk to fit (1 mm wall): {:.2}×{:.2} mm, {:.2} mm deep",
+                    dims.half_w * 2.0, dims.half_l * 2.0, dims.depth
+                )
             } else {
                 String::new()
             };
-            return KeyPlan::Dome { radius, detail };
+            return KeyPlan::Dome { dims, detail };
         }
     }
 
@@ -555,7 +597,8 @@ pub fn apply_key(
     // (This matches the preview, which probes the model and sizes correctly.)
     let clearance = Clearance::probe(&frame, model, model);
     let nominal = FrustumDims::from_width_depth(width_mm, depth_mm);
-    let plan = decide_key(&clearance, nominal, shape);
+    let nominal_dome = DomeDims::from_width_depth(width_mm, depth_mm);
+    let plan = decide_key(&clearance, nominal, nominal_dome, shape);
 
     match plan {
         KeyPlan::Frustum { dims, detail } => {
@@ -571,8 +614,8 @@ pub fn apply_key(
                 }
             }
         }
-        KeyPlan::Dome { radius, detail } => {
-            let out = apply_dome(part_a, part_b, &frame, radius, tolerance);
+        KeyPlan::Dome { dims, detail } => {
+            let out = apply_dome(part_a, part_b, &frame, dims, tolerance);
             if out.kind == KeyKind::Dome {
                 KeyOutcome { detail, ..out }
             } else {
@@ -628,7 +671,8 @@ pub fn build_key_preview_soup(
     // model on both sides (its walls are the same walls the halves will have).
     let clearance = Clearance::probe(&frame, model, model);
     let nominal = FrustumDims::from_width_depth(width_mm, depth_mm);
-    let plan = decide_key(&clearance, nominal, shape);
+    let nominal_dome = DomeDims::from_width_depth(width_mm, depth_mm);
+    let plan = decide_key(&clearance, nominal, nominal_dome, shape);
     let build_frame = frame_extruding_toward_part_b(&frame);
 
     let mut soup: Vec<f32> = Vec::new();
@@ -640,9 +684,9 @@ pub fn build_key_preview_soup(
             append_soup(&mut soup, &build_frustum(&build_frame, *dims, tolerance, fillet_mm + tolerance));
             (KeyKind::Frustum, detail.clone())
         }
-        KeyPlan::Dome { radius, detail } => {
-            append_soup(&mut soup, &build_dome(&build_frame, *radius, 0.0, 24));
-            append_soup(&mut soup, &build_dome(&build_frame, *radius, tolerance, 24));
+        KeyPlan::Dome { dims, detail } => {
+            append_soup(&mut soup, &build_dome(&build_frame, dims.half_w, dims.half_l, dims.depth, 0.0, DOME_SEGMENTS));
+            append_soup(&mut soup, &build_dome(&build_frame, dims.half_w, dims.half_l, dims.depth, tolerance, DOME_SEGMENTS));
             (KeyKind::Dome, detail.clone())
         }
         KeyPlan::None { detail } => (KeyKind::None, detail.clone()),
@@ -810,21 +854,27 @@ impl Clearance {
         Some(FrustumDims { width, length, depth })
     }
 
-    /// Clamp the dome radius so the grown hemisphere keeps ≥ margin from every
-    /// wall (depth into part_b and lateral both apply, radius is symmetric).
-    /// Returns `None` if even the minimum dome can't fit.
-    fn fit_dome(&self, nominal_r: f32) -> Option<f32> {
+    /// Clamp an oblong dome (per-axis) so the grown half-ellipsoid keeps ≥ margin
+    /// from every wall: `depth` against part_b's depth, `half_w`/`half_l` against
+    /// the lateral walls. Each axis is capped independently (the oblong proportions
+    /// are preserved where they fit, only over-large axes shrink). Returns `None`
+    /// if the result is smaller than the minimum useful dome on any axis.
+    fn fit_dome(&self, nominal: DomeDims) -> Option<DomeDims> {
         let m = KEY_WALL_MARGIN_MM;
         let tol = DEFAULT_KEY_TOLERANCE_MM;
-        let cap = (self.depth_b - m - tol)
-            .min(self.half_room_u() - m - tol)
-            .min(self.half_room_v() - m - tol)
-            .max(0.0);
-        let r = nominal_r.min(cap);
-        if r < KEY_MIN_DOME_RADIUS_MM {
+        let cap_depth = (self.depth_b - m - tol).max(0.0);
+        let cap_w = (self.half_room_u() - m - tol).max(0.0);
+        let cap_l = (self.half_room_v() - m - tol).max(0.0);
+        let half_w = nominal.half_w.min(cap_w);
+        let half_l = nominal.half_l.min(cap_l);
+        let depth = nominal.depth.min(cap_depth);
+        // The minimum useful dome: a hemisphere of the floor radius (so the floor
+        // applies to the semi-axes and the bulge depth alike).
+        let floor = KEY_MIN_DOME_RADIUS_MM;
+        if half_w < floor || half_l < floor || depth < floor {
             None
         } else {
-            Some(r)
+            Some(DomeDims { half_w, half_l, depth })
         }
     }
 }
@@ -859,25 +909,39 @@ fn nearest_hit(mesh: &IndexedMesh, origin: Vec3, dir: Vec3) -> Option<f32> {
 // Half-sphere (dome) key — the fallback when a frustum can't fit a thin part.
 // ---------------------------------------------------------------------------
 
-/// Build a watertight dome (a spherical cap) bulging along `+axis` of the
+/// Build a watertight OBLONG dome — a half-ellipsoid bulging along `+axis` of the
 /// (already part_b-facing) `frame`, closed by a flat disk at the mouth plane.
 ///
-/// The sphere is centered at the anchor with radius `R = radius + grow`; the flat
-/// cap sits at `z = −grow − overlap` — pulled back into part_a by `grow` (socket
-/// clearance) plus the fixed `KEY_BASE_OVERLAP_MM` so the dome base overlaps
-/// part_a's solid for a clean union (and the socket mouth fully breaches part_b).
-/// This also keeps the SOCKET (`grow = tolerance`) a TRUE dilation of the PEG
-/// (`grow = 0`): every peg surface point lies strictly inside the socket — peg pole
-/// at `radius` < `R`, peg rim above the socket's lower mouth — so the boolean is
-/// clean (no coincident faces). `segments` = longitude steps; `rings` latitude
-/// bands from mouth to pole.
-fn build_dome(frame: &KeyFrame, radius: f32, grow: f32, segments: usize) -> IndexedMesh {
-    let big_r = (radius + grow).max(1e-4);
+/// The half-ellipsoid has semi-axes `half_w` (along `u`), `half_l` (along `v`),
+/// and `depth` (along `+axis`): equal semi-axes give a hemisphere, unequal ones an
+/// oblong dome. A point on the unit hemisphere `(sinθcosφ, sinθsinφ, cosθ)` maps to
+/// `(half_w·…, half_l·…, depth·cosθ)`. Below the equator (z=0) a short straight
+/// skirt drops to the mouth plane, then a flat cap closes it.
+///
+/// `grow` dilates every semi-axis by that amount (the socket = peg with
+/// `grow = tolerance`), and the flat cap sits at `z = −grow − overlap` — pulled
+/// back into part_a by `grow` (socket clearance) plus the fixed `KEY_BASE_OVERLAP_MM`
+/// so the dome base overlaps part_a's solid for a clean union (and the socket mouth
+/// fully breaches part_b). The straight skirt makes the socket a clean per-axis
+/// dilation of the peg (no coincident faces) so the boolean is robust.
+///
+/// `segments` = longitude steps; the surface uses a fixed number of latitude rings.
+fn build_dome(
+    frame: &KeyFrame,
+    half_w: f32,
+    half_l: f32,
+    depth: f32,
+    grow: f32,
+    segments: usize,
+) -> IndexedMesh {
+    let aw = (half_w + grow).max(1e-4); // semi-axis along u
+    let al = (half_l + grow).max(1e-4); // semi-axis along v
+    let ad = (depth + grow).max(1e-4); // semi-axis along +axis (bulge depth)
     // Cap plane: pulled back by `grow` (socket dilation) + the fixed overlap so the
     // base sinks into part_a. For the peg (grow=0) this is just the overlap.
     let z_mouth = -grow - KEY_BASE_OVERLAP_MM;
     let seg = segments.max(6);
-    let rings = 4usize; // latitude bands from the mouth circle up to the pole
+    let rings = DOME_RINGS; // latitude bands from the EQUATOR (z=0) up to the pole
 
     let local = |x: f32, y: f32, z: f32| -> Vec3 {
         frame
@@ -887,27 +951,35 @@ fn build_dome(frame: &KeyFrame, radius: f32, grow: f32, segments: usize) -> Inde
             .add(frame.axis.scale(z))
     };
 
-    // Polar angle of the mouth: where the sphere (radius big_r, centered at the
-    // anchor) crosses z = z_mouth. cos(theta_mouth) = z_mouth / big_r.
-    let cos_m = (z_mouth / big_r).clamp(-1.0, 1.0);
-    let theta_mouth = cos_m.acos(); // 0 at pole, π/2 at equator, > π/2 if z_mouth<0
-
     let mut positions: Vec<Vec3> = Vec::new();
-    // Pole (top of the cap, along +axis).
+    // Pole (top of the bulge, along +axis at z = ad).
     let pole = positions.len() as u32;
-    positions.push(local(0.0, 0.0, big_r));
-    // Latitude rings from just below the pole down to the mouth circle.
-    let mut ring_start = Vec::with_capacity(rings);
+    positions.push(local(0.0, 0.0, ad));
+    // Latitude rings from just below the pole down to the equator (θ: 0→π/2).
+    // Rings are biased TOWARD the pole (θ ∝ t² where t = i/rings) so more sit
+    // where curvature is highest — the tip is the first place facets show, so
+    // clustering rings there smooths it far more than uniform spacing for the
+    // same ring count.
+    let mut ring_start: Vec<u32> = Vec::with_capacity(rings + 1);
     for i in 1..=rings {
-        let theta = theta_mouth * (i as f32 / rings as f32);
-        let z = big_r * theta.cos();
-        let rr = big_r * theta.sin();
+        let t = i as f32 / rings as f32; // 0→1
+        let theta = (std::f32::consts::FRAC_PI_2) * t * t; // pole-biased 0→π/2
+        let z = ad * theta.cos(); // ad → 0
+        let s = theta.sin(); // 0 → 1 (lateral scale)
         ring_start.push(positions.len() as u32);
         for j in 0..seg {
             let phi = 2.0 * std::f32::consts::PI * (j as f32 / seg as f32);
-            positions.push(local(rr * phi.cos(), rr * phi.sin(), z));
+            positions.push(local(aw * s * phi.cos(), al * s * phi.sin(), z));
         }
     }
+    // Skirt ring: the equator profile dropped straight down to the mouth plane (a
+    // short vertical wall so the socket cleanly clears the peg as it enters).
+    let skirt = positions.len() as u32;
+    for j in 0..seg {
+        let phi = 2.0 * std::f32::consts::PI * (j as f32 / seg as f32);
+        positions.push(local(aw * phi.cos(), al * phi.sin(), z_mouth));
+    }
+    ring_start.push(skirt);
     // Flat-cap center (on the mouth plane).
     let center = positions.len() as u32;
     positions.push(local(0.0, 0.0, z_mouth));
@@ -920,8 +992,9 @@ fn build_dome(frame: &KeyFrame, radius: f32, grow: f32, segments: usize) -> Inde
         let b = r0 + ((j + 1) % seg) as u32;
         triangles.push([pole, a, b]);
     }
-    // Bands between successive rings (cur nearer the pole, nxt nearer the mouth).
-    for i in 0..rings - 1 {
+    // Bands between successive rings (cur nearer the pole, nxt nearer the mouth),
+    // INCLUDING the equator→skirt band (the vertical wall).
+    for i in 0..ring_start.len() - 1 {
         let cur = ring_start[i];
         let nxt = ring_start[i + 1];
         for j in 0..seg {
@@ -934,9 +1007,9 @@ fn build_dome(frame: &KeyFrame, radius: f32, grow: f32, segments: usize) -> Inde
             triangles.push([c0, n0, n1]);
         }
     }
-    // Flat cap (mouth ring → center). Its outward normal points along −axis (the
+    // Flat cap (skirt ring → center). Its outward normal points along −axis (the
     // open mouth into part_b), so wind CW seen from +axis.
-    let eq = ring_start[rings - 1];
+    let eq = *ring_start.last().unwrap();
     for j in 0..seg {
         let a = eq + j as u32;
         let b = eq + ((j + 1) % seg) as u32;
@@ -951,12 +1024,13 @@ fn apply_dome(
     part_a: IndexedMesh,
     part_b: IndexedMesh,
     frame: &KeyFrame,
-    radius: f32,
+    dims: DomeDims,
     tolerance: f32,
 ) -> KeyOutcome {
     let build_frame = frame_extruding_toward_part_b(frame);
-    let peg_mesh = build_dome(&build_frame, radius, 0.0, 24);
-    let socket_mesh = build_dome(&build_frame, radius, tolerance, 24);
+    let peg_mesh = build_dome(&build_frame, dims.half_w, dims.half_l, dims.depth, 0.0, DOME_SEGMENTS);
+    let socket_mesh =
+        build_dome(&build_frame, dims.half_w, dims.half_l, dims.depth, tolerance, DOME_SEGMENTS);
 
     let result = (|| -> Result<(IndexedMesh, IndexedMesh), String> {
         let a = to_manifold(&part_a).map_err(|e| format!("part_a invalid: {e}"))?;
@@ -1274,22 +1348,27 @@ mod tests {
         assert!(soup.iter().all(|f| f.is_finite()), "all coords finite");
     }
 
-    // Test 9: the dome key is watertight and the peg fits inside the grown socket.
+    // Test 9: the dome key (round AND oblong) is watertight and the peg fits inside
+    // the grown socket.
     #[test]
     fn dome_is_watertight_and_fits() {
         let mem = flat_membrane(10.0);
         let frame = frame_extruding_toward_part_b(&frame_from_membrane(&mem).expect("frame"));
-        let r = 3.0;
-        let peg = build_dome(&frame, r, 0.0, 24);
-        let socket = build_dome(&frame, r, 0.1, 24);
-        let peg_m = to_manifold(&peg).expect("dome peg watertight");
-        let socket_m = to_manifold(&socket).expect("dome socket watertight");
-        let leftover = peg_m.difference(&socket_m);
-        assert!(
-            leftover.is_empty() || leftover.num_tri() == 0,
-            "dome peg fits inside grown dome socket (leftover tris = {})",
-            leftover.num_tri()
-        );
+        // (half_w, half_l, depth) cases: a round hemisphere and two oblong ones.
+        for (hw, hl, d) in [(3.0, 3.0, 3.0), (4.0, 2.0, 3.0), (2.0, 2.5, 5.0)] {
+            let peg = build_dome(&frame, hw, hl, d, 0.0, DOME_SEGMENTS);
+            let socket = build_dome(&frame, hw, hl, d, 0.1, DOME_SEGMENTS);
+            let peg_m = to_manifold(&peg)
+                .unwrap_or_else(|e| panic!("dome peg ({hw},{hl},{d}) watertight: {e}"));
+            let socket_m = to_manifold(&socket)
+                .unwrap_or_else(|e| panic!("dome socket ({hw},{hl},{d}) watertight: {e}"));
+            let leftover = peg_m.difference(&socket_m);
+            assert!(
+                leftover.is_empty() || leftover.num_tri() == 0,
+                "dome peg ({hw},{hl},{d}) fits inside grown socket (leftover = {})",
+                leftover.num_tri()
+            );
+        }
     }
 
     // Test 10: THE REAL PIPELINE — run an actual contour_split on a cube, then key

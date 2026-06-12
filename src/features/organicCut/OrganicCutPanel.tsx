@@ -29,6 +29,12 @@ export interface OrganicCutPanelState {
   keyShape: 'frustum' | 'dome';
   /** Edge fillet radius (mm) — rounds the frustum's corners + tip. 0 = sharp. */
   keyFilletMm: number;
+  /**
+   * Dome only: when true, the Width/Depth sliders are ratio-locked — dragging one
+   * scales the other to preserve the current proportions (resize as a unit). When
+   * false, each is independent (free oblong control).
+   */
+  keyUniformScale: boolean;
 }
 
 interface OrganicCutPanelProps {
@@ -88,6 +94,31 @@ export function OrganicCutPanel({
   const setState = React.useCallback((patch: Partial<OrganicCutPanelState>) => {
     onStateChange({ ...state, ...patch });
   }, [onStateChange, state]);
+
+  // Set the dome's Width or Depth, honoring Uniform Scale: when locked, dragging
+  // one slider scales the OTHER by the same factor so the current width:depth
+  // proportion is preserved (resize as a unit). Unlocked → set just that axis.
+  const setDomeDim = React.useCallback((axis: 'width' | 'depth', next: number) => {
+    const clamped = clampFloat(next, 1, 20, 1);
+    if (!state.keyUniformScale) {
+      setState(axis === 'width' ? { keyWidthMm: clamped } : { keyDepthMm: clamped });
+      return;
+    }
+    const cur = axis === 'width' ? state.keyWidthMm : state.keyDepthMm;
+    if (cur <= 0) {
+      // Degenerate current value — just set both to the new value (round).
+      setState({ keyWidthMm: clamped, keyDepthMm: clamped });
+      return;
+    }
+    const factor = clamped / cur;
+    const other = axis === 'width' ? state.keyDepthMm : state.keyWidthMm;
+    const scaledOther = clampFloat(other * factor, 1, 20, 1);
+    setState(
+      axis === 'width'
+        ? { keyWidthMm: clamped, keyDepthMm: scaledOther }
+        : { keyDepthMm: clamped, keyWidthMm: scaledOther },
+    );
+  }, [clampFloat, setState, state.keyUniformScale, state.keyWidthMm, state.keyDepthMm]);
 
   const cardStyle: React.CSSProperties = {
     borderColor: 'var(--border-subtle)',
@@ -348,55 +379,88 @@ export function OrganicCutPanel({
                       </button>
                     </div>
                   </div>
+                  {/* Width — frustum: sets just width; dome: ratio-locks depth
+                      when Uniform Scale is on. */}
                   <div>
-                    <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>
-                      {state.keyShape === 'dome' ? 'Key Diameter' : 'Key Width'}
-                    </label>
+                    <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Key Width</label>
                     <ScrollableNumberField
                       value={state.keyWidthMm}
-                      onChange={(value) => setState({ keyWidthMm: clampFloat(value, 1, 20, 1) })}
+                      onChange={(value) =>
+                        state.keyShape === 'dome'
+                          ? setDomeDim('width', value)
+                          : setState({ keyWidthMm: clampFloat(value, 1, 20, 1) })
+                      }
                       min={1}
                       max={20}
                       step={0.5}
                       unit="mm"
-                      ariaLabel="Key base width in millimeters"
+                      ariaLabel="Key width in millimeters"
                       disabled={disabled || isApplying}
                       className="mt-1"
                     />
                   </div>
-                  {/* Depth + Edge Fillet only apply to the frustum (a dome is
-                      already fully round). */}
+                  {/* Depth — applies to BOTH shapes now (dome bulge into the body
+                      / frustum peg depth). Dome ratio-locks width when Uniform. */}
+                  <div>
+                    <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Key Depth</label>
+                    <ScrollableNumberField
+                      value={state.keyDepthMm}
+                      onChange={(value) =>
+                        state.keyShape === 'dome'
+                          ? setDomeDim('depth', value)
+                          : setState({ keyDepthMm: clampFloat(value, 1, 20, 1) })
+                      }
+                      min={1}
+                      max={20}
+                      step={0.5}
+                      unit="mm"
+                      ariaLabel="Key depth in millimeters"
+                      disabled={disabled || isApplying}
+                      className="mt-1"
+                    />
+                  </div>
+                  {/* Edge Fillet: frustum only (a dome is already fully round). */}
                   {state.keyShape === 'frustum' && (
-                    <>
-                      <div>
-                        <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Key Depth</label>
-                        <ScrollableNumberField
-                          value={state.keyDepthMm}
-                          onChange={(value) => setState({ keyDepthMm: clampFloat(value, 1, 20, 1) })}
-                          min={1}
-                          max={20}
-                          step={0.5}
-                          unit="mm"
-                          ariaLabel="Key depth in millimeters"
-                          disabled={disabled || isApplying}
-                          className="mt-1"
+                    <div>
+                      <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Edge Fillet</label>
+                      <ScrollableNumberField
+                        value={state.keyFilletMm}
+                        onChange={(value) => setState({ keyFilletMm: clampFloat(value, 0, 5, 2) })}
+                        min={0}
+                        max={5}
+                        step={0.1}
+                        unit="mm"
+                        ariaLabel="Key edge fillet radius in millimeters (0 = sharp)"
+                        disabled={disabled || isApplying}
+                        className="mt-1"
+                      />
+                    </div>
+                  )}
+                  {/* Uniform Scale: dome only — lock width:depth so the dome resizes
+                      as a unit (keeps its shape), or unlock for free oblong control. */}
+                  {state.keyShape === 'dome' && (
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between gap-2 text-left"
+                      onClick={() => setState({ keyUniformScale: !state.keyUniformScale })}
+                      disabled={disabled || isApplying}
+                      title="Lock width and depth together so the dome keeps its shape when resized. Unlock for an oblong dome."
+                    >
+                      <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Uniform Scale</span>
+                      <span
+                        className="relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors"
+                        style={{
+                          background: state.keyUniformScale
+                            ? 'var(--accent)'
+                            : 'color-mix(in srgb, var(--text-muted), transparent 60%)',
+                        }}
+                      >
+                        <span
+                          className="inline-block h-3 w-3 transform rounded-full bg-white transition-transform"
+                          style={{ transform: state.keyUniformScale ? 'translateX(14px)' : 'translateX(2px)' }}
                         />
-                      </div>
-                      <div>
-                        <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Edge Fillet</label>
-                        <ScrollableNumberField
-                          value={state.keyFilletMm}
-                          onChange={(value) => setState({ keyFilletMm: clampFloat(value, 0, 5, 2) })}
-                          min={0}
-                          max={5}
-                          step={0.1}
-                          unit="mm"
-                          ariaLabel="Key edge fillet radius in millimeters (0 = sharp)"
-                          disabled={disabled || isApplying}
-                          className="mt-1"
-                        />
-                      </div>
-                    </>
+                      </span>
+                    </button>
                   )}
                 </div>
               )}

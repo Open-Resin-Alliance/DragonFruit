@@ -158,6 +158,9 @@ const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
   keyShape: 'frustum',
   // Edge fillet off by default (sharp box); the user dials it in live.
   keyFilletMm: 0.0,
+  // Dome Uniform Scale on by default — width/depth move together (round dome)
+  // until the user unlocks it for an oblong shape.
+  keyUniformScale: true,
 };
 
 /** Minimum points before a CONTOUR cut is possible (a real loop needs ≥3). */
