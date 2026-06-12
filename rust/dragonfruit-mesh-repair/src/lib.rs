@@ -6,12 +6,13 @@
 
 pub mod analysis;
 pub mod arrangement;
-pub mod core;
-pub mod geodesic;
+/// Shared mesh primitives now live in the `dragonfruit-mesh-core` crate. This
+/// re-export keeps the historical `crate::core::{mesh,bvh,halfedge}` paths
+/// working for the rest of this crate (and any external `mesh_repair::core::*`
+/// users) without rewriting every import.
+pub use dragonfruit_mesh_core as core;
 pub mod hollowing;
 pub mod io;
-pub mod membrane;
-pub mod organic_cut;
 pub mod repair;
 pub mod report;
 
@@ -21,11 +22,6 @@ pub use crate::hollowing::{
     hollow_voxel, punch_cylinders, DrainHoleSpec, HolePunchOptions, HolePunchOutcome,
     HolePunchReport, HolePunchSpec, HollowMode, HollowOptions, HollowOutcome, HollowReport,
     HollowSession, OpenFace,
-};
-pub use crate::geodesic::{surface_loop_from_mesh, surface_loop_positions, GeodesicSolver};
-pub use crate::organic_cut::{
-    organic_cut, OrganicCutLoopPoint, OrganicCutOptions, OrganicCutOutcome, OrganicCutReport,
-    OrganicCutSpec,
 };
 pub use crate::repair::{classify_support_split, repair, RepairOptions, RepairOutcome};
 pub use crate::report::MeshHealthReport;

@@ -1,0 +1,30 @@
+[package]
+name = "dragonfruit-organic-cut"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "dragonfruit_organic_cut"
+path = "src/lib.rs"
+
+[features]
+# Enable the manifold-csg boolean backend, required by the contour (membrane)
+# cut. Without it, only the geodesic seam + flat plane-cut fallback are available.
+manifold = ["dep:manifold-csg", "dep:manifold-csg-sys"]
+
+[dependencies]
+dragonfruit-mesh-core = { path = "../dragonfruit-mesh-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bytemuck = { version = "1", features = ["derive"] }
+ahash = "0.8"
+smallvec = "1"
+cdt = "0.1"
+# Pinned to the exact versions dragonfruit-mesh-repair locks: manifold-csg 0.1.4
+# with manifold-csg-sys 3.4.103. The newer 0.1.8 / sys 3.5.x pair fails to build
+# on this toolchain (missing FFI symbols), so both crates stay on the known-good
+# pinned pair. The -sys pin (a transitive dep made direct here) forces cargo to
+# pick 3.4.103 instead of resolving the newest 3.5.x.
+manifold-csg = { version = "=0.1.4", optional = true, default-features = false }
+manifold-csg-sys = { version = "=3.4.103", optional = true }

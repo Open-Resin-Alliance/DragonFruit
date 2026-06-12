@@ -16,8 +16,8 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
-use crate::core::halfedge::Topology;
-use crate::core::mesh::{IndexedMesh, Vec3};
+use dragonfruit_mesh_core::halfedge::Topology;
+use dragonfruit_mesh_core::mesh::{IndexedMesh, Vec3};
 
 /// Vertex adjacency derived from the mesh topology: for each vertex, its graph
 /// neighbours and the Euclidean length of the connecting edge.

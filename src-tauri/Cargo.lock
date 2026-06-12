@@ -1364,6 +1364,7 @@ dependencies = [
  "bytemuck",
  "dragonfruit-islands",
  "dragonfruit-mesh-repair",
+ "dragonfruit-organic-cut",
  "dragonfruit-rtsp-relay",
  "dragonfruit-slicing-engine",
  "flate2",
@@ -1400,6 +1401,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dragonfruit-mesh-core"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "bytemuck",
+ "serde",
+ "smallvec",
+]
+
+[[package]]
 name = "dragonfruit-mesh-repair"
 version = "0.1.0"
 dependencies = [
@@ -1407,6 +1418,7 @@ dependencies = [
  "bytemuck",
  "cdt",
  "clap",
+ "dragonfruit-mesh-core",
  "manifold-csg",
  "quick-xml 0.31.0",
  "rayon",
@@ -1415,6 +1427,21 @@ dependencies = [
  "smallvec",
  "thiserror 1.0.69",
  "zip 0.6.6",
+]
+
+[[package]]
+name = "dragonfruit-organic-cut"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "bytemuck",
+ "cdt",
+ "dragonfruit-mesh-core",
+ "manifold-csg",
+ "manifold-csg-sys",
+ "serde",
+ "serde_json",
+ "smallvec",
 ]
 
 [[package]]

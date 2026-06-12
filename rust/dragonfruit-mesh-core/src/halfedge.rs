@@ -1,7 +1,7 @@
 //! Half-edge topology over an [`IndexedMesh`]. Builds edge adjacency, boundary
 //! loops, non-manifold edge classification, and per-vertex face rings.
 
-use crate::core::mesh::IndexedMesh;
+use crate::mesh::IndexedMesh;
 use ahash::AHashMap;
 
 /// Canonical undirected edge key (sorted endpoints).

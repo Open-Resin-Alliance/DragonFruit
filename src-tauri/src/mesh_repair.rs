@@ -16,10 +16,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use dragonfruit_mesh_repair::{
-    analyze, classify_support_split, hollow_voxel, io, organic_cut, punch_cylinders, repair,
-    GeodesicSolver, HolePunchOptions, HollowOptions, HollowSession, IndexedMesh, OrganicCutOptions,
-    RepairOptions, Vec3,
+    analyze, classify_support_split, hollow_voxel, io, punch_cylinders, repair, HolePunchOptions,
+    HollowOptions, HollowSession, IndexedMesh, RepairOptions, Vec3,
 };
+// The organic cut feature now lives in its own crate.
+use dragonfruit_organic_cut::{organic_cut, GeodesicSolver, OrganicCutOptions};
 use serde::Deserialize;
 use tauri::ipc::Response;
 
@@ -1044,7 +1045,7 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
     let result = tauri::async_runtime::spawn_blocking(move || {
         let soup = if let Some(bytes) = source_bytes {
             let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
-            dragonfruit_mesh_repair::membrane::build_cutter_preview_soup(
+            dragonfruit_organic_cut::membrane::build_cutter_preview_soup(
                 &mesh,
                 &loop_pts,
                 thickness_mm,
@@ -1054,7 +1055,7 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
             .ok_or_else(|| "cutter could not be built from the loop".to_string())?
         } else {
             // No captured source yet → bare membrane on the raw loop (no offset).
-            dragonfruit_mesh_repair::membrane::build_membrane_preview_soup_full(
+            dragonfruit_organic_cut::membrane::build_membrane_preview_soup_full(
                 &loop_pts,
                 membrane_smoothing,
                 density,

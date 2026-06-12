@@ -246,6 +246,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
+name = "dragonfruit-mesh-core"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "bytemuck",
+ "serde",
+ "smallvec",
+]
+
+[[package]]
 name = "dragonfruit-mesh-repair"
 version = "0.1.0"
 dependencies = [
@@ -253,6 +263,7 @@ dependencies = [
  "bytemuck",
  "cdt",
  "clap",
+ "dragonfruit-mesh-core",
  "manifold-csg",
  "proptest",
  "quick-xml",

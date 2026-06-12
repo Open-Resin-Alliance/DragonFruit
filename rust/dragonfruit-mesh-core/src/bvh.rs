@@ -3,7 +3,7 @@
 //! to construct on multi-million-triangle meshes without fuss, and good
 //! enough for self-intersection queries and ray casts.
 
-use crate::core::mesh::{Aabb, IndexedMesh, Vec3};
+use crate::mesh::{Aabb, IndexedMesh, Vec3};
 
 #[derive(Clone, Debug)]
 enum Node {

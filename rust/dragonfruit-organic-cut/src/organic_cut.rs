@@ -17,7 +17,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::mesh::{IndexedMesh, Vec3};
+use dragonfruit_mesh_core::mesh::{IndexedMesh, Vec3};
 
 /// A single point on the user-drawn loop, in the model's local space.
 #[derive(Debug, Clone, Deserialize)]

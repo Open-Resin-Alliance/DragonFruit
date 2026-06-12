@@ -16,8 +16,8 @@
 
 #![cfg(feature = "manifold")]
 
-use crate::core::bvh::Bvh;
-use crate::core::mesh::{Aabb, IndexedMesh, Vec3};
+use dragonfruit_mesh_core::bvh::Bvh;
+use dragonfruit_mesh_core::mesh::{Aabb, IndexedMesh, Vec3};
 
 /// Default cutter thickness in mm. This is an ABSOLUTE minimum, independent of
 /// model size — a bigger model must NOT lose a bigger chunk. It only needs to be
