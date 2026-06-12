@@ -8,6 +8,7 @@ import { OrbitControls, TransformControls } from '@react-three/drei';
 import { RaftPreview } from './PreviewTypes/Raft/RaftPreview';
 import { GridPreview } from './PreviewTypes/Grid/GridPreview';
 import { TrunkPreview } from './PreviewTypes/Trunk/TrunkPreview';
+import { BracePreview } from './PreviewTypes/Brace/BracePreview';
 import { subscribeToSettings, getSettingsSnapshot } from '../state';
 import { subscribeToAnatomyPreviewState, getAnatomyPreviewState, setAnatomyPreviewActiveSettingKey } from './previewState';
 import { ANATOMY_CONFIG } from './AnatomyPreviewConfig';
@@ -770,7 +771,15 @@ function PreviewContent({
                     />
                 )}
 
-                {activeKind !== 'raft' && activeKind !== 'grid' && (
+                {activeKind === 'stick' && (
+                    <BracePreview
+                        settings={previewSettings}
+                        activeKind={activeKind}
+                        previewState={previewState}
+                    />
+                )}
+
+                {activeKind !== 'raft' && activeKind !== 'grid' && activeKind !== 'stick' && (
                     <TrunkPreview
                             settings={previewSettings}
                         liveConfig={liveConfig}

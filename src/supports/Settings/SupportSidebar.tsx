@@ -36,7 +36,7 @@ import {
     GridSettingsCard,
     SupportKindTabs,
 } from './components';
-import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { SupportAnatomyPreviewSlot } from './AnatomyPreview/SupportAnatomyPreviewSlot';
@@ -173,6 +173,7 @@ export function SupportSidebar() {
     const settings = useSyncExternalStore(subscribeToSettings, getSettings, getSettings);
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
     const [autoBraceStatus, setAutoBraceStatus] = useState<{ kind: 'success' | 'warning' | 'error'; message: string } | null>(null);
+    const [defaultsAnimating, setDefaultsAnimating] = useState(false);
     const [expanded, setExpanded] = React.useState(true);
     const [devToolsOpen, setDevToolsOpen] = useState(false);
     const saveStatusTimeoutRef = React.useRef<number | null>(null);
@@ -567,6 +568,10 @@ export function SupportSidebar() {
         setSettings(createDefaultSettings());
         setRaftSettings(DEFAULT_RAFT_SETTINGS);
         setAnatomyPreviewActiveSettingKey(null);
+
+        // Trigger spin animation
+        setDefaultsAnimating(true);
+        setTimeout(() => setDefaultsAnimating(false), 600);
     }, []);
 
     const handleAutoBrace = React.useCallback(() => {
@@ -1071,9 +1076,21 @@ export function SupportSidebar() {
                     </>
                 )}
                 right={(
-                    <div className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--border-subtle)' }}>
-                        <ActiveKindIcon className="h-3 w-3" style={{ color: 'var(--accent)' }} />
-                        <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{activeKindMeta.label}</span>
+                    <div className="inline-flex items-center gap-1">
+                        <IconButton
+                            onClick={handleSave}
+                            className={`!p-1.5 transition-colors ${saveStatus === 'saved' ? '!bg-green-600/30 !text-green-400 animate-pulse' : saveStatus === 'error' ? '!bg-red-600/30 !text-red-400' : '!text-green-400/70 hover:!text-green-400 hover:!bg-green-600/15'}`}
+                            title={saveStatus !== 'idle' ? (saveStatus === 'saved' ? 'Saved' : 'Save failed') : 'Save settings'}
+                        >
+                            <Save className="h-3.5 w-3.5" />
+                        </IconButton>
+                        <IconButton
+                            onClick={handleRestoreDefaults}
+                            className={`!p-1.5 transition-colors ${defaultsAnimating ? '' : '!text-red-400/70 hover:!text-red-400 hover:!bg-red-600/15'}`}
+                            title="Restore defaults"
+                        >
+                            <RotateCcw className={`h-3.5 w-3.5 ${defaultsAnimating ? 'animate-spin-once text-orange-400' : ''}`} />
+                        </IconButton>
                     </div>
                 )}
             />
@@ -1222,42 +1239,6 @@ export function SupportSidebar() {
                         </div>
                     </div>
 
-                    {activeKind !== 'trunk' ? (
-                        <div className="space-y-1.5 px-0.5">
-                            {saveStatus !== 'idle' && (
-                                <div
-                                    className="text-[10px]"
-                                    style={{ color: saveStatus === 'saved' ? '#34d399' : '#f87171' }}
-                                >
-                                    {saveStatus === 'saved' ? 'Saved' : 'Save failed'}
-                                </div>
-                            )}
-
-                            <div className="grid grid-cols-2 gap-1.5">
-                                <Button
-                                    type="button"
-                                    onClick={handleSave}
-                                    variant="primary"
-                                    size="md"
-                                    className="w-full !h-10 !text-sm !font-semibold !inline-flex !items-center !justify-center !gap-2"
-                                >
-                                    <Save className="h-4 w-4" />
-                                    <span>Save</span>
-                                </Button>
-
-                                <Button
-                                    type="button"
-                                    onClick={handleRestoreDefaults}
-                                    variant="accent"
-                                    size="md"
-                                    className="w-full !h-10 !text-sm !font-semibold !inline-flex !items-center !justify-center !gap-2"
-                                >
-                                    <RotateCcw className="h-4 w-4" />
-                                    <span>Defaults</span>
-                                </Button>
-                            </div>
-                        </div>
-                    ) : null}
                 </div>
             )}
         </Card>
