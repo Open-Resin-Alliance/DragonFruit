@@ -1101,69 +1101,60 @@ export function SupportSidebar() {
                                     {activeKind === 'raft' ? (
                                         <>
                                             {!shouldUseOverflowCompactMode ? (
-                                                <Section title="Anatomy preview">
+                                                <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
                                                     {renderPreviewBox('h-[220px]')}
-                                                </Section>
+                                                </div>
                                             ) : null}
-                                            <Section title="Raft settings">
+                                            <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
                                                 <RaftSettingsCard
                                                     settings={raftSettings}
                                                     onChange={(partial) => updateRaftSettings(partial)}
                                                 />
-                                            </Section>
+                                            </div>
                                         </>
                                     ) : activeKind === 'grid' ? (
                                         <>
                                             {!shouldUseOverflowCompactMode ? (
-                                                <Section title="Anatomy preview">
+                                                <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
                                                     {renderPreviewBox('h-[220px]')}
-                                                </Section>
+                                                </div>
                                             ) : null}
-                                            <Section title="Grid settings">
+                                            <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
                                                 <GridSettingsCard
                                                     grid={settings.grid}
                                                     onChange={(partial) => updateGridSettings(partial)}
                                                 />
-                                            </Section>
+                                            </div>
                                         </>
                                     ) : activeKind === 'stick' ? (
                                         <>
                                             {!shouldUseOverflowCompactMode ? (
-                                                <Section title="Anatomy preview">
-                                                    {renderPreviewBox('h-[250px]')}
-                                                </Section>
+                                                <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
+                                                    {renderPreviewBox('h-[220px]')}
+                                                </div>
                                             ) : null}
-                                            <Section title="Auto bracing">
+                                            <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
                                                 <AutoBracingSettingsCard
                                                     settings={settings.autoBracing}
                                                     onChange={(partial) => updateAutoBracingSettings(partial)}
                                                     onAutoBrace={handleAutoBrace}
                                                     status={autoBraceStatus}
                                                 />
-                                            </Section>
+                                            </div>
                                         </>
                                     ) : activeKind === 'trunk' ? (
                                         <>
                                             {shouldUseCompactTrunkLayout ? (
                                                 <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
-                                                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                                                        Support geometry
-                                                    </div>
                                                     {supportGeometryFields}
                                                 </div>
                                             ) : (
                                                 <div className="flex gap-2 items-stretch">
                                                     <div className="flex-1 min-w-0 rounded-md border p-2 flex flex-col" style={SECTION_CARD_STYLE}>
-                                                        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                                                            Anatomy preview
-                                                        </div>
                                                         {renderPreviewBox('flex-1 min-h-[340px]')}
                                                     </div>
 
                                                     <div className="flex-1 min-w-0 rounded-md border p-2" style={SECTION_CARD_STYLE}>
-                                                        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                                                            Support geometry
-                                                        </div>
                                                         {supportGeometryFields}
                                                     </div>
                                                 </div>
@@ -1215,13 +1206,13 @@ export function SupportSidebar() {
                                         </>
                                     ) : (
                                         <>
-                                            <Section title="Anatomy preview">
+                                            <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
                                                 {renderPreviewBox('h-[250px]')}
-                                            </Section>
+                                            </div>
 
-                                            <Section title="Support geometry">
+                                            <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
                                                 {supportGeometryFields}
-                                            </Section>
+                                            </div>
 
                                             {/* Placement notes removed per design request */}
                                         </>
