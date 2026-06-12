@@ -83,7 +83,7 @@ export function TransformControls({
   };
 
   const compactButtonClass = 'ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]';
-  const valueInputClass = 'ui-input h-8 w-full px-1.5 text-xs sm:text-sm text-center tabular-nums no-spinners';
+  const valueInputClass = 'ui-input h-8 w-full px-1.5 text-xs sm:text-sm text-left tabular-nums no-spinners';
 
   const sectionCardStyle: React.CSSProperties = {
     borderColor: 'var(--border-subtle)',
@@ -193,30 +193,42 @@ export function TransformControls({
                 <div className="grid grid-cols-3 gap-1 min-w-0">
                   <div className="min-w-0">
                     <label className="ui-meta mb-1 block text-center" style={{ color: '#f87171' }}>X</label>
-                    <NumberInput
-                      value={parseFloat(position.x.toFixed(2))}
-                      onChange={(val) => handlePositionChange('x', val)}
-                      onBlur={() => onTransformCommit?.()}
-                      className={valueInputClass}
-                    />
+                    <div className="relative">
+                      <NumberInput
+                        value={parseFloat(position.x.toFixed(2))}
+                        onChange={(val) => handlePositionChange('x', val)}
+                        onBlur={() => onTransformCommit?.()}
+                        className={valueInputClass}
+                        showStepper={false}
+                      />
+                      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>mm</span>
+                    </div>
                   </div>
                   <div className="min-w-0">
                     <label className="ui-meta mb-1 block text-center" style={{ color: '#4ade80' }}>Y</label>
-                    <NumberInput
-                      value={parseFloat(position.y.toFixed(2))}
-                      onChange={(val) => handlePositionChange('y', val)}
-                      onBlur={() => onTransformCommit?.()}
-                      className={valueInputClass}
-                    />
+                    <div className="relative">
+                      <NumberInput
+                        value={parseFloat(position.y.toFixed(2))}
+                        onChange={(val) => handlePositionChange('y', val)}
+                        onBlur={() => onTransformCommit?.()}
+                        className={valueInputClass}
+                        showStepper={false}
+                      />
+                      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>mm</span>
+                    </div>
                   </div>
                   <div className="min-w-0">
                     <label className="ui-meta mb-1 block text-center" style={{ color: '#60a5fa' }}>Z</label>
-                    <NumberInput
-                      value={parseFloat(position.z.toFixed(2))}
-                      onChange={(val) => handlePositionChange('z', val)}
-                      onBlur={() => onTransformCommit?.()}
-                      className={valueInputClass}
-                    />
+                    <div className="relative">
+                      <NumberInput
+                        value={parseFloat(position.z.toFixed(2))}
+                        onChange={(val) => handlePositionChange('z', val)}
+                        onBlur={() => onTransformCommit?.()}
+                        className={valueInputClass}
+                        showStepper={false}
+                      />
+                      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>mm</span>
+                    </div>
                   </div>
                 </div>
 
@@ -326,39 +338,51 @@ export function TransformControls({
                 <div className="grid grid-cols-3 gap-1 min-w-0">
                   <div className="min-w-0">
                     <label className="ui-meta mb-1 block text-center" style={{ color: '#f87171' }}>X</label>
-                    <NumberInput
-                      value={parseFloat(wrapRotationDegrees(toDegrees(rotation.x)).toFixed(2))}
-                      onChange={(val) => handleRotationChange('x', val)}
-                      onBlur={() => {
-                        onRotationComplete?.();
-                        onTransformCommit?.();
-                      }}
-                      className={valueInputClass}
-                    />
+                    <div className="relative">
+                      <NumberInput
+                        value={parseFloat(wrapRotationDegrees(toDegrees(rotation.x)).toFixed(2))}
+                        onChange={(val) => handleRotationChange('x', val)}
+                        onBlur={() => {
+                          onRotationComplete?.();
+                          onTransformCommit?.();
+                        }}
+                        className={valueInputClass}
+                        showStepper={false}
+                      />
+                      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[14px] font-semibold" style={{ color: 'var(--text-muted)' }}>°</span>
+                    </div>
                   </div>
                   <div className="min-w-0">
                     <label className="ui-meta mb-1 block text-center" style={{ color: '#4ade80' }}>Y</label>
-                    <NumberInput
-                      value={parseFloat(wrapRotationDegrees(toDegrees(rotation.y)).toFixed(2))}
-                      onChange={(val) => handleRotationChange('y', val)}
-                      onBlur={() => {
-                        onRotationComplete?.();
-                        onTransformCommit?.();
-                      }}
-                      className={valueInputClass}
-                    />
+                    <div className="relative">
+                      <NumberInput
+                        value={parseFloat(wrapRotationDegrees(toDegrees(rotation.y)).toFixed(2))}
+                        onChange={(val) => handleRotationChange('y', val)}
+                        onBlur={() => {
+                          onRotationComplete?.();
+                          onTransformCommit?.();
+                        }}
+                        className={valueInputClass}
+                        showStepper={false}
+                      />
+                      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[14px] font-semibold" style={{ color: 'var(--text-muted)' }}>°</span>
+                    </div>
                   </div>
                   <div className="min-w-0">
                     <label className="ui-meta mb-1 block text-center" style={{ color: '#60a5fa' }}>Z</label>
-                    <NumberInput
-                      value={parseFloat(wrapRotationDegrees(toDegrees(rotation.z)).toFixed(2))}
-                      onChange={(val) => handleRotationChange('z', val)}
-                      onBlur={() => {
-                        onRotationComplete?.();
-                        onTransformCommit?.();
-                      }}
-                      className={valueInputClass}
-                    />
+                    <div className="relative">
+                      <NumberInput
+                        value={parseFloat(wrapRotationDegrees(toDegrees(rotation.z)).toFixed(2))}
+                        onChange={(val) => handleRotationChange('z', val)}
+                        onBlur={() => {
+                          onRotationComplete?.();
+                          onTransformCommit?.();
+                        }}
+                        className={valueInputClass}
+                        showStepper={false}
+                      />
+                      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[14px] font-semibold" style={{ color: 'var(--text-muted)' }}>°</span>
+                    </div>
                   </div>
                 </div>
 
