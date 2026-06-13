@@ -254,6 +254,9 @@ struct GeodesicRequestDto {
     /// Edge fillet radius in mm (rounds the frustum corners + tip). Default 0.
     #[serde(default)]
     key_fillet_mm: f32,
+    /// Flip which half gets the peg vs the socket (preview reflects the direction).
+    #[serde(default)]
+    key_swap_sides: bool,
 }
 
 fn default_density_one() -> f32 {
@@ -290,6 +293,7 @@ impl Default for GeodesicRequestDto {
             key_depth_mm: 2.5,
             key_shape: "frustum".to_string(),
             key_fillet_mm: 0.0,
+            key_swap_sides: false,
         }
     }
 }
@@ -1077,6 +1081,7 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
     let key_depth_mm = req.key_depth_mm;
     let key_shape = dragonfruit_organic_cut::KeyShape::from_str_or_default(&req.key_shape);
     let key_fillet_mm = req.key_fillet_mm;
+    let key_swap_sides = req.key_swap_sides;
 
     // Use the captured cut SOURCE mesh so the preview can apply the real loop
     // offset (needs surface normals) and show the REAL cutter slab — exactly what
@@ -1104,6 +1109,7 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
                         membrane_smoothing,
                         density,
                         key_shape,
+                        key_swap_sides,
                         key_width_mm,
                         key_depth_mm,
                         key_fillet_mm,

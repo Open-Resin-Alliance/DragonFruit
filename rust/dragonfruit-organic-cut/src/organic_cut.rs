@@ -103,6 +103,10 @@ pub struct OrganicCutSpec {
     /// 0 = sharp box. Ignored by the dome. Defaults to 0.
     #[serde(default)]
     pub key_fillet_mm: f32,
+    /// Flip which half gets the peg vs the socket. Default false: peg on `part_a`
+    /// (the membrane's +normal side), socket carved from `part_b`. True swaps them.
+    #[serde(default)]
+    pub key_swap_sides: bool,
 }
 
 /// serde defaults for the key size (mm). Literals (not `crate::key::` constants)
@@ -414,6 +418,7 @@ fn organic_cut_contour(
             part_b,
             &split.membrane,
             crate::key::KeyShape::from_str_or_default(&options.cut.key_shape),
+            options.cut.key_swap_sides,
             options.cut.key_width_mm,
             options.cut.key_depth_mm,
             options.cut.key_fillet_mm,

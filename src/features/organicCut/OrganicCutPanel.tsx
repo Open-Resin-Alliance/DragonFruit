@@ -35,6 +35,11 @@ export interface OrganicCutPanelState {
    * false, each is independent (free oblong control).
    */
   keyUniformScale: boolean;
+  /**
+   * Flip which cut half gets the peg vs the socket. False (default): peg on the
+   * +normal side. True: swap them. Lets the user choose which part keeps the peg.
+   */
+  keySwapSides: boolean;
 }
 
 interface OrganicCutPanelProps {
@@ -379,6 +384,22 @@ export function OrganicCutPanel({
                       </button>
                     </div>
                   </div>
+                  {/* Flip which half gets the peg vs the socket. Affects the cut
+                      (not the preview shape, which is identical either way). */}
+                  <button
+                    type="button"
+                    className="ui-button ui-button-secondary !h-7 w-full whitespace-nowrap px-1.5 text-[10px]"
+                    onClick={() => setState({ keySwapSides: !state.keySwapSides })}
+                    disabled={disabled || isApplying}
+                    title="Swap which cut half receives the peg and which receives the socket."
+                  >
+                    <span className="inline-flex items-center justify-center gap-1.5">
+                      <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4" />
+                      </svg>
+                      <span>{state.keySwapSides ? 'Peg on Side B' : 'Peg on Side A'}</span>
+                    </span>
+                  </button>
                   {/* Width — frustum: sets just width; dome: ratio-locks depth
                       when Uniform Scale is on. */}
                   <div>

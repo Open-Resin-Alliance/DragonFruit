@@ -261,6 +261,20 @@ fn frame_extruding_toward_part_b(frame: &KeyFrame) -> KeyFrame {
     }
 }
 
+/// Mirror a frame so its `axis` points into part_b instead of part_a (used to
+/// flip which half gets the peg). Same construction as
+/// [`frame_extruding_toward_part_b`] — negate `axis`, swap `u`/`v` to keep a
+/// right-handed basis — but conceptually it re-roots the key on the opposite side.
+fn flip_frame_sides(frame: &KeyFrame) -> KeyFrame {
+    KeyFrame {
+        anchor: frame.anchor,
+        axis: frame.axis.scale(-1.0),
+        u: frame.v,
+        v: frame.u,
+        cut_area: frame.cut_area,
+    }
+}
+
 /// Build a tapered rectangular frustum (truncated box) in the given frame.
 ///
 /// The base rectangle (`width`×`length`) sits at `anchor` in the `u`/`v` plane;
@@ -565,18 +579,20 @@ fn decide_key(
 ///
 /// A degenerate frame, or any boolean failure, yields the parts UNCHANGED with
 /// `KeyKind::None` + a reason — a failed key must NEVER destroy the cut result.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_key(
     model: &IndexedMesh,
     part_a: IndexedMesh,
     part_b: IndexedMesh,
     membrane: &Membrane,
     shape: KeyShape,
+    swap_sides: bool,
     width_mm: f32,
     depth_mm: f32,
     fillet_mm: f32,
     tolerance: f32,
 ) -> KeyOutcome {
-    let frame = match frame_from_membrane(membrane) {
+    let frame0 = match frame_from_membrane(membrane) {
         Some(f) => f,
         None => {
             return KeyOutcome {
@@ -587,6 +603,19 @@ pub fn apply_key(
                     .to_string(),
             };
         }
+    };
+
+    // Flip which half gets the peg vs the socket. By default the peg roots in
+    // part_a (the membrane's +normal side) and protrudes into part_b's socket. To
+    // swap, mirror the placement frame (negate the axis, keeping a right-handed
+    // basis by swapping u/v) AND swap the two part roles — then the SAME downstream
+    // logic (peg onto the first arg, socket from the second) puts the peg on part_b
+    // and the socket on part_a. Geometry is otherwise identical, so the fit ladder
+    // and clearance below are unchanged.
+    let (frame, part_a, part_b) = if swap_sides {
+        (flip_frame_sides(&frame0), part_b, part_a)
+    } else {
+        (frame0, part_a, part_b)
     };
 
     // Local thickness is measured against the ORIGINAL un-cut model, NOT the split
@@ -600,9 +629,19 @@ pub fn apply_key(
     let nominal_dome = DomeDims::from_width_depth(width_mm, depth_mm);
     let plan = decide_key(&clearance, nominal, nominal_dome, shape);
 
+    // The KeyOutcome from apply_frustum/apply_dome holds (peg-half, socket-half) in
+    // (part_a, part_b). When we swapped roles above, swap them back so the returned
+    // part_a/part_b match the caller's original orientation.
+    let unswap = |mut out: KeyOutcome| -> KeyOutcome {
+        if swap_sides {
+            std::mem::swap(&mut out.part_a, &mut out.part_b);
+        }
+        out
+    };
+
     match plan {
         KeyPlan::Frustum { dims, detail } => {
-            let out = apply_frustum(part_a, part_b, &frame, dims, fillet_mm, tolerance);
+            let out = unswap(apply_frustum(part_a, part_b, &frame, dims, fillet_mm, tolerance));
             if out.kind == KeyKind::Frustum {
                 KeyOutcome { detail, ..out }
             } else {
@@ -615,7 +654,7 @@ pub fn apply_key(
             }
         }
         KeyPlan::Dome { dims, detail } => {
-            let out = apply_dome(part_a, part_b, &frame, dims, tolerance);
+            let out = unswap(apply_dome(part_a, part_b, &frame, dims, tolerance));
             if out.kind == KeyKind::Dome {
                 KeyOutcome { detail, ..out }
             } else {
@@ -626,7 +665,12 @@ pub fn apply_key(
                 }
             }
         }
-        KeyPlan::None { detail } => KeyOutcome { part_a, part_b, kind: KeyKind::None, detail },
+        // No key placed → return the parts in the CALLER's orientation. part_a/
+        // part_b here are still in swapped roles if we swapped, so put them back.
+        KeyPlan::None { detail } => {
+            let (pa, pb) = if swap_sides { (part_b, part_a) } else { (part_a, part_b) };
+            KeyOutcome { part_a: pa, part_b: pb, kind: KeyKind::None, detail }
+        }
     }
 }
 
@@ -640,12 +684,14 @@ pub fn apply_key(
 /// Returns `(soup, kind, detail)`. On no key (too thin / degenerate), the soup is
 /// empty and `detail` explains why (for the alert). `None` only if the membrane
 /// itself can't be built from the loop.
+#[allow(clippy::too_many_arguments)]
 pub fn build_key_preview_soup(
     model: &IndexedMesh,
     loop_pts: &[Vec3],
     membrane_smoothing: f32,
     density: f32,
     shape: KeyShape,
+    swap_sides: bool,
     width_mm: f32,
     depth_mm: f32,
     fillet_mm: f32,
@@ -673,7 +719,12 @@ pub fn build_key_preview_soup(
     let nominal = FrustumDims::from_width_depth(width_mm, depth_mm);
     let nominal_dome = DomeDims::from_width_depth(width_mm, depth_mm);
     let plan = decide_key(&clearance, nominal, nominal_dome, shape);
-    let build_frame = frame_extruding_toward_part_b(&frame);
+    // The build frame must MATCH what `apply_key` uses so the preview is exactly
+    // what cuts. Default: extrude the peg toward part_b. Swapped: `apply_key`
+    // mirrors the frame (flip_frame_sides) first, so do the same here — the peg
+    // then visibly points toward part_a, making the flip apparent on screen.
+    let placed = if swap_sides { flip_frame_sides(&frame) } else { frame };
+    let build_frame = frame_extruding_toward_part_b(&placed);
 
     let mut soup: Vec<f32> = Vec::new();
     let (kind, detail) = match &plan {
@@ -1201,7 +1252,7 @@ mod tests {
         let mem = flat_membrane(10.0);
 
         let a_tris_before = part_a.triangle_count();
-        let out = apply_key(&model, part_a, part_b, &mem, KeyShape::Frustum, 5.0, 5.0, 0.0, 0.1);
+        let out = apply_key(&model, part_a, part_b, &mem, KeyShape::Frustum, false, 5.0, 5.0, 0.0, 0.1);
 
         assert_eq!(out.kind, KeyKind::Frustum, "frustum key placed: {}", out.detail);
         assert!(
@@ -1211,6 +1262,30 @@ mod tests {
         // Both halves remain watertight (convertible to a manifold).
         assert!(to_manifold(&out.part_a).is_ok(), "keyed part_a is watertight");
         assert!(to_manifold(&out.part_b).is_ok(), "keyed part_b is watertight");
+    }
+
+    // Test 4b: swap_sides flips which half gets the peg — now part_B grows it (the
+    // mirror of test 4), and the returned parts keep the caller's a/b orientation.
+    #[test]
+    fn swap_sides_puts_the_peg_on_part_b() {
+        let model = axis_aligned_slab(Vec3::new(-5.0, -5.0, -10.0), Vec3::new(5.0, 5.0, 10.0));
+        let part_a = axis_aligned_slab(Vec3::new(-5.0, -5.0, 0.0), Vec3::new(5.0, 5.0, 10.0));
+        let part_b = axis_aligned_slab(Vec3::new(-5.0, -5.0, -10.0), Vec3::new(5.0, 5.0, 0.0));
+        let mem = flat_membrane(10.0);
+
+        let b_tris_before = part_b.triangle_count();
+        // swap_sides = true → peg unions onto part_b, socket carves part_a.
+        let out = apply_key(&model, part_a, part_b, &mem, KeyShape::Frustum, true, 5.0, 5.0, 0.0, 0.1);
+
+        assert_eq!(out.kind, KeyKind::Frustum, "swapped frustum key placed: {}", out.detail);
+        assert!(
+            out.part_b.triangle_count() > b_tris_before,
+            "part_b gained the peg when swapped ({} → {})",
+            b_tris_before,
+            out.part_b.triangle_count()
+        );
+        assert!(to_manifold(&out.part_a).is_ok(), "swapped part_a watertight");
+        assert!(to_manifold(&out.part_b).is_ok(), "swapped part_b watertight");
     }
 
     // Test 5: the peg fits inside the grown socket cavity (difference is empty).
@@ -1254,7 +1329,7 @@ mod tests {
         let key_d = 5.0;
         assert!(key_d > 4.0, "test premise: requested depth exceeds the part");
 
-        let out = apply_key(&model, part_a, part_b.clone(), &mem, KeyShape::Frustum, key_w, key_d, 0.0, 0.1);
+        let out = apply_key(&model, part_a, part_b.clone(), &mem, KeyShape::Frustum, false, key_w, key_d, 0.0, 0.1);
 
         assert_eq!(out.kind, KeyKind::Frustum, "still a frustum, just smaller: {}", out.detail);
         assert!(out.detail.contains("shrunk"), "reports the shrink: {:?}", out.detail);
@@ -1287,7 +1362,7 @@ mod tests {
         // ~2.0 mm deep part_b: below the frustum's depth floor (1 mm key + 1 mm
         // wall + 0.1 mm tol = 2.1 mm needed) but the shallower dome still fits.
         let (model1, pa, pb) = split_halves(20.0, 2.0);
-        let dome_out = apply_key(&model1, pa, pb, &mem, KeyShape::Frustum, 5.0, 5.0, 0.0, 0.1);
+        let dome_out = apply_key(&model1, pa, pb, &mem, KeyShape::Frustum, false, 5.0, 5.0, 0.0, 0.1);
         assert_eq!(dome_out.kind, KeyKind::Dome, "dome fallback: {}", dome_out.detail);
         assert!(
             dome_out.detail.contains("half-sphere"),
@@ -1299,7 +1374,7 @@ mod tests {
         // the parts come back UNCHANGED.
         let (model2, pa2, pb2) = split_halves(20.0, 0.5);
         let pb2_tris = pb2.triangle_count();
-        let none_out = apply_key(&model2, pa2, pb2, &mem, KeyShape::Frustum, 5.0, 5.0, 0.0, 0.1);
+        let none_out = apply_key(&model2, pa2, pb2, &mem, KeyShape::Frustum, false, 5.0, 5.0, 0.0, 0.1);
         assert_eq!(none_out.kind, KeyKind::None, "no key: {}", none_out.detail);
         assert!(none_out.detail.contains("too thin"), "no-key reason: {:?}", none_out.detail);
         assert_eq!(
@@ -1316,7 +1391,7 @@ mod tests {
         let mem = flat_membrane(10.0);
         // Plenty thick for a frustum — but we ask for a dome explicitly.
         let (model, pa, pb) = split_halves(20.0, 20.0);
-        let out = apply_key(&model, pa, pb, &mem, KeyShape::Dome, 5.0, 5.0, 0.0, 0.1);
+        let out = apply_key(&model, pa, pb, &mem, KeyShape::Dome, false, 5.0, 5.0, 0.0, 0.1);
         assert_eq!(
             out.kind,
             KeyKind::Dome,
@@ -1340,12 +1415,50 @@ mod tests {
             Vec3::new(-5.0, 5.0, 0.0),
         ];
         let (soup, kind, _detail) =
-            build_key_preview_soup(&model, &loop_pts, DEFAULT_MEMBRANE_SMOOTHING, 1.0, KeyShape::Frustum, 5.0, 5.0, 0.0, 0.1)
+            build_key_preview_soup(&model, &loop_pts, DEFAULT_MEMBRANE_SMOOTHING, 1.0, KeyShape::Frustum, false, 5.0, 5.0, 0.0, 0.1)
                 .expect("preview builds");
         assert_eq!(kind, KeyKind::Frustum, "healthy box → frustum key preview");
         assert!(!soup.is_empty(), "preview soup non-empty");
         assert_eq!(soup.len() % 9, 0, "whole triangles");
         assert!(soup.iter().all(|f| f.is_finite()), "all coords finite");
+    }
+
+    // Test 6b: the swap flag visibly flips the preview — the key's body extends to
+    // the OPPOSITE side of the cut (so the flip is apparent on screen, not a no-op).
+    #[test]
+    fn swap_flips_the_preview_key_direction() {
+        let model = axis_aligned_slab(Vec3::new(-5.0, -5.0, -10.0), Vec3::new(5.0, 5.0, 10.0));
+        let loop_pts = vec![
+            Vec3::new(-5.0, -5.0, 0.0),
+            Vec3::new(5.0, -5.0, 0.0),
+            Vec3::new(5.0, 5.0, 0.0),
+            Vec3::new(-5.0, 5.0, 0.0),
+        ];
+        // The cut is at z=0; the peg extrudes along ±z. Measure the soup's z-extent
+        // on each side of the cut for unswapped vs swapped.
+        let z_extent = |swap: bool| -> (f32, f32) {
+            let (soup, _, _) = build_key_preview_soup(
+                &model, &loop_pts, DEFAULT_MEMBRANE_SMOOTHING, 1.0, KeyShape::Frustum, swap, 5.0, 5.0, 0.0, 0.1,
+            )
+            .expect("preview builds");
+            let mut lo = f32::INFINITY;
+            let mut hi = f32::NEG_INFINITY;
+            for c in soup.chunks_exact(3) {
+                lo = lo.min(c[2]);
+                hi = hi.max(c[2]);
+            }
+            (lo, hi)
+        };
+        let (lo0, hi0) = z_extent(false);
+        let (lo1, hi1) = z_extent(true);
+        // Unswapped: peg extends mostly to ONE side; swapped: mostly to the OTHER.
+        // The body's far extent should land on opposite signs of z.
+        let far0 = if hi0.abs() > lo0.abs() { hi0 } else { lo0 };
+        let far1 = if hi1.abs() > lo1.abs() { hi1 } else { lo1 };
+        assert!(
+            far0.signum() != far1.signum(),
+            "swap flips the key to the other side of the cut (far0={far0}, far1={far1})"
+        );
     }
 
     // Test 9: the dome key (round AND oblong) is watertight and the peg fits inside
@@ -1416,7 +1529,7 @@ mod tests {
         let b_before = split.part_b.triangle_count();
 
         // Now key the REAL parts — clearance probes against the original `model`.
-        let out = apply_key(&model, split.part_a, split.part_b, &split.membrane, KeyShape::Frustum, 5.0, 5.0, 0.0, 0.1);
+        let out = apply_key(&model, split.part_a, split.part_b, &split.membrane, KeyShape::Frustum, false, 5.0, 5.0, 0.0, 0.1);
 
         assert_eq!(
             out.kind,

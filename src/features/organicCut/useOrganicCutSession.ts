@@ -161,6 +161,8 @@ const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
   // Dome Uniform Scale on by default — width/depth move together (round dome)
   // until the user unlocks it for an oblong shape.
   keyUniformScale: true,
+  // Peg on the +normal side (part A) by default; the Flip button swaps it.
+  keySwapSides: false,
 };
 
 /** Minimum points before a CONTOUR cut is possible (a real loop needs ≥3). */
@@ -391,6 +393,7 @@ export function useOrganicCutSession({
           panelState.keyDepthMm,
           panelState.keyShape,
           panelState.keyFilletMm,
+          panelState.keySwapSides,
         );
         if (cancelled) return;
         setMembranePreview(result.membrane);
@@ -403,7 +406,7 @@ export function useOrganicCutSession({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [toolActive, loop, activeGeometry, activeGeometryKey, cutMode, geodesicPolyline, isDraggingPoint, panelState.membraneSmoothing, panelState.density, panelState.thicknessMm, panelState.generateKey, panelState.keyWidthMm, panelState.keyDepthMm, panelState.keyShape, panelState.keyFilletMm]);
+  }, [toolActive, loop, activeGeometry, activeGeometryKey, cutMode, geodesicPolyline, isDraggingPoint, panelState.membraneSmoothing, panelState.density, panelState.thicknessMm, panelState.generateKey, panelState.keyWidthMm, panelState.keyDepthMm, panelState.keyShape, panelState.keyFilletMm, panelState.keySwapSides]);
 
   const addPoint = React.useCallback((point: OrganicCutLoopPoint) => {
     setLoop((prev) => [...prev, point]);
@@ -567,6 +570,7 @@ export function useOrganicCutSession({
             keyDepthMm: ps.keyDepthMm,
             keyShape: ps.keyShape,
             keyFilletMm: ps.keyFilletMm,
+            keySwapSides: ps.keySwapSides,
           };
         } else {
           // Compute the plane from the SAME helper the preview uses, so the cut

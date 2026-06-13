@@ -87,6 +87,8 @@ export interface OrganicCutSpec {
   keyShape?: 'frustum' | 'dome';
   /** Edge fillet radius in mm (rounds frustum corners + tip). Serde: `keyFilletMm`. */
   keyFilletMm?: number;
+  /** Flip which half gets the peg vs the socket. Serde field: `keySwapSides`. */
+  keySwapSides?: boolean;
 }
 
 export interface OrganicCutOptions {

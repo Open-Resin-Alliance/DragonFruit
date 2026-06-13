@@ -274,6 +274,7 @@ export async function computeMembranePreview(
   keyDepthMm = 2.5,
   keyShape: 'frustum' | 'dome' = 'frustum',
   keyFilletMm = 0.0,
+  keySwapSides = false,
 ): Promise<MembranePreviewResult> {
   const empty: MembranePreviewResult = {
     membrane: null,
@@ -296,6 +297,7 @@ export async function computeMembranePreview(
     keyDepthMm,
     keyShape,
     keyFilletMm,
+    keySwapSides,
   });
   try {
     const reportJson = await core.invoke<string>('mesh_organic_cut_membrane_preview', { requestJson });
