@@ -11,6 +11,7 @@ import {
 } from './filtering';
 import { clusterWalkOrder } from './ordering';
 import { buildIslandPucks } from './islandPuckMarkers';
+import { scanMeshMinima } from './meshMinima';
 import type { DetectedIsland } from './types';
 
 /**
@@ -46,7 +47,8 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number } | null>(null);
   const [voxelIslands, setVoxelIslands] = useState<DetectedIsland[]>([]);
-  // (Part B) minimaIslands; (Part C) intersection classification.
+  const [minimaIslands, setMinimaIslands] = useState<DetectedIsland[]>([]);
+  // (Part C) intersection classification across voxel + minima.
 
   // Scan params (surfaced in the advanced modal).
   const [pxMm, setPxMm] = useState(0.05);
@@ -56,8 +58,9 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   // Filter toggles — default ON ⇒ supported/grounded islands hidden (and skipped by ←/→).
   const [filterToggles, setFilterToggles] = useState<IslandFilterToggles>(DEFAULT_FILTER_TOGGLES);
 
-  // Overlay visibility (Part A: voxel blue only; B/C add green minima / red intersection / exclusions).
+  // Overlay visibility (blue voxel + green minima; Part C adds red intersection / exclusions).
   const [showVoxel, setShowVoxel] = useState(true);
+  const [showMinima, setShowMinima] = useState(true);
 
   const [selectedMarkerId, setSelectedMarkerId] = useState<number | null>(null);
 
@@ -87,7 +90,13 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     return { positions, bbox: soup.boundingBox! };
   }, [geom, transform]);
 
-  const onRunVoxelScan = useCallback(async () => {
+  /**
+   * Run BOTH detectors on the same world-space positions (one shared transform →
+   * one frame → directly comparable for Part C). Voxel uses the scanline worker
+   * pool; minima is a single Rust IPC call. A minima failure (e.g. non-Tauri
+   * context) is non-fatal — voxel results still stand.
+   */
+  const onRunScan = useCallback(async () => {
     const world = prepareWorldGeom();
     if (!world) return;
     setScanning(true);
@@ -101,17 +110,25 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         supportBufferMm: supportBufMm,
         connectivity,
       };
-      const result = await detectVoxelIslands(world, layerHeightMm, params, (done, total) =>
+      const voxel = await detectVoxelIslands(world, layerHeightMm, params, (done, total) =>
         setScanProgress({ done, total }),
       );
-      setVoxelIslands(result);
+      setVoxelIslands(voxel);
+
+      try {
+        const minima = await scanMeshMinima(world.positions);
+        setMinimaIslands(minima);
+      } catch (err) {
+        console.error('[Islands] mesh-minima scan failed', err);
+        setMinimaIslands([]);
+      }
     } finally {
       setScanning(false);
     }
   }, [prepareWorldGeom, layerHeightMm, pxMm, supportBufMm, connectivity]);
 
-  // Part A: voxel only. (Part C) const allIslands = [...voxelIslands, ...minimaIslands] + classify.
-  const allIslands = voxelIslands;
+  // Voxel + mesh-minima, unified. (Part C) adds intersection classification here.
+  const allIslands = useMemo(() => [...voxelIslands, ...minimaIslands], [voxelIslands, minimaIslands]);
 
   // Annotate supported/grounded flags, then apply the visibility toggles. Work on
   // shallow copies so React state objects aren't mutated (contact Vector3 is shared, never mutated).
@@ -126,14 +143,19 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     [filteredIslands, pxMm],
   );
 
-  // Blue voxel pucks for the IslandOverlay layer.
+  // Per-source pucks for the IslandOverlay layers (blue voxel / green minima).
   const voxelPucks = useMemo(
     () => buildIslandPucks(filteredIslands.filter((i) => i.source === 'voxel')),
+    [filteredIslands],
+  );
+  const minimaPucks = useMemo(
+    () => buildIslandPucks(filteredIslands.filter((i) => i.source === 'minima')),
     [filteredIslands],
   );
 
   const clear = useCallback(() => {
     setVoxelIslands([]);
+    setMinimaIslands([]);
     setSelectedMarkerId(null);
   }, []);
 
@@ -141,9 +163,11 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     scanning,
     scanProgress,
     voxelIslands,
+    minimaIslands,
     filteredIslands,
     orderedIslands,
     voxelPucks,
+    minimaPucks,
     pxMm,
     setPxMm,
     supportBufMm,
@@ -154,9 +178,11 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     setFilterToggles,
     showVoxel,
     setShowVoxel,
+    showMinima,
+    setShowMinima,
     selectedMarkerId,
     setSelectedMarkerId,
-    onRunVoxelScan,
+    onRunScan,
     clear,
   };
 }

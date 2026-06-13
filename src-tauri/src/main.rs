@@ -2,6 +2,7 @@
 
 mod astar;
 mod mesh_repair;
+mod mesh_minima;
 mod network;
 mod sdf;
 fn default_minimum_aa_alpha_percent() -> f32 {
@@ -3211,6 +3212,7 @@ fn main() {
             slice_solid_native_to_temp_path,
             cancel_slicing,
             run_island_scan_native,
+            mesh_minima::scan_mesh_minima,
             export_mesh_file,
             save_print_file,
             save_print_file_from_path,

@@ -4,6 +4,7 @@ import React from 'react';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import type { UseIslandsReturn } from '@/volumeAnalysis/Islands/useIslands';
+import { ISLAND_LAYER_COLORS } from '@/volumeAnalysis/Islands/islandPuckMarkers';
 
 interface IslandsPanelProps {
   islands: UseIslandsReturn;
@@ -23,8 +24,11 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
     scanProgress,
     filteredIslands,
     voxelIslands,
+    minimaIslands,
     showVoxel,
     setShowVoxel,
+    showMinima,
+    setShowMinima,
     filterToggles,
     setFilterToggles,
     pxMm,
@@ -34,8 +38,10 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
   } = islands;
 
   const shownCount = filteredIslands.length;
-  const totalCount = voxelIslands.length;
+  const totalCount = voxelIslands.length + minimaIslands.length;
   const hiddenCount = totalCount - shownCount;
+  const voxelShown = filteredIslands.filter((i) => i.source === 'voxel').length;
+  const minimaShown = filteredIslands.filter((i) => i.source === 'minima').length;
 
   return (
     <Card>
@@ -76,7 +82,7 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
         <div className="px-2.5 pt-2 pb-3 space-y-2.5">
           <button
             type="button"
-            onClick={() => { void islands.onRunVoxelScan(); }}
+            onClick={() => { void islands.onRunScan(); }}
             disabled={!hasGeometry || scanning}
             className="h-8 w-full rounded-md border px-2.5 text-[11px] font-semibold uppercase tracking-wide transition-colors disabled:opacity-50"
             style={{
@@ -93,8 +99,8 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
 
           {totalCount > 0 && (
             <div className="ui-meta">
-              {shownCount} shown
-              {hiddenCount > 0 ? ` · ${hiddenCount} filtered (supported / plate-contact)` : ''}
+              {voxelShown} voxel · {minimaShown} minima
+              {hiddenCount > 0 ? ` · ${hiddenCount} filtered` : ''}
             </div>
           )}
 
@@ -148,9 +154,23 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
             />
             <span
               className="inline-block w-2.5 h-2.5 rounded-full"
-              style={{ background: '#3b82f6' }}
+              style={{ background: ISLAND_LAYER_COLORS.voxel }}
             />
             <span className="ui-meta">Show voxel islands</span>
+          </label>
+
+          <label className="flex items-center gap-1.5 py-1 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showMinima}
+              onChange={(e) => setShowMinima(e.target.checked)}
+              className="ui-checkbox !w-4 !h-4"
+            />
+            <span
+              className="inline-block w-2.5 h-2.5 rounded-full"
+              style={{ background: ISLAND_LAYER_COLORS.minima }}
+            />
+            <span className="ui-meta">Show mesh minima islands</span>
           </label>
 
           <div className="space-y-1.5 pt-1.5 border-t" style={{ borderColor: 'var(--border-subtle)' }}>

@@ -19449,6 +19449,16 @@ export default function Home() {
                 selectedIslandId={islandsPoc.selectedMarkerId ?? null}
               />
             )}
+            {scene.mode === 'support' && islandsPoc.showMinima && (
+              <IslandOverlay
+                key="islands-poc-minima"
+                markers={islandsPoc.minimaPucks.markers}
+                brushRadiusMm={0.5}
+                color={ISLAND_LAYER_COLORS.minima}
+                opacity={PUCK_OPACITY}
+                selectedIslandId={islandsPoc.selectedMarkerId ?? null}
+              />
+            )}
           </SceneCanvas>
 
           {/* Transform Toolbar */}
