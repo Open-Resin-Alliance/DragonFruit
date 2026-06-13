@@ -88,7 +88,7 @@ import { SupportPainterPanel } from '@/features/supportPainter/components/Suppor
 import { setClipBounds } from './clipBoundsStore';
 import { FailureDiagnosticsOverlay } from '@/features/supportPainter/components/FailureDiagnosticsOverlay';
 import { useIsLinux } from '@/hooks/usePlatform';
-import { useSupportPainterManager } from '@/features/supportPainter/useSupportPainterManager';
+import { useSupportPainterManager, SupportPainterInteractionController } from '@/features/supportPainter/useSupportPainterManager';
 import { supportPainterStore, useSupportPainterState } from '@/features/supportPainter/supportPainterStore';
 import {
   DEFAULT_CAMERA_PROJECTION_SETTINGS,
@@ -5006,6 +5006,13 @@ export function SceneCanvas({
           {/* Selection Provider - manages model selection state */}
           <SelectionProvider initialSelection={activeModelId || 'default-model'}>
             <SelectionSync activeModelId={activeModelId ?? null} />
+            {painterState.isActive && (
+              <SupportPainterInteractionController
+                activeModelId={activeModelId}
+                geometry={activeModelGeom}
+                meshResolver={getActiveMesh}
+              />
+            )}
             {/* Selection Manager - handles click-to-select/deselect logic */}
             <SelectionManager enabled={cameraInteractionCycleEnabled && mode === 'prepare'} mode={mode} handleCanvasDeselect={false} />
 

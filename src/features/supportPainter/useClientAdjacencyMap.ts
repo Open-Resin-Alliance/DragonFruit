@@ -8,6 +8,12 @@ export interface ClientAdjacencyMap {
   faceCentroids: THREE.Vector3[];
   faceZBounds: { min: number; max: number }[];
   macroNormalsCache?: Map<number, THREE.Vector3[]>;
+  _topology?: {
+    vertexPositions: THREE.Vector3[];
+    faceVertices: [number, number, number][];
+    edgeMap: Map<string, any>;
+    vertexEdges: Set<string>[];
+  };
 }
 
 /**
@@ -1578,60 +1584,74 @@ export function walkSharpCorner(
   const positions = positionAttr.array;
   const faceCount = positionAttr.count / 3;
 
-  const vertexMap = new Map<string, number>();
-  const vertexPositions: THREE.Vector3[] = [];
-
-  const getVertexId = (x: number, y: number, z: number): number => {
-    const key = `${Math.round(x * 100000)},${Math.round(y * 100000)},${Math.round(z * 100000)}`;
-    let id = vertexMap.get(key);
-    if (id === undefined) {
-      id = vertexPositions.length;
-      vertexMap.set(key, id);
-      vertexPositions.push(new THREE.Vector3(x, y, z));
-    }
-    return id;
-  };
-
-  const faceVertices: [number, number, number][] = [];
-  for (let f = 0; f < faceCount; f++) {
-    const o = f * 9;
-    const v0 = getVertexId(positions[o], positions[o + 1], positions[o + 2]);
-    const v1 = getVertexId(positions[o + 3], positions[o + 4], positions[o + 5]);
-    const v2 = getVertexId(positions[o + 6], positions[o + 7], positions[o + 8]);
-    faceVertices.push([v0, v1, v2]);
-  }
-
   interface EdgeInfo {
     id: string;
     v0: number;
     v1: number;
     faces: number[];
   }
-  const edgeMap = new Map<string, EdgeInfo>();
-  const vertexEdges = Array.from({ length: vertexPositions.length }, () => new Set<string>());
 
-  const addFaceEdge = (v0: number, v1: number, faceIdx: number) => {
-    const minV = Math.min(v0, v1);
-    const maxV = Math.max(v0, v1);
-    const key = `${minV}_${maxV}`;
-    let edge = edgeMap.get(key);
-    if (!edge) {
-      edge = { id: key, v0: minV, v1: maxV, faces: [] };
-      edgeMap.set(key, edge);
-      vertexEdges[minV].add(key);
-      vertexEdges[maxV].add(key);
-    }
-    if (!edge.faces.includes(faceIdx)) {
-      edge.faces.push(faceIdx);
-    }
-  };
+  let topology = map._topology;
+  if (!topology) {
+    const vertexMap = new Map<string, number>();
+    const vertexPositions: THREE.Vector3[] = [];
 
-  for (let f = 0; f < faceCount; f++) {
-    const [v0, v1, v2] = faceVertices[f];
-    addFaceEdge(v0, v1, f);
-    addFaceEdge(v1, v2, f);
-    addFaceEdge(v2, v0, f);
+    const getVertexId = (x: number, y: number, z: number): number => {
+      const key = `${Math.round(x * 100000)},${Math.round(y * 100000)},${Math.round(z * 100000)}`;
+      let id = vertexMap.get(key);
+      if (id === undefined) {
+        id = vertexPositions.length;
+        vertexMap.set(key, id);
+        vertexPositions.push(new THREE.Vector3(x, y, z));
+      }
+      return id;
+    };
+
+    const faceVertices: [number, number, number][] = [];
+    for (let f = 0; f < faceCount; f++) {
+      const o = f * 9;
+      const v0 = getVertexId(positions[o], positions[o + 1], positions[o + 2]);
+      const v1 = getVertexId(positions[o + 3], positions[o + 4], positions[o + 5]);
+      const v2 = getVertexId(positions[o + 6], positions[o + 7], positions[o + 8]);
+      faceVertices.push([v0, v1, v2]);
+    }
+
+    const edgeMap = new Map<string, EdgeInfo>();
+    const vertexEdges = Array.from({ length: vertexPositions.length }, () => new Set<string>());
+
+    const addFaceEdge = (v0: number, v1: number, faceIdx: number) => {
+      const minV = Math.min(v0, v1);
+      const maxV = Math.max(v0, v1);
+      const key = `${minV}_${maxV}`;
+      let edge = edgeMap.get(key);
+      if (!edge) {
+        edge = { id: key, v0: minV, v1: maxV, faces: [] };
+        edgeMap.set(key, edge);
+        vertexEdges[minV].add(key);
+        vertexEdges[maxV].add(key);
+      }
+      if (!edge.faces.includes(faceIdx)) {
+        edge.faces.push(faceIdx);
+      }
+    };
+
+    for (let f = 0; f < faceCount; f++) {
+      const [v0, v1, v2] = faceVertices[f];
+      addFaceEdge(v0, v1, f);
+      addFaceEdge(v1, v2, f);
+      addFaceEdge(v2, v0, f);
+    }
+
+    topology = {
+      vertexPositions,
+      faceVertices,
+      edgeMap,
+      vertexEdges,
+    };
+    map._topology = topology;
   }
+
+  const { vertexPositions, faceVertices, edgeMap, vertexEdges } = topology;
 
   const getEdgeDihedral = (edge: EdgeInfo): number => {
     if (edge.faces.length === 0) return 0;
@@ -1827,4 +1847,78 @@ export function walkSharpCorner(
   }
 
   return result;
+}
+
+export function expandPathWithDijkstra(
+  map: ClientAdjacencyMap,
+  controlPoints: { point: [number, number, number]; faceIndex: number; normal?: [number, number, number] }[],
+  isClosed: boolean
+): { point: [number, number, number]; faceIndex: number; normal: [number, number, number] | undefined }[] {
+  if (controlPoints.length === 0) return [];
+  if (controlPoints.length === 1) {
+    const cp = controlPoints[0];
+    return [{
+      point: cp.point,
+      faceIndex: cp.faceIndex,
+      normal: cp.normal || [map.faceNormals[cp.faceIndex].x, map.faceNormals[cp.faceIndex].y, map.faceNormals[cp.faceIndex].z]
+    }];
+  }
+
+  const expanded: { point: [number, number, number]; faceIndex: number; normal: [number, number, number] | undefined }[] = [];
+
+  for (let i = 0; i < controlPoints.length - 1; i++) {
+    const cp0 = controlPoints[i];
+    const cp1 = controlPoints[i + 1];
+
+    const facePath = findDijkstraFacePath(map, cp0.faceIndex, cp1.faceIndex, 1.0);
+    
+    for (let j = 0; j < facePath.length; j++) {
+      const faceIdx = facePath[j];
+      let pt: [number, number, number];
+      let norm: [number, number, number];
+
+      if (j === 0) {
+        pt = cp0.point;
+        norm = cp0.normal || [map.faceNormals[faceIdx].x, map.faceNormals[faceIdx].y, map.faceNormals[faceIdx].z];
+      } else if (j === facePath.length - 1) {
+        continue;
+      } else {
+        const centroid = map.faceCentroids[faceIdx];
+        const normal = map.faceNormals[faceIdx];
+        pt = [centroid.x, centroid.y, centroid.z];
+        norm = [normal.x, normal.y, normal.z];
+      }
+
+      expanded.push({
+        point: pt,
+        faceIndex: faceIdx,
+        normal: norm
+      });
+    }
+  }
+
+  const lastCp = controlPoints[controlPoints.length - 1];
+  expanded.push({
+    point: lastCp.point,
+    faceIndex: lastCp.faceIndex,
+    normal: lastCp.normal || [map.faceNormals[lastCp.faceIndex].x, map.faceNormals[lastCp.faceIndex].y, map.faceNormals[lastCp.faceIndex].z]
+  });
+
+  if (isClosed && controlPoints.length >= 3) {
+    const cp0 = controlPoints[0];
+    const facePath = findDijkstraFacePath(map, lastCp.faceIndex, cp0.faceIndex, 1.0);
+
+    for (let j = 1; j < facePath.length - 1; j++) {
+      const faceIdx = facePath[j];
+      const centroid = map.faceCentroids[faceIdx];
+      const normal = map.faceNormals[faceIdx];
+      expanded.push({
+        point: [centroid.x, centroid.y, centroid.z],
+        faceIndex: faceIdx,
+        normal: [normal.x, normal.y, normal.z]
+      });
+    }
+  }
+
+  return expanded;
 }

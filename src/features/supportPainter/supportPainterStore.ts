@@ -21,7 +21,7 @@ import {
   upgradePipeline,
   arePipelinesEquivalent,
 } from './supportPainterTypes';
-import { type ClientAdjacencyMap, proposeRegionOnClient } from './useClientAdjacencyMap';
+import { type ClientAdjacencyMap, proposeRegionOnClient, expandPathWithDijkstra } from './useClientAdjacencyMap';
 import { deserializeROIsFromVoxl } from './voxlCodec';
 import { getPresetById, importCustomPreset, getPresetList } from '@/supports/Settings/presets';
 import { getSnapshot as getSupportSnapshot, setSnapshot as setSupportSnapshot } from '@/supports/state';
@@ -2187,11 +2187,17 @@ export const supportPainterStore = {
       placementScriptId: scriptId,
       modelId: activeModelId ?? undefined,
       vectorPath: isVectorBrush
-        ? pointPathPoints.map(p => ({
-            point: [...p.point] as [number, number, number],
-            normal: p.normal ? [...p.normal] as [number, number, number] : undefined,
-            faceIndex: p.faceIndex
-          }))
+        ? (() => {
+            const rawPath = pointPathPoints.map(p => ({
+              point: [...p.point] as [number, number, number],
+              normal: p.normal ? [...p.normal] as [number, number, number] : undefined,
+              faceIndex: p.faceIndex
+            }));
+            if (clientAdjacencyMap && brush !== 'SharpCorner') {
+              return expandPathWithDijkstra(clientAdjacencyMap, rawPath, pointPathClosed);
+            }
+            return rawPath;
+          })()
         : undefined,
     };
 

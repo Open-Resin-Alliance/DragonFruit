@@ -29,7 +29,7 @@ export default function VectorPathOverlay({ modelId }: VectorPathOverlayProps) {
           const v = new THREE.Vector3(...pt.point);
           if (pt.normal) {
             const n = new THREE.Vector3(...pt.normal).normalize();
-            v.addScaledVector(n, 0.05); // Offset by 0.05mm along surface normal to prevent Z-fighting
+            v.addScaledVector(n, 0.15); // Offset by 0.15mm along surface normal to prevent Z-fighting and convex surface clipping
           }
           return v;
         });

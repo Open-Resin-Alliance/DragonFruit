@@ -4,6 +4,7 @@ import { useFrame } from '@react-three/fiber';
 import { Line } from '@react-three/drei';
 import { useSupportPainterState } from '@/features/supportPainter/supportPainterStore';
 import { PointPathMarker } from './PointPathMarker';
+import { expandPathWithDijkstra } from '@/features/supportPainter/useClientAdjacencyMap';
 
 /**
  * High-Performance Viewport Overlay for Point Path and Point Perimeter drawing mode.
@@ -12,7 +13,7 @@ import { PointPathMarker } from './PointPathMarker';
  * when loop closure is within connecting range.
  */
 export default function PointPathOverlay({ matrixWorld }: { matrixWorld?: THREE.Matrix4 }) {
-  const { activeBrush, pointPathPoints, pointPathMode, hoveredWorldPoint } = useSupportPainterState();
+  const { activeBrush, pointPathPoints, pointPathMode, hoveredWorldPoint, clientAdjacencyMap, pointPathClosed } = useSupportPainterState();
 
   // Reference lists of shader materials to animate uniforms
   const firstPointShaderRef = useRef<THREE.ShaderMaterial>(null);
@@ -56,19 +57,33 @@ export default function PointPathOverlay({ matrixWorld }: { matrixWorld?: THREE.
 
   // Line segment path rendering setup
   const linePoints = useMemo(() => {
-    const pts = pointPathPoints.map((pt) => {
+    let path = pointPathPoints.map(p => ({
+      point: [...p.point] as [number, number, number],
+      faceIndex: p.faceIndex,
+      normal: p.normal ? [...p.normal] as [number, number, number] : undefined,
+    }));
+
+    if (clientAdjacencyMap && activeBrush !== 'SharpCorner') {
+      const isClosed = (pointPathMode === 'polygon' || activeBrush === 'PointPerimeter');
+      path = expandPathWithDijkstra(clientAdjacencyMap, path, isClosed);
+    }
+
+    const pts = path.map((pt) => {
       const v = new THREE.Vector3(...pt.point);
       if (pt.normal) {
         const n = new THREE.Vector3(...pt.normal).normalize();
-        v.addScaledVector(n, 0.05); // Offset by 0.05mm along normal to prevent Z-fighting
+        v.addScaledVector(n, 0.15); // Offset by 0.15mm along normal to prevent Z-fighting and convex surface clipping
       }
       return v;
     });
-    if ((pointPathMode === 'polygon' || activeBrush === 'PointPerimeter') && pts.length >= 3) {
+
+    const isClosedPath = (pointPathMode === 'polygon' || activeBrush === 'PointPerimeter');
+    if (isClosedPath && pts.length >= 3) {
       pts.push(pts[0].clone());
     }
+
     return pts;
-  }, [pointPathPoints, pointPathMode, activeBrush]);
+  }, [pointPathPoints, pointPathMode, activeBrush, clientAdjacencyMap]);
 
   // Handle other points shader refs array allocations
   const registerOtherShaderRef = (index: number) => (el: THREE.ShaderMaterial | null) => {
@@ -123,7 +138,7 @@ export default function PointPathOverlay({ matrixWorld }: { matrixWorld?: THREE.
         const pos = new THREE.Vector3(...pt.point);
         if (pt.normal) {
           const n = new THREE.Vector3(...pt.normal).normalize();
-          pos.addScaledVector(n, 0.05); // Offset by 0.05mm along normal
+          pos.addScaledVector(n, 0.15); // Offset by 0.15mm along normal
         }
 
         return (
