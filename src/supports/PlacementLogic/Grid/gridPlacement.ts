@@ -451,16 +451,11 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
             nodeKey,
         );
     if (!host) {
-        // Preview: trust the A* pathfinder's collision validation — defer the
-        // expensive segment-level raycast to click time.
-        let collidesWithGroundRoute = false;
-        if (args.isPreview) {
-            // Skip — no collision check in preview.
-        } else {
-            perfMark('grid:trunk-collision');
-            collidesWithGroundRoute = Boolean(mesh && trunkCollidesWithMesh(snappedCandidate, settings, mesh));
-            perfMeasureWithSpike('grid:trunk-collision', 'grid:collision-check');
-        }
+        // Grid-mode trunk candidates are built without the flexible mesh router,
+        // so preview and click must share this collision gate.
+        perfMark('grid:trunk-collision');
+        const collidesWithGroundRoute = Boolean(mesh && trunkCollidesWithMesh(snappedCandidate, settings, mesh));
+        perfMeasureWithSpike('grid:trunk-collision', 'grid:collision-check');
         if (!collidesWithGroundRoute) {
             return {
                 kind: 'place_trunk',
