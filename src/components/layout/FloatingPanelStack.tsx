@@ -76,6 +76,7 @@ const PANEL_WIDTH_OVERRIDES: Record<string, number> = {
   'visual-settings': 48,
   'prepare-smoothing-settings': 340,
   'transform-debug-overlay': 420,
+  'support-painter-panel': 320,
 };
 const PANEL_SCALE_EXEMPT_IDS = new Set<string>(['support-settings']);
 const LOCKED_PANEL_IDS = new Set<string>(['visual-settings']);
@@ -662,7 +663,10 @@ function FloatingPanelItem({
         rightClickGestureRef.current = null;
       }}
     >
-      <div className="w-full flex-1 min-h-0 flex flex-col [&>*]:!w-full [&>*]:max-h-full [&>*]:flex-1 [&>*]:min-h-0">
+      <div className={maxHeight !== undefined
+        ? "w-full flex-1 min-h-0 flex flex-col [&>*]:!w-full [&>*]:max-h-full [&>*]:flex-1 [&>*]:min-h-0"
+        : "w-full [&>*]:!w-full"}
+      >
         {children}
       </div>
     </div>
@@ -1445,6 +1449,9 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
         let customMaxHeight: number | undefined;
         if (panelId === 'support-painter-tooltip') {
           customMaxHeight = Math.max(120, containerSize.height - panelPosition.y - 160);
+        }
+        if (panelId === 'support-painter-panel') {
+          customMaxHeight = Math.max(200, containerSize.height - 40);
         }
 
         return entry.node ? (

@@ -142,6 +142,7 @@ export function SupportPainterTooltipCard({ mode }: SupportPainterTooltipCardPro
       {/* Premium Cased Rollup Header */}
       <div
         onClick={() => setIsCollapsed(!isCollapsed)}
+        data-panel-drag-handle="true"
         className="flex items-center justify-between px-3.5 py-2 cursor-pointer select-none flex-shrink-0"
         style={{
           borderBottom: isCollapsed ? 'none' : '1px solid rgba(45, 55, 72, 0.25)',

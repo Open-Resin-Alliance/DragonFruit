@@ -932,7 +932,17 @@ function _recomputeTriangleColorMap(): TriangleColorMap {
   return map;
 }
 
+let activeMeshGetter: (() => THREE.Mesh | null) | null = null;
+
 export const supportPainterStore = {
+  registerActiveMeshGetter(getter: () => THREE.Mesh | null) {
+    activeMeshGetter = getter;
+  },
+
+  getActiveMesh(): THREE.Mesh | null {
+    return activeMeshGetter ? activeMeshGetter() : null;
+  },
+
   getSnapshot(): SupportPainterState {
     return storeSnapshot;
   },

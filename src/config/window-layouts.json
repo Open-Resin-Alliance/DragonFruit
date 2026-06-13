@@ -285,8 +285,8 @@
     },
     {
       "id": "support",
-      "matchPanelIds": ["support-settings"],
-      "order": ["visual-settings", "support-settings"],
+      "matchPanelIds": ["support-settings", "support-painter-panel"],
+      "order": ["support-painter-panel", "visual-settings", "support-settings"],
       "anchors": {
         "visual-settings": {
           "to": "support-settings",
@@ -300,8 +300,8 @@
     },
     {
       "id": "support-painter",
-      "matchPanelIds": ["support-settings", "support-painter-tooltip"],
-      "order": ["visual-settings", "support-settings", "support-painter-tooltip"],
+      "matchPanelIds": ["support-settings", "support-painter-panel", "support-painter-tooltip"],
+      "order": ["support-painter-panel", "visual-settings", "support-settings", "support-painter-tooltip"],
       "anchors": {
         "visual-settings": {
           "to": "support-settings",

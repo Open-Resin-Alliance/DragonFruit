@@ -210,11 +210,9 @@ function getSupportTips(supportState: any, activeModelId: string): THREE.Vector3
 
 export function SupportPainterPanel({
   activeModelId,
-  getActiveMesh,
   onModeChange,
 }: {
   activeModelId?: string | null;
-  getActiveMesh?: () => THREE.Mesh | null;
   onModeChange?: (mode: 'support' | 'supportPainter') => void;
 }) {
   const state = useSupportPainterState();
@@ -484,8 +482,8 @@ export function SupportPainterPanel({
   };
 
   const handleGenerate = async () => {
-    if (!activeModelId || !getActiveMesh || pendingRegions.length === 0) return;
-    const mesh = getActiveMesh();
+    const mesh = supportPainterStore.getActiveMesh();
+    if (!activeModelId || !mesh || pendingRegions.length === 0) return;
     if (!mesh) return;
 
     setIsGenerating(true);
@@ -668,7 +666,7 @@ export function SupportPainterPanel({
   };
 
   const handleRecalculateRegions = async (regionIds: string[]) => {
-    const activeMesh = getActiveMesh?.();
+    const activeMesh = supportPainterStore.getActiveMesh();
     if (!activeModelId || !activeMesh || regionIds.length === 0) return;
 
     setIsGenerating(true);
@@ -723,7 +721,7 @@ export function SupportPainterPanel({
     setIsScanning(true);
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const activeMesh = getActiveMesh?.();
+      const activeMesh = supportPainterStore.getActiveMesh();
       if (!activeMesh) {
         throw new Error('Active mesh not available');
       }
@@ -1479,7 +1477,7 @@ export function SupportPainterPanel({
                     onClick={() => {
                       const firstPt = state.pointPathPoints[0];
                       if (firstPt) {
-                        const activeMesh = getActiveMesh?.();
+                        const activeMesh = supportPainterStore.getActiveMesh();
                         supportPainterStore.setPointPathClosed(true);
                         const newId = supportPainterStore.commitPointPathRegion({
                           seedTriangleId: firstPt.faceIndex,
@@ -2352,7 +2350,7 @@ export function SupportPainterPanel({
                       variant="secondary"
                       size="sm"
                       onClick={async () => {
-                        const activeMesh = getActiveMesh?.();
+                        const activeMesh = supportPainterStore.getActiveMesh();
                         if (activeModelId && activeMesh && completedRegions.length > 0) {
                           const allIds = completedRegions.map(r => r.id);
                           await handleRecalculateRegions(allIds);
@@ -2395,7 +2393,7 @@ export function SupportPainterPanel({
                         const script = state.placementScripts.get(scriptId);
                         if (script) {
                           supportPainterStore.updateRegionCustomBrush(firstSelectedRegion.id, JSON.parse(JSON.stringify(script.operations)), scriptId);
-                          const activeMesh = getActiveMesh?.();
+                          const activeMesh = supportPainterStore.getActiveMesh();
                           if (activeModelId && activeMesh) {
                             void regenerateSupportsForRoi(activeModelId, activeMesh, firstSelectedRegion.id);
                           }
@@ -2738,7 +2736,7 @@ export function SupportPainterPanel({
                 } finally {
                   endSupportStateBatch();
                 }
-                const activeMesh = getActiveMesh?.();
+                const activeMesh = supportPainterStore.getActiveMesh();
                 if (activeModelId && activeMesh) {
                   const targetRegions = selectedIds.map(id => state.regions.get(id)).filter(Boolean) as ROIRegion[];
                   setIsGenerating(true);
@@ -2761,7 +2759,7 @@ export function SupportPainterPanel({
                 const activeSelected = state.selectedRegionId ? state.regions.get(state.selectedRegionId) : null;
                 if (activeSelected) {
                   supportPainterStore.updateRegionCustomBrush(activeSelected.id, editingPipeline, editingPlacementScriptId);
-                  const activeMesh = getActiveMesh?.();
+                  const activeMesh = supportPainterStore.getActiveMesh();
                   if (activeModelId && activeMesh) {
                     void regenerateSupportsForRoi(activeModelId, activeMesh, activeSelected.id);
                   }
