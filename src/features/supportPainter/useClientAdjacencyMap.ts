@@ -15,125 +15,102 @@ export interface ClientAdjacencyMap {
     edgeMap: Map<string, any>;
     vertexEdges: Set<string>[];
   };
+  faceToFacesFlat?: Int32Array;
+  faceNormalsFlat?: Float32Array;
+  faceCentroidsFlat?: Float32Array;
+  faceZBoundsFlat?: Float32Array;
+  _macroNormalsFlatCache?: Map<number, Float32Array>;
 }
 
-/**
- * Builds a high-performance face adjacency map and spatial cache on the client side
- * directly from the Three.js BufferGeometry, in LOCAL SPACE to ensure 100% robustness
- * against transform timing, scales, and rotation states.
- */
-export function buildClientAdjacencyMap(geometry: THREE.BufferGeometry): ClientAdjacencyMap {
-  let geom = geometry;
-  let needsDispose = false;
+export function wrapFlatAdjacencyMap(
+  faceCount: number,
+  faceToFacesFlat: Int32Array,
+  faceNormalsFlat: Float32Array,
+  faceCentroidsFlat: Float32Array,
+  faceZBoundsFlat: Float32Array,
+  positions: Float32Array | ArrayLike<number>
+): ClientAdjacencyMap {
+  const cachedFaceToFaces = new Array(faceCount);
+  const cachedFaceNormals = new Array(faceCount);
+  const cachedFaceCentroids = new Array(faceCount);
+  const cachedFaceZBounds = new Array(faceCount);
 
-  if (geometry.index) {
-    console.log('[useClientAdjacencyMap] Converting indexed geometry to non-indexed for accurate adjacency map building');
-    try {
-      geom = geometry.toNonIndexed();
-      needsDispose = true;
-    } catch (err) {
-      console.error('[useClientAdjacencyMap] Failed to convert indexed geometry to non-indexed', err);
-    }
-  }
+  // Use flat, filled dummy arrays as Proxy targets so that built-in methods (.map, .forEach, etc.) work correctly
+  const faceToFaces = new Proxy(new Array(faceCount).fill(undefined), {
+    get(target, prop) {
+      if (prop === 'length') return faceCount;
+      const idx = Number(prop);
+      if (isNaN(idx) || idx < 0 || idx >= faceCount) return (target as any)[prop];
 
-  const posAttr = geom.getAttribute('position') as THREE.BufferAttribute;
-  if (!posAttr) {
-    if (needsDispose) geom.dispose();
-    return { faceCount: 0, faceToFaces: [], faceNormals: [], faceCentroids: [], faceZBounds: [] };
-  }
-  const positions = posAttr.array;
-  const faceCount = posAttr.count / 3;
-
-  const faceToFaces: number[][] = Array.from({ length: faceCount }, () => []);
-  const faceNormals: THREE.Vector3[] = [];
-  const faceCentroids: THREE.Vector3[] = [];
-  const faceZBounds: { min: number; max: number }[] = [];
-
-  // Quantization key for vertex welding (5 decimal places, 1e-5 mm tolerance)
-  const vertexToFacesMap = new Map<string, number[]>();
-
-  const v0 = new THREE.Vector3();
-  const v1 = new THREE.Vector3();
-  const v2 = new THREE.Vector3();
-  const edge1 = new THREE.Vector3();
-  const edge2 = new THREE.Vector3();
-
-  const getVertexKey = (x: number, y: number, z: number): string => {
-    return `${Math.round(x * 100000)},${Math.round(y * 100000)},${Math.round(z * 100000)}`;
-  };
-
-  for (let f = 0; f < faceCount; f++) {
-    const o = f * 9;
-    v0.set(positions[o], positions[o + 1], positions[o + 2]);
-    v1.set(positions[o + 3], positions[o + 4], positions[o + 5]);
-    v2.set(positions[o + 6], positions[o + 7], positions[o + 8]);
-
-    // 1. Centroid
-    const centroid = new THREE.Vector3(
-      (v0.x + v1.x + v2.x) / 3,
-      (v0.y + v1.y + v2.y) / 3,
-      (v0.z + v1.z + v2.z) / 3
-    );
-    faceCentroids.push(centroid);
-
-    // 2. Normal
-    edge1.subVectors(v1, v0);
-    edge2.subVectors(v2, v0);
-    const normal = new THREE.Vector3().crossVectors(edge1, edge2).normalize();
-    faceNormals.push(normal);
-
-    // 3. Z Bounds
-    const minZ = Math.min(v0.z, v1.z, v2.z);
-    const maxZ = Math.max(v0.z, v1.z, v2.z);
-    faceZBounds.push({ min: minZ, max: maxZ });
-
-    // 4. Welding index
-    const k0 = getVertexKey(v0.x, v0.y, v0.z);
-    const k1 = getVertexKey(v1.x, v1.y, v1.z);
-    const k2 = getVertexKey(v2.x, v2.y, v2.z);
-
-    for (const key of [k0, k1, k2]) {
-      let list = vertexToFacesMap.get(key);
-      if (!list) {
-        list = [];
-        vertexToFacesMap.set(key, list);
+      let arr = cachedFaceToFaces[idx];
+      if (arr === undefined) {
+        arr = [];
+        const start = idx * 3;
+        for (let i = 0; i < 3; i++) {
+          const val = faceToFacesFlat[start + i];
+          if (val !== -1) arr.push(val);
+        }
+        cachedFaceToFaces[idx] = arr;
       }
-      list.push(f);
+      return arr;
     }
-  }
+  }) as any;
 
-  // Build Face-to-Face Adjacency (faces sharing at least 2 coincident vertices)
-  const sharedCounts = new Map<number, number>();
+  const faceNormals = new Proxy(new Array(faceCount).fill(undefined), {
+    get(target, prop) {
+      if (prop === 'length') return faceCount;
+      const idx = Number(prop);
+      if (isNaN(idx) || idx < 0 || idx >= faceCount) return (target as any)[prop];
 
-  for (let f = 0; f < faceCount; f++) {
-    const o = f * 9;
-    v0.set(positions[o], positions[o + 1], positions[o + 2]);
-    v1.set(positions[o + 3], positions[o + 4], positions[o + 5]);
-    v2.set(positions[o + 6], positions[o + 7], positions[o + 8]);
-
-    const k0 = getVertexKey(v0.x, v0.y, v0.z);
-    const k1 = getVertexKey(v1.x, v1.y, v1.z);
-    const k2 = getVertexKey(v2.x, v2.y, v2.z);
-
-    sharedCounts.clear();
-    for (const key of [k0, k1, k2]) {
-      const list = vertexToFacesMap.get(key) || [];
-      for (const other of list) {
-        if (other === f) continue;
-        sharedCounts.set(other, (sharedCounts.get(other) || 0) + 1);
+      let vec = cachedFaceNormals[idx];
+      if (vec === undefined) {
+        vec = new THREE.Vector3(
+          faceNormalsFlat[idx * 3],
+          faceNormalsFlat[idx * 3 + 1],
+          faceNormalsFlat[idx * 3 + 2]
+        );
+        cachedFaceNormals[idx] = vec;
       }
+      return vec;
     }
+  }) as any;
 
-    for (const [other, count] of sharedCounts.entries()) {
-      if (count >= 2) {
-        faceToFaces[f].push(other);
+  const faceCentroids = new Proxy(new Array(faceCount).fill(undefined), {
+    get(target, prop) {
+      if (prop === 'length') return faceCount;
+      const idx = Number(prop);
+      if (isNaN(idx) || idx < 0 || idx >= faceCount) return (target as any)[prop];
+
+      let vec = cachedFaceCentroids[idx];
+      if (vec === undefined) {
+        vec = new THREE.Vector3(
+          faceCentroidsFlat[idx * 3],
+          faceCentroidsFlat[idx * 3 + 1],
+          faceCentroidsFlat[idx * 3 + 2]
+        );
+        cachedFaceCentroids[idx] = vec;
       }
+      return vec;
     }
-  }
+  }) as any;
 
-  if (needsDispose) {
-    geom.dispose();
-  }
+  const faceZBounds = new Proxy(new Array(faceCount).fill(undefined), {
+    get(target, prop) {
+      if (prop === 'length') return faceCount;
+      const idx = Number(prop);
+      if (isNaN(idx) || idx < 0 || idx >= faceCount) return (target as any)[prop];
+
+      let bounds = cachedFaceZBounds[idx];
+      if (bounds === undefined) {
+        bounds = {
+          min: faceZBoundsFlat[idx * 2],
+          max: faceZBoundsFlat[idx * 2 + 1]
+        };
+        cachedFaceZBounds[idx] = bounds;
+      }
+      return bounds;
+    }
+  }) as any;
 
   return {
     faceCount,
@@ -143,6 +120,178 @@ export function buildClientAdjacencyMap(geometry: THREE.BufferGeometry): ClientA
     faceZBounds,
     positions,
   };
+}
+
+/**
+ * Builds a high-performance face adjacency map and spatial cache on the client side
+ * directly from the Three.js BufferGeometry, in LOCAL SPACE to ensure 100% robustness
+ * against transform timing, scales, and rotation states. Runs in O(N) time and uses
+ * flat typed arrays to minimize RAM footprint.
+ */
+export function buildClientAdjacencyMap(geometry: THREE.BufferGeometry): ClientAdjacencyMap {
+  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
+  if (!posAttr) {
+    return { faceCount: 0, faceToFaces: [], faceNormals: [], faceCentroids: [], faceZBounds: [] };
+  }
+  const positions = posAttr.array;
+  const indexAttr = geometry.index;
+  const indices = indexAttr ? indexAttr.array : null;
+
+  const faceCount = indices ? indices.length / 3 : posAttr.count / 3;
+
+  // Flat output arrays to conserve RAM
+  const faceToFacesFlat = new Int32Array(faceCount * 3).fill(-1);
+  const faceNormalsFlat = new Float32Array(faceCount * 3);
+  const faceCentroidsFlat = new Float32Array(faceCount * 3);
+  const faceZBoundsFlat = new Float32Array(faceCount * 2);
+
+  // Weld vertices using a numeric hash grid to avoid string allocations
+  const vertexHash = new Map<number, number[]>();
+  const vertexCoords: number[] = [];
+  let nextVertexId = 0;
+
+  const getVertexId = (x: number, y: number, z: number): number => {
+    const rx = Math.round(x * 100000);
+    const ry = Math.round(y * 100000);
+    const rz = Math.round(z * 100000);
+    const hash = (rx * 73856093 ^ ry * 19349663 ^ rz * 83492791) >>> 0;
+
+    let list = vertexHash.get(hash);
+    if (!list) {
+      list = [];
+      vertexHash.set(hash, list);
+    }
+
+    for (const id of list) {
+      const vx = vertexCoords[id * 3];
+      const vy = vertexCoords[id * 3 + 1];
+      const vz = vertexCoords[id * 3 + 2];
+      if (Math.abs(vx - x) < 1e-5 && Math.abs(vy - y) < 1e-5 && Math.abs(vz - z) < 1e-5) {
+        return id;
+      }
+    }
+
+    const id = nextVertexId++;
+    list.push(id);
+    vertexCoords.push(x, y, z);
+    return id;
+  };
+
+  const faceVertices = new Int32Array(faceCount * 3);
+
+  // Pass 1: Compute Centroids, Normals, Bounds, and welded Vertex IDs
+  for (let f = 0; f < faceCount; f++) {
+    let i0, i1, i2;
+    if (indices) {
+      i0 = indices[f * 3];
+      i1 = indices[f * 3 + 1];
+      i2 = indices[f * 3 + 2];
+    } else {
+      i0 = f * 3;
+      i1 = f * 3 + 1;
+      i2 = f * 3 + 2;
+    }
+
+    const x0 = positions[i0 * 3], y0 = positions[i0 * 3 + 1], z0 = positions[i0 * 3 + 2];
+    const x1 = positions[i1 * 3], y1 = positions[i1 * 3 + 1], z1 = positions[i1 * 3 + 2];
+    const x2 = positions[i2 * 3], y2 = positions[i2 * 3 + 1], z2 = positions[i2 * 3 + 2];
+
+    const vid0 = getVertexId(x0, y0, z0);
+    const vid1 = getVertexId(x1, y1, z1);
+    const vid2 = getVertexId(x2, y2, z2);
+
+    faceVertices[f * 3]     = vid0;
+    faceVertices[f * 3 + 1] = vid1;
+    faceVertices[f * 3 + 2] = vid2;
+
+    // Centroid
+    faceCentroidsFlat[f * 3]     = (x0 + x1 + x2) / 3;
+    faceCentroidsFlat[f * 3 + 1] = (y0 + y1 + y2) / 3;
+    faceCentroidsFlat[f * 3 + 2] = (z0 + z1 + z2) / 3;
+
+    // Normal
+    const ux = x1 - x0, uy = y1 - y0, uz = z1 - z0;
+    const vx = x2 - x0, vy = y2 - y0, vz = z2 - z0;
+    let nx = uy * vz - uz * vy;
+    let ny = uz * vx - ux * vz;
+    let nz = ux * vy - uy * vx;
+    const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+    if (len > 0) {
+      nx /= len;
+      ny /= len;
+      nz /= len;
+    }
+    faceNormalsFlat[f * 3]     = nx;
+    faceNormalsFlat[f * 3 + 1] = ny;
+    faceNormalsFlat[f * 3 + 2] = nz;
+
+    // Z Bounds
+    faceZBoundsFlat[f * 2]     = Math.min(z0, z1, z2);
+    faceZBoundsFlat[f * 2 + 1] = Math.max(z0, z1, z2);
+  }
+
+  // Pass 2: Map edges to faces using packed integer keys (O(N))
+  // key = u * 16777216 + v (since max vertex ID is less than 16,777,216)
+  const edgeToFaces = new Map<number, number[]>();
+  
+  for (let f = 0; f < faceCount; f++) {
+    const v0 = faceVertices[f * 3];
+    const v1 = faceVertices[f * 3 + 1];
+    const v2 = faceVertices[f * 3 + 2];
+
+    const e0 = v0 < v1 ? v0 * 16777216 + v1 : v1 * 16777216 + v0;
+    const e1 = v1 < v2 ? v1 * 16777216 + v2 : v2 * 16777216 + v1;
+    const e2 = v2 < v0 ? v2 * 16777216 + v0 : v0 * 16777216 + v2;
+
+    for (const key of [e0, e1, e2]) {
+      let list = edgeToFaces.get(key);
+      if (!list) {
+        list = [];
+        edgeToFaces.set(key, list);
+      }
+      list.push(f);
+    }
+  }
+
+  // Pass 3: Build faceToFacesFlat adjacency
+  for (let f = 0; f < faceCount; f++) {
+    const v0 = faceVertices[f * 3];
+    const v1 = faceVertices[f * 3 + 1];
+    const v2 = faceVertices[f * 3 + 2];
+
+    const e0 = v0 < v1 ? v0 * 16777216 + v1 : v1 * 16777216 + v0;
+    const e1 = v1 < v2 ? v1 * 16777216 + v2 : v2 * 16777216 + v1;
+    const e2 = v2 < v0 ? v2 * 16777216 + v0 : v0 * 16777216 + v2;
+
+    const keys = [e0, e1, e2];
+    for (let e = 0; e < 3; e++) {
+      const list = edgeToFaces.get(keys[e]);
+      if (list) {
+        for (const other of list) {
+          if (other !== f) {
+            faceToFacesFlat[f * 3 + e] = other;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  const map = wrapFlatAdjacencyMap(
+    faceCount,
+    faceToFacesFlat,
+    faceNormalsFlat,
+    faceCentroidsFlat,
+    faceZBoundsFlat,
+    positions
+  );
+
+  map.faceToFacesFlat = faceToFacesFlat;
+  map.faceNormalsFlat = faceNormalsFlat;
+  map.faceCentroidsFlat = faceCentroidsFlat;
+  map.faceZBoundsFlat = faceZBoundsFlat;
+
+  return map;
 }
 
 /**
@@ -567,7 +716,11 @@ function walkRidge(
   const LOW_THRESHOLD = (selection?.creasePropagateAngleDeg ?? 3) * (Math.PI / 180);
   const alignLimit = selection?.ridgeAlignmentTolerance ?? 0.3;
 
+  const peakCurvatureCache = new Map<number, { neighborIdx: number; angle: number }>();
   const getPeakCurvature = (f: number): { neighborIdx: number; angle: number } => {
+    let cached = peakCurvatureCache.get(f);
+    if (cached !== undefined) return cached;
+
     const norm = map.faceNormals[f];
     let maxAngle = 0;
     let neighborIdx = -1;
@@ -578,7 +731,9 @@ function walkRidge(
         neighborIdx = adj;
       }
     }
-    return { neighborIdx, angle: maxAngle };
+    const res = { neighborIdx, angle: maxAngle };
+    peakCurvatureCache.set(f, res);
+    return res;
   };
 
   const seedPeak = getPeakCurvature(seed);
@@ -704,7 +859,11 @@ export function walkRoughEdge(
   if (seedNormal.dot(localUp) > 0.2) return [];
 
   // Precompute local normal entropy/variance in a 2-ring neighborhood for all candidates
+  const varianceCache = new Map<number, number>();
   const getLocalNormalVariance = (f: number): number => {
+    const cached = varianceCache.get(f);
+    if (cached !== undefined) return cached;
+
     const neighbors = new Set<number>([f, ...(map.faceToFaces[f] || [])]);
     for (const n of map.faceToFaces[f] || []) {
       for (const nn of map.faceToFaces[n] || []) {
@@ -719,7 +878,9 @@ export function walkRoughEdge(
       varianceSum += angle * angle;
       count++;
     }
-    return count > 0 ? varianceSum / count : 0;
+    const res = count > 0 ? varianceSum / count : 0;
+    varianceCache.set(f, res);
+    return res;
   };
 
   // 1. Variance Hysteresis (Phase C)
@@ -782,7 +943,11 @@ export function walkSoftRidge(
   const LOW_THRESHOLD = (selection?.creasePropagateAngleDeg ?? 0.5) * (Math.PI / 180);
   const alignLimit = selection?.ridgeAlignmentTolerance ?? 0.3;
 
+  const peakCurvatureCache = new Map<number, { neighborIdx: number; angle: number }>();
   const getPeakCurvature = (f: number): { neighborIdx: number; angle: number } => {
+    let cached = peakCurvatureCache.get(f);
+    if (cached !== undefined) return cached;
+
     const norm = map.faceNormals[f];
     let maxAngle = 0;
     let neighborIdx = -1;
@@ -793,7 +958,9 @@ export function walkSoftRidge(
         neighborIdx = adj;
       }
     }
-    return { neighborIdx, angle: maxAngle };
+    const res = { neighborIdx, angle: maxAngle };
+    peakCurvatureCache.set(f, res);
+    return res;
   };
 
   const seedPeak = getPeakCurvature(seed);
@@ -1607,34 +1774,141 @@ function getOrComputeMacroNormals(
   iterations: number,
   lambda: number
 ): THREE.Vector3[] {
+  if (!map._macroNormalsFlatCache) {
+    map._macroNormalsFlatCache = new Map<number, Float32Array>();
+  }
   if (!map.macroNormalsCache) {
     map.macroNormalsCache = new Map<number, THREE.Vector3[]>();
   }
-  const cached = map.macroNormalsCache.get(iterations);
-  if (cached) return cached;
+  const cachedProxy = map.macroNormalsCache.get(iterations);
+  if (cachedProxy) return cachedProxy;
 
   const count = map.faceCount;
-  const normals = map.faceNormals.map(n => n.clone());
-  const temp = Array.from({ length: count }, () => new THREE.Vector3());
-
-  for (let iter = 0; iter < iterations; iter++) {
+  
+  let faceNormalsFlat = map.faceNormalsFlat;
+  if (!faceNormalsFlat && map.faceNormals) {
+    faceNormalsFlat = new Float32Array(count * 3);
     for (let i = 0; i < count; i++) {
-      temp[i].copy(normals[i]);
-    }
-    for (let i = 0; i < count; i++) {
-      const adjs = map.faceToFaces[i] || [];
-      if (adjs.length === 0) continue;
-      const sum = new THREE.Vector3();
-      for (const adj of adjs) {
-        sum.add(temp[adj]);
+      const n = map.faceNormals[i];
+      if (n) {
+        faceNormalsFlat[i * 3] = n.x;
+        faceNormalsFlat[i * 3 + 1] = n.y;
+        faceNormalsFlat[i * 3 + 2] = n.z;
       }
-      sum.divideScalar(adjs.length);
-      normals[i].lerpVectors(temp[i], sum, lambda).normalize();
+    }
+  }
+  if (!faceNormalsFlat) {
+    faceNormalsFlat = new Float32Array(count * 3);
+  }
+
+  let faceToFacesFlat = map.faceToFacesFlat;
+  if (!faceToFacesFlat && map.faceToFaces) {
+    faceToFacesFlat = new Int32Array(count * 3).fill(-1);
+    for (let i = 0; i < count; i++) {
+      const adjs = map.faceToFaces[i];
+      if (adjs) {
+        if (adjs.length > 0) faceToFacesFlat[i * 3] = adjs[0];
+        if (adjs.length > 1) faceToFacesFlat[i * 3 + 1] = adjs[1];
+        if (adjs.length > 2) faceToFacesFlat[i * 3 + 2] = adjs[2];
+      }
     }
   }
 
-  map.macroNormalsCache.set(iterations, normals);
-  return normals;
+  const normals = new Float32Array(faceNormalsFlat);
+  const temp = new Float32Array(count * 3);
+
+  for (let iter = 0; iter < iterations; iter++) {
+    temp.set(normals);
+
+    for (let i = 0; i < count; i++) {
+      const startAdj = i * 3;
+      let adj0 = -1, adj1 = -1, adj2 = -1;
+      if (faceToFacesFlat) {
+        adj0 = faceToFacesFlat[startAdj];
+        adj1 = faceToFacesFlat[startAdj + 1];
+        adj2 = faceToFacesFlat[startAdj + 2];
+      } else {
+        const adjs = map.faceToFaces[i];
+        if (adjs) {
+          if (adjs.length > 0) adj0 = adjs[0];
+          if (adjs.length > 1) adj1 = adjs[1];
+          if (adjs.length > 2) adj2 = adjs[2];
+        }
+      }
+
+      let adjCount = 0;
+      let sumX = 0, sumY = 0, sumZ = 0;
+
+      if (adj0 !== -1) {
+        sumX += temp[adj0 * 3];
+        sumY += temp[adj0 * 3 + 1];
+        sumZ += temp[adj0 * 3 + 2];
+        adjCount++;
+      }
+      if (adj1 !== -1) {
+        sumX += temp[adj1 * 3];
+        sumY += temp[adj1 * 3 + 1];
+        sumZ += temp[adj1 * 3 + 2];
+        adjCount++;
+      }
+      if (adj2 !== -1) {
+        sumX += temp[adj2 * 3];
+        sumY += temp[adj2 * 3 + 1];
+        sumZ += temp[adj2 * 3 + 2];
+        adjCount++;
+      }
+
+      if (adjCount === 0) continue;
+
+      const avgX = sumX / adjCount;
+      const avgY = sumY / adjCount;
+      const avgZ = sumZ / adjCount;
+
+      const currX = temp[i * 3];
+      const currY = temp[i * 3 + 1];
+      const currZ = temp[i * 3 + 2];
+
+      let nx = currX + (avgX - currX) * lambda;
+      let ny = currY + (avgY - currY) * lambda;
+      let nz = currZ + (avgZ - currZ) * lambda;
+
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      if (len > 0) {
+        nx /= len;
+        ny /= len;
+        nz /= len;
+      }
+
+      normals[i * 3] = nx;
+      normals[i * 3 + 1] = ny;
+      normals[i * 3 + 2] = nz;
+    }
+  }
+
+  map._macroNormalsFlatCache.set(iterations, normals);
+
+  const cachedVectors = new Array(count);
+  const proxy = new Proxy(new Array(count).fill(undefined), {
+    get(target, prop) {
+      if (prop === 'length') return count;
+      const idx = Number(prop);
+      if (isNaN(idx) || idx < 0 || idx >= count) return (target as any)[prop];
+
+      let vec = cachedVectors[idx];
+      if (vec === undefined) {
+        vec = new THREE.Vector3(
+          normals[idx * 3],
+          normals[idx * 3 + 1],
+          normals[idx * 3 + 2]
+        );
+        cachedVectors[idx] = vec;
+      }
+      return vec;
+    }
+  }) as any;
+
+  map.macroNormalsCache.set(iterations, proxy);
+  return proxy;
 }
 
 export function walkSharpCorner(
