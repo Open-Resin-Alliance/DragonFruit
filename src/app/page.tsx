@@ -29,6 +29,7 @@ import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls
 import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { LayerSlider } from '@/components/controls/LayerSlider';
 import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
+import { SupportSidebar } from '@/supports/Settings';
 import { SupportPainterTooltipCard } from '@/features/supportPainter/components/SupportPainterTooltipCard';
 import { SupportPainterPanel } from '@/features/supportPainter/components/SupportPainterPanel';
 import { useSupportPainterState } from '@/features/supportPainter/supportPainterStore';
