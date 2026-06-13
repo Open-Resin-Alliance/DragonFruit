@@ -107,9 +107,9 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
               </div>
               <input
                 type="range"
-                min="0.05"
+                min="0.03"
                 max="0.5"
-                step="0.05"
+                step="0.01"
                 value={pxMm}
                 onChange={(e) => setPxMm(parseFloat(e.target.value))}
                 disabled={scanning}

@@ -95,6 +95,7 @@ import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 import { useIslands } from '@/volumeAnalysis/Islands/useIslands';
 import { IslandsPanel } from '@/components/controls/IslandsPanel';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
+import { PUCK_OPACITY, ISLAND_LAYER_COLORS } from '@/volumeAnalysis/Islands/islandPuckMarkers';
 import { useSupportInteractionManager } from '@/features/supports/useSupportInteractionManager';
 import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
 import { useDeleteHotkey } from '@/features/delete/useDeleteHotkey';
@@ -19443,8 +19444,8 @@ export default function Home() {
                 key="islands-poc-voxel"
                 markers={islandsPoc.voxelPucks.markers}
                 brushRadiusMm={0.5}
-                color="#3b82f6"
-                opacity={0.9}
+                color={ISLAND_LAYER_COLORS.voxel}
+                opacity={PUCK_OPACITY}
                 selectedIslandId={islandsPoc.selectedMarkerId ?? null}
               />
             )}

@@ -16,6 +16,20 @@ import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogi
  * (no `getScanVisualPosition` double-apply).
  */
 
+/**
+ * Shared puck metrics. The voxel, mesh-minima, and intersection layers all use
+ * the SAME radius/thickness/opacity — only the hue differs per layer. Centralised
+ * here so Part C's intersection pucks match the voxel pucks exactly.
+ */
+export const PUCK_BASE_RADIUS_MM = 0.25; // 0.5 mm diameter floor
+export const PUCK_HEIGHT_MM = 0.25; // disc thickness
+export const PUCK_OPACITY = 0.45;
+export const ISLAND_LAYER_COLORS = {
+  voxel: '#3b82f6', // blue
+  minima: '#22c55e', // green
+  intersection: '#ef4444', // red
+} as const;
+
 export interface PuckOptions {
   /** Fallback puck radius (mm) when an island has no area (e.g. mesh minima). */
   defaultRadiusMm?: number;
@@ -50,8 +64,8 @@ export function buildIslandPucks(
   islands: DetectedIsland[],
   opts: PuckOptions = {},
 ): PuckResult {
-  const defaultRadius = opts.defaultRadiusMm ?? 0.4;
-  const height = opts.heightMm ?? 0.35;
+  const defaultRadius = opts.defaultRadiusMm ?? PUCK_BASE_RADIUS_MM;
+  const height = opts.heightMm ?? PUCK_HEIGHT_MM;
   const segments = opts.segments ?? 24;
 
   const markers: IslandMarker[] = [];

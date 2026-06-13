@@ -49,8 +49,8 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   // (Part B) minimaIslands; (Part C) intersection classification.
 
   // Scan params (surfaced in the advanced modal).
-  const [pxMm, setPxMm] = useState(0.1);
-  const [supportBufMm, setSupportBufMm] = useState(0.6);
+  const [pxMm, setPxMm] = useState(0.05);
+  const [supportBufMm, setSupportBufMm] = useState(0.25);
   const [connectivity, setConnectivity] = useState<4 | 8>(4);
 
   // Filter toggles — default ON ⇒ supported/grounded islands hidden (and skipped by ←/→).
