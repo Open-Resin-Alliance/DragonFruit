@@ -488,8 +488,8 @@ export function upgradePipeline(
   if ((activeBrushType as string) === 'CylinderMinima') activeBrushType = 'SoftRidge';
   if ((activeBrushType as string) === 'CylinderSides') activeBrushType = 'RoughEdge';
 
-  const isPointPathOrMarker = activeBrushType === 'PointPath' || activeBrushType === 'Marker' || activeBrushType === 'RoughEdge' || activeBrushType === 'Unk Legacy Brush';
-  const isLineBrush = activeBrushType === 'Ridge' || activeBrushType === 'SoftRidge' || activeBrushType === 'PointPath';
+  const isPointPathOrMarker = activeBrushType === 'PointPath' || activeBrushType === 'Marker' || activeBrushType === 'RoughEdge' || activeBrushType === 'Unk Legacy Brush' || activeBrushType === 'SharpCorner';
+  const isLineBrush = activeBrushType === 'Ridge' || activeBrushType === 'SoftRidge' || activeBrushType === 'PointPath' || activeBrushType === 'SharpCorner';
   const isMinimaIslands = activeBrushType === 'MinimaIslands';
 
   const standardTypes: ('minima' | 'perimeter' | 'infill' | 'centerline')[] = [

@@ -1876,7 +1876,9 @@ export async function generateSupportsFromPainter(
             }
           }
 
-          if (distance2D(cand.pos, acc.pos) < effectiveRadius) {
+          const isVectorBrush = cand.regionType === 'PointPath' || cand.regionType === 'PointPerimeter' || cand.regionType === 'SharpCorner';
+          const dist = isVectorBrush ? cand.pos.distanceTo(acc.pos) : distance2D(cand.pos, acc.pos);
+          if (dist < effectiveRadius) {
             return true;
           }
         }
@@ -2192,6 +2194,59 @@ export async function generateSupportsFromPainter(
       } else if (stage.type === 'infill') {
         if (triangleIds.size > 0) {
           const spacing = Math.max(0.1, stage.spacing.baseSpacingMm);
+
+          // Build local plane polygon projection helper if PointPerimeter
+          let isPointInLocalPolygon: ((pos: THREE.Vector3) => boolean) | undefined = undefined;
+
+          if (region.brushType === 'PointPerimeter' && region.vectorPath && region.vectorPath.length >= 3) {
+            const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
+            const worldPts = region.vectorPath.map(p => new THREE.Vector3(...p.point).applyMatrix4(mesh.matrixWorld));
+            const worldNorms = region.vectorPath.map(p => {
+              const n = p.normal ? new THREE.Vector3(...p.normal) : new THREE.Vector3(0, 0, 1);
+              return n.applyMatrix3(normalMatrix).normalize();
+            });
+
+            const planeNormal = new THREE.Vector3();
+            const planeCentroid = new THREE.Vector3();
+            for (const p of worldPts) {
+              planeCentroid.add(p);
+            }
+            planeCentroid.divideScalar(worldPts.length);
+            for (const n of worldNorms) {
+              planeNormal.add(n);
+            }
+            planeNormal.normalize();
+            if (planeNormal.lengthSq() < 1e-4) {
+              planeNormal.copy(worldNorms[0] || new THREE.Vector3(0, 0, 1));
+            }
+
+            const tangentU = new THREE.Vector3(1, 0, 0).cross(planeNormal);
+            if (tangentU.lengthSq() < 1e-4) {
+              tangentU.copy(new THREE.Vector3(0, 1, 0).cross(planeNormal));
+            }
+            tangentU.normalize();
+            const tangentV = new THREE.Vector3().crossVectors(planeNormal, tangentU).normalize();
+
+            const poly2D = worldPts.map(p => {
+              const rel = new THREE.Vector3().subVectors(p, planeCentroid);
+              return new THREE.Vector2(rel.dot(tangentU), rel.dot(tangentV));
+            });
+
+            isPointInLocalPolygon = (pos: THREE.Vector3): boolean => {
+              const rel = new THREE.Vector3().subVectors(pos, planeCentroid);
+              const u = rel.dot(tangentU);
+              const v = rel.dot(tangentV);
+
+              let inside = false;
+              for (let i = 0, j = poly2D.length - 1; i < poly2D.length; j = i++) {
+                const xi = poly2D[i].x, yi = poly2D[i].y;
+                const xj = poly2D[j].x, yj = poly2D[j].y;
+                const intersect = ((yi > v) !== (yj > v)) && (u < (xj - xi) * (v - yi) / (yj - yi) + xi);
+                if (intersect) inside = !inside;
+              }
+              return inside;
+            };
+          }
           const minXY = new THREE.Vector2(Infinity, Infinity);
           const maxXY = new THREE.Vector2(-Infinity, -Infinity);
 
@@ -2249,8 +2304,12 @@ export async function generateSupportsFromPainter(
                 }
 
                 if (matchingTri && bary) {
+                  const pos = new THREE.Vector3(px, py, bestZ);
+                  if (isPointInLocalPolygon && !isPointInLocalPolygon(pos)) {
+                    continue;
+                  }
                   candidates.push({
-                    pos: new THREE.Vector3(px, py, bestZ),
+                    pos,
                     normal: matchingTri.normal.clone(),
                     regionId: region.id,
                     regionType: region.brushType,
@@ -2297,8 +2356,12 @@ export async function generateSupportsFromPainter(
                 }
 
                 if (matchingTri && bary) {
+                  const pos = new THREE.Vector3(px, py, bestZ);
+                  if (isPointInLocalPolygon && !isPointInLocalPolygon(pos)) {
+                    continue;
+                  }
                   candidates.push({
-                    pos: new THREE.Vector3(px, py, bestZ),
+                    pos,
                     normal: matchingTri.normal.clone(),
                     regionId: region.id,
                     regionType: region.brushType,
@@ -2326,6 +2389,9 @@ export async function generateSupportsFromPainter(
             );
 
             for (const pt of results3D) {
+              if (isPointInLocalPolygon && !isPointInLocalPolygon(pt.pos)) {
+                continue;
+              }
               candidates.push({
                 pos: pt.pos,
                 normal: pt.normal,
@@ -2369,8 +2435,12 @@ export async function generateSupportsFromPainter(
                 }
 
                 if (matchingTri && bary) {
+                  const pos = new THREE.Vector3(px, py, bestZ);
+                  if (isPointInLocalPolygon && !isPointInLocalPolygon(pos)) {
+                    continue;
+                  }
                   candidates.push({
-                    pos: new THREE.Vector3(px, py, bestZ),
+                    pos,
                     normal: matchingTri.normal.clone(),
                     regionId: region.id,
                     regionType: region.brushType,

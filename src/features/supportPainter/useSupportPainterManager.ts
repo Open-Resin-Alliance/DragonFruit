@@ -649,6 +649,7 @@ export function SupportPainterInteractionController({
               const newId = supportPainterStore.commitPointPathRegion({
                 seedTriangleId: snap.pointPathPoints[0].faceIndex,
                 brushType: 'PointPerimeter',
+                matrixWorld: mesh.matrixWorld,
               });
 
               const nextSnap = supportPainterStore.getSnapshot();
@@ -702,6 +703,7 @@ export function SupportPainterInteractionController({
               const newId = supportPainterStore.commitPointPathRegion({
                 seedTriangleId: faceIndex,
                 brushType: 'SharpCorner',
+                matrixWorld: mesh.matrixWorld,
               });
 
               const nextSnap = supportPainterStore.getSnapshot();

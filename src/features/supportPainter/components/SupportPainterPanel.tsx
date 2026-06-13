@@ -1479,10 +1479,12 @@ export function SupportPainterPanel({
                     onClick={() => {
                       const firstPt = state.pointPathPoints[0];
                       if (firstPt) {
+                        const activeMesh = getActiveMesh?.();
                         supportPainterStore.setPointPathClosed(true);
                         const newId = supportPainterStore.commitPointPathRegion({
                           seedTriangleId: firstPt.faceIndex,
                           brushType: 'PointPerimeter',
+                          matrixWorld: activeMesh?.matrixWorld,
                         });
                         const nextSnap = supportPainterStore.getSnapshot();
                         const addedRegion = nextSnap.regions.get(newId);

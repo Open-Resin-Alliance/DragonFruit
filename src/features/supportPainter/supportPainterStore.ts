@@ -21,7 +21,7 @@ import {
   upgradePipeline,
   arePipelinesEquivalent,
 } from './supportPainterTypes';
-import { type ClientAdjacencyMap, proposeRegionOnClient, expandPathWithDijkstra } from './useClientAdjacencyMap';
+import { type ClientAdjacencyMap, proposeRegionOnClient, expandPathWithDijkstra, walkPointPathPolygon } from './useClientAdjacencyMap';
 import { deserializeROIsFromVoxl } from './voxlCodec';
 import { getPresetById, importCustomPreset, getPresetList } from '@/supports/Settings/presets';
 import { getSnapshot as getSupportSnapshot, setSnapshot as setSupportSnapshot } from '@/supports/state';
@@ -2144,12 +2144,27 @@ export const supportPainterStore = {
     notify();
   },
 
-  commitPointPathRegion(payload: { seedTriangleId: number; brushType?: BrushType }): string {
+  commitPointPathRegion(payload: { seedTriangleId: number; brushType?: BrushType; matrixWorld?: THREE.Matrix4 }): string {
     const brush = payload.brushType || activeBrush;
     const isVectorBrush = brush === 'PointPath' || brush === 'PointPerimeter' || brush === 'SharpCorner';
 
     if (!isVectorBrush && proposedTriangleIds.size === 0) return '';
     if (isVectorBrush && pointPathPoints.length === 0) return '';
+
+    let finalTriangleIds = new Set<number>(proposedTriangleIds);
+    if (clientAdjacencyMap && (brush === 'PointPerimeter' || (brush === 'PointPath' && pointPathMode === 'polygon'))) {
+      const activeMatrix = payload.matrixWorld || new THREE.Matrix4();
+      const inv = new THREE.Matrix4().copy(activeMatrix).invert();
+      const localUp = new THREE.Vector3(0, 0, 1).transformDirection(inv);
+
+      const scale = new THREE.Vector3();
+      activeMatrix.decompose(new THREE.Vector3(), new THREE.Quaternion(), scale);
+      const worldScale = (scale.x + scale.y + scale.z) / 3;
+
+      const pts = pointPathPoints.map(p => p.faceIndex);
+      const computedIds = walkPointPathPolygon(clientAdjacencyMap, pts, localUp, worldScale);
+      finalTriangleIds = new Set(computedIds);
+    }
 
     const id = crypto.randomUUID?.() || Math.random().toString(36).substring(2);
     const color = BRUSH_COLORS[brush] || BRUSH_COLORS.PointPath;
@@ -2179,7 +2194,7 @@ export const supportPainterStore = {
       id,
       brushType: brush,
       seedTriangleId: payload.seedTriangleId,
-      triangleIds: new Set(proposedTriangleIds),
+      triangleIds: finalTriangleIds,
       color,
       proposedOnly: false,
       createdAt: Date.now(),

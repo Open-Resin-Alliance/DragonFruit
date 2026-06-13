@@ -86,4 +86,116 @@ describe('Support Painter Phase 5 PointPath - Dijkstra Pathfinding & Watertight 
       assert.ok(resultSet.has(f), `Face ${f} should be selected in the flood fill`);
     }
   });
+
+  it('walkPointPathPolygon should be geometrically watertight and not leak on complex polygons', () => {
+    // 5x5 grid (25 faces)
+    // Centroids are at (x, y, 0) for x, y in [0, 4]
+    const faceCentroids: THREE.Vector3[] = [];
+    const faceToFaces: number[][] = [];
+    for (let y = 0; y < 5; y++) {
+      for (let x = 0; x < 5; x++) {
+        faceCentroids.push(new THREE.Vector3(x, y, 0));
+        
+        const adj: number[] = [];
+        const idx = y * 5 + x;
+        if (x > 0) adj.push(idx - 1);
+        if (x < 4) adj.push(idx + 1);
+        if (y > 0) adj.push(idx - 5);
+        if (y < 4) adj.push(idx + 5);
+        faceToFaces.push(adj);
+      }
+    }
+
+    const mock5x5Map: ClientAdjacencyMap = {
+      faceCount: 25,
+      faceNormals: Array.from({ length: 25 }, () => new THREE.Vector3(0, 0, -1)),
+      faceCentroids,
+      faceZBounds: Array.from({ length: 25 }, () => ({ min: -0.1, max: 0.1 })),
+      faceToFaces,
+      // positions for 25 faces (each triangle has 3 vertices = 9 numbers)
+      // we represent them as simple flat triangles around centroids
+      positions: new Float32Array(
+        faceCentroids.flatMap(c => [
+          c.x - 0.4, c.y - 0.4, 0,
+          c.x + 0.4, c.y - 0.4, 0,
+          c.x, c.y + 0.4, 0
+        ])
+      )
+    };
+
+    // Define control points of polygon: 6 -> 8 -> 18 -> 16
+    // In local 2D space, this forms a square from (1, 1) to (3, 1) to (3, 3) to (1, 3)
+    // The interior faces are: 12 (centroid at 2, 2)
+    // The diagonal faces: 7 (2, 1), 13 (3, 2), 17 (2, 3), 11 (1, 2)
+    // Boundary faces: 6, 8, 18, 16
+    // Outside faces: 2 (2, 0), etc.
+    const result = walkPointPathPolygon(mock5x5Map, [6, 8, 18, 16], new THREE.Vector3(0, 0, -1), 1.0);
+    const resultSet = new Set(result);
+
+    // Interior and boundary faces should be included
+    assert.ok(resultSet.has(12), 'Interior face 12 should be included');
+    assert.ok(resultSet.has(7), 'Interior face 7 should be included');
+    assert.ok(resultSet.has(13), 'Interior face 13 should be included');
+    assert.ok(resultSet.has(17), 'Interior face 17 should be included');
+    assert.ok(resultSet.has(11), 'Interior face 11 should be included');
+
+    // Outside faces should NOT be included
+    assert.ok(!resultSet.has(2), 'Outside face 2 should NOT be included');
+    assert.ok(!resultSet.has(14), 'Outside face 14 should NOT be included');
+    assert.ok(!resultSet.has(22), 'Outside face 22 should NOT be included');
+    assert.ok(!resultSet.has(10), 'Outside face 10 should NOT be included');
+  });
+
+  it('walkPointPathPolygon should be watertight against topological leaks (wormholes) using geometric filtering', () => {
+    // 5x5 grid (25 faces)
+    const faceCentroids: THREE.Vector3[] = [];
+    const faceToFaces: number[][] = [];
+    for (let y = 0; y < 5; y++) {
+      for (let x = 0; x < 5; x++) {
+        faceCentroids.push(new THREE.Vector3(x, y, 0));
+        
+        const adj: number[] = [];
+        const idx = y * 5 + x;
+        if (x > 0) adj.push(idx - 1);
+        if (x < 4) adj.push(idx + 1);
+        if (y > 0) adj.push(idx - 5);
+        if (y < 4) adj.push(idx + 5);
+        faceToFaces.push(adj);
+      }
+    }
+
+    // Deliberately introduce a topological "wormhole" between interior face 12 and outside face 2.
+    // This simulates a non-manifold or faulty mesh connection that would leak in topological-only fills.
+    faceToFaces[12].push(2);
+    faceToFaces[2].push(12);
+
+    const mockLeakyMap: ClientAdjacencyMap = {
+      faceCount: 25,
+      faceNormals: Array.from({ length: 25 }, () => new THREE.Vector3(0, 0, -1)),
+      faceCentroids,
+      faceZBounds: Array.from({ length: 25 }, () => ({ min: -0.1, max: 0.1 })),
+      faceToFaces,
+      positions: new Float32Array(
+        faceCentroids.flatMap(c => [
+          c.x - 0.4, c.y - 0.4, 0,
+          c.x + 0.4, c.y - 0.4, 0,
+          c.x, c.y + 0.4, 0
+        ])
+      )
+    };
+
+    // Square perimeter: 6 -> 8 -> 18 -> 16
+    const result = walkPointPathPolygon(mockLeakyMap, [6, 8, 18, 16], new THREE.Vector3(0, 0, -1), 1.0);
+    const resultSet = new Set(result);
+
+    // Interior face must be included
+    assert.ok(resultSet.has(12), 'Interior face 12 should be included');
+
+    // Outside face 2 (connected via topological wormhole) must NOT be included because it is geometrically outside
+    assert.ok(!resultSet.has(2), 'Outside face 2 should NOT be included despite topological connection');
+    // Adjacent outside faces must also not be included
+    assert.ok(!resultSet.has(1), 'Outside face 1 should NOT be included');
+    assert.ok(!resultSet.has(3), 'Outside face 3 should NOT be included');
+  });
 });
+

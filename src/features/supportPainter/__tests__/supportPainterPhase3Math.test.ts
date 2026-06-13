@@ -571,4 +571,109 @@ describe('Support Painter Phase 3 - Advanced Mathematical Pathing & Solvers', ()
     assert.strictEqual(candidates[0].pos.z, 2.0);
     assert.strictEqual(candidates[1].pos.z, 10.0);
   });
+
+  it('should generate infill supports strictly inside PointPerimeter region using local projected plane', async () => {
+    resetSupportStore();
+    supportPainterStore.clearAll();
+
+    // 1. Set up a simple mesh (flat square at Z = 5.0)
+    const vertices = new Float32Array([
+      0, 0, 5,     // 0: bottom-left
+      10, 0, 5,    // 1: bottom-right
+      10, 10, 5,   // 2: top-right
+      0, 10, 5,    // 3: top-left
+    ]);
+    const normals = new Float32Array([
+      0, 0, -1,
+      0, 0, -1,
+      0, 0, -1,
+      0, 0, -1,
+    ]);
+    const indices = [0, 2, 1, 0, 3, 2];
+
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+    geom.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    geom.setIndex(indices);
+
+    const mat = new THREE.MeshBasicMaterial();
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.name = 'mock-mesh-leaf-test';
+    mesh.updateMatrixWorld(true);
+
+    // 2. Set up PointPerimeter region
+    // The vectorPath defines a 3D polygon: square from (2, 2, 5) to (8, 2, 5) to (8, 8, 5) to (2, 8, 5)
+    // The triangles are 0 and 1, which cover the entire 10x10 space.
+    const modelId = 'test-model-perimeter-infill';
+    const regionId = 'test-perimeter-infill-region';
+    
+    const customOps = [
+      {
+        id: 'infill-op-id',
+        type: 'infill' as const,
+        enabled: true,
+        supportPresetId: 'detail',
+        suppression: {
+          enabled: false,
+          distanceMm: 2.0,
+          suppressAgainst: [] as any[],
+        },
+        spacing: {
+          baseSpacingMm: 2.0,
+          infillPattern: 'Grid' as const,
+          attemptLeafCreation: false,
+        },
+      }
+    ];
+
+    const region: ROIRegion = {
+      id: regionId,
+      brushType: 'PointPerimeter',
+      seedTriangleId: 0,
+      triangleIds: new Set([0, 1]),
+      color: '#D97706',
+      proposedOnly: false,
+      createdAt: Date.now(),
+      vectorPath: [
+        { point: [2, 2, 5], normal: [0, 0, -1], faceIndex: 0 },
+        { point: [8, 2, 5], normal: [0, 0, -1], faceIndex: 0 },
+        { point: [8, 8, 5], normal: [0, 0, -1], faceIndex: 1 },
+        { point: [2, 8, 5], normal: [0, 0, -1], faceIndex: 1 },
+      ],
+      customBrush: {
+        id: 'temp-perimeter-brush',
+        name: 'Perimeter Brush',
+        color: '#D97706',
+        baseBrush: 'PointPerimeter',
+        selection: {
+          normalConeAngleMinDeg: 0,
+          normalConeAngleMaxDeg: 90,
+          overhangSlopeMinDeg: 0,
+          overhangSlopeMaxDeg: 90,
+          curvatureMin: 0,
+          curvatureMax: 10,
+          dihedralAngleToleranceDeg: 90,
+        },
+        operations: customOps,
+      }
+    };
+
+    const regionsMap = new Map<string, ROIRegion>([[regionId, region]]);
+    supportPainterStore.restoreRegions(regionsMap);
+
+    await generateSupportsFromPainter(modelId, mesh, [region]);
+
+    const supportSnapshot = getSupportSnapshot();
+    const trunks = Object.values(supportSnapshot.trunks).filter(t => t.roiId === regionId);
+
+    assert.ok(trunks.length > 0, 'Should generate infill supports inside PointPerimeter');
+    
+    for (const t of trunks) {
+      const x = t.contactCone!.pos.x;
+      const y = t.contactCone!.pos.y;
+      // All infill supports must be strictly inside [2, 8] x [2, 8]
+      assert.ok(x >= 1.99 && x <= 8.01, `X coordinate ${x} must be inside perimeter [2, 8]`);
+      assert.ok(y >= 1.99 && y <= 8.01, `Y coordinate ${y} must be inside perimeter [2, 8]`);
+    }
+  });
 });

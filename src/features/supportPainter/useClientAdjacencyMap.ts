@@ -1462,76 +1462,144 @@ export function walkPointPathPolygon(
     return inside;
   };
 
-  let interiorSeed = -1;
-  let bestDistSq = Infinity;
+  // 2D Point-in-Triangle test using Barycentric Coordinates
+  const pointInTriangle2D = (
+    px: number, py: number,
+    ax: number, ay: number,
+    bx: number, by: number,
+    cx: number, cy: number
+  ): { in: boolean } => {
+    const v0x = cx - ax;
+    const v0y = cy - ay;
+    const v1x = bx - ax;
+    const v1y = by - ay;
+    const v2x = px - ax;
+    const v2y = py - ay;
 
-  const checkFaces = new Set<number>();
+    const dot00 = v0x * v0x + v0y * v0y;
+    const dot01 = v0x * v1x + v0y * v1y;
+    const dot02 = v0x * v2x + v0y * v2y;
+    const dot11 = v1x * v1x + v1y * v1y;
+    const dot12 = v1x * v2x + v1y * v2y;
+
+    const denom = dot00 * dot11 - dot01 * dot01;
+    if (Math.abs(denom) < 1e-8) {
+      return { in: false };
+    }
+    const invDenom = 1 / denom;
+    const u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+    const v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+
+    return {
+      in: u >= -1e-5 && v >= -1e-5 && (u + v) <= 1 + 1e-5,
+    };
+  };
+
+  // Helper for segment intersection
+  const lineSegmentsIntersect = (
+    p1: { u: number; v: number }, q1: { u: number; v: number },
+    p2: { u: number; v: number }, q2: { u: number; v: number }
+  ): boolean => {
+    const det = (q1.u - p1.u) * (q2.v - p2.v) - (q2.u - p2.u) * (q1.v - p1.v);
+    if (Math.abs(det) < 1e-8) return false;
+    const t = ((p2.u - p1.u) * (q2.v - p2.v) - (q2.u - p2.u) * (p2.v - p1.v)) / det;
+    const u = ((p2.u - p1.u) * (q1.v - p1.v) - (q1.u - p1.u) * (p2.v - p1.v)) / det;
+    return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+  };
+
+  // Helper for triangle-polygon overlap
+  const triangleOverlapsPolygon = (
+    tu0: number, tv0: number,
+    tu1: number, tv1: number,
+    tu2: number, tv2: number,
+    poly: { u: number; v: number }[]
+  ): boolean => {
+    // 1. Any triangle vertex is inside the polygon
+    if (isPointInPolygon(tu0, tv0, poly)) return true;
+    if (isPointInPolygon(tu1, tv1, poly)) return true;
+    if (isPointInPolygon(tu2, tv2, poly)) return true;
+
+    // 2. Any polygon vertex is inside the triangle
+    for (const pv of poly) {
+      const res = pointInTriangle2D(pv.u, pv.v, tu0, tv0, tu1, tv1, tu2, tv2);
+      if (res.in) return true;
+    }
+
+    // 3. Any triangle edge intersects any polygon edge
+    const tVerts = [
+      { u: tu0, v: tv0 },
+      { u: tu1, v: tv1 },
+      { u: tu2, v: tv2 }
+    ];
+    for (let i = 0; i < 3; i++) {
+      const tp1 = tVerts[i];
+      const tp2 = tVerts[(i + 1) % 3];
+      for (let j = 0; j < poly.length; j++) {
+        const pp1 = poly[j];
+        const pp2 = poly[(j + 1) % poly.length];
+        if (lineSegmentsIntersect(tp1, tp2, pp1, pp2)) return true;
+      }
+    }
+
+    return false;
+  };
+
+  const minU = Math.min(...projected2D.map(p => p.u));
+  const maxU = Math.max(...projected2D.map(p => p.u));
+  const minV = Math.min(...projected2D.map(p => p.v));
+  const maxV = Math.max(...projected2D.map(p => p.v));
+
+  // Run a localized BFS search starting from boundaryList to gather candidate faces within the bounding box
+  const candidateFaces = new Set<number>(boundaryList);
   const scanQueue: number[] = [...boundaryList];
   const scanVisited = new Set<number>(boundaryList);
 
-  let ringsScanned = 0;
-  while (scanQueue.length > 0 && ringsScanned < 15) {
-    const levelSize = scanQueue.length;
-    for (let l = 0; l < levelSize; l++) {
-      const curr = scanQueue.shift()!;
-      const adjs = map.faceToFaces[curr];
-      for (const adj of adjs) {
-        if (!scanVisited.has(adj)) {
-          scanVisited.add(adj);
+  while (scanQueue.length > 0) {
+    const curr = scanQueue.shift()!;
+    const adjs = map.faceToFaces[curr] || [];
+    for (const adj of adjs) {
+      if (!scanVisited.has(adj)) {
+        scanVisited.add(adj);
+        const rel = new THREE.Vector3().subVectors(map.faceCentroids[adj], seedCentroid);
+        const u = rel.dot(tangentU);
+        const v = rel.dot(tangentV);
+        // Bounding box filter (with 2.0mm safety margin to ensure no boundary faces are clipped)
+        if (u >= minU - 2.0 && u <= maxU + 2.0 && v >= minV - 2.0 && v <= maxV + 2.0) {
           scanQueue.push(adj);
-          checkFaces.add(adj);
+          candidateFaces.add(adj);
         }
       }
     }
-    ringsScanned++;
   }
 
-  for (const face of checkFaces) {
-    const rel = new THREE.Vector3().subVectors(map.faceCentroids[face], seedCentroid);
-    const u = rel.dot(tangentU);
-    const v = rel.dot(tangentV);
+  const finalFaces: number[] = [];
+  for (const face of candidateFaces) {
+    // Project the 3 vertices of the face
+    const positions = map.positions;
+    if (!positions) {
+      finalFaces.push(face);
+      continue;
+    }
+    
+    // Retrieve vertices in local space
+    const v0 = new THREE.Vector3(positions[face * 9], positions[face * 9 + 1], positions[face * 9 + 2]);
+    const v1 = new THREE.Vector3(positions[face * 9 + 3], positions[face * 9 + 4], positions[face * 9 + 5]);
+    const v2 = new THREE.Vector3(positions[face * 9 + 6], positions[face * 9 + 7], positions[face * 9 + 8]);
 
-    if (isPointInPolygon(u, v, projected2D)) {
-      const distSq = (u - avgU) * (u - avgU) + (v - avgV) * (v - avgV);
-      if (distSq < bestDistSq) {
-        bestDistSq = distSq;
-        interiorSeed = face;
-      }
+    const rel0 = new THREE.Vector3().subVectors(v0, seedCentroid);
+    const rel1 = new THREE.Vector3().subVectors(v1, seedCentroid);
+    const rel2 = new THREE.Vector3().subVectors(v2, seedCentroid);
+
+    const tu0 = rel0.dot(tangentU), tv0 = rel0.dot(tangentV);
+    const tu1 = rel1.dot(tangentU), tv1 = rel1.dot(tangentV);
+    const tu2 = rel2.dot(tangentU), tv2 = rel2.dot(tangentV);
+
+    if (triangleOverlapsPolygon(tu0, tv0, tu1, tv1, tu2, tv2, projected2D)) {
+      finalFaces.push(face);
     }
   }
 
-  if (interiorSeed === -1) {
-    return boundaryList;
-  }
-
-  const filled = new Set<number>(boundary);
-  const fillQueue: number[] = [interiorSeed];
-  filled.add(interiorSeed);
-
-  const maxFillCount = Math.max(1000, map.faceCount * 0.20);
-  let failed = false;
-
-  while (fillQueue.length > 0) {
-    const curr = fillQueue.shift()!;
-    if (filled.size > maxFillCount) {
-      failed = true;
-      break;
-    }
-
-    const adjs = map.faceToFaces[curr];
-    for (const adj of adjs) {
-      if (!filled.has(adj)) {
-        filled.add(adj);
-        fillQueue.push(adj);
-      }
-    }
-  }
-
-  if (failed) {
-    return boundaryList;
-  }
-
-  return Array.from(filled);
+  return finalFaces;
 }
 
 function getOrComputeMacroNormals(

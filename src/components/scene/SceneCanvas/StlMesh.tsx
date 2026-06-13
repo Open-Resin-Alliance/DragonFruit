@@ -1369,6 +1369,7 @@ if (uDitherAmount > 0.0) {
                     const newId = supportPainterStore.commitPointPathRegion({
                       seedTriangleId: snap.pointPathPoints[0].faceIndex,
                       brushType: 'PointPerimeter',
+                      matrixWorld: matrixWorld,
                     });
 
                     const nextSnap = supportPainterStore.getSnapshot();
