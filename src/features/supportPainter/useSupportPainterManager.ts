@@ -224,6 +224,7 @@ export function useSupportPainterManager(
     }
 
     let active = true;
+    let dismissTimer: NodeJS.Timeout | null = null;
     supportPainterStore.setIsBuildingAdjacencyMap(true);
 
     const timer = setTimeout(() => {
@@ -244,7 +245,11 @@ export function useSupportPainterManager(
         }
       } finally {
         if (active) {
-          supportPainterStore.setIsBuildingAdjacencyMap(false);
+          dismissTimer = setTimeout(() => {
+            if (active) {
+              supportPainterStore.setIsBuildingAdjacencyMap(false);
+            }
+          }, 1500);
         }
       }
     }, 50);
@@ -252,6 +257,7 @@ export function useSupportPainterManager(
     return () => {
       active = false;
       clearTimeout(timer);
+      if (dismissTimer) clearTimeout(dismissTimer);
       supportPainterStore.setIsBuildingAdjacencyMap(false);
     };
   }, [isActive, activeModelId, geometry, initializedModelId]);
