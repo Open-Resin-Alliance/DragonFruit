@@ -88,9 +88,13 @@ For release-style builds and bundles:
 
 ## Localization (i18n)
 
+[![Crowdin](https://badges.crowdin.net/dragonfruit/localized.svg)](https://translate.dragonfruit-slicer.com/)
+
 See [LOCALE.md](LOCALE.md) for details on DragonFruit's internationalization
 setup, including supported locales, catalog structure, workflow commands, and
 runtime language selection.
+
+Help translate DragonFruit at **[translate.dragonfruit-slicer.com](https://translate.dragonfruit-slicer.com/)**.
 
 ## Project Structure
 

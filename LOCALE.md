@@ -31,22 +31,10 @@ Typical loop: mark new strings → `npm run i18n:extract` → fill in the empty
 
 ## Crowdin
 
-Translations are managed via the [Crowdin GitHub Integration](https://crowdin.com)
-(Crowdin GitHub App), which natively understands the gettext PO format used by
-Lingui. The integration watches the `dev` branch and handles everything
-automatically — no local tokens or CLI needed.
-
-### Setup
-
-1. Create a project at [crowdin.com](https://crowdin.com) (Software
-   Localization type).
-2. Fill in the `project_id` in `crowdin.yml`.
-3. Install the [Crowdin GitHub App](https://github.com/marketplace/crowdin) on
-   the `Open-Resin-Alliance/DragonFruit` repo.
-4. In the Crowdin project → Integrations → GitHub, connect the repo and point
-   it at the `dev` branch with:
-   - **Source:** `src/locales/en/messages.po`
-   - **Translation:** `src/locales/%two_letter_code%/messages.po`
+Translations are managed on **[translate.dragonfruit-slicer.com](https://translate.dragonfruit-slicer.com/)**
+via the Crowdin GitHub Integration, which natively understands the gettext PO
+format used by Lingui. The integration watches the `dev` branch and handles
+everything automatically — no local tokens or CLI needed.
 
 ### How it works
 
@@ -63,6 +51,12 @@ npm run i18n:compile   # verify the JS catalogs
 # commit both .po and .js files
 git push               # Crowdin picks up the source changes
 ```
+
+### Help translate
+
+Head to **[translate.dragonfruit-slicer.com](https://translate.dragonfruit-slicer.com/)**
+to contribute translations for Spanish, German, French, or request a new
+locale.
 
 ## Choosing the language at runtime
 
