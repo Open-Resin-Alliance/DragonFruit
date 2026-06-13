@@ -1288,17 +1288,6 @@ if (uDitherAmount > 0.0) {
           if (mode === 'support' && onSupportHover) {
             onSupportHover(null);
           }
-
-          if (mode === 'supportPainter') {
-            lastSharpCornerFaceRef.current = null;
-            lastSharpCornerPointRef.current = null;
-            const snap = supportPainterStore.getSnapshot();
-            if (snap.activeBrush === 'SharpCorner') {
-              supportPainterStore.setPointPathPoints([]);
-            }
-            supportPainterStore.setHoveredTriangle(null);
-            supportPainterStore.setInteractionPhase('Idle');
-          }
         }}
         onPointerDown={(e) => {
           if (isSupportShiftGesture(e)) {

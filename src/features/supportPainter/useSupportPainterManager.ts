@@ -834,12 +834,24 @@ export function SupportPainterInteractionController({
       }
     };
 
+    const handlePointerLeaveCapture = () => {
+      supportPainterStore.setHoveredTriangle(null);
+      const snap = supportPainterStore.getSnapshot();
+      if (snap.activeBrush === 'SharpCorner') {
+        supportPainterStore.setPointPathPoints([]);
+        lastSharpCornerFaceRef.current = null;
+        lastSharpCornerPointRef.current = null;
+      }
+    };
+
     canvas.addEventListener('pointerdown', handlePointerDownCapture, { capture: true });
     canvas.addEventListener('pointermove', handlePointerMoveCapture, { capture: true });
+    canvas.addEventListener('pointerleave', handlePointerLeaveCapture, { capture: true });
 
     return () => {
       canvas.removeEventListener('pointerdown', handlePointerDownCapture, { capture: true });
       canvas.removeEventListener('pointermove', handlePointerMoveCapture, { capture: true });
+      canvas.removeEventListener('pointerleave', handlePointerLeaveCapture, { capture: true });
     };
   }, [isActive, activeModelId, camera, gl.domElement, size, meshResolver, getFirstValidIntersection]);
 

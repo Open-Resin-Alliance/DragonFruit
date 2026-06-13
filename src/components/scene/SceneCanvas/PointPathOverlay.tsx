@@ -72,7 +72,7 @@ export default function PointPathOverlay({ matrixWorld }: { matrixWorld?: THREE.
       const v = new THREE.Vector3(...pt.point);
       if (pt.normal) {
         const n = new THREE.Vector3(...pt.normal).normalize();
-        const offset = activeBrush === 'SharpCorner' ? 0.03 : 0.15;
+        const offset = activeBrush === 'SharpCorner' ? 0.005 : 0.15;
         v.addScaledVector(n, offset); // Offset by normal to prevent Z-fighting
       }
       return v;

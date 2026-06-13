@@ -248,12 +248,13 @@ export function proposeRegionOnClient(
       }
       return walkManualCircle(map, seedFaceIndex, localUp, worldScale, brushRadiusMm);
     case 'PointPath':
+    case 'PointPerimeter':
       if (pointPathParams && pointPathParams.points.length > 0) {
         const pts = pointPathParams.points.map((p) => p.faceIndex);
         if (seedFaceIndex >= 0 && seedFaceIndex < map.faceCount && !pointPathParams.closed) {
           pts.push(seedFaceIndex);
         }
-        if (pointPathParams.mode === 'line') {
+        if (brushType === 'PointPath' && pointPathParams.mode === 'line') {
           return walkPointPathLine(map, pts, pointPathParams.widthMm, localUp, worldScale);
         } else {
           return walkPointPathPolygon(map, pts, localUp, worldScale);
@@ -1419,8 +1420,7 @@ export function walkPointPathPolygon(
     rawPath.push(rawPath[0]);
   }
 
-  const smoothedPath = smoothPointPath(map, rawPath);
-  const boundary = new Set<number>(smoothedPath);
+  const boundary = new Set<number>(rawPath);
 
   const firstSeed = points[0];
   const seedNormal = map.faceNormals[firstSeed];

@@ -26,14 +26,14 @@ export default function VectorPathOverlay({ modelId }: VectorPathOverlayProps) {
     <group renderOrder={9999}>
       {committedVectorRegions.map((region) => {
         const pts = region.vectorPath!.map((pt) => {
-          const v = new THREE.Vector3(...pt.point);
-          if (pt.normal) {
-            const n = new THREE.Vector3(...pt.normal).normalize();
-            const offset = region.brushType === 'SharpCorner' ? 0.03 : 0.15;
-            v.addScaledVector(n, offset); // Offset along normal to prevent Z-fighting
-          }
-          return v;
-        });
+           const v = new THREE.Vector3(...pt.point);
+           if (pt.normal) {
+             const n = new THREE.Vector3(...pt.normal).normalize();
+             const offset = region.brushType === 'SharpCorner' ? 0.005 : 0.15;
+             v.addScaledVector(n, offset); // Offset along normal to prevent Z-fighting
+           }
+           return v;
+         });
         
         // If it's a PointPerimeter (closed loop), append the first point to close the path
         if (region.brushType === 'PointPerimeter' && pts.length >= 3) {
