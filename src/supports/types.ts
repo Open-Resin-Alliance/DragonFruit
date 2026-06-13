@@ -157,6 +157,7 @@ export interface ContactDisk {
     surfaceNormal: Vec3;
     coneAxis: Vec3;
     diskLengthOverride?: number;
+    placementSurface?: 'interior' | 'exterior';
     profile: ContactDiskProfile;
     contactDiameterMm: number;
 }

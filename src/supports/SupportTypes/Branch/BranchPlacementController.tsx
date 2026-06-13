@@ -49,6 +49,13 @@ interface ShaftHoverDetail {
     point?: Vec3 | null;
 }
 
+type PlacementSurface = 'interior' | 'exterior';
+
+function markContactPlacementSurface<T extends { placementSurface?: PlacementSurface } | undefined>(contact: T, surface?: PlacementSurface): T {
+    if (!contact || !surface) return contact;
+    return { ...contact, placementSurface: surface } as T;
+}
+
 // Scratch raycaster reused for clip-zone fallback raycasts (same pattern as StlMesh).
 const _branchClipFallbackRaycaster = new THREE.Raycaster();
 
@@ -84,7 +91,7 @@ function findClipAwareHitForBranch(
 }
 
 export function BranchPlacementController() {
-    const { isActive, altActive, stage, tipPosition, tipNormal, modelId } = useBranchPlacementState();
+    const { isActive, altActive, stage, tipPosition, tipNormal, modelId, placementSurface } = useBranchPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const immediateModelHoverId = useImmediateModelHoverId();
     const { getHotkey } = useHotkeyConfig();
@@ -709,10 +716,17 @@ export function BranchPlacementController() {
                         mesh: resolveTipMesh(),
                     });
                     if (error) return;
-                    addTwig(twig);
+                    const markedTwig = placementSurface
+                        ? {
+                            ...twig,
+                            contactDiskA: markContactPlacementSurface(twig.contactDiskA, placementSurface),
+                            contactDiskB: markContactPlacementSurface(twig.contactDiskB, placementSurface),
+                        }
+                        : twig;
+                    addTwig(markedTwig);
                     pushHistory({
                         type: SUPPORT_ADD_TWIG,
-                        payload: { twig },
+                        payload: { twig: markedTwig },
                     });
                 } else {
                     const { stick, error } = buildStick({
@@ -724,10 +738,17 @@ export function BranchPlacementController() {
                         mesh: resolveTipMesh(),
                     });
                     if (error) return;
-                    addStick(stick);
+                    const markedStick = placementSurface
+                        ? {
+                            ...stick,
+                            contactConeA: markContactPlacementSurface(stick.contactConeA, placementSurface),
+                            contactConeB: markContactPlacementSurface(stick.contactConeB, placementSurface),
+                        }
+                        : stick;
+                    addStick(markedStick);
                     pushHistory({
                         type: SUPPORT_ADD_STICK,
-                        payload: { stick },
+                        payload: { stick: markedStick },
                     });
                 }
 
@@ -764,14 +785,20 @@ export function BranchPlacementController() {
             });
 
             console.log('[BranchPlacement] Creating branch via snap click', branch);
+            const markedBranch = placementSurface
+                ? {
+                    ...branch,
+                    contactCone: markContactPlacementSurface(branch.contactCone, placementSurface),
+                }
+                : branch;
 
             addKnot(parentKnot);
-            addBranch(branch);
+            addBranch(markedBranch);
 
             pushHistory({
                 type: SUPPORT_ADD_BRANCH,
                 payload: {
-                    branch,
+                    branch: markedBranch,
                     knot: parentKnot,
                 },
             });
@@ -785,7 +812,7 @@ export function BranchPlacementController() {
 
         window.addEventListener('click', handleClick, true);
         return () => window.removeEventListener('click', handleClick, true);
-    }, [isActive, stage, tipPosition, tipNormal, modelId, resetSnapping, resolveTipMesh]);
+    }, [isActive, stage, tipPosition, tipNormal, modelId, placementSurface, resetSnapping, resolveTipMesh]);
 
     // Reset snapping when deactivated
     useEffect(() => {

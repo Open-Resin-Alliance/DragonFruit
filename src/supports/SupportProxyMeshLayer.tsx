@@ -614,35 +614,49 @@ export function SupportProxyMeshLayer({
       return isPointInsideCavityVolume(tempVec, geometry);
     };
 
+    const isInteriorContactCone = (cone: { pos: Vec3; placementSurface?: 'interior' | 'exterior' } | undefined, modelId?: string): boolean => {
+      if (!cone) return false;
+      if (cone.placementSurface === 'interior') return true;
+      if (cone.placementSurface === 'exterior') return false;
+      return isPointOnCavitySurface(cone.pos, modelId);
+    };
+
+    const isInteriorContactDisk = (disk: { pos: Vec3; placementSurface?: 'interior' | 'exterior' } | undefined, modelId?: string): boolean => {
+      if (!disk) return false;
+      if (disk.placementSurface === 'interior') return true;
+      if (disk.placementSurface === 'exterior') return false;
+      return isPointOnCavitySurface(disk.pos, modelId);
+    };
+
     // Trunks
     for (const trunk of Object.values(supportTrunks)) {
-      if (trunk.contactCone && isPointOnCavitySurface(trunk.contactCone.pos, trunk.modelId)) {
+      if (isInteriorContactCone(trunk.contactCone, trunk.modelId)) {
         ids.add(`trunk:${trunk.id}`);
       }
     }
     for (const branch of Object.values(supportBranches)) {
-      if (branch.contactCone && isPointOnCavitySurface(branch.contactCone.pos, branch.modelId)) {
+      if (isInteriorContactCone(branch.contactCone, branch.modelId)) {
         ids.add(`branch:${branch.id}`);
       }
     }
     for (const leaf of Object.values(supportLeaves)) {
-      if (isPointOnCavitySurface(leaf.contactCone.pos, leaf.modelId)) {
+      if (isInteriorContactCone(leaf.contactCone, leaf.modelId)) {
         ids.add(`leaf:${leaf.id}`);
       }
     }
     for (const stick of Object.values(supportSticks)) {
-      const onA = stick.contactConeA && isPointOnCavitySurface(stick.contactConeA.pos, stick.modelId);
-      const onB = stick.contactConeB && isPointOnCavitySurface(stick.contactConeB.pos, stick.modelId);
+      const onA = isInteriorContactCone(stick.contactConeA, stick.modelId);
+      const onB = isInteriorContactCone(stick.contactConeB, stick.modelId);
       if (onA || onB) ids.add(`stick:${stick.id}`);
     }
     for (const anchor of Object.values(supportState.anchors)) {
-      if (anchor.contactCone && isPointOnCavitySurface(anchor.contactCone.pos, anchor.modelId)) {
+      if (isInteriorContactCone(anchor.contactCone, anchor.modelId)) {
         ids.add(`anchor:${anchor.id}`);
       }
     }
     for (const twig of Object.values(supportTwigs)) {
-      const onA = twig.contactDiskA && isPointOnCavitySurface(twig.contactDiskA.pos, twig.modelId);
-      const onB = twig.contactDiskB && isPointOnCavitySurface(twig.contactDiskB.pos, twig.modelId);
+      const onA = isInteriorContactDisk(twig.contactDiskA, twig.modelId);
+      const onB = isInteriorContactDisk(twig.contactDiskB, twig.modelId);
       if (onA || onB) ids.add(`twig:${twig.id}`);
     }
 
