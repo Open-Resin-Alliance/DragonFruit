@@ -1421,6 +1421,7 @@ export function walkPointPathPolygon(
   }
 
   const boundary = new Set<number>(rawPath);
+  const boundaryList = Array.from(boundary);
 
   const firstSeed = points[0];
   const seedNormal = map.faceNormals[firstSeed];
@@ -1434,8 +1435,7 @@ export function walkPointPathPolygon(
 
   const seedCentroid = map.faceCentroids[firstSeed];
 
-  const boundaryList = Array.from(boundary);
-  const projected2D: { u: number; v: number }[] = boundaryList.map((face) => {
+  const projected2D: { u: number; v: number }[] = points.map((face) => {
     const rel = new THREE.Vector3().subVectors(map.faceCentroids[face], seedCentroid);
     return {
       u: rel.dot(tangentU),

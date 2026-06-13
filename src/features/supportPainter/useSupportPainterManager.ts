@@ -246,7 +246,7 @@ export function useSupportPainterManager(
     const snap = supportPainterStore.getSnapshot();
     const activeCustomBrush = activeCustomBrushId ? customBrushes.get(activeCustomBrushId) : undefined;
     const activeBrushType = activeCustomBrush ? (activeCustomBrush.baseBrush || 'MacroFace') : activeBrush;
-    const isPointPath = activeBrushType === 'PointPath';
+    const isPointPath = activeBrushType === 'PointPath' || activeBrushType === 'PointPerimeter';
 
     if (!isActive || !activeModelId || initializedModelId !== activeModelId) {
       return;

@@ -1419,8 +1419,6 @@ export async function generateSupportsFromPainter(
       });
       const worldPts = region.vectorPath!.map((p, idx) => {
         const v = new THREE.Vector3(...p.point).applyMatrix4(mesh.matrixWorld);
-        const norm = worldNorms[idx];
-        v.addScaledVector(norm, 0.05); // Offset outward by 0.05mm along normal to ensure strictly outside mesh volume
         return v;
       });
 
