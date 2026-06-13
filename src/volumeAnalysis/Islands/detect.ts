@@ -1,26 +1,20 @@
 import * as THREE from 'three';
 import { type DetectedIsland } from './types';
-// PORTABILITY: ALL analysis-domain dependencies are confined to this file —
-// the analysis slicer + the IslandScan per-layer primitives. If that infra is
-// removed (e.g. Analysis tab retired), this is the one Islands/ module to
-// re-home or vendor; every other Islands/ file is independent of it.
-import { BucketedSlicer } from '@/components/analysis/Slice2D';
-import { scanLayer } from '@/volumeAnalysis/IslandScan/island';
-import { rleEncode } from '@/volumeAnalysis/IslandScan/rle';
-import { rasterizeLoopsToExistingGrid } from '@/volumeAnalysis/IslandScan/raster';
-import type { Mask } from '@/volumeAnalysis/IslandScan/types';
+// PORTABILITY: analysis-domain dependencies are confined to this file — the
+// scanline island worker (the fast RLE engine the Analysis-tab voxel rescan
+// uses) and the RleLabels type. If that infra is removed, this is the one
+// Islands/ module to re-home; everything else is independent.
+import type { RleLabels } from '@/volumeAnalysis/IslandScan/rle';
 
 // Pixel-centre offsets — mirror ScanOrchestrator's VOXEL_OFFSET_{X,Y} so contact
-// points land in the same world frame as the legacy overlay. Hardcoded (rather
-// than imported) to avoid pulling the whole ScanOrchestrator pipeline for two
-// constants.
+// points land in the same world frame as the legacy overlay.
 const VOXEL_OFFSET_X = 0.5;
 const VOXEL_OFFSET_Y = 0;
 
 export interface VoxelDetectParams {
   pxMm: number;
   supportBufferMm: number;
-  /** Per-layer 2D candidate connectivity (passed to `scanLayer`). */
+  /** Per-layer 2D candidate connectivity (passed to scanLayer in the worker). */
   connectivity?: 4 | 8;
   /** 3D cluster connectivity across layers: true = 26-conn (default), false = 6-conn. */
   diagonal3D?: boolean;
@@ -33,23 +27,28 @@ export interface VoxelDetectInput {
   bbox: THREE.Box3;
 }
 
+interface GridRef {
+  originX: number;
+  originZ: number;
+  width: number;
+  height: number;
+  px_mm: number;
+}
+
 /**
  * Rebuilt voxel island detection.
  *
- * THE FIX: the legacy pipeline ran connected-components on the whole solid mask
- * and propagated island IDs up through every solid pixel above a seed (and seeded
- * the grounded body at layer 0), so every island column reached a top surface.
- * Here an island is a 3D-connected cluster of the *unsupported* `scanLayer`
- * candidates only (`current − dilate(prev_below)`). Candidates never include the
- * supported bulk, so a cluster terminates as soon as the region becomes supported
- * — it can never climb to a top surface.
+ * THE FIX: an island is a 3D-connected cluster of the *unsupported* scanLayer
+ * candidates only (current − dilate(prev_below)). Candidates never include the
+ * supported bulk, so a cluster terminates as soon as the region becomes
+ * supported — it can never climb to a top surface (the legacy bug).
  *
- * Cross-layer linking is voxel adjacency (26-conn by default, robust to slanted
- * overhangs). Overlap-based linking is the refinement if overhangs fragment/merge.
- *
- * Runs on the main thread for PoC simplicity (reusing the same slicer + scanLayer
- * the worker uses), yielding periodically for progress. Worker-ization is a
- * straightforward perf follow-up for very large models.
+ * PERFORMANCE: slicing + per-layer candidate extraction run on the **scanline
+ * worker pool** — the same fast RLE engine the Analysis-tab voxel rescan uses
+ * (scanlineScan.worker.ts). We only collect each layer's candidate labels, then
+ * run 3D connected-components (26-conn by default) on the union of candidate
+ * voxels. (An earlier draft ran the point-in-polygon rasterizer on the main
+ * thread — far slower; replaced.)
  */
 export async function detectVoxelIslands(
   input: VoxelDetectInput,
@@ -61,49 +60,37 @@ export async function detectVoxelIslands(
   const bb = input.bbox;
   const minZ = bb.min.z;
 
-  // Grid (mirrors ScanOrchestrator): mask Y stores -worldY.
+  // Grid (mirrors ScanOrchestrator): mask row 0 stores -bb.max.y; mask Y == -worldY.
   const originX = bb.min.x;
-  const originZ = -bb.max.y; // mask row 0
+  const originZ = -bb.max.y;
   const width = Math.max(1, Math.ceil((bb.max.x - bb.min.x) / px));
   const height = Math.max(1, Math.ceil((bb.max.y - bb.min.y) / px));
   const numLayers = Math.max(0, Math.ceil((bb.max.z - minZ) / layerHeightMm));
   if (numLayers === 0) return [];
 
-  const codec = gridCodec(width, height);
-  const slicer = new BucketedSlicer(input.positions, 5.0);
+  const gridRef: GridRef = { originX, originZ, width, height, px_mm: px };
   const opts = {
     px_mm: px,
     support_buffer_mm: params.supportBufferMm,
     connectivity: params.connectivity ?? 4,
   };
-  const gridRef: Mask = {
-    data: new Uint8Array(width * height),
-    width,
-    height,
-    originX,
-    originZ,
-    px_mm: px,
-  };
 
-  // Collect the unsupported candidate voxels across all layers.
+  const candidateLayers = await sliceCandidateLayers(
+    input.positions,
+    gridRef,
+    minZ,
+    numLayers,
+    layerHeightMm,
+    opts,
+    onProgress,
+  );
+
+  // Union of all unsupported candidate voxels.
+  const codec = gridCodec(width, height);
   const candidates = new Set<number>();
-
   for (let L = 0; L < numLayers; L++) {
-    const zTop = minZ + (L + 1) * layerHeightMm + 1e-6;
-    const zBot = zTop - layerHeightMm;
-
-    const loopsNow = slicer.slice(zTop).map((loop) => loop.map((v) => ({ x: v.x, y: v.y })));
-    const loopsPrev = slicer.slice(zBot).map((loop) => loop.map((v) => ({ x: v.x, y: v.y })));
-
-    const currentRle = rleEncode(rasterizeLoopsToExistingGrid(loopsNow, gridRef).data, width, height);
-    const prevRle =
-      loopsPrev.length > 0
-        ? rleEncode(rasterizeLoopsToExistingGrid(loopsPrev, gridRef).data, width, height)
-        : null;
-
-    const { labels } = scanLayer(currentRle, prevRle, opts);
-
-    // Mark candidate pixels (label id > 0 == unsupported).
+    const labels = candidateLayers[L];
+    if (!labels) continue;
     for (let y = 0; y < labels.height; y++) {
       const row = labels.rows[y];
       for (let i = 0; i < row.length; i += 3) {
@@ -115,12 +102,71 @@ export async function detectVoxelIslands(
         }
       }
     }
-
-    onProgress?.(L + 1, numLayers);
-    if ((L & 15) === 0) await Promise.resolve(); // keep the UI breathing
   }
 
   return buildIslands(candidates, codec, { originX, originZ, px, minZ, layerHeightMm }, params.diagonal3D !== false);
+}
+
+/**
+ * Slice every layer on the scanline worker pool and return each layer's
+ * candidate (unsupported) RLE labels. Mirrors ScanOrchestrator.runScanInternal's
+ * dispatch — concurrency = hardwareConcurrency — but keeps only res.labels.
+ */
+async function sliceCandidateLayers(
+  positions: Float32Array,
+  gridRef: GridRef,
+  minZ: number,
+  numLayers: number,
+  layerHeightMm: number,
+  opts: { px_mm: number; support_buffer_mm: number; connectivity: 4 | 8 },
+  onProgress?: (done: number, total: number) => void,
+): Promise<RleLabels[]> {
+  const candidateLayers: RleLabels[] = new Array(numLayers);
+
+  const cores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
+  const concurrency = Math.min(Math.max(2, cores), numLayers);
+
+  const workers: Worker[] = Array.from(
+    { length: concurrency },
+    () => new Worker(new URL('@/volumeAnalysis/IslandScan/scanlineScan.worker.ts', import.meta.url), { type: 'module' }),
+  );
+  // Each worker builds its own BucketedSlicer from the positions.
+  workers.forEach((w) => w.postMessage({ type: 'init', positions }));
+
+  let nextIndex = 0;
+  let done = 0;
+
+  await Promise.all(
+    workers.map(
+      (w) =>
+        new Promise<void>((resolve) => {
+          const runNext = () => {
+            if (nextIndex >= numLayers) {
+              resolve();
+              return;
+            }
+            const idx = nextIndex++;
+            const zTop = minZ + (idx + 1) * layerHeightMm + 1e-6;
+
+            const onMessage = (e: MessageEvent) => {
+              const msg = e.data as { type?: string; result?: { islandLabelsRle: RleLabels } };
+              if (msg?.type !== 'done') return;
+              w.removeEventListener('message', onMessage);
+              candidateLayers[idx] = msg.result!.islandLabelsRle;
+              done++;
+              onProgress?.(done, numLayers);
+              runNext();
+            };
+            w.addEventListener('message', onMessage);
+            w.postMessage({ type: 'layer', z: zTop, layerHeightMm, gridRef, opts });
+          };
+          runNext();
+        }),
+    ),
+  );
+
+  workers.forEach((w) => w.terminate());
+  return candidateLayers;
 }
 
 interface GridGeom {
