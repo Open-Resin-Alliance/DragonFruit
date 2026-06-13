@@ -5,7 +5,7 @@ import { supportPainterStore, useSupportPainterState } from './supportPainterSto
 import { PAINT_ROI_ADD, PAINT_ROI_REMOVE, PAINT_ROI_STRIP } from './supportPainterHistoryTypes';
 import { pushHistory, registerHistoryHandler } from '@/history/historyStore';
 import { SUPPORT_EDIT_REPLACE } from '@/supports/history/actionTypes';
-import { type ROIRegion, BRUSH_COLORS } from './supportPainterTypes';
+import { type ROIRegion, type BrushType, BRUSH_COLORS } from './supportPainterTypes';
 import { buildClientAdjacencyMap, proposeRegionOnClient, walkSharpCorner } from './useClientAdjacencyMap';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
 import { deleteSupportsForRoi } from '@/supports/PlacementLogic/SupportModelLinker';
@@ -257,118 +257,7 @@ export function useSupportPainterManager(
   }, [isActive, activeModelId, geometry, initializedModelId]);
 
 
-  // 4. Synchronous, Low-Latency Client-Side Region Proposal (runs in <1ms!)
-  const activeCustomBrush = activeCustomBrushId ? customBrushes.get(activeCustomBrushId) : undefined;
-  const customBrushParamsJson = activeCustomBrush ? JSON.stringify(activeCustomBrush.selection) : '';
-  const pointPathPointsJson = JSON.stringify(pointPathPoints);
-
-  useEffect(() => {
-    const snap = supportPainterStore.getSnapshot();
-    const activeCustomBrush = activeCustomBrushId ? customBrushes.get(activeCustomBrushId) : undefined;
-    const activeBrushType = activeCustomBrush ? (activeCustomBrush.baseBrush || 'MacroFace') : activeBrush;
-    const isPointPath = activeBrushType === 'PointPath' || activeBrushType === 'PointPerimeter';
-
-    if (!isActive || !activeModelId || initializedModelId !== activeModelId) {
-      return;
-    }
-
-    if (hoveredTriangleId === null && !isPointPath) {
-      return;
-    }
-
-    const map = supportPainterStore.getClientAdjacencyMap();
-    if (!map) {
-      console.warn('[SupportPainterManager] Client adjacency map not available!');
-      return;
-    }
-
-    try {
-      // Resolve the live mesh and its up-to-date matrixWorld dynamically at hover time
-      const mesh = meshResolver?.();
-      const matrixWorld = mesh?.matrixWorld || new THREE.Matrix4();
-      
-      console.log(`[SupportPainterManager] Running proposal on seed: ${hoveredTriangleId}, active brush: ${activeBrush}, mesh resolved: ${!!mesh}`);
-      
-      const isCustomMarker = activeCustomBrush && activeCustomBrush.baseBrush === 'Marker';
-
-      const radius = isCustomMarker
-        ? (activeCustomBrush.selection.markerRadiusMm ?? 1.5)
-        : snap.markerRadiusMm;
-
-      const shape = isCustomMarker
-        ? (activeCustomBrush.selection.markerTipShape ?? 'circle')
-        : snap.markerTipShape;
-
-      const rotation = isCustomMarker
-        ? (activeCustomBrush.selection.markerTipRotationDeg ?? 0)
-        : snap.markerTipRotationDeg;
-
-      const collisionMode = isCustomMarker
-        ? (activeCustomBrush.selection.markerCollisionMode ?? 'merge')
-        : snap.markerCollisionMode;
-
-      const markerParams = {
-        radiusMm: radius,
-        shape,
-        rotationDeg: rotation,
-        collisionMode,
-      };
-
-      const pointPathParams = {
-        points: snap.pointPathPoints,
-        widthMm: snap.pointPathWidthMm,
-        mode: snap.pointPathMode,
-        closed: snap.pointPathClosed,
-      };
-
-      const occupiedFaces = new Set<number>();
-      for (const [id, reg] of snap.regions.entries()) {
-        if (id === snap.selectedRegionId) continue;
-        for (const tid of reg.triangleIds) {
-          occupiedFaces.add(tid);
-        }
-      }
-
-      // Execute the brush walk synchronously in JavaScript using the live transform
-      const isCircleOrSquare = activeBrushType === 'Point' || activeBrushType === 'ManualCircle' || activeBrushType === 'ManualSquare';
-      const effectiveRadius = isCircleOrSquare ? brushRadiusMm * 0.5 : brushRadiusMm;
-      
-      const proposedIds = proposeRegionOnClient(
-        map,
-        hoveredTriangleId ?? -1,
-        activeBrushType,
-        matrixWorld,
-        activeBrushType === 'Marker' ? radius : effectiveRadius,
-        activeCustomBrush,
-        markerParams,
-        occupiedFaces,
-        pointPathParams
-      );
-      
-      console.log(`[SupportPainterManager] Smart brush search returned ${proposedIds.length} triangles.`);
-      supportPainterStore.setProposedTriangleIds(proposedIds);
-    } catch (err) {
-      console.error('[SupportPainterManager] Client proposal failed', err);
-    }
-  }, [
-    isActive,
-    activeModelId,
-    hoveredTriangleId,
-    activeBrush,
-    initializedModelId,
-    meshResolver,
-    brushRadiusMm,
-    activeCustomBrushId,
-    customBrushParamsJson,
-    markerRadiusMm,
-    markerTipShape,
-    markerTipRotationDeg,
-    markerCollisionMode,
-    pointPathPointsJson,
-    pointPathWidthMm,
-    pointPathMode,
-    pointPathClosed,
-  ]);
+  // 4. Proposal calculation moved to useFrame inside SupportPainterInteractionController for atomic flicker-free updates
 }
 
 /**
@@ -425,12 +314,32 @@ export function SupportPainterInteractionController({
     return null;
   }, []);
 
+  const lastStateRef = useRef({
+    hoveredFace: null as number | null,
+    hoveredPoint: null as [number, number, number] | null,
+    brushType: '' as BrushType,
+    brushRadius: 0,
+    markerRadius: 0,
+    markerTipShape: '',
+    markerTipRotation: 0,
+    markerCollisionMode: '',
+    pointPathLength: 0,
+    pointPathWidth: 0,
+    pointPathMode: '',
+    pointPathClosed: false,
+    activeCustomBrushId: null as string | null,
+    altKey: false,
+    shiftKey: false
+  });
+
   // Frame loop for mouse hover detection
   useFrame(() => {
     if (!isActive || !activeModelId || state.modifierKeys.shift) {
       if (lastHoveredFaceRef.current !== null) {
         lastHoveredFaceRef.current = null;
-        supportPainterStore.setHoveredTriangle(null);
+        lastStateRef.current.hoveredFace = null;
+        lastStateRef.current.hoveredPoint = null;
+        supportPainterStore.setHoveredAndProposed(null, null, []);
       }
       return;
     }
@@ -453,31 +362,117 @@ export function SupportPainterInteractionController({
     const intersections = customRaycaster.intersectObject(mesh);
     const validHit = getFirstValidIntersection(intersections, customRaycaster.ray.direction, mesh.matrixWorld);
 
+    let faceIndex: number | null = null;
+    let hitPoint: THREE.Vector3 | null = null;
+
     if (validHit && typeof validHit.faceIndex === 'number') {
-      const faceIndex = validHit.faceIndex;
-      const hitPoint = validHit.point;
+      faceIndex = validHit.faceIndex;
+      hitPoint = validHit.point;
+    }
+
+    // Determine active brush settings
+    const activeCustomBrush = snap.activeCustomBrushId ? snap.customBrushes.get(snap.activeCustomBrushId) : undefined;
+    const activeBrushType = activeCustomBrush ? (activeCustomBrush.baseBrush || 'MacroFace') : snap.activeBrush;
+
+    const isCustomMarker = activeCustomBrush && activeCustomBrush.baseBrush === 'Marker';
+    const radius = isCustomMarker ? (activeCustomBrush.selection.markerRadiusMm ?? 1.5) : snap.markerRadiusMm;
+    const shape = isCustomMarker ? (activeCustomBrush.selection.markerTipShape ?? 'circle') : snap.markerTipShape;
+    const rotation = isCustomMarker ? (activeCustomBrush.selection.markerTipRotationDeg ?? 0) : snap.markerTipRotationDeg;
+    const collisionMode = isCustomMarker ? (activeCustomBrush.selection.markerCollisionMode ?? 'fence') : snap.markerCollisionMode;
+    const eraserMode = activeCustomBrush ? activeCustomBrush.selection.markerEraserMode : snap.markerEraserMode;
+
+    const markerParams = { radiusMm: radius, shape, rotationDeg: rotation, collisionMode };
+    const pointPathParams = {
+      points: snap.pointPathPoints,
+      widthMm: snap.pointPathWidthMm,
+      mode: snap.pointPathMode,
+      closed: snap.pointPathClosed,
+    };
+
+    // Check if hovered face, hovered point, or brush parameters changed
+    const faceChanged = faceIndex !== lastStateRef.current.hoveredFace;
+    let pointMoved = false;
+    if (hitPoint && lastStateRef.current.hoveredPoint) {
+      const dx = hitPoint.x - lastStateRef.current.hoveredPoint[0];
+      const dy = hitPoint.y - lastStateRef.current.hoveredPoint[1];
+      const dz = hitPoint.z - lastStateRef.current.hoveredPoint[2];
+      if (dx * dx + dy * dy + dz * dz > 0.0025) { // 0.05mm threshold
+        pointMoved = true;
+      }
+    } else if (!!hitPoint !== !!lastStateRef.current.hoveredPoint) {
+      pointMoved = true;
+    }
+
+    const settingsChanged =
+      activeBrushType !== lastStateRef.current.brushType ||
+      snap.brushRadiusMm !== lastStateRef.current.brushRadius ||
+      snap.markerRadiusMm !== lastStateRef.current.markerRadius ||
+      snap.markerTipShape !== lastStateRef.current.markerTipShape ||
+      snap.markerTipRotationDeg !== lastStateRef.current.markerTipRotation ||
+      snap.markerCollisionMode !== lastStateRef.current.markerCollisionMode ||
+      snap.pointPathPoints.length !== lastStateRef.current.pointPathLength ||
+      snap.pointPathWidthMm !== lastStateRef.current.pointPathWidth ||
+      snap.pointPathMode !== lastStateRef.current.pointPathMode ||
+      snap.pointPathClosed !== lastStateRef.current.pointPathClosed ||
+      snap.activeCustomBrushId !== lastStateRef.current.activeCustomBrushId ||
+      snap.modifierKeys.alt !== lastStateRef.current.altKey ||
+      snap.modifierKeys.shift !== lastStateRef.current.shiftKey;
+
+    if (faceChanged || pointMoved || settingsChanged) {
+      // Update cache refs
+      lastStateRef.current.hoveredFace = faceIndex;
+      lastStateRef.current.hoveredPoint = hitPoint ? [hitPoint.x, hitPoint.y, hitPoint.z] : null;
+      lastStateRef.current.brushType = activeBrushType;
+      lastStateRef.current.brushRadius = snap.brushRadiusMm;
+      lastStateRef.current.markerRadius = snap.markerRadiusMm;
+      lastStateRef.current.markerTipShape = snap.markerTipShape;
+      lastStateRef.current.markerTipRotation = snap.markerTipRotationDeg;
+      lastStateRef.current.markerCollisionMode = snap.markerCollisionMode;
+      lastStateRef.current.pointPathLength = snap.pointPathPoints.length;
+      lastStateRef.current.pointPathWidth = snap.pointPathWidthMm;
+      lastStateRef.current.pointPathMode = snap.pointPathMode;
+      lastStateRef.current.pointPathClosed = snap.pointPathClosed;
+      lastStateRef.current.activeCustomBrushId = snap.activeCustomBrushId;
+      lastStateRef.current.altKey = snap.modifierKeys.alt;
+      lastStateRef.current.shiftKey = snap.modifierKeys.shift;
+
+      if (faceIndex === null) {
+        lastHoveredFaceRef.current = null;
+        supportPainterStore.setHoveredAndProposed(null, null, []);
+        if (snap.activeBrush === 'SharpCorner' && snap.pointPathPoints.length > 0) {
+          supportPainterStore.setPointPathPoints([]);
+          lastSharpCornerFaceRef.current = null;
+          lastSharpCornerPointRef.current = null;
+        }
+        return;
+      }
+
+      lastHoveredFaceRef.current = faceIndex;
+      if (hitPoint) {
+        lastHoveredPointRef.current.copy(hitPoint);
+      }
 
       // Handle SharpCorner walk preview on hover
-      if (snap.activeBrush === 'SharpCorner') {
-        const map = supportPainterStore.getClientAdjacencyMap();
-        if (map && geometry) {
-          const snappedWorldPoint = getSnappedWorldPoint(
-            hitPoint,
-            faceIndex,
-            mesh,
-            camera,
-            size,
-            mouseRef.current
-          );
+      if (snap.activeBrush === 'SharpCorner' && geometry && hitPoint) {
+        const snappedWorldPoint = getSnappedWorldPoint(
+          hitPoint,
+          faceIndex,
+          mesh,
+          camera,
+          size,
+          mouseRef.current
+        );
 
-          const isNewFace = lastSharpCornerFaceRef.current !== faceIndex;
-          const dist = lastSharpCornerPointRef.current ? snappedWorldPoint.distanceTo(lastSharpCornerPointRef.current) : Infinity;
-          const isEmpty = snap.pointPathPoints.length === 0;
+        const isNewFace = lastSharpCornerFaceRef.current !== faceIndex;
+        const dist = lastSharpCornerPointRef.current ? snappedWorldPoint.distanceTo(lastSharpCornerPointRef.current) : Infinity;
+        const isEmpty = snap.pointPathPoints.length === 0;
 
-          if (isNewFace || dist > 0.01 || isEmpty) {
-            lastSharpCornerFaceRef.current = faceIndex;
-            lastSharpCornerPointRef.current = snappedWorldPoint.clone();
+        if (isNewFace || dist > 0.01 || isEmpty) {
+          lastSharpCornerFaceRef.current = faceIndex;
+          lastSharpCornerPointRef.current = snappedWorldPoint.clone();
 
+          const map = supportPainterStore.getClientAdjacencyMap();
+          if (map) {
             const walkedPath = walkSharpCorner(
               map,
               geometry,
@@ -499,80 +494,57 @@ export function SupportPainterInteractionController({
               supportPainterStore.setPointPathPoints([]);
             }
           }
-        } else {
-          supportPainterStore.setPointPathPoints([]);
         }
       }
 
-      const faceChanged = faceIndex !== lastHoveredFaceRef.current;
-      const distSq = hitPoint.distanceToSquared(lastHoveredPointRef.current);
-      const movedEnough = distSq > 0.0025; // 0.05mm squared threshold
+      // Compute client-side proposal
+      const map = supportPainterStore.getClientAdjacencyMap();
+      if (map && hitPoint) {
+        const occupiedFaces = new Set<number>();
+        for (const [id, reg] of snap.regions.entries()) {
+          if (id === snap.selectedRegionId) continue;
+          for (const tid of reg.triangleIds) {
+            occupiedFaces.add(tid);
+          }
+        }
 
-      if (faceChanged || movedEnough) {
-        lastHoveredFaceRef.current = faceIndex;
-        lastHoveredPointRef.current.copy(hitPoint);
-        supportPainterStore.setHoveredTriangle(faceIndex, [hitPoint.x, hitPoint.y, hitPoint.z]);
+        const isCircleOrSquare = activeBrushType === 'Point' || activeBrushType === 'ManualCircle' || activeBrushType === 'ManualSquare';
+        const effectiveRadius = isCircleOrSquare ? snap.brushRadiusMm * 0.5 : snap.brushRadiusMm;
+
+        const proposedIds = proposeRegionOnClient(
+          map,
+          faceIndex,
+          activeBrushType,
+          mesh.matrixWorld,
+          activeBrushType === 'Marker' ? radius : effectiveRadius,
+          activeCustomBrush,
+          markerParams,
+          occupiedFaces,
+          pointPathParams
+        );
 
         // Drag-to-paint / Drag-to-erase
         const isDragging = (snap.interactionPhase === 'Expand' || snap.interactionPhase === 'Subtract');
-        
-        if (isDragging && snap.activeBrush !== 'PointPath' && snap.activeBrush !== 'PointPerimeter' && snap.activeBrush !== 'SharpCorner') {
-          const map = supportPainterStore.getClientAdjacencyMap();
-          if (map) {
-            const activeCustomBrush = snap.activeCustomBrushId ? snap.customBrushes.get(snap.activeCustomBrushId) : undefined;
-            const activeBrushType = activeCustomBrush ? (activeCustomBrush.baseBrush || 'MacroFace') : snap.activeBrush;
+        const isVectorBrush = activeBrushType === 'PointPath' || activeBrushType === 'PointPerimeter' || activeBrushType === 'SharpCorner';
 
-            const isCustomMarker = activeCustomBrush && activeCustomBrush.baseBrush === 'Marker';
-            const radius = isCustomMarker ? (activeCustomBrush.selection.markerRadiusMm ?? 1.5) : snap.markerRadiusMm;
-            const shape = isCustomMarker ? (activeCustomBrush.selection.markerTipShape ?? 'circle') : snap.markerTipShape;
-            const rotation = isCustomMarker ? (activeCustomBrush.selection.markerTipRotationDeg ?? 0) : snap.markerTipRotationDeg;
-            const collisionMode = isCustomMarker ? (activeCustomBrush.selection.markerCollisionMode ?? 'fence') : snap.markerCollisionMode;
-            const eraserMode = activeCustomBrush ? activeCustomBrush.selection.markerEraserMode : snap.markerEraserMode;
-
-            const markerParams = { radiusMm: radius, shape, rotationDeg: rotation, collisionMode };
-            const occupiedFaces = new Set<number>();
-            for (const [id, reg] of snap.regions.entries()) {
-              if (id === snap.selectedRegionId) continue;
-              for (const tid of reg.triangleIds) {
-                occupiedFaces.add(tid);
-              }
-            }
-
-            const isCircleOrSquare = activeBrushType === 'Point' || activeBrushType === 'ManualCircle' || activeBrushType === 'ManualSquare';
-            const effectiveRadius = isCircleOrSquare ? snap.brushRadiusMm * 0.5 : snap.brushRadiusMm;
-
-            const proposedIds = proposeRegionOnClient(
-              map,
-              faceIndex,
-              activeBrushType,
-              mesh.matrixWorld,
-              activeBrushType === 'Marker' ? radius : effectiveRadius,
-              activeCustomBrush,
-              markerParams,
-              occupiedFaces
-            );
-
-            if (proposedIds.length > 0) {
-              const isMarker = activeBrushType === 'Marker';
-              const isSubtract = snap.modifierKeys.alt || (isMarker && eraserMode) || (snap.interactionPhase === 'Subtract');
-              if (isSubtract) {
-                supportPainterStore.subtractTrianglesFromRegions(proposedIds);
-              } else if (snap.selectedRegionId) {
-                supportPainterStore.appendTrianglesToRegion(snap.selectedRegionId, proposedIds);
-              }
-            }
-          }
+        if (isDragging && !isVectorBrush) {
+          const isMarker = activeBrushType === 'Marker';
+          const isSubtract = snap.modifierKeys.alt || (isMarker && eraserMode) || (snap.interactionPhase === 'Subtract');
+          supportPainterStore.commitPaintStroke(
+            faceIndex,
+            [hitPoint.x, hitPoint.y, hitPoint.z],
+            proposedIds,
+            isSubtract,
+            snap.selectedRegionId
+          );
+        } else {
+          // Just update hover and proposed preview atomically
+          supportPainterStore.setHoveredAndProposed(
+            faceIndex,
+            [hitPoint.x, hitPoint.y, hitPoint.z],
+            proposedIds
+          );
         }
-      }
-    } else {
-      if (lastHoveredFaceRef.current !== null) {
-        lastHoveredFaceRef.current = null;
-        supportPainterStore.setHoveredTriangle(null);
-      }
-      if (snap.activeBrush === 'SharpCorner' && snap.pointPathPoints.length > 0) {
-        supportPainterStore.setPointPathPoints([]);
-        lastSharpCornerFaceRef.current = null;
-        lastSharpCornerPointRef.current = null;
       }
     }
   });
@@ -809,8 +781,7 @@ export function SupportPainterInteractionController({
           generateSupportsFromPainter(activeModelId || 'active-model', mesh, [mockRegion])
             .catch((err) => console.error('[useSupportPainterManager] Direct generation failed', err));
 
-          supportPainterStore.setHoveredTriangle(null);
-          supportPainterStore.setProposedTriangleIds([]);
+          supportPainterStore.setHoveredAndProposed(null, null, []);
         } else {
           supportPainterStore.setInteractionPhase('Expand');
           const newId = supportPainterStore.commitRegion({
@@ -857,7 +828,7 @@ export function SupportPainterInteractionController({
     };
 
     const handlePointerLeaveCapture = () => {
-      supportPainterStore.setHoveredTriangle(null);
+      supportPainterStore.setHoveredAndProposed(null, null, []);
       const snap = supportPainterStore.getSnapshot();
       if (snap.activeBrush === 'SharpCorner') {
         supportPainterStore.setPointPathPoints([]);

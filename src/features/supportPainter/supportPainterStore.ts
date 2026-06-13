@@ -1120,6 +1120,170 @@ export const supportPainterStore = {
     notify();
   },
 
+  setHoveredAndProposed(
+    id: number | null,
+    worldPoint: [number, number, number] | null,
+    proposedIds: number[] | Set<number>
+  ) {
+    let changed = false;
+    if (hoveredTriangleId !== id) {
+      hoveredTriangleId = id;
+      changed = true;
+    }
+    if (!hoveredWorldPoint && !worldPoint) {
+      // do nothing
+    } else if (
+      !hoveredWorldPoint ||
+      !worldPoint ||
+      hoveredWorldPoint[0] !== worldPoint[0] ||
+      hoveredWorldPoint[1] !== worldPoint[1] ||
+      hoveredWorldPoint[2] !== worldPoint[2]
+    ) {
+      hoveredWorldPoint = worldPoint;
+      changed = true;
+    }
+
+    const newProposedSet = new Set(proposedIds);
+    let proposedChanged = false;
+    if (proposedTriangleIds.size !== newProposedSet.size) {
+      proposedChanged = true;
+    } else {
+      for (const tid of newProposedSet) {
+        if (!proposedTriangleIds.has(tid)) {
+          proposedChanged = true;
+          break;
+        }
+      }
+    }
+
+    if (changed || proposedChanged) {
+      proposedTriangleIds = newProposedSet;
+      triangleColorMap = _recomputeTriangleColorMap();
+      updateSnapshot();
+      notify();
+    }
+  },
+
+  commitPaintStroke(
+    hoveredId: number | null,
+    worldPoint: [number, number, number] | null,
+    proposedIds: number[] | Set<number>,
+    isSubtract: boolean,
+    selectedRegionId: string | null
+  ) {
+    // 1. Update hover info
+    hoveredTriangleId = hoveredId;
+    hoveredWorldPoint = worldPoint;
+
+    // 2. Apply stroke
+    if (isSubtract) {
+      const idsSet = new Set(proposedIds);
+      for (const [id, region] of regions.entries()) {
+        const nextSet = new Set<number>();
+        let changed = false;
+        for (const tid of region.triangleIds) {
+          if (idsSet.has(tid)) {
+            changed = true;
+          } else {
+            nextSet.add(tid);
+          }
+        }
+        if (changed) {
+          if (nextSet.size === 0) {
+            regions.delete(id);
+          } else {
+            region.triangleIds = nextSet;
+            region.rleSpans = undefined;
+            region.loops = undefined;
+            this.pruneOrphans(id);
+          }
+        }
+      }
+    } else if (selectedRegionId) {
+      const region = regions.get(selectedRegionId);
+      if (region) {
+        let nextSet = new Set(region.triangleIds);
+        for (const tid of proposedIds) {
+          nextSet.add(tid);
+        }
+        const isMarker = region.brushType === 'Marker' || (region.customBrush && region.customBrush.baseBrush === 'Marker');
+        if (isMarker && clientAdjacencyMap) {
+          nextSet = morphologicalClosing(nextSet, clientAdjacencyMap);
+        }
+        region.triangleIds = nextSet;
+        region.rleSpans = undefined;
+        region.loops = undefined;
+
+        // Handle collisions
+        const collisionMode = region.customBrush
+          ? (region.customBrush.selection.markerCollisionMode ?? 'fence')
+          : markerCollisionMode;
+
+        if (isMarker) {
+          if (collisionMode === 'push') {
+            for (const [otherId, otherReg] of regions.entries()) {
+              if (otherId === selectedRegionId) continue;
+              let intersected = false;
+              const nextOtherSet = new Set<number>();
+              for (const tid of otherReg.triangleIds) {
+                if (nextSet.has(tid)) {
+                  intersected = true;
+                } else {
+                  nextOtherSet.add(tid);
+                }
+              }
+              if (intersected) {
+                if (nextOtherSet.size === 0) {
+                  regions.delete(otherId);
+                } else {
+                  otherReg.triangleIds = nextOtherSet;
+                  otherReg.rleSpans = undefined;
+                  otherReg.loops = undefined;
+                  this.pruneOrphans(otherId);
+                }
+              }
+            }
+          } else if (collisionMode === 'merge') {
+            const mergedIds = new Set<string>();
+            for (const [otherId, otherReg] of regions.entries()) {
+              if (otherId === selectedRegionId) continue;
+              let hasOverlap = false;
+              for (const tid of otherReg.triangleIds) {
+                if (nextSet.has(tid)) {
+                  hasOverlap = true;
+                  break;
+                }
+              }
+              if (hasOverlap) {
+                for (const tid of otherReg.triangleIds) {
+                  nextSet.add(tid);
+                }
+                mergedIds.add(otherId);
+              }
+            }
+            if (mergedIds.size > 0) {
+              region.triangleIds = nextSet;
+              for (const otherId of mergedIds) {
+                regions.delete(otherId);
+                const supportState = getSupportSnapshot();
+                const nextSupportState = _remapSupportsRoiId(supportState, [otherId], selectedRegionId);
+                setSupportSnapshot(nextSupportState);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Clear preview proposedTriangleIds since the stroke is committed
+    proposedTriangleIds.clear();
+
+    // 4. Update snapshot and notify exactly ONCE
+    triangleColorMap = _recomputeTriangleColorMap();
+    updateSnapshot();
+    notify();
+  },
+
   setInteractionPhase(phase: BrushInteractionPhase) {
     if (interactionPhase === phase) return;
     interactionPhase = phase;
