@@ -65,6 +65,7 @@ fn make_job(case: &BenchCase) -> IslandScanJob {
         layer_height_mm: 0.05,
         grid: GridRef { origin_x: 0.0, origin_z: 0.0, width: case.width, height: case.height, px_mm: 0.05 },
         num_layers: case.num_layers, min_overlap_px: 1, overlap_neighborhood_px: 1,
+        candidate_only: false,
     }
 }
 

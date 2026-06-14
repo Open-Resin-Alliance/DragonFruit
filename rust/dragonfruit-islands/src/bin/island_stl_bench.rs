@@ -97,6 +97,7 @@ fn main() {
         num_layers: num_layers as u32,
         min_overlap_px: 1,
         overlap_neighborhood_px: 1,
+        candidate_only: false,
     };
 
     println!("\nIsland scan (warmup)...");

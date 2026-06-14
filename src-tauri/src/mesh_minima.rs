@@ -314,6 +314,7 @@ pub async fn scan_voxel_islands_from_path(
             num_layers: num_layers as u32,
             min_overlap_px: 1,
             overlap_neighborhood_px: 1,
+            candidate_only: true,
         };
 
         let scan_result = run_island_scan_streaming(&job, &triangles, bbox.min.z as f64, false, None);

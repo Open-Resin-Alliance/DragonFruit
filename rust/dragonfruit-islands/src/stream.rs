@@ -67,6 +67,7 @@ pub fn run_island_scan_streaming(
             &lr.components,
             prev_island_labels.as_ref(),
             &lr.solid_mask,
+            job.candidate_only,
         );
 
         // 4. Update window (older layers are dropped from memory here)
@@ -195,6 +196,7 @@ mod tests {
             num_layers: 3,
             min_overlap_px: 1,
             overlap_neighborhood_px: 1,
+            candidate_only: false,
         };
 
         // No triangles means empty scan result

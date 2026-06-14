@@ -67,6 +67,7 @@ pub fn run_island_scan(
             &lr.components,
             prev_labels,
             &lr.solid_mask,
+            job.candidate_only,
         );
         island_labels_per_layer.push(island_labels);
 
@@ -191,6 +192,7 @@ mod tests {
             num_layers,
             min_overlap_px: 1,
             overlap_neighborhood_px: 1,
+            candidate_only: false,
         }
     }
 

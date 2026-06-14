@@ -1675,6 +1675,7 @@ async fn run_island_scan_native(
             num_layers: num_layers as u32,
             min_overlap_px: params.min_overlap_px,
             overlap_neighborhood_px: params.overlap_neighborhood_px,
+            candidate_only: false,
         };
 
         let win_scan = win.clone();
