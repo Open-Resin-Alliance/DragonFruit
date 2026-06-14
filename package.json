@@ -40,9 +40,14 @@
     "lint": "eslint",
     "test": "node --import tsx --test src/**/__tests__/*.test.ts",
     "test:watch": "node --import tsx --test --watch src/**/__tests__/*.test.ts",
-    "bench:support-drag": "node --import tsx scripts/support-drag-perf.ts"
+    "bench:support-drag": "node --import tsx scripts/support-drag-perf.ts",
+    "i18n:extract": "lingui extract",
+    "i18n:compile": "lingui compile",
+    "i18n:update": "lingui extract && lingui compile"
   },
   "dependencies": {
+    "@lingui/core": "^6.3.0",
+    "@lingui/react": "^6.3.0",
     "@msgpack/msgpack": "^3.1.2",
     "@react-three/drei": "^10.7.6",
     "@react-three/fiber": "^9.4.0",
@@ -68,6 +73,8 @@
     "uuid": "^13.0.0"
   },
   "devDependencies": {
+    "@lingui/cli": "^6.3.0",
+    "@lingui/swc-plugin": "^6.4.0",
     "@tailwindcss/postcss": "^4",
     "@tauri-apps/cli": "^2.8.0",
     "@types/express": "^5.0.6",

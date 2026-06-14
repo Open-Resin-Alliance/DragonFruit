@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
 import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Plus, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
@@ -1421,6 +1423,7 @@ function readNumberField(payload: JsonObject, key: string): number | null {
 }
 
 export default function Home() {
+  const { _ } = useLingui();
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
   const importSceneFile = scene.importSceneFile;
@@ -3416,18 +3419,18 @@ export default function Home() {
     return [
       {
         id: 'supports-toggle-curve' as const,
-        label: 'Toggle Curve',
+        label: msg`Toggle Curve`,
         icon: RefreshCw,
       },
       {
         id: 'supports-add-joint' as const,
-        label: 'Add Joint',
+        label: msg`Add Joint`,
         icon: Plus,
       },
     ];
   }, []);
 
-  const editorContextMenuTitle = scene.mode === 'support' ? 'Supports' : 'Editor';
+  const editorContextMenuTitle = scene.mode === 'support' ? _(msg`Supports`) : _(msg`Editor`);
   const editorContextMenuItems = scene.mode === 'support' ? supportContextMenuItems : undefined;
   const editorContextMenuDisabledActions = React.useMemo(() => {
     if (scene.mode === 'support') {

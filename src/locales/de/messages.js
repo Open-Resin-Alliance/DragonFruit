@@ -1,0 +1,1 @@
+/*eslint-disable*/module.exports={messages:JSON.parse("{\"1LOqzE\":[\"Reparieren\"],\"HzVv6g\":[\"Einfügen\"],\"V8JmyJ\":[\"Kurve umschalten\"],\"bnWKFr\":[\"Editor-Kontextmenü\"],\"cCd8Bs\":[\"Ausschneiden\"],\"cnGeoo\":[\"Löschen\"],\"gO04dm\":[\"Verbindung hinzufügen\"],\"he3ygx\":[\"Kopieren\"],\"qnIA1S\":[\"Stützen\"],\"uBAxNB\":[\"Editor\"]}")};

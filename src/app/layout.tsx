@@ -4,6 +4,7 @@ import "./globals.css";
 import { HotkeyProvider } from "@/hotkeys/HotkeyContext";
 import { RendererCrashDiagnostics } from "@/components/debug/RendererCrashDiagnostics";
 import { AppLogger } from "@/components/AppLogger";
+import { I18nClientProvider } from "@/components/I18nClientProvider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -42,11 +43,13 @@ export default function RootLayout({
           color: 'var(--foreground, #e6ebf2)',
         }}
       >
-        <HotkeyProvider>
-          <AppLogger />
-          <RendererCrashDiagnostics />
-          {children}
-        </HotkeyProvider>
+        <I18nClientProvider>
+          <HotkeyProvider>
+            <AppLogger />
+            <RendererCrashDiagnostics />
+            {children}
+          </HotkeyProvider>
+        </I18nClientProvider>
       </body>
     </html>
   );

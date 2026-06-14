@@ -25,6 +25,7 @@ src-tauri/gen/
 
 # environment files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # logs/debug
 .pnpm-debug.log*

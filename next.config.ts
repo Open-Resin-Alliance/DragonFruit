@@ -13,6 +13,11 @@ const nextConfig: NextConfig = {
   // natively — no extra config required. The empty object here acknowledges we
   // are intentionally using Turbopack without a custom webpack config.
   turbopack: {},
+  experimental: {
+    // LinguiJS macro transform via SWC — handles @lingui/core/macro imports at
+    // compile time so the runtime receives plain message descriptors.
+    swcPlugins: [["@lingui/swc-plugin", {}]],
+  },
   env: {
     NEXT_PUBLIC_APP_VERSION: packageVersion,
     NEXT_PUBLIC_BUILD_CHANNEL: buildChannel,

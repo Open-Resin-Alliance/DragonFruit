@@ -1,6 +1,8 @@
 "use client";
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import {
   Wrench,
   Copy,
@@ -34,23 +36,27 @@ type EditorContextMenuProps = {
 
 type MenuItemDef = {
   id: EditorMenuAction;
-  label: string;
+  label: ReturnType<typeof msg>;
   icon: LucideIcon;
 };
 
+// msg`` marks strings for extraction without evaluating them immediately;
+// the _ helper resolves each descriptor against the active locale at render time.
 const MENU_ITEMS: MenuItemDef[] = [
-  { id: 'delete', label: 'Delete', icon: Trash2 },
-  { id: 'cut', label: 'Cut', icon: Scissors },
-  { id: 'copy', label: 'Copy', icon: Copy },
-  { id: 'paste', label: 'Paste', icon: ClipboardPaste },
-  { id: 'repair', label: 'Repair', icon: Wrench },
+  { id: 'delete', label: msg`Delete`, icon: Trash2 },
+  { id: 'cut',    label: msg`Cut`,    icon: Scissors },
+  { id: 'copy',   label: msg`Copy`,   icon: Copy },
+  { id: 'paste',  label: msg`Paste`,  icon: ClipboardPaste },
+  { id: 'repair', label: msg`Repair`, icon: Wrench },
 ];
 
 const MENU_WIDTH = 176;
 const BASE_MENU_HEIGHT = 44;
 const MENU_ITEM_HEIGHT = 32;
 
-export function EditorContextMenu({ position, onAction, disabledActions = [], title = 'Editor', items = MENU_ITEMS }: EditorContextMenuProps) {
+export function EditorContextMenu({ position, onAction, disabledActions = [], title, items = MENU_ITEMS }: EditorContextMenuProps) {
+  const { _ } = useLingui();
+
   if (!position) return null;
 
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1920;
@@ -73,10 +79,10 @@ export function EditorContextMenu({ position, onAction, disabledActions = [], ti
         e.stopPropagation();
       }}
       role="menu"
-      aria-label="Editor context menu"
+      aria-label={_(msg`Editor context menu`)}
     >
       <div className="mb-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-        {title}
+        {title ?? _(msg`Editor`)}
       </div>
       <div className="space-y-0.5">
         {items.map((item) => {
@@ -116,7 +122,7 @@ export function EditorContextMenu({ position, onAction, disabledActions = [], ti
               >
                 <Icon className="h-3.5 w-3.5" />
               </span>
-              <span>{item.label}</span>
+              <span>{_(item.label)}</span>
             </button>
           );
         })}

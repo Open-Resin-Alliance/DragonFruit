@@ -1,7 +1,8 @@
 'use client';
 
 import React from 'react';
-import { Bug, ClipboardCopy, Database, LayoutGrid, RotateCcw } from 'lucide-react';
+import { Bug, ClipboardCopy, Database, Languages, LayoutGrid, RotateCcw } from 'lucide-react';
+import { LanguageSwitcher } from '@/components/ui/LanguageSwitcher';
 import type { ImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
 import {
   FLOATING_LAYOUT_DEBUG_REQUEST_EVENT,
@@ -82,6 +83,48 @@ export function GeneralSettingsTab({
 
   return (
     <div className="space-y-3">
+      <section
+        className="rounded-lg border p-3"
+        style={{
+          background: 'var(--surface-1)',
+          borderColor: 'var(--border-subtle)',
+        }}
+      >
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+            }}
+          >
+            <Languages className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Language
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Choose the interface language. Detected from your system on first run; your choice is remembered.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Interface language
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Applied immediately across the app.
+              </div>
+            </div>
+            <LanguageSwitcher />
+          </div>
+        </div>
+      </section>
+
       <section
         className="rounded-lg border p-3"
         style={{
