@@ -11991,13 +11991,57 @@ export default function Home() {
   // Islands PoC — fresh, tab-agnostic hook (true world-space). Mounted in the
   // Support tab; relocatable to Analysis with a one-line move. supportTips is
   // injected (no src/supports coupling in the Islands module).
-  // TODO(Part B): derive active-model support-tip world positions from
-  // supports/state.ts getSnapshot() and pass them here so the 0.3mm filter engages.
+  const [supportTips, setSupportTips] = React.useState<THREE.Vector3[]>([]);
+
+  React.useEffect(() => {
+    const updateSupportTips = () => {
+      const snap = getSupportSnapshot();
+      const tips: THREE.Vector3[] = [];
+      const activeModelId = scene.activeModel?.id;
+      if (!activeModelId) {
+        setSupportTips([]);
+        return;
+      }
+
+      const addPos = (pos?: { x: number; y: number; z: number }, modelId?: string) => {
+        if (pos && modelId === activeModelId) {
+          tips.push(new THREE.Vector3(pos.x, pos.y, pos.z));
+        }
+      };
+
+      for (const t of Object.values(snap.trunks)) {
+        if (t.contactCone) addPos(t.contactCone.pos, t.modelId);
+      }
+      for (const b of Object.values(snap.branches)) {
+        if (b.contactCone) addPos(b.contactCone.pos, b.modelId);
+      }
+      for (const l of Object.values(snap.leaves)) {
+        if (l.contactCone) addPos(l.contactCone.pos, l.modelId);
+      }
+      for (const a of Object.values(snap.anchors)) {
+        if (a.contactCone) addPos(a.contactCone.pos, a.modelId);
+      }
+      for (const tw of Object.values(snap.twigs)) {
+        if (tw.contactDiskA) addPos(tw.contactDiskA.pos, tw.modelId);
+        if (tw.contactDiskB) addPos(tw.contactDiskB.pos, tw.modelId);
+      }
+      for (const st of Object.values(snap.sticks)) {
+        if (st.contactConeA) addPos(st.contactConeA.pos, st.modelId);
+        if (st.contactConeB) addPos(st.contactConeB.pos, st.modelId);
+      }
+
+      setSupportTips(tips);
+    };
+
+    updateSupportTips();
+    return subscribeSupportState(updateSupportTips);
+  }, [scene.activeModel?.id]);
+
   const islandsPoc = useIslands({
     geom: scene.geom,
     transform: transformMgr.transform,
     layerHeightMm: slicing.layerHeightMm,
-    supportTips: [],
+    supportTips,
     plateZ: 0,
     sourcePath: scene.activeModel?.sourcePath,
   });
@@ -19444,22 +19488,32 @@ export default function Home() {
                 NO transform is passed (identity group; avoids the legacy
                 getScanVisualPosition offset). Renders inside the R3F Canvas via
                 SceneCanvas children. */}
-            {scene.mode === 'support' && islandsPoc.showVoxel && (
+            {scene.mode === 'support' && islandsPoc.showVoxelOnly && (
               <IslandOverlay
-                key="islands-poc-voxel"
-                markers={islandsPoc.voxelPucks.markers}
+                key="islands-poc-voxel-only"
+                markers={islandsPoc.voxelOnlyPucks.markers}
                 brushRadiusMm={0.5}
                 color={ISLAND_LAYER_COLORS.voxel}
                 opacity={PUCK_OPACITY}
                 selectedIslandId={islandsPoc.selectedMarkerId ?? null}
               />
             )}
-            {scene.mode === 'support' && islandsPoc.showMinima && (
+            {scene.mode === 'support' && islandsPoc.showMinimaOnly && (
               <IslandOverlay
-                key="islands-poc-minima"
-                markers={islandsPoc.minimaPucks.markers}
+                key="islands-poc-minima-only"
+                markers={islandsPoc.minimaOnlyPucks.markers}
                 brushRadiusMm={0.5}
                 color={ISLAND_LAYER_COLORS.minima}
+                opacity={PUCK_OPACITY}
+                selectedIslandId={islandsPoc.selectedMarkerId ?? null}
+              />
+            )}
+            {scene.mode === 'support' && islandsPoc.showIntersection && (
+              <IslandOverlay
+                key="islands-poc-intersection"
+                markers={islandsPoc.intersectionPucks.markers}
+                brushRadiusMm={0.5}
+                color={ISLAND_LAYER_COLORS.intersection}
                 opacity={PUCK_OPACITY}
                 selectedIslandId={islandsPoc.selectedMarkerId ?? null}
               />

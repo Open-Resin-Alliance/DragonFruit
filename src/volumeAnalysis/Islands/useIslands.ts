@@ -13,6 +13,7 @@ import { clusterWalkOrder } from './ordering';
 import { buildIslandPucks } from './islandPuckMarkers';
 import { scanMeshMinima } from './meshMinima';
 import type { DetectedIsland } from './types';
+import { classifyIntersection } from './intersection';
 
 /**
  * Page-scope state hook for the unified Islands panel (PoC). Tab-agnostic and
@@ -83,8 +84,9 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   const [filterToggles, setFilterToggles] = useState<IslandFilterToggles>(DEFAULT_FILTER_TOGGLES);
 
   // Overlay visibility (blue voxel + green minima; Part C adds red intersection / exclusions).
-  const [showVoxel, setShowVoxel] = useState(true);
-  const [showMinima, setShowMinima] = useState(true);
+  const [showVoxelOnly, setShowVoxelOnly] = useState(true);
+  const [showMinimaOnly, setShowMinimaOnly] = useState(true);
+  const [showIntersection, setShowIntersection] = useState(true);
 
   const [selectedMarkerId, setSelectedMarkerId] = useState<number | null>(null);
 
@@ -226,7 +228,15 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   }, [geom, transform, sourcePath, prepareWorldGeom, layerHeightMm, pxMm, supportBufMm, connectivity]);
 
   // Voxel + mesh-minima, unified. (Part C) adds intersection classification here.
-  const allIslands = useMemo(() => [...voxelIslands, ...minimaIslands], [voxelIslands, minimaIslands]);
+  const classifiedResult = useMemo(() => {
+    return classifyIntersection(voxelIslands, minimaIslands, {
+      xyToleranceMm: 0.5,
+      zBandMm: layerHeightMm,
+    });
+  }, [voxelIslands, minimaIslands, layerHeightMm]);
+
+  const allIslands = classifiedResult.islands;
+  const stats = classifiedResult.stats;
 
   // Annotate supported/grounded flags, then apply the visibility toggles. Work on
   // shallow copies so React state objects aren't mutated (contact Vector3 is shared, never mutated).
@@ -241,15 +251,33 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     [filteredIslands, pxMm],
   );
 
-  // Per-source pucks for the IslandOverlay layers (blue voxel / green minima).
-  const voxelPucks = useMemo(
-    () => buildIslandPucks(filteredIslands.filter((i) => i.source === 'voxel')),
+  // Per-source pucks for the IslandOverlay layers (blue voxel-only / green minima-only / red intersection).
+  const voxelOnlyPucks = useMemo(
+    () => buildIslandPucks(filteredIslands.filter((i) => i.source === 'voxel' && i.class === 'voxelOnly')),
     [filteredIslands],
   );
-  const minimaPucks = useMemo(
-    () => buildIslandPucks(filteredIslands.filter((i) => i.source === 'minima')),
+  const minimaOnlyPucks = useMemo(
+    () => buildIslandPucks(filteredIslands.filter((i) => i.source === 'minima' && i.class === 'minimaOnly')),
     [filteredIslands],
   );
+  const intersectionPucks = useMemo(
+    () => buildIslandPucks(filteredIslands.filter((i) => i.class === 'intersection' && i.source === 'voxel')),
+    [filteredIslands],
+  );
+
+  const byMarkerId = useMemo(() => {
+    const merged = new Map<number, DetectedIsland>();
+    for (const [id, island] of voxelOnlyPucks.byMarkerId) {
+      merged.set(id, island);
+    }
+    for (const [id, island] of minimaOnlyPucks.byMarkerId) {
+      merged.set(id, island);
+    }
+    for (const [id, island] of intersectionPucks.byMarkerId) {
+      merged.set(id, island);
+    }
+    return merged;
+  }, [voxelOnlyPucks, minimaOnlyPucks, intersectionPucks]);
 
   const clear = useCallback(() => {
     setVoxelIslands([]);
@@ -265,8 +293,11 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     minimaIslands,
     filteredIslands,
     orderedIslands,
-    voxelPucks,
-    minimaPucks,
+    voxelOnlyPucks,
+    minimaOnlyPucks,
+    intersectionPucks,
+    byMarkerId,
+    stats,
     pxMm,
     setPxMm,
     supportBufMm,
@@ -275,10 +306,12 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     setConnectivity,
     filterToggles,
     setFilterToggles,
-    showVoxel,
-    setShowVoxel,
-    showMinima,
-    setShowMinima,
+    showVoxelOnly,
+    setShowVoxelOnly,
+    showMinimaOnly,
+    setShowMinimaOnly,
+    showIntersection,
+    setShowIntersection,
     selectedMarkerId,
     setSelectedMarkerId,
     onRunScan,

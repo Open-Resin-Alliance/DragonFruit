@@ -25,10 +25,13 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
     filteredIslands,
     voxelIslands,
     minimaIslands,
-    showVoxel,
-    setShowVoxel,
-    showMinima,
-    setShowMinima,
+    showVoxelOnly,
+    setShowVoxelOnly,
+    showMinimaOnly,
+    setShowMinimaOnly,
+    showIntersection,
+    setShowIntersection,
+    stats,
     filterToggles,
     setFilterToggles,
     pxMm,
@@ -37,11 +40,13 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
     setSupportBufMm,
   } = islands;
 
-  const shownCount = filteredIslands.length;
-  const totalCount = voxelIslands.length + minimaIslands.length;
-  const hiddenCount = totalCount - shownCount;
-  const voxelShown = filteredIslands.filter((i) => i.source === 'voxel').length;
-  const minimaShown = filteredIslands.filter((i) => i.source === 'minima').length;
+  const voxelOnlyShown = filteredIslands.filter((i) => i.source === 'voxel' && i.class === 'voxelOnly').length;
+  const minimaOnlyShown = filteredIslands.filter((i) => i.source === 'minima' && i.class === 'minimaOnly').length;
+  const intersectionShown = filteredIslands.filter((i) => i.class === 'intersection' && i.source === 'voxel').length;
+
+  const totalScannedPucks = (stats?.voxelTotal ?? 0) + (stats?.minimaTotal ?? 0) - (stats?.matched ?? 0);
+  const totalShownPucks = voxelOnlyShown + minimaOnlyShown + intersectionShown;
+  const hiddenPucksCount = totalScannedPucks - totalShownPucks;
 
   return (
     <Card>
@@ -72,7 +77,7 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
         )}
         right={(
           <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>
-            {totalCount > 0 ? `${shownCount}${hiddenCount > 0 ? ` / ${totalCount}` : ''}` : ''}
+            {totalScannedPucks > 0 ? `${totalShownPucks}${hiddenPucksCount > 0 ? ` / ${totalScannedPucks}` : ''}` : ''}
           </span>
         )}
         hideDivider={!expanded}
@@ -97,10 +102,37 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
               : 'Scan Islands'}
           </button>
 
-          {totalCount > 0 && (
-            <div className="ui-meta">
-              {voxelShown} voxel · {minimaShown} minima
-              {hiddenCount > 0 ? ` · ${hiddenCount} filtered` : ''}
+          {totalScannedPucks > 0 && stats && (
+            <div className="space-y-1 pt-0.5 pb-1">
+              <div className="ui-meta flex justify-between">
+                <span>Voxel islands:</span>
+                <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>{stats.voxelTotal}</span>
+              </div>
+              <div className="ui-meta flex justify-between">
+                <span>Mesh minima:</span>
+                <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>{stats.minimaTotal}</span>
+              </div>
+              <div className="ui-meta flex justify-between border-b pb-1 mb-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <span>Intersections (matched):</span>
+                <span className="font-semibold" style={{ color: ISLAND_LAYER_COLORS.intersection }}>{stats.matched}</span>
+              </div>
+              <div className="ui-meta flex justify-between text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                <span>Shown pucks:</span>
+                <span>{totalShownPucks} ({voxelOnlyShown} vox, {minimaOnlyShown} min, {intersectionShown} int)</span>
+              </div>
+              {stats.minimaSupersetOfVoxel && (
+                <div
+                  className="mt-1.5 p-1.5 rounded text-[10px] leading-normal flex items-center gap-1 font-medium"
+                  style={{
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 88%)',
+                    color: 'var(--text-strong)',
+                    border: '1px solid color-mix(in srgb, var(--accent), transparent 50%)'
+                  }}
+                >
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                  <span>Verdict: Mesh-minima ⊇ Voxel (100% covered)</span>
+                </div>
+              )}
             </div>
           )}
 
@@ -148,29 +180,43 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
           <label className="flex items-center gap-1.5 py-1 cursor-pointer">
             <input
               type="checkbox"
-              checked={showVoxel}
-              onChange={(e) => setShowVoxel(e.target.checked)}
+              checked={showVoxelOnly}
+              onChange={(e) => setShowVoxelOnly(e.target.checked)}
               className="ui-checkbox !w-4 !h-4"
             />
             <span
               className="inline-block w-2.5 h-2.5 rounded-full"
               style={{ background: ISLAND_LAYER_COLORS.voxel }}
             />
-            <span className="ui-meta">Show voxel islands</span>
+            <span className="ui-meta">Voxel-only ({voxelOnlyShown})</span>
           </label>
 
           <label className="flex items-center gap-1.5 py-1 cursor-pointer">
             <input
               type="checkbox"
-              checked={showMinima}
-              onChange={(e) => setShowMinima(e.target.checked)}
+              checked={showMinimaOnly}
+              onChange={(e) => setShowMinimaOnly(e.target.checked)}
               className="ui-checkbox !w-4 !h-4"
             />
             <span
               className="inline-block w-2.5 h-2.5 rounded-full"
               style={{ background: ISLAND_LAYER_COLORS.minima }}
             />
-            <span className="ui-meta">Show mesh minima islands</span>
+            <span className="ui-meta">Minima-only ({minimaOnlyShown})</span>
+          </label>
+
+          <label className="flex items-center gap-1.5 py-1 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showIntersection}
+              onChange={(e) => setShowIntersection(e.target.checked)}
+              className="ui-checkbox !w-4 !h-4"
+            />
+            <span
+              className="inline-block w-2.5 h-2.5 rounded-full"
+              style={{ background: ISLAND_LAYER_COLORS.intersection }}
+            />
+            <span className="ui-meta">Intersections ({intersectionShown})</span>
           </label>
 
           <div className="space-y-1.5 pt-1.5 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -195,7 +241,7 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
           </div>
 
           <div className="ui-meta pt-1.5 border-t leading-snug" style={{ borderColor: 'var(--border-subtle)' }}>
-            <p>Unsupported contact regions only — no top-surface false positives. Mesh-minima &amp; intersection layers arrive in Parts B/C.</p>
+            <p>Classified contact regions in world space. Intersection layers match voxel and mesh candidate islands within 0.5mm XY / 1 layer Z.</p>
           </div>
         </div>
       )}
