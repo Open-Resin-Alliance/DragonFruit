@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useCallback } from 'react';
 import * as THREE from 'three';
+import { useFrame } from '@react-three/fiber';
 import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
 import { applyIslandOverlay as drawIslandOverlay } from '@/volumeAnalysis/IslandScan/islandOverlayPainter';
 import type { ModelTransform } from '@/hooks/useModelTransform';
@@ -17,17 +18,6 @@ type IslandOverlayProps = {
   clipLower?: number | null;
   clipUpper?: number | null;
 };
-
-// Global sync timer running at module level in a single requestAnimationFrame loop.
-// No need to track frames or register useFrame loops in React/R3F components.
-const globalTimeUniform = { value: 0 };
-if (typeof window !== 'undefined') {
-  const updateTime = () => {
-    globalTimeUniform.value = performance.now() / 1000;
-    requestAnimationFrame(updateTime);
-  };
-  requestAnimationFrame(updateTime);
-}
 
 export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity, transform, centerOffset, selectedIslandId, clipLower, clipUpper }: IslandOverlayProps) {
   const threeColor = useMemo(() => new THREE.Color(color), [color]);
@@ -52,12 +42,7 @@ export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity,
 
   const clippingPlanes = clippingPlanesRef.current;
 
-  // Single base unit geometry shared by the instanced mesh (radius 1, height 1)
-  const baseGeometry = useMemo(() => {
-    const g = new THREE.CylinderGeometry(1, 1, 1, 24);
-    g.rotateX(Math.PI / 2); // Rotate to Z-up
-    return g;
-  }, []);
+
 
   // Split markers into instanced (non-selected positive IDs), selected (double-pass occluded/visible), and negative IDs (utility markers)
   const { instancedMarkers, selectedMarkers, negativeIdMarkers } = useMemo(() => {
@@ -79,6 +64,7 @@ export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity,
   }, [markers, selectedIslandId]);
 
   const instancedMeshRef = useRef<THREE.InstancedMesh>(null);
+  const instancedMaterialRef = useRef<THREE.ShaderMaterial>(null);
 
   // Synchronously update instance matrices before rendering
   React.useLayoutEffect(() => {
@@ -96,10 +82,10 @@ export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity,
       }
       const bbox = marker.geometry.boundingBox!;
       const radius = (bbox.max.x - bbox.min.x) / 2;
-      const height = bbox.max.z - bbox.min.z;
 
       tempPosition.set(marker.centerX, marker.centerY, marker.baseZ);
-      tempScale.set(radius, radius, height);
+      // Slightly squashed sphere (oblate spheroid) sitting flat as a volumetric dome
+      tempScale.set(radius, radius, radius * 0.6);
       tempMatrix.compose(tempPosition, new THREE.Quaternion(), tempScale);
 
       mesh.setMatrixAt(index, tempMatrix);
@@ -108,58 +94,38 @@ export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity,
     mesh.instanceMatrix.needsUpdate = true;
   }, [instancedMarkers]);
 
-  // Inject custom volumetric glow and laser core shaders into standard material compiling
-  const onBeforeCompile = useCallback((shader: THREE.Shader) => {
-    shader.uniforms.uTime = globalTimeUniform;
+  // Uniform allocations
+  const instancedUniforms = useMemo(() => ({
+    uColor: { value: threeColor },
+    uOpacity: { value: opacity },
+    uTime: { value: 0.0 },
+    uSelected: { value: 0.0 },
+  }), [threeColor, opacity]);
 
-    shader.vertexShader = shader.vertexShader.replace(
-      '#include <common>',
-      `#include <common>
-       varying vec3 vLocalPosition;`
-    );
-    shader.vertexShader = shader.vertexShader.replace(
-      '#include <begin_vertex>',
-      `#include <begin_vertex>
-       vLocalPosition = position;`
-    );
+  const selectedUniforms = useMemo(() => ({
+    occluded: {
+      uColor: { value: occludedColor },
+      uOpacity: { value: 0.95 },
+      uTime: { value: 0.0 },
+      uSelected: { value: 1.0 },
+    },
+    visible: {
+      uColor: { value: visibleColor },
+      uOpacity: { value: 0.95 },
+      uTime: { value: 0.0 },
+      uSelected: { value: 1.0 },
+    },
+  }), [occludedColor, visibleColor]);
 
-    shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <common>',
-      `#include <common>
-       varying vec3 vLocalPosition;
-       uniform float uTime;`
-    );
-
-    shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <opaque_fragment>',
-      `
-      // Radial distance from center axis (0.0 to 1.0)
-      float r = length(vLocalPosition.xy);
-      // Vertical distance from center plane (0.0 to 1.0)
-      float h = abs(vLocalPosition.z) * 2.0;
-
-      // Volumetric falloff: smoothly decay to 0 at all boundaries to remove flat puck edges
-      float radialFalloff = smoothstep(1.0, 0.0, r);
-      float verticalFalloff = smoothstep(1.0, 0.0, h);
-      float intensity = radialFalloff * verticalFalloff;
-
-      float softHalo = intensity;
-      float laserCore = pow(intensity, 8.0);
-      float pulse = 1.0 + 0.15 * sin(uTime * 12.5663706);
-
-      // Blend color with a brilliant white highlight core
-      vec3 finalColor = mix(diffuseColor.rgb, vec3(1.0), laserCore * 0.7);
-      // Scale alpha: soft halo + sharp laser core, scaled by opacity and 2 Hz pulse
-      float finalAlpha = clamp((diffuseColor.a * softHalo + laserCore * 0.4) * pulse, 0.0, 0.95);
-
-      #ifdef OPAQUE
-      gl_FragColor = vec4( finalColor, 1.0 );
-      #else
-      gl_FragColor = vec4( finalColor, finalAlpha );
-      #endif
-      `
-    );
-  }, []);
+  // Update time uniforms in a single R3F frame loop to keep all glows in sync at 2 Hz
+  useFrame(({ clock }) => {
+    const elapsed = clock.getElapsedTime();
+    if (instancedMaterialRef.current) {
+      instancedMaterialRef.current.uniforms.uTime.value = elapsed;
+    }
+    selectedUniforms.occluded.uTime.value = elapsed;
+    selectedUniforms.visible.uTime.value = elapsed;
+  });
 
   if (markers.length === 0) {
     return null;
@@ -184,56 +150,142 @@ export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity,
         <instancedMesh
           key={instancedMarkers.length}
           ref={instancedMeshRef}
-          args={[baseGeometry, undefined, instancedMarkers.length]}
+          args={[undefined, undefined, instancedMarkers.length]}
         >
-          <meshBasicMaterial
-            transparent={true}
-            color={threeColor}
-            opacity={opacity}
+          <sphereGeometry args={[1, 24, 24]} />
+          <shaderMaterial
+            ref={instancedMaterialRef}
+            clipping={true}
+            clippingPlanes={clippingPlanes}
             depthTest={true}
             depthWrite={false}
-            clippingPlanes={clippingPlanes}
-            onBeforeCompile={onBeforeCompile}
+            transparent={true}
+            uniforms={instancedUniforms}
+            vertexShader={VERTEX_SHADER}
+            fragmentShader={FRAGMENT_SHADER}
+            clipIntersection={true}
           />
         </instancedMesh>
       )}
 
       {/* 3. Render selected island (if any) twice for occlusion contrast */}
-      {selectedMarkers.map((marker) => (
-        <group key={marker.id}>
-          {/* Occluded state - orange, no depth test, renders behind */}
-          <mesh
-            geometry={marker.geometry!}
-            renderOrder={999}
-          >
-            <meshBasicMaterial
-              transparent={true}
-              color={occludedColor}
-              opacity={0.95}
-              depthTest={false}
-              depthWrite={false}
-              clippingPlanes={clippingPlanes}
-              onBeforeCompile={onBeforeCompile}
-            />
-          </mesh>
+      {selectedMarkers.map((marker) => {
+        if (!marker.geometry) return null;
+        if (!marker.geometry.boundingBox) {
+          marker.geometry.computeBoundingBox();
+        }
+        const bbox = marker.geometry.boundingBox!;
+        const radius = (bbox.max.x - bbox.min.x) / 2;
 
-          {/* Visible state - yellow, with depth test, renders on top */}
-          <mesh
-            geometry={marker.geometry!}
-            renderOrder={1000}
+        return (
+          <group
+            key={marker.id}
+            position={[marker.centerX, marker.centerY, marker.baseZ]}
+            scale={[radius, radius, radius * 0.6]}
           >
-            <meshBasicMaterial
-              transparent={true}
-              color={visibleColor}
-              opacity={0.95}
-              depthTest={true}
-              depthWrite={false}
-              clippingPlanes={clippingPlanes}
-              onBeforeCompile={onBeforeCompile}
-            />
-          </mesh>
-        </group>
-      ))}
+            {/* Occluded state - orange, no depth test, renders behind */}
+            <mesh renderOrder={999}>
+              <sphereGeometry args={[1, 24, 24]} />
+              <shaderMaterial
+                clipping={true}
+                clippingPlanes={clippingPlanes}
+                depthTest={false}
+                depthWrite={false}
+                transparent={true}
+                uniforms={selectedUniforms.occluded}
+                vertexShader={VERTEX_SHADER}
+                fragmentShader={FRAGMENT_SHADER}
+                clipIntersection={true}
+              />
+            </mesh>
+
+            {/* Visible state - yellow, with depth test, renders on top */}
+            <mesh renderOrder={1000}>
+              <sphereGeometry args={[1, 24, 24]} />
+              <shaderMaterial
+                clipping={true}
+                clippingPlanes={clippingPlanes}
+                depthTest={true}
+                depthWrite={false}
+                transparent={true}
+                uniforms={selectedUniforms.visible}
+                vertexShader={VERTEX_SHADER}
+                fragmentShader={FRAGMENT_SHADER}
+                clipIntersection={true}
+              />
+            </mesh>
+          </group>
+        );
+      })}
     </group>
   );
 }
+
+const VERTEX_SHADER = `
+#include <common>
+#include <clipping_planes_pars_vertex>
+
+uniform float uTime;
+varying vec3 vViewPosition;
+varying vec3 vPosition;
+
+void main() {
+  vPosition = position;
+  
+  // 2 Hz breathing pulse
+  float pulse = 1.0 + 0.12 * sin(uTime * 12.566370618);
+  vec3 localPos = position * pulse;
+  
+  #ifdef USE_INSTANCING
+    vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(localPos, 1.0);
+  #else
+    vec4 mvPosition = modelViewMatrix * vec4(localPos, 1.0);
+  #endif
+
+  #include <clipping_planes_vertex>
+  
+  vViewPosition = -mvPosition.xyz;
+  gl_Position = projectionMatrix * mvPosition;
+}
+`;
+
+const FRAGMENT_SHADER = `
+#include <clipping_planes_pars_fragment>
+uniform vec3 uColor;
+uniform float uOpacity;
+uniform float uTime;
+uniform float uSelected;
+
+varying vec3 vViewPosition;
+varying vec3 vPosition;
+
+void main() {
+  #include <clipping_planes_fragment>
+  
+  // Distance from center of the sphere (0.0 to 1.0)
+  float dist = length(vPosition);
+  
+  // Intensity gradient: 1.0 at center, fading to 0.0 at the outer surface
+  float intensity = max(0.0, 1.0 - dist);
+  
+  // Volumetric soft exponential fadeout
+  float softHalo = pow(intensity, 2.5);
+  
+  // High-intensity laser highlight core in the exact center
+  float laserCore = pow(intensity, 16.0);
+  
+  // 2 Hz breathing pulse for alpha
+  float pulseAlpha = 0.85 + 0.15 * sin(uTime * 12.566370618);
+  
+  float selectionMultiplier = uSelected > 0.5 ? 1.5 : 1.0;
+  
+  // Blend color with a brilliant white highlight core
+  vec3 coreColor = vec3(1.0);
+  vec3 finalColor = mix(uColor, coreColor, laserCore * 0.7);
+  
+  // Scale alpha: soft halo + sharp laser core, scaled by opacity and 2 Hz pulse
+  float alpha = clamp((uOpacity * softHalo + laserCore * 0.4) * pulseAlpha * selectionMultiplier, 0.0, 0.95);
+  
+  gl_FragColor = vec4(finalColor, alpha);
+}
+`;

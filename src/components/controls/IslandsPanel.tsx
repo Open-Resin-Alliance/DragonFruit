@@ -152,7 +152,7 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
                   {orderedIslands.map((island) => {
                     const id = markerIdFor(island);
                     const isSelected = selectedMarkerId === id;
-                    let color = ISLAND_LAYER_COLORS.voxel;
+                    let color: string = ISLAND_LAYER_COLORS.voxel;
                     if (island.class === 'minimaOnly') {
                       color = ISLAND_LAYER_COLORS.minima;
                     } else if (island.class === 'intersection') {
