@@ -1640,36 +1640,18 @@ async fn run_island_scan_native(
         );
         log::debug!("[island-scan-native] debug dump: {}", dump_dir.display());
 
-        // Phase A: Rasterize all layers using shared module (same code as bench)
-        let total_layers;
-        let grid_width;
-        let grid_height;
-        let origin_x;
-        let origin_z;
-        let w;
-        let h;
+        // Phase A: Calculate grid dimensions and bounds
+        let origin_x = params.bbox_min_x;
+        let origin_z = -params.bbox_max_y; // mask Y = -world Y
+        let grid_width = ((params.bbox_max_x - params.bbox_min_x) / params.px_mm).ceil().max(1.0) as i32;
+        let grid_height = ((params.bbox_max_y - params.bbox_min_y) / params.px_mm).ceil().max(1.0) as i32;
+        let model_height = params.bbox_max_z - params.bbox_min_z;
+        let num_layers = (model_height / params.layer_height_mm).ceil().max(0.0) as usize;
 
-        let t_raster = std::time::Instant::now();
-        let (masks, gw, gh, num_layers, ox, oz) = slicer_pool().install(|| {
-            dragonfruit_islands::rasterize::rasterize_for_island_scan(
-                &triangles,
-                params.bbox_min_x, params.bbox_max_x,
-                params.bbox_min_y, params.bbox_max_y,
-                params.bbox_min_z, params.bbox_max_z,
-                params.px_mm,
-                params.layer_height_mm,
-            )
-        });
-        grid_width = gw;
-        grid_height = gh;
-        origin_x = ox;
-        origin_z = oz;
-        w = grid_width as usize;
-        h = grid_height as usize;
-        total_layers = num_layers as u32;
-        let rasterize_ms = t_raster.elapsed().as_secs_f64() * 1000.0;
+        let w = grid_width as usize;
+        let h = grid_height as usize;
 
-        // Phase B: Island scan pipeline (sequential tracking — progress per layer)
+        // Phase B: Island scan pipeline (sequential tracking using streaming)
         let t_scan = std::time::Instant::now();
         let connectivity = if params.connectivity == 8 {
             dragonfruit_islands::model::Connectivity::Eight
@@ -1697,29 +1679,40 @@ async fn run_island_scan_native(
 
         let win_scan = win.clone();
         let scan_result = slicer_pool().install(|| {
-            dragonfruit_islands::pipeline::run_island_scan(
+            dragonfruit_islands::stream::run_island_scan_streaming(
                 &job,
-                &masks,
+                &triangles,
+                params.bbox_min_z,
+                true, // store_labels = true for Volume Analysis
                 Some(&move |done: u32, total: u32| {
-                    // Map pipeline progress (0..total) to layer count (0..total_layers)
-                    // — same convention as TS ScanOrchestrator onProgress(done, numLayers)
-                    let layer = (done as u64 * total_layers as u64 / total.max(1) as u64) as u32;
                     let _ = win_scan.emit("islandscan://progress", SliceProgressPayload {
-                        done: layer.min(total_layers),
-                        total: total_layers,
+                        done,
+                        total,
                         phase: "Scanning".to_string(),
                     });
                 }),
             )
         });
         let scan_ms = t_scan.elapsed().as_secs_f64() * 1000.0;
-        let total_ms = rasterize_ms + scan_ms;
+        let rasterize_ms = 0.0;
+        let total_ms = scan_ms;
 
-        let total_solid_px: u64 = masks.iter().map(|m| m.pixel_count()).sum();
+        let total_solid_px: u64 = scan_result
+            .island_labels_per_layer
+            .iter()
+            .map(|labels| {
+                labels
+                    .rows
+                    .iter()
+                    .map(|row| row.iter().map(|run| run.length as u64).sum::<u64>())
+                    .sum::<u64>()
+            })
+            .sum();
+
         log::info!(
-            "[island-scan-native] grid={}x{} layers={} solid_px={} islands={} raster={:.0}ms scan={:.0}ms",
+            "[island-scan-native] grid={}x{} layers={} solid_px={} islands={} scan={:.0}ms",
             grid_width, grid_height, num_layers, total_solid_px,
-            scan_result.islands.len(), rasterize_ms, scan_ms,
+            scan_result.islands.len(), scan_ms,
         );
 
         // Phase C: Build frontend-compatible result

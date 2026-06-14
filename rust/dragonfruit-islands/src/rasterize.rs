@@ -336,3 +336,25 @@ pub fn rasterize_for_island_scan(
 
     (masks, grid_width, grid_height, num_layers, origin_x, origin_z)
 }
+
+/// Helper to slice, rasterize, and RLE-encode a single layer.
+pub fn rasterize_layer_for_island_scan(
+    triangles: &[Triangle],
+    z: f64,
+    grid_width: i32,
+    grid_height: i32,
+    origin_x: f64,
+    origin_z: f64,
+    px_mm: f64,
+) -> RleMask {
+    let loops = slice_to_loops(triangles, z);
+    let dense = rasterize_loops(
+        &loops,
+        grid_width as usize,
+        grid_height as usize,
+        origin_x,
+        origin_z,
+        px_mm,
+    );
+    rle_encode(&dense, grid_width, grid_height)
+}

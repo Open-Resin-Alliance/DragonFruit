@@ -13,8 +13,7 @@ use serde::{Deserialize, Serialize};
 use dragonfruit_mesh_repair::{core::mesh::Vec3, IndexedMesh};
 use dragonfruit_islands::{
     model::{Connectivity, IslandScanJob, GridRef},
-    pipeline::run_island_scan,
-    rasterize::rasterize_for_island_scan,
+    stream::run_island_scan_streaming,
 };
 
 /// A detected local vertical minimum: a vertex whose Z is strictly below all its
@@ -284,17 +283,15 @@ pub async fn scan_voxel_islands_from_path(
         // 3. Get transformed bounding box
         let bbox = mesh.bbox();
 
-        // 4. Rasterize all layers
-        let (masks, gw, gh, num_layers, ox, oz) = rasterize_for_island_scan(
-            &triangles,
-            bbox.min.x as f64, bbox.max.x as f64,
-            bbox.min.y as f64, bbox.max.y as f64,
-            bbox.min.z as f64, bbox.max.z as f64,
-            px_mm,
-            layer_height_mm,
-        );
+        // 4. Calculate grid bounds and dimensions (matching rasterize_for_island_scan)
+        let ox = bbox.min.x as f64;
+        let oz = -bbox.max.y as f64;
+        let gw = ((bbox.max.x as f64 - bbox.min.x as f64) / px_mm).ceil().max(1.0) as i32;
+        let gh = ((bbox.max.y as f64 - bbox.min.y as f64) / px_mm).ceil().max(1.0) as i32;
+        let model_height = bbox.max.z as f64 - bbox.min.z as f64;
+        let num_layers = (model_height / layer_height_mm).ceil().max(0.0) as usize;
 
-        // 5. Run island scan pipeline
+        // 5. Run island scan pipeline using streaming
         let connectivity_enum = if connectivity == 8 {
             Connectivity::Eight
         } else {
@@ -319,7 +316,7 @@ pub async fn scan_voxel_islands_from_path(
             overlap_neighborhood_px: 1,
         };
 
-        let scan_result = run_island_scan(&job, &masks, None);
+        let scan_result = run_island_scan_streaming(&job, &triangles, bbox.min.z as f64, false, None);
 
         // 6. Convert tracking result back to VoxelIslands
         let mut voxel_islands = Vec::new();
