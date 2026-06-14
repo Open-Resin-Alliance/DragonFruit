@@ -42,13 +42,11 @@ export interface UseIslandsInput {
   plateZ?: number;
   /** File path of the loaded model. */
   sourcePath?: string | null;
-  /** Raycast check to verify if a line-of-sight between two points is clear */
-  checkOcclusion?: (start: THREE.Vector3, end: THREE.Vector3) => boolean;
 }
 
 export type UseIslandsReturn = ReturnType<typeof useIslands>;
 
-export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ = 0, sourcePath, checkOcclusion }: UseIslandsInput) {
+export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ = 0, sourcePath }: UseIslandsInput) {
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number } | null>(null);
   const [voxelIslands, setVoxelIslands] = useState<DetectedIsland[]>([]);
@@ -247,22 +245,12 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     return applyFilter(annotated, filterToggles);
   }, [allIslands, supportTips, plateZ, filterToggles]);
 
-  // Cluster-walk ordering for the list / ←/→ navigation (Euclidean; co-visibility added in Part C).
+  // Cluster-walk ordering for the list / ←/→ navigation (Euclidean only).
   const orderedIslands = useMemo(() => {
-    const coVisible = checkOcclusion
-      ? (a: DetectedIsland, b: DetectedIsland) => {
-          const midpoint = new THREE.Vector3().addVectors(a.contact, b.contact).multiplyScalar(0.5);
-          const distance = Math.max(a.contact.distanceTo(b.contact) * 2, 20);
-          const viewPos = new THREE.Vector3(midpoint.x, midpoint.y, midpoint.z - distance);
-          return checkOcclusion(viewPos, a.contact) && checkOcclusion(viewPos, b.contact);
-        }
-      : undefined;
-
     return clusterWalkOrder(filteredIslands.map((i) => ({ ...i })), {
       epsilonMm: Math.max(8, pxMm * 40),
-      coVisible,
     });
-  }, [filteredIslands, pxMm, checkOcclusion]);
+  }, [filteredIslands, pxMm]);
 
   // Per-source pucks for the IslandOverlay layers (blue voxel-only / green minima-only / red intersection).
   const voxelOnlyPucks = useMemo(

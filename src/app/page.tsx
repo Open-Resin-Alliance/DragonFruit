@@ -12045,7 +12045,6 @@ export default function Home() {
     supportTips,
     plateZ: 0,
     sourcePath: scene.activeModel?.sourcePath,
-    checkOcclusion: (start, end) => modelRaycastRef.current?.(start, end) ?? true,
   });
 
   // 5. Supports

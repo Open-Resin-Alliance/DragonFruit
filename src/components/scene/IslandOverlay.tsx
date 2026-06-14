@@ -1,7 +1,5 @@
-
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef, useCallback } from 'react';
 import * as THREE from 'three';
-import { useFrame } from '@react-three/fiber';
 import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
 import { applyIslandOverlay as drawIslandOverlay } from '@/volumeAnalysis/IslandScan/islandOverlayPainter';
 import type { ModelTransform } from '@/hooks/useModelTransform';
@@ -20,13 +18,18 @@ type IslandOverlayProps = {
   clipUpper?: number | null;
 };
 
-/**
- * Renders 3D island shapes based on actual island geometry.
- * Creates low-poly 3D objects from the first few layers of each island.
- * Applies the same transform as the main mesh to keep overlays aligned.
- */
+// Global sync timer running at module level in a single requestAnimationFrame loop.
+// No need to track frames or register useFrame loops in React/R3F components.
+const globalTimeUniform = { value: 0 };
+if (typeof window !== 'undefined') {
+  const updateTime = () => {
+    globalTimeUniform.value = performance.now() / 1000;
+    requestAnimationFrame(updateTime);
+  };
+  requestAnimationFrame(updateTime);
+}
+
 export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity, transform, centerOffset, selectedIslandId, clipLower, clipUpper }: IslandOverlayProps) {
-  // console.log(`[${ new Date().toISOString() }][IslandOverlay] Render start`);
   const threeColor = useMemo(() => new THREE.Color(color), [color]);
   const visibleColor = useMemo(() => new THREE.Color('#ffff00'), []); // Bright yellow when visible
   const occludedColor = useMemo(() => new THREE.Color('#fF6600'), []); // Vibrant red-orange when behind mesh
@@ -49,201 +52,188 @@ export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity,
 
   const clippingPlanes = clippingPlanesRef.current;
 
-  // console.log('[IslandOverlay] Rendering with:', {
-  //   markerCount: markers.length,
-  //   color,
-  //   opacity,
-  //   hasTransform: !!transform,
-  //   hasCenterOffset: !!centerOffset,
-  //   centerOffset: centerOffset ? { x: centerOffset.x, y: centerOffset.y, z: centerOffset.z } : null,
-  //   selectedIslandId
-  // });
+  // Single base unit geometry shared by the instanced mesh (radius 1, height 1)
+  const baseGeometry = useMemo(() => {
+    const g = new THREE.CylinderGeometry(1, 1, 1, 24);
+    g.rotateX(Math.PI / 2); // Rotate to Z-up
+    return g;
+  }, []);
+
+  // Split markers into instanced (non-selected positive IDs), selected (double-pass occluded/visible), and negative IDs (utility markers)
+  const { instancedMarkers, selectedMarkers, negativeIdMarkers } = useMemo(() => {
+    const instanced: IslandMarker[] = [];
+    const selected: IslandMarker[] = [];
+    const neg: IslandMarker[] = [];
+
+    for (const m of markers) {
+      if (m.id < 0) {
+        neg.push(m);
+      } else if (m.id === selectedIslandId) {
+        selected.push(m);
+      } else {
+        instanced.push(m);
+      }
+    }
+
+    return { instancedMarkers: instanced, selectedMarkers: selected, negativeIdMarkers: neg };
+  }, [markers, selectedIslandId]);
+
+  const instancedMeshRef = useRef<THREE.InstancedMesh>(null);
+
+  // Synchronously update instance matrices before rendering
+  React.useLayoutEffect(() => {
+    const mesh = instancedMeshRef.current;
+    if (!mesh || instancedMarkers.length === 0) return;
+
+    const tempMatrix = new THREE.Matrix4();
+    const tempPosition = new THREE.Vector3();
+    const tempScale = new THREE.Vector3();
+
+    instancedMarkers.forEach((marker, index) => {
+      if (!marker.geometry) return;
+      if (!marker.geometry.boundingBox) {
+        marker.geometry.computeBoundingBox();
+      }
+      const bbox = marker.geometry.boundingBox!;
+      const radius = (bbox.max.x - bbox.min.x) / 2;
+      const height = bbox.max.z - bbox.min.z;
+
+      tempPosition.set(marker.centerX, marker.centerY, marker.baseZ);
+      tempScale.set(radius, radius, height);
+      tempMatrix.compose(tempPosition, new THREE.Quaternion(), tempScale);
+
+      mesh.setMatrixAt(index, tempMatrix);
+    });
+
+    mesh.instanceMatrix.needsUpdate = true;
+  }, [instancedMarkers]);
+
+  // Inject custom volumetric glow and laser core shaders into standard material compiling
+  const onBeforeCompile = useCallback((shader: THREE.Shader) => {
+    shader.uniforms.uTime = globalTimeUniform;
+
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <common>',
+      `#include <common>
+       varying vec3 vLocalPosition;`
+    );
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+       vLocalPosition = position;`
+    );
+
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <common>',
+      `#include <common>
+       varying vec3 vLocalPosition;
+       uniform float uTime;`
+    );
+
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <opaque_fragment>',
+      `
+      // Radial distance from center axis (0.0 to 1.0)
+      float r = length(vLocalPosition.xy);
+      // Vertical distance from center plane (0.0 to 1.0)
+      float h = abs(vLocalPosition.z) * 2.0;
+
+      // Volumetric falloff: smoothly decay to 0 at all boundaries to remove flat puck edges
+      float radialFalloff = smoothstep(1.0, 0.0, r);
+      float verticalFalloff = smoothstep(1.0, 0.0, h);
+      float intensity = radialFalloff * verticalFalloff;
+
+      float softHalo = intensity;
+      float laserCore = pow(intensity, 8.0);
+      float pulse = 1.0 + 0.15 * sin(uTime * 12.5663706);
+
+      // Blend color with a brilliant white highlight core
+      vec3 finalColor = mix(diffuseColor.rgb, vec3(1.0), laserCore * 0.7);
+      // Scale alpha: soft halo + sharp laser core, scaled by opacity and 2 Hz pulse
+      float finalAlpha = clamp((diffuseColor.a * softHalo + laserCore * 0.4) * pulse, 0.0, 0.95);
+
+      #ifdef OPAQUE
+      gl_FragColor = vec4( finalColor, 1.0 );
+      #else
+      gl_FragColor = vec4( finalColor, finalAlpha );
+      #endif
+      `
+    );
+  }, []);
 
   if (markers.length === 0) {
-    // console.log('[IslandOverlay] No markers to render');
     return null;
   }
 
-  // Apply X/Y translation only - marker geometries are already in world space (including auto-lift and rotation)
   return (
     <group position={getScanVisualPosition(transform)}>
-      {markers.map((marker) => {
-        if (!marker.geometry) return null;
+      {/* 1. Render utility markers (negative IDs) */}
+      {negativeIdMarkers.map((marker) => (
+        <mesh key={marker.id} geometry={marker.geometry} renderOrder={99999}>
+          <meshBasicMaterial
+            color={marker.id < -1_000_000 ? '#00ff00' : '#ffff00'}
+            depthTest={false}
+            depthWrite={false}
+            clippingPlanes={clippingPlanes}
+          />
+        </mesh>
+      ))}
 
-        // Special handling for Markers (Negative IDs)
-        if (marker.id < 0) {
-          const isSeed = marker.id < -1_000_000;
-          const markerColor = isSeed ? '#00ff00' : '#ffff00'; // Green for Seed, Yellow for Center
+      {/* 2. Render all unselected island markers using a single draw call instanced mesh */}
+      {instancedMarkers.length > 0 && (
+        <instancedMesh
+          key={instancedMarkers.length}
+          ref={instancedMeshRef}
+          args={[baseGeometry, undefined, instancedMarkers.length]}
+        >
+          <meshBasicMaterial
+            transparent={true}
+            color={threeColor}
+            opacity={opacity}
+            depthTest={true}
+            depthWrite={false}
+            clippingPlanes={clippingPlanes}
+            onBeforeCompile={onBeforeCompile}
+          />
+        </instancedMesh>
+      )}
 
-          return (
-            <mesh
-              key={marker.id}
-              geometry={marker.geometry}
-              renderOrder={99999}
-            >
-              <meshBasicMaterial
-                color={markerColor}
-                depthTest={false}
-                depthWrite={false}
-                clippingPlanes={clippingPlanes}
-              />
-            </mesh>
-          );
-        }
-
-        const isSelected = marker.id === selectedIslandId;
-
-        if (isSelected) {
-          return (
-            <group key={marker.id}>
-              {/* Occluded state - orange, no depth test, renders behind */}
-              <GlowMesh
-                geometry={marker.geometry}
-                color={occludedColor}
-                opacity={0.95}
-                selected={true}
-                clippingPlanes={clippingPlanes}
-                depthTest={false}
-                depthWrite={false}
-                renderOrder={999}
-              />
-
-              {/* Visible state - yellow, with depth test, renders on top */}
-              <GlowMesh
-                geometry={marker.geometry}
-                color={visibleColor}
-                opacity={0.95}
-                selected={true}
-                clippingPlanes={clippingPlanes}
-                depthTest={true}
-                depthWrite={false}
-                renderOrder={1000}
-              />
-            </group>
-          );
-        } else {
-          return (
-            <GlowMesh
-              key={marker.id}
-              geometry={marker.geometry}
-              color={threeColor}
-              opacity={opacity}
-              selected={false}
+      {/* 3. Render selected island (if any) twice for occlusion contrast */}
+      {selectedMarkers.map((marker) => (
+        <group key={marker.id}>
+          {/* Occluded state - orange, no depth test, renders behind */}
+          <mesh
+            geometry={marker.geometry!}
+            renderOrder={999}
+          >
+            <meshBasicMaterial
+              transparent={true}
+              color={occludedColor}
+              opacity={0.95}
+              depthTest={false}
+              depthWrite={false}
               clippingPlanes={clippingPlanes}
+              onBeforeCompile={onBeforeCompile}
+            />
+          </mesh>
+
+          {/* Visible state - yellow, with depth test, renders on top */}
+          <mesh
+            geometry={marker.geometry!}
+            renderOrder={1000}
+          >
+            <meshBasicMaterial
+              transparent={true}
+              color={visibleColor}
+              opacity={0.95}
               depthTest={true}
               depthWrite={false}
+              clippingPlanes={clippingPlanes}
+              onBeforeCompile={onBeforeCompile}
             />
-          );
-        }
-      })}
+          </mesh>
+        </group>
+      ))}
     </group>
-  );
-}
-
-const VERTEX_SHADER = `
-#include <clipping_planes_pars_vertex>
-varying vec3 vNormal;
-varying vec3 vViewPosition;
-
-void main() {
-  #include <clipping_planes_vertex>
-  vNormal = normalize(normalMatrix * normal);
-  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-  vViewPosition = -mvPosition.xyz;
-  gl_Position = projectionMatrix * mvPosition;
-}
-`;
-
-const FRAGMENT_SHADER = `
-#include <clipping_planes_pars_fragment>
-uniform vec3 uColor;
-uniform float uOpacity;
-uniform float uTime;
-uniform float uSelected;
-
-varying vec3 vNormal;
-varying vec3 vViewPosition;
-
-void main() {
-  #include <clipping_planes_fragment>
-  
-  vec3 normal = normalize(vNormal);
-  vec3 viewDir = normalize(vViewPosition);
-  
-  float dotProduct = abs(dot(normal, viewDir));
-  float fresnel = pow(1.0 - dotProduct, 2.5);
-  float laserCore = pow(dotProduct, 16.0);
-  float pulse = 1.0 + 0.15 * sin(uTime * 4.0);
-  
-  float selectionMultiplier = uSelected > 0.5 ? 1.5 : 1.0;
-  
-  vec3 coreColor = vec3(1.0);
-  vec3 glowColor = mix(uColor, coreColor, laserCore * 0.4);
-  
-  float alpha = clamp((uOpacity * (0.6 + 0.4 * fresnel) + laserCore * 0.3) * pulse * selectionMultiplier, 0.0, 0.95);
-  
-  gl_FragColor = vec4(glowColor, alpha);
-}
-`;
-
-interface GlowMeshProps {
-  geometry: THREE.BufferGeometry;
-  color: THREE.Color;
-  opacity: number;
-  selected?: boolean;
-  clippingPlanes?: THREE.Plane[];
-  depthTest?: boolean;
-  depthWrite?: boolean;
-  renderOrder?: number;
-}
-
-function GlowMesh({
-  geometry,
-  color,
-  opacity,
-  selected = false,
-  clippingPlanes = [],
-  depthTest = true,
-  depthWrite = false,
-  renderOrder = 0,
-}: GlowMeshProps) {
-  const materialRef = React.useRef<THREE.ShaderMaterial>(null);
-
-  useFrame((state) => {
-    if (materialRef.current) {
-      materialRef.current.uniforms.uTime.value = state.clock.getElapsedTime();
-    }
-  });
-
-  const uniforms = useMemo(() => ({
-    uColor: { value: color },
-    uOpacity: { value: opacity },
-    uTime: { value: 0 },
-    uSelected: { value: selected ? 1.0 : 0.0 },
-  }), [color, opacity, selected]);
-
-  React.useEffect(() => {
-    if (materialRef.current) {
-      materialRef.current.uniforms.uColor.value = color;
-      materialRef.current.uniforms.uOpacity.value = opacity;
-      materialRef.current.uniforms.uSelected.value = selected ? 1.0 : 0.0;
-    }
-  }, [color, opacity, selected]);
-
-  return (
-    <mesh geometry={geometry} renderOrder={renderOrder}>
-      <shaderMaterial
-        ref={materialRef}
-        clipping={true}
-        clippingPlanes={clippingPlanes}
-        depthTest={depthTest}
-        depthWrite={depthWrite}
-        transparent={true}
-        uniforms={uniforms}
-        vertexShader={VERTEX_SHADER}
-        fragmentShader={FRAGMENT_SHADER}
-        clipIntersection={true}
-      />
-    </mesh>
   );
 }
