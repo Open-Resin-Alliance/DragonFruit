@@ -107,6 +107,19 @@ pub struct OrganicCutSpec {
     /// (the membrane's +normal side), socket carved from `part_b`. True swaps them.
     #[serde(default)]
     pub key_swap_sides: bool,
+    /// Key tilt (radians): polar angle the key leans OFF the cut normal. 0 = straight
+    /// out (default). The base stays glued flat to the cut face — the body shears to
+    /// lean (it does not rigidly rotate). Clamped to ~60°.
+    #[serde(default)]
+    pub key_tilt_rad: f32,
+    /// Key tilt azimuth (radians): which in-plane direction the lean points toward,
+    /// measured in the cut's tangent frame. Irrelevant when `key_tilt_rad == 0`.
+    #[serde(default)]
+    pub key_tilt_azimuth_rad: f32,
+    /// Key roll (radians): spin of the key about its own axis — orients the
+    /// rectangle / oblong dome footprint. Default 0.
+    #[serde(default)]
+    pub key_roll_rad: f32,
 }
 
 /// serde defaults for the key size (mm). Literals (not `crate::key::` constants)
@@ -419,6 +432,11 @@ fn organic_cut_contour(
             &split.membrane,
             crate::key::KeyShape::from_str_or_default(&options.cut.key_shape),
             options.cut.key_swap_sides,
+            crate::key::KeyTilt::new(
+                options.cut.key_tilt_rad,
+                options.cut.key_tilt_azimuth_rad,
+                options.cut.key_roll_rad,
+            ),
             options.cut.key_width_mm,
             options.cut.key_depth_mm,
             options.cut.key_fillet_mm,

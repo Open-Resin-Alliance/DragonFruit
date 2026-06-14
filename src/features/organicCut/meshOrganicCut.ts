@@ -10,7 +10,7 @@
  * M1: the backend cut is a no-op, so both parts come back equal to the source.
  */
 import * as THREE from 'three';
-import type { OrganicCutLoopPoint, OrganicCutOptions, OrganicCutReport, OrganicCutResult } from './types';
+import type { KeyPreviewFrame, OrganicCutLoopPoint, OrganicCutOptions, OrganicCutReport, OrganicCutResult } from './types';
 
 type TauriInvoke = <T>(
   cmd: string,
@@ -255,6 +255,11 @@ export interface MembranePreviewResult {
   keyKind: KeyPreviewKind;
   /** Reason the key shrank / fell back / was skipped. Empty when nominal/off. */
   keyDetail: string;
+  /**
+   * Placement frame of the previewed key (model-local), for the aim+roll gizmo.
+   * Null when no key was placed.
+   */
+  keyFrame: KeyPreviewFrame | null;
 }
 
 /**
@@ -275,12 +280,16 @@ export async function computeMembranePreview(
   keyShape: 'frustum' | 'dome' = 'frustum',
   keyFilletMm = 0.0,
   keySwapSides = false,
+  keyTiltRad = 0.0,
+  keyTiltAzimuthRad = 0.0,
+  keyRollRad = 0.0,
 ): Promise<MembranePreviewResult> {
   const empty: MembranePreviewResult = {
     membrane: null,
     keyPreview: null,
     keyKind: 'none',
     keyDetail: '',
+    keyFrame: null,
   };
   const core = await loadTauriCore();
   if (!core) return empty;
@@ -298,6 +307,9 @@ export async function computeMembranePreview(
     keyShape,
     keyFilletMm,
     keySwapSides,
+    keyTiltRad,
+    keyTiltAzimuthRad,
+    keyRollRad,
   });
   try {
     const reportJson = await core.invoke<string>('mesh_organic_cut_membrane_preview', { requestJson });
@@ -306,6 +318,7 @@ export async function computeMembranePreview(
       keyTriangleCount?: number;
       keyKind?: KeyPreviewKind;
       keyDetail?: string;
+      keyFrame?: KeyPreviewFrame | null;
     };
     const membrane = report.triangleCount
       ? await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_membrane')
@@ -318,6 +331,7 @@ export async function computeMembranePreview(
       keyPreview,
       keyKind: report.keyKind ?? 'none',
       keyDetail: report.keyDetail ?? '',
+      keyFrame: report.keyFrame ?? null,
     };
   } catch (err) {
     // eslint-disable-next-line no-console

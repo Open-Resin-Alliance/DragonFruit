@@ -4,7 +4,7 @@ import type { ThreeEvent } from '@react-three/fiber';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
-import type { OrganicCutLoopPoint, OrganicCutMode } from './types';
+import type { KeyPreviewFrame, OrganicCutLoopPoint, OrganicCutMode } from './types';
 import { cutPlaneFromPoints } from './cutPlane';
 
 interface OrganicCutToolProps {
@@ -77,7 +77,21 @@ interface OrganicCutToolProps {
    * user sees the key straddling the cut before committing.
    */
   keyPreview?: Float32Array | null;
+  /**
+   * Placement frame of the previewed key (model-local). The key SOUP is built
+   * UN-tilted (straight); the tilt is applied LIVE as a rigid rotation of the key
+   * mesh here, so dragging the aim gizmo moves the key instantly with no Rust
+   * round-trip. Null when no key. (The real cut bakes the tilt in Rust.)
+   */
+  keyFrame?: KeyPreviewFrame | null;
+  /** Live key tilt / azimuth / roll (radians) for the client-side rotation. */
+  keyTiltRad?: number;
+  keyTiltAzimuthRad?: number;
+  keyRollRad?: number;
 }
+
+/** Max key tilt (radians) — mirrors the Rust `KEY_MAX_TILT_RAD` (~60°). */
+const KEY_MAX_TILT_RAD = Math.PI / 3;
 
 /** Marker radius as a fraction of the model's bbox diagonal (small = precise). */
 const MARKER_RADIUS_FRACTION = 0.00075;
@@ -117,6 +131,10 @@ export function OrganicCutTool({
   cutMode = 'plane',
   membranePreview,
   keyPreview,
+  keyFrame,
+  keyTiltRad = 0,
+  keyTiltAzimuthRad = 0,
+  keyRollRad = 0,
 }: OrganicCutToolProps) {
   const activeModel = useMemo(() => models.find((m) => m.id === activeModelId), [models, activeModelId]);
   const transform = activeTransform || activeModel?.transform;
@@ -284,6 +302,119 @@ export function OrganicCutTool({
     edges.computeBoundingSphere();
     return edges;
   }, [keyGeometry]);
+
+  // LIVE key tilt matrix (model-local world space). The key SOUP is built straight
+  // (un-tilted) in Rust, so dragging the aim gizmo never triggers a Rust rebuild —
+  // instead we rotate the key mesh here, instantly. This MUST match the Rust
+  // `LeanXform` EXACTLY so the preview equals the cut.
+  //
+  // CRITICAL: the soup is built in the Rust BUILD frame (`frame_extruding_toward_
+  // part_b`), which is the reported natural frame with the axis NEGATED and u/v
+  // SWAPPED. The lean rotation is computed in that build frame. If we instead
+  // rotated in the natural frame, the lean would be MIRRORED (the build-frame swap
+  // flips handedness). So we reconstruct the build frame here and apply the lean the
+  // same way Rust's LeanXform::for_build does.
+  const keyTiltMatrix = useMemo(() => {
+    if (!keyFrame) return null;
+    const anchor = new THREE.Vector3(...keyFrame.anchor);
+    // Natural ("orig") frame as reported.
+    const axisN = new THREE.Vector3(...keyFrame.axis).normalize();
+    const uN = new THREE.Vector3(...keyFrame.u).normalize();
+    const vN = new THREE.Vector3(...keyFrame.v).normalize();
+    // Build frame = frame_extruding_toward_part_b(natural): negate axis, swap u/v.
+    const buildAxis = axisN.clone().multiplyScalar(-1);
+    const buildU = vN.clone();
+    const buildV = uN.clone();
+
+    const tilt = Math.min(Math.abs(keyTiltRad), KEY_MAX_TILT_RAD) * Math.sign(keyTiltRad || 1);
+    const roll = keyRollRad;
+    if (Math.abs(tilt) < 1e-6 && Math.abs(roll) < 1e-6) return null;
+
+    // Apply order (matches LeanXform::apply): roll about build +axis, then lean about
+    // the in-plane axis k, composed as q = qLean · qRoll.
+    const q = new THREE.Quaternion();
+    if (Math.abs(roll) >= 1e-6) {
+      q.premultiply(new THREE.Quaternion().setFromAxisAngle(buildAxis, roll));
+    }
+    let sink = 0;
+    if (Math.abs(tilt) >= 1e-6) {
+      // leanWorld = cos(az)·uN + sin(az)·vN (in the ORIGINAL/natural tangent plane).
+      const leanWorld = uN.clone().multiplyScalar(Math.cos(keyTiltAzimuthRad))
+        .add(vN.clone().multiplyScalar(Math.sin(keyTiltAzimuthRad)));
+      // Project onto the BUILD basis: lu = leanWorld·buildU, lv = leanWorld·buildV.
+      const lu = leanWorld.dot(buildU);
+      const lv = leanWorld.dot(buildV);
+      const len = Math.hypot(lu, lv);
+      if (len > 1e-9) {
+        // k (build-local) = (−lv, lu, 0)/len → world vector via the build basis.
+        const k = buildU.clone().multiplyScalar(-lv / len)
+          .add(buildV.clone().multiplyScalar(lu / len))
+          .normalize();
+        q.premultiply(new THREE.Quaternion().setFromAxisAngle(k, tilt));
+        // Sink so the tilted base stays buried (matches the Rust half_diag·sin sink).
+        // half_diag ≈ the base footprint reach; depth is the closest proxy we have on
+        // the frontend, and the sink only affects how deep the base goes (not the
+        // visible orientation), so a small mismatch is harmless.
+        sink = keyFrame.depth * 0.9 * Math.sin(Math.abs(tilt));
+      }
+    }
+
+    // Compose about the anchor: translate to origin, rotate, sink along −buildAxis,
+    // translate back. m = back · sink · rot · toOrigin.
+    const toOrigin = new THREE.Matrix4().makeTranslation(-anchor.x, -anchor.y, -anchor.z);
+    const rot = new THREE.Matrix4().makeRotationFromQuaternion(q);
+    const sinkV = buildAxis.clone().multiplyScalar(-sink);
+    const sinkM = new THREE.Matrix4().makeTranslation(sinkV.x, sinkV.y, sinkV.z);
+    const back = new THREE.Matrix4().makeTranslation(anchor.x, anchor.y, anchor.z);
+    return back.multiply(sinkM).multiply(rot).multiply(toOrigin);
+  }, [keyFrame, keyTiltRad, keyTiltAzimuthRad, keyRollRad]);
+
+  // Clip the key preview AT THE WAFER: hide everything on the part_a (+normal) side
+  // of the cut plane, so the preview shows only the portion that actually goes into
+  // the body (below the wafer) — not the full peg poking up above it. The wafer plane
+  // is FIXED (it doesn't tilt with the key); as the key leans, its part_a-side
+  // overhang is clipped by this stationary plane. The plane is in WORLD space (where
+  // three.js clipping planes operate), so we transform the local key frame to world.
+  // Stable primitive snapshots of the transform so the plane memo only recomputes
+  // when values actually change (not on every render — `transform` is a fresh object
+  // each render). A new Plane object each render churns the material's clippingPlanes.
+  const ctpx = transform?.position.x ?? 0;
+  const ctpy = transform?.position.y ?? 0;
+  const ctpz = transform?.position.z ?? 0;
+  const ctrx = transform?.rotation.x ?? 0;
+  const ctry = transform?.rotation.y ?? 0;
+  const ctrz = transform?.rotation.z ?? 0;
+  const ctsx = transform?.scale.x ?? 1;
+  const ctsy = transform?.scale.y ?? 1;
+  const ctsz = transform?.scale.z ?? 1;
+  const cHasTransform = !!transform;
+  const keyClipPlane = useMemo(() => {
+    if (!keyFrame || !cHasTransform) return null;
+    const anchorL = new THREE.Vector3(...keyFrame.anchor);
+    const axisL = new THREE.Vector3(...keyFrame.axis).normalize();
+    // local→world = plate(position, quat, scale) ∘ meshLocalOffset. Build the quat
+    // here from the rotation primitives (not the churning currentQuaternion) so this
+    // only recomputes when values actually change.
+    const quat = quaternionFromGlobalEuler({ x: ctrx, y: ctry, z: ctrz });
+    const outer = new THREE.Matrix4().compose(
+      new THREE.Vector3(ctpx, ctpy, ctpz),
+      quat,
+      new THREE.Vector3(ctsx, ctsy, ctsz),
+    );
+    const inner = new THREE.Matrix4().makeTranslation(meshLocalOffset.x, meshLocalOffset.y, meshLocalOffset.z);
+    const localToWorld = outer.multiply(inner);
+    const anchorW = anchorL.clone().applyMatrix4(localToWorld);
+    const normalMat = new THREE.Matrix3().getNormalMatrix(localToWorld);
+    // Keep the part_b side (where the peg extrudes into the body): a clipping plane
+    // keeps the half-space its normal points INTO (normal·p + constant ≥ 0), so the
+    // kept normal is −axis (toward part_b). Everything on the part_a (+normal) side of
+    // the wafer is hidden. No bias — clip exactly at the wafer plane.
+    const keepNormalW = axisL.clone().applyMatrix3(normalMat).normalize().multiplyScalar(-1);
+    return new THREE.Plane().setFromNormalAndCoplanarPoint(keepNormalW, anchorW);
+  }, [keyFrame, cHasTransform, meshLocalOffset, ctpx, ctpy, ctpz, ctrx, ctry, ctrz, ctsx, ctsy, ctsz]);
+  // Stable array for the material `clippingPlanes` prop (a new array each render
+  // would churn the material every frame).
+  const keyClipPlanes = useMemo(() => (keyClipPlane ? [keyClipPlane] : null), [keyClipPlane]);
 
   // Wireframe of the membrane so we can SEE the triangulation (verify the grid
   // remesh / spot slivers). Edges-only overlay on the translucent surface.
@@ -601,31 +732,48 @@ export function OrganicCutTool({
         {/* Registration-key preview (peg + socket) — amber so it reads distinctly
             from the green membrane. `depthTest={false}` so it always draws THROUGH
             the model (an X-ray overlay), like the membrane wireframe — the key is
-            mostly buried inside the body, so without this it'd be hidden. */}
-        {keyGeometry && (
-          <mesh geometry={keyGeometry} renderOrder={1000} frustumCulled={false}>
-            <meshBasicMaterial
-              color={0xffa630}
-              transparent
-              opacity={0.4}
-              side={THREE.DoubleSide}
-              depthTest={false}
-              depthWrite={false}
-            />
-          </mesh>
-        )}
+            mostly buried inside the body, so without this it'd be hidden.
 
-        {/* Key edge outline so the peg/socket 3D form reads through the model. */}
-        {keyWireframe && (
-          <lineSegments geometry={keyWireframe} renderOrder={1001} frustumCulled={false}>
-            <lineBasicMaterial
-              color={0xff7a00}
-              transparent
-              opacity={0.9}
-              depthTest={false}
-              depthWrite={false}
-            />
-          </lineSegments>
+            The soup is built STRAIGHT (un-tilted) in Rust; the live tilt is applied
+            here as a rigid rotation matrix about the base, so the aim gizmo moves the
+            key instantly with no Rust round-trip. Wrapped in a group carrying that
+            matrix (identity when un-tilted). It's CLIPPED at the wafer so only the
+            portion going into the body (part_b side) shows — not the overhang above. */}
+        {keyGeometry && (
+          <group
+            matrixAutoUpdate={false}
+            ref={(g) => {
+              if (!g) return;
+              if (keyTiltMatrix) g.matrix.copy(keyTiltMatrix);
+              else g.matrix.identity();
+              g.matrixWorldNeedsUpdate = true;
+            }}
+          >
+            <mesh geometry={keyGeometry} renderOrder={1000} frustumCulled={false}>
+              <meshBasicMaterial
+                color={0xffa630}
+                transparent
+                opacity={0.4}
+                side={THREE.DoubleSide}
+                depthTest={false}
+                depthWrite={false}
+                clippingPlanes={keyClipPlanes}
+              />
+            </mesh>
+            {/* Key edge outline so the peg/socket 3D form reads through the model. */}
+            {keyWireframe && (
+              <lineSegments geometry={keyWireframe} renderOrder={1001} frustumCulled={false}>
+                <lineBasicMaterial
+                  color={0xff7a00}
+                  transparent
+                  opacity={0.9}
+                  depthTest={false}
+                  depthWrite={false}
+                  clippingPlanes={keyClipPlanes}
+                />
+              </lineSegments>
+            )}
+          </group>
         )}
 
         {/* Live translucent cut-plane preview (what the slice will look like). */}

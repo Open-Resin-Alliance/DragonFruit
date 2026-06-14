@@ -257,6 +257,16 @@ struct GeodesicRequestDto {
     /// Flip which half gets the peg vs the socket (preview reflects the direction).
     #[serde(default)]
     key_swap_sides: bool,
+    /// Key tilt (radians) — polar lean off the cut normal. Base stays glued; the
+    /// body shears to lean. Default 0.
+    #[serde(default)]
+    key_tilt_rad: f32,
+    /// Key tilt azimuth (radians) — which in-plane direction the lean points.
+    #[serde(default)]
+    key_tilt_azimuth_rad: f32,
+    /// Key roll (radians) — spin about the key's own axis. Default 0.
+    #[serde(default)]
+    key_roll_rad: f32,
 }
 
 fn default_density_one() -> f32 {
@@ -294,6 +304,9 @@ impl Default for GeodesicRequestDto {
             key_shape: "frustum".to_string(),
             key_fillet_mm: 0.0,
             key_swap_sides: false,
+            key_tilt_rad: 0.0,
+            key_tilt_azimuth_rad: 0.0,
+            key_roll_rad: 0.0,
         }
     }
 }
@@ -1082,6 +1095,11 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
     let key_shape = dragonfruit_organic_cut::KeyShape::from_str_or_default(&req.key_shape);
     let key_fillet_mm = req.key_fillet_mm;
     let key_swap_sides = req.key_swap_sides;
+    let key_tilt = dragonfruit_organic_cut::KeyTilt::new(
+        req.key_tilt_rad,
+        req.key_tilt_azimuth_rad,
+        req.key_roll_rad,
+    );
 
     // Use the captured cut SOURCE mesh so the preview can apply the real loop
     // offset (needs surface normals) and show the REAL cutter slab — exactly what
@@ -1098,11 +1116,14 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
         let mut key_soup: Vec<f32> = Vec::new();
         let mut key_kind = "none".to_string();
         let mut key_detail = String::new();
+        // Placement frame for the aim/roll gizmo (anchor, axis, u, v, tip), in
+        // model-local coords. None when no key is previewed.
+        let mut key_frame: Option<dragonfruit_organic_cut::KeyFrameInfo> = None;
 
         let soup = if let Some(bytes) = source_bytes {
             let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
             if generate_key {
-                if let Some((ks, kind, detail)) =
+                if let Some((ks, kind, detail, frame)) =
                     dragonfruit_organic_cut::build_key_preview_soup(
                         &mesh,
                         &loop_pts,
@@ -1110,6 +1131,7 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
                         density,
                         key_shape,
                         key_swap_sides,
+                        key_tilt,
                         key_width_mm,
                         key_depth_mm,
                         key_fillet_mm,
@@ -1119,6 +1141,7 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
                     key_soup = ks;
                     key_kind = kind.as_str().to_string();
                     key_detail = detail;
+                    key_frame = frame;
                 }
             }
             dragonfruit_organic_cut::membrane::build_cutter_preview_soup(
@@ -1142,12 +1165,12 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
         let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&soup).to_vec();
         let key_bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&key_soup).to_vec();
         let key_tris = key_soup.len() / 9;
-        Ok::<_, String>((bytes, tri_count, key_bytes, key_tris, key_kind, key_detail))
+        Ok::<_, String>((bytes, tri_count, key_bytes, key_tris, key_kind, key_detail, key_frame))
     })
     .await
     .map_err(|e| format!("membrane preview task panicked: {e}"))??;
 
-    let (bytes, tri_count, key_bytes, key_tris, key_kind, key_detail) = result;
+    let (bytes, tri_count, key_bytes, key_tris, key_kind, key_detail, key_frame) = result;
     *organic_cut_membrane_bytes()
         .lock()
         .map_err(|e| format!("membrane lock poisoned: {e}"))? = Some(bytes);
@@ -1156,8 +1179,22 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
         .map_err(|e| format!("key lock poisoned: {e}"))? = Some(key_bytes);
     // key_detail is plain ASCII status text; escape quotes/backslashes for JSON.
     let key_detail_json = json_escape(&key_detail);
+    // The gizmo frame (anchor/axis/u/v/tip, model-local) so the frontend can place
+    // the aim + roll handles exactly on the previewed key. `null` when no key.
+    let key_frame_json = match key_frame {
+        Some(f) => format!(
+            "{{\"anchor\":[{},{},{}],\"axis\":[{},{},{}],\"u\":[{},{},{}],\"v\":[{},{},{}],\"tip\":[{},{},{}],\"depth\":{}}}",
+            f.anchor.x, f.anchor.y, f.anchor.z,
+            f.axis.x, f.axis.y, f.axis.z,
+            f.u.x, f.u.y, f.u.z,
+            f.v.x, f.v.y, f.v.z,
+            f.tip.x, f.tip.y, f.tip.z,
+            f.depth,
+        ),
+        None => "null".to_string(),
+    };
     Ok(format!(
-        "{{\"triangleCount\":{tri_count},\"keyTriangleCount\":{key_tris},\"keyKind\":\"{key_kind}\",\"keyDetail\":\"{key_detail_json}\"}}"
+        "{{\"triangleCount\":{tri_count},\"keyTriangleCount\":{key_tris},\"keyKind\":\"{key_kind}\",\"keyDetail\":\"{key_detail_json}\",\"keyFrame\":{key_frame_json}}}"
     ))
 }
 

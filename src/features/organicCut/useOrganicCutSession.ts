@@ -13,7 +13,7 @@
  * intentionally not touching yet).
  */
 import React from 'react';
-import type { OrganicCutLoopPoint, OrganicCutResult, OrganicCutSessionStatus } from './types';
+import type { KeyPreviewFrame, OrganicCutLoopPoint, OrganicCutResult, OrganicCutSessionStatus } from './types';
 import type { OrganicCutPanelState } from './OrganicCutPanel';
 import {
   computeGeodesicLoop,
@@ -133,6 +133,11 @@ export interface OrganicCutSession {
   keyKind: KeyPreviewKind;
   /** Reason the key shrank / fell back / was skipped (for the panel alert). */
   keyDetail: string;
+  /**
+   * Placement frame of the previewed key (model-local), for the in-viewport aim+
+   * roll gizmo. Null when no key was placed. Drives where the tip/roll handles sit.
+   */
+  keyFrame: KeyPreviewFrame | null;
 }
 
 const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
@@ -156,13 +161,18 @@ const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
   keyDepthMm: 2.5,
   // Default key shape — the rotation-locking tapered frustum.
   keyShape: 'frustum',
-  // Edge fillet off by default (sharp box); the user dials it in live.
-  keyFilletMm: 0.0,
+  // Edge fillet 0.2mm by default (lightly rounded corners + tip); user tunes live.
+  keyFilletMm: 0.2,
   // Dome Uniform Scale on by default — width/depth move together (round dome)
   // until the user unlocks it for an oblong shape.
   keyUniformScale: true,
   // Peg on the +normal side (part A) by default; the Flip button swaps it.
   keySwapSides: false,
+  // Key points straight out of the cut by default; the in-viewport aim gizmo
+  // (drag the tip) leans it, the roll ring spins it. All measured in radians.
+  keyTiltRad: 0,
+  keyTiltAzimuthRad: 0,
+  keyRollRad: 0,
 };
 
 /** Minimum points before a CONTOUR cut is possible (a real loop needs ≥3). */
@@ -190,6 +200,9 @@ export function useOrganicCutSession({
   const [keyPreview, setKeyPreview] = React.useState<Float32Array | null>(null);
   const [keyKind, setKeyKind] = React.useState<KeyPreviewKind>('none');
   const [keyDetail, setKeyDetail] = React.useState<string>('');
+  // Placement frame of the previewed key (anchor/axis/u/v/tip), for the aim+roll
+  // gizmo. Null when no key is previewed.
+  const [keyFrame, setKeyFrame] = React.useState<KeyPreviewFrame | null>(null);
   // Selected waypoint index (click a marker to select; Delete removes it).
   const [selectedIndex, setSelectedIndex] = React.useState<number | null>(null);
 
@@ -372,6 +385,7 @@ export function useOrganicCutSession({
         setKeyPreview(null);
         setKeyKind('none');
         setKeyDetail('');
+        setKeyFrame(null);
       }
       return;
     }
@@ -383,6 +397,11 @@ export function useOrganicCutSession({
         const poly = geodesicPolyline;
         const previewLoop =
           poly && poly.length >= 9 ? geodesicPolylineToLoopPoints(poly) : loop;
+        // The key SOUP is built STRAIGHT (tilt = 0): the live tilt is applied as a
+        // client-side rigid rotation of the key mesh (OrganicCutTool), so dragging
+        // the aim gizmo never triggers this heavy Rust round-trip. Hence tilt is NOT
+        // passed here and NOT in the deps below — only width/depth/shape/etc. rebuild
+        // the soup. (The real cut still bakes the tilt in Rust via apply_key.)
         const result = await computeMembranePreview(
           previewLoop,
           panelState.membraneSmoothing,
@@ -394,18 +413,25 @@ export function useOrganicCutSession({
           panelState.keyShape,
           panelState.keyFilletMm,
           panelState.keySwapSides,
+          0,
+          0,
+          0,
         );
         if (cancelled) return;
         setMembranePreview(result.membrane);
         setKeyPreview(result.keyPreview);
         setKeyKind(result.keyKind);
         setKeyDetail(result.keyDetail);
+        setKeyFrame(result.keyFrame);
       })();
     }, 80);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
+    // NOTE: keyTilt/azimuth/roll are intentionally NOT deps — tilt is applied live
+    // on the client (see OrganicCutTool's keyTiltMatrix), so changing it must NOT
+    // rebuild the soup. Keeping them out is what makes the aim gizmo smooth.
   }, [toolActive, loop, activeGeometry, activeGeometryKey, cutMode, geodesicPolyline, isDraggingPoint, panelState.membraneSmoothing, panelState.density, panelState.thicknessMm, panelState.generateKey, panelState.keyWidthMm, panelState.keyDepthMm, panelState.keyShape, panelState.keyFilletMm, panelState.keySwapSides]);
 
   const addPoint = React.useCallback((point: OrganicCutLoopPoint) => {
@@ -571,6 +597,11 @@ export function useOrganicCutSession({
             keyShape: ps.keyShape,
             keyFilletMm: ps.keyFilletMm,
             keySwapSides: ps.keySwapSides,
+            // Aim/roll: the base-glued lean + spin set by the in-viewport gizmo. The
+            // preview already showed exactly this key (same angles, same shear).
+            keyTiltRad: ps.keyTiltRad,
+            keyTiltAzimuthRad: ps.keyTiltAzimuthRad,
+            keyRollRad: ps.keyRollRad,
           };
         } else {
           // Compute the plane from the SAME helper the preview uses, so the cut
@@ -678,5 +709,6 @@ export function useOrganicCutSession({
     keyPreview,
     keyKind,
     keyDetail,
+    keyFrame,
   };
 }

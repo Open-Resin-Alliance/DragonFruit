@@ -89,6 +89,34 @@ export interface OrganicCutSpec {
   keyFilletMm?: number;
   /** Flip which half gets the peg vs the socket. Serde field: `keySwapSides`. */
   keySwapSides?: boolean;
+  /**
+   * Key tilt (radians): polar lean off the cut normal. The base stays glued flat to
+   * the cut face; the body shears to lean. 0 = straight out. Serde: `keyTiltRad`.
+   */
+  keyTiltRad?: number;
+  /**
+   * Key tilt azimuth (radians): which in-plane direction the lean points toward.
+   * Irrelevant when keyTiltRad === 0. Serde: `keyTiltAzimuthRad`.
+   */
+  keyTiltAzimuthRad?: number;
+  /** Key roll (radians): spin about the key's own axis. Serde: `keyRollRad`. */
+  keyRollRad?: number;
+}
+
+/**
+ * Placement frame of the previewed key (model-local coords), returned by the
+ * membrane/key preview so the aim+roll gizmo can sit exactly on the key. `anchor`
+ * is the base center (the tilt/roll pivot); `axis` is the un-tilted cut normal the
+ * key roots against; `u`/`v` are the in-plane basis; `tip` is the leaned apex where
+ * the aim handle is drawn; `depth` is the peg height (for handle scaling).
+ */
+export interface KeyPreviewFrame {
+  anchor: [number, number, number];
+  axis: [number, number, number];
+  u: [number, number, number];
+  v: [number, number, number];
+  tip: [number, number, number];
+  depth: number;
 }
 
 export interface OrganicCutOptions {

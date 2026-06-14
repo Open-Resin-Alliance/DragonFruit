@@ -43,7 +43,7 @@ import { HollowingPanel, type HollowingPanelState } from '../features/hollowing'
 import { HolePunchPanel, type HolePunchPanelState } from '../features/hole-punching/HolePunchPanel';
 import { HolePunchPreviewCylinder } from '@/features/hole-punching/HolePunchPreviewCylinder';
 import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
-import { OrganicCutPanel, OrganicCutTool, useOrganicCutSession } from '@/features/organicCut';
+import { OrganicCutPanel, OrganicCutTool, OrganicCutKeyGizmo, useOrganicCutSession } from '@/features/organicCut';
 import { MirrorTool } from '@/features/mirror/MirrorTool';
 import { bakeWithFlips } from '@/features/mirror/logic/bakeWithFlips';
 import { buildMirrorSupportTransforms, reflectTransformAcrossWorldAxis } from '@/features/mirror/logic/buildMirrorSupportTransforms';
@@ -18888,6 +18888,28 @@ export default function Home() {
             onHolePunchHover={scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing' && !hollowingEditMode ? handleHolePunchHover : undefined}
             onOrganicCutClick={organicCutToolActive ? handleOrganicCutClick : undefined}
             organicCutDragging={organicCutDragging}
+            organicCutKeyGizmo={
+              organicCutToolActive && organicCut.panelState.cutMode === 'contour' ? (
+                <OrganicCutKeyGizmo
+                  models={scene.models}
+                  activeModelId={displayActiveModelId}
+                  activeTransform={transformMgr.transform}
+                  keyFrame={organicCut.keyFrame}
+                  keyTiltRad={organicCut.panelState.keyTiltRad}
+                  keyTiltAzimuthRad={organicCut.panelState.keyTiltAzimuthRad}
+                  keyRollRad={organicCut.panelState.keyRollRad}
+                  onKeyAimChange={(tilt, azimuth, roll) =>
+                    organicCut.setPanelState({
+                      ...organicCut.panelState,
+                      keyTiltRad: tilt,
+                      keyTiltAzimuthRad: azimuth,
+                      keyRollRad: roll,
+                    })
+                  }
+                  onDragStateChange={handleOrganicCutDragStateChange}
+                />
+              ) : undefined
+            }
             onSupportHover={supports.onModelHover}
             onActiveModelChange={handleSceneModelSelection}
             onMarqueeSelectionChange={handleSceneMarqueeSelection}
@@ -19164,6 +19186,10 @@ export default function Home() {
                 cutMode={organicCut.panelState.cutMode}
                 membranePreview={organicCut.membranePreview}
                 keyPreview={organicCut.keyPreview}
+                keyFrame={organicCut.keyFrame}
+                keyTiltRad={organicCut.panelState.keyTiltRad}
+                keyTiltAzimuthRad={organicCut.panelState.keyTiltAzimuthRad}
+                keyRollRad={organicCut.panelState.keyRollRad}
               />
             )}
             {scene.mode === 'prepare' && transformMgr.transformMode === 'mirror' && (

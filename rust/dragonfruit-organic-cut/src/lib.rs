@@ -20,8 +20,8 @@ pub mod organic_cut;
 pub use crate::geodesic::{surface_loop_from_mesh, surface_loop_positions, GeodesicSolver};
 #[cfg(feature = "manifold")]
 pub use crate::key::{
-    apply_key, build_key_preview_soup, KeyKind, KeyOutcome, KeyShape, DEFAULT_KEY_DEPTH_MM,
-    DEFAULT_KEY_TOLERANCE_MM, DEFAULT_KEY_WIDTH_MM,
+    apply_key, build_key_preview_soup, KeyFrameInfo, KeyKind, KeyOutcome, KeyShape, KeyTilt,
+    DEFAULT_KEY_DEPTH_MM, DEFAULT_KEY_TOLERANCE_MM, DEFAULT_KEY_WIDTH_MM, KEY_MAX_TILT_RAD,
 };
 pub use crate::organic_cut::{
     organic_cut, OrganicCutLoopPoint, OrganicCutOptions, OrganicCutOutcome, OrganicCutReport,
