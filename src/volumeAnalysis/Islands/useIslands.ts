@@ -245,25 +245,41 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     return applyFilter(annotated, filterToggles);
   }, [allIslands, supportTips, plateZ, filterToggles]);
 
+  const displayedIslands = useMemo(() => {
+    return filteredIslands.filter((island) => {
+      if (island.class === 'voxelOnly' && island.source === 'voxel') {
+        return showVoxelOnly;
+      }
+      if (island.class === 'minimaOnly' && island.source === 'minima') {
+        return showMinimaOnly;
+      }
+      if (island.class === 'intersection') {
+        // Only include the voxel version of the intersection to avoid duplicate navigation items
+        return showIntersection && island.source === 'voxel';
+      }
+      return true;
+    });
+  }, [filteredIslands, showVoxelOnly, showMinimaOnly, showIntersection]);
+
   // Cluster-walk ordering for the list / ←/→ navigation (Euclidean only).
   const orderedIslands = useMemo(() => {
-    return clusterWalkOrder(filteredIslands.map((i) => ({ ...i })), {
+    return clusterWalkOrder(displayedIslands.map((i) => ({ ...i })), {
       epsilonMm: Math.max(8, pxMm * 40),
     });
-  }, [filteredIslands, pxMm]);
+  }, [displayedIslands, pxMm]);
 
   // Per-source pucks for the IslandOverlay layers (blue voxel-only / green minima-only / red intersection).
   const voxelOnlyPucks = useMemo(
-    () => buildIslandPucks(filteredIslands.filter((i) => i.source === 'voxel' && i.class === 'voxelOnly')),
-    [filteredIslands],
+    () => buildIslandPucks(showVoxelOnly ? filteredIslands.filter((i) => i.source === 'voxel' && i.class === 'voxelOnly') : []),
+    [filteredIslands, showVoxelOnly],
   );
   const minimaOnlyPucks = useMemo(
-    () => buildIslandPucks(filteredIslands.filter((i) => i.source === 'minima' && i.class === 'minimaOnly')),
-    [filteredIslands],
+    () => buildIslandPucks(showMinimaOnly ? filteredIslands.filter((i) => i.source === 'minima' && i.class === 'minimaOnly') : []),
+    [filteredIslands, showMinimaOnly],
   );
   const intersectionPucks = useMemo(
-    () => buildIslandPucks(filteredIslands.filter((i) => i.class === 'intersection' && i.source === 'voxel')),
-    [filteredIslands],
+    () => buildIslandPucks(showIntersection ? filteredIslands.filter((i) => i.class === 'intersection' && i.source === 'voxel') : []),
+    [filteredIslands, showIntersection],
   );
 
   const byMarkerId = useMemo(() => {
