@@ -1533,6 +1533,27 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
   const networkSupport = normalizeNetworkSupport(partial?.networkSupport);
   const networkSettings = sanitizePrinterNetworkSettings(partial?.network);
 
+  const resolvedBuildDimensionMode = normalizeBuildDimensionMode((partial as any)?.buildDimensionMode) ?? 'manual';
+  const resolvedPixelSize = sanitizePixelSize(partial?.pixelSize);
+  let resolvedBuildVolumeMm = partial?.buildVolumeMm ?? { width: 143, depth: 89, height: 175 };
+
+  // When auto mode is active and pixelSize is known, ensure build volume is computed
+  // from pixelSize × resolution (not a stale fallback).
+  if (resolvedBuildDimensionMode === 'auto' && resolvedPixelSize && partial?.display) {
+    const resX = partial.display.resolutionX ?? 2560;
+    const resY = partial.display.resolutionY ?? 1620;
+    if (
+      !resolvedBuildVolumeMm
+      || (resolvedBuildVolumeMm.width === 143 && resolvedBuildVolumeMm.depth === 89)
+    ) {
+      resolvedBuildVolumeMm = {
+        width: (resX * resolvedPixelSize.x) / 1000,
+        depth: (resY * resolvedPixelSize.y) / 1000,
+        height: resolvedBuildVolumeMm?.height ?? 175,
+      };
+    }
+  }
+
   const profile: PrinterProfile = {
     id: createId('printer'),
     name: partial?.name?.trim() || `Printer ${state.printerProfiles.length + 1}`,
@@ -1543,16 +1564,16 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
     hasCamera: normalizeCameraSupport(partial?.hasCamera),
     networkFilter: sanitizeNetworkFilter(partial?.networkFilter),
     platformBadge: sanitizePlatformBadge(partial?.platformBadge),
-    pixelSize: sanitizePixelSize(partial?.pixelSize),
+    pixelSize: resolvedPixelSize,
     bitDepth: sanitizeBitDepth(partial?.bitDepth),
-    buildDimensionMode: normalizeBuildDimensionMode((partial as any)?.buildDimensionMode) ?? 'manual',
+    buildDimensionMode: resolvedBuildDimensionMode,
     officialPresetId: partial?.officialPresetId?.trim(),
     officialPresetVersion: Number.isFinite(Number((partial as any)?.officialPresetVersion))
       ? normalizeProfileVersion((partial as any).officialPresetVersion, 1)
       : undefined,
     isOfficial: partial?.isOfficial ?? false,
     isCustom: partial?.isCustom ?? true,
-    buildVolumeMm: partial?.buildVolumeMm ?? { width: 143, depth: 89, height: 175 },
+    buildVolumeMm: resolvedBuildVolumeMm,
     safetyMarginMm: sanitizeSafetyMarginMm(partial?.safetyMarginMm),
     display: {
       resolutionX: partial?.display?.resolutionX ?? 2560,
@@ -1604,6 +1625,26 @@ export function addPrinterProfileFromPreset(presetId: string): string {
   ));
 
   if (existingOfficial) {
+    // Refresh the existing profile with current preset data — cached profiles
+    // may have stale buildDimensionMode/buildVolumeMm from an older schema.
+    const refinedBuildDimensionMode = normalizeBuildDimensionMode((preset as any).buildDimensionMode);
+    const needsRefresh = (
+      (existingOfficial.buildDimensionMode !== refinedBuildDimensionMode)
+      || (refinedBuildDimensionMode === 'auto' && existingOfficial.pixelSize == null)
+    );
+    if (needsRefresh && refinedBuildDimensionMode != null) {
+      const idx = state.printerProfiles.indexOf(existingOfficial);
+      if (idx !== -1) {
+        state.printerProfiles[idx] = {
+          ...existingOfficial,
+          buildDimensionMode: refinedBuildDimensionMode,
+          pixelSize: existingOfficial.pixelSize ?? preset.pixelSize,
+          buildVolumeMm: preset.buildVolumeMm,
+        };
+        persist(state);
+        notify();
+      }
+    }
     return existingOfficial.id;
   }
 
