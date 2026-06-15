@@ -15,6 +15,7 @@ interface IslandSurfaceDotsOverlayProps {
   clipUpper?: number | null;
   opacity?: number;
   transform?: ModelTransform | null;
+  dropOffsetZ?: number;
 }
 
 const defaultPosition = new THREE.Vector3(0, 0, 0);
@@ -30,9 +31,11 @@ export default function IslandSurfaceDotsOverlay({
   clipUpper,
   opacity = 0.9,
   transform,
+  dropOffsetZ = 0,
 }: IslandSurfaceDotsOverlayProps) {
   const [gridTexture, setGridTexture] = useState<THREE.DataTexture | null>(null);
   const [markerTexture, setMarkerTexture] = useState<THREE.DataTexture | null>(null);
+  const [markerMetaTexture, setMarkerMetaTexture] = useState<THREE.DataTexture | null>(null);
   const [bboxMin, setBboxMin] = useState<THREE.Vector3>(new THREE.Vector3());
   const [bboxMax, setBboxMax] = useState<THREE.Vector3>(new THREE.Vector3());
 
@@ -61,48 +64,63 @@ export default function IslandSurfaceDotsOverlay({
     [centerOffset]
   );
 
-  // Generate 2D decal grid + 1D marker list textures on CPU
-  useEffect(() => {
-    let targetBBox = scanBBox;
-    if (!targetBBox && geometry) {
-      const bbox = geometry.boundingBox
-        ? geometry.boundingBox.clone()
-        : new THREE.Box3().setFromBufferAttribute(geometry.getAttribute('position') as THREE.BufferAttribute);
-      const center = bbox.getCenter(new THREE.Vector3());
-      const centeredBBox = bbox.clone().translate(new THREE.Vector3(-center.x, -center.y, -center.z));
-      
-      const matrix = new THREE.Matrix4();
-      if (transform) {
-        matrix.compose(
-          transform.position,
-          quaternionFromGlobalEuler(transform.rotation),
-          transform.scale
-        );
-      } else {
-        matrix.identity();
-      }
-      centeredBBox.applyMatrix4(matrix);
-      targetBBox = centeredBBox;
-    }
+  const localBBox = useMemo(() => {
+    if (!geometry) return new THREE.Box3();
+    return geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
+      geometry.getAttribute('position') as THREE.BufferAttribute
+    );
+  }, [geometry]);
 
-    if (islandMarkers.length === 0 || !targetBBox) {
+  // Transform world-space marker centers back to geometry local space on the CPU
+  const localMarkers = useMemo(() => {
+    if (islandMarkers.length === 0) return [];
+    const matrix = new THREE.Matrix4();
+    if (transform) {
+      matrix.compose(
+        transform.position,
+        quaternionFromGlobalEuler(transform.rotation),
+        transform.scale
+      );
+    } else {
+      matrix.identity();
+    }
+    const invMatrix = matrix.clone().invert();
+
+    return islandMarkers.map(m => {
+      const worldCenter = new THREE.Vector3(m.centerX, m.centerY, m.baseZ);
+      const localCenter = worldCenter.clone().applyMatrix4(invMatrix).add(centerOffset);
+      return {
+        ...m,
+        centerX: localCenter.x,
+        centerY: localCenter.y,
+        baseZ: localCenter.z,
+      };
+    });
+  }, [islandMarkers, transform, centerOffset]);
+
+  // Generate 2D decal grid + 1D marker list textures on CPU (completely local space)
+  useEffect(() => {
+    if (localMarkers.length === 0 || !localBBox) {
       setGridTexture(prev => { if (prev) prev.dispose(); return null; });
       setMarkerTexture(prev => { if (prev) prev.dispose(); return null; });
+      setMarkerMetaTexture(prev => { if (prev) prev.dispose(); return null; });
       return;
     }
 
-    const res = generateDecalGrid(islandMarkers, targetBBox);
+    const res = generateDecalGrid(localMarkers, localBBox);
     setGridTexture(prev => { if (prev) prev.dispose(); return res.gridTexture; });
     setMarkerTexture(prev => { if (prev) prev.dispose(); return res.markerTexture; });
+    setMarkerMetaTexture(prev => { if (prev) prev.dispose(); return res.markerMetaTexture; });
     setBboxMin(res.bboxMin);
     setBboxMax(res.bboxMax);
-  }, [islandMarkers, scanBBox, geometry, transform]);
+  }, [localMarkers, localBBox]);
 
   // Clean up texture resources on unmount
   useEffect(() => {
     return () => {
       setGridTexture(prev => { if (prev) prev.dispose(); return null; });
       setMarkerTexture(prev => { if (prev) prev.dispose(); return null; });
+      setMarkerMetaTexture(prev => { if (prev) prev.dispose(); return null; });
     };
   }, []);
 
@@ -121,28 +139,30 @@ export default function IslandSurfaceDotsOverlay({
       uniforms: {
         uGridTexture: { value: null },
         uMarkerTexture: { value: null },
+        uMarkerMetaTexture: { value: null },
         uBBoxMin: { value: new THREE.Vector3() },
         uBBoxMax: { value: new THREE.Vector3() },
         uSelectedIslandId: { value: -1 },
         uOpacity: { value: opacity },
       },
       vertexShader: `
-        varying vec3 vWorldPos;
+        varying vec3 vLocalPos;
         varying vec3 vWorldNormal;
 
         void main() {
+          vLocalPos = position.xyz;
           vec4 worldPos = modelMatrix * vec4(position, 1.0);
-          vWorldPos = worldPos.xyz;
           vWorldNormal = normalize(mat3(modelMatrix) * normal);
           gl_Position = projectionMatrix * viewMatrix * worldPos;
         }
       `,
       fragmentShader: `
-        varying vec3 vWorldPos;
+        varying vec3 vLocalPos;
         varying vec3 vWorldNormal;
 
         uniform sampler2D uGridTexture;
         uniform sampler2D uMarkerTexture;
+        uniform sampler2D uMarkerMetaTexture;
         uniform vec3 uBBoxMin;
         uniform vec3 uBBoxMax;
         uniform float uSelectedIslandId;
@@ -158,8 +178,8 @@ export default function IslandSurfaceDotsOverlay({
             discard;
           }
 
-          // Convert fragment world X/Y coordinates to normalized grid UV coordinates
-          vec2 uv = (vWorldPos.xy - uBBoxMin.xy) / (uBBoxMax.xy - uBBoxMin.xy);
+          // Convert fragment local X/Y coordinates to normalized grid UV coordinates
+          vec2 uv = (vLocalPos.xy - uBBoxMin.xy) / (uBBoxMax.xy - uBBoxMin.xy);
 
           if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) {
             discard;
@@ -179,23 +199,22 @@ export default function IslandSurfaceDotsOverlay({
               continue;
             }
 
-            int idx = int(fIndex);
+            int idx = int(floor(fIndex + 0.5));
             
-            // Sample the 1D marker texture containing the analytical data of marker idx
+            // Sample the 1D marker textures containing the analytical data of marker idx
             vec4 markerData = texelFetch(uMarkerTexture, ivec2(idx, 0), 0);
+            vec4 metaData = texelFetch(uMarkerMetaTexture, ivec2(idx, 0), 0);
+            
             vec3 center = markerData.xyz;
-            float packedVal = markerData.a;
+            float radius = markerData.a;
 
-            // Decode ID, type, and radius
-            float radius = mod(packedVal, 100.0);
-            float type = mod(floor(packedVal / 100.0), 10.0);
-            float islandId = floor(packedVal / 1000.0) - 1.0;
+            float islandId = metaData.r;
+            float type = metaData.g;
 
-            // Compute exact analytical distance in world space (infinite vector resolution)
-            float dist = distance(vWorldPos.xy, center.xy);
-            float distZ = abs(vWorldPos.z - center.z);
+            // Compute exact analytical 3D distance in local space
+            float dist = distance(vLocalPos, center);
 
-            if (dist < radius && distZ < 0.5) {
+            if (dist < radius) {
               vec3 color = vec3(0.0, 0.33, 1.0); // Voxel blue
               if (type == 1.0) {
                 color = vec3(0.0, 1.0, 0.0); // Minima green
@@ -233,10 +252,11 @@ export default function IslandSurfaceDotsOverlay({
     if (!material) return;
     material.uniforms.uGridTexture.value = gridTexture || null;
     material.uniforms.uMarkerTexture.value = markerTexture || null;
+    material.uniforms.uMarkerMetaTexture.value = markerMetaTexture || null;
     material.uniforms.uBBoxMin.value.copy(bboxMin);
     material.uniforms.uBBoxMax.value.copy(bboxMax);
     material.uniforms.uSelectedIslandId.value = selectedIslandId ?? -1;
-  }, [gridTexture, markerTexture, bboxMin, bboxMax, selectedIslandId, material]);
+  }, [gridTexture, markerTexture, markerMetaTexture, bboxMin, bboxMax, selectedIslandId, material]);
 
   // Clean up material resources on unmount
   useEffect(() => {
@@ -250,14 +270,16 @@ export default function IslandSurfaceDotsOverlay({
   // Sync group transformation in frame loop to eliminate 1-frame latency/wobbling
   useFrame(() => {
     if (!groupRef.current) return;
-    groupRef.current.position.copy(transform?.position ?? defaultPosition);
+    const pos = transform?.position ?? defaultPosition;
+    const zOffset = dropOffsetZ ?? 0;
+    groupRef.current.position.set(pos.x, pos.y, pos.z + zOffset);
     groupRef.current.quaternion.copy(transform ? quaternionFromGlobalEuler(transform.rotation) : defaultQuaternion);
     groupRef.current.scale.copy(transform?.scale ?? defaultScale);
   });
 
   return (
     <group ref={groupRef}>
-      {gridTexture && markerTexture && (
+      {gridTexture && markerTexture && markerMetaTexture && (
         <mesh geometry={geometry} position={meshLocalOffset} renderOrder={8} raycast={() => null}>
           <primitive object={material} attach="material" />
         </mesh>

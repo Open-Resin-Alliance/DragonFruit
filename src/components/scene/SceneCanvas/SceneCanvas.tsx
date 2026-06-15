@@ -5500,7 +5500,8 @@ export function SceneCanvas({
                         clipLower={clipLower}
                         clipUpper={clipUpper}
                         opacity={overlayOpacity ?? 0.9}
-                        transform={animatedTransform}
+                        transform={transformToUse}
+                        dropOffsetZ={dropOffsetZ}
                       />
                     )}
                   </React.Fragment>
