@@ -108,21 +108,12 @@ const fragmentShader = `
 
       float radius = marker.w;
 
-      // 1. 3D Spherical Decal Projection (guarantees no smearing on vertical walls)
+      // 1. Pure 3D Spherical Decal Projection (no planar snapping or normal-based guards to avoid smearing/spilling)
       float dist = distance(vWorldPos, marker.xyz);
+      float dp = max(fwidth(dist), 0.0001);
 
-      // 2. Downward-Facing Guard (prevents bleeding to top-sides and vertical side walls)
-      float downwardFactor = 1.0 - smoothstep(-0.45, -0.15, vWorldNormal.z);
-
-      // 3. Parallel Surface Snap (restricted to flat surfaces within a 3D sphere)
-      float flatFactor = smoothstep(0.93, 0.97, abs(vWorldNormal.z));
-      float snapFactor = flatFactor * (1.0 - smoothstep(radius * 1.5, radius * 2.5, dist));
-
-      // 4. Decal dot factor with crisp, sharp edges (0.015mm anti-aliasing feather)
-      float radialFactor = 1.0 - smoothstep(radius - 0.015, radius + 0.015, dist);
-      float dotFactor = radialFactor;
-
-      float factor = max(dotFactor, snapFactor) * downwardFactor;
+      // 2. Decal dot factor with crisp, screen-space anti-aliasing (exactly 1.5 pixels wide transition)
+      float factor = 1.0 - smoothstep(radius - dp * 0.75, radius + dp * 0.75, dist);
       if (factor > 0.001) {
         vec3 col = COLOR_VOXEL;
         if (isSelectedMarker) {
