@@ -60,7 +60,13 @@ export async function checkForUpdates(): Promise<UpdateInfo | null> {
 let _cachedUpdate: Awaited<ReturnType<typeof check>> = null;
 
 export async function fetchUpdateInfo(): Promise<UpdateInfo | null> {
-  _cachedUpdate = await check();
+  try {
+    _cachedUpdate = await check();
+  } catch {
+    // Plugin throws on non-2XX (e.g. endpoint 404 during dev).
+    _cachedUpdate = null;
+    return null;
+  }
   if (!_cachedUpdate) return null;
   return {
     version: _cachedUpdate.version,

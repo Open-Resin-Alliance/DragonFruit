@@ -3114,6 +3114,11 @@ fn main() {
             .level_for("rustls", log::LevelFilter::Warn)
             .level_for("h2", log::LevelFilter::Warn)
             .level_for("tokio_tungstenite", log::LevelFilter::Warn)
+            // Updater plugin logs ERROR for non-2XX endpoint responses (expected
+            // during dev when no release exists yet). The frontend handles
+            // surfacing real update failures to the user, so suppress the
+            // Rust-side noise here.
+            .level_for("tauri_plugin_updater", log::LevelFilter::Off)
             .max_file_size(5_000_000)
             .rotation_strategy(RotationStrategy::KeepOne)
             .build()

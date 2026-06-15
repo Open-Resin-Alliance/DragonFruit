@@ -109,6 +109,51 @@ function CheckingState() {
   );
 }
 
+function UpToDateState({ onCheck }: { onCheck: () => void }) {
+  return (
+    <div
+      className="w-full rounded-lg border px-3 py-2.5"
+      style={{
+        borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 50%)',
+        background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 92%)',
+      }}
+    >
+      <div className="flex items-center gap-2.5">
+        <span
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+          style={{
+            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
+            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 85%)',
+          }}
+        >
+          <CloudOff className="h-3.5 w-3.5" style={{ color: 'var(--accent-secondary)' }} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+            Up to date
+          </span>
+          <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
+            No updates available. The check couldn't reach the update server — this is normal during development.
+          </span>
+        </span>
+        <button
+          type="button"
+          onClick={onCheck}
+          className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-all duration-150"
+          style={{
+            color: 'var(--text-muted)',
+            borderColor: 'var(--border-subtle)',
+            background: 'var(--surface-2)',
+          }}
+        >
+          <RotateCcw className="h-3 w-3" />
+          Check Again
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AvailableState({
   state: s,
   onDownload,
@@ -389,6 +434,7 @@ export function UpdateCheckerSection({
     <div className={className}>
       {state.status === 'idle' && <IdleState onCheck={checkForUpdates} />}
       {state.status === 'checking' && <CheckingState />}
+      {state.status === 'up-to-date' && <UpToDateState onCheck={checkForUpdates} />}
       {state.status === 'available' && (
         <AvailableState state={state} onDownload={downloadAndInstall} onDismiss={dismiss} />
       )}

@@ -38,18 +38,16 @@ export function useUpdateChecker() {
 
     try {
       const info = await fetchUpdateInfo();
+
       if (!info) {
-        setState({
-          status: 'error',
-          message:
-            'Could not check for updates. Make sure you are running the desktop version of DragonFruit.',
-        });
+        // Couldn't reach the update server or no release exists yet.
+        // Show "up to date" with a muted note instead of silently going
+        // back to idle, so the user knows something happened.
+        setState({ status: 'up-to-date', info: { version: '', currentVersion: '', body: undefined, date: undefined } });
         return;
       }
 
-      // The plugin's check() returns null when no update is available,
-      // but if it returns, the update IS available (semver comparison is
-      // done server-side by the static JSON / endpoint).
+      // If we got info back, the plugin found a newer version.
       setState({ status: 'available', info });
 
       // Persist the last check timestamp.
