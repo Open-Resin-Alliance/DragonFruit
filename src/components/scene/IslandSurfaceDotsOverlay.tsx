@@ -159,7 +159,7 @@ export default function IslandSurfaceDotsOverlay({
       fragmentShader: `
         varying vec3 vLocalPos;
         varying vec3 vWorldNormal;
-
+ 
         uniform sampler2D uGridTexture;
         uniform sampler2D uMarkerTexture;
         uniform sampler2D uMarkerMetaTexture;
@@ -167,80 +167,78 @@ export default function IslandSurfaceDotsOverlay({
         uniform vec3 uBBoxMax;
         uniform float uSelectedIslandId;
         uniform float uOpacity;
-
+ 
         #include <clipping_planes_pars_fragment>
-
+ 
+        void processSlot(float fIndex, vec3 localPos, float selectedId, float opacity, inout vec3 finalColor, inout float finalAlpha, inout bool hit) {
+          if (fIndex < 0.0) {
+            return;
+          }
+          int idx = int(floor(fIndex + 0.5));
+          vec4 markerData = texelFetch(uMarkerTexture, ivec2(idx, 0), 0);
+          vec4 metaData = texelFetch(uMarkerMetaTexture, ivec2(idx, 0), 0);
+          
+          vec3 center = markerData.xyz;
+          float radius = markerData.a;
+          float islandId = metaData.r;
+          float type = metaData.g;
+          
+          float dist = distance(localPos, center);
+          if (dist < radius) {
+            vec3 color = vec3(0.0, 0.33, 1.0); // Voxel blue
+            if (type == 1.0) {
+              color = vec3(0.0, 1.0, 0.0); // Minima green
+            } else if (type == 2.0) {
+              color = vec3(1.0, 0.0, 0.0); // Intersection red
+            }
+            
+            float aa = max(fwidth(dist) * 1.15, 0.001);
+            float alpha = 1.0 - smoothstep(radius - aa, radius + aa, dist);
+            
+            if (islandId == selectedId) {
+              color = vec3(1.0, 0.92, 0.016); // Selected yellow (#ffff00)
+              alpha = 0.95;
+            }
+            
+            float blendedAlpha = alpha * opacity;
+            finalColor = mix(finalColor, color, alpha);
+            finalAlpha = max(finalAlpha, blendedAlpha);
+            hit = true;
+          }
+        }
+ 
         void main() {
           #include <clipping_planes_fragment>
-
+ 
           vec3 normal = normalize(vWorldNormal);
           if (normal.z >= -0.1) {
             discard;
           }
-
+ 
           // Convert fragment local X/Y coordinates to normalized grid UV coordinates
           vec2 uv = (vLocalPos.xy - uBBoxMin.xy) / (uBBoxMax.xy - uBBoxMin.xy);
-
-          if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) {
+ 
+          if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) {
             discard;
           }
-
+ 
           // Fetch the 4 candidate marker indices stored in this cell
           vec4 cellIndices = texture(uGridTexture, uv);
           
           vec3 finalColor = vec3(0.0);
           float finalAlpha = 0.0;
           bool hit = false;
-
-          // Loop over each of the 4 slots to check for overlapping circles
-          for (int c = 0; c < 4; c++) {
-            float fIndex = (c == 0) ? cellIndices.r : ((c == 1) ? cellIndices.g : ((c == 2) ? cellIndices.b : cellIndices.a));
-            if (fIndex < 0.0) {
-              continue;
-            }
-
-            int idx = int(floor(fIndex + 0.5));
-            
-            // Sample the 1D marker textures containing the analytical data of marker idx
-            vec4 markerData = texelFetch(uMarkerTexture, ivec2(idx, 0), 0);
-            vec4 metaData = texelFetch(uMarkerMetaTexture, ivec2(idx, 0), 0);
-            
-            vec3 center = markerData.xyz;
-            float radius = markerData.a;
-
-            float islandId = metaData.r;
-            float type = metaData.g;
-
-            // Compute exact analytical 3D distance in local space
-            float dist = distance(vLocalPos, center);
-
-            if (dist < radius) {
-              vec3 color = vec3(0.0, 0.33, 1.0); // Voxel blue
-              if (type == 1.0) {
-                color = vec3(0.0, 1.0, 0.0); // Minima green
-              } else if (type == 2.0) {
-                color = vec3(1.0, 0.0, 0.0); // Intersection red
-              }
-
-              float aa = max(fwidth(dist) * 1.15, 0.001);
-              float alpha = 1.0 - smoothstep(radius - aa, radius + aa, dist);
-
-              if (islandId == uSelectedIslandId) {
-                color = vec3(1.0, 0.92, 0.016); // Selected yellow (#ffff00)
-                alpha = 0.95;
-              }
-
-              float blendedAlpha = alpha * uOpacity;
-              finalColor = mix(finalColor, color, alpha);
-              finalAlpha = max(finalAlpha, blendedAlpha);
-              hit = true;
-            }
-          }
-
+ 
+          // Process each of the 4 slots statically to avoid dynamic dynamic index compiler emulation
+          processSlot(cellIndices.r, vLocalPos, uSelectedIslandId, uOpacity, finalColor, finalAlpha, hit);
+          processSlot(cellIndices.g, vLocalPos, uSelectedIslandId, uOpacity, finalColor, finalAlpha, hit);
+          processSlot(cellIndices.b, vLocalPos, uSelectedIslandId, uOpacity, finalColor, finalAlpha, hit);
+          processSlot(cellIndices.a, vLocalPos, uSelectedIslandId, uOpacity, finalColor, finalAlpha, hit);
+ 
           if (!hit) {
             discard;
           }
-
+ 
           gl_FragColor = vec4(finalColor, finalAlpha);
         }
       `,
