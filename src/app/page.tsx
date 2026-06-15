@@ -19171,11 +19171,29 @@ export default function Home() {
             islandMarkers={
               scene.mode === 'support'
                 ? [
-                    ...islandsPoc.voxelOnlyPucks.markers,
-                    ...islandsPoc.minimaOnlyPucks.markers,
-                    ...islandsPoc.intersectionPucks.markers,
+                    ...islandsPoc.voxelOnlyPucks.markers.map(m => {
+                      const island = islandsPoc.byMarkerId.get(m.id);
+                      const area = island?.areaMm2 ?? 0;
+                      const radius = area > 0 ? Math.max(0.1, Math.sqrt(area / Math.PI)) : 0.1;
+                      return { ...m, radius, type: 0, islandId: m.id };
+                    }),
+                    ...islandsPoc.minimaOnlyPucks.markers.map(m => {
+                      return { ...m, radius: 0.1, type: 1, islandId: m.id };
+                    }),
+                    ...islandsPoc.intersectionPucks.markers.map(m => {
+                      const island = islandsPoc.byMarkerId.get(m.id);
+                      const area = island?.areaMm2 ?? 0;
+                      const radius = area > 0 ? Math.max(0.1, Math.sqrt(area / Math.PI)) : 0.1;
+                      return { ...m, radius, type: 2, islandId: m.id };
+                    }),
                   ]
-                : (islands.overlayEnabled ? islands.islandMarkers : [])
+                : (islands.overlayEnabled && islands.islandMarkers
+                    ? islands.islandMarkers.map(m => {
+                        const area = m.pixelCount * (islands.pxMm || 0.05) * (islands.pxMm || 0.05);
+                        const radius = area > 0 ? Math.max(0.1, Math.sqrt(area / Math.PI)) : 0.1;
+                        return { ...m, radius, type: 0, islandId: m.id };
+                      })
+                    : [])
             }
             overlayBrushRadius={islands.overlayBrushRadius}
             overlayColor={islands.overlayColor}

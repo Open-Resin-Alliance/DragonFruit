@@ -41,23 +41,16 @@ export function generateDecalGrid(
   const markerData = new Float32Array(markerCount * 4);
 
   for (let i = 0; i < markerCount; i++) {
-    const marker = markers[i];
+    const marker = markers[i] as any;
     const cx = marker.centerX;
     const cy = marker.centerY;
     const cz = marker.baseZ;
-    const r = (marker as any).radius ?? 0.25;
-
-    const markerAny = marker as any;
-    // Determine type: 0: voxel, 1: minima, 2: intersection, 3: selected
-    let type = 0;
-    if (markerAny.color === '#00ff00' || marker.id >= 1000000) {
-      type = 1; // minima
-    } else if (markerAny.color === '#ff0000') {
-      type = 2; // intersection
-    }
+    const r = marker.radius ?? 0.1;
+    const type = marker.type ?? 0;
+    const islandId = marker.islandId ?? marker.id;
 
     // Pack values into the alpha channel: (ID + 1) * 1000 + Type * 100 + Radius
-    const packedVal = (marker.id + 1) * 1000 + type * 100 + r;
+    const packedVal = (islandId + 1) * 1000 + type * 100 + r;
 
     markerData[i * 4] = cx;
     markerData[i * 4 + 1] = cy;
@@ -77,13 +70,13 @@ export function generateDecalGrid(
   gridData.fill(-1.0); // Initialize all index slots to -1.0
 
   for (let i = 0; i < markerCount; i++) {
-    const marker = markers[i];
+    const marker = markers[i] as any;
     if (marker.id < 0) continue; // Skip utility/seed markers
 
     const cx = marker.centerX;
     const cy = marker.centerY;
-    const r = (marker as any).radius ?? 0.25;
-    const rDilated = r + 0.2; // Dilation padding to ensure smooth fragment shader interpolation near boundaries
+    const r = marker.radius ?? 0.1;
+    const rDilated = r + 0.15; // 0.15mm padding for smooth anti-aliased edge interpolation
 
     // Find the cell bounding box in grid space
     const xStart = Math.max(0, Math.floor(((cx - rDilated - min.x) / dx) * W));
@@ -91,26 +84,16 @@ export function generateDecalGrid(
     const yStart = Math.max(0, Math.floor(((cy - rDilated - min.y) / dy) * H));
     const yEnd = Math.min(H - 1, Math.ceil(((cy + rDilated - min.y) / dy) * H));
 
-    const rDilatedSq = rDilated * rDilated;
-
-    // Rasterize marker index into overlapping grid cells
+    // Rasterize marker index into overlapping grid cells in the bounding box (conservative)
     for (let gy = yStart; gy <= yEnd; gy++) {
-      const cellY = min.y + ((gy + 0.5) / H) * dy;
-      const dyVal = cellY - cy;
-
       for (let gx = xStart; gx <= xEnd; gx++) {
-        const cellX = min.x + ((gx + 0.5) / W) * dx;
-        const dxVal = cellX - cx;
-
-        if (dxVal * dxVal + dyVal * dyVal <= rDilatedSq) {
-          const pixelIdx = (gx + gy * W) * 4;
-          
-          // Store index in the first available channel slot
-          for (let c = 0; c < 4; c++) {
-            if (gridData[pixelIdx + c] === -1.0) {
-              gridData[pixelIdx + c] = i;
-              break;
-            }
+        const pixelIdx = (gx + gy * W) * 4;
+        
+        // Store index in the first available channel slot
+        for (let c = 0; c < 4; c++) {
+          if (gridData[pixelIdx + c] === -1.0) {
+            gridData[pixelIdx + c] = i;
+            break;
           }
         }
       }
