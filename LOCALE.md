@@ -29,6 +29,12 @@ Typical loop: mark new strings → `npm run i18n:extract` → fill in the empty
 `msgstr` values in the `.po` files → `npm run i18n:compile` (or just
 `npm run i18n:update` once the translations are in place).
 
+> The Lingui CLI requires Node >= 22.19 (it uses `node:fs` `globSync`), which is
+> newer than the project's pinned Node (`.nvmrc`). The compiled `.js` catalogs
+> are committed precisely so the app build does not run the CLI, keeping builds
+> green on the project's Node version. Run `extract`/`compile` locally on Node
+> 22+ and commit the regenerated catalogs.
+
 ## Crowdin
 
 Translations are managed on **[translate.dragonfruit-slicer.com](https://translate.dragonfruit-slicer.com/)**
@@ -64,7 +70,7 @@ The UI language is resolved on startup by `detectInitialLocale()`, in this order
 of precedence:
 
 1. An explicit user choice persisted in `localStorage` (set via the language
-   switcher in the top bar).
+   switcher under Settings > General).
 2. A build-time override via the `NEXT_PUBLIC_DF_LOCALE` env var — handy for
    forcing a language in demos or CI, e.g.:
    ```bash
@@ -75,6 +81,6 @@ of precedence:
 3. The browser/OS preferred language (`navigator.language`).
 4. The English default.
 
-The language switcher in the top bar changes the locale live via `loadLocale()`
-and persists the choice, so it overrides the env var and detection on subsequent
-loads.
+The language switcher under Settings > General changes the locale live via
+`loadLocale()` and persists the choice, so it overrides the env var and
+detection on subsequent loads.
