@@ -41,12 +41,15 @@ pub struct CutPlaneSpec {
 /// - `Plane` (default): the flat planar cut (M2) — slices along a single plane.
 /// - `Contour`: the curved "wafer" cut (M4) — builds a soap-film membrane that
 ///   follows the drawn loop and splits along that contoured seam.
+/// - `BoundedPlane`: flat planar cut within a regular polygon or circular boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CutMode {
     #[default]
     Plane,
     Contour,
+    #[serde(rename = "bounded_plane")]
+    BoundedPlane,
 }
 
 /// One organic cut: a closed loop plus the wafer parameters.
@@ -75,6 +78,18 @@ pub struct OrganicCutSpec {
     /// Flat (`plane`) vs curved (`contour`). Default `plane` for back-compat.
     #[serde(default)]
     pub mode: CutMode,
+    /// Bounded Plane: number of sides of the regular polygon cutter (3-16, circle=64).
+    #[serde(default = "default_sides")]
+    pub sides: usize,
+    /// Bounded Plane: radius of the regular polygon or circular cutter.
+    #[serde(default = "default_radius")]
+    pub radius: f32,
+    /// Bounded Plane: 3D translation/position in model-local space.
+    #[serde(default)]
+    pub position: [f32; 3],
+    /// Bounded Plane: 3D rotation/Euler angles in model-local space.
+    #[serde(default)]
+    pub rotation: [f32; 3],
     /// Contour cutter thickness in mm. Default ~0.01 (physically zero) when
     /// unset/<=0. Only used by the contour cut.
     #[serde(default)]
@@ -120,6 +135,13 @@ pub struct OrganicCutSpec {
     /// rectangle / oblong dome footprint. Default 0.
     #[serde(default)]
     pub key_roll_rad: f32,
+}
+
+fn default_sides() -> usize {
+    4
+}
+fn default_radius() -> f32 {
+    20.0
 }
 
 /// serde defaults for the key size (mm). Literals (not `crate::key::` constants)
@@ -364,6 +386,14 @@ pub fn organic_cut(mesh: IndexedMesh, options: &OrganicCutOptions) -> OrganicCut
                     };
                 }
             }
+        } else if options.cut.mode == CutMode::BoundedPlane {
+            match organic_cut_bounded_plane(&mesh, options) {
+                Ok(outcome) => return outcome,
+                Err(reason) => {
+                    eprintln!("[dragonfruit-mesh-repair] bounded plane cut failed: {reason}");
+                    return noop_outcome(mesh, reason);
+                }
+            }
         }
 
         match organic_cut_plane(&mesh, options) {
@@ -379,6 +409,111 @@ pub fn organic_cut(mesh: IndexedMesh, options: &OrganicCutOptions) -> OrganicCut
         let _ = options;
         noop_outcome(mesh, "manifold feature disabled".to_string())
     }
+}
+
+#[cfg(feature = "manifold")]
+fn organic_cut_bounded_plane(
+    mesh: &IndexedMesh,
+    options: &OrganicCutOptions,
+) -> Result<OrganicCutOutcome, String> {
+    use manifold_csg::Manifold;
+
+    let source_triangle_count = mesh.triangle_count();
+
+    let thickness = if options.cut.cutter_thickness_mm > 0.0 {
+        options.cut.cutter_thickness_mm
+    } else {
+        crate::membrane::DEFAULT_CUTTER_THICKNESS_MM
+    };
+
+    // Build the cutter slab
+    let prism = crate::membrane::build_polygon_prism_transformed(
+        options.cut.sides,
+        options.cut.radius,
+        thickness,
+        options.cut.position,
+        options.cut.rotation,
+    );
+
+    let cutter = crate::membrane::to_manifold(&prism).map_err(|e| format!("cutter slab invalid: {e}"))?;
+
+    // Build model manifold
+    let src_positions: Vec<f32> = mesh.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
+    let src_indices: Vec<u32> = mesh.triangles.iter().flat_map(|t| *t).collect();
+
+    let model = Manifold::from_mesh_f32(&src_positions, 3, &src_indices)
+        .map_err(|err| format!("manifold rejected source mesh: {err:?} (tris={source_triangle_count})"))?;
+    if model.is_empty() || model.num_tri() == 0 {
+        return Err("source mesh produced an empty manifold (non-watertight?)".to_string());
+    }
+
+    let sliced = model.difference(&cutter);
+    let parts = sliced.decompose();
+    let component_count = parts.len();
+
+    if component_count < 2 {
+        return Err(format!(
+            "Bounded plane did not fully sever the model (got {component_count} component) — \
+             please increase the radius or reposition the cutter"
+        ));
+    }
+
+    // Convert parts back to IndexedMesh
+    let mut islands = Vec::new();
+    for p in parts {
+        if let Some(im) = crate::membrane::manifold_to_indexed(&p) {
+            islands.push(im);
+        }
+    }
+
+    // Build a flat polygon membrane for key placement (at correct position and rotation)
+    let membrane = crate::membrane::build_flat_polygon_membrane(
+        options.cut.sides,
+        options.cut.radius,
+        options.cut.position,
+        options.cut.rotation,
+    );
+
+    let (mut part_a, mut part_b) = crate::membrane::split_into_two_sides(&membrane, islands)
+        .ok_or_else(|| "Bounded plane did not fully sever the model (multiple islands but all on one side) — please increase the radius or reposition the cutter".to_string())?;
+
+    let (mut key_kind, mut key_detail) = (crate::key::KeyKind::None, String::new());
+
+    if options.cut.generate_key {
+        let keyed = crate::key::apply_key(
+            mesh,
+            part_a,
+            part_b,
+            &membrane,
+            crate::key::KeyShape::from_str_or_default(&options.cut.key_shape),
+            options.cut.key_swap_sides,
+            crate::key::KeyTilt::new(
+                options.cut.key_tilt_rad,
+                options.cut.key_tilt_azimuth_rad,
+                options.cut.key_roll_rad,
+            ),
+            options.cut.key_width_mm,
+            options.cut.key_depth_mm,
+            options.cut.key_fillet_mm,
+            crate::key::DEFAULT_KEY_TOLERANCE_MM,
+        );
+        part_a = keyed.part_a;
+        part_b = keyed.part_b;
+        key_kind = keyed.kind;
+        key_detail = keyed.detail;
+    }
+
+    let report = OrganicCutReport {
+        source_triangle_count,
+        part_a_triangle_count: part_a.triangle_count(),
+        part_b_triangle_count: part_b.triangle_count(),
+        engine: "bounded_plane".to_string(),
+        detail: format!("sides={}", options.cut.sides),
+        key_kind: key_kind.as_str().to_string(),
+        key_detail,
+    };
+
+    Ok(OrganicCutOutcome { part_a, part_b, report })
 }
 
 /// Curved "wafer" cut (M4): build a soap-film membrane following the drawn loop,
@@ -793,5 +928,44 @@ mod tests {
         assert_eq!(outcome.report.engine, "noop");
         assert_eq!(outcome.part_a.triangle_count(), src_tris);
         assert_eq!(outcome.part_b.triangle_count(), src_tris);
+    }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn bounded_plane_mode_splits_cube_into_two_parts() {
+        let mesh = IndexedMesh::from_triangle_soup(&cube_soup(10.0), 1e-6);
+        let options = OrganicCutOptions {
+            cut: OrganicCutSpec {
+                mode: CutMode::BoundedPlane,
+                sides: 4,
+                radius: 12.0, // big enough to span the cube at z=5
+                position: [5.0, 5.0, 5.0], // centered at the cube's center
+                rotation: [0.0, 0.0, 0.0],
+                ..Default::default()
+            },
+        };
+        let outcome = organic_cut(mesh, &options);
+        assert_eq!(outcome.report.engine, "bounded_plane");
+        assert!(outcome.part_a.triangle_count() > 0, "part A empty");
+        assert!(outcome.part_b.triangle_count() > 0, "part B empty");
+    }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn bounded_plane_mode_fails_to_sever_when_radius_is_too_small() {
+        let mesh = IndexedMesh::from_triangle_soup(&cube_soup(10.0), 1e-6);
+        let options = OrganicCutOptions {
+            cut: OrganicCutSpec {
+                mode: CutMode::BoundedPlane,
+                sides: 4,
+                radius: 2.0, // too small to sever a 10x10 cube
+                position: [5.0, 5.0, 5.0],
+                rotation: [0.0, 0.0, 0.0],
+                ..Default::default()
+            },
+        };
+        let outcome = organic_cut(mesh, &options);
+        assert_eq!(outcome.report.engine, "noop");
+        assert!(outcome.report.detail.contains("Bounded plane did not fully sever"));
     }
 }

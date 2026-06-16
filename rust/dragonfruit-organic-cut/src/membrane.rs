@@ -1522,6 +1522,125 @@ pub fn axis_aligned_slab(lo: Vec3, hi: Vec3) -> IndexedMesh {
     IndexedMesh { positions, triangles }
 }
 
+/// Build a regular polygon prism (cylinder-like) of `sides` (capped at 3-16 or circle=64),
+/// `radius` (capped at max 1e-4), and `thickness` (tessellated along Z), closed by flat caps.
+/// Outward-wound so `to_manifold` accepts it.
+pub fn build_polygon_prism(sides: usize, radius: f32, thickness: f32) -> IndexedMesh {
+    let n = sides.max(3);
+    let r = radius.max(1e-4);
+    let half_t = thickness.max(1e-4) * 0.5;
+
+    let mut positions = Vec::with_capacity(n * 2 + 2);
+    // Top sheet vertices (CCW winding seen from +Z)
+    for i in 0..n {
+        let angle = 2.0 * std::f32::consts::PI * (i as f32 / n as f32);
+        positions.push(Vec3::new(r * angle.cos(), r * angle.sin(), half_t));
+    }
+    // Bottom sheet vertices (CCW winding seen from +Z)
+    for i in 0..n {
+        let angle = 2.0 * std::f32::consts::PI * (i as f32 / n as f32);
+        positions.push(Vec3::new(r * angle.cos(), r * angle.sin(), -half_t));
+    }
+    // Top center
+    let top_center = positions.len() as u32;
+    positions.push(Vec3::new(0.0, 0.0, half_t));
+    // Bottom center
+    let bottom_center = positions.len() as u32;
+    positions.push(Vec3::new(0.0, 0.0, -half_t));
+
+    let mut triangles = Vec::with_capacity(n * 4);
+    // Top cap (fan from top center, wound CCW seen from +Z)
+    for i in 0..n {
+        let next = ((i + 1) % n) as u32;
+        triangles.push([top_center, i as u32, next]);
+    }
+    // Bottom cap (fan from bottom center, wound CW seen from +Z which is CCW seen from OUTSIDE)
+    let offset = n as u32;
+    for i in 0..n {
+        let next = ((i + 1) % n) as u32;
+        triangles.push([bottom_center, offset + next, offset + i as u32]);
+    }
+    // Side walls (two tris per side quad, wound CCW seen from OUTSIDE)
+    for i in 0..n {
+        let next = ((i + 1) % n) as u32;
+        triangles.push([i as u32, offset + i as u32, offset + next]);
+        triangles.push([i as u32, offset + next, next]);
+    }
+
+    IndexedMesh { positions, triangles }
+}
+
+fn rotate_x(v: Vec3, angle: f32) -> Vec3 {
+    let cos = angle.cos();
+    let sin = angle.sin();
+    Vec3::new(v.x, v.y * cos - v.z * sin, v.y * sin + v.z * cos)
+}
+
+fn rotate_y(v: Vec3, angle: f32) -> Vec3 {
+    let cos = angle.cos();
+    let sin = angle.sin();
+    Vec3::new(v.x * cos + v.z * sin, v.y, -v.x * sin + v.z * cos)
+}
+
+fn rotate_z(v: Vec3, angle: f32) -> Vec3 {
+    let cos = angle.cos();
+    let sin = angle.sin();
+    Vec3::new(v.x * cos - v.y * sin, v.x * sin + v.y * cos, v.z)
+}
+
+pub fn rotate_xyz(v: Vec3, rot: [f32; 3]) -> Vec3 {
+    rotate_z(rotate_y(rotate_x(v, rot[0]), rot[1]), rot[2])
+}
+
+/// Build a regular polygon prism of `sides`, `radius`, and `thickness`, transformed by `position` and `rotation`.
+pub fn build_polygon_prism_transformed(
+    sides: usize,
+    radius: f32,
+    thickness: f32,
+    position: [f32; 3],
+    rotation: [f32; 3],
+) -> IndexedMesh {
+    let mut prism = build_polygon_prism(sides, radius, thickness);
+    let pos = Vec3::new(position[0], position[1], position[2]);
+    for v in &mut prism.positions {
+        *v = rotate_xyz(*v, rotation).add(pos);
+    }
+    prism
+}
+
+/// Build a flat polygon membrane of `sides`, `radius`, located at `position` and `rotation`.
+pub fn build_flat_polygon_membrane(
+    sides: usize,
+    radius: f32,
+    position: [f32; 3],
+    rotation: [f32; 3],
+) -> Membrane {
+    let n = sides.max(3);
+    let r = radius.max(1e-4);
+    let pos = Vec3::new(position[0], position[1], position[2]);
+
+    let mut vertices = Vec::with_capacity(n + 1);
+    for i in 0..n {
+        let angle = 2.0 * std::f32::consts::PI * (i as f32 / n as f32);
+        let local_pt = Vec3::new(r * angle.cos(), r * angle.sin(), 0.0);
+        let world_pt = rotate_xyz(local_pt, rotation).add(pos);
+        vertices.push(world_pt);
+    }
+    // Add center vertex
+    vertices.push(pos);
+
+    let center_idx = n as u32;
+    let mut triangles = Vec::with_capacity(n);
+    for i in 0..n {
+        let next = ((i + 1) % n) as u32;
+        triangles.push([center_idx, i as u32, next]);
+    }
+
+    let boundary = (0..n as u32).collect();
+
+    Membrane { vertices, triangles, boundary }
+}
+
 /// Build a `manifold` solid from an `IndexedMesh` (xyz only). Mirrors the exact
 /// conversion `organic_cut_plane` uses, so behavior is identical to the live cut.
 pub fn to_manifold(mesh: &IndexedMesh) -> Result<manifold_csg::Manifold, String> {
@@ -1798,7 +1917,7 @@ fn mesh_centroid(mesh: &IndexedMesh) -> Vec3 {
 /// This is what makes the contour cut work on real organic models, where a single
 /// seam can carve the body into many islands per side (the dragon's base gave 3-4
 /// components — top + bottom + slivers — which this collapses to a clean 2).
-fn split_into_two_sides(membrane: &Membrane, islands: Vec<IndexedMesh>) -> Option<(IndexedMesh, IndexedMesh)> {
+pub(crate) fn split_into_two_sides(membrane: &Membrane, islands: Vec<IndexedMesh>) -> Option<(IndexedMesh, IndexedMesh)> {
     let mut side_a: Vec<IndexedMesh> = Vec::new();
     let mut side_b: Vec<IndexedMesh> = Vec::new();
     for island in islands {

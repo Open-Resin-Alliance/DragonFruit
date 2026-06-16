@@ -870,11 +870,9 @@ pub fn apply_key(
 /// empty and `detail` explains why (for the alert). `None` only if the membrane
 /// itself can't be built from the loop.
 #[allow(clippy::too_many_arguments)]
-pub fn build_key_preview_soup(
+pub fn build_key_preview_soup_from_membrane(
     model: &IndexedMesh,
-    loop_pts: &[Vec3],
-    membrane_smoothing: f32,
-    density: f32,
+    membrane: &Membrane,
     shape: KeyShape,
     swap_sides: bool,
     tilt: KeyTilt,
@@ -883,12 +881,7 @@ pub fn build_key_preview_soup(
     fillet_mm: f32,
     tolerance: f32,
 ) -> Option<(Vec<f32>, KeyKind, String, Option<KeyFrameInfo>)> {
-    use crate::membrane::{build_membrane_full, CONTOUR_SUBDIVISIONS, DEFAULT_GRID_DIVISIONS};
-
-    let grid = DEFAULT_GRID_DIVISIONS * (density.clamp(1.0, 4.0) as f64);
-    let membrane =
-        build_membrane_full(loop_pts, CONTOUR_SUBDIVISIONS, membrane_smoothing, grid)?;
-    let frame = match frame_from_membrane(&membrane) {
+    let frame = match frame_from_membrane(membrane) {
         Some(f) => f,
         None => {
             return Some((
@@ -945,6 +938,38 @@ pub fn build_key_preview_soup(
     // gizmo rotations into tilt/azimuth/roll. `tip` is the leaned apex (model-local).
     let info = build_key_frame_info(&placed, &build_frame, &plan, lean);
     Some((soup, kind, detail, info))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_key_preview_soup(
+    model: &IndexedMesh,
+    loop_pts: &[Vec3],
+    membrane_smoothing: f32,
+    density: f32,
+    shape: KeyShape,
+    swap_sides: bool,
+    tilt: KeyTilt,
+    width_mm: f32,
+    depth_mm: f32,
+    fillet_mm: f32,
+    tolerance: f32,
+) -> Option<(Vec<f32>, KeyKind, String, Option<KeyFrameInfo>)> {
+    use crate::membrane::{build_membrane_full, CONTOUR_SUBDIVISIONS, DEFAULT_GRID_DIVISIONS};
+
+    let grid = DEFAULT_GRID_DIVISIONS * (density.clamp(1.0, 4.0) as f64);
+    let membrane =
+        build_membrane_full(loop_pts, CONTOUR_SUBDIVISIONS, membrane_smoothing, grid)?;
+    build_key_preview_soup_from_membrane(
+        model,
+        &membrane,
+        shape,
+        swap_sides,
+        tilt,
+        width_mm,
+        depth_mm,
+        fillet_mm,
+        tolerance,
+    )
 }
 
 /// Placement-frame info handed to the frontend so the aim/roll gizmo sits exactly

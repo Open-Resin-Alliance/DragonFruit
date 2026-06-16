@@ -267,6 +267,21 @@ struct GeodesicRequestDto {
     /// Key roll (radians) — spin about the key's own axis. Default 0.
     #[serde(default)]
     key_roll_rad: f32,
+    /// Which cut mode we are in (plane, contour, bounded_plane).
+    #[serde(default)]
+    mode: dragonfruit_organic_cut::CutMode,
+    /// Bounded Plane: number of sides (3-16, circle=64). Default 4.
+    #[serde(default = "default_sides_four")]
+    sides: usize,
+    /// Bounded Plane: radius. Default 20 mm.
+    #[serde(default = "default_radius_twenty")]
+    radius: f32,
+    /// Bounded Plane: local position coordinates. Default [0.0, 0.0, 0.0].
+    #[serde(default)]
+    position: [f32; 3],
+    /// Bounded Plane: local rotation Euler angles. Default [0.0, 0.0, 0.0].
+    #[serde(default)]
+    rotation: [f32; 3],
 }
 
 fn default_density_one() -> f32 {
@@ -289,6 +304,14 @@ fn default_key_shape() -> String {
     "frustum".to_string()
 }
 
+fn default_sides_four() -> usize {
+    4
+}
+
+fn default_radius_twenty() -> f32 {
+    20.0
+}
+
 impl Default for GeodesicRequestDto {
     fn default() -> Self {
         Self {
@@ -307,6 +330,11 @@ impl Default for GeodesicRequestDto {
             key_tilt_rad: 0.0,
             key_tilt_azimuth_rad: 0.0,
             key_roll_rad: 0.0,
+            mode: dragonfruit_organic_cut::CutMode::Plane,
+            sides: 4,
+            radius: 20.0,
+            position: [0.0; 3],
+            rotation: [0.0; 3],
         }
     }
 }
@@ -1074,7 +1102,7 @@ pub async fn mesh_organic_cut_read_geodesic() -> Result<Response, String> {
 #[tauri::command]
 pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<String, String> {
     let req = parse_geodesic_request(&request_json);
-    if req.points.len() < 3 {
+    if req.mode != dragonfruit_organic_cut::CutMode::BoundedPlane && req.points.len() < 3 {
         *organic_cut_membrane_bytes()
             .lock()
             .map_err(|e| format!("membrane lock poisoned: {e}"))? = None;
@@ -1120,7 +1148,45 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
         // model-local coords. None when no key is previewed.
         let mut key_frame: Option<dragonfruit_organic_cut::KeyFrameInfo> = None;
 
-        let soup = if let Some(bytes) = source_bytes {
+        let soup = if req.mode == dragonfruit_organic_cut::CutMode::BoundedPlane {
+            let membrane = dragonfruit_organic_cut::membrane::build_flat_polygon_membrane(
+                req.sides,
+                req.radius,
+                req.position,
+                [0.0, 0.0, 0.0],
+            );
+            if let Some(bytes) = source_bytes {
+                let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+                if generate_key {
+                    if let Some((ks, kind, detail, frame)) =
+                        dragonfruit_organic_cut::build_key_preview_soup_from_membrane(
+                            &mesh,
+                            &membrane,
+                            key_shape,
+                            key_swap_sides,
+                            key_tilt,
+                            key_width_mm,
+                            key_depth_mm,
+                            key_fillet_mm,
+                            dragonfruit_organic_cut::DEFAULT_KEY_TOLERANCE_MM,
+                        )
+                    {
+                        key_soup = ks;
+                        key_kind = kind.as_str().to_string();
+                        key_detail = detail;
+                        key_frame = frame;
+                    }
+                }
+            }
+            let mut s = Vec::with_capacity(membrane.triangles.len() * 9);
+            for t in &membrane.triangles {
+                for &vi in t {
+                    let v = membrane.vertices[vi as usize];
+                    s.extend_from_slice(&[v.x, v.y, v.z]);
+                }
+            }
+            s
+        } else if let Some(bytes) = source_bytes {
             let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
             if generate_key {
                 if let Some((ks, kind, detail, frame)) =
