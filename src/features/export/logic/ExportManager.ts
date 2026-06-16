@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { STLExporter } from 'three-stdlib';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
 import { buildSupportExportFromStores, serializeVoxlDocumentV2 } from '@/features/scene/voxl';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
@@ -859,8 +860,6 @@ export class ExportManager {
     sceneContext?: ExportSceneContext,
     saveTarget?: ExportSceneSaveTarget,
   ): Promise<string | null> {
-    console.log('[ExportManager] Starting export...', options);
-
     const scopedModelIds = new Set((sceneContext?.models ?? []).map((model) => model.id));
     const hasScopedModelFilter = scopedModelIds.size > 0;
 
@@ -921,11 +920,27 @@ export class ExportManager {
       const globalRaftSettings = getRaftSettings();
       if (globalRaftSettings.bottomMode !== 'off') {
         const supportState = getSnapshot();
+        const kickstandState = getKickstandSnapshot();
         const allRoots = Object.values(supportState.roots);
+        const allKickstandRoots = Object.values(kickstandState.roots);
 
         // Group roots by modelId so each model gets a separate raft
         const rootsByModel = new Map<string, typeof allRoots>();
         for (const root of allRoots) {
+          const rootModelId = root.modelId ?? null;
+          if (hasScopedModelFilter) {
+            if (!rootModelId || !scopedModelIds.has(rootModelId)) {
+              continue;
+            }
+          }
+
+          const mid = rootModelId ?? '__orphan__';
+          let arr = rootsByModel.get(mid);
+          if (!arr) { arr = []; rootsByModel.set(mid, arr); }
+          arr.push(root);
+        }
+
+        for (const root of allKickstandRoots) {
           const rootModelId = root.modelId ?? null;
           if (hasScopedModelFilter) {
             if (!rootModelId || !scopedModelIds.has(rootModelId)) {
@@ -1118,6 +1133,7 @@ export class ExportManager {
               rotation: { x: number; y: number; z: number };
               scale: { x: number; y: number; z: number };
             };
+            meshModifiers?: ModelMeshModifiers;
             mesh: {
               mode: 'embedded-file';
               fileName: string;
@@ -1159,6 +1175,7 @@ export class ExportManager {
                   z: model.transform.scale.z,
                 },
               },
+              meshModifiers: model.meshModifiers,
               mesh: {
                 mode: 'embedded-file',
                 fileName: `${this.normalizeExportFilenameBase(model.name || 'model')}.stl`,

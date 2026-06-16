@@ -7,9 +7,9 @@ This page is the developer-facing index for DragonFruit format contracts.
 VOXL is DragonFruit’s native scene container.
 
 - V1: JSON-based legacy profile (reader compatibility required).
-- V2: binary chunk container (preferred writer target).
+- V2.1: binary chunk container semantic revision (preferred writer target; header major remains `2`).
 
-Contracts include chunk typing, compression validation, bounds checks, and support payload compatibility.
+Contracts include chunk typing, compression validation, bounds checks, support payload compatibility, and model modifier persistence (`meshModifiers`) for re-editable workflows like hollowing.
 
 See: `dev/voxl-format-spec.md`
 

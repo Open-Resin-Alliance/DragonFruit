@@ -30,6 +30,8 @@ extra_css:
   - stylesheets/dragonfruit-theme.css
 extra_javascript:
   - javascripts/homepage-release-feed.js
+  - javascripts/mathjax.js
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 plugins:
   - search
   - meta
@@ -39,6 +41,9 @@ markdown_extensions:
   - admonition
   - attr_list
   - tables
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.superfences
   - toc:
       permalink: true
 nav:
@@ -49,6 +54,7 @@ nav:
       - Interface Tour: getting-started/interface-tour.md
   - Workflows:
       - Model Preparation: workflows/model-preparation.md
+      - Hollowing and Hole Punch: workflows/hollowing.md
       - Transform and Positioning: workflows/transform-and-positioning.md
       - Place On-Face and Mirror: workflows/place-on-face-and-mirror.md
       - Mesh Smoothing: workflows/mesh-smoothing.md
@@ -74,6 +80,7 @@ nav:
       - Plugin Framework: dev/plugins-framework.md
       - Complex Plugin Contributing: dev/plugins-complex-contributing.md
       - Support System: dev/support-system.md
+      - Support Pathfinding V3: dev/support-pathfinding-v3.md
       - Branch Supports: dev/branch-supports.md
       - Grid and Branching: dev/grid-and-branching.md
       - Raft Geometry: dev/raft-geometry.md

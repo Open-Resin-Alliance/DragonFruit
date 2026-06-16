@@ -8,7 +8,7 @@ import { pushHistory } from '@/history/historyStore';
 import type { SnapTarget } from '../../interaction/SnappingManager';
 import type { Brace, Knot, Vec3 } from '../../types';
 import { SUPPORT_ADD_BRACE } from '../../history/actionTypes';
-import { getSettings } from '../../Settings/state';
+import { getSettings, getAutoBracingSettings } from '../../Settings/state';
 import { useKickstandStoreState } from '../Kickstand/kickstandStore';
 import { bracePlacementStore, useBracePlacementState } from './bracePlacementState';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
@@ -55,6 +55,11 @@ interface LeafClickDetail {
     intersection?: ModifierAwareIntersection;
 }
 
+interface LeafHoverDetail {
+    leafId?: string | null;
+    point?: Vec3 | null;
+}
+
 export function BracePlacementController() {
     const { altActive, stage, start } = useBracePlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
@@ -64,6 +69,7 @@ export function BracePlacementController() {
 
     const { raycaster, camera, pointer } = useThree();
     const hoveredShaftRef = useMemo(() => ({ current: null as ShaftHoverDetail | null }), []);
+    const hoveredLeafRef = useMemo(() => ({ current: null as LeafHoverDetail | null }), []);
     const supportEditSuppressedRef = useRef(false);
     const lastPreviewSignatureRef = useRef<string | null>(null);
 
@@ -132,6 +138,61 @@ export function BracePlacementController() {
         return buildLeafConeSnapMeta(supportState.leaves);
     }, [supportState.leaves]);
 
+    const segmentPlacementSurfaceById = useMemo(() => {
+        const map = new Map<string, 'interior' | 'exterior' | undefined>();
+        for (const trunk of Object.values(supportState.trunks)) {
+            for (const seg of trunk.segments) {
+                map.set(seg.id, trunk.contactCone?.placementSurface);
+            }
+        }
+        for (const branch of Object.values(supportState.branches)) {
+            for (const seg of branch.segments) {
+                map.set(seg.id, branch.contactCone?.placementSurface);
+            }
+        }
+        for (const twig of Object.values(supportState.twigs)) {
+            const placementSurface = twig.contactDiskA?.placementSurface ?? twig.contactDiskB?.placementSurface;
+            for (const seg of twig.segments) {
+                map.set(seg.id, placementSurface);
+            }
+        }
+        for (const stick of Object.values(supportState.sticks)) {
+            const placementSurface = stick.contactConeA?.placementSurface ?? stick.contactConeB?.placementSurface;
+            for (const seg of stick.segments) {
+                map.set(seg.id, placementSurface);
+            }
+        }
+        for (const brace of Object.values(supportState.braces)) {
+            map.set(`braceSegment:${brace.id}`, brace.placementSurface);
+        }
+        return map;
+    }, [supportState.trunks, supportState.branches, supportState.twigs, supportState.sticks, supportState.braces]);
+
+    const leafPlacementSurfaceById = useMemo(() => {
+        const map = new Map<string, 'interior' | 'exterior' | undefined>();
+        for (const leaf of Object.values(supportState.leaves)) {
+            map.set(leaf.id, leaf.contactCone?.placementSurface);
+        }
+        return map;
+    }, [supportState.leaves]);
+
+    const resolveBracePlacementSurface = useCallback((
+        startSurface?: 'interior' | 'exterior',
+        endSurface?: 'interior' | 'exterior',
+    ): 'interior' | 'exterior' | undefined => {
+        if (startSurface === 'interior' || endSurface === 'interior') return 'interior';
+        if (startSurface === 'exterior' || endSurface === 'exterior') return 'exterior';
+        return startSurface ?? endSurface;
+    }, []);
+
+    const activePlacementSurface = useMemo(() => {
+        if (!start) return undefined;
+        if (start.kind === 'shaft') {
+            return start.segmentId ? segmentPlacementSurfaceById.get(start.segmentId) : undefined;
+        }
+        return start.leafId ? leafPlacementSurfaceById.get(start.leafId) : undefined;
+    }, [start, segmentPlacementSurfaceById, leafPlacementSurfaceById]);
+
     // Reverse lookup: twig segment id → owning twig. Lets the placement
     // controller resolve the live twig taper diameter at the snap point so
     // brace endpoint knots on twigs match the leaf-on-twig rule (1.10× of
@@ -175,21 +236,6 @@ export function BracePlacementController() {
         [twigBySegmentId]
     );
 
-    const resolveLeafSurface = useCallback((leafId: string, axisPoint: Vec3, coneT: number) => {
-        const meta = leafMeta.get(leafId);
-        if (!meta) return null;
-
-        // The endpoint knot should be centered on the cone axis.
-        // We still compute local diameter from coneT for sizing.
-        const center = new THREE.Vector3(axisPoint.x, axisPoint.y, axisPoint.z);
-        const rMm = THREE.MathUtils.lerp(meta.contactRadiusMm, meta.bodyRadiusMm, THREE.MathUtils.clamp(coneT, 0, 1));
-        return {
-            pos: { x: center.x, y: center.y, z: center.z },
-            diameterMm: rMm * 2,
-            modelId: meta.modelId,
-        };
-    }, [leafMeta]);
-
     const isValidEndSegment = useCallback(
         (endSegmentId: string) => {
             if (!start) return false;
@@ -230,17 +276,19 @@ export function BracePlacementController() {
             includeBraces: true,
             includeTwigs: true,
             includeSticks: true,
+            placementSurface: activePlacementSurface,
             excludeSegmentIds: excludedSegmentIds,
         });
 
         targets.push(...buildKickstandPathSnapTargets(kickstandState, { excludeSegmentIds: excludedSegmentIds }));
-        targets.push(...buildLeafConePathSnapTargets(leafMeta));
+        targets.push(...buildLeafConePathSnapTargets(leafMeta, { placementSurface: activePlacementSurface }));
 
         return targets;
     }, [
         altActive,
         stage,
         start,
+        activePlacementSurface,
         supportState.trunks,
         supportState.branches,
         supportState.braces,
@@ -337,6 +385,21 @@ export function BracePlacementController() {
         [getTarget, resolveNearestPathTarget, segmentMeta, overrideHostDiameterForTwig]
     );
 
+    const resolveLeafSurface = useCallback((leafId: string, axisPoint: Vec3, coneT: number) => {
+        const meta = leafMeta.get(leafId);
+        if (!meta) return null;
+
+        // The endpoint knot should be centered on the cone axis.
+        // We still compute local diameter from coneT for sizing.
+        const center = new THREE.Vector3(axisPoint.x, axisPoint.y, axisPoint.z);
+        const rMm = THREE.MathUtils.lerp(meta.contactRadiusMm, meta.bodyRadiusMm, THREE.MathUtils.clamp(coneT, 0, 1));
+        return {
+            pos: { x: center.x, y: center.y, z: center.z },
+            diameterMm: rMm * 2,
+            modelId: meta.modelId,
+        };
+    }, [leafMeta]);
+
     const resolveLeafSnapFromClick = useCallback(
         (leafId: string, point: Vec3) => {
             const meta = leafMeta.get(leafId);
@@ -379,6 +442,16 @@ export function BracePlacementController() {
         return resolveSnapFromClick(hovered.segmentId, hovered.point);
     }, [hoveredShaftRef, resolveSnapFromClick]);
 
+    // Leaf counterpart to resolveHoveredShaftSnap. The brace-leaf-hover event
+    // (LeafRenderer) gives us {leafId, point} directly, so we can resolve a leaf
+    // snap without the strict GPU-picker id match the global path requires (the
+    // picker reports the cone's contactDiskId on a leaf, never the leaf id).
+    const resolveHoveredLeafSnap = useCallback(() => {
+        const hovered = hoveredLeafRef.current;
+        if (!hovered?.leafId || !hovered.point) return null;
+        return resolveLeafSnapFromClick(hovered.leafId, hovered.point);
+    }, [hoveredLeafRef, resolveLeafSnapFromClick]);
+
     useFrame(() => {
         if (isSupportEditInteractionActive()) {
             if (!supportEditSuppressedRef.current) {
@@ -394,10 +467,15 @@ export function BracePlacementController() {
 
         if (!altActive && stage === 'idle') return;
 
-        // Fast path: when shaft-hover already provides a concrete segment+point,
-        // skip the heavier global snapping pass for this frame.
+        // Fast path: when shaft-hover OR leaf-hover already provides a concrete
+        // target+point, skip the heavier global snapping pass for this frame.
+        // Leaves MUST use this path: the strict global snapper keys on the GPU
+        // pick id, but hovering a leaf reports the cone's contactDiskId, which
+        // never matches the leaf-keyed snap target — so the global path can't
+        // lock a leaf. The brace-leaf-hover event gives us {leafId, point} directly.
         const hasHoveredShaftFastPath = !!(hoveredShaftRef.current?.segmentId && hoveredShaftRef.current?.point);
-        const resolvedSnap = hasHoveredShaftFastPath
+        const hasHoveredLeafFastPath = !!(hoveredLeafRef.current?.leafId && hoveredLeafRef.current?.point);
+        const resolvedSnap = (hasHoveredShaftFastPath || hasHoveredLeafFastPath)
             ? { state: 'none' as const, targetId: null, snappedPos: null, t: null, metadata: null }
             : updateAndGetResolvedSnap();
 
@@ -425,6 +503,29 @@ export function BracePlacementController() {
                     'brace:hovered-snap',
                     hoveredSnap.segmentId ?? 'none',
                     previewVecKey(hoveredSnap.snappedPos),
+                    quantizePreviewValue(hostDia),
+                ].join('|');
+                publishPreview(signature, preview);
+                bracePlacementStore.setSnapTarget(null);
+                return;
+            }
+
+            // Leaf hover fast-path preview (counterpart to the shaft hover above).
+            const hoveredLeafSnap = resolveHoveredLeafSnap();
+            if (hoveredLeafSnap) {
+                const settings = getSettings();
+                const fallbackDia = settings.shaft.diameterMm;
+                const hostDia = hoveredLeafSnap.hostDiameterMm ?? fallbackDia;
+                const preview = {
+                    start: hoveredLeafSnap.snappedPos,
+                    end: hoveredLeafSnap.snappedPos,
+                    startDiameterMm: hostDia,
+                    endDiameterMm: hostDia,
+                };
+                const signature = [
+                    'brace:hovered-leaf-snap',
+                    hoveredLeafSnap.leafId ?? 'none',
+                    previewVecKey(hoveredLeafSnap.snappedPos),
                     quantizePreviewValue(hostDia),
                 ].join('|');
                 publishPreview(signature, preview);
@@ -469,7 +570,6 @@ export function BracePlacementController() {
                         }
                     }
                     hostDia = overrideHostDiameterForTwig(resolvedSnap.targetId, resolvedSnap.t, hostDia) ?? hostDia;
-                    // Zero-length preview: renders as a single sphere with green lights.
                     const preview = {
                         start: resolvedSnap.snappedPos,
                         end: resolvedSnap.snappedPos,
@@ -519,6 +619,7 @@ export function BracePlacementController() {
         let endDiam: number = startDiam;
 
         const hoveredSnap = resolveHoveredShaftSnap();
+        const hoveredLeafSnapEnd = resolveHoveredLeafSnap();
         if (hoveredSnap && hoveredSnap.segmentId && hoveredSnap.t !== undefined) {
             const snapTarget = {
                 kind: 'shaft' as const,
@@ -545,6 +646,28 @@ export function BracePlacementController() {
                 } else {
                     bracePlacementStore.setSnapTarget(null);
                 }
+            }
+        } else if (hoveredLeafSnapEnd) {
+            // Leaf hover fast-path end target (counterpart to the shaft branch
+            // above). resolveLeafSnapFromClick already clamps coneT off the tip.
+            const leafSnap = hoveredLeafSnapEnd;
+            const sameLeaf = start.kind === 'leaf' && start.leafId === leafSnap.leafId;
+            const crossModel = !!(start.ownerModelId && leafSnap.ownerModelId && start.ownerModelId !== leafSnap.ownerModelId);
+
+            if (sameLeaf || crossModel) {
+                bracePlacementStore.setSnapTarget(null);
+            } else {
+                const snapTarget = {
+                    kind: 'leaf' as const,
+                    leafId: leafSnap.leafId,
+                    coneT: leafSnap.coneT,
+                    snappedPos: leafSnap.snappedPos,
+                    hostDiameterMm: leafSnap.hostDiameterMm,
+                    ownerModelId: leafSnap.ownerModelId,
+                };
+                bracePlacementStore.setSnapTarget(snapTarget);
+                endPos = snapTarget.snappedPos;
+                endDiam = snapTarget.hostDiameterMm ?? fallbackDia;
             }
         } else if (resolvedSnap.state === 'locked' && resolvedSnap.targetId && resolvedSnap.snappedPos && resolvedSnap.t !== null) {
             if (leafMeta.has(resolvedSnap.targetId)) {
@@ -612,15 +735,12 @@ export function BracePlacementController() {
                         endPos = snapTarget.snappedPos;
                         endDiam = snapTarget.hostDiameterMm ?? fallbackDia;
                     }
+                } else if (snapTarget.segmentId && isValidEndSegment(snapTarget.segmentId)) {
+                    bracePlacementStore.setSnapTarget(snapTarget);
+                    endPos = snapTarget.snappedPos;
+                    endDiam = snapTarget.hostDiameterMm ?? fallbackDia;
                 } else {
-                    // If snapping is locked onto the same segment as the start, treat it as "free".
-                    if (snapTarget.segmentId && isValidEndSegment(snapTarget.segmentId)) {
-                        bracePlacementStore.setSnapTarget(snapTarget);
-                        endPos = snapTarget.snappedPos;
-                        endDiam = snapTarget.hostDiameterMm ?? fallbackDia;
-                    } else {
-                        bracePlacementStore.setSnapTarget(null);
-                    }
+                    bracePlacementStore.setSnapTarget(null);
                 }
             }
         } else {
@@ -678,6 +798,41 @@ export function BracePlacementController() {
         };
     }, [hoveredShaftRef]);
 
+    // Leaf hover plumbing — counterpart to the shaft-hover effect above.
+    // Lets the brace tool show a snap preview on a leaf and feed the click
+    // handlers a resolved leaf snap, without depending on the strict picker.
+    useEffect(() => {
+        const handleLeafHover = (evt: Event) => {
+            const detail = (evt as CustomEvent<LeafHoverDetail>).detail;
+            if (!detail?.leafId || !detail.point) return;
+            hoveredLeafRef.current = {
+                leafId: detail.leafId,
+                point: detail.point,
+            };
+        };
+
+        const handleLeafLeave = (evt: Event) => {
+            const detail = (evt as CustomEvent<{ leafId?: string | null }>).detail;
+            if (!detail?.leafId) {
+                hoveredLeafRef.current = null;
+                return;
+            }
+
+            if (hoveredLeafRef.current?.leafId === detail.leafId) {
+                hoveredLeafRef.current = null;
+            }
+        };
+
+        window.addEventListener('brace-leaf-hover', handleLeafHover as EventListener);
+        window.addEventListener('brace-leaf-leave', handleLeafLeave as EventListener);
+
+        return () => {
+            window.removeEventListener('brace-leaf-hover', handleLeafHover as EventListener);
+            window.removeEventListener('brace-leaf-leave', handleLeafLeave as EventListener);
+            hoveredLeafRef.current = null;
+        };
+    }, [hoveredLeafRef]);
+
     useEffect(() => {
         if (!altActive && stage === 'idle') {
             resetSnapping();
@@ -706,8 +861,9 @@ export function BracePlacementController() {
                 if (!snap) return;
                 bracePlacementStore.setStart(snap);
                 const settings = getSettings();
+                const braceDia = getAutoBracingSettings().braceDiameterMm;
                 const fallbackDia = settings.shaft.diameterMm;
-                const startDiam = snap.hostDiameterMm ?? fallbackDia;
+                const startDiam = Math.min(snap.hostDiameterMm ?? fallbackDia, braceDia);
                 bracePlacementStore.setPreview({
                     start: snap.snappedPos,
                     end: snap.snappedPos,
@@ -728,9 +884,10 @@ export function BracePlacementController() {
                 if (!start.leafId || start.coneT === undefined) return;
 
                 const settings = getSettings();
+                const braceDia = getAutoBracingSettings().braceDiameterMm;
                 const fallback = settings.shaft.diameterMm;
-                const startDiam = start.hostDiameterMm ?? fallback;
-                const endDiam = endSnap.hostDiameterMm ?? fallback;
+                const startDiam = Math.min(start.hostDiameterMm ?? fallback, braceDia);
+                const endDiam = Math.min(endSnap.hostDiameterMm ?? fallback, braceDia);
 
                 const braceId = generateUuid();
                 const startKnotId = generateUuid();
@@ -753,12 +910,17 @@ export function BracePlacementController() {
                 };
 
                 const modelId = start.ownerModelId ?? endSnap.ownerModelId ?? 'unknown';
+                const placementSurface = resolveBracePlacementSurface(
+                    leafPlacementSurfaceById.get(start.leafId),
+                    endSnap.segmentId ? segmentPlacementSurfaceById.get(endSnap.segmentId) : undefined,
+                );
 
                 const brace: Brace = {
                     id: braceId,
                     modelId,
                     startKnotId,
                     endKnotId,
+                    placementSurface,
                     profile: {
                         diameter: Math.min(startDiam, endDiam),
                     },
@@ -796,9 +958,10 @@ export function BracePlacementController() {
             if (startModelId && endModelId && startModelId !== endModelId) return;
 
             const settings = getSettings();
+            const braceDia = getAutoBracingSettings().braceDiameterMm;
             const fallback = settings.shaft.diameterMm;
-            const startDiam = start.hostDiameterMm ?? fallback;
-            const endDiam = endSnap.hostDiameterMm ?? fallback;
+            const startDiam = Math.min(start.hostDiameterMm ?? fallback, braceDia);
+            const endDiam = Math.min(endSnap.hostDiameterMm ?? fallback, braceDia);
 
             const braceId = generateUuid();
             const startKnotId = generateUuid();
@@ -821,12 +984,17 @@ export function BracePlacementController() {
             };
 
             const modelId = startModelId ?? endModelId ?? 'unknown';
+            const placementSurface = resolveBracePlacementSurface(
+                segmentPlacementSurfaceById.get(start.segmentId),
+                endSnap.segmentId ? segmentPlacementSurfaceById.get(endSnap.segmentId) : undefined,
+            );
 
             const brace: Brace = {
                 id: braceId,
                 modelId,
                 startKnotId,
                 endKnotId,
+                placementSurface,
                 profile: {
                     diameter: Math.min(startDiam, endDiam),
                 },
@@ -852,7 +1020,7 @@ export function BracePlacementController() {
 
         window.addEventListener('shaft-click', handleShaftClick as EventListener, true);
         return () => window.removeEventListener('shaft-click', handleShaftClick as EventListener, true);
-    }, [altActive, stage, start, branchFamilyBinding, resolveSnapFromClick, isValidEndSegment, segmentMeta]);
+    }, [altActive, stage, start, branchFamilyBinding, resolveSnapFromClick, isValidEndSegment, segmentMeta, leafPlacementSurfaceById, segmentPlacementSurfaceById, resolveBracePlacementSurface]);
 
     useEffect(() => {
         const handleLeafClick = (evt: Event) => {
@@ -874,8 +1042,9 @@ export function BracePlacementController() {
                 if (!snap) return;
                 bracePlacementStore.setStart(snap);
                 const settings = getSettings();
+                const braceDia = getAutoBracingSettings().braceDiameterMm;
                 const fallbackDia = settings.shaft.diameterMm;
-                const startDiam = snap.hostDiameterMm ?? fallbackDia;
+                const startDiam = Math.min(snap.hostDiameterMm ?? fallbackDia, braceDia);
                 bracePlacementStore.setPreview({
                     start: snap.snappedPos,
                     end: snap.snappedPos,
@@ -898,9 +1067,10 @@ export function BracePlacementController() {
                 if (!start.leafId || start.coneT === undefined) return;
 
                 const settings = getSettings();
+                const braceDia = getAutoBracingSettings().braceDiameterMm;
                 const fallback = settings.shaft.diameterMm;
-                const startDiam = start.hostDiameterMm ?? fallback;
-                const endDiam = endSnap.hostDiameterMm ?? fallback;
+                const startDiam = Math.min(start.hostDiameterMm ?? fallback, braceDia);
+                const endDiam = Math.min(endSnap.hostDiameterMm ?? fallback, braceDia);
 
                 const braceId = generateUuid();
                 const startKnotId = generateUuid();
@@ -923,11 +1093,16 @@ export function BracePlacementController() {
                 };
 
                 const modelId = startModelId ?? endModelId ?? 'unknown';
+                const placementSurface = resolveBracePlacementSurface(
+                    leafPlacementSurfaceById.get(start.leafId),
+                    leafPlacementSurfaceById.get(leafId),
+                );
                 const brace: Brace = {
                     id: braceId,
                     modelId,
                     startKnotId,
                     endKnotId,
+                    placementSurface,
                     profile: {
                         diameter: Math.min(startDiam, endDiam),
                     },
@@ -986,11 +1161,16 @@ export function BracePlacementController() {
             };
 
             const modelId = startModelId ?? endModelId ?? 'unknown';
+            const placementSurface = resolveBracePlacementSurface(
+                segmentPlacementSurfaceById.get(start.segmentId),
+                leafPlacementSurfaceById.get(leafId),
+            );
             const brace: Brace = {
                 id: braceId,
                 modelId,
                 startKnotId,
                 endKnotId,
+                placementSurface,
                 profile: {
                     diameter: Math.min(startDiam, endDiam),
                 },
@@ -1015,7 +1195,7 @@ export function BracePlacementController() {
 
         window.addEventListener('brace-leaf-click', handleLeafClick as EventListener, true);
         return () => window.removeEventListener('brace-leaf-click', handleLeafClick as EventListener, true);
-    }, [altActive, stage, start, branchFamilyBinding, resolveLeafSnapFromClick, resolveSnapFromClick]);
+    }, [altActive, stage, start, branchFamilyBinding, resolveLeafSnapFromClick, resolveSnapFromClick, leafPlacementSurfaceById, segmentPlacementSurfaceById, resolveBracePlacementSurface]);
 
     return null;
 }

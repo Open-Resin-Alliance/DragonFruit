@@ -4,6 +4,7 @@ import type { Island } from '@/volumeAnalysis/IslandScan/types';
 import { IslandHierarchyModal } from '@/components/modals/IslandHierarchyModal';
 import { ChevronRight, Network } from 'lucide-react';
 import { Button, Card, CardHeader, IconButton, Input } from '@/components/ui/primitives';
+import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 type IslandListCardProps = {
   islands: Island[];
@@ -29,7 +30,7 @@ export function IslandListCard({
   zOffsetMm,
 }: IslandListCardProps) {
   const cardRef = React.useRef<HTMLDivElement | null>(null);
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState<'id' | 'volume' | 'layers'>('id');
   const [showHierarchyModal, setShowHierarchyModal] = useState(false);

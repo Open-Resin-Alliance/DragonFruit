@@ -9,6 +9,7 @@ import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import {
   applyOfficialMaterialProfileUpdate,
   applyOfficialPrinterProfileUpdate,
+  DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
   addMaterialProfile,
   addPrinterProfileFromPreset,
   disconnectPrinterNetworkDevice,
@@ -90,6 +91,7 @@ import {
   LabeledResinFamilySelect,
   LabeledCurrencySelect,
   MaterialProfileFormSections,
+  MaterialAntiAliasingSection,
   MaterialProfileIdentitySection,
   PluginLocalMaterialSettingsSections,
   ReplacementMaterialEditorShell,
@@ -102,6 +104,7 @@ type ProfileSettingsModalProps = {
   initialTab?: 'printer' | 'material';
   openPrinterLibraryToken?: number;
   openNetworkSettingsToken?: number;
+  openMaterialAntiAliasingToken?: number;
 };
 
 type DeleteConfirmTarget =
@@ -300,6 +303,7 @@ export function ProfileSettingsModal({
   initialTab = 'printer',
   openPrinterLibraryToken = 0,
   openNetworkSettingsToken = 0,
+  openMaterialAntiAliasingToken = 0,
 }: ProfileSettingsModalProps) {
   const logNetworkScanDebug = React.useCallback((scope: string, details: Record<string, unknown>) => {
     try {
@@ -361,6 +365,7 @@ export function ProfileSettingsModal({
     liftSpeedMmMin: 60,
     retractSpeedMmMin: 150,
     minimumAaAlphaPercent: 35,
+    antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
   });
   const [newMaterialDraft, setNewMaterialDraft] = React.useState<Omit<MaterialProfile, 'id' | 'printerProfileId'>>({
     name: 'New Material',
@@ -378,6 +383,7 @@ export function ProfileSettingsModal({
     liftSpeedMmMin: 60,
     retractSpeedMmMin: 150,
     minimumAaAlphaPercent: 35,
+    antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
   });
   const [editMaterialLocalSettingsByOutput, setEditMaterialLocalSettingsByOutput] = React.useState<LocalSettingsByOutputDraft>({});
   const [newMaterialLocalSettingsByOutput, setNewMaterialLocalSettingsByOutput] = React.useState<LocalSettingsByOutputDraft>({});
@@ -525,6 +531,16 @@ export function ProfileSettingsModal({
     return profileState.printerProfiles.find((profile) => profile.id === selectedPrinterId) ?? fallback;
   }, [profileState, selectedPrinterId]);
 
+  const printerDitherBitDepth = React.useMemo<number | null>(() => {
+    const printerBitDepth = Number(selectedPrinter?.bitDepth?.bits);
+    if (!Number.isFinite(printerBitDepth) || printerBitDepth <= 0) {
+      return null;
+    }
+    // 8-bit (or higher) displays don't need dithering.
+    if (Math.round(printerBitDepth) >= 8) return null;
+    return Math.max(2, Math.min(7, Math.round(printerBitDepth)));
+  }, [selectedPrinter?.bitDepth?.bits]);
+
   const selectedFormatVersionOptions = React.useMemo(() => {
     if (!selectedPrinter) return [] as Array<{ value: string; label: string; isDefault?: boolean }>;
     return getAvailableFormatVersionOptions(selectedPrinter.display.outputFormat);
@@ -568,7 +584,11 @@ export function ProfileSettingsModal({
     const declared = [...(selectedLocalMaterialSettingsAdapter.tabs ?? [])]
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
       .map((tab, index) => ({ id: tab.id, title: tab.title, order: tab.order ?? (index + 1) * 10 }));
-    return [...declared, { id: 'meta', title: 'Meta', order: 1000 }];
+    return [
+      ...declared,
+      { id: 'meta', title: 'Meta', order: 1000 },
+      { id: 'anti-aliasing', title: 'Anti-Aliasing', order: 1010 },
+    ];
   }, [selectedLocalMaterialSettingsAdapter, usePluginLocalSettingsAsReplacement]);
 
   const replacementMaterialEditorDefaultTab = React.useMemo(() => {
@@ -902,6 +922,8 @@ export function ProfileSettingsModal({
   const remoteMaterialsCacheRef = React.useRef<Map<string, RemoteMaterialsCacheEntry>>(new Map());
   const lastHandledOpenPrinterLibraryTokenRef = React.useRef(0);
   const lastHandledOpenNetworkSettingsTokenRef = React.useRef(0);
+  const lastHandledOpenMaterialAntiAliasingTokenRef = React.useRef(0);
+  const materialEditorInitialTabOverrideRef = React.useRef<string | null>(null);
   const wasOpenRef = React.useRef(false);
   const materialSelectionInitializedRef = React.useRef(false);
   const lastInitializedNetworkPrinterIdRef = React.useRef<string | null>(null);
@@ -1526,12 +1548,21 @@ export function ProfileSettingsModal({
       && openNetworkSettingsToken > 0
       && openNetworkSettingsToken > lastHandledOpenNetworkSettingsTokenRef.current;
 
+    const shouldOpenMaterialAntiAliasing =
+      initialTab === 'material'
+      && openMaterialAntiAliasingToken > 0
+      && openMaterialAntiAliasingToken > lastHandledOpenMaterialAntiAliasingTokenRef.current;
+
     if (shouldOpenPrinterLibrary) {
       lastHandledOpenPrinterLibraryTokenRef.current = openPrinterLibraryToken;
     }
 
     if (shouldOpenNetworkSettings) {
       lastHandledOpenNetworkSettingsTokenRef.current = openNetworkSettingsToken;
+    }
+
+    if (shouldOpenMaterialAntiAliasing) {
+      lastHandledOpenMaterialAntiAliasingTokenRef.current = openMaterialAntiAliasingToken;
     }
 
     setSelectedPrinterId(profileState.activePrinterProfileId);
@@ -1548,9 +1579,19 @@ export function ProfileSettingsModal({
     setSelectedMaterialId(activeMaterial?.id ?? null);
     setSelectedManufacturer(activeMaterial?.brand ?? null);
     setSelectedResinFamily(activeMaterial?.resinFamily ?? null);
+    if (shouldOpenMaterialAntiAliasing && activeMaterial) {
+      const isOfficial = typeof activeMaterial.officialTemplateId === 'string' && activeMaterial.officialTemplateId.trim().length > 0;
+      if (isOfficial) {
+        setShowOfficialMaterialLockDialog(true);
+      } else {
+        materialEditorInitialTabOverrideRef.current = 'anti-aliasing';
+        setIsMaterialEditorOpen(true);
+      }
+    }
   }, [
     initialTab,
     isOpen,
+    openMaterialAntiAliasingToken,
     openNetworkSettingsToken,
     openPrinterLibraryToken,
     profileState.activeMaterialProfileId,
@@ -2741,7 +2782,8 @@ export function ProfileSettingsModal({
 
   React.useEffect(() => {
     if (!isMaterialEditorOpen || !selectedMaterial) return;
-    setMaterialEditorTab(replacementMaterialEditorDefaultTab);
+    setMaterialEditorTab(materialEditorInitialTabOverrideRef.current ?? replacementMaterialEditorDefaultTab);
+    materialEditorInitialTabOverrideRef.current = null;
     setEditMaterialDraft({
       name: selectedMaterial.name,
       brand: selectedMaterial.brand,
@@ -2762,6 +2804,7 @@ export function ProfileSettingsModal({
       liftSpeedMmMin: selectedMaterial.liftSpeedMmMin,
       retractSpeedMmMin: selectedMaterial.retractSpeedMmMin,
       minimumAaAlphaPercent: selectedMaterial.minimumAaAlphaPercent,
+      antiAliasingSettings: selectedMaterial.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
     });
     if (selectedPrinter) {
       setEditMaterialLocalSettingsByOutput(
@@ -2845,6 +2888,7 @@ export function ProfileSettingsModal({
       liftSpeedMmMin: 60,
       retractSpeedMmMin: 150,
       minimumAaAlphaPercent: 35,
+      antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
     });
     setNewMaterialLocalSettingsByOutput(
       resolveDefaultLocalSettingsForOutput(
@@ -2875,6 +2919,7 @@ export function ProfileSettingsModal({
       liftSpeedMmMin: preset.liftSpeedMmMin ?? 60,
       retractSpeedMmMin: preset.retractSpeedMmMin ?? 150,
       minimumAaAlphaPercent: preset.minimumAaAlphaPercent ?? 35,
+      antiAliasingSettings: preset.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
       ...(preset.templateId ? { officialTemplateId: preset.templateId } : {}),
       ...(preset.profileVersion != null ? { officialTemplateVersion: preset.profileVersion } : {}),
     });
@@ -2922,6 +2967,7 @@ export function ProfileSettingsModal({
         liftSpeedMmMin: preset.liftSpeedMmMin ?? 60,
         retractSpeedMmMin: preset.retractSpeedMmMin ?? 150,
         minimumAaAlphaPercent: preset.minimumAaAlphaPercent ?? 35,
+        antiAliasingSettings: preset.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
         ...(preset.templateId ? { officialTemplateId: preset.templateId } : {}),
         ...(preset.profileVersion != null ? { officialTemplateVersion: preset.profileVersion } : {}),
         localSettingsByOutput: preset.localSettingsByOutput
@@ -2971,6 +3017,7 @@ export function ProfileSettingsModal({
       setShowOfficialMaterialLockDialog(true);
       return;
     }
+    materialEditorInitialTabOverrideRef.current = null;
     setIsMaterialEditorOpen(true);
   }, [selectedMaterial]);
 
@@ -3050,6 +3097,7 @@ export function ProfileSettingsModal({
       liftSpeedMmMin: selectedMaterial.liftSpeedMmMin,
       retractSpeedMmMin: selectedMaterial.retractSpeedMmMin,
       minimumAaAlphaPercent: selectedMaterial.minimumAaAlphaPercent,
+      antiAliasingSettings: selectedMaterial.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
       localSettingsByOutput: selectedMaterial.localSettingsByOutput,
       officialTemplateId: undefined,
       officialTemplateVersion: undefined,
@@ -3206,6 +3254,7 @@ export function ProfileSettingsModal({
           minimumAaAlphaPercent: Number.isFinite(Number(source.minimumAaAlphaPercent))
             ? Math.max(0, Math.min(100, Number(source.minimumAaAlphaPercent)))
             : 35,
+          antiAliasingSettings: source.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
           localSettingsByOutput: source.localSettingsByOutput
             ? (source.localSettingsByOutput as Record<string, Record<string, string | number | boolean>>)
             : resolveDefaultLocalSettingsForOutput(selectedPrinter.display.outputFormat, selectedResolvedSettingsMode),
@@ -3402,8 +3451,8 @@ export function ProfileSettingsModal({
           </button>
         </div>
 
-        <div className={`px-4 py-3 custom-scrollbar ${hasPrinters ? 'flex-1 min-h-0 overflow-hidden flex' : 'flex-1 min-h-0 overflow-hidden flex'}`}>
-          <div className={`flex flex-col gap-3 ${hasPrinters ? 'w-full min-h-0 flex-1' : 'w-full h-full min-h-0'}`}>
+        <div className={`px-4 py-3 custom-scrollbar ${hasPrinters ? 'flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex' : 'flex-1 min-h-0 overflow-hidden flex'}`}>
+          <div className={`flex flex-col gap-3 ${hasPrinters ? 'w-full min-h-full' : 'w-full h-full min-h-0'}`}>
           {isCustomSelectedPrinter && (
             <div
               className="rounded-lg border px-3 py-2 text-xs flex items-start gap-2"
@@ -3459,7 +3508,7 @@ export function ProfileSettingsModal({
           )}
 
           {hasPrinters && (
-          <section className="rounded-lg border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 8%), var(--surface-1))' }}>
+          <section className="rounded-lg border overflow-hidden shrink-0" style={{ borderColor: 'var(--border-subtle)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 8%), var(--surface-1))' }}>
             <div className="p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
               <div className="flex items-start justify-between gap-2">
                 <div>
@@ -3925,7 +3974,7 @@ export function ProfileSettingsModal({
 
           {hasPrinters && selectedPrinter && (
           <section
-            className="rounded-lg border overflow-hidden flex flex-col min-h-0 flex-1"
+            className="rounded-lg border overflow-hidden flex flex-col min-h-[320px] flex-1 shrink-0"
             style={{
               borderColor: 'var(--border-subtle)',
               background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 8%), var(--surface-1))',
@@ -4450,7 +4499,7 @@ export function ProfileSettingsModal({
                 </div>
               </div>
 
-              <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-3 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <button
                   type="button"
                   onClick={handleResetFleetUnitDraft}
@@ -4491,7 +4540,15 @@ export function ProfileSettingsModal({
           <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
             if (event.target === event.currentTarget) setShowPresetPicker(false);
           }}>
-            <div className="w-full max-w-[1040px] h-[94vh] max-h-[90vh] min-h-[620px] rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter flex flex-col" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+            <div
+              className="w-full max-w-[1040px] min-h-0 rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter flex flex-col"
+              style={{
+                borderColor: 'var(--border-strong)',
+                background: 'var(--surface-0)',
+                height: 'min(90vh, 820px)',
+                maxHeight: 'calc(100vh - 2rem)',
+              }}
+            >
               <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                 <div className="flex items-center gap-2.5">
                   <span
@@ -4519,7 +4576,7 @@ export function ProfileSettingsModal({
                 </button>
               </div>
 
-              <div className="grid grid-cols-[220px_minmax(0,1fr)] grid-rows-[1fr] min-h-[620px] flex-1 min-h-0 overflow-hidden">
+              <div className="grid grid-cols-[220px_minmax(0,1fr)] grid-rows-[1fr] flex-1 min-h-0 overflow-hidden">
                 <div className="border-r flex flex-col min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                   <div className="p-2 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                     <div className="relative">
@@ -4601,7 +4658,7 @@ export function ProfileSettingsModal({
               </div>
 
               {/* Printer Library footer */}
-              <div className="flex items-center justify-between gap-3 px-4 py-3 border-t" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+              <div className="flex items-center justify-between gap-3 px-4 py-3 border-t shrink-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                 <span className="text-[12px]" style={{ color: 'var(--text-muted)' }}>
                   {selectedLibraryPresetIds.size > 0
                     ? `${selectedLibraryPresetIds.size} printer${selectedLibraryPresetIds.size !== 1 ? 's' : ''} selected`
@@ -4658,6 +4715,7 @@ export function ProfileSettingsModal({
                     activeTabStyle={accentSecondaryActionStyle92}
                     draft={editMaterialDraft}
                     onDraftChange={setEditMaterialDraft}
+                    printerDitherBitDepth={printerDitherBitDepth}
                     outputFormat={selectedPrinter?.display.outputFormat ?? '.lys'}
                     settingsMode={selectedResolvedSettingsMode}
                     adapter={selectedLocalMaterialSettingsAdapter}
@@ -4667,6 +4725,11 @@ export function ProfileSettingsModal({
                 ) : (
                   <>
                     <MaterialProfileFormSections draft={editMaterialDraft} onChange={setEditMaterialDraft} />
+                    <MaterialAntiAliasingSection
+                      draft={editMaterialDraft}
+                      onChange={setEditMaterialDraft}
+                      printerDitherBitDepth={printerDitherBitDepth}
+                    />
                     <PluginLocalMaterialSettingsSections
                       outputFormat={selectedPrinter?.display.outputFormat ?? '.lys'}
                       settingsMode={selectedResolvedSettingsMode}
@@ -4679,7 +4742,7 @@ export function ProfileSettingsModal({
                 )}
               </div>
 
-              <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-3 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <button
                   type="button"
                   onClick={() => {
@@ -5082,7 +5145,7 @@ export function ProfileSettingsModal({
                 </div>
               </div>
 
-              <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="px-3 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
                   Changes are applied immediately.
                 </span>
@@ -5108,8 +5171,13 @@ export function ProfileSettingsModal({
             }}
           >
             <div
-              className="w-full max-w-[1040px] h-[94vh] max-h-[90vh] min-h-[620px] rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter flex flex-col"
-              style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}
+              className="w-full max-w-[1040px] min-h-0 rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter flex flex-col"
+              style={{
+                borderColor: 'var(--border-strong)',
+                background: 'var(--surface-0)',
+                height: 'min(90vh, 820px)',
+                maxHeight: 'calc(100vh - 2rem)',
+              }}
             >
               <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                 <div className="flex items-center gap-2.5">
@@ -5137,7 +5205,7 @@ export function ProfileSettingsModal({
                   <X className="w-4 h-4" />
                 </button>
               </div>
-              <div className="grid grid-cols-[220px_minmax(0,1fr)] grid-rows-[1fr] min-h-[620px] flex-1 min-h-0 overflow-hidden">
+              <div className="grid grid-cols-[220px_minmax(0,1fr)] grid-rows-[1fr] flex-1 min-h-0 overflow-hidden">
                 <div className="border-r flex flex-col min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                   <div className="p-2 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                     <div className="relative">
@@ -5296,7 +5364,7 @@ export function ProfileSettingsModal({
               </div>
 
               {/* Material Library footer */}
-              <div className="flex items-center justify-between gap-3 px-4 py-3 border-t" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+              <div className="flex items-center justify-between gap-3 px-4 py-3 border-t shrink-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                 <span className="text-[12px]" style={{ color: 'var(--text-muted)' }}>
                   {selectedLibraryMaterialKeys.size > 0
                     ? `${selectedLibraryMaterialKeys.size} material${selectedLibraryMaterialKeys.size !== 1 ? 's' : ''} selected`
@@ -5353,6 +5421,7 @@ export function ProfileSettingsModal({
                     activeTabStyle={accentSecondaryActionStyle92}
                     draft={newMaterialDraft}
                     onDraftChange={setNewMaterialDraft}
+                    printerDitherBitDepth={printerDitherBitDepth}
                     outputFormat={selectedPrinter.display.outputFormat}
                     settingsMode={selectedResolvedSettingsMode}
                     adapter={selectedLocalMaterialSettingsAdapter}
@@ -5362,6 +5431,11 @@ export function ProfileSettingsModal({
                 ) : (
                   <>
                     <MaterialProfileFormSections draft={newMaterialDraft} onChange={setNewMaterialDraft} />
+                    <MaterialAntiAliasingSection
+                      draft={newMaterialDraft}
+                      onChange={setNewMaterialDraft}
+                      printerDitherBitDepth={printerDitherBitDepth}
+                    />
                     <PluginLocalMaterialSettingsSections
                       outputFormat={selectedPrinter.display.outputFormat}
                       settingsMode={selectedResolvedSettingsMode}

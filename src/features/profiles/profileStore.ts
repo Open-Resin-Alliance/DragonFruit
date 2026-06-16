@@ -202,6 +202,70 @@ function sanitizeBitDepth(input: unknown): PrinterBitDepth | undefined {
 export type LocalMaterialSettingsValue = string | number | boolean;
 export type LocalMaterialSettingsMap = Record<string, LocalMaterialSettingsValue>;
 
+export type MaterialAntiAliasingSettings = {
+  enableCustomSettings: boolean;
+  enableOverride: boolean;
+  mode: 'Off' | 'Blur' | '3DAA';
+  level: string;
+  useCustomLevel: boolean;
+  blurBrushRadiusPx: number;
+  useCustomBlurBrushRadius: boolean;
+  blurBrushKernel: 'box' | 'gaussian';
+  blurBrushSigmaX: number;
+  blurBrushSigmaY: number;
+  zBlurRadiusLayers: number;
+  useCustomZBlurRadius: boolean;
+  zBlurKernel: 'box' | 'gaussian';
+  zBlurSigma: number;
+  zBlendLookBack: number;
+  useCustomZBlendLookBack: boolean;
+  zBlendFadePx: number;
+  zBlendFadeMode: 'auto' | 'manual';
+  zBlendAutoMode: boolean;
+  useCustomZBlendFadePx: boolean;
+  zaaPattern: 'uniform' | 'halton' | 'base2';
+  zaaDuplicateZ: boolean;
+  blurGraySourceMode: 'minimum' | 'lut';
+  zBlendResinType: 'opaque' | 'clear' | 'custom';
+  selectedLutCurveId: string;
+  aaOnSupports: boolean;
+  ditherEnabled: boolean;
+  ditherBitDepth: number;
+  ditherDeviceGamma: number;
+};
+
+export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettings = {
+  enableCustomSettings: false,
+  enableOverride: false,
+  mode: 'Blur',
+  level: '4x',
+  useCustomLevel: false,
+  blurBrushRadiusPx: 1,
+  useCustomBlurBrushRadius: false,
+  blurBrushKernel: 'gaussian',
+  blurBrushSigmaX: 0.5,
+  blurBrushSigmaY: 0.5,
+  zBlurRadiusLayers: 0,
+  useCustomZBlurRadius: false,
+  zBlurKernel: 'box',
+  zBlurSigma: 0.5,
+  zBlendLookBack: 2,
+  useCustomZBlendLookBack: false,
+  zBlendFadePx: 20,
+  zBlendFadeMode: 'auto',
+  zBlendAutoMode: true,
+  useCustomZBlendFadePx: false,
+  zaaPattern: 'halton',
+  zaaDuplicateZ: true,
+  blurGraySourceMode: 'lut',
+  zBlendResinType: 'opaque',
+  selectedLutCurveId: 'default',
+  aaOnSupports: false,
+  ditherEnabled: false,
+  ditherBitDepth: 3,
+  ditherDeviceGamma: 3.0,
+};
+
 const MATERIAL_PROFILE_LOCAL_OVERRIDE_KEYS = new Set<keyof MaterialProfile>([
   'layerHeightMm',
   'normalExposureSec',
@@ -237,6 +301,7 @@ export type MaterialProfile = {
   liftSpeedMmMin: number;
   retractSpeedMmMin: number;
   minimumAaAlphaPercent: number;
+  antiAliasingSettings: MaterialAntiAliasingSettings;
   localSettingsByOutput?: Record<string, LocalMaterialSettingsMap>;
 };
 
@@ -244,6 +309,68 @@ function normalizeMinimumAaAlphaPercent(value: unknown, fallback = 35): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(0, Math.min(100, numeric));
+}
+
+function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(min, Math.min(max, numeric));
+}
+
+function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAliasingSettings {
+  const source = (input && typeof input === 'object') ? input as Record<string, unknown> : {};
+  const defaults = DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS;
+  const mode = source.mode === 'Off' || source.mode === '3DAA' ? source.mode : defaults.mode;
+  const blurBrushKernel = source.blurBrushKernel === 'box' ? 'box' : defaults.blurBrushKernel;
+  const zBlurKernel = source.zBlurKernel === 'gaussian' ? 'gaussian' : defaults.zBlurKernel;
+  const zaaPattern = source.zaaPattern === 'uniform' || source.zaaPattern === 'base2'
+    ? source.zaaPattern
+    : defaults.zaaPattern;
+  const blurGraySourceMode = source.blurGraySourceMode === 'minimum' ? 'minimum' : defaults.blurGraySourceMode;
+  const zBlendFadeMode = source.zBlendFadeMode === 'manual' ? 'manual' : defaults.zBlendFadeMode;
+  const zBlendResinType = source.zBlendResinType === 'clear' || source.zBlendResinType === 'custom'
+    ? source.zBlendResinType
+    : defaults.zBlendResinType;
+  const selectedLutCurveId = typeof source.selectedLutCurveId === 'string' && source.selectedLutCurveId.trim().length > 0
+    ? source.selectedLutCurveId.trim()
+    : defaults.selectedLutCurveId;
+  const levelRaw = typeof source.level === 'string' ? source.level.trim().toLowerCase() : defaults.level;
+  const levelSteps = Number(levelRaw.endsWith('x') ? levelRaw.slice(0, -1) : levelRaw);
+  const level = `${Math.max(2, Math.min(64, Number.isFinite(levelSteps) ? Math.round(levelSteps) : 4))}x`;
+
+  return {
+    enableCustomSettings: typeof source.enableCustomSettings === 'boolean'
+      ? source.enableCustomSettings
+      : (typeof source.enableOverride === 'boolean' ? source.enableOverride : defaults.enableCustomSettings),
+    enableOverride: typeof source.enableOverride === 'boolean' ? source.enableOverride : defaults.enableOverride,
+    mode,
+    level,
+    useCustomLevel: typeof source.useCustomLevel === 'boolean' ? source.useCustomLevel : defaults.useCustomLevel,
+    blurBrushRadiusPx: Math.round(clampNumber(source.blurBrushRadiusPx, defaults.blurBrushRadiusPx, 0, 64)),
+    useCustomBlurBrushRadius: typeof source.useCustomBlurBrushRadius === 'boolean' ? source.useCustomBlurBrushRadius : defaults.useCustomBlurBrushRadius,
+    blurBrushKernel,
+    blurBrushSigmaX: clampNumber(source.blurBrushSigmaX, defaults.blurBrushSigmaX, 0.05, 16),
+    blurBrushSigmaY: clampNumber(source.blurBrushSigmaY, defaults.blurBrushSigmaY, 0.05, 16),
+    zBlurRadiusLayers: Math.round(clampNumber(source.zBlurRadiusLayers, defaults.zBlurRadiusLayers, 0, 8)),
+    useCustomZBlurRadius: typeof source.useCustomZBlurRadius === 'boolean' ? source.useCustomZBlurRadius : defaults.useCustomZBlurRadius,
+    zBlurKernel,
+    zBlurSigma: clampNumber(source.zBlurSigma, defaults.zBlurSigma, 0.05, 16),
+    zBlendLookBack: Math.round(clampNumber(source.zBlendLookBack, defaults.zBlendLookBack, 1, 16)),
+    useCustomZBlendLookBack: typeof source.useCustomZBlendLookBack === 'boolean' ? source.useCustomZBlendLookBack : defaults.useCustomZBlendLookBack,
+    zBlendFadePx: Math.round(clampNumber(source.zBlendFadePx, defaults.zBlendFadePx, 1, 256)),
+    zBlendFadeMode,
+    zBlendAutoMode: typeof source.zBlendAutoMode === 'boolean' ? source.zBlendAutoMode : defaults.zBlendAutoMode,
+    useCustomZBlendFadePx: typeof source.useCustomZBlendFadePx === 'boolean' ? source.useCustomZBlendFadePx : defaults.useCustomZBlendFadePx,
+    zaaPattern,
+    zaaDuplicateZ: typeof source.zaaDuplicateZ === 'boolean' ? source.zaaDuplicateZ : defaults.zaaDuplicateZ,
+    blurGraySourceMode,
+    zBlendResinType,
+    selectedLutCurveId,
+    aaOnSupports: typeof source.aaOnSupports === 'boolean' ? source.aaOnSupports : defaults.aaOnSupports,
+    ditherEnabled: typeof source.ditherEnabled === 'boolean' ? source.ditherEnabled : defaults.ditherEnabled,
+    ditherBitDepth: Math.round(clampNumber(source.ditherBitDepth, defaults.ditherBitDepth, 2, 7)),
+    ditherDeviceGamma: clampNumber(source.ditherDeviceGamma, defaults.ditherDeviceGamma, 0.5, 4.0),
+  };
 }
 
 function sanitizeLocalMaterialSettingsMap(input: unknown): LocalMaterialSettingsMap | undefined {
@@ -835,6 +962,7 @@ function createDefaultMaterials(printerProfiles: PrinterProfile[]): MaterialProf
     ...template,
     currencyCode: typeof (template as any).currencyCode === 'string' ? (template as any).currencyCode : 'USD',
     minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((template as any).minimumAaAlphaPercent, 35),
+    antiAliasingSettings: sanitizeMaterialAntiAliasingSettings((template as any).antiAliasingSettings),
     localSettingsByOutput: sanitizeLocalSettingsByOutput((template as any).localSettingsByOutput),
     id: createDefaultMaterialIdFromTemplateName(template.name),
     printerProfileId: primaryPrinterId,
@@ -937,11 +1065,35 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
           officialPresetVersion: normalizeProfileVersion((profile as any).officialPresetVersion, fallbackOfficialPresetVersion),
           isOfficial: isOfficialProfileByHeuristic(profile),
           isCustom: typeof profile.isCustom === 'boolean' ? profile.isCustom : !isOfficialProfileByHeuristic(profile),
-          buildVolumeMm: {
-            width: Number(rawBuildVolume?.width) || fallbackBuildVolume?.width || 143,
-            depth: Number(rawBuildVolume?.depth) || fallbackBuildVolume?.depth || 89,
-            height: Number(rawBuildVolume?.height) || fallbackBuildVolume?.height || 175,
-          },
+          buildVolumeMm: (() => {
+            // When buildDimensionMode is 'auto', compute width/depth from pixelSize × resolution
+            const toPositive = (v: unknown): number | undefined => {
+              const n = Number(v);
+              return Number.isFinite(n) && n > 0 ? n : undefined;
+            };
+            const rawW = toPositive((rawBuildVolume as any)?.width);
+            const rawD = toPositive((rawBuildVolume as any)?.depth);
+            const rawH = toPositive((rawBuildVolume as any)?.height)
+              ?? toPositive(fallbackBuildVolume?.height)
+              ?? 175;
+
+            if (resolvedBuildDimensionMode === 'auto' && resolvedPixelSize) {
+              const resX = Number(rawDisplay?.resolutionX) || fallbackDisplay?.resolutionX || 2560;
+              const resY = Number(rawDisplay?.resolutionY) || fallbackDisplay?.resolutionY || 1620;
+              const px = resolvedPixelSize;
+              return {
+                width: rawW ?? (resX * px.x) / 1000,
+                depth: rawD ?? (resY * px.y) / 1000,
+                height: rawH,
+              };
+            }
+
+            return {
+              width: rawW ?? fallbackBuildVolume?.width ?? 143,
+              depth: rawD ?? fallbackBuildVolume?.depth ?? 89,
+              height: rawH,
+            };
+          })(),
           safetyMarginMm: explicitSafetyMargin ?? fallbackSafetyMargin,
           display: {
             resolutionX: Number(rawDisplay?.resolutionX) || fallbackDisplay?.resolutionX || 2560,
@@ -1023,6 +1175,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
           liftSpeedMmMin: Number((profile as any).liftSpeedMmMin) || 60,
           retractSpeedMmMin: Number((profile as any).retractSpeedMmMin) || 150,
           minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((profile as any).minimumAaAlphaPercent, 35),
+          antiAliasingSettings: sanitizeMaterialAntiAliasingSettings((profile as any).antiAliasingSettings),
           localSettingsByOutput: sanitizeLocalSettingsByOutput((profile as any).localSettingsByOutput),
         };
       })
@@ -1248,6 +1401,7 @@ function ensureActiveMaterialForActivePrinter(nextState: ProfileStoreState): Pro
       liftSpeedMmMin: 60,
       retractSpeedMmMin: 150,
       minimumAaAlphaPercent: 35,
+      antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
       localSettingsByOutput: undefined,
     };
 
@@ -1379,6 +1533,27 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
   const networkSupport = normalizeNetworkSupport(partial?.networkSupport);
   const networkSettings = sanitizePrinterNetworkSettings(partial?.network);
 
+  const resolvedBuildDimensionMode = normalizeBuildDimensionMode((partial as any)?.buildDimensionMode) ?? 'manual';
+  const resolvedPixelSize = sanitizePixelSize(partial?.pixelSize);
+  let resolvedBuildVolumeMm = partial?.buildVolumeMm ?? { width: 143, depth: 89, height: 175 };
+
+  // When auto mode is active and pixelSize is known, ensure build volume is computed
+  // from pixelSize × resolution (not a stale fallback).
+  if (resolvedBuildDimensionMode === 'auto' && resolvedPixelSize && partial?.display) {
+    const resX = partial.display.resolutionX ?? 2560;
+    const resY = partial.display.resolutionY ?? 1620;
+    if (
+      !resolvedBuildVolumeMm
+      || (resolvedBuildVolumeMm.width === 143 && resolvedBuildVolumeMm.depth === 89)
+    ) {
+      resolvedBuildVolumeMm = {
+        width: (resX * resolvedPixelSize.x) / 1000,
+        depth: (resY * resolvedPixelSize.y) / 1000,
+        height: resolvedBuildVolumeMm?.height ?? 175,
+      };
+    }
+  }
+
   const profile: PrinterProfile = {
     id: createId('printer'),
     name: partial?.name?.trim() || `Printer ${state.printerProfiles.length + 1}`,
@@ -1389,16 +1564,16 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
     hasCamera: normalizeCameraSupport(partial?.hasCamera),
     networkFilter: sanitizeNetworkFilter(partial?.networkFilter),
     platformBadge: sanitizePlatformBadge(partial?.platformBadge),
-    pixelSize: sanitizePixelSize(partial?.pixelSize),
+    pixelSize: resolvedPixelSize,
     bitDepth: sanitizeBitDepth(partial?.bitDepth),
-    buildDimensionMode: normalizeBuildDimensionMode((partial as any)?.buildDimensionMode) ?? 'manual',
+    buildDimensionMode: resolvedBuildDimensionMode,
     officialPresetId: partial?.officialPresetId?.trim(),
     officialPresetVersion: Number.isFinite(Number((partial as any)?.officialPresetVersion))
       ? normalizeProfileVersion((partial as any).officialPresetVersion, 1)
       : undefined,
     isOfficial: partial?.isOfficial ?? false,
     isCustom: partial?.isCustom ?? true,
-    buildVolumeMm: partial?.buildVolumeMm ?? { width: 143, depth: 89, height: 175 },
+    buildVolumeMm: resolvedBuildVolumeMm,
     safetyMarginMm: sanitizeSafetyMarginMm(partial?.safetyMarginMm),
     display: {
       resolutionX: partial?.display?.resolutionX ?? 2560,
@@ -1450,6 +1625,26 @@ export function addPrinterProfileFromPreset(presetId: string): string {
   ));
 
   if (existingOfficial) {
+    // Refresh the existing profile with current preset data — cached profiles
+    // may have stale buildDimensionMode/buildVolumeMm from an older schema.
+    const refinedBuildDimensionMode = normalizeBuildDimensionMode((preset as any).buildDimensionMode);
+    const needsRefresh = (
+      (existingOfficial.buildDimensionMode !== refinedBuildDimensionMode)
+      || (refinedBuildDimensionMode === 'auto' && existingOfficial.pixelSize == null)
+    );
+    if (needsRefresh && refinedBuildDimensionMode != null) {
+      const idx = state.printerProfiles.indexOf(existingOfficial);
+      if (idx !== -1) {
+        state.printerProfiles[idx] = {
+          ...existingOfficial,
+          buildDimensionMode: refinedBuildDimensionMode,
+          pixelSize: existingOfficial.pixelSize ?? preset.pixelSize,
+          buildVolumeMm: preset.buildVolumeMm,
+        };
+        persist(state);
+        notify();
+      }
+    }
     return existingOfficial.id;
   }
 
@@ -1525,6 +1720,7 @@ export function addMaterialProfile(
     liftSpeedMmMin: partial?.liftSpeedMmMin ?? 60,
     retractSpeedMmMin: partial?.retractSpeedMmMin ?? 150,
     minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(partial?.minimumAaAlphaPercent, 35),
+    antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(partial?.antiAliasingSettings),
     localSettingsByOutput: sanitizeLocalSettingsByOutput(partial?.localSettingsByOutput),
   };
 
@@ -1834,6 +2030,9 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
       localSettingsByOutput: updates.localSettingsByOutput !== undefined
         ? sanitizeLocalSettingsByOutput(updates.localSettingsByOutput)
         : profile.localSettingsByOutput,
+      antiAliasingSettings: updates.antiAliasingSettings !== undefined
+        ? sanitizeMaterialAntiAliasingSettings(updates.antiAliasingSettings)
+        : profile.antiAliasingSettings,
     };
   });
 
@@ -1915,6 +2114,7 @@ export function duplicatePrinterProfileAsCustom(id: string): string {
         liftSpeedMmMin: 60,
         retractSpeedMmMin: 150,
         minimumAaAlphaPercent: 35,
+        antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
         localSettingsByOutput: undefined,
       },
     ];
@@ -2071,6 +2271,7 @@ export function importPrinterBundle(payload: unknown): string {
       liftSpeedMmMin: Number.isFinite(Number(material.liftSpeedMmMin)) ? Number(material.liftSpeedMmMin) : 60,
       retractSpeedMmMin: Number.isFinite(Number(material.retractSpeedMmMin)) ? Number(material.retractSpeedMmMin) : 150,
       minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(material.minimumAaAlphaPercent, 35),
+      antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(material.antiAliasingSettings),
       localSettingsByOutput: sanitizeLocalSettingsByOutput(material.localSettingsByOutput),
     }));
 
@@ -2095,6 +2296,7 @@ export function importPrinterBundle(payload: unknown): string {
       liftSpeedMmMin: 60,
       retractSpeedMmMin: 150,
       minimumAaAlphaPercent: 35,
+      antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
       localSettingsByOutput: undefined,
     });
   }
@@ -2551,6 +2753,9 @@ export function applyOfficialMaterialProfileUpdate(materialProfileId: string): A
         minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(
           (template as any).minimumAaAlphaPercent,
           item.minimumAaAlphaPercent,
+        ),
+        antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(
+          (template as any).antiAliasingSettings ?? item.antiAliasingSettings,
         ),
         localSettingsByOutput: sanitizeLocalSettingsByOutput((template as any).localSettingsByOutput)
           ?? item.localSettingsByOutput,

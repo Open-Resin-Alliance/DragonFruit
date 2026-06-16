@@ -90,6 +90,17 @@ export interface GizmoConfig {
   constrainToSurface?: boolean;
   constrainToPlane?: boolean;
   axisLock?: GizmoAxis | null;
+
+  // Per-axis visual animation flip for rotation rings.
+  // Set a component to -1 to invert the ring handle animation direction
+  // (e.g. when the gizmo local frame has an inverted axis convention such
+  // as displayY = -cutterY in HolePunchGizmo).
+  axisVisualFlip?: { x?: number; y?: number; z?: number };
+
+  // Suppress face-camera behaviors
+  disableArrowFlip?: boolean;
+  disableRingBillboard?: boolean;
+  disableViewCull?: boolean;
   
   // Callbacks
   onMoveStart?: (axis?: GizmoAxis) => boolean | void;

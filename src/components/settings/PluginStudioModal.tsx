@@ -18,6 +18,7 @@ import {
 } from '@/features/slicing/formats/registry';
 import {
   getAvailablePrinterPresets,
+  DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
   getInstalledPlugins,
   getProfileStoreServerSnapshot,
   getProfileStoreSnapshot,
@@ -232,6 +233,7 @@ const DEFAULT_MATERIAL_DRAFT: MaterialDraft = {
   liftSpeedMmMin: 60,
   retractSpeedMmMin: 150,
   minimumAaAlphaPercent: 35,
+  antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
 };
 
 const ACCENT_SECONDARY_BUTTON_STYLE_92: React.CSSProperties = {
@@ -922,7 +924,10 @@ function parsePrinterPresetDraft(value: unknown): PrinterPresetDraft {
 
   const hasExplicitWidth = typeof buildVolume.width === 'number' && Number.isFinite(buildVolume.width);
   const hasExplicitDepth = typeof buildVolume.depth === 'number' && Number.isFinite(buildVolume.depth);
-  const autoBuildWidthDepth = !hasExplicitWidth || !hasExplicitDepth;
+  // If the preset declares buildDimensionMode === 'auto', trust it even when
+  // width/depth happen to be finite (they may have been pre-computed by sanitizePrinterPreset).
+  const presetBuildDimensionMode = (value as any)?.buildDimensionMode;
+  const autoBuildWidthDepth = presetBuildDimensionMode === 'auto' || !hasExplicitWidth || !hasExplicitDepth;
 
   const computedWidth = resolutionX > 0 && pixelSizeX > 0 ? computeBuildDimensionMm(resolutionX, pixelSizeX) : 0;
   const computedDepth = resolutionY > 0 && pixelSizeY > 0 ? computeBuildDimensionMm(resolutionY, pixelSizeY) : 0;

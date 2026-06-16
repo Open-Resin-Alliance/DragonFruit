@@ -15,6 +15,10 @@ type UseMarqueeSelectionHandlersParams = {
   containerRef: React.RefObject<HTMLDivElement | null>;
   interactionResetToken?: number;
   mode?: string;
+  prepareMarqueeEnabled?: boolean;
+  allowPrepareMarqueeFromHover?: boolean;
+  prepareMarqueePublishesModelSelectionEvents?: boolean;
+  prepareMarqueeRequiresShift?: boolean;
   isGizmoDragging: boolean;
   isPostGizmoInteractionGuardActive: boolean;
   hoveredModelId: string | null;
@@ -34,6 +38,10 @@ export function useMarqueeSelectionHandlers({
   containerRef,
   interactionResetToken,
   mode,
+  prepareMarqueeEnabled = false,
+  allowPrepareMarqueeFromHover = false,
+  prepareMarqueePublishesModelSelectionEvents = true,
+  prepareMarqueeRequiresShift = true,
   isGizmoDragging,
   isPostGizmoInteractionGuardActive,
   hoveredModelId,
@@ -70,15 +78,22 @@ export function useMarqueeSelectionHandlers({
   }, [containerRef]);
 
   const handleMarqueePointerDownCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (mode !== 'prepare' && mode !== 'support') return;
+    const canUsePrepareMarquee = mode === 'prepare' && prepareMarqueeEnabled;
+    if (!canUsePrepareMarquee && mode !== 'support') return;
     if (e.button !== 0) return;
-    if (!e.shiftKey) return;
+    if (mode === 'support' || prepareMarqueeRequiresShift) {
+      if (!e.shiftKey) return;
+    }
     // Skip marquee when Cmd/Ctrl+Shift is held — that's rotation snap, not selection
     if (e.metaKey || e.ctrlKey) return;
     if (isGizmoDragging || isPostGizmoInteractionGuardActive) return;
-    if (mode === 'prepare' && (hoveredModelId || supportHoveredCategory !== 'none')) return;
+    if (
+      mode === 'prepare'
+      && !allowPrepareMarqueeFromHover
+      && (hoveredModelId || supportHoveredCategory !== 'none')
+    ) return;
 
-    if (mode === 'prepare' && onActiveModelChange) {
+    if (mode === 'prepare' && prepareMarqueePublishesModelSelectionEvents && onActiveModelChange) {
       const hasSelection = !!activeModelId || !!selectedModelIds?.length;
       if (hasSelection && !window.__modelClickedThisFrame && !isOrbitInteracting && !spaceMouseNavigationActive) {
         onActiveModelChange(null);
@@ -99,7 +114,11 @@ export function useMarqueeSelectionHandlers({
     isOrbitInteracting,
     isPostGizmoInteractionGuardActive,
     mode,
+    allowPrepareMarqueeFromHover,
     onActiveModelChange,
+    prepareMarqueePublishesModelSelectionEvents,
+    prepareMarqueeRequiresShift,
+    prepareMarqueeEnabled,
     selectedModelIds,
     spaceMouseNavigationActive,
     supportHoveredCategory,
@@ -215,17 +234,19 @@ export function useMarqueeSelectionHandlers({
       const selectedIds = resolveMarqueeSelectedIds(currentSelection);
       onMarqueeSelectionChange(selectedIds);
 
-      if (selectedIds.length > 0) {
-        window.dispatchEvent(new CustomEvent('model-clicked', { detail: { modelId: selectedIds[0] } }));
-      } else {
-        window.dispatchEvent(new CustomEvent('model-deselected'));
-      }
+      if (prepareMarqueePublishesModelSelectionEvents) {
+        if (selectedIds.length > 0) {
+          window.dispatchEvent(new CustomEvent('model-clicked', { detail: { modelId: selectedIds[0] } }));
+        } else {
+          window.dispatchEvent(new CustomEvent('model-deselected'));
+        }
 
-      window.__modelClickGuardUntil = performance.now() + 48;
-      window.__modelClickedThisFrame = true;
-      window.setTimeout(() => {
-        window.__modelClickedThisFrame = false;
-      }, 0);
+        window.__modelClickGuardUntil = performance.now() + 48;
+        window.__modelClickedThisFrame = true;
+        window.setTimeout(() => {
+          window.__modelClickedThisFrame = false;
+        }, 0);
+      }
     } else if (mode === 'support') {
       const selectedSupportIds = resolveMarqueeSelectedSupportIds(currentSelection);
       commitSupportMarqueeSelection(selectedSupportIds);
@@ -238,6 +259,7 @@ export function useMarqueeSelectionHandlers({
     marqueeSelection,
     mode,
     onMarqueeSelectionChange,
+    prepareMarqueePublishesModelSelectionEvents,
     resolveMarqueeSelectedIds,
     resolveMarqueeSelectedSupportIds,
     suppressNextCanvasClickRef,

@@ -1,4 +1,4 @@
-import type { Anchor, Branch, Knot, SupportState, Vec3 } from '../../types';
+import type { Anchor, Branch, Knot, Leaf, SupportState, Vec3 } from '../../types';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import type { SupportSettings } from '../../Settings/types';
 import type { TrunkBuildResult } from '../../SupportTypes/Trunk/trunkBuilder';
@@ -38,6 +38,14 @@ export type GridPlacementDecision =
         supportData: SupportData;
     }
     | {
+        kind: 'place_leaf';
+        nodeKey: GridNodeKey;
+        hostTrunkId: string;
+        knot: Knot;
+        leaf: Leaf;
+        supportData: SupportData;
+    }
+    | {
         kind: 'place_anchor';
         anchor: Anchor;
         supportData: SupportData;
@@ -57,4 +65,6 @@ export interface DecideGridPlacementArgs {
     tipNormal: Vec3;
     modelId: string;
     mesh?: THREE.Mesh;
+    /** When true, skip expensive click-time-only checks (e.g. full segment raycasts). */
+    isPreview?: boolean;
 }

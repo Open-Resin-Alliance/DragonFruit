@@ -1,14 +1,16 @@
 import React from 'react';
-import { Hand, Move3D, Paintbrush2, LayoutGrid, ArrowDownToLine, FlipHorizontal2 } from 'lucide-react';
+import { Hand, Move3D, Paintbrush2, LayoutGrid, ArrowDownToLine, FlipHorizontal2, Droplets } from 'lucide-react';
 import type { TransformMode } from '@/hooks/useModelTransform';
 import { usePlatformModifier } from '@/hooks/usePlatformModifier';
+import { warmTransformGizmoGeometryCache } from '@/components/gizmo/gizmoGeometryCache';
 
 interface TransformToolbarProps {
   mode: TransformMode;
   onModeChange: (mode: TransformMode) => void;
+  onModeHover?: (mode: TransformMode | null) => void;
 }
 
-export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) {
+export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformToolbarProps) {
   const [hoveredMode, setHoveredMode] = React.useState<TransformMode | null>(null);
   const modKey = usePlatformModifier();
 
@@ -17,6 +19,7 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
     { mode: 'transform', label: 'Modify', icon: <Move3D className="w-4 h-4" />, hint: 'Move, rotate, and scale' },
     { mode: 'placeOnFace', label: 'On-Face', icon: <ArrowDownToLine className="w-4 h-4" />, hint: 'Orient flat against plate' },
     { mode: 'mirror', label: 'Mirror', icon: <FlipHorizontal2 className="w-4 h-4" />, hint: 'Mirror across X, Y, or Z' },
+    { mode: 'hollowing', label: 'Hollow', icon: <Droplets className="w-4 h-4" />, hint: 'Create cavity or open-face shell' },
     { mode: 'smoothing', label: 'Smooth', icon: <Paintbrush2 className="w-4 h-4" />, hint: 'Sculpt and smooth surface' },
     { mode: 'arrange', label: 'Arrange', icon: <LayoutGrid className="w-4 h-4" />, hint: 'Auto-arrange models on plate' },
   ];
@@ -28,6 +31,20 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
       onModeChange(next);
     });
   }, [onModeChange]);
+
+  const handleModeHoverChange = React.useCallback((next: TransformMode | null) => {
+    if (next === 'transform') {
+      warmTransformGizmoGeometryCache();
+    }
+    setHoveredMode(next);
+    onModeHover?.(next);
+  }, [onModeHover]);
+
+  const handleModeLeave = React.useCallback((modeValue: TransformMode) => {
+    const next = hoveredMode === modeValue ? null : hoveredMode;
+    setHoveredMode(next);
+    onModeHover?.(next);
+  }, [hoveredMode, onModeHover]);
 
   return (
     <div
@@ -43,11 +60,13 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
     >
       <div
         className={`relative grid items-center rounded-full px-1 py-1 ${
-          buttons.length === 6
-            ? 'grid-cols-6'
-            : buttons.length === 5
-              ? 'grid-cols-5'
-              : 'grid-cols-4'
+          buttons.length === 7
+            ? 'grid-cols-7'
+            : buttons.length === 6
+              ? 'grid-cols-6'
+              : buttons.length === 5
+                ? 'grid-cols-5'
+                : 'grid-cols-4'
         }`}
         style={{
           background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 50%)',
@@ -72,8 +91,10 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
             <button
               key={btn.mode}
               onClick={() => handleModeClick(btn.mode)}
-              onMouseEnter={() => setHoveredMode(btn.mode)}
-              onMouseLeave={() => setHoveredMode((prev) => (prev === btn.mode ? null : prev))}
+              onMouseEnter={() => handleModeHoverChange(btn.mode)}
+              onMouseLeave={() => handleModeLeave(btn.mode)}
+              onFocus={() => handleModeHoverChange(btn.mode)}
+              onBlur={() => handleModeLeave(btn.mode)}
               className={`relative z-[1] flex w-[112px] items-center justify-center gap-1.5 rounded-full px-3.5 py-2 text-[11px] font-semibold uppercase tracking-wider transition-all duration-200 active:scale-[0.98] ${
                 active
                   ? 'scale-[1.01]'

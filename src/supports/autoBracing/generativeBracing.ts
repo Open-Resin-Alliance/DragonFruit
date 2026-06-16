@@ -37,8 +37,7 @@ export function generateRequiredKickstands(
     const meshEntries = getAllMeshEntriesForAutoBrace();
     const generatedKickstands: KickstandBuildResult[] = [];
 
-    // The maximum horizontal run a brace can physically reach based on the 3D max length setting
-    const maxHorizontalRun = settings.maxBraceLengthMm / Math.SQRT2;
+    const maxHorizontalRun = settings.maxBraceLengthMm;
     // We want the new kickstand to generate well within the max run so it definitely connects.
     const GENERATION_DISTANCE_MM = Math.min(5.0, maxHorizontalRun * 0.8);
 

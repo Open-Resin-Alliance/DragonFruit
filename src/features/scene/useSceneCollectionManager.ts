@@ -37,6 +37,7 @@ import {
   getProfileStoreServerSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
+import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 
 type PersistedMeshAppearance = {
   v: 1;
@@ -141,6 +142,7 @@ function cloneLoadedModel(model: LoadedModel): LoadedModel {
   return {
     ...model,
     transform: cloneTransform(model.transform),
+    meshModifiers: model.meshModifiers ? clonePlainObject(model.meshModifiers) : undefined,
   };
 }
 
@@ -646,6 +648,7 @@ type PluginSceneImportPayload = {
   };
   modelId?: string;
   supportData?: DragonfruitImportFormat | null;
+  meshModifiers?: ModelMeshModifiers;
 };
 
 function toFiniteNumber(value: unknown): number | null {
@@ -712,6 +715,7 @@ function normalizePluginSceneImportPayload(payload: unknown): PluginSceneImportP
     transform?: unknown;
     modelId?: unknown;
     supportData?: unknown;
+    meshModifiers?: unknown;
   };
 
   if (!(source.geometry instanceof THREE.BufferGeometry)) return null;
@@ -729,6 +733,12 @@ function normalizePluginSceneImportPayload(payload: unknown): PluginSceneImportP
 
   if (!position || !rotation || !scale) return null;
 
+  let meshModifiers: ModelMeshModifiers | undefined;
+  if (source.meshModifiers && typeof source.meshModifiers === 'object') {
+    // Accept the modifiers as-is — they are plain objects that match the interface.
+    meshModifiers = source.meshModifiers as ModelMeshModifiers;
+  }
+
   return {
     geometry: source.geometry,
     transform: {
@@ -740,6 +750,7 @@ function normalizePluginSceneImportPayload(payload: unknown): PluginSceneImportP
       ? source.modelId
       : undefined,
     supportData: asDragonfruitImportFormat(source.supportData),
+    meshModifiers,
   };
 }
 
@@ -755,6 +766,7 @@ export interface LoadedModel {
   visible: boolean;
   color: string;
   polygonCount: number;
+  meshModifiers?: ModelMeshModifiers;
   ignoreAutoLift?: boolean;
   manualZMoveOverride?: boolean;
 }
@@ -847,6 +859,7 @@ type ModelClipboardEntry = {
   transform: ModelTransform;
   color: string;
   polygonCount: number;
+  meshModifiers?: ModelMeshModifiers;
   supportClipboard: SupportClipboardPayload | null;
 };
 
@@ -2359,12 +2372,22 @@ export function useSceneCollectionManager() {
     const center = bbox.getCenter(new THREE.Vector3());
     const size = bbox.getSize(new THREE.Vector3());
 
+    // Recompute edge geometry for the Higher Contrast Model Edges overlay when
+    // the geometry has changed (e.g. after hole punch / hollowing).  Compute it
+    // only if the old geometry had one (i.e. the user has edge lines enabled),
+    // and skip during deferred post-processing to avoid blocking the UI.
+    const hadEdgeGeometry = !!target.geometry.edgeGeometry;
+    const nextEdgeGeometry = hadEdgeGeometry && !options?.deferPostProcessing
+      ? new THREE.EdgesGeometry(nextBufferGeometry, 30)
+      : target.geometry.edgeGeometry;
+
     const nextGeometry: GeometryWithBounds = {
       geometry: nextBufferGeometry,
       bbox,
       center,
       size,
       flatteningPlanes: target.geometry.flatteningPlanes,
+      ...(nextEdgeGeometry ? { edgeGeometry: nextEdgeGeometry } : {}),
     };
 
     if (!options?.deferPostProcessing) {
@@ -2445,6 +2468,14 @@ export function useSceneCollectionManager() {
     setModels(prev => prev.map(m =>
       m.id === id ? { ...m, visible } : m
     ));
+  }, []);
+
+  const setModelMeshModifiers = useCallback((id: string, meshModifiers: ModelMeshModifiers | undefined) => {
+    setModels(prev => prev.map((model) => (
+      model.id === id
+        ? { ...model, meshModifiers }
+        : model
+    )));
   }, []);
 
   const setModelManualZMoveOverride = useCallback((id: string, manualZMoveOverride: boolean) => {
@@ -2742,6 +2773,7 @@ export function useSceneCollectionManager() {
         },
         color: source.color,
         polygonCount: source.polygonCount,
+        meshModifiers: source.meshModifiers ? clonePlainObject(source.meshModifiers) : undefined,
         supportClipboard,
       },
     ]);
@@ -2770,6 +2802,7 @@ export function useSceneCollectionManager() {
         },
         color: source.color,
         polygonCount: source.polygonCount,
+        meshModifiers: source.meshModifiers ? clonePlainObject(source.meshModifiers) : undefined,
         supportClipboard,
       };
     }));
@@ -2808,6 +2841,7 @@ export function useSceneCollectionManager() {
       visible: true,
       color: first.color,
       polygonCount: first.polygonCount,
+      meshModifiers: first.meshModifiers ? clonePlainObject(first.meshModifiers) : undefined,
     };
 
     const nextModels = [...models, pastedModel];
@@ -3181,6 +3215,7 @@ export function useSceneCollectionManager() {
         visible: true,
         color: entry.color,
         polygonCount: entry.polygonCount,
+        meshModifiers: entry.meshModifiers ? clonePlainObject(entry.meshModifiers) : undefined,
       };
     });
 
@@ -3252,6 +3287,7 @@ export function useSceneCollectionManager() {
         visible: source.visible,
         color: source.color,
         polygonCount: source.polygonCount,
+        meshModifiers: source.meshModifiers ? clonePlainObject(source.meshModifiers) : undefined,
       };
     });
 
@@ -3487,7 +3523,7 @@ export function useSceneCollectionManager() {
 
       for (let i = 0; i < processedItems.length; i++) {
         const { normalized, processed } = processedItems[i];
-        const { transform: importedTransform, modelId: importedModelId, supportData } = normalized;
+        const { transform: importedTransform, modelId: importedModelId, supportData, meshModifiers } = normalized;
 
         const originalPosition = importedTransform.position.clone();
         const sourceTransform: ModelTransform = {
@@ -3522,6 +3558,7 @@ export function useSceneCollectionManager() {
           color: '#a3a3a3',
           polygonCount: processed.geometry.getAttribute('position').count / 3,
           ignoreAutoLift: true,
+          meshModifiers: meshModifiers ? clonePlainObject(meshModifiers) : undefined,
           manualZMoveOverride: true,
         };
 
@@ -3757,6 +3794,7 @@ export function useSceneCollectionManager() {
             visible: model.visible,
             color,
             polygonCount,
+            meshModifiers: model.meshModifiers ? clonePlainObject(model.meshModifiers) : undefined,
             ignoreAutoLift: true,
             manualZMoveOverride: true,
           });
@@ -4304,6 +4342,7 @@ export function useSceneCollectionManager() {
     finalizeModelGeometryPostProcessing,
     setModelManualZMoveOverride,
     setModelVisibility,
+    setModelMeshModifiers,
     renameModel,
     groupModels,
     ungroupModels,

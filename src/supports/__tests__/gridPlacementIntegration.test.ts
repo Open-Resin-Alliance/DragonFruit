@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import * as THREE from 'three';
 
 import type { TrunkPlacementResult } from '../PlacementLogic/StandardPlacement';
 import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
@@ -189,7 +190,7 @@ test('decideGridPlacement merges into the preferred occupied node before conside
         modelId: MODEL_ID,
     });
 
-    assert.equal(decision.kind, 'place_branch');
+    assert.equal(decision.kind, 'place_leaf');
     assert.equal(decision.nodeKey, '0,0');
     assert.equal(decision.hostTrunkId, preferredHost.build.trunk.id);
 });
@@ -258,6 +259,40 @@ test('decideGridPlacement places a branch on the occupied preferred node when th
         modelId: MODEL_ID,
     });
 
+    assert.equal(decision.kind, 'place_leaf');
+    assert.equal(decision.nodeKey, '0,0');
+    assert.equal(decision.hostTrunkId, preferredHost.build.trunk.id);
+});
+
+test('decideGridPlacement keeps using a branch when the direct hosted span is too long for an auto-leaf', () => {
+    const settings = makeSettings();
+    setSettings(settings);
+
+    const snapshot = makeEmptySnapshot();
+    const preferredHost = buildStraightFixture({
+        x: 0,
+        y: 0,
+        tipZ: 10,
+        socketZ: 9,
+    });
+    addTrunkBuild(snapshot, preferredHost);
+
+    const candidate = buildStraightFixture({
+        x: 1.9,
+        y: 0,
+        tipZ: 6,
+        socketZ: 5,
+    });
+
+    const decision = decideGridPlacement({
+        settings,
+        snapshot,
+        candidate: candidate.build,
+        tipPos: candidate.input.tipPos,
+        tipNormal: candidate.input.tipNormal,
+        modelId: MODEL_ID,
+    });
+
     assert.equal(decision.kind, 'place_branch');
     assert.equal(decision.nodeKey, '0,0');
     assert.equal(decision.hostTrunkId, preferredHost.build.trunk.id);
@@ -298,7 +333,7 @@ test('decideGridPlacement replaces the preferred host trunk when the candidate t
     assert.equal(decision.hostTrunkId, preferredHost.build.trunk.id);
 });
 
-test('decideGridPlacement falls back to a different reachable host when the preferred host cannot accept an attachment', () => {
+test('decideGridPlacement rejects when the fixed preferred host cannot accept an attachment', () => {
     const settings = makeSettings();
     setSettings(settings);
 
@@ -308,9 +343,9 @@ test('decideGridPlacement falls back to a different reachable host when the pref
             return buildManualHostFixture({
                 x: 0,
                 y: 0,
-                tipZ: 8,
-                bottomZ: 5,
-                topZ: 7,
+                tipZ: 7.1,
+                bottomZ: 6.7,
+                topZ: 6.9,
             });
         }
 
@@ -332,14 +367,13 @@ test('decideGridPlacement falls back to a different reachable host when the pref
             topZ: 7,
         });
     });
-    const fallbackHost = fixtures.get('1,0');
-    assert.ok(fallbackHost);
+    assert.ok(fixtures.get('1,0'));
 
     const candidate = buildStraightFixture({
         x: 0,
         y: 0,
-        tipZ: 4.5,
-        socketZ: 4,
+        tipZ: 6.5,
+        socketZ: 6,
     });
 
     const decision = decideGridPlacement({
@@ -351,7 +385,50 @@ test('decideGridPlacement falls back to a different reachable host when the pref
         modelId: MODEL_ID,
     });
 
-    assert.equal(decision.kind, 'place_branch');
-    assert.equal(decision.nodeKey, '1,0');
-    assert.equal(decision.hostTrunkId, fallbackHost.build.trunk.id);
+    assert.equal(decision.kind, 'reject');
+    assert.equal(decision.nodeKey, '0,0');
+    assert.equal(decision.reason, 'NO_VALID_ATTACHMENT');
+});
+
+test('decideGridPlacement applies the same trunk collision gate for preview and commit', () => {
+    const settings = makeSettings();
+    setSettings(settings);
+
+    const snapshot = makeEmptySnapshot();
+    const candidate = buildStraightFixture({
+        x: 0,
+        y: 0,
+        tipZ: 10,
+        socketZ: 9,
+    });
+
+    const blocker = new THREE.Mesh(
+        new THREE.BoxGeometry(2, 2, 2),
+        new THREE.MeshBasicMaterial(),
+    );
+    blocker.position.set(0, 0, 4.5);
+    blocker.updateMatrixWorld(true);
+
+    const baseArgs = {
+        settings,
+        snapshot,
+        candidate: candidate.build,
+        tipPos: candidate.input.tipPos,
+        tipNormal: candidate.input.tipNormal,
+        modelId: MODEL_ID,
+        mesh: blocker,
+    };
+
+    const previewDecision = decideGridPlacement({
+        ...baseArgs,
+        isPreview: true,
+    });
+    const commitDecision = decideGridPlacement(baseArgs);
+
+    assert.equal(previewDecision.kind, 'reject');
+    assert.equal(commitDecision.kind, 'reject');
+    assert.equal(previewDecision.nodeKey, '0,0');
+    assert.equal(commitDecision.nodeKey, '0,0');
+    assert.equal(previewDecision.reason, 'COLLISION_WITH_MODEL');
+    assert.equal(commitDecision.reason, 'COLLISION_WITH_MODEL');
 });

@@ -8,8 +8,9 @@
 import * as THREE from 'three';
 import { Vec3, Roots, Trunk, Segment, Joint } from '../../types';
 import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
-import { getSocketPosition } from '../../SupportPrimitives/ContactCone/contactConeUtils';
+import { getFinalSocketPosition, getSocketPosition } from '../../SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
+import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
 import { getJointDiameter } from '../../constants';
 import { getSettings } from '../../Settings';
 import type { SupportData } from '../../rendering/SupportBuilder';
@@ -20,12 +21,84 @@ import type { SnappedTrunkRouteResult, TrunkRouteResult } from './trunkRouteType
 import { gridSnappedXYFromKey } from '../../PlacementLogic/Grid/gridMath';
 import { normalizeFirstConstructionJoint, withCentralStraightSupportJoint } from './trunkConstructionJoints';
 import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
+import { perfMark, perfMeasureWithSpike } from '../../PlacementLogic/Pathfinding/pathfindingPerf';
 
 function uuidv4() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
         const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
         return v.toString(16);
     });
+}
+
+const JOINT_CHAIN_Z_EPSILON = 0.0001;
+
+function getAscendingJointPenalty(joints: Vec3[], lowerBoundZ: number, upperBoundZ: number): number {
+    let penalty = 0;
+    let previousZ = lowerBoundZ;
+
+    for (const joint of joints) {
+        if (joint.z <= previousZ + JOINT_CHAIN_Z_EPSILON) {
+            penalty += (previousZ + JOINT_CHAIN_Z_EPSILON) - joint.z + 1;
+        }
+        if (joint.z >= upperBoundZ - JOINT_CHAIN_Z_EPSILON) {
+            penalty += joint.z - (upperBoundZ - JOINT_CHAIN_Z_EPSILON) + 1;
+        }
+        previousZ = Math.max(previousZ, joint.z);
+    }
+
+    return penalty;
+}
+
+function orientJointsBaseToSocket(joints: Vec3[], lowerBoundZ: number, upperBoundZ: number): Vec3[] {
+    if (joints.length < 2) {
+        return [...joints];
+    }
+
+    const forward = [...joints];
+    const reversed = [...joints].reverse();
+    const forwardPenalty = getAscendingJointPenalty(forward, lowerBoundZ, upperBoundZ);
+    const reversedPenalty = getAscendingJointPenalty(reversed, lowerBoundZ, upperBoundZ);
+
+    return reversedPenalty < forwardPenalty ? reversed : forward;
+}
+
+function filterStrictlyAscendingJoints(joints: Vec3[], lowerBoundZ: number, upperBoundZ: number): Vec3[] {
+    const result: Vec3[] = [];
+    let previousZ = lowerBoundZ;
+
+    for (const joint of joints) {
+        if (joint.z <= previousZ + JOINT_CHAIN_Z_EPSILON) {
+            continue;
+        }
+        if (joint.z >= upperBoundZ - JOINT_CHAIN_Z_EPSILON) {
+            continue;
+        }
+
+        result.push(joint);
+        previousZ = joint.z;
+    }
+
+    return result;
+}
+
+function normalizeTrunkJointChain(args: {
+    rootTopZ: number;
+    socketPos: Vec3;
+    routeJoints: Vec3[];
+    constructionJoints: Vec3[];
+}): { routeJoints: Vec3[]; constructionJoints: Vec3[] } {
+    const { rootTopZ, socketPos } = args;
+    const orientedConstruction = orientJointsBaseToSocket(args.constructionJoints, rootTopZ, socketPos.z);
+    const normalizedConstruction = filterStrictlyAscendingJoints(orientedConstruction, rootTopZ, socketPos.z);
+
+    const routeLowerBoundZ = normalizedConstruction[normalizedConstruction.length - 1]?.z ?? rootTopZ;
+    const orientedRoute = orientJointsBaseToSocket(args.routeJoints, routeLowerBoundZ, socketPos.z);
+    const normalizedRoute = filterStrictlyAscendingJoints(orientedRoute, routeLowerBoundZ, socketPos.z);
+
+    return {
+        constructionJoints: normalizedConstruction,
+        routeJoints: normalizedRoute,
+    };
 }
 
 function buildTipProfile(
@@ -88,11 +161,11 @@ export interface TrunkBuildResult {
  */
 // ---------------------------------------------------------------------------
 // Placement result cache — covers V2 A* + V1 fallback together.
-// Multi-entry LRU per model (24 slots) avoids cache thrashing when the cursor
-// sweeps through a transition zone at the 0.5mm quantisation boundary.
+// Multi-entry LRU per model (24 slots) avoids cache thrashing while staying
+// tight enough that trunk/stick decisions revalidate near collision boundaries.
 // ---------------------------------------------------------------------------
-const PLACEMENT_CACHE_QUANT = 0.5; // mm — matches SDF cell size
-const NORMAL_CACHE_QUANT = 0.05;   // ~2.9° buckets
+const PLACEMENT_CACHE_QUANT = 0.1; // mm - keep hover cache tight near collision/cavity boundaries
+const NORMAL_CACHE_QUANT = 0.02;   // ~1.1 degree buckets
 const MAX_PLACEMENT_CACHE_ENTRIES = 24;
 
 // Map<modelId, Map<cacheKey, result>> — insertion-ordered for FIFO eviction
@@ -134,10 +207,6 @@ export function clearPlacementCache(modelId?: string): void {
 export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
     const { tipPos, tipNormal, modelId, mesh, overrides, isPreview } = input;
 
-    // Placement computation always runs (no cache). This ensures preview and click
-    // use consistent logic and settings, preventing the mismatches that occurred
-    // when coarse preview results were cached and reused for click placement.
-
     // Read current settings
     const settings = getSettings();
     const tipProfile = buildTipProfile(settings, overrides);
@@ -161,21 +230,38 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
     if (mesh) {
         // V2 grid A* pathfinder (SDF-backed).
         // Both preview and click use FULL collision checks to ensure consistent safety.
-        // Preview uses lower budget (1200 expansions) for responsiveness, but same
-        // collision detection rigor as click. This trades slightly slower preview
-        // exploration for correct collision avoidance.
-        const v2Context = isPreview ? { maxExpansions: 1200 } : undefined;
-        const result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
-        placement = result;
+        // Preview uses lower budget (800 expansions) for responsiveness.
+        const v2Context = isPreview ? { maxExpansions: 800 } : undefined;
+
+        // Cache key: position + normal quantised at 0.5mm / 0.05 normal.
+        // Only used for preview → preview reuse; click-time bypasses cache
+        // to ensure fresh collision validation against any moved models.
+        const cacheKey = isPreview ? placementCacheKey(tipPos, tipNormal) : null;
+        const cached = cacheKey ? getPlacementCache(modelId, cacheKey) : undefined;
+
+        if (cached) {
+            placement = cached;
+        } else {
+            perfMark('trunk:v2-placement');
+            const result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
+            perfMeasureWithSpike('trunk:v2-placement', 'trunk:v2-placement');
+            placement = result;
+            if (cacheKey) {
+                setPlacementCache(modelId, cacheKey, placement);
+            }
+        }
     } else {
         placement = calculateStandardPlacement(placementInput);
     }
 
-    return buildTrunkDataFromPlacement(input, placement);
+    perfMark('trunk:build-from-placement');
+    const built = buildTrunkDataFromPlacement(input, placement);
+    perfMeasureWithSpike('trunk:build-from-placement', 'trunk:build-from-placement');
+    return built;
 }
 
 export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: TrunkPlacementResult): TrunkBuildResult {
-    const { tipPos, tipNormal, modelId, overrides } = input;
+    const { tipPos, tipNormal, modelId, overrides, mesh } = input;
     const settings = getSettings();
     const settingsCodeHex = encodeSupportSettingsHex(settings);
     const tipProfile = buildTipProfile(settings, overrides);
@@ -195,37 +281,92 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
         z: tipPos.z + tipNormal.z * diskThickness,
     };
 
-    // Always derive socket from the live tip pose so cone/body stay locked even
-    // when route data came from a quantised preview cache entry.
     const liveSocketPos = getSocketPosition(coneStartPos, effectiveConeAxis, tipProfile);
+    const solverSocketPos = placement.socketPos ?? liveSocketPos;
+    const solverSocketDeltaSq =
+        (solverSocketPos.x - liveSocketPos.x) ** 2
+        + (solverSocketPos.y - liveSocketPos.y) ** 2
+        + (solverSocketPos.z - liveSocketPos.z) ** 2;
+
+    // When the solver shifted the socket (cone-clear seed, A* routing), the
+    // actual cone axis is the direction from coneStartPos to solverSocketPos —
+    // NOT the surface-normal-derived axis.  Use the actual geometric direction
+    // so the cone renderer orients the cone body to match the real geometry.
+    let actualConeAxis = effectiveConeAxis;
+    if (solverSocketDeltaSq > 0.000001) {
+        const deltaX = solverSocketPos.x - coneStartPos.x;
+        const deltaY = solverSocketPos.y - coneStartPos.y;
+        const deltaZ = solverSocketPos.z - coneStartPos.z;
+        const deltaLen = Math.sqrt(deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ);
+        if (deltaLen > 0.001) {
+            actualConeAxis = {
+                x: deltaX / deltaLen,
+                y: deltaY / deltaLen,
+                z: deltaZ / deltaLen,
+            };
+        }
+    }
+
+    const contactConeTemplate: ContactCone = recomputeContactConeForMovedDisk(
+        {
+            id: '__solver-authored-socket__',
+            pos: tipPos,
+            normal: actualConeAxis,
+            surfaceNormal: tipNormal,
+            diskLengthOverride: tipDiskLengthOverrideMm,
+            profile: tipProfile,
+        },
+        tipPos,
+        tipNormal,
+        solverSocketPos,
+        mesh,
+    );
+    const resolvedSocketPos = getFinalSocketPosition(contactConeTemplate);
     const rootsTopZ = diskHeight + coneHeight;
-    const routeJoints = placement.joints ? [...placement.joints] : [];
+    const authoredRouteJoints = placement.joints ? [...placement.joints] : [];
+    const authoredConstructionJoints = placement.constructionJoints ? [...placement.constructionJoints] : [];
+    const normalizedAuthoredChains = normalizeTrunkJointChain({
+        rootTopZ: rootsTopZ,
+        socketPos: resolvedSocketPos,
+        routeJoints: authoredRouteJoints,
+        constructionJoints: authoredConstructionJoints,
+    });
+    const routeJoints = normalizedAuthoredChains.routeJoints;
     const isStraightSupport = routeJoints.length === 0;
-    const initialConstructionJoints = placement.constructionJoints ? [...placement.constructionJoints] : [];
+    const initialConstructionJoints = normalizedAuthoredChains.constructionJoints;
     const fallbackConstructionJoints = isStraightSupport
         ? withCentralStraightSupportJoint({
             basePos: placement.basePos,
             rootTopZ: rootsTopZ,
-            socketPos: liveSocketPos,
+            socketPos: resolvedSocketPos,
         })
         : initialConstructionJoints;
     const normalizedConstructionJoints = normalizeFirstConstructionJoint({
         basePos: placement.basePos,
         rootTopZ: rootsTopZ,
-        socketPos: liveSocketPos,
+        socketPos: resolvedSocketPos,
         routeJoints,
         constructionJoints: initialConstructionJoints.length > 0
             ? initialConstructionJoints
             : fallbackConstructionJoints,
     });
+    const normalizedJointChains = normalizeTrunkJointChain({
+        rootTopZ: rootsTopZ,
+        socketPos: resolvedSocketPos,
+        routeJoints,
+        constructionJoints: normalizedConstructionJoints,
+    });
+    const finalRouteJoints = normalizedJointChains.routeJoints;
+    const finalConstructionJoints = normalizedJointChains.constructionJoints;
+    const finalIsStraightSupport = finalRouteJoints.length === 0;
 
     const routeBase: TrunkRouteResult = {
-        kind: isStraightSupport ? 'straight' : 'routed',
+        kind: finalIsStraightSupport ? 'straight' : 'routed',
         basePos: placement.basePos,
-        socketPos: liveSocketPos,
+        socketPos: resolvedSocketPos,
         unsnappedBottomPos: placement.unsnappedBottomPos ?? placement.basePos,
-        joints: routeJoints,
-        constructionJoints: normalizedConstructionJoints,
+        joints: finalRouteJoints,
+        constructionJoints: finalConstructionJoints,
         validity: placement.error ? 'hard_invalid' : 'valid',
         error: placement.error,
         warning: placement.warning,
@@ -296,7 +437,7 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
     };
 
     // 2. Create Segments
-    if (isStraightSupport && createdJoints.length === 1) {
+    if (finalIsStraightSupport && createdJoints.length === 1) {
         createdSegments.push({
             id: uuidv4(),
             diameter: shaftDiameter,
@@ -341,13 +482,9 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
 
     // Build ContactCone
     const contactCone: ContactCone = {
+        ...contactConeTemplate,
         id: contactConeId,
-        pos: tipPos,
-        normal: effectiveConeAxis, // Cone axis may differ from surface normal due to tilt rules
-        surfaceNormal: tipNormal, // The actual surface normal
-        diskLengthOverride: tipDiskLengthOverrideMm,
-        profile: tipProfile,
-        socketJointId: socketJointId // Link to unique socket ID
+        socketJointId: socketJointId,
     };
 
     // Build Trunk

@@ -4,12 +4,13 @@ import React from 'react';
 import * as THREE from 'three';
 import { useSyncExternalStore } from 'react';
 import { subscribe, getSnapshot } from '@/supports/state';
+import { getKickstandSnapshot, subscribeToKickstandStore } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getRaftSettings, subscribeToRaftStore } from '../RaftState';
-import { SupportBaseCircle } from '../RaftTypes';
 import { computeFootprint } from '../geometry/computeFootprint';
 import { generateChamferedBase } from '../geometry/generateChamferedBase';
 import { generatePerimeterWall } from '../geometry/generatePerimeterWall';
 import { generateCrenelatedWallManual } from '../geometry/generateCrenelatedWallManual';
+import { collectRaftBaseCirclesByModel, fromRaftModelKey } from '../raftFootprintCircles';
 
 /**
  * RaftRenderer
@@ -53,6 +54,7 @@ export default function RaftRenderer({
   onModelPointerSelect,
 }: RaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
+  const kickstandState = useSyncExternalStore(subscribeToKickstandStore, getKickstandSnapshot, getKickstandSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
   const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
   const [immediatePrepareActiveModelId, setImmediatePrepareActiveModelId] = React.useState<string | null>(null);
@@ -147,53 +149,22 @@ export default function RaftRenderer({
   const raftMeshes = React.useMemo(() => {
     if (raft.bottomMode !== 'solid') return null;
 
-    const rootsByModel = new Map<string, typeof supportState.roots[string][]>();
-    for (const root of Object.values(supportState.roots)) {
-      if (excludeModelId && root.modelId === excludeModelId) continue;
-      if (root.modelId && excludedModelIdSet.has(root.modelId)) continue;
-      if (modelFilterId && root.modelId !== modelFilterId) continue;
-      const key = root.modelId || 'unknown';
-      if (!rootsByModel.has(key)) rootsByModel.set(key, []);
-      rootsByModel.get(key)!.push(root);
-    }
-
-    // Include anchor roots as synthetic Roots entries for raft footprint
-    for (const anchor of Object.values(supportState.anchors)) {
-      if (excludeModelId && anchor.modelId === excludeModelId) continue;
-      if (anchor.modelId && excludedModelIdSet.has(anchor.modelId)) continue;
-      if (modelFilterId && anchor.modelId !== modelFilterId) continue;
-      const key = anchor.modelId || 'unknown';
-      if (!rootsByModel.has(key)) rootsByModel.set(key, []);
-      rootsByModel.get(key)!.push({
-        id: anchor.id,
-        modelId: anchor.modelId,
-        transform: { pos: anchor.rootPos, rot: { x: 0, y: 0, z: 0, w: 1 } },
-        diameter: anchor.rootBaseDiameter,
-        diskHeight: anchor.rootHeight,
-        coneHeight: 0,
-      });
-    }
-
-    const blendColor = (baseHex: string, tintHex: string, strength: number) =>
-      new THREE.Color(baseHex).lerp(new THREE.Color(tintHex), strength).getStyle();
-
-    const resolveTintStrength = (modelId: string) => {
-      if (!colorized) return 0;
-      if (selectedModelIdSet.has(modelId)) return 1;
-      if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
-      if (hasSelectedModels) return 0;
-      return hoverized ? 0.5 : 1;
-    };
+    const rootsByModel = collectRaftBaseCirclesByModel({
+      roots: Object.values(supportState.roots),
+      anchors: Object.values(supportState.anchors),
+      kickstandRoots: Object.values(kickstandState.roots),
+    }, {
+      modelFilterId,
+      excludeModelId,
+      excludedModelIds: excludedModelIdSet,
+      fallbackModelKey: 'unknown',
+    });
 
     const meshes: Array<{ baseMesh: THREE.Mesh; wallMesh: THREE.Mesh | null }> = [];
 
-    for (const [modelId, roots] of rootsByModel) {
-      const circles: SupportBaseCircle[] = roots.map(root => ({
-        x: root.transform.pos.x,
-        y: root.transform.pos.y,
-        r: root.diameter / 2,
-      }));
+    for (const [modelKey, circles] of rootsByModel) {
       if (circles.length === 0) continue;
+      const modelId = fromRaftModelKey(modelKey, 'unknown') ?? modelKey;
 
       const profile = computeFootprint(circles, { marginMm: 0.2, samplesPerCircle: 24 });
       if (!profile || profile.length < 3) continue;
@@ -233,7 +204,7 @@ export default function RaftRenderer({
     }
 
     return meshes;
-  }, [excludeModelId, excludedModelIdSet, modelFilterId, supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing, raftOpacity, raftTransparent, ghostRenderOrder, clippingPlanes]);
+  }, [excludeModelId, excludedModelIdSet, modelFilterId, supportState, kickstandState.roots, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing, raftOpacity, raftTransparent, ghostRenderOrder, clippingPlanes]);
 
   const handleClick = React.useCallback((e: any) => {
     if (passive) return;

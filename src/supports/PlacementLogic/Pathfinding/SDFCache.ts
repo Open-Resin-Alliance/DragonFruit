@@ -17,6 +17,8 @@
  */
 
 import * as THREE from 'three';
+import { PrecomputedSDFGrid } from './PrecomputedSDFGrid';
+import type { ClearanceHeightmap } from './ClearanceHeightmap';
 
 // ---------- Types ----------
 
@@ -29,6 +31,21 @@ export interface SDFQuery {
     distance: number;
     /** Nearest point on the mesh surface (world space) */
     nearestPoint: THREE.Vector3;
+}
+
+interface MeshBVHClosestPointTarget {
+    point: THREE.Vector3;
+    distance: number;
+    faceIndex: number;
+}
+
+interface MeshBVHLike {
+    closestPointToPoint(
+        point: THREE.Vector3,
+        target: MeshBVHClosestPointTarget,
+        minThreshold?: number,
+        maxThreshold?: number,
+    ): MeshBVHClosestPointTarget | null;
 }
 
 // ---------- Helpers ----------
@@ -53,8 +70,9 @@ export class SDFCache {
 
     private readonly mesh: THREE.Mesh;
     /** BVH instance from three-mesh-bvh (geometry.boundsTree) */
-    private readonly bvh: any;
+    private readonly bvh: MeshBVHLike;
     private inverseMatrix = new THREE.Matrix4();
+    private readonly worldBounds = new THREE.Box3();
     private worldScale = 1;
     private readonly cache = new Map<number, number>();
 
@@ -70,15 +88,25 @@ export class SDFCache {
     /** Last seen matrixWorld — used to detect stale cache. */
     private readonly _lastMatrix = new THREE.Matrix4();
 
+    /** Optional pre-computed sparse SDF grid from Rust. When set, lookups
+     *  check this grid first (zero BVH overhead) and only fall back to BVH
+     *  for cells outside the pre-computed shell. */
+    private precomputedGrid: PrecomputedSDFGrid | null = null;
+
+    /** Optional clearance heightmap from Rust. Enables O(1) straight-descent
+     *  viability checks and a tighter A* heuristic. */
+    private heightmap: ClearanceHeightmap | null = null;
+
     constructor(mesh: THREE.Mesh, opts?: SDFCacheOptions) {
         this.cellSize = opts?.cellSize ?? 0.5;
         this.mesh = mesh;
 
-        const geom = mesh.geometry as any;
-        this.bvh = geom.boundsTree;
-        if (!this.bvh) {
+        const geom = mesh.geometry as THREE.BufferGeometry & { boundsTree?: MeshBVHLike };
+        const bvh = geom.boundsTree;
+        if (!bvh) {
             throw new Error('SDFCache: mesh geometry has no boundsTree (BVH). Ensure BVH is computed before constructing the cache.');
         }
+        this.bvh = bvh;
 
         this._snapshotMatrix();
     }
@@ -89,6 +117,16 @@ export class SDFCache {
         const scale = new THREE.Vector3();
         this.mesh.matrixWorld.decompose(new THREE.Vector3(), new THREE.Quaternion(), scale);
         this.worldScale = (scale.x + scale.y + scale.z) / 3;
+
+        const geom = this.mesh.geometry;
+        if (!geom.boundingBox) {
+            geom.computeBoundingBox();
+        }
+        if (geom.boundingBox) {
+            this.worldBounds.copy(geom.boundingBox).applyMatrix4(this.mesh.matrixWorld);
+        } else {
+            this.worldBounds.makeEmpty();
+        }
     }
 
     /**
@@ -102,6 +140,74 @@ export class SDFCache {
             this.cache.clear();
             this._snapshotMatrix();
         }
+    }
+
+    /**
+     * Load a pre-computed sparse SDF grid from the Rust backend.
+     * Once set, all `distanceAt` / `isBlocked` / `segmentBlocked` calls
+     * check this grid first — zero BVH overhead for pre-computed cells.
+     * Cells outside the pre-computed shell still fall back to BVH.
+     */
+    loadPrecomputed(grid: PrecomputedSDFGrid): void {
+        if (grid.cellSize !== this.cellSize) {
+            console.warn(
+                `SDFCache: precomputed cellSize ${grid.cellSize} != cache cellSize ${this.cellSize}. ` +
+                `The precomputed grid will be used but quantisation may differ.`
+            );
+        }
+        this.precomputedGrid = grid;
+    }
+
+    /**
+     * Load a clearance heightmap from the Rust backend.
+     * Enables O(1) straight-descent viability checks via {@link columnIsClear}
+     * and provides the data for a tighter A* heuristic.
+     */
+    loadHeightmap(hm: ClearanceHeightmap): void {
+        this.heightmap = hm;
+    }
+
+    /** True if a pre-computed grid has been loaded. */
+    get hasPrecomputed(): boolean {
+        return this.precomputedGrid !== null;
+    }
+
+    /** True if a clearance heightmap has been loaded. */
+    get hasHeightmap(): boolean {
+        return this.heightmap !== null;
+    }
+
+    /**
+     * Returns true if a straight-down column from world-space (wx, wy, z)
+     * to the build plate is clear of model geometry.  Uses the pre-computed
+     * heightmap when available (O(1)); falls back to a full SDF column check.
+     */
+    columnIsClear(wx: number, wy: number, z: number): boolean {
+        if (this.heightmap) {
+            // Transform world → local for the heightmap lookup
+            this._localPoint.set(wx, wy, z).applyMatrix4(this.inverseMatrix);
+            return this.heightmap.columnIsClear(
+                this._localPoint.x / this.worldScale,
+                this._localPoint.y / this.worldScale,
+                this._localPoint.z / this.worldScale,
+            );
+        }
+        // Fallback: check the column with segmentBlocked
+        return !this.segmentBlocked(wx, wy, z, wx, wy, 0, 0.001);
+    }
+
+    /**
+     * Returns the highest blocked Z at a world-space XY position.
+     * -Infinity means the column is entirely clear.  Returns NaN if
+     * no heightmap is loaded.
+     */
+    getBlockedZ(wx: number, wy: number): number {
+        if (!this.heightmap) return NaN;
+        this._localPoint.set(wx, wy, 0).applyMatrix4(this.inverseMatrix);
+        return this.heightmap.get(
+            this._localPoint.x / this.worldScale,
+            this._localPoint.y / this.worldScale,
+        ) * this.worldScale;
     }
 
     // ---- Public API ----
@@ -120,6 +226,13 @@ export class SDFCache {
      * point is on the interior side of the surface.
      */
     distanceAt(wx: number, wy: number, wz: number): number {
+        // Fast path: check pre-computed grid first (zero BVH overhead).
+        const pg = this.precomputedGrid;
+        if (pg) {
+            const dist = this._lookupPrecomputed(wx, wy, wz, pg);
+            if (dist !== undefined) return dist;
+        }
+
         const cs = this.cellSize;
         const qx = quantize(wx, cs);
         const qy = quantize(wy, cs);
@@ -129,16 +242,296 @@ export class SDFCache {
         const cached = this.cache.get(key);
         if (cached !== undefined) return cached;
 
+        const dist = this._computeSignedDistanceAtQuantizedCell(qx, qy, qz);
+        this.cache.set(key, dist);
+        return dist;
+    }
+
+    /**
+     * Look up a signed distance in the pre-computed grid.
+     * Transforms world-space coords to model-local, quantises, and
+     * retrieves the pre-computed distance. Returns undefined if the
+     * cell is outside the pre-computed shell.
+     */
+    private _lookupPrecomputed(
+        wx: number, wy: number, wz: number,
+        pg: PrecomputedSDFGrid,
+    ): number | undefined {
+        // Transform world → local
+        this._localPoint.set(wx, wy, wz).applyMatrix4(this.inverseMatrix);
+        const lx = this._localPoint.x;
+        const ly = this._localPoint.y;
+        const lz = this._localPoint.z;
+
+        // Quantise in local space using the pre-computed cell size
+        const cs = pg.cellSize;
+        const qx = quantize(lx, cs);
+        const qy = quantize(ly, cs);
+        const qz = quantize(lz, cs);
+
+        const dist = pg.get(qx, qy, qz);
+        if (dist === undefined) return undefined;
+
+        // Scale back to world-space mm
+        return dist * this.worldScale;
+    }
+
+    private _getOrCreateQuantizedDistance(qx: number, qy: number, qz: number, maxDistance = Infinity): number {
+        const key = cellKey(qx, qy, qz);
+        const cached = this.cache.get(key);
+        if (cached !== undefined) return cached;
+
+        const cs = this.cellSize;
+        const cX = qx * cs;
+        const cY = qy * cs;
+        const cZ = qz * cs;
+
+        // Check pre-computed grid in local space
+        const pg = this.precomputedGrid;
+        if (pg) {
+            this._localPoint.set(cX, cY, cZ).applyMatrix4(this.inverseMatrix);
+            const lx = this._localPoint.x;
+            const ly = this._localPoint.y;
+            const lz = this._localPoint.z;
+            const lqx = quantize(lx, pg.cellSize);
+            const lqy = quantize(ly, pg.cellSize);
+            const lqz = quantize(lz, pg.cellSize);
+            const preDist = pg.get(lqx, lqy, lqz);
+            if (preDist !== undefined) {
+                const dist = preDist * this.worldScale;
+                this.cache.set(key, dist);
+                return dist;
+            }
+        }
+
+        if (maxDistance !== Infinity && !this._expandedWorldBoundsContains(cX, cY, cZ, maxDistance)) {
+            return Infinity;
+        }
+
+        const canBeInterior = this._expandedWorldBoundsContains(cX, cY, cZ, 0);
+        const dist = this._computeSignedDistanceAtQuantizedCell(
+            qx,
+            qy,
+            qz,
+            canBeInterior ? Infinity : maxDistance,
+        );
+        if (canBeInterior || dist !== Infinity) {
+            this.cache.set(key, dist);
+        }
+        return dist;
+    }
+
+    distanceAtTrilinear(wx: number, wy: number, wz: number): number {
+        const cs = this.cellSize;
+        const fx = wx / cs;
+        const fy = wy / cs;
+        const fz = wz / cs;
+
+        const x0 = Math.floor(fx);
+        const y0 = Math.floor(fy);
+        const z0 = Math.floor(fz);
+
+        const tx = fx - x0;
+        const ty = fy - y0;
+        const tz = fz - z0;
+
+        const d000 = this._getOrCreateQuantizedDistance(x0, y0, z0);
+        const d100 = this._getOrCreateQuantizedDistance(x0 + 1, y0, z0);
+        const d010 = this._getOrCreateQuantizedDistance(x0, y0 + 1, z0);
+        const d110 = this._getOrCreateQuantizedDistance(x0 + 1, y0 + 1, z0);
+        const d001 = this._getOrCreateQuantizedDistance(x0, y0, z0 + 1);
+        const d101 = this._getOrCreateQuantizedDistance(x0 + 1, y0, z0 + 1);
+        const d011 = this._getOrCreateQuantizedDistance(x0, y0 + 1, z0 + 1);
+        const d111 = this._getOrCreateQuantizedDistance(x0 + 1, y0 + 1, z0 + 1);
+
+        if (
+            d000 === Infinity || d100 === Infinity || d010 === Infinity || d110 === Infinity ||
+            d001 === Infinity || d101 === Infinity || d011 === Infinity || d111 === Infinity
+        ) {
+            return this.distanceAt(wx, wy, wz);
+        }
+
+        // Interpolate along X
+        const d00 = d000 * (1 - tx) + d100 * tx;
+        const d10 = d010 * (1 - tx) + d110 * tx;
+        const d01 = d001 * (1 - tx) + d101 * tx;
+        const d11 = d011 * (1 - tx) + d111 * tx;
+
+        // Interpolate along Y
+        const d0 = d00 * (1 - ty) + d10 * ty;
+        const d1 = d01 * (1 - ty) + d11 * ty;
+
+        // Interpolate along Z
+        return d0 * (1 - tz) + d1 * tz;
+    }
+
+    distanceAndGradientAt(wx: number, wy: number, wz: number, maxDistance = Infinity): { distance: number; gradient: { x: number; y: number; z: number } } {
+        const cs = this.cellSize;
+        if (maxDistance !== Infinity && !this._expandedWorldBoundsContains(wx, wy, wz, maxDistance + cs * 2)) {
+            return { distance: Infinity, gradient: { x: 0, y: 0, z: 0 } };
+        }
+
+        const fx = wx / cs;
+        const fy = wy / cs;
+        const fz = wz / cs;
+
+        const x0 = Math.floor(fx);
+        const y0 = Math.floor(fy);
+        const z0 = Math.floor(fz);
+
+        const tx = fx - x0;
+        const ty = fy - y0;
+        const tz = fz - z0;
+
+        const d000 = this._getOrCreateQuantizedDistance(x0, y0, z0, maxDistance);
+        const d100 = this._getOrCreateQuantizedDistance(x0 + 1, y0, z0, maxDistance);
+        const d010 = this._getOrCreateQuantizedDistance(x0, y0 + 1, z0, maxDistance);
+        const d110 = this._getOrCreateQuantizedDistance(x0 + 1, y0 + 1, z0, maxDistance);
+        const d001 = this._getOrCreateQuantizedDistance(x0, y0, z0 + 1, maxDistance);
+        const d101 = this._getOrCreateQuantizedDistance(x0 + 1, y0, z0 + 1, maxDistance);
+        const d011 = this._getOrCreateQuantizedDistance(x0, y0 + 1, z0 + 1, maxDistance);
+        const d111 = this._getOrCreateQuantizedDistance(x0 + 1, y0 + 1, z0 + 1, maxDistance);
+
+        if (
+            d000 === Infinity || d100 === Infinity || d010 === Infinity || d110 === Infinity ||
+            d001 === Infinity || d101 === Infinity || d011 === Infinity || d111 === Infinity
+        ) {
+            const distance = this.distanceAtWithin(wx, wy, wz, maxDistance);
+            const h = 0.1;
+            const dXPlus = this.distanceAtWithin(wx + h, wy, wz, maxDistance);
+            const dXMinus = this.distanceAtWithin(wx - h, wy, wz, maxDistance);
+            const dYPlus = this.distanceAtWithin(wx, wy + h, wz, maxDistance);
+            const dYMinus = this.distanceAtWithin(wx, wy - h, wz, maxDistance);
+            const dZPlus = this.distanceAtWithin(wx, wy, wz + h, maxDistance);
+            const dZMinus = this.distanceAtWithin(wx, wy, wz - h, maxDistance);
+
+            let gx = 0, gy = 0, gz = 0;
+            if (dXPlus !== Infinity && dXMinus !== Infinity) gx = (dXPlus - dXMinus) / (2 * h);
+            if (dYPlus !== Infinity && dYMinus !== Infinity) gy = (dYPlus - dYMinus) / (2 * h);
+            if (dZPlus !== Infinity && dZMinus !== Infinity) gz = (dZPlus - dZMinus) / (2 * h);
+
+            const len = Math.sqrt(gx * gx + gy * gy + gz * gz);
+            const gradient = len > 1e-6 ? { x: gx / len, y: gy / len, z: gz / len } : { x: 0, y: 0, z: 0 };
+            return { distance, gradient };
+        }
+
+        const d00 = d000 * (1 - tx) + d100 * tx;
+        const d10 = d010 * (1 - tx) + d110 * tx;
+        const d01 = d001 * (1 - tx) + d101 * tx;
+        const d11 = d011 * (1 - tx) + d111 * tx;
+
+        const d0 = d00 * (1 - ty) + d10 * ty;
+        const d1 = d01 * (1 - ty) + d11 * ty;
+
+        const distance = d0 * (1 - tz) + d1 * tz;
+
+        const dD_dtx = (d100 - d000) * (1 - ty) * (1 - tz) +
+                       (d110 - d010) * ty * (1 - tz) +
+                       (d101 - d001) * (1 - ty) * tz +
+                       (d111 - d011) * ty * tz;
+
+        const dD_dty = (d010 - d000) * (1 - tx) * (1 - tz) +
+                       (d110 - d100) * tx * (1 - tz) +
+                       (d011 - d001) * (1 - tx) * tz +
+                       (d111 - d101) * tx * tz;
+
+        const dD_dtz = (d001 - d000) * (1 - tx) * (1 - ty) +
+                       (d101 - d100) * tx * (1 - ty) +
+                       (d011 - d010) * (1 - tx) * ty +
+                       (d111 - d110) * tx * ty;
+
+        const invCs = 1 / cs;
+        const gx = dD_dtx * invCs;
+        const gy = dD_dty * invCs;
+        const gz = dD_dtz * invCs;
+
+        const len = Math.sqrt(gx * gx + gy * gy + gz * gz);
+        const gradient = len > 1e-6 ? { x: gx / len, y: gy / len, z: gz / len } : { x: 0, y: 0, z: 0 };
+
+        return { distance, gradient };
+    }
+
+    /**
+     * Returns the signed distance if this cell might be within `maxDistance`
+     * of the mesh, otherwise returns Infinity without traversing the BVH.
+     *
+     * This is conservative: cells outside the mesh world AABB expanded by
+     * `maxDistance` cannot be close enough to affect routing clearance or
+     * clearance penalties. Cells inside the actual mesh AABB still use the
+     * full signed distance path, preserving interior-blocking behavior.
+     */
+    distanceAtWithin(wx: number, wy: number, wz: number, maxDistance: number): number {
+        const cs = this.cellSize;
+        const qx = quantize(wx, cs);
+        const qy = quantize(wy, cs);
+        const qz = quantize(wz, cs);
+        const key = cellKey(qx, qy, qz);
+
+        const cached = this.cache.get(key);
+        if (cached !== undefined) return cached;
+
+        const cX = qx * cs;
+        const cY = qy * cs;
+        const cZ = qz * cs;
+        if (!this._expandedWorldBoundsContains(cX, cY, cZ, maxDistance)) {
+            return Infinity;
+        }
+
+        const canBeInterior = this._expandedWorldBoundsContains(cX, cY, cZ, 0);
+        const dist = this._computeSignedDistanceAtQuantizedCell(
+            qx,
+            qy,
+            qz,
+            canBeInterior ? Infinity : maxDistance,
+        );
+        if (canBeInterior || dist !== Infinity) {
+            this.cache.set(key, dist);
+        }
+        return dist;
+    }
+
+    private _expandedWorldBoundsContains(x: number, y: number, z: number, margin: number): boolean {
+        if (this.worldBounds.isEmpty()) return true;
+        return x >= this.worldBounds.min.x - margin
+            && x <= this.worldBounds.max.x + margin
+            && y >= this.worldBounds.min.y - margin
+            && y <= this.worldBounds.max.y + margin
+            && z >= this.worldBounds.min.z - margin
+            && z <= this.worldBounds.max.z + margin;
+    }
+
+    private _segmentIntersectsExpandedWorldBounds(
+        ax: number, ay: number, az: number,
+        bx: number, by: number, bz: number,
+        margin: number,
+    ): boolean {
+        if (this.worldBounds.isEmpty()) return true;
+        const minX = Math.min(ax, bx);
+        const maxX = Math.max(ax, bx);
+        const minY = Math.min(ay, by);
+        const maxY = Math.max(ay, by);
+        const minZ = Math.min(az, bz);
+        const maxZ = Math.max(az, bz);
+        return maxX >= this.worldBounds.min.x - margin
+            && minX <= this.worldBounds.max.x + margin
+            && maxY >= this.worldBounds.min.y - margin
+            && minY <= this.worldBounds.max.y + margin
+            && maxZ >= this.worldBounds.min.z - margin
+            && minZ <= this.worldBounds.max.z + margin;
+    }
+
+    private _computeSignedDistanceAtQuantizedCell(qx: number, qy: number, qz: number, maxDistance = Infinity): number {
+        const cs = this.cellSize;
         // Compute via BVH (local space)
         const cX = qx * cs;
         const cY = qy * cs;
         const cZ = qz * cs;
 
         this._localPoint.set(cX, cY, cZ).applyMatrix4(this.inverseMatrix);
-        const result = this.bvh.closestPointToPoint(this._localPoint, this._resultTarget);
+        const localMaxDistance = maxDistance === Infinity ? Infinity : maxDistance / Math.max(0.000001, this.worldScale);
+        const result = this.bvh.closestPointToPoint(this._localPoint, this._resultTarget, 0, localMaxDistance);
 
         if (!result) {
-            this.cache.set(key, Infinity);
             return Infinity;
         }
 
@@ -158,7 +551,6 @@ export class SDFCache {
             }
         }
 
-        this.cache.set(key, dist);
         return dist;
     }
 
@@ -221,6 +613,10 @@ export class SDFCache {
     /**
      * Returns true if the cell at `(wx,wy,wz)` is closer to the mesh
      * surface than `clearance` mm (i.e. would collide for the given radius).
+     *
+     * Uses single-cell `distanceAt` (1 BVH query, cached) rather than
+     * `distanceAtTrilinear` (8 BVH queries) — this is on the hot path for
+     * A* neighbor expansion and must remain cheap.
      */
     isBlocked(wx: number, wy: number, wz: number, clearance: number): boolean {
         return this.distanceAt(wx, wy, wz) < clearance;
@@ -235,11 +631,13 @@ export class SDFCache {
      * up to `(d - clearance)` along the ray — no point within that radius
      * can be closer than `clearance` to the surface.
      *
-     * Accuracy is equivalent to fixed cellSize sampling (both use the same
-     * cell-quantized cache), while open-space traversals that used to cost
-     * ~50 queries for a 25mm segment now cost ~3–5. In tight regions the
-     * adaptive step degrades gracefully to the cellSize floor, matching the
-     * previous fixed-step accuracy.
+     * Uses single-cell `distanceAt` (1 BVH query, cached per cell) rather
+     * than `distanceAtTrilinear` (8 BVH queries) — this is on the hot path
+     * for A* neighbor edge validation and path simplification.  Accuracy is
+     * equivalent to fixed cellSize sampling (both use the same cell-quantized
+     * cache), while open-space traversals that used to cost ~50 queries for
+     * a 25mm segment now cost ~3–5. In tight regions the adaptive step
+     * degrades gracefully to the cellSize floor.
      */
     segmentBlocked(
         ax: number, ay: number, az: number,
@@ -251,6 +649,9 @@ export class SDFCache {
         const dz = bz - az;
         const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (len < 0.01) return this.distanceAt(ax, ay, az) < clearance;
+        if (!this._segmentIntersectsExpandedWorldBounds(ax, ay, az, bx, by, bz, clearance)) {
+            return false;
+        }
 
         const invLen = 1 / len;
         const ux = dx * invLen;

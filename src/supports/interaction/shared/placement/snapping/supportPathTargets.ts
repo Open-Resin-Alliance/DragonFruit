@@ -1,10 +1,12 @@
 import type { SnapTarget } from '../../../SnappingManager';
 import type { SupportState, Vec3, Brace, Knot } from '../../../../types';
-import { getSocketPosition } from '../../../../SupportPrimitives/ContactCone';
+import { getFinalSocketPosition } from '../../../../SupportPrimitives/ContactCone';
 import type { ContactCone } from '../../../../SupportPrimitives/ContactCone/types';
 import { calculateDiskThickness } from '../../../../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../../../constants';
 import type { KickstandState } from '../../../../SupportTypes/Kickstand/types';
+
+type PlacementSurface = 'interior' | 'exterior';
 
 interface BuildSupportPathSnapTargetsOptions {
     includeTrunks?: boolean;
@@ -12,6 +14,7 @@ interface BuildSupportPathSnapTargetsOptions {
     includeBraces?: boolean;
     includeTwigs?: boolean;
     includeSticks?: boolean;
+    placementSurface?: PlacementSurface;
     excludeSegmentIds?: ReadonlySet<string>;
 }
 
@@ -21,6 +24,7 @@ interface BuildKickstandPathSnapTargetsOptions {
 
 interface BuildLeafConePathSnapTargetsOptions {
     excludeLeafIds?: ReadonlySet<string>;
+    placementSurface?: PlacementSurface;
 }
 
 export interface LeafConeSnapMeta {
@@ -39,6 +43,15 @@ function cloneVec3(v: Vec3): Vec3 {
 
 function shouldExclude(id: string, excludeSegmentIds?: ReadonlySet<string>): boolean {
     return !!excludeSegmentIds && excludeSegmentIds.has(id);
+}
+
+function matchesPlacementSurfaceFilter(
+    targetSurface: PlacementSurface | undefined,
+    requestedSurface: PlacementSurface | undefined,
+): boolean {
+    if (!requestedSurface) return true;
+    if (requestedSurface === 'interior') return targetSurface === 'interior';
+    return targetSurface !== 'interior';
 }
 
 function normalizeVec3(v: Vec3): Vec3 {
@@ -83,6 +96,7 @@ export function buildSupportPathSnapTargets(
         includeBraces = true,
         includeTwigs = false,
         includeSticks = false,
+        placementSurface,
         excludeSegmentIds,
     } = options;
 
@@ -92,6 +106,7 @@ export function buildSupportPathSnapTargets(
 
     if (includeTrunks) {
         for (const trunk of Object.values(supportState.trunks)) {
+            if (!matchesPlacementSurfaceFilter(trunk.contactCone?.placementSurface, placementSurface)) continue;
             const root = rootMap.get(trunk.rootId);
             if (!root || trunk.segments.length === 0) continue;
 
@@ -106,11 +121,7 @@ export function buildSupportPathSnapTargets(
                 const endPoint = segment.topJoint
                     ? cloneVec3(segment.topJoint.pos)
                     : trunk.contactCone
-                        ? getSocketPosition(
-                            trunk.contactCone.pos,
-                            trunk.contactCone.normal,
-                            trunk.contactCone.profile
-                        )
+                        ? getFinalSocketPosition(trunk.contactCone)
                         : { x: currentStart.x, y: currentStart.y, z: currentStart.z + 10 };
 
                 if (!shouldExclude(segment.id, excludeSegmentIds)) {
@@ -135,6 +146,7 @@ export function buildSupportPathSnapTargets(
 
     if (includeBranches) {
         for (const branch of Object.values(supportState.branches)) {
+            if (!matchesPlacementSurfaceFilter(branch.contactCone?.placementSurface, placementSurface)) continue;
             const parentKnot = knotMap.get(branch.parentKnotId);
             if (!parentKnot || branch.segments.length === 0) continue;
 
@@ -144,11 +156,7 @@ export function buildSupportPathSnapTargets(
                 const endPoint = segment.topJoint
                     ? cloneVec3(segment.topJoint.pos)
                     : branch.contactCone
-                        ? getSocketPosition(
-                            branch.contactCone.pos,
-                            branch.contactCone.normal,
-                            branch.contactCone.profile
-                        )
+                        ? getFinalSocketPosition(branch.contactCone)
                         : { x: currentStart.x, y: currentStart.y, z: currentStart.z + 5 };
 
                 if (!shouldExclude(segment.id, excludeSegmentIds)) {
@@ -173,6 +181,7 @@ export function buildSupportPathSnapTargets(
 
     if (includeBraces) {
         for (const brace of Object.values(supportState.braces)) {
+            if (!matchesPlacementSurfaceFilter(brace.placementSurface, placementSurface)) continue;
             const braceSegmentId = `braceSegment:${brace.id}`;
             if (shouldExclude(braceSegmentId, excludeSegmentIds)) continue;
 
@@ -207,6 +216,8 @@ export function buildSupportPathSnapTargets(
 
     if (includeTwigs) {
         for (const twig of Object.values(supportState.twigs)) {
+            const twigPlacementSurface = twig.contactDiskA?.placementSurface ?? twig.contactDiskB?.placementSurface;
+            if (!matchesPlacementSurfaceFilter(twigPlacementSurface, placementSurface)) continue;
             for (const segment of twig.segments) {
                 if (shouldExclude(segment.id, excludeSegmentIds)) continue;
                 if (!segment.bottomJoint || !segment.topJoint) continue;
@@ -229,6 +240,8 @@ export function buildSupportPathSnapTargets(
 
     if (includeSticks) {
         for (const stick of Object.values(supportState.sticks)) {
+            const stickPlacementSurface = stick.contactConeA?.placementSurface ?? stick.contactConeB?.placementSurface;
+            if (!matchesPlacementSurfaceFilter(stickPlacementSurface, placementSurface)) continue;
             for (const segment of stick.segments) {
                 if (shouldExclude(segment.id, excludeSegmentIds)) continue;
                 if (!segment.bottomJoint || !segment.topJoint) continue;
@@ -363,11 +376,12 @@ export function buildLeafConePathSnapTargets(
     leafMeta: ReadonlyMap<string, LeafConeSnapMeta>,
     options: BuildLeafConePathSnapTargetsOptions = {}
 ): SnapTarget[] {
-    const { excludeLeafIds } = options;
+    const { excludeLeafIds, placementSurface } = options;
     const targets: SnapTarget[] = [];
 
     for (const [leafId, meta] of leafMeta.entries()) {
         if (excludeLeafIds?.has(leafId)) continue;
+        if (!matchesPlacementSurfaceFilter(meta.cone.placementSurface, placementSurface)) continue;
 
         targets.push({
             id: leafId,

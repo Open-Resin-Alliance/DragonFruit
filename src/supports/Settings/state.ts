@@ -50,13 +50,19 @@ function mergeWithDefaults(settings: SupportSettings): SupportSettings {
         ...defaults,
         ...settings,
         tip: mergedTip,
-        shaft: { ...defaults.shaft, ...settings.shaft },
+        shaft: {
+            ...defaults.shaft,
+            ...settings.shaft,
+            routingAlgorithm: (settings.shaft?.routingAlgorithm === 'astar') ? 'astar' : 'potential',
+        },
         roots: { ...defaults.roots, ...settings.roots },
         baseFlare: { ...defaults.baseFlare, ...settings.baseFlare },
         joint: { ...defaults.joint, ...settings.joint },
         grid: mergedGrid,
         meshToMesh: { ...defaults.meshToMesh, ...(settings as any).meshToMesh },
         autoBracing: mergedAutoBracing,
+        devToolsEnabled: settings.devToolsEnabled !== undefined ? settings.devToolsEnabled : defaults.devToolsEnabled,
+        devTools: settings.devTools ? { ...defaults.devTools, ...settings.devTools } : defaults.devTools,
     };
 }
 
@@ -114,14 +120,24 @@ export function getAutoBracingSettings() {
 // --- Setters ---
 
 export function setSettings(settings: SupportSettings): void {
-    currentSettings = mergeWithDefaults(settings);
+    const merged = mergeWithDefaults(settings);
+    // Clamp contact cone body diameter so it never exceeds the trunk diameter
+    if (merged.tip.bodyDiameterMm > merged.shaft.diameterMm) {
+        merged.tip.bodyDiameterMm = merged.shaft.diameterMm;
+    }
+    currentSettings = merged;
     notify();
 }
 
 export function updateTipProfile(tip: Partial<SupportSettings['tip']>): void {
+    const mergedTip = { ...currentSettings.tip, ...tip };
+    // Clamp contact cone body diameter so it never exceeds the trunk diameter
+    if (mergedTip.bodyDiameterMm > currentSettings.shaft.diameterMm) {
+        mergedTip.bodyDiameterMm = currentSettings.shaft.diameterMm;
+    }
     currentSettings = {
         ...currentSettings,
-        tip: { ...currentSettings.tip, ...tip },
+        tip: mergedTip,
     };
     notify();
 }
@@ -192,6 +208,22 @@ export function updateAutoBracingSettings(autoBracing: Partial<SupportSettings['
     notify();
 }
 
+export function updateDevToolsSettings(devTools: Partial<SupportSettings['devTools']>): void {
+    currentSettings = {
+        ...currentSettings,
+        devTools: { ...currentSettings.devTools, ...devTools },
+    };
+    notify();
+}
+
+export function updateDevToolsEnabled(enabled: boolean): void {
+    currentSettings = {
+        ...currentSettings,
+        devToolsEnabled: enabled,
+    };
+    notify();
+}
+
 // --- Subscription ---
 
 export function subscribeToSettings(listener: SettingsListener): () => void {
@@ -217,8 +249,14 @@ const STORAGE_KEY = 'support-settings';
 
 export function saveSettingsToLocalStorage(): void {
     try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(currentSettings));
-        console.log('[SettingsStore] Saved to localStorage');
+        // Exclude dev tools settings from saved state to reset on next app startup
+        const toSave = {
+            ...currentSettings,
+            devToolsEnabled: false,
+            devTools: createDefaultSettings().devTools,
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+        console.log('[SettingsStore] Saved to localStorage (DevTools reset)');
     } catch (err) {
         console.error('[SettingsStore] Failed to save:', err);
     }
@@ -229,9 +267,16 @@ export function loadSettingsFromLocalStorage(): boolean {
         const stored = localStorage.getItem(STORAGE_KEY);
         if (!stored) return false;
         const parsed = JSON.parse(stored) as SupportSettings;
+        // Force reset dev tools on load
+        parsed.devToolsEnabled = false;
+        parsed.devTools = createDefaultSettings().devTools;
+        // Force reset routingAlgorithm to potential on launch
+        if (parsed.shaft) {
+            parsed.shaft.routingAlgorithm = 'potential';
+        }
         currentSettings = mergeWithDefaults(parsed);
         notify();
-        console.log('[SettingsStore] Loaded from localStorage');
+        console.log('[SettingsStore] Loaded from localStorage (DevTools reset)');
         return true;
     } catch (err) {
         console.error('[SettingsStore] Failed to load:', err);

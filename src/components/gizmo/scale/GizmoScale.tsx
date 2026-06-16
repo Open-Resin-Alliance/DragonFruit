@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { ThreeEvent, useThree } from '@react-three/fiber';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
 import type { GizmoAxis } from '../types';
+import { getCachedBoxGeometry, getCachedScaleCubeEdgeGeometry } from '../gizmoGeometryCache';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
 
@@ -23,37 +24,6 @@ interface GizmoScaleProps {
   onDragEnd: () => void;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
-}
-
-/**
- * Create hexagonal prism with radial gradient
- */
-function createGradientHexagonGeometry(
-  startColor: string,
-  endColor: string,
-  radius: number,
-  depth: number
-): THREE.BufferGeometry {
-  const geometry = new THREE.CylinderGeometry(radius, radius, depth, 6);
-  const colors = new Float32Array(geometry.attributes.position.count * 3);
-
-  const start = new THREE.Color(startColor);
-  const end = new THREE.Color(endColor);
-
-  // Apply gradient from center to edges
-  for (let i = 0; i < geometry.attributes.position.count; i++) {
-    const x = geometry.attributes.position.getX(i);
-    const z = geometry.attributes.position.getZ(i);
-    const distFromCenter = Math.sqrt(x * x + z * z) / radius;
-    const t = Math.min(distFromCenter, 1.0); // Normalize to 0-1
-    const color = new THREE.Color().lerpColors(start, end, t);
-    colors[i * 3] = color.r;
-    colors[i * 3 + 1] = color.g;
-    colors[i * 3 + 2] = color.b;
-  }
-
-  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  return geometry;
 }
 
 /**
@@ -120,18 +90,6 @@ export function GizmoScale({
   const shouldFlipY = axis === 'y' && (camera.position.y - gizmoPosition.y > 0);
   const shouldFlipZ = axis === 'z' && (camera.position.z - gizmoPosition.z > 0);
 
-  // Create gradient hexagon geometry
-  const hexGeometry = useMemo(
-    () =>
-      createGradientHexagonGeometry(
-        axisColors.start,
-        axisColors.end,
-        GIZMO_SIZES.scaleHexagonRadius,
-        GIZMO_SIZES.scaleHexagonDepth
-      ),
-    [axisColors.start, axisColors.end]
-  );
-
   // Position for each axis (at end of line) with camera-relative flipping
   const length = GIZMO_SIZES.scaleLineLength;
   const position: [number, number, number] =
@@ -145,10 +103,16 @@ export function GizmoScale({
   const rotation: [number, number, number] =
     axis === 'x' ? [0, 0, Math.PI / 2] : axis === 'y' ? [0, 0, 0] : [Math.PI / 2, 0, 0];
 
-  const cubeEdgeGeometry = useMemo(() => {
-    const box = new THREE.BoxGeometry(1, 1, 1);
-    return new THREE.EdgesGeometry(box);
-  }, []);
+  const pickBoxGeometry = useMemo(
+    () => getCachedBoxGeometry(
+      GIZMO_SIZES.scaleHexagonRadius * 2.3,
+      GIZMO_SIZES.scaleHexagonRadius * 2.3,
+      GIZMO_SIZES.scaleHexagonRadius * 2.3,
+    ),
+    [],
+  );
+  const handleBoxGeometry = useMemo(() => getCachedBoxGeometry(1, 1, 1), []);
+  const cubeEdgeGeometry = useMemo(() => getCachedScaleCubeEdgeGeometry(), []);
 
   const handlePointerEnter = (e: ThreeEvent<PointerEvent>) => {
     if (!interactionsEnabled) return;
@@ -305,11 +269,7 @@ export function GizmoScale({
         onPointerLeave={handlePointerLeave}
         onContextMenu={handleContextMenu}
       >
-        <boxGeometry args={[
-          GIZMO_SIZES.scaleHexagonRadius * 2.3,
-          GIZMO_SIZES.scaleHexagonRadius * 2.3,
-          GIZMO_SIZES.scaleHexagonRadius * 2.3
-        ]} />
+        <primitive object={pickBoxGeometry} attach="geometry" />
         <meshBasicMaterial visible={false} depthTest={false} />
       </mesh>
       {/* Connection line from center - DISABLED to avoid overlap with move arrows */}
@@ -328,7 +288,7 @@ export function GizmoScale({
       {/* Cube handle */}
       <group position={position}>
         <mesh scale={GIZMO_SIZES.scaleHexagonRadius * highlightScale}>
-          <boxGeometry args={[1, 1, 1]} />
+          <primitive object={handleBoxGeometry} attach="geometry" />
           <meshBasicMaterial
             color={handleColor}
             transparent

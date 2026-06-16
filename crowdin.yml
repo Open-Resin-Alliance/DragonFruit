@@ -1,0 +1,15 @@
+# Crowdin configuration for DragonFruit localization.
+#
+# Uses the Crowdin GitHub Integration (not the CLI).
+# Install the Crowdin GitHub App on the repo and configure it to watch
+# src/locales/en/messages.po. It will automatically:
+#   - Detect source file changes and sync them to Crowdin.
+#   - Open a PR when new translations are ready.
+# No local tokens needed — just extract strings, commit, and push.
+
+project_id: "905733" # DragonFruit
+preserve_hierarchy: true
+
+files:
+  - source: /src/locales/en/messages.po
+    translation: /src/locales/%locale%/messages.po

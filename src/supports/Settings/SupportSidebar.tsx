@@ -3,7 +3,7 @@
 
 import React, { useState, useEffect, useLayoutEffect, useSyncExternalStore } from 'react';
 import ReactDOM from 'react-dom';
-import { Save, RotateCcw, Sparkles, Wrench, WandSparkles, Sailboat, Grid3X3, Pickaxe } from 'lucide-react';
+import { Check, Save, RotateCcw, Sparkles, Wrench, WandSparkles, Sailboat, Grid3X3, Pickaxe } from 'lucide-react';
 import { usePresetHotkeys } from '@/hotkeys/usePresetHotkeys';
 import {
     getSettings,
@@ -16,6 +16,7 @@ import {
     updateRootsProfile,
     updateGridSettings,
     updateAutoBracingSettings,
+    updateDevToolsEnabled,
 } from './state';
 import {
     subscribe as subscribeToSupportState,
@@ -23,8 +24,11 @@ import {
     resolveEditableSupportTarget,
     getSupportSettingsForTarget,
     applySettingsToSupportTarget,
+    beginSupportStateBatch,
+    endSupportStateBatch,
     type EditableSupportTarget,
 } from '../state';
+import { getSelectedSupportIds } from '../interaction/supportMultiSelection';
 import { checkPresetDrift, findMatchingPresetIdForSettings, getPresetById } from './presets';
 import { createDefaultSettings, type SupportSettings } from './types';
 import { areSupportGeometrySettingsEqual } from './supportSettingsCodec';
@@ -35,7 +39,7 @@ import {
     GridSettingsCard,
     SupportKindTabs,
 } from './components';
-import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { SupportAnatomyPreviewSlot } from './AnatomyPreview/SupportAnatomyPreviewSlot';
@@ -59,7 +63,7 @@ import {
 import { DEFAULT_RAFT_SETTINGS } from '../Rafts/Crenelated/RaftDefaults';
 import type { SupportKind } from './supportKindState';
 
-const INPUT_CLASS = 'ui-input h-8 w-full px-2.5 text-xs sm:text-sm no-spinners';
+const INPUT_CLASS = 'ui-input h-8 w-full px-2.5 text-xs sm:text-sm text-center no-spinners';
 const SECTION_CARD_STYLE: React.CSSProperties = {
     borderColor: 'var(--border-subtle)',
     background: 'var(--surface-1)',
@@ -161,6 +165,40 @@ function fieldFocusProps(
     };
 }
 
+/** Apply settings to all currently selected supports (multi-selection aware). */
+function applySettingsToAllSelectedSupports(settings: SupportSettings): void {
+    const snap = getSupportSnapshot();
+    const selectedIds = getSelectedSupportIds();
+    const idsToApply = selectedIds.length > 0
+        ? selectedIds
+        : (snap.selectedId ? [snap.selectedId] : []);
+
+    if (idsToApply.length === 0) return;
+
+    // Batch all mutations so notify() only fires once after the loop,
+    // preventing cascading re-renders from useSyncExternalStore listeners.
+    beginSupportStateBatch();
+    try {
+        for (const id of idsToApply) {
+            let target: EditableSupportTarget | null = null;
+            if (snap.trunks[id]) {
+                target = { kind: 'trunk', id };
+            } else if (snap.branches[id]) {
+                target = { kind: 'branch', id };
+            } else if (snap.leaves[id]) {
+                target = { kind: 'leaf', id };
+            } else {
+                target = resolveEditableSupportTarget(id, snap.selectedCategory ?? undefined);
+            }
+            if (target) {
+                applySettingsToSupportTarget(target, settings);
+            }
+        }
+    } finally {
+        endSupportStateBatch();
+    }
+}
+
 /**
  * SupportSidebar
  * 
@@ -172,7 +210,9 @@ export function SupportSidebar() {
     const settings = useSyncExternalStore(subscribeToSettings, getSettings, getSettings);
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
     const [autoBraceStatus, setAutoBraceStatus] = useState<{ kind: 'success' | 'warning' | 'error'; message: string } | null>(null);
+    const [defaultsAnimating, setDefaultsAnimating] = useState(false);
     const [expanded, setExpanded] = React.useState(true);
+    const [devToolsOpen, setDevToolsOpen] = useState(false);
     const saveStatusTimeoutRef = React.useRef<number | null>(null);
     const autoBraceStatusTimeoutRef = React.useRef<number | null>(null);
     const isAdaptiveConeAngle = (settings.tip.coneAngleMode ?? 'normal') === 'adaptive';
@@ -369,7 +409,7 @@ export function SupportSidebar() {
         const latestSettings = editSessionLatestSettingsRef.current ?? getSettings();
         const persisted = getSupportSettingsForTarget(target);
         if (!persisted || !areSupportGeometrySettingsEqual(persisted, latestSettings)) {
-            applySettingsToSupportTarget(target, latestSettings);
+            applySettingsToAllSelectedSupports(latestSettings);
         }
 
         if (before) {
@@ -510,7 +550,7 @@ export function SupportSidebar() {
 
         supportEditSessionDirtyRef.current = true;
         editSessionLatestSettingsRef.current = settings;
-        applySettingsToSupportTarget(editableTarget, settings);
+        applySettingsToAllSelectedSupports(settings);
     }, [editableTarget, settings]);
 
     React.useEffect(() => {
@@ -565,6 +605,10 @@ export function SupportSidebar() {
         setSettings(createDefaultSettings());
         setRaftSettings(DEFAULT_RAFT_SETTINGS);
         setAnatomyPreviewActiveSettingKey(null);
+
+        // Trigger spin animation
+        setDefaultsAnimating(true);
+        setTimeout(() => setDefaultsAnimating(false), 600);
     }, []);
 
     const handleAutoBrace = React.useCallback(() => {
@@ -617,7 +661,7 @@ export function SupportSidebar() {
         </div>
     );
 
-    const sectionScrollClass = 'flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1';
+    const sectionScrollClass = 'flex-1 min-h-0 overflow-y-auto custom-scrollbar';
     const shouldUseOverflowCompactMode = OVERFLOW_COMPACT_KIND_SET.has(activeKind) && trunkCompactByOverflow;
     const shouldUseCompactTrunkLayout = activeKind === 'trunk' && shouldUseOverflowCompactMode;
     const hasFloatingTrunkPreviewTrigger = POPUP_PREVIEW_KIND_SET.has(activeKind)
@@ -779,27 +823,39 @@ export function SupportSidebar() {
         : 'text-[11px] font-medium leading-tight';
     const compactTrunkPairClass = 'grid grid-cols-2 gap-1.5 items-start';
 
+    const unitHint = (unit: string) => (
+        <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>{unit}</span>
+    );
+
     const supportGeometryFieldsDefault = (
         <div className="space-y-2.5">
             <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.contactDiameterMm')}>
-                <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Contact Diameter (mm)">Contact Diameter (mm)</div>
-                <NumberInput
-                    value={settings.tip.contactDiameterMm}
-                    onChange={(val) => updateTipProfile({ contactDiameterMm: val })}
-                    step={0.1}
-                    {...getInputProps('tip.contactDiameterMm', compactInputClass)}
-                />
+                <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Contact Diameter">Contact Diameter</div>
+                <div className="relative">
+                    <NumberInput
+                        value={settings.tip.contactDiameterMm}
+                        onChange={(val) => updateTipProfile({ contactDiameterMm: val })}
+                        step={0.1}
+                        showStepper={false}
+                        {...getInputProps('tip.contactDiameterMm', compactInputClass)}
+                    />
+                    {unitHint('mm')}
+                </div>
             </div>
 
             {(activeKind === 'trunk' || activeKind === 'branch' || activeKind === 'leaf') && (
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.lengthMm')}>
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Contact Cone Length (mm)">Contact Cone Length (mm)</div>
-                    <NumberInput
-                        value={settings.tip.lengthMm}
-                        onChange={(val) => updateTipProfile({ lengthMm: val })}
-                        step={0.1}
-                        {...getInputProps('tip.lengthMm', compactInputClass)}
-                    />
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Contact Cone Length">Contact Cone Length</div>
+                    <div className="relative">
+                        <NumberInput
+                            value={settings.tip.lengthMm}
+                            onChange={(val) => updateTipProfile({ lengthMm: val })}
+                            step={0.1}
+                            showStepper={false}
+                            {...getInputProps('tip.lengthMm', compactInputClass)}
+                        />
+                        {unitHint('mm')}
+                    </div>
                 </div>
             )}
 
@@ -810,15 +866,15 @@ export function SupportSidebar() {
                     setAnatomyPreviewActiveSettingKey(null);
                 })}>
                     <div
-                        className={isAdaptiveConeAngle ? 'grid grid-cols-[1fr_82px] gap-1 items-center' : 'flex items-center'}
+                        className={isAdaptiveConeAngle ? 'grid grid-cols-2 gap-1.5 items-center' : 'flex items-center'}
                     >
-                        <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Cone Angle">Cone Angle</div>
+                        <div className={`${compactFieldLabelClass} text-center`} style={{ color: 'var(--text-muted)' }} title="Cone Angle">Cone Angle</div>
                         {isAdaptiveConeAngle && (
-                            <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Offset">Offset</div>
+                            <div className={`${compactFieldLabelClass} text-center`} style={{ color: 'var(--text-muted)' }} title="Offset">Offset</div>
                         )}
                     </div>
                     <div
-                        className={isAdaptiveConeAngle ? 'grid grid-cols-[1fr_82px] gap-1 items-center' : 'flex items-center gap-1'}
+                        className={isAdaptiveConeAngle ? 'grid grid-cols-2 gap-1.5 items-center' : 'flex items-center gap-1'}
                     >
                         <SelectDropdown
                             value={settings.tip.coneAngleMode ?? 'normal'}
@@ -828,7 +884,7 @@ export function SupportSidebar() {
                                 { value: 'locked', label: 'Locked' },
                                 { value: 'adaptive', label: 'Adaptive' },
                             ]}
-                            className={`${isAdaptiveConeAngle ? 'w-full' : 'flex-1'} min-w-0 space-y-0`}
+                            className={`${isAdaptiveConeAngle ? 'w-full' : 'flex-1'} min-w-0 space-y-0 h-8`}
                             selectClassName={`${isAdaptiveConeAngle ? 'w-full' : 'flex-1'} min-w-0 h-8 px-2.5 pr-10 text-xs sm:text-sm truncate`}
                             menuClassName="!min-w-[9.5rem]"
                             selectedDisplay={useAdaptiveIconCompactDisplay ? <WandSparkles className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} aria-label="Adaptive mode" /> : undefined}
@@ -841,16 +897,21 @@ export function SupportSidebar() {
                                     boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent), white 8%) inset, 0 0 0 2px color-mix(in srgb, var(--accent), transparent 72%)',
                                 }
                                 : undefined}
+
                         />
 
                         {isAdaptiveConeAngle && (
-                            <NumberInput
-                                value={settings.tip.adaptiveConeAngleOffsetDeg ?? 30}
-                                onChange={(val) => updateTipProfile({ adaptiveConeAngleOffsetDeg: val })}
-                                aria-label="Adaptive offset (deg)"
-                                title="Adaptive offset (deg)"
-                                {...getInputProps('tip.adaptiveConeAngleOffsetDeg', compactInputClass)}
-                            />
+                            <div className="relative h-8">
+                                <NumberInput
+                                    value={settings.tip.adaptiveConeAngleOffsetDeg ?? 30}
+                                    onChange={(val) => updateTipProfile({ adaptiveConeAngleOffsetDeg: val })}
+                                    aria-label="Adaptive offset"
+                                    title="Adaptive offset"
+                                    showStepper={false}
+                                    {...getInputProps('tip.adaptiveConeAngleOffsetDeg', compactInputClass)}
+                                />
+                                {unitHint('°')}
+                            </div>
                         )}
                     </div>
                 </div>
@@ -858,50 +919,65 @@ export function SupportSidebar() {
 
             {(activeKind === 'trunk' || activeKind === 'branch') && (
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('shaft.diameterMm')}>
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Trunk Diameter (mm)">Trunk Diameter (mm)</div>
-                    <NumberInput
-                        value={settings.shaft.diameterMm}
-                        onChange={(val) => updateShaftProfile({ diameterMm: val })}
-                        step={0.1}
-                        {...getInputProps('shaft.diameterMm', compactInputClass)}
-                    />
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Trunk Diameter">Trunk Diameter</div>
+                    <div className="relative">
+                        <NumberInput
+                            value={settings.shaft.diameterMm}
+                            onChange={(val) => updateShaftProfile({ diameterMm: val })}
+                            step={0.1}
+                            showStepper={false}
+                            {...getInputProps('shaft.diameterMm', compactInputClass)}
+                        />
+                        {unitHint('mm')}
+                    </div>
                 </div>
             )}
 
             {activeKind === 'trunk' && (
                 <>
                     <div className="h-px" style={{ background: 'var(--border-subtle)' }} />
-                    <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Roots</div>
 
                     <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.diameterMm')}>
-                        <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Roots Diameter (mm)">Roots Diameter (mm)</div>
-                        <NumberInput
-                            value={settings.roots.diameterMm}
-                            onChange={(val) => updateRootsProfile({ diameterMm: val })}
-                            step={0.1}
-                            {...getInputProps('roots.diameterMm', compactInputClass)}
-                        />
+                        <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Roots Diameter">Roots Diameter</div>
+                        <div className="relative">
+                            <NumberInput
+                                value={settings.roots.diameterMm}
+                                onChange={(val) => updateRootsProfile({ diameterMm: val })}
+                                step={0.1}
+                                showStepper={false}
+                                {...getInputProps('roots.diameterMm', compactInputClass)}
+                            />
+                            {unitHint('mm')}
+                        </div>
                     </div>
 
                     <div className="space-y-2">
                         <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.diskHeightMm')}>
-                            <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Disk Height (mm)</div>
-                            <NumberInput
-                                value={settings.roots.diskHeightMm}
-                                onChange={(val) => updateRootsProfile({ diskHeightMm: val })}
-                                step={0.1}
-                                {...getInputProps('roots.diskHeightMm', compactInputClass)}
-                            />
+                            <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Disk Height</div>
+                            <div className="relative">
+                                <NumberInput
+                                    value={settings.roots.diskHeightMm}
+                                    onChange={(val) => updateRootsProfile({ diskHeightMm: val })}
+                                    step={0.1}
+                                    showStepper={false}
+                                    {...getInputProps('roots.diskHeightMm', compactInputClass)}
+                                />
+                                {unitHint('mm')}
+                            </div>
                         </div>
 
                         <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.coneHeightMm')}>
-                            <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Cone Height (mm)</div>
-                            <NumberInput
-                                value={settings.roots.coneHeightMm}
-                                onChange={(val) => updateRootsProfile({ coneHeightMm: val })}
-                                step={0.1}
-                                {...getInputProps('roots.coneHeightMm', compactInputClass)}
-                            />
+                            <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Cone Height</div>
+                            <div className="relative">
+                                <NumberInput
+                                    value={settings.roots.coneHeightMm}
+                                    onChange={(val) => updateRootsProfile({ coneHeightMm: val })}
+                                    step={0.1}
+                                    showStepper={false}
+                                    {...getInputProps('roots.coneHeightMm', compactInputClass)}
+                                />
+                                {unitHint('mm')}
+                            </div>
                         </div>
                     </div>
                 </>
@@ -913,23 +989,31 @@ export function SupportSidebar() {
         <div className="space-y-2.5">
             <div className={compactTrunkPairClass}>
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.contactDiameterMm')}>
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Contact Diameter (mm)">Contact Diameter (mm)</div>
-                    <NumberInput
-                        value={settings.tip.contactDiameterMm}
-                        onChange={(val) => updateTipProfile({ contactDiameterMm: val })}
-                        step={0.1}
-                        {...getInputProps('tip.contactDiameterMm', compactInputClass)}
-                    />
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Contact Diameter">Contact Diameter</div>
+                    <div className="relative">
+                        <NumberInput
+                            value={settings.tip.contactDiameterMm}
+                            onChange={(val) => updateTipProfile({ contactDiameterMm: val })}
+                            step={0.1}
+                            showStepper={false}
+                            {...getInputProps('tip.contactDiameterMm', compactInputClass)}
+                        />
+                        {unitHint('mm')}
+                    </div>
                 </div>
 
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.lengthMm')}>
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Contact Cone Length (mm)">Contact Cone Length (mm)</div>
-                    <NumberInput
-                        value={settings.tip.lengthMm}
-                        onChange={(val) => updateTipProfile({ lengthMm: val })}
-                        step={0.1}
-                        {...getInputProps('tip.lengthMm', compactInputClass)}
-                    />
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Contact Cone Length">Contact Cone Length</div>
+                    <div className="relative">
+                        <NumberInput
+                            value={settings.tip.lengthMm}
+                            onChange={(val) => updateTipProfile({ lengthMm: val })}
+                            step={0.1}
+                            showStepper={false}
+                            {...getInputProps('tip.lengthMm', compactInputClass)}
+                        />
+                        {unitHint('mm')}
+                    </div>
                 </div>
             </div>
 
@@ -941,9 +1025,9 @@ export function SupportSidebar() {
                 <div
                     className={isAdaptiveConeAngle ? 'grid grid-cols-2 gap-1.5 items-center' : 'flex items-center'}
                 >
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Cone Angle">Cone Angle</div>
+                    <div className={`${compactFieldLabelClass} text-center`} style={{ color: 'var(--text-muted)' }} title="Cone Angle">Cone Angle</div>
                     {isAdaptiveConeAngle && (
-                        <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Offset">Offset</div>
+                        <div className={`${compactFieldLabelClass} text-center`} style={{ color: 'var(--text-muted)' }} title="Offset">Offset</div>
                     )}
                 </div>
                 <div
@@ -973,58 +1057,78 @@ export function SupportSidebar() {
                     />
 
                     {isAdaptiveConeAngle && (
-                        <NumberInput
-                            value={settings.tip.adaptiveConeAngleOffsetDeg ?? 30}
-                            onChange={(val) => updateTipProfile({ adaptiveConeAngleOffsetDeg: val })}
-                            aria-label="Adaptive offset (deg)"
-                            title="Adaptive offset (deg)"
-                            {...getInputProps('tip.adaptiveConeAngleOffsetDeg', compactInputClass)}
-                        />
+                        <div className="relative">
+                            <NumberInput
+                                value={settings.tip.adaptiveConeAngleOffsetDeg ?? 30}
+                                onChange={(val) => updateTipProfile({ adaptiveConeAngleOffsetDeg: val })}
+                                aria-label="Adaptive offset"
+                                title="Adaptive offset"
+                                showStepper={false}
+                                {...getInputProps('tip.adaptiveConeAngleOffsetDeg', compactInputClass)}
+                            />
+                            {unitHint('°')}
+                        </div>
                     )}
                 </div>
             </div>
 
             <div className={compactTrunkPairClass}>
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('shaft.diameterMm')}>
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Trunk Diameter (mm)">Trunk Diameter (mm)</div>
-                    <NumberInput
-                        value={settings.shaft.diameterMm}
-                        onChange={(val) => updateShaftProfile({ diameterMm: val })}
-                        step={0.1}
-                        {...getInputProps('shaft.diameterMm', compactInputClass)}
-                    />
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Trunk Diameter">Trunk Diameter</div>
+                    <div className="relative">
+                        <NumberInput
+                            value={settings.shaft.diameterMm}
+                            onChange={(val) => updateShaftProfile({ diameterMm: val })}
+                            step={0.1}
+                            showStepper={false}
+                            {...getInputProps('shaft.diameterMm', compactInputClass)}
+                        />
+                        {unitHint('mm')}
+                    </div>
                 </div>
 
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.diameterMm')}>
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Roots Diameter (mm)">Roots Diameter (mm)</div>
-                    <NumberInput
-                        value={settings.roots.diameterMm}
-                        onChange={(val) => updateRootsProfile({ diameterMm: val })}
-                        step={0.1}
-                        {...getInputProps('roots.diameterMm', compactInputClass)}
-                    />
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Roots Diameter">Roots Diameter</div>
+                    <div className="relative">
+                        <NumberInput
+                            value={settings.roots.diameterMm}
+                            onChange={(val) => updateRootsProfile({ diameterMm: val })}
+                            step={0.1}
+                            showStepper={false}
+                            {...getInputProps('roots.diameterMm', compactInputClass)}
+                        />
+                        {unitHint('mm')}
+                    </div>
                 </div>
             </div>
 
             <div className={compactTrunkPairClass}>
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.diskHeightMm')}>
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Disk Height (mm)">Disk Height (mm)</div>
-                    <NumberInput
-                        value={settings.roots.diskHeightMm}
-                        onChange={(val) => updateRootsProfile({ diskHeightMm: val })}
-                        step={0.1}
-                        {...getInputProps('roots.diskHeightMm', compactInputClass)}
-                    />
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Disk Height">Disk Height</div>
+                    <div className="relative">
+                        <NumberInput
+                            value={settings.roots.diskHeightMm}
+                            onChange={(val) => updateRootsProfile({ diskHeightMm: val })}
+                            step={0.1}
+                            showStepper={false}
+                            {...getInputProps('roots.diskHeightMm', compactInputClass)}
+                        />
+                        {unitHint('mm')}
+                    </div>
                 </div>
 
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.coneHeightMm')}>
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Cone Height (mm)">Cone Height (mm)</div>
-                    <NumberInput
-                        value={settings.roots.coneHeightMm}
-                        onChange={(val) => updateRootsProfile({ coneHeightMm: val })}
-                        step={0.1}
-                        {...getInputProps('roots.coneHeightMm', compactInputClass)}
-                    />
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Cone Height">Cone Height</div>
+                    <div className="relative">
+                        <NumberInput
+                            value={settings.roots.coneHeightMm}
+                            onChange={(val) => updateRootsProfile({ coneHeightMm: val })}
+                            step={0.1}
+                            showStepper={false}
+                            {...getInputProps('roots.coneHeightMm', compactInputClass)}
+                        />
+                        {unitHint('mm')}
+                    </div>
                 </div>
             </div>
         </div>
@@ -1039,6 +1143,8 @@ export function SupportSidebar() {
 
     return (
         <>
+
+
         <div ref={supportSidebarAnchorRef}>
         <Card className={expanded ? 'max-h-[calc(100dvh-var(--topbar-height)-24px)] overflow-hidden flex flex-col' : undefined}>
             <CardHeader
@@ -1067,9 +1173,21 @@ export function SupportSidebar() {
                     </>
                 )}
                 right={(
-                    <div className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--border-subtle)' }}>
-                        <ActiveKindIcon className="h-3 w-3" style={{ color: 'var(--accent)' }} />
-                        <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{activeKindMeta.label}</span>
+                    <div className="inline-flex items-center gap-1">
+                        <IconButton
+                            onClick={handleSave}
+                            className={`!p-1.5 transition-colors ${saveStatus === 'saved' ? '!bg-green-600/30 !text-green-400' : saveStatus === 'error' ? '!bg-red-600/30 !text-red-400' : '!text-green-400/70 hover:!text-green-400 hover:!bg-green-600/15'}`}
+                            title={saveStatus !== 'idle' ? (saveStatus === 'saved' ? 'Saved' : 'Save failed') : 'Save settings'}
+                        >
+                            {saveStatus === 'saved' ? <Check className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
+                        </IconButton>
+                        <IconButton
+                            onClick={handleRestoreDefaults}
+                            className={`!p-1.5 transition-colors ${defaultsAnimating ? '' : '!text-red-400/70 hover:!text-red-400 hover:!bg-red-600/15'}`}
+                            title="Restore defaults"
+                        >
+                            <RotateCcw className={`h-3.5 w-3.5 ${defaultsAnimating ? 'animate-spin-once text-orange-400' : ''}`} />
+                        </IconButton>
                     </div>
                 )}
             />
@@ -1097,69 +1215,54 @@ export function SupportSidebar() {
                                     {activeKind === 'raft' ? (
                                         <>
                                             {!shouldUseOverflowCompactMode ? (
-                                                <Section title="Anatomy preview">
-                                                    {renderPreviewBox('h-[220px]')}
-                                                </Section>
+                                                renderPreviewBox('h-[220px]')
                                             ) : null}
-                                            <Section title="Raft settings">
+                                            <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
                                                 <RaftSettingsCard
                                                     settings={raftSettings}
                                                     onChange={(partial) => updateRaftSettings(partial)}
                                                 />
-                                            </Section>
+                                            </div>
                                         </>
                                     ) : activeKind === 'grid' ? (
                                         <>
                                             {!shouldUseOverflowCompactMode ? (
-                                                <Section title="Anatomy preview">
-                                                    {renderPreviewBox('h-[220px]')}
-                                                </Section>
+                                                renderPreviewBox('h-[220px]')
                                             ) : null}
-                                            <Section title="Grid settings">
+                                            <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
                                                 <GridSettingsCard
                                                     grid={settings.grid}
                                                     onChange={(partial) => updateGridSettings(partial)}
                                                 />
-                                            </Section>
+                                            </div>
                                         </>
                                     ) : activeKind === 'stick' ? (
                                         <>
                                             {!shouldUseOverflowCompactMode ? (
-                                                <Section title="Anatomy preview">
-                                                    {renderPreviewBox('h-[250px]')}
-                                                </Section>
+                                                renderPreviewBox('h-[220px]')
                                             ) : null}
-                                            <Section title="Auto bracing">
+                                            <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
                                                 <AutoBracingSettingsCard
                                                     settings={settings.autoBracing}
                                                     onChange={(partial) => updateAutoBracingSettings(partial)}
                                                     onAutoBrace={handleAutoBrace}
                                                     status={autoBraceStatus}
                                                 />
-                                            </Section>
+                                            </div>
                                         </>
                                     ) : activeKind === 'trunk' ? (
                                         <>
                                             {shouldUseCompactTrunkLayout ? (
                                                 <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
-                                                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                                                        Support geometry
-                                                    </div>
                                                     {supportGeometryFields}
                                                 </div>
                                             ) : (
                                                 <div className="flex gap-2 items-stretch">
-                                                    <div className="flex-1 min-w-0 rounded-md border p-2 flex flex-col" style={SECTION_CARD_STYLE}>
-                                                        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                                                            Anatomy preview
-                                                        </div>
+                                                    <div className="w-1/2 min-w-0 flex flex-col">
                                                         {renderPreviewBox('flex-1 min-h-[340px]')}
                                                     </div>
 
-                                                    <div className="flex-1 min-w-0 rounded-md border p-2" style={SECTION_CARD_STYLE}>
-                                                        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                                                            Support geometry
-                                                        </div>
+                                                    <div className="w-1/2 min-w-0 rounded-md border p-2" style={SECTION_CARD_STYLE}>
                                                         {supportGeometryFields}
                                                     </div>
                                                 </div>
@@ -1170,40 +1273,30 @@ export function SupportSidebar() {
                                                     selectedPresetIdOverride={effectivePresetIdOverride}
                                                     disableGlobalPresetActivation={Boolean(editableTarget)}
                                                     onPresetSelected={(presetId) => {
-                                                        const liveSupportState = getSupportSnapshot();
-                                                        const liveTarget = resolveEditableSupportTarget(
-                                                            liveSupportState.selectedId,
-                                                            liveSupportState.selectedCategory ?? undefined,
-                                                        );
+                                                        const preset = getPresetById(presetId);
+                                                        if (!preset) return;
 
-                                                        if (liveTarget) {
-                                                            const preset = getPresetById(presetId);
-                                                            if (preset) {
-                                                                const current = getSettings();
+                                                        const current = getSettings();
 
-                                                                supportEditSessionDirtyRef.current = true;
-                                                                const nextSettings: SupportSettings = {
-                                                                    ...preset.settings,
-                                                                    grid: {
-                                                                        ...current.grid,
-                                                                    },
-                                                                    tip: {
-                                                                        ...preset.settings.tip,
-                                                                        coneAngleMode: current.tip.coneAngleMode,
-                                                                        adaptiveConeAngleOffsetDeg: current.tip.adaptiveConeAngleOffsetDeg,
-                                                                        coneAngleDeg: current.tip.coneAngleDeg,
-                                                                    },
-                                                                    autoBracing: {
-                                                                        ...current.autoBracing,
-                                                                    },
-                                                                };
-                                                                editSessionLatestSettingsRef.current = nextSettings;
-                                                                setSettings(nextSettings);
-                                                                applySettingsToSupportTarget(liveTarget, nextSettings);
-                                                            }
-                                                        }
-
-                                                        if (!liveTarget) return;
+                                                        supportEditSessionDirtyRef.current = true;
+                                                        const nextSettings: SupportSettings = {
+                                                            ...preset.settings,
+                                                            grid: {
+                                                                ...current.grid,
+                                                            },
+                                                            tip: {
+                                                                ...preset.settings.tip,
+                                                                coneAngleMode: current.tip.coneAngleMode,
+                                                                adaptiveConeAngleOffsetDeg: current.tip.adaptiveConeAngleOffsetDeg,
+                                                                coneAngleDeg: current.tip.coneAngleDeg,
+                                                            },
+                                                            autoBracing: {
+                                                                ...current.autoBracing,
+                                                            },
+                                                        };
+                                                        editSessionLatestSettingsRef.current = nextSettings;
+                                                        setSettings(nextSettings);
+                                                        applySettingsToAllSelectedSupports(nextSettings);
                                                         setOptimisticPresetId(presetId);
                                                     }}
                                                 />
@@ -1211,15 +1304,11 @@ export function SupportSidebar() {
                                         </>
                                     ) : (
                                         <>
-                                            <Section title="Anatomy preview">
-                                                {renderPreviewBox('h-[250px]')}
-                                            </Section>
+                                            {renderPreviewBox('h-[250px]')}
 
-                                            <Section title="Support geometry">
+                                            <div className="rounded-md border p-2" style={SECTION_CARD_STYLE}>
                                                 {supportGeometryFields}
-                                            </Section>
-
-                                            {/* Placement notes removed per design request */}
+                                            </div>
                                         </>
                                     )}
                                 </>
@@ -1227,42 +1316,6 @@ export function SupportSidebar() {
                         </div>
                     </div>
 
-                    {activeKind !== 'trunk' ? (
-                        <div className="space-y-1.5 px-0.5">
-                            {saveStatus !== 'idle' && (
-                                <div
-                                    className="text-[10px]"
-                                    style={{ color: saveStatus === 'saved' ? '#34d399' : '#f87171' }}
-                                >
-                                    {saveStatus === 'saved' ? 'Saved' : 'Save failed'}
-                                </div>
-                            )}
-
-                            <div className="grid grid-cols-2 gap-1.5">
-                                <Button
-                                    type="button"
-                                    onClick={handleSave}
-                                    variant="primary"
-                                    size="md"
-                                    className="w-full !h-10 !text-sm !font-semibold !inline-flex !items-center !justify-center !gap-2"
-                                >
-                                    <Save className="h-4 w-4" />
-                                    <span>Save</span>
-                                </Button>
-
-                                <Button
-                                    type="button"
-                                    onClick={handleRestoreDefaults}
-                                    variant="accent"
-                                    size="md"
-                                    className="w-full !h-10 !text-sm !font-semibold !inline-flex !items-center !justify-center !gap-2"
-                                >
-                                    <RotateCcw className="h-4 w-4" />
-                                    <span>Defaults</span>
-                                </Button>
-                            </div>
-                        </div>
-                    ) : null}
                 </div>
             )}
         </Card>

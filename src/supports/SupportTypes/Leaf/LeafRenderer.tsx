@@ -95,6 +95,10 @@ export const LeafRenderer = React.memo(function LeafRenderer({
         const branchFamilyHeld = branchPlacementStore.getSnapshot().altActive
             || isSupportPlacementBindingSatisfiedByModifierState(branchFamilyBinding, getSupportPlacementModifierState(e));
         if (branchFamilyHeld) {
+            // Brace tool: dispatch brace-leaf-click so a brace endpoint can attach
+            // to this leaf's cone. (For an unselected leaf the cone is in the batched
+            // scene mesh and SupportRenderer dispatches this; a selected leaf renders
+            // its own cone here, so dispatch from this handler too.)
             e.stopPropagation();
             if (e.nativeEvent) {
                 e.nativeEvent.stopPropagation?.();
@@ -129,10 +133,11 @@ export const LeafRenderer = React.memo(function LeafRenderer({
             scene,
             initialEvent: e,
             modelId: leaf.modelId,
-            onHit: ({ point, surfaceNormal }: ContactDiskDragHit) => {
+            placementSurface: leaf.contactCone?.placementSurface,
+            onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
                 const latest = getSnapshot().leaves[leaf.id];
                 if (!latest?.contactCone) return;
-                liveDragConeRef.current = recomputeContactConeForMovedDisk(latest.contactCone, point, surfaceNormal, socketAnchor);
+                liveDragConeRef.current = recomputeContactConeForMovedDisk(latest.contactCone, point, surfaceNormal, socketAnchor, mesh);
                 setDragTick(t => t + 1);
             },
             onEnd: () => {

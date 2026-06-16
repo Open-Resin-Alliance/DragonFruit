@@ -219,7 +219,7 @@ export function useExportThumbnailCapture({
     const prevScissorTest = renderer.getScissorTest();
     const prevBuildVolumeOverlayVisible = buildVolumeBoundsOverlayRef.current?.visible ?? null;
     const visibilityRestores: Array<{ node: THREE.Object3D; visible: boolean }> = [];
-    const lightRestores: Array<{ light: THREE.Light; position: THREE.Vector3 }> = [];
+    const lightRestores: Array<{ light: THREE.Light; position: THREE.Vector3; target?: THREE.Object3D; targetPosition?: THREE.Vector3 }> = [];
     const colorRestores: Array<{ material: THREE.Material & { color: THREE.Color }; color: THREE.Color }> = [];
     const helperOriginalVisibility = new WeakMap<THREE.Object3D, boolean>();
     const buildPlateHelperNodes: THREE.Object3D[] = [];
@@ -246,6 +246,10 @@ export function useExportThumbnailCapture({
       for (let i = lightRestores.length - 1; i >= 0; i -= 1) {
         const entry = lightRestores[i];
         entry.light.position.copy(entry.position);
+        if (entry.target && entry.targetPosition) {
+          entry.target.position.copy(entry.targetPosition);
+          entry.target.updateMatrixWorld(true);
+        }
         entry.light.updateMatrixWorld(true);
       }
       for (let i = colorRestores.length - 1; i >= 0; i -= 1) {
@@ -560,15 +564,29 @@ export function useExportThumbnailCapture({
       }
 
       const syncCaptureCameraLights = () => {
+        const captureViewDirection = new THREE.Vector3();
+        captureCamera.getWorldDirection(captureViewDirection);
+
         sceneGraph.traverse((node) => {
           if (!(node instanceof THREE.Light)) return;
           const light = node;
-          const followCaptureCamera = Boolean((light.userData as Record<string, unknown> | undefined)?.followCaptureCamera);
+          const userData = light.userData as Record<string, unknown> | undefined;
+          const followCaptureCamera = Boolean(userData?.followCaptureCamera);
           if (!followCaptureCamera) return;
           if (lightRestores.every((entry) => entry.light !== light)) {
-            lightRestores.push({ light, position: light.position.clone() });
+            const target = light instanceof THREE.DirectionalLight ? light.target : undefined;
+            lightRestores.push({
+              light,
+              position: light.position.clone(),
+              target,
+              targetPosition: target?.position.clone(),
+            });
           }
           light.position.copy(captureCamera.position);
+          if (light instanceof THREE.DirectionalLight && userData?.followCaptureCameraDirection) {
+            light.target.position.copy(captureCamera.position).addScaledVector(captureViewDirection, 100);
+            light.target.updateMatrixWorld(true);
+          }
           light.updateMatrixWorld(true);
         });
       };

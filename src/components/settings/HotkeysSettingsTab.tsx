@@ -4,15 +4,14 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { Keyboard, Lock, RotateCcw } from 'lucide-react';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { HotkeyBinding, UNIVERSAL_HOTKEYS } from '@/hotkeys/hotkeyConfig';
-import { getPresetList, subscribeToPresets } from '@/supports/Settings/presets';
 
-const PRESET_ACTION_TO_ID: Record<string, string> = {
-  APPLY_DETAIL: 'detail',
-  APPLY_STRUCTURE: 'structure',
-  APPLY_ANCHOR: 'anchor',
-  APPLY_CUSTOM_1: 'custom1',
-  APPLY_CUSTOM_2: 'custom2',
-  APPLY_CUSTOM_3: 'custom3',
+const PINNED_SLOT_LABELS: Record<string, string> = {
+  SLOT_1: 'Slot 1',
+  SLOT_2: 'Slot 2',
+  SLOT_3: 'Slot 3',
+  SLOT_4: 'Slot 4',
+  SLOT_5: 'Slot 5',
+  SLOT_6: 'Slot 6',
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -30,21 +29,27 @@ const SECTION_GROUPS: Array<{
   categories: string[];
 }> = [
   {
-    id: 'navigation',
-    title: 'Navigation & Workspace',
-    description: 'Focus, projection, and canvas tool switching.',
-    categories: ['CAMERA', 'CANVAS'],
+    id: 'global',
+    title: 'Global',
+    description: 'Camera, focus, and viewport shortcuts available across all workspaces.',
+    categories: ['CAMERA'],
+  },
+  {
+    id: 'scene',
+    title: 'Prepare',
+    description: 'Canvas tool switching and scene arrangement shortcuts.',
+    categories: ['CANVAS'],
   },
   {
     id: 'supports',
-    title: 'Support Authoring',
-    description: 'Placement modes and support workflow shortcuts.',
+    title: 'Supports',
+    description: 'Support authoring workflow shortcuts.',
     categories: ['SUPPORTS'],
   },
   {
     id: 'presets',
-    title: 'Preset Actions',
-    description: 'Quick-apply detail, structure, anchor, and custom presets.',
+    title: 'Support Presets',
+    description: 'Quick-apply support preset shortcuts.',
     categories: ['PRESETS'],
   },
   {
@@ -85,20 +90,6 @@ function getBindingTokens(binding: HotkeyBinding): string[] {
 export function HotkeysSettingsTab() {
   const { config, updateHotkey, resetToDefaults } = useHotkeyConfig();
   const [recordingKey, setRecordingKey] = useState<{ category: string, action: string } | null>(null);
-  const [presetNames, setPresetNames] = useState<Record<string, string>>({});
-
-  // Subscribe to preset changes to keep labels in sync
-  useEffect(() => {
-    const updateNames = () => {
-      const list = getPresetList();
-      const map: Record<string, string> = {};
-      list.forEach(p => map[p.id] = p.name);
-      setPresetNames(map);
-    };
-
-    updateNames();
-    return subscribeToPresets(updateNames);
-  }, []);
 
   // Effect to handle key recording
   useEffect(() => {
@@ -152,11 +143,10 @@ export function HotkeysSettingsTab() {
               return { action, label: binding.description, binding };
             }
 
-            const presetId = PRESET_ACTION_TO_ID[action];
-            const presetName = presetId ? presetNames[presetId] : null;
+            const slotLabel = PINNED_SLOT_LABELS[action] ?? action;
             return {
               action,
-              label: presetName ? `Apply \"${presetName}\" Preset` : binding.description,
+              label: slotLabel,
               binding,
             };
           });
@@ -174,7 +164,7 @@ export function HotkeysSettingsTab() {
         categories,
       };
     }).filter((section) => section.categories.some((category) => category.entries.length > 0));
-  }, [config, presetNames]);
+  }, [config]);
 
   const universalRows = useMemo(() => {
     return Object.entries(UNIVERSAL_HOTKEYS).map(([action, binding]) => {
@@ -208,38 +198,16 @@ export function HotkeysSettingsTab() {
     [configurableSections],
   );
 
-  const navigationSection = useMemo(
-    () => nonRotationSections.find((section) => section.id === 'navigation') ?? null,
-    [nonRotationSections],
-  );
-
-  const supportSection = useMemo(
-    () => nonRotationSections.find((section) => section.id === 'supports') ?? null,
-    [nonRotationSections],
-  );
-
-  const presetSection = useMemo(
-    () => nonRotationSections.find((section) => section.id === 'presets') ?? null,
-    [nonRotationSections],
-  );
-
-  const extraNonRotationSections = useMemo(
-    () => nonRotationSections.filter((section) => !['navigation', 'supports', 'presets'].includes(section.id)),
-    [nonRotationSections],
-  );
-
-  const [firstExtraSection, ...remainingExtraSections] = extraNonRotationSections;
-
-  const remainingExtraRows = useMemo(() => {
-    const rows: Array<[typeof remainingExtraSections[number] | null, typeof remainingExtraSections[number] | null]> = [];
-    for (let index = 0; index < remainingExtraSections.length; index += 2) {
+  const sectionRows = useMemo(() => {
+    const rows: Array<[typeof nonRotationSections[number] | null, typeof nonRotationSections[number] | null]> = [];
+    for (let index = 0; index < nonRotationSections.length; index += 2) {
       rows.push([
-        remainingExtraSections[index] ?? null,
-        remainingExtraSections[index + 1] ?? null,
+        nonRotationSections[index] ?? null,
+        nonRotationSections[index + 1] ?? null,
       ]);
     }
     return rows;
-  }, [remainingExtraSections]);
+  }, [nonRotationSections]);
 
   const renderConfigSection = (section: {
     id: string;
@@ -317,28 +285,14 @@ export function HotkeysSettingsTab() {
 
       <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1">
         <div className="space-y-2.5">
-          {(navigationSection || supportSection) && (
-            <div className="grid gap-2.5 lg:grid-cols-2 lg:items-stretch">
-              {navigationSection ? renderConfigSection(navigationSection) : <div />}
-              {supportSection ? renderConfigSection(supportSection) : <div />}
-            </div>
-          )}
-
-          {(presetSection || firstExtraSection) && (
-            <div className="grid gap-2.5 lg:grid-cols-2 lg:items-stretch">
-              {presetSection ? renderConfigSection(presetSection) : <div />}
-              {firstExtraSection ? renderConfigSection(firstExtraSection) : <div />}
-            </div>
-          )}
-
-          {remainingExtraRows.map(([leftSection, rightSection], index) => (
-            <div key={`extra-row-${index}`} className="grid gap-2.5 lg:grid-cols-2 lg:items-stretch">
+          {sectionRows.map(([leftSection, rightSection], index) => (
+            <div key={`section-row-${index}`} className="grid gap-2.5 lg:grid-cols-2">
               {leftSection ? renderConfigSection(leftSection) : <div />}
               {rightSection ? renderConfigSection(rightSection) : <div />}
             </div>
           ))}
 
-          <div className="grid gap-2.5 lg:grid-cols-2 lg:items-stretch">
+          <div className="grid gap-2.5 lg:grid-cols-2">
             {rotationSection ? renderConfigSection(rotationSection) : <div />}
 
             <section

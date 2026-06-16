@@ -44,6 +44,12 @@ export type GeometryWithBounds = {
   flatteningPlanes: FlatteningPlane[];
   /** Present when defective vertex data was detected and auto-repaired */
   meshDefects?: MeshDefects;
+  /**
+   * Pre-computed hard-edge geometry for the Higher Contrast Model Edges overlay.
+   * Uses a 30° threshold angle — only crease edges are included, not every triangle edge.
+   * Computed once during import to avoid synchronous lag when toggling the setting on.
+   */
+  edgeGeometry?: THREE.EdgesGeometry;
 };
 
 /**
@@ -436,8 +442,16 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   const flatteningPlanes = computeFlatteningPlanes(geometry);
   console.log(`[${new Date().toISOString()}] [processGeometry] Flattening Planes finished. Took ${(performance.now() - startPlanes).toFixed(2)}ms`);
 
+  // Yield before edge geometry computation (can be expensive for large meshes)
+  await new Promise<void>(r => setTimeout(r, 0));
+
+  console.log(`[${new Date().toISOString()}] [processGeometry] Computing Edge Geometry`);
+  const startEdges = performance.now();
+  const edgeGeometry = new THREE.EdgesGeometry(geometry, 30);
+  console.log(`[${new Date().toISOString()}] [processGeometry] Edge Geometry finished. Took ${(performance.now() - startEdges).toFixed(2)}ms`);
+
   const shouldSurfaceDefects = meshDefects.hasDefects || meshDefects.nativeRepairReport != null;
-  return { geometry, bbox, center, size, flatteningPlanes, ...(shouldSurfaceDefects ? { meshDefects } : {}) };
+  return { geometry, bbox, center, size, flatteningPlanes, edgeGeometry, ...(shouldSurfaceDefects ? { meshDefects } : {}) };
 }
 
 export async function loadStlGeometry(fileUrl: string, options?: ProcessGeometryOptions): Promise<GeometryWithBounds> {

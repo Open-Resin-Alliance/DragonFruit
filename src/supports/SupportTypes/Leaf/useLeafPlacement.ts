@@ -161,8 +161,9 @@ export function useLeafPlacement() {
         const surfaceNormal = calculateSmoothedNormal(hit);
         const pos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
         const modelId = hit.object.userData?.modelId || 'unknown';
+        const placementSurface = hit.object.userData?.supportPlacementSurface === 'interior' ? 'interior' : undefined;
 
-        leafPlacementStore.setTip(pos, surfaceNormal, modelId);
+        leafPlacementStore.setTip(pos, surfaceNormal, modelId, placementSurface);
     }, [binding, state.hotkeyActive, isPlacementDisabled]);
 
     const onSupportHover = useCallback((hit: THREE.Intersection | null) => { void hit; }, []);

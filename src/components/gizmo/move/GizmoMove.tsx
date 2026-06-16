@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { ThreeEvent, useThree } from '@react-three/fiber';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
 import type { GizmoAxis as AxisType } from '../types';
+import { getCachedConeGeometry, getCachedMoveShaftGeometry, getCachedSphereGeometry } from '../gizmoGeometryCache';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
 
@@ -23,6 +24,15 @@ interface GizmoMoveProps {
   moveHandleBidirectional?: boolean;
   moveHandleLengthScale?: number;
   moveHandleThicknessScale?: number;
+  /**
+   * World-space direction for this axis. When the gizmo parent group is
+   * rotated, the hardcoded local-axis direction no longer matches the
+   * visual arrow. Pass the world-space direction computed from the
+   * gizmo's rotation to keep the drag axis aligned with the visual arrow.
+   * Falls back to world X/Y/Z when not provided (existing behavior).
+   */
+  worldAxisDir?: THREE.Vector3;
+  disableArrowFlip?: boolean;
   onDragStart: () => boolean | void;
   onDrag: (delta: THREE.Vector3) => void;
   onDragEnd: () => void;
@@ -48,6 +58,8 @@ export function GizmoMove({
   moveHandleBidirectional = false,
   moveHandleLengthScale = 1.0,
   moveHandleThicknessScale = 1.0,
+  worldAxisDir,
+  disableArrowFlip = false,
   onDragStart,
   onDrag,
   onDragEnd,
@@ -100,15 +112,21 @@ export function GizmoMove({
   const headRadius = Math.max(0.03, GIZMO_SIZES.arrowHeadRadius * moveHandleThicknessScale);
   const headLength = Math.max(0.08, GIZMO_SIZES.arrowHeadLength * moveHandleLengthScale);
 
-  const shouldFlipX = axis === 'x' && (camera.position.x - gizmoPosition.x > 0);
-  const shouldFlipY = axis === 'y' && (camera.position.y - gizmoPosition.y > 0);
-  const shouldFlipZ = axis === 'z' && (camera.position.z - gizmoPosition.z > 0);
+  const shouldFlipX = axis === 'x' && !disableArrowFlip && (camera.position.x - gizmoPosition.x > 0);
+  const shouldFlipY = axis === 'y' && !disableArrowFlip && (camera.position.y - gizmoPosition.y > 0);
+  const shouldFlipZ = axis === 'z' && !disableArrowFlip && (camera.position.z - gizmoPosition.z > 0);
 
-  const rotation: [number, number, number] =
-    axis === 'x' ? [0, 0, shouldFlipX ? -Math.PI / 2 : Math.PI / 2]
-    : axis === 'y' ? [0, 0, shouldFlipY ? 0 : Math.PI]
-    : axis === 'z' ? (shouldFlipZ ? [Math.PI / 2, 0, 0] : [-Math.PI / 2, 0, 0])
-    : [0, 0, 0];
+  const positiveAxisRotation: [number, number, number] =
+    axis === 'x' ? [0, 0, -Math.PI / 2]
+    : axis === 'y' ? [0, 0, 0]
+    : [Math.PI / 2, 0, 0];
+
+  const rotation: [number, number, number] = disableArrowFlip
+    ? positiveAxisRotation
+    : axis === 'x' ? [0, 0, shouldFlipX ? -Math.PI / 2 : Math.PI / 2]
+      : axis === 'y' ? [0, 0, shouldFlipY ? 0 : Math.PI]
+        : axis === 'z' ? (shouldFlipZ ? [Math.PI / 2, 0, 0] : [-Math.PI / 2, 0, 0])
+          : [0, 0, 0];
 
   const getAxisParamFromMouse = useCallback((clientX: number, clientY: number): number | null => {
     const rect = gl.domElement.getBoundingClientRect();
@@ -123,10 +141,18 @@ export function GizmoMove({
     const raycaster = raycasterRef.current;
     raycaster.setFromCamera(ndc, camera);
 
+    // Use the world-space axis direction if provided (rotated gizmo),
+    // otherwise fall back to the hardcoded world axis (existing behavior).
     const axisDir = scratchAxisDirRef.current;
-    if (axis === 'x') axisDir.set(1, 0, 0);
-    else if (axis === 'y') axisDir.set(0, 1, 0);
-    else axisDir.set(0, 0, 1);
+    if (worldAxisDir) {
+      axisDir.copy(worldAxisDir);
+    } else if (axis === 'x') {
+      axisDir.set(1, 0, 0);
+    } else if (axis === 'y') {
+      axisDir.set(0, 1, 0);
+    } else {
+      axisDir.set(0, 0, 1);
+    }
 
     // Closest points between the infinite drag axis line and pointer ray.
     // Uses the FIXED drag origin (captured at pointer-down) as the axis reference
@@ -147,8 +173,7 @@ export function GizmoMove({
 
     return ((axisDotRay * rayDotAxisToRay) - axisDotAxisToRay) / denom;
   // gizmoPosition intentionally excluded — we use dragAxisOriginRef (stable).
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [axis, camera, gl]);
+  }, [axis, camera, gl, worldAxisDir]);
 
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
     if (e.button === 2) return;
@@ -184,11 +209,14 @@ export function GizmoMove({
     onPointerLeave();
   };
 
+  // World-space axis direction. Falls back to hardcoded world axis when
+  // worldAxisDir prop is not provided (existing behavior with no rotation).
   const axisDirection = useMemo(() => {
+    if (worldAxisDir) return worldAxisDir.clone();
     if (axis === 'x') return new THREE.Vector3(1, 0, 0);
     if (axis === 'y') return new THREE.Vector3(0, 1, 0);
     return new THREE.Vector3(0, 0, 1);
-  }, [axis]);
+  }, [axis, worldAxisDir]);
 
   useEffect(() => {
     if (!isDragging) return;
@@ -236,29 +264,10 @@ export function GizmoMove({
     ? GIZMO_LIGHTING.pointLightIntensity.hovered
     : GIZMO_LIGHTING.pointLightIntensity.idle;
 
-  const gradientGeometry = useMemo(() => {
-    const geometry = new THREE.CylinderGeometry(shaftRadius, shaftRadius, shaftLength, 8, 1);
-    const colors = new Float32Array(geometry.attributes.position.count * 3);
-
-    const pureCenterColor = axis === 'x' ? '#ff0000' : axis === 'y' ? '#0ce300' : '#0000ff';
-    const secondaryColor = axis === 'x' ? '#ff9900' : axis === 'y' ? '#ffcc00' : '#1596ff';
-
-    const startColor = new THREE.Color(pureCenterColor);
-    const endColor = new THREE.Color(secondaryColor);
-
-    for (let i = 0; i < geometry.attributes.position.count; i++) {
-      const y = geometry.attributes.position.getY(i);
-      const normalizedPos = (y + shaftLength / 2) / shaftLength;
-      const t = Math.max(0, (normalizedPos - 0.33) / 0.67);
-      const color = new THREE.Color().lerpColors(startColor, endColor, t);
-      colors[i * 3] = color.r;
-      colors[i * 3 + 1] = color.g;
-      colors[i * 3 + 2] = color.b;
-    }
-
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    return geometry;
-  }, [axis, shaftLength, shaftRadius]);
+  const gradientGeometry = useMemo(
+    () => getCachedMoveShaftGeometry(axis, shaftRadius, shaftLength),
+    [axis, shaftLength, shaftRadius],
+  );
 
   const endColorHex = isActive
     ? GIZMO_COLORS.active
@@ -269,6 +278,8 @@ export function GizmoMove({
   const arrowTipPosition: [number, number, number] = [0, shaftLength, 0];
   const oppositeArrowTipPosition: [number, number, number] = [0, -shaftLength, 0];
   const pickTipRadius = Math.max(0.14, headRadius * 2.35);
+  const pickTipGeometry = useMemo(() => getCachedSphereGeometry(pickTipRadius, 12, 12), [pickTipRadius]);
+  const arrowHeadGeometry = useMemo(() => getCachedConeGeometry(headRadius, headLength, 8), [headLength, headRadius]);
 
   return (
     <group rotation={rotation}>
@@ -285,7 +296,7 @@ export function GizmoMove({
           onPointerLeave={handlePointerLeaveLocal}
           scale={handleScale}
         >
-          <sphereGeometry args={[pickTipRadius, 12, 12]} />
+          <primitive object={pickTipGeometry} attach="geometry" />
           <meshBasicMaterial visible={false} depthTest={false} />
         </mesh>
 
@@ -298,7 +309,7 @@ export function GizmoMove({
             onPointerLeave={handlePointerLeaveLocal}
             scale={handleScale}
           >
-            <sphereGeometry args={[pickTipRadius, 12, 12]} />
+            <primitive object={pickTipGeometry} attach="geometry" />
             <meshBasicMaterial visible={false} depthTest={false} />
           </mesh>
         )}
@@ -330,7 +341,7 @@ export function GizmoMove({
 
       <group position={arrowTipPosition} scale={handleScale * hoverScale}>
         <mesh scale={1.15}>
-          <coneGeometry args={[headRadius, headLength, 8]} />
+          <primitive object={arrowHeadGeometry} attach="geometry" />
           <meshBasicMaterial
             color={isDimmed ? new THREE.Color(dimmedColor).multiplyScalar(0.7).getHex() : new THREE.Color(endColorHex).multiplyScalar(0.3).getHex()}
             opacity={opacity}
@@ -340,7 +351,7 @@ export function GizmoMove({
         </mesh>
 
         <mesh>
-          <coneGeometry args={[headRadius, headLength, 8]} />
+          <primitive object={arrowHeadGeometry} attach="geometry" />
           <meshBasicMaterial
             color={isDimmed ? dimmedColor : endColorHex}
             opacity={opacity}
@@ -353,7 +364,7 @@ export function GizmoMove({
       {moveHandleBidirectional && (
         <group position={oppositeArrowTipPosition} rotation={[Math.PI, 0, 0]} scale={handleScale * hoverScale}>
           <mesh scale={1.15}>
-            <coneGeometry args={[headRadius, headLength, 8]} />
+            <primitive object={arrowHeadGeometry} attach="geometry" />
             <meshBasicMaterial
               color={isDimmed ? new THREE.Color(dimmedColor).multiplyScalar(0.7).getHex() : new THREE.Color(endColorHex).multiplyScalar(0.3).getHex()}
               opacity={opacity}
@@ -363,7 +374,7 @@ export function GizmoMove({
           </mesh>
 
           <mesh>
-            <coneGeometry args={[headRadius, headLength, 8]} />
+            <primitive object={arrowHeadGeometry} attach="geometry" />
             <meshBasicMaterial
               color={isDimmed ? dimmedColor : endColorHex}
               opacity={opacity}

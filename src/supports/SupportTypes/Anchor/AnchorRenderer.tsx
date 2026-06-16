@@ -80,10 +80,11 @@ export const AnchorRenderer = React.memo(function AnchorRenderer({
             scene,
             initialEvent: e,
             modelId: anchor.modelId,
-            onHit: ({ point, surfaceNormal }: ContactDiskDragHit) => {
+            placementSurface: anchor.contactCone?.placementSurface,
+            onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
                 const latest = getSnapshot().anchors[anchor.id];
                 if (!latest?.contactCone) return;
-                liveDragConeRef.current = recomputeContactConeForMovedDisk(latest.contactCone, point, surfaceNormal, socketAnchor);
+                liveDragConeRef.current = recomputeContactConeForMovedDisk(latest.contactCone, point, surfaceNormal, socketAnchor, mesh);
                 setDragTick(t => t + 1);
             },
             onEnd: () => {

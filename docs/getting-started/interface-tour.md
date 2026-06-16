@@ -11,7 +11,7 @@ DragonFruit combines a central 3D workspace with mode-specific controls.
 
 ## Interaction modes
 
-- **Prepare mode**: model transform and setup.
+- **Prepare mode**: model transform, hollowing, hole punching, and setup.
 - **Analysis mode**: island and diagnostic inspection workflows.
 - **Support mode**: support placement, editing, snapping, and raft tuning.
 - **Export mode**: finalize output and export artifacts.

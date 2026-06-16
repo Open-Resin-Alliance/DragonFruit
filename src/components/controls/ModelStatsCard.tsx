@@ -39,6 +39,41 @@ export function ModelStatsCard({
   estimatedPrintTimeLabelOverride,
   estimatedResinLabelOverride,
 }: ModelStatsCardProps) {
+  // Match the same viewport-responsive width as floating panels
+  const panelWidth = React.useMemo(() => {
+    if (typeof window === 'undefined') return 320;
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    let scale = 1;
+    if (w >= 3200 && h >= 1100) scale = 1.14;
+    else if (w >= 2600 && h >= 980) scale = 1.08;
+    else if (w <= 1100 || h <= 700) scale = 0.72;
+    else if (w <= 1366 || h <= 820) scale = 0.82;
+    else if (w <= 1600 || h <= 900) scale = 0.9;
+    else if (w <= 1800 || h <= 980) scale = 0.95;
+    return Math.max(72, Math.round(320 * scale));
+  }, []);
+
+  // Recompute on window resize
+  const [resizedWidth, setResizedWidth] = React.useState(panelWidth);
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const compute = () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      let scale = 1;
+      if (w >= 3200 && h >= 1100) scale = 1.14;
+      else if (w >= 2600 && h >= 980) scale = 1.08;
+      else if (w <= 1100 || h <= 700) scale = 0.72;
+      else if (w <= 1366 || h <= 820) scale = 0.82;
+      else if (w <= 1600 || h <= 900) scale = 0.9;
+      else if (w <= 1800 || h <= 980) scale = 0.95;
+      setResizedWidth(Math.max(72, Math.round(320 * scale)));
+    };
+    window.addEventListener('resize', compute);
+    return () => window.removeEventListener('resize', compute);
+  }, []);
+
   const [isFlipped, setIsFlipped] = React.useState(false);
   const baseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
   const inFlightBaseResinMlRef = React.useRef<Map<string, Promise<number | null>>>(new Map());
@@ -423,7 +458,7 @@ export function ModelStatsCard({
   };
 
   return (
-    <div className="pointer-events-auto select-none w-[320px] max-w-[320px]">
+    <div className="pointer-events-auto select-none" style={{ width: resizedWidth, maxWidth: resizedWidth }}>
       <div
         className="w-full [perspective:1200px]"
       >

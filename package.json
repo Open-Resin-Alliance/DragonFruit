@@ -1,6 +1,6 @@
 {
   "name": "dragonfruit",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "buildChannel": "beta",
   "private": true,
   "scripts": {
@@ -40,15 +40,22 @@
     "lint": "eslint",
     "test": "node --import tsx --test src/**/__tests__/*.test.ts",
     "test:watch": "node --import tsx --test --watch src/**/__tests__/*.test.ts",
-    "bench:support-drag": "node --import tsx scripts/support-drag-perf.ts"
+    "bench:support-drag": "node --import tsx scripts/support-drag-perf.ts",
+    "i18n:extract": "lingui extract",
+    "i18n:compile": "lingui compile",
+    "i18n:update": "lingui extract && lingui compile"
   },
   "dependencies": {
+    "@lingui/core": "^6.3.0",
+    "@lingui/react": "^6.3.0",
     "@msgpack/msgpack": "^3.1.2",
     "@react-three/drei": "^10.7.6",
     "@react-three/fiber": "^9.4.0",
     "@react-three/postprocessing": "^3.0.4",
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-log": "^2.8.0",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "@types/uuid": "^10.0.0",
     "clipper-lib": "^6.4.2",
     "express": "^5.2.1",
@@ -63,12 +70,16 @@
     "react": "19.2.0",
     "react-colorful": "^5.6.1",
     "react-dom": "19.2.0",
+    "react-markdown": "^10.1.0",
     "three": "^0.181.0",
     "three-stdlib": "^2.36.1",
     "uuid": "^13.0.0"
   },
   "devDependencies": {
+    "@lingui/cli": "^6.3.0",
+    "@lingui/swc-plugin": "^6.4.0",
     "@tailwindcss/postcss": "^4",
+    "@tailwindcss/typography": "^0.5.20",
     "@tauri-apps/cli": "^2.8.0",
     "@types/express": "^5.0.6",
     "@types/node": "^20",

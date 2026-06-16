@@ -2,6 +2,11 @@ import React from 'react';
 import { ChevronDown } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
+// useLayoutEffect runs before the browser paints (so the menu can be measured
+// and positioned without a visible reflow), but warns during SSR — fall back to
+// useEffect on the server, where layout effects do nothing anyway.
+const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? React.useLayoutEffect : React.useEffect;
+
 export type SelectDropdownProps<T extends string | number = string> = {
   label?: string;
   id?: string;
@@ -133,9 +138,11 @@ export function SelectDropdown<T extends string | number = string>({
     const margin = 8;
     const gap = 6;
 
-    const measuredMenuWidth = measureMenu && menuRef.current
-      ? menuRef.current.offsetWidth
-      : rect.width;
+    // The menu is always forced to the trigger's width (minWidth/width below),
+    // so position from rect.width directly. Measuring offsetWidth instead was
+    // wrong on the first pass — before the width style applied — which left the
+    // menu mispositioned until a later pass corrected it (the visible reflow).
+    const measuredMenuWidth = rect.width;
     const measuredMenuHeight = measureMenu && menuRef.current
       ? menuRef.current.offsetHeight
       : 0;
@@ -170,7 +177,7 @@ export function SelectDropdown<T extends string | number = string>({
     });
   }, [menuAlign]);
 
-  React.useEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     if (!isOpen) {
       setHoveredOptionKey(null);
       setIsFooterActionHovered(false);
@@ -178,11 +185,10 @@ export function SelectDropdown<T extends string | number = string>({
       return;
     }
 
-    updateMenuPosition(false);
-
-    const raf = window.requestAnimationFrame(() => {
-      updateMenuPosition(true);
-    });
+    // Measure and reveal in a single synchronous pass before paint: the portal
+    // menu is already committed to the DOM here, so this positions it at its
+    // final spot with no intermediate frame painted at a stale position.
+    updateMenuPosition(true);
 
     const onLayoutChange = () => {
       updateMenuPosition(true);
@@ -192,7 +198,6 @@ export function SelectDropdown<T extends string | number = string>({
     window.addEventListener('scroll', onLayoutChange, true);
 
     return () => {
-      window.cancelAnimationFrame(raf);
       window.removeEventListener('resize', onLayoutChange);
       window.removeEventListener('scroll', onLayoutChange, true);
     };

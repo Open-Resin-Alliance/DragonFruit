@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Leaf, Knot, Vec3 } from '../../types';
 import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
-import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
+import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { getSettings } from '../../Settings';
 import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
@@ -19,6 +19,7 @@ export interface LeafBuildInput {
     modelId: string;
     parentKnot: Knot;
     hostDiameterMm: number;
+    mesh?: THREE.Mesh;
 }
 
 export interface LeafBuildResult {
@@ -38,46 +39,32 @@ function computeLeafConeAxisAndLength(
     tipPos: Vec3,
     surfaceNormal: Vec3,
     knotPos: Vec3,
-    baseProfile: SupportTipProfile
+    baseProfile: SupportTipProfile,
+    mesh?: THREE.Mesh,
 ): { axis: Vec3; lengthMm: number; diskThicknessMm: number } {
-    _tip.set(tipPos.x, tipPos.y, tipPos.z);
-    _sn.set(surfaceNormal.x, surfaceNormal.y, surfaceNormal.z);
-    _knot.set(knotPos.x, knotPos.y, knotPos.z);
-
-    _axis.copy(_knot).sub(_tip);
-    if (_axis.lengthSq() < 0.000001) {
-        _axis.copy(_sn);
-    }
-    _axis.normalize();
-
-    let finalThickness = 0;
-    let finalLength = Math.max(0.1, _knot.distanceTo(_tip));
-
-    for (let i = 0; i < 3; i++) {
-        const axisVec3 = { x: _axis.x, y: _axis.y, z: _axis.z };
-        const thickness = baseProfile.type === 'disk'
-            ? calculateDiskThickness(surfaceNormal, axisVec3, baseProfile)
-            : 0;
-        finalThickness = thickness;
-
-        _start.copy(_tip).addScaledVector(_sn, thickness);
-        _coneVec.copy(_knot).sub(_start);
-        const len = _coneVec.length();
-        if (len > 0.000001) {
-            _axis.copy(_coneVec).normalize();
-            finalLength = Math.max(0.1, len);
-        }
-    }
+    const cone = recomputeContactConeForMovedDisk(
+        {
+            id: 'preview-leaf-cone',
+            pos: tipPos,
+            normal: surfaceNormal,
+            surfaceNormal,
+            profile: baseProfile,
+        },
+        tipPos,
+        surfaceNormal,
+        knotPos,
+        mesh,
+    );
 
     return {
-        axis: { x: _axis.x, y: _axis.y, z: _axis.z },
-        lengthMm: finalLength,
-        diskThicknessMm: finalThickness,
+        axis: cone.normal,
+        lengthMm: cone.profile.lengthMm,
+        diskThicknessMm: cone.diskLengthOverride ?? 0,
     };
 }
 
 export function buildLeafData(input: LeafBuildInput): LeafBuildResult {
-    const { tipPos, surfaceNormal, modelId, parentKnot, hostDiameterMm } = input;
+    const { tipPos, surfaceNormal, modelId, parentKnot, hostDiameterMm, mesh } = input;
 
     const settings = getSettings();
     const settingsCodeHex = encodeSupportSettingsHex(settings);
@@ -97,7 +84,8 @@ export function buildLeafData(input: LeafBuildInput): LeafBuildResult {
         tipPos,
         surfaceNormal,
         parentKnot.pos,
-        baseProfile
+        baseProfile,
+        mesh,
     );
 
     const profile: SupportTipProfile = {
@@ -107,11 +95,20 @@ export function buildLeafData(input: LeafBuildInput): LeafBuildResult {
     };
 
     const contactCone: ContactCone = {
+        ...recomputeContactConeForMovedDisk(
+            {
+                id: 'leaf-cone',
+                pos: tipPos,
+                normal: axis,
+                surfaceNormal,
+                profile,
+            },
+            tipPos,
+            surfaceNormal,
+            parentKnot.pos,
+            mesh,
+        ),
         id: uuid(),
-        pos: tipPos,
-        normal: axis,
-        surfaceNormal,
-        profile,
     };
 
     const leafId = uuid();

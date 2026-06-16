@@ -71,8 +71,15 @@ export interface Knot {
     pos: Vec3; // World position on the host shaft
     diameter?: number; // Host shaft diameter + 0.1mm (computed at creation if absent)
     /**
+     * Persistent normalization intent that should survive save/load roundtrips.
+     * Used when imported support geometry needs deterministic preserve/project behavior
+     * instead of falling back to heuristics on subsequent reloads.
+     */
+    normalizationHint?: 'preserve' | 'project' | 'braceImported';
+    /**
      * Import-time hint stamped by converters (e.g. LYS).
-     * Consumed and stripped by normalizeLoadedKnotAndLeafGeometry.
+     * Consumed by normalizeLoadedKnotAndLeafGeometry and promoted into
+     * `normalizationHint` for roundtrip-stable persistence.
      * 'preserve' → keep authored pos; 'project' → project to shaft geometry.
      * Not present for runtime-created knots.
      */
@@ -150,6 +157,7 @@ export interface ContactDisk {
     surfaceNormal: Vec3;
     coneAxis: Vec3;
     diskLengthOverride?: number;
+    placementSurface?: 'interior' | 'exterior';
     profile: ContactDiskProfile;
     contactDiameterMm: number;
 }
@@ -198,6 +206,7 @@ export interface Anchor extends SupportEntity {
 export interface Brace extends SupportEntity {
     startKnotId: string;
     endKnotId: string;
+    placementSurface?: 'interior' | 'exterior';
     curve?: BraceCurve;
     profile: {
         diameter: number;

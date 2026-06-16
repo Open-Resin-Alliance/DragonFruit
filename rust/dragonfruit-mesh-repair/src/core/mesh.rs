@@ -62,6 +62,33 @@ impl Vec3 {
     pub fn finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
     }
+
+    /// Rotate this vector by a unit quaternion `[x, y, z, w]`.
+    /// The quaternion must be normalized (unit length).
+    /// Uses the standard formula: `v' = v + 2·qw·(qv×v) + 2·(qv×(qv×v))`
+    /// where `qv = (qx, qy, qz)` is the vector part of the quaternion.
+    #[inline]
+    pub fn rotate_by_quat(self, q: [f32; 4]) -> Self {
+        let [qx, qy, qz, qw] = q;
+        // cross(qv, v)
+        let c1_x = qy * self.z - qz * self.y;
+        let c1_y = qz * self.x - qx * self.z;
+        let c1_z = qx * self.y - qy * self.x;
+        // t = 2 * cross(qv, v)
+        let t_x = c1_x * 2.0;
+        let t_y = c1_y * 2.0;
+        let t_z = c1_z * 2.0;
+        // cross(qv, t)
+        let c2_x = qy * t_z - qz * t_y;
+        let c2_y = qz * t_x - qx * t_z;
+        let c2_z = qx * t_y - qy * t_x;
+        // v' = v + qw * t + cross(qv, t)
+        Self::new(
+            self.x + qw * t_x + c2_x,
+            self.y + qw * t_y + c2_y,
+            self.z + qw * t_z + c2_z,
+        )
+    }
 }
 
 /// Axis-aligned bounding box.
@@ -158,8 +185,16 @@ impl IndexedMesh {
         for tri in 0..tri_count {
             let base = tri * 9;
             let v0 = Vec3::new(positions[base], positions[base + 1], positions[base + 2]);
-            let v1 = Vec3::new(positions[base + 3], positions[base + 4], positions[base + 5]);
-            let v2 = Vec3::new(positions[base + 6], positions[base + 7], positions[base + 8]);
+            let v1 = Vec3::new(
+                positions[base + 3],
+                positions[base + 4],
+                positions[base + 5],
+            );
+            let v2 = Vec3::new(
+                positions[base + 6],
+                positions[base + 7],
+                positions[base + 8],
+            );
             let i0 = intern(v0, &mut out);
             let i1 = intern(v1, &mut out);
             let i2 = intern(v2, &mut out);
@@ -223,12 +258,9 @@ impl IndexedMesh {
             let a = self.positions[tri[0] as usize];
             let b = self.positions[tri[1] as usize];
             let c = self.positions[tri[2] as usize];
-            sum += (a.x as f64)
-                * ((b.y as f64) * (c.z as f64) - (b.z as f64) * (c.y as f64))
-                - (a.y as f64)
-                    * ((b.x as f64) * (c.z as f64) - (b.z as f64) * (c.x as f64))
-                + (a.z as f64)
-                    * ((b.x as f64) * (c.y as f64) - (b.y as f64) * (c.x as f64));
+            sum += (a.x as f64) * ((b.y as f64) * (c.z as f64) - (b.z as f64) * (c.y as f64))
+                - (a.y as f64) * ((b.x as f64) * (c.z as f64) - (b.z as f64) * (c.x as f64))
+                + (a.z as f64) * ((b.x as f64) * (c.y as f64) - (b.y as f64) * (c.x as f64));
         }
         sum / 6.0
     }

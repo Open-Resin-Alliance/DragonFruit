@@ -41,7 +41,6 @@ import {
   VOXL_MAGIC,
   type BuildVoxlDocumentInput,
   type ParsedVoxlResult,
-  type VoxlDocumentV1,
   type VoxlMeshRef,
   type VoxlMeta,
   type VoxlModelEntry,
@@ -52,6 +51,7 @@ import type { DragonfruitImportFormat } from '@/supports/types';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 export const VOXL_V2 = 2;
+export const VOXL_V2_SEMANTIC_REVISION = 2.1;
 
 const HEADER_SIZE = 16;
 const DIR_ENTRY_SIZE = 20;
@@ -146,6 +146,7 @@ export async function serializeVoxlDocumentV2(
         rotation: { x: m.transform.rotation.x, y: m.transform.rotation.y, z: m.transform.rotation.z },
         scale: { x: m.transform.scale.x, y: m.transform.scale.y, z: m.transform.scale.z },
       },
+      meshModifiers: m.meshModifiers,
       mesh: meshRef,
     };
   });
@@ -367,7 +368,7 @@ export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
       extensions,
     },
     meshBytes: meshBytesMap,
-    sourceVersion: 2,
+    sourceVersion: VOXL_V2_SEMANTIC_REVISION,
   };
 }
 

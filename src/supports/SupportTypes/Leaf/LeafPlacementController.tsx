@@ -25,10 +25,18 @@ import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearest
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 import { previewVecKey, previewNormalKey, quantizePreviewValue } from '../shared/previewSignature';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
+import { findClosestMeshToPoint } from '../../PlacementLogic/PlacementUtils';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
     point?: Vec3 | null;
+}
+
+type PlacementSurface = 'interior' | 'exterior';
+
+function markContactPlacementSurface<T extends { placementSurface?: PlacementSurface } | undefined>(contact: T, surface?: PlacementSurface): T {
+    if (!contact || !surface) return contact;
+    return { ...contact, placementSurface: surface } as T;
 }
 
 // Pooled scratch objects — reused each frame to avoid per-frame GC pressure.
@@ -37,7 +45,7 @@ const _upVec = new THREE.Vector3();
 const _planeHit = new THREE.Vector3();
 
 export function LeafPlacementController() {
-    const { isActive, stage, tipPosition, surfaceNormal, modelId } = useLeafPlacementState();
+    const { isActive, stage, tipPosition, surfaceNormal, modelId, placementSurface } = useLeafPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const kickstandState = useKickstandStoreState();
     const { getHotkey } = useHotkeyConfig();
@@ -75,15 +83,19 @@ export function LeafPlacementController() {
                 includeBranches: true,
                 includeBraces: true,
                 includeTwigs: true,
+                includeSticks: true,
+                placementSurface,
             }),
             ...buildKickstandPathSnapTargets(kickstandState),
         ];
     }, [
         stage,
+        placementSurface,
         supportState.trunks,
         supportState.branches,
         supportState.braces,
         supportState.twigs,
+        supportState.sticks,
         kickstandState.kickstands,
     ]);
 
@@ -110,6 +122,11 @@ export function LeafPlacementController() {
     const getPotentialTargets = useCallback(() => allTargets, [allTargets]);
 
     const { updateAndGetResolvedSnap, resetSnapping } = usePlacementSnappingSession(getTarget, getPotentialTargets);
+
+    const resolveTipMesh = useCallback(() => {
+        if (!tipPosition) return undefined;
+        return findClosestMeshToPoint(tipPosition, modelMeshesRef.current);
+    }, [tipPosition]);
 
     useEffect(() => {
         const handleShaftHover = (event: Event) => {
@@ -403,6 +420,7 @@ export function LeafPlacementController() {
                     modelId,
                     parentKnot,
                     hostDiameterMm: resolvedHostDiameter,
+                    mesh: resolveTipMesh(),
                 });
 
                 const maxAngleDeg = settings.shaft.maxAngleDeg ?? 80;
@@ -489,15 +507,22 @@ export function LeafPlacementController() {
                 modelId,
                 parentKnot,
                 hostDiameterMm,
+                mesh: resolveTipMesh(),
             });
+            const markedLeaf = placementSurface
+                ? {
+                    ...leaf,
+                    contactCone: markContactPlacementSurface(leaf.contactCone, placementSurface),
+                }
+                : leaf;
 
             addKnot(parentKnot);
-            addLeaf(leaf);
+            addLeaf(markedLeaf);
 
             pushHistory({
                 type: SUPPORT_ADD_LEAF,
                 payload: {
-                    leaf,
+                    leaf: markedLeaf,
                     knot: parentKnot,
                 },
             });
@@ -525,7 +550,7 @@ export function LeafPlacementController() {
 
         window.addEventListener('click', handleClick, true);
         return () => window.removeEventListener('click', handleClick, true);
-    }, [isActive, stage, tipPosition, surfaceNormal, modelId, leafBinding]);
+    }, [isActive, stage, tipPosition, surfaceNormal, modelId, placementSurface, leafBinding, resolveTipMesh]);
 
     useEffect(() => {
         if (!isActive) {

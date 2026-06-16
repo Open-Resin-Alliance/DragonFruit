@@ -74,6 +74,16 @@ interface SupportProxyMeshLayerProps {
   onModelPointerSelect?: (modelId: string) => void;
   enablePointerSelection?: boolean;
   includeDetailedPrimitives?: boolean;
+  /** When true, only show supports whose contact points touch the cavity mesh. */
+  interiorView?: boolean;
+  /** Cavity mesh geometry keyed by modelId, used for interior support filtering. */
+  cavityGeometryByModelId?: Map<string, THREE.BufferGeometry>;
+  /**
+   * World-to-local inverse matrices per modelId. Needed to transform support
+   * contact positions (world space) into the cavity geometry's local space
+   * for accurate BVH closest-point queries.
+   */
+  modelWorldInverseById?: Map<string, THREE.Matrix4>;
 }
 
 const DEFAULT_SUPPORT_COLOR = '#9a9a9a';
@@ -122,6 +132,7 @@ type SharedProxyCacheEntry = {
   hasSolidBottom: boolean;
   raftThickness: number;
   includeDetailedPrimitives: boolean;
+  interiorSupportIdSet: Set<string> | null;
   baseProxyByModel: Map<string, ProxyModelGeometry>;
 };
 
@@ -409,6 +420,9 @@ export function SupportProxyMeshLayer({
   onModelPointerSelect,
   enablePointerSelection = true,
   includeDetailedPrimitives = true,
+  interiorView = false,
+  cavityGeometryByModelId,
+  modelWorldInverseById,
 }: SupportProxyMeshLayerProps) {
   const { hit } = usePicking();
   const supportState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
@@ -508,6 +522,157 @@ export function SupportProxyMeshLayer({
     };
   }, [outOfBoundsMaterial]);
 
+  // ── Interior support filtering ────────────────────────────────────────
+  // When interiorView is active, build a set of support IDs whose contact
+  // points are ON the cavity mesh surface (interior supports). Exterior
+  // supports contact the outer shell, which is typically 1-3mm away from
+  // the cavity surface — well beyond the threshold.
+  //
+  // Uses three-mesh-bvh's closestPointToPoint (O(log n) per query) for
+  // exact distance-to-surface measurement. The BVH is built once on the
+  // cavity geometry and cached on geometry.boundsTree.
+  //
+  // IMPORTANT: Support contact positions are in WORLD space, while the
+  // cavity geometry is in the model's LOCAL space. We use the model's
+  // world-inverse matrix to transform support positions into local space
+  // before the BVH query.
+  const interiorSupportIdSet = React.useMemo<Set<string> | null>(() => {
+    if (!interiorView || !cavityGeometryByModelId || cavityGeometryByModelId.size === 0) return null;
+
+    const THRESHOLD_MM = 0.3;
+    const RAY_HIT_EPSILON_MM = 1e-5;
+    const RAY_DEDUPE_EPSILON_MM = 1e-4;
+    const ids = new Set<string>();
+    const tempVec = new THREE.Vector3();
+    const insideRaycaster = new THREE.Raycaster();
+    const insideRayDirection = new THREE.Vector3(1, 0.37139, 0.11317).normalize();
+    const cavityMeshByGeometry = new Map<THREE.BufferGeometry, THREE.Mesh>();
+    const queryTarget = { point: new THREE.Vector3(), distance: 0, faceIndex: -1 };
+
+    // Ensure BVH is built on each cavity geometry
+    for (const [, geometry] of cavityGeometryByModelId) {
+      const g = geometry as THREE.BufferGeometry & { boundsTree?: { closestPointToPoint: Function } };
+      if (!g.boundsTree && typeof (g as any).computeBoundsTree === 'function') {
+        (g as any).computeBoundsTree();
+      }
+      cavityMeshByGeometry.set(geometry, new THREE.Mesh(geometry));
+    }
+
+    const isPointInsideCavityVolume = (pointLocal: THREE.Vector3, geometry: THREE.BufferGeometry): boolean => {
+      const mesh = cavityMeshByGeometry.get(geometry);
+      if (!mesh) return false;
+
+      insideRaycaster.set(pointLocal, insideRayDirection);
+      const hits = insideRaycaster.intersectObject(mesh, false);
+      if (hits.length === 0) return false;
+
+      let crossingCount = 0;
+      let lastDistance = Number.NEGATIVE_INFINITY;
+      for (const hit of hits) {
+        if (hit.distance <= RAY_HIT_EPSILON_MM) continue;
+        if (Math.abs(hit.distance - lastDistance) <= RAY_DEDUPE_EPSILON_MM) continue;
+        lastDistance = hit.distance;
+        crossingCount += 1;
+      }
+
+      return (crossingCount % 2) === 1;
+    };
+
+    const isPointOnCavitySurface = (pos: Vec3, modelId?: string): boolean => {
+      const geometry = modelId ? cavityGeometryByModelId.get(modelId) : null;
+      if (!geometry && !modelId) {
+        for (const [, geom] of cavityGeometryByModelId) {
+          const g = geom as THREE.BufferGeometry & { boundsTree?: { closestPointToPoint: Function } };
+          tempVec.set(pos.x, pos.y, pos.z);
+          if (g.boundsTree) {
+            queryTarget.distance = Infinity;
+            const result = g.boundsTree.closestPointToPoint(tempVec, queryTarget);
+            if (result && result.distance < THRESHOLD_MM) return true;
+          }
+          if (isPointInsideCavityVolume(tempVec, geom)) return true;
+        }
+        return false;
+      }
+      if (!geometry) return false;
+      const g = geometry as THREE.BufferGeometry & { boundsTree?: { closestPointToPoint: Function } };
+
+      // Transform world-space support position into the model's local space
+      tempVec.set(pos.x, pos.y, pos.z);
+      if (modelId && modelWorldInverseById) {
+        const invMatrix = modelWorldInverseById.get(modelId);
+        if (invMatrix) {
+          tempVec.applyMatrix4(invMatrix);
+        }
+      }
+
+      if (g.boundsTree) {
+        queryTarget.distance = Infinity;
+        const result = g.boundsTree.closestPointToPoint(tempVec, queryTarget);
+        if (result !== null && result.distance < THRESHOLD_MM) return true;
+      }
+
+      return isPointInsideCavityVolume(tempVec, geometry);
+    };
+
+    const isInteriorContactCone = (cone: { pos: Vec3; placementSurface?: 'interior' | 'exterior' } | undefined, modelId?: string): boolean => {
+      if (!cone) return false;
+      if (cone.placementSurface === 'interior') return true;
+      if (cone.placementSurface === 'exterior') return false;
+      return isPointOnCavitySurface(cone.pos, modelId);
+    };
+
+    const isInteriorContactDisk = (disk: { pos: Vec3; placementSurface?: 'interior' | 'exterior' } | undefined, modelId?: string): boolean => {
+      if (!disk) return false;
+      if (disk.placementSurface === 'interior') return true;
+      if (disk.placementSurface === 'exterior') return false;
+      return isPointOnCavitySurface(disk.pos, modelId);
+    };
+
+    // Trunks
+    for (const trunk of Object.values(supportTrunks)) {
+      if (isInteriorContactCone(trunk.contactCone, trunk.modelId)) {
+        ids.add(`trunk:${trunk.id}`);
+      }
+    }
+    for (const branch of Object.values(supportBranches)) {
+      if (isInteriorContactCone(branch.contactCone, branch.modelId)) {
+        ids.add(`branch:${branch.id}`);
+      }
+    }
+    for (const leaf of Object.values(supportLeaves)) {
+      if (isInteriorContactCone(leaf.contactCone, leaf.modelId)) {
+        ids.add(`leaf:${leaf.id}`);
+      }
+    }
+    for (const stick of Object.values(supportSticks)) {
+      const onA = isInteriorContactCone(stick.contactConeA, stick.modelId);
+      const onB = isInteriorContactCone(stick.contactConeB, stick.modelId);
+      if (onA || onB) ids.add(`stick:${stick.id}`);
+    }
+    for (const anchor of Object.values(supportState.anchors)) {
+      if (isInteriorContactCone(anchor.contactCone, anchor.modelId)) {
+        ids.add(`anchor:${anchor.id}`);
+      }
+    }
+    for (const twig of Object.values(supportTwigs)) {
+      const onA = isInteriorContactDisk(twig.contactDiskA, twig.modelId);
+      const onB = isInteriorContactDisk(twig.contactDiskB, twig.modelId);
+      if (onA || onB) ids.add(`twig:${twig.id}`);
+    }
+
+    return ids;
+  }, [
+    interiorView,
+    cavityGeometryByModelId,
+    modelWorldInverseById,
+    supportTrunks,
+    supportBranches,
+    supportLeaves,
+    supportSticks,
+    supportTwigs,
+    supportState.anchors,
+  ]);
+
   const baseProxyByModel = React.useMemo(() => {
     if (
       sharedProxyCache
@@ -526,6 +691,7 @@ export function SupportProxyMeshLayer({
       && sharedProxyCache.hasSolidBottom === hasSolidBottom
       && sharedProxyCache.raftThickness === raftThickness
       && sharedProxyCache.includeDetailedPrimitives === includeDetailedPrimitives
+      && sharedProxyCache.interiorSupportIdSet === interiorSupportIdSet
     ) {
       return sharedProxyCache.baseProxyByModel;
     }
@@ -681,6 +847,7 @@ export function SupportProxyMeshLayer({
     };
 
     for (const trunk of Object.values(supportTrunks)) {
+      if (interiorSupportIdSet && !interiorSupportIdSet.has(`trunk:${trunk.id}`)) continue;
       const root = supportRoots[trunk.rootId];
       if (!root) continue;
 
@@ -750,6 +917,7 @@ export function SupportProxyMeshLayer({
     }
 
     for (const branch of Object.values(supportBranches)) {
+      if (interiorSupportIdSet && !interiorSupportIdSet.has(`branch:${branch.id}`)) continue;
       const parentKnot = supportKnots[branch.parentKnotId];
       if (!parentKnot) continue;
 
@@ -804,6 +972,7 @@ export function SupportProxyMeshLayer({
 
     if (includeDetailedPrimitives) {
       for (const leaf of Object.values(supportLeaves)) {
+        if (interiorSupportIdSet && !interiorSupportIdSet.has(`leaf:${leaf.id}`)) continue;
         leafModelIdById.set(leaf.id, leaf.modelId);
         leafSupportIdById.set(leaf.id, leaf.id);
         pushCone({
@@ -833,6 +1002,7 @@ export function SupportProxyMeshLayer({
     }
 
     for (const twig of Object.values(supportTwigs)) {
+      if (interiorSupportIdSet && !interiorSupportIdSet.has(`twig:${twig.id}`)) continue;
       if (includeDetailedPrimitives) {
         pushCone(toProxyConeFromTwigDisk(twig.contactDiskA, twig.id, twig.modelId));
         pushCone(toProxyConeFromTwigDisk(twig.contactDiskB, twig.id, twig.modelId));
@@ -886,6 +1056,7 @@ export function SupportProxyMeshLayer({
     }
 
     for (const stick of Object.values(supportSticks)) {
+      if (interiorSupportIdSet && !interiorSupportIdSet.has(`stick:${stick.id}`)) continue;
       if (includeDetailedPrimitives) {
         pushCone({
           ...stick.contactConeA,
@@ -937,6 +1108,9 @@ export function SupportProxyMeshLayer({
     }
 
     for (const brace of Object.values(supportBraces)) {
+      // In interior view, hide braces entirely — they're connecting
+      // structures between supports, not model-facing supports.
+      if (interiorSupportIdSet) continue;
       const startKnot = supportKnots[brace.startKnotId];
       const endKnot = supportKnots[brace.endKnotId];
       if (!startKnot || !endKnot) continue;
@@ -945,13 +1119,19 @@ export function SupportProxyMeshLayer({
       // diameter + 0.1mm offset). Using profile.diameter alone produces the thin brace setting
       // value and loses the dynamic sizing that matches the attached trunk thickness.
       const profileDiameter = Math.max(0.001, brace.profile?.diameter ?? 1);
-      const startHostDiameter = Math.max(
-        0.001,
-        (startKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+      const startHostDiameter = Math.min(
+        profileDiameter,
+        Math.max(
+          0.001,
+          (startKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+        ),
       );
-      const endHostDiameter = Math.max(
-        0.001,
-        (endKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+      const endHostDiameter = Math.min(
+        profileDiameter,
+        Math.max(
+          0.001,
+          (endKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
+        ),
       );
 
       const segmentId = `braceSegment:${brace.id}`;
@@ -1002,6 +1182,7 @@ export function SupportProxyMeshLayer({
     // Anchors: root + contact cone, no shafts
     const supportAnchors = supportState.anchors;
     for (const anchor of Object.values(supportAnchors)) {
+      if (interiorSupportIdSet && !interiorSupportIdSet.has(`anchor:${anchor.id}`)) continue;
       pushRoot({
         id: `${anchor.id}:root`,
         supportId: anchor.id,
@@ -1023,6 +1204,7 @@ export function SupportProxyMeshLayer({
     }
 
     for (const kickstand of Object.values(kickstandKickstands)) {
+      if (interiorSupportIdSet && !interiorSupportIdSet.has(`kickstand:${kickstand.id}`)) continue;
       const root = kickstandRoots[kickstand.rootId];
       const hostKnot = kickstandKnots[kickstand.hostKnotId];
       if (!root || !hostKnot) continue;
@@ -1099,6 +1281,7 @@ export function SupportProxyMeshLayer({
       hasSolidBottom,
       raftThickness,
       includeDetailedPrimitives,
+      interiorSupportIdSet,
       baseProxyByModel: byModel,
     };
 
@@ -1118,6 +1301,7 @@ export function SupportProxyMeshLayer({
     hasSolidBottom,
     raftThickness,
     includeDetailedPrimitives,
+    interiorSupportIdSet,
   ]);
 
   const modelEntries = React.useMemo(() => {

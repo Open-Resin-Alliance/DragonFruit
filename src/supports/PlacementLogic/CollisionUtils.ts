@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { Vec3 } from '../types';
 import { bezierToLineSegments } from '../Curves/BezierUtils';
 
+const DOUBLE_SIDED_MATERIAL = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+
 const WHISKER_DIAGONAL = 0.7071067811865476;
 const WHISKER_OFFSETS: ReadonlyArray<{ u: number; v: number }> = [
     { u: 1, v: 0 },
@@ -68,8 +70,15 @@ export function checkShaftCollision(
         raycaster.near = 0;
         raycaster.far = maxRayDistance;
         raycaster.set(rayOrigin, direction);
-        const intersections = raycaster.intersectObject(mesh, false);
-        return intersections.length > 0 ? intersections[0] : null;
+        
+        const originalMaterial = mesh.material;
+        try {
+            mesh.material = DOUBLE_SIDED_MATERIAL;
+            const intersections = raycaster.intersectObject(mesh, false);
+            return intersections.length > 0 ? intersections[0] : null;
+        } finally {
+            mesh.material = originalMaterial;
+        }
     };
 
     // 1. Check Center Ray

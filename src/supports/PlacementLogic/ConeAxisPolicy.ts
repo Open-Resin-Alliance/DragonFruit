@@ -1,6 +1,42 @@
 import * as THREE from 'three';
 import { Vec3 } from '../types';
 
+export const MAX_CONE_AXIS_DEVIATION_FROM_SURFACE_NORMAL_DEG = 30;
+
+function normalizeOrFallback(vector: Vec3, fallback: Vec3): THREE.Vector3 {
+    const candidate = new THREE.Vector3(vector.x, vector.y, vector.z);
+    if (candidate.lengthSq() < 1e-10) {
+        return new THREE.Vector3(fallback.x, fallback.y, fallback.z).normalize();
+    }
+    return candidate.normalize();
+}
+
+export function clampConeAxisDeviationFromSurfaceNormal(
+    surfaceNormal: Vec3,
+    desiredConeAxis: Vec3,
+    maxDeviationDeg: number = MAX_CONE_AXIS_DEVIATION_FROM_SURFACE_NORMAL_DEG,
+): Vec3 {
+    const normal = normalizeOrFallback(surfaceNormal, { x: 0, y: 0, z: 1 });
+    let coneAxisVec = normalizeOrFallback(desiredConeAxis, surfaceNormal);
+
+    const maxDeviationRad = THREE.MathUtils.degToRad(maxDeviationDeg);
+    const deviationRad = coneAxisVec.angleTo(normal);
+    if (deviationRad <= maxDeviationRad + 1e-6) {
+        return { x: coneAxisVec.x, y: coneAxisVec.y, z: coneAxisVec.z };
+    }
+
+    const rotationAxis = new THREE.Vector3().crossVectors(normal, coneAxisVec);
+    if (rotationAxis.lengthSq() < 1e-10) {
+        rotationAxis.copy(new THREE.Vector3(0, 0, 1).cross(normal));
+        if (rotationAxis.lengthSq() < 1e-10) {
+            rotationAxis.copy(new THREE.Vector3(1, 0, 0).cross(normal));
+        }
+    }
+    rotationAxis.normalize();
+    coneAxisVec = normal.clone().applyAxisAngle(rotationAxis, maxDeviationRad).normalize();
+    return { x: coneAxisVec.x, y: coneAxisVec.y, z: coneAxisVec.z };
+}
+
 export interface ConeAxisPolicyInput {
     surfaceNormal: Vec3;
     coneAngleMode: 'normal' | 'locked' | 'adaptive';
@@ -16,7 +52,7 @@ export interface ConeAxisPolicyResult {
 export function resolveConeAxisPolicy(input: ConeAxisPolicyInput): ConeAxisPolicyResult {
     const { surfaceNormal, coneAngleMode, adaptiveConeAngleOffsetDeg } = input;
 
-    const normal = new THREE.Vector3(surfaceNormal.x, surfaceNormal.y, surfaceNormal.z).normalize();
+    const normal = normalizeOrFallback(surfaceNormal, { x: 0, y: 0, z: 1 });
     const up = new THREE.Vector3(0, 0, 1);
 
     const surfaceAngleFromUpDeg = normal.angleTo(up) * (180 / Math.PI);
@@ -91,11 +127,39 @@ export function resolveConeAxisPolicy(input: ConeAxisPolicyInput): ConeAxisPolic
         }
     }
 
-    const coneAxis: Vec3 = { x: coneAxisVec.x, y: coneAxisVec.y, z: coneAxisVec.z };
+    const coneAxis = clampConeAxisDeviationFromSurfaceNormal(
+        { x: normal.x, y: normal.y, z: normal.z },
+        { x: coneAxisVec.x, y: coneAxisVec.y, z: coneAxisVec.z },
+    );
+
+    // Never let the cone axis point upward — in resin printing the cone must
+    // point toward the build plate (negative Z).  If the computed axis has a
+    // positive Z component, project it to horizontal with a slight downward tilt.
+    const clampedAxis = clampAxisDownward(coneAxis);
 
     return {
         surfaceAngleFromUpDeg,
         minAllowedSurfaceAngleFromUpDeg,
-        coneAxis,
+        coneAxis: clampedAxis,
+    };
+}
+
+/**
+ * Ensures a cone axis never points upward (positive Z).
+ * Projects upward-pointing axes to horizontal with a 5° downward tilt.
+ */
+function clampAxisDownward(axis: Vec3): Vec3 {
+    if (axis.z <= 0) return axis;
+
+    const hLen = Math.sqrt(axis.x * axis.x + axis.y * axis.y);
+    if (hLen < 0.001) {
+        return { x: 0, y: 0, z: -1 };
+    }
+    const tiltRad = Math.PI / 36; // 5°
+    const scale = 1 / hLen;
+    return {
+        x: axis.x * scale * Math.cos(tiltRad),
+        y: axis.y * scale * Math.cos(tiltRad),
+        z: -Math.sin(tiltRad),
     };
 }

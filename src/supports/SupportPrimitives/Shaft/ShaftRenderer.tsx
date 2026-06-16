@@ -5,7 +5,7 @@ import { usePickingSubscription } from '@/components/picking';
 import { useBracePlacementState } from '../../SupportTypes/Brace/bracePlacementState';
 import { useKickstandPlacementState } from '../../SupportTypes/Kickstand/kickstandPlacementState';
 import { useLeafPlacementState } from '../../SupportTypes/Leaf/leafPlacementState';
-import { emitImmediateModelHover } from '../../interaction/pointerOcclusion';
+import { emitImmediateModelHover, isInteriorSupportInteractionActive } from '../../interaction/pointerOcclusion';
 
 const NOOP_RAYCAST: THREE.Object3D['raycast'] = () => {};
 
@@ -175,7 +175,9 @@ export function ShaftRenderer({
         }
 
         const topIntersectionObject = Array.isArray(e?.intersections)
-            ? ((e.intersections[0] as { object?: THREE.Object3D | null } | undefined)?.object ?? null)
+            ? ((isInteriorSupportInteractionActive()
+                ? e.intersections.find((entry: { object?: THREE.Object3D | null }) => !entry?.object?.userData?.modelId)
+                : e.intersections[0]) as { object?: THREE.Object3D | null } | undefined)?.object ?? null
             : null;
 
         let isTopPointerTargetNow = false;

@@ -54,6 +54,7 @@ export function JointRenderer({
     const radius = displayDiameter / 2;
     const groupRef = useRef<THREE.Group>(null);
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
+    const [pointerHoverActive, setPointerHoverActive] = useState(false);
 
     // State Subscription. When attached to a disk, mirror the disk's selection
     // state instead of having an independent one.
@@ -102,7 +103,11 @@ export function JointRenderer({
         && hit.category === 'joint'
         && hit.objectId === joint.id
         && isParentSelected;
-    const isHovered = !isDragging && !isSupportEditInteractionActive() && isTopPickedJoint && !isSelected;
+    const isHovered = !isDragging
+        && !isSupportEditInteractionActive()
+        && !isSelected
+        && isParentSelected
+        && (isTopPickedJoint || pointerHoverActive);
     
     // Visual State
     // If hovered, glow white. If selected, be blue. Else default/prop color.
@@ -207,16 +212,21 @@ export function JointRenderer({
     
     const handlePointerMove = (e: any) => {
         if (isDragging || isSupportEditInteractionActive()) {
+            setPointerHoverActive(false);
             emitImmediateModelHover(null);
             return;
         }
 
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
+            setPointerHoverActive(false);
             setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
             emitImmediateModelHover(frontModelId);
             return;
         }
+
+        const pointerOverJoint = isPointerOverThisJoint(e);
+        setPointerHoverActive(pointerOverJoint && isParentSelected && isInteractable);
 
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
@@ -225,12 +235,19 @@ export function JointRenderer({
     };
 
     const handlePointerLeave = () => {
+        setPointerHoverActive(false);
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
         }
         emitImmediateModelHover(null);
         document.body.style.cursor = '';
     };
+
+    useEffect(() => {
+        if (!isParentSelected || !isInteractable || isDragging || isSupportEditInteractionActive()) {
+            setPointerHoverActive(false);
+        }
+    }, [isParentSelected, isInteractable, isDragging]);
     
     const hitboxRadius = isParentSelected ? radius * 1.15 : radius;
 

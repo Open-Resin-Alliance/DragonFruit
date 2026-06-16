@@ -6,6 +6,7 @@ export type { OccupancyOptions } from './SupportOccupancy';
 
 export { gridAStar } from './GridAStar';
 export type { GridAStarOptions, GridAStarResult, WarmStartState } from './GridAStar';
+export { solveDeterministicFieldPath } from './FieldDeterministicSolver';
 
 export {
     calculateSmartPlacementV2,

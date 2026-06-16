@@ -4,10 +4,17 @@ import { useSyncExternalStore } from 'react';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { usePicking } from '@/components/picking';
 import { subscribe, getSnapshot } from './state';
+import { getKickstandSnapshot, subscribeToKickstandStore } from './SupportTypes/Kickstand/kickstandStore';
 import { getRaftSettings, subscribeToRaftStore } from './Rafts/Crenelated/RaftState';
-import type { RaftSettings, SupportBaseCircle } from './Rafts/Crenelated/RaftTypes';
+import type { RaftSettings } from './Rafts/Crenelated/RaftTypes';
 import { buildSolidRaftPreviewMeshes } from './Settings/AnatomyPreview/PreviewTypes/Raft/buildSolidRaftPreviewMeshes';
 import { buildLineRaftPreviewMeshes } from './Settings/AnatomyPreview/PreviewTypes/Raft/buildLineRaftPreviewMeshes';
+import {
+  collectRaftBaseCirclesByModel,
+  fromRaftModelKey,
+  RAFT_UNASSIGNED_MODEL_KEY,
+  toRaftModelKey,
+} from './Rafts/Crenelated/raftFootprintCircles';
 
 interface RaftProxyMeshLayerProps {
   clipLower?: number | null;
@@ -47,24 +54,23 @@ type VisibleRaftEntry = {
 type RaftProxyCacheEntry = {
   supportRootsRef: ReturnType<typeof getSnapshot>['roots'];
   supportAnchorsRef: ReturnType<typeof getSnapshot>['anchors'];
+  kickstandRootsRef: ReturnType<typeof getKickstandSnapshot>['roots'];
   raftSignature: string;
   geometriesByModel: Map<string, CachedRaftGeometry>;
 };
 
 let raftProxyCache: RaftProxyCacheEntry | null = null;
-
-const MODEL_NONE_KEY = '__none__';
 const RAFT_BASE_COLOR = '#a3a3a3';
 const SOLID_BOTTOM_TINT_COLOR = '#3b82f6';
 const LINE_BOTTOM_TINT_COLOR = '#f97316';
 const WALL_TINT_COLOR = '#22c55e';
 
 function toModelKey(modelId?: string): string {
-  return modelId ?? MODEL_NONE_KEY;
+  return toRaftModelKey(modelId, RAFT_UNASSIGNED_MODEL_KEY);
 }
 
 function fromModelKey(modelKey: string): string | undefined {
-  return modelKey === MODEL_NONE_KEY ? undefined : modelKey;
+  return fromRaftModelKey(modelKey, RAFT_UNASSIGNED_MODEL_KEY) ?? undefined;
 }
 
 function buildRaftSignature(raft: RaftSettings): string {
@@ -163,37 +169,6 @@ function disposeGeneratedMeshes(meshes: Array<THREE.Mesh | null | undefined>) {
   }
 }
 
-function collectRootCirclesByModel(
-  roots: ReturnType<typeof getSnapshot>['roots'],
-  anchors: ReturnType<typeof getSnapshot>['anchors'],
-): Map<string, SupportBaseCircle[]> {
-  const byModel = new Map<string, SupportBaseCircle[]>();
-
-  for (const root of Object.values(roots)) {
-    const modelKey = toModelKey(root.modelId);
-    const circles = byModel.get(modelKey) ?? [];
-    circles.push({
-      x: root.transform.pos.x,
-      y: root.transform.pos.y,
-      r: root.diameter / 2,
-    });
-    if (!byModel.has(modelKey)) byModel.set(modelKey, circles);
-  }
-
-  for (const anchor of Object.values(anchors)) {
-    const modelKey = toModelKey(anchor.modelId);
-    const circles = byModel.get(modelKey) ?? [];
-    circles.push({
-      x: anchor.rootPos.x,
-      y: anchor.rootPos.y,
-      r: anchor.rootBaseDiameter / 2,
-    });
-    if (!byModel.has(modelKey)) byModel.set(modelKey, circles);
-  }
-
-  return byModel;
-}
-
 export function RaftProxyMeshLayer({
   clipLower,
   clipUpper,
@@ -216,6 +191,8 @@ export function RaftProxyMeshLayer({
   const supportState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const supportRoots = supportState.roots;
   const supportAnchors = supportState.anchors;
+  const kickstandState = useSyncExternalStore(subscribeToKickstandStore, getKickstandSnapshot, getKickstandSnapshot);
+  const kickstandRoots = kickstandState.roots;
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
 
   const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
@@ -241,12 +218,19 @@ export function RaftProxyMeshLayer({
       raftProxyCache
       && raftProxyCache.supportRootsRef === supportRoots
       && raftProxyCache.supportAnchorsRef === supportAnchors
+      && raftProxyCache.kickstandRootsRef === kickstandRoots
       && raftProxyCache.raftSignature === raftSignature
     ) {
       return raftProxyCache.geometriesByModel;
     }
 
-    const rootCirclesByModel = collectRootCirclesByModel(supportRoots, supportAnchors);
+    const rootCirclesByModel = collectRaftBaseCirclesByModel({
+      roots: Object.values(supportRoots),
+      anchors: Object.values(supportAnchors),
+      kickstandRoots: Object.values(kickstandRoots),
+    }, {
+      fallbackModelKey: RAFT_UNASSIGNED_MODEL_KEY,
+    });
     const next = new Map<string, CachedRaftGeometry>();
 
     if (raft.bottomMode === 'solid') {
@@ -306,12 +290,13 @@ export function RaftProxyMeshLayer({
     raftProxyCache = {
       supportRootsRef: supportRoots,
       supportAnchorsRef: supportAnchors,
+      kickstandRootsRef: kickstandRoots,
       raftSignature,
       geometriesByModel: next,
     };
 
     return next;
-  }, [raft, raftSignature, supportRoots, supportAnchors]);
+  }, [raft, raftSignature, supportRoots, supportAnchors, kickstandRoots]);
 
   const visibleEntries = React.useMemo<VisibleRaftEntry[]>(() => {
     const entries: VisibleRaftEntry[] = [];

@@ -5,13 +5,6 @@ import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { AxisLabels } from '@/components/scene/AxisLabels';
 
-export function LoggingHelper({ mode }: { mode?: string }) {
-  React.useEffect(() => {
-    console.log('[SceneCanvas] Mode in Canvas:', mode);
-  }, [mode]);
-  return null;
-}
-
 export function EnableLocalClipping({ enabled = true }: { enabled?: boolean }) {
   const { gl } = useThree();
   useEffect(() => {
@@ -58,28 +51,39 @@ export function CameraClipPlaneStabilizer() {
   return null;
 }
 
-function FillLight({ intensity }: { intensity: number }) {
+function ViewHeadlight({ intensity }: { intensity: number }) {
   const { camera } = useThree();
-  const lightRef = React.useRef<THREE.PointLight | null>(null);
+  const lightRef = React.useRef<THREE.DirectionalLight | null>(null);
+  const targetRef = React.useRef<THREE.Object3D>(new THREE.Object3D());
+  const viewDirectionRef = React.useRef(new THREE.Vector3());
 
   useFrame(() => {
     if (!lightRef.current) return;
-    lightRef.current.position.copy(camera.position);
+
+    const light = lightRef.current;
+    const target = targetRef.current;
+    camera.getWorldDirection(viewDirectionRef.current);
+
+    light.position.copy(camera.position);
+    target.position.copy(camera.position).addScaledVector(viewDirectionRef.current, 100);
+    target.updateMatrixWorld(true);
+    light.target = target;
   });
 
-  // Camera-following fill/headlight so the region under inspection remains
-  // evenly readable while preserving the scene's global ambient + directional
-  // lighting stack.
+  // Camera-forward key light: unlike a point light at the camera, this keeps
+  // the illumination direction stable even when the inspected object is panned
+  // away from screen center.
   return (
-    <pointLight
-      ref={lightRef}
-      name="fill-light"
-      intensity={intensity}
-      decay={0}
-      distance={0}
-      color="#ffffff"
-      userData={{ followCaptureCamera: true }}
-    />
+    <>
+      <directionalLight
+        ref={lightRef}
+        name="view-headlight"
+        intensity={intensity}
+        color="#ffffff"
+        userData={{ followCaptureCamera: true, followCaptureCameraDirection: true }}
+      />
+      <primitive object={targetRef.current} />
+    </>
   );
 }
 
@@ -100,7 +104,7 @@ export function Lights({
       <directionalLight position={[0, 0, 12]} intensity={directionalIntensity} color="#ffffff" />
       <directionalLight position={[0, 0, -12]} intensity={directionalIntensity * 0.15} color="#90a7ff" />
       <hemisphereLight args={['#f6e8ff', '#3e415c', ambientIntensity * 0.6]} />
-      <FillLight intensity={clampedHeadlightIntensity} />
+      <ViewHeadlight intensity={clampedHeadlightIntensity} />
     </>
   );
 }
@@ -395,14 +399,41 @@ export function Helpers({
     return texture;
   }, []);
 
+
+  // Rasterize SVG to canvas and use as texture for robust WebGL support
   const plateLogoTexture = React.useMemo(() => {
-    const texture = new THREE.TextureLoader().load('/dragonfruit_assets/branding/text_logo.svg');
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.generateMipmaps = true;
-    texture.minFilter = THREE.LinearMipmapLinearFilter;
-    texture.magFilter = THREE.LinearFilter;
-    texture.wrapS = THREE.ClampToEdgeWrapping;
-    texture.wrapT = THREE.ClampToEdgeWrapping;
+    const texture = new THREE.Texture();
+    fetch('/dragonfruit_assets/branding/text_logo.svg')
+      .then(res => res.text())
+      .then(svgText => {
+        // Create an image from SVG text
+        const svg = new Blob([svgText], { type: 'image/svg+xml' });
+        const url = URL.createObjectURL(svg);
+        const img = new window.Image();
+        img.onload = () => {
+          // Draw SVG onto a canvas
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width || 1772;
+          canvas.height = img.height || 304;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            texture.image = canvas;
+            texture.needsUpdate = true;
+            texture.colorSpace = THREE.SRGBColorSpace;
+            texture.generateMipmaps = true;
+            texture.minFilter = THREE.LinearMipmapLinearFilter;
+            texture.magFilter = THREE.LinearFilter;
+            texture.wrapS = THREE.ClampToEdgeWrapping;
+            texture.wrapT = THREE.ClampToEdgeWrapping;
+          }
+          URL.revokeObjectURL(url);
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(url);
+        };
+        img.src = url;
+      });
     return texture;
   }, []);
 
@@ -620,6 +651,7 @@ export function Helpers({
         renderOrder={-10}
         raycast={nullRaycast}
         visible={shouldShowBuildPlate && clampedBuildPlateOpacity > 0.001}
+        frustumCulled={false}
         userData={{ thumbnailHelperType: 'buildPlate' }}
       >
         <primitive object={buildPlateGeometry} attach="geometry" />
@@ -633,13 +665,14 @@ export function Helpers({
       </mesh>
 
       {/* Grid on XY plane (horizontal) - rotate 90° around X */}
-      {shouldShowGrid && (
+      {shouldShowGrid && clampedBuildPlateOpacity > 0.001 && (
         <gridHelper
           args={[baseSize, divisions, gridMajorColor, gridMinorColor]}
           position={[buildVolumeCenterX, buildVolumeCenterY, -0.01]}
           rotation={[Math.PI / 2, 0, 0]}
           scale={[scaleX, 1, scaleZ]}
           raycast={nullRaycast}
+          frustumCulled={false}
           userData={{ thumbnailHelperType: 'grid' }}
         />
       )}
@@ -647,9 +680,11 @@ export function Helpers({
       {shouldShowGrid && shouldShowBuildPlate && (
         <group
           position={[0, 0, plateLogoZ]}
+          visible={shouldShowBuildPlate && clampedBuildPlateOpacity > 0.001}
+          frustumCulled={false}
           userData={{ thumbnailHelperType: 'grid' }}
         >
-          <mesh position={[plateLogoX, plateLogoY, 0]} renderOrder={20} raycast={nullRaycast}>
+          <mesh position={[plateLogoX, plateLogoY, 0]} renderOrder={20} raycast={nullRaycast} frustumCulled={false}>
             <planeGeometry args={[plateLogoWidth, plateLogoHeight]} />
             <meshBasicMaterial
               map={plateLogoTexture}
@@ -668,7 +703,7 @@ export function Helpers({
 
       {/* Axes: short, thicker arrows hovering slightly above Z0 to avoid grid clipping */}
       {shouldShowGrid && (
-      <group position={[resolvedOriginMinX, resolvedOriginMinY, axisBaseZ]} userData={{ thumbnailHelperType: 'grid' }}>
+      <group position={[resolvedOriginMinX, resolvedOriginMinY, axisBaseZ]} frustumCulled={false} userData={{ thumbnailHelperType: 'grid' }}>
         {/* X axis */}
         <mesh position={[axisLength * 0.5, 0, 0]} rotation={[0, 0, -Math.PI * 0.5]} raycast={nullRaycast}>
           <cylinderGeometry args={[axisShaftRadius, axisShaftRadius, axisLength, 12]} />
@@ -707,7 +742,7 @@ export function Helpers({
 
       {/* FRONT orientation marker locked to grid front edge and constrained within build plate bounds */}
       {shouldShowBuildPlate && (
-      <group position={[buildVolumeCenterX, buildVolumeCenterY + frontMarkerY, 0.001]} userData={{ thumbnailHelperType: 'buildPlate' }}>
+      <group position={[buildVolumeCenterX, buildVolumeCenterY + frontMarkerY, 0.001]} frustumCulled={false} userData={{ thumbnailHelperType: 'buildPlate' }}>
         {frontTexture && (
           <mesh renderOrder={21} raycast={nullRaycast}>
             <planeGeometry args={[frontMarkerWidth, frontMarkerDepth]} />
@@ -728,8 +763,8 @@ export function Helpers({
       )}
 
       {/* Safety margin hazard stripes - semi-transparent red-white diagonal stripes */}
-      {shouldShowBuildPlate && hasSafetyMargins && clampedBuildPlateOpacity > 0.001 && (
-        <group position={[0, 0, plateLogoZ]} userData={{ thumbnailHelperType: 'buildPlate' }}>
+      {shouldShowBuildPlate && hasSafetyMargins && (
+        <group position={[0, 0, plateLogoZ]} visible={clampedBuildPlateOpacity > 0.001} frustumCulled={false} userData={{ thumbnailHelperType: 'buildPlate' }}>
           {/* Front strip */}
           {marginFront > 0 && (
             <mesh

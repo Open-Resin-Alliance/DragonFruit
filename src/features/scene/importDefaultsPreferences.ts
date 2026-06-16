@@ -92,11 +92,29 @@ function resolveTrunkDiameterMm(trunk: Trunk): number | null {
   return null;
 }
 
+function resolveKickstandDiameterMm(
+  build: NonNullable<DragonfruitImportFormat['kickstands']>[number],
+): number | null {
+  const firstSegmentDiameter = build.kickstand.segments[0]?.diameter;
+  if (typeof firstSegmentDiameter === 'number' && Number.isFinite(firstSegmentDiameter) && firstSegmentDiameter > 0) {
+    return firstSegmentDiameter;
+  }
+
+  const bodyDiameter = build.kickstand.profile.bodyDiameterMm;
+  if (typeof bodyDiameter === 'number' && Number.isFinite(bodyDiameter) && bodyDiameter > 0) {
+    return bodyDiameter;
+  }
+
+  return null;
+}
+
 export function applyImportDefaultsToSupportPayload(
   payload: DragonfruitImportFormat,
   defaults: ImportDefaultsSettings,
 ): DragonfruitImportFormat {
-  if (defaults.rootsEnabled || payload.roots.length === 0 || payload.trunks.length === 0) {
+  const kickstandBuilds = payload.kickstands ?? [];
+
+  if (defaults.rootsEnabled || (payload.roots.length === 0 && kickstandBuilds.length === 0)) {
     return payload;
   }
 
@@ -107,6 +125,15 @@ export function applyImportDefaultsToSupportPayload(
     const existing = rootDiameterById.get(trunk.rootId);
     if (existing == null || diameter > existing) {
       rootDiameterById.set(trunk.rootId, diameter);
+    }
+  }
+
+  for (const build of kickstandBuilds) {
+    const diameter = resolveKickstandDiameterMm(build);
+    if (diameter == null) continue;
+    const existing = rootDiameterById.get(build.root.id);
+    if (existing == null || diameter > existing) {
+      rootDiameterById.set(build.root.id, diameter);
     }
   }
 
@@ -128,6 +155,22 @@ export function applyImportDefaultsToSupportPayload(
     };
   });
 
+  const nextKickstands = kickstandBuilds.map((build) => {
+    const kickstandDiameter = rootDiameterById.get(build.root.id);
+    if (kickstandDiameter == null || build.root.diameter === kickstandDiameter) {
+      return build;
+    }
+
+    changed = true;
+    return {
+      ...build,
+      root: {
+        ...build.root,
+        diameter: kickstandDiameter,
+      },
+    };
+  });
+
   if (!changed) {
     return payload;
   }
@@ -135,6 +178,7 @@ export function applyImportDefaultsToSupportPayload(
   return {
     ...payload,
     roots: nextRoots,
+    kickstands: nextKickstands,
   };
 }
 

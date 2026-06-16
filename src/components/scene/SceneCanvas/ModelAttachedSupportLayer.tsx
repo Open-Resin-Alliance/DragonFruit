@@ -47,6 +47,16 @@ export type ModelAttachedSupportLayerProps = {
   leafPlacementPreview?: SupportData | null;
   bracePlacementPreview?: BracePreviewData | null;
   kickstandPlacementPreview?: SupportData | null;
+  /** When true, only show supports whose contact points touch the cavity mesh. */
+  interiorView?: boolean;
+  /** Cavity mesh geometry keyed by modelId, used for interior support filtering. */
+  cavityGeometryByModelId?: Map<string, THREE.BufferGeometry>;
+  /**
+   * World-to-local inverse matrices per modelId. Needed to transform support
+   * contact positions (world space) into the cavity geometry's local space
+   * for accurate BVH closest-point queries.
+   */
+  modelWorldInverseById?: Map<string, THREE.Matrix4>;
 };
 
 export function ModelAttachedSupportLayer({
@@ -87,6 +97,9 @@ export function ModelAttachedSupportLayer({
   leafPlacementPreview = null,
   bracePlacementPreview = null,
   kickstandPlacementPreview = null,
+  interiorView = false,
+  cavityGeometryByModelId,
+  modelWorldInverseById,
 }: ModelAttachedSupportLayerProps) {
   // Performance policy: use proxy support/raft rendering everywhere except
   // support workspace, where full editable primitives are required.
@@ -96,7 +109,7 @@ export function ModelAttachedSupportLayer({
 
   return (
     <>
-      {!hideRaftPrimitives && useUltraLazySupports && (
+      {!hideRaftPrimitives && !interiorView && useUltraLazySupports && (
         <RaftProxyMeshLayer
           modelFilterId={hideRaftPrimitivesForInactiveModels && activeModelId ? activeModelId : modelFilterId}
           clipLower={clipLower}
@@ -117,7 +130,7 @@ export function ModelAttachedSupportLayer({
         />
       )}
 
-      {!hideRaftPrimitives && !useUltraLazySupports && (
+      {!hideRaftPrimitives && !interiorView && !useUltraLazySupports && (
         <>
           <RaftRenderer
             clipLower={clipLower}
@@ -178,6 +191,9 @@ export function ModelAttachedSupportLayer({
             onModelPointerSelect={onModelPointerSelect}
             enablePointerSelection={proxyPointerSelectionEnabled}
             includeDetailedPrimitives={proxyIncludeDetailedPrimitives}
+            interiorView={interiorView}
+            cavityGeometryByModelId={cavityGeometryByModelId}
+            modelWorldInverseById={modelWorldInverseById}
           />
         ) : (
           <SupportRenderer
@@ -207,6 +223,9 @@ export function ModelAttachedSupportLayer({
             leafPlacementPreview={leafPlacementPreview}
             bracePlacementPreview={bracePlacementPreview}
             kickstandPlacementPreview={kickstandPlacementPreview}
+            interiorView={interiorView}
+            cavityGeometryByModelId={cavityGeometryByModelId}
+            modelWorldInverseById={modelWorldInverseById}
           />
         )}
       </group>

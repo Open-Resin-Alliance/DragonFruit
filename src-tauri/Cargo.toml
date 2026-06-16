@@ -1,6 +1,6 @@
 [package]
 name = "dragonfruit-desktop"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 
 [build-dependencies]
@@ -17,6 +17,9 @@ tauri = { git = "https://github.com/tauri-apps/tauri", rev = "562bc592b337de417a
 # to avoid E0252 collision (they pull tauri with default wry feature).
 tauri-plugin-log = { version = "2", optional = true }
 tauri-plugin-single-instance = { version = "2", optional = true }
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+url = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
@@ -35,6 +38,8 @@ dragonfruit-slicing-engine = { path = "../rust/dragonfruit-slicing-engine" }
 dragonfruit-rtsp-relay = { path = "../rust/dragonfruit-rtsp-relay" }
 dragonfruit-islands = { path = "../rust/dragonfruit-islands" }
 dragonfruit-mesh-repair = { path = "../rust/dragonfruit-mesh-repair", features = ["manifold"] }
+dragonfruit-sdf = { path = "../rust/dragonfruit-sdf" }
+dragonfruit-astar = { path = "../rust/dragonfruit-astar" }
 flate2 = "1.1.9"
 bytemuck = "1"
 

@@ -14,6 +14,8 @@ export type SlicingSettingsModeOption = {
   isDefault?: boolean;
 };
 
+export type SlicingXPackingStrategy = 'none' | 'bitdepth-packed-x';
+
 export type SlicingFormatDefinition = {
   id: string;
   outputFormat: PrinterOutputFormat;
@@ -21,6 +23,7 @@ export type SlicingFormatDefinition = {
   ownership: SlicingFormatOwnership;
   layerDataKind: 'png' | 'raw-mask';
   pluginId?: string;
+  xPackingStrategy?: SlicingXPackingStrategy;
   formatVersions?: SlicingFormatVersionOption[];
   settingsModes?: SlicingSettingsModeOption[];
   rustModulePath: string;

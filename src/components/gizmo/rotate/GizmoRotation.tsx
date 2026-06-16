@@ -7,8 +7,18 @@ import { Line } from '@react-three/drei';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
 import { snapAngle, SNAP_COARSE, SNAP_FINE, SNAP_STORAGE_KEY } from './snapRotation';
 import type { GizmoAxis } from '../types';
+import {
+  getCachedConeGeometry,
+  getCachedRotationArcGeometry,
+  getCachedRotationArcPoints,
+  getCachedSphereGeometry,
+} from '../gizmoGeometryCache';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
+
+const ROTATION_CENTER_DEADZONE_PX = 24;
+const ROTATION_NEAR_CENTER_JUMP_GUARD_PX = 56;
+const ROTATION_NEAR_CENTER_MAX_DELTA = Math.PI / 2;
 
 interface GizmoRotationProps {
   axis: GizmoAxis;
@@ -22,11 +32,43 @@ interface GizmoRotationProps {
   suppressAxisAnimations?: boolean;
   enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
+  disableRingBillboard?: boolean;
+  /** Scale factor for the rotation handle (diamond cones and pick sphere) relative to gizmo size */
+  handleScale?: number;
+  /**
+   * World-space direction of this ring's rotation axis.
+   * When the gizmo parent group is rotated, the hardcoded world-axis
+   * comparison in computeShouldFlip no longer matches the visual axis.
+   * Pass the world-space direction so flip detection is correct.
+   */
+  worldAxisDir?: THREE.Vector3;
+  /**
+   * Optional override for the visual animation sign.
+   * Set to -1 to invert the ring handle animation direction relative to the
+   * object rotation (e.g. when the gizmo local frame has an inverted axis
+   * convention like displayY = -cutterY in HolePunchGizmo).
+   */
+  axisVisualFlip?: number;
   onDragStart: () => boolean | void;
   onDrag: (angle: number) => void;
   onDragEnd: () => void;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
+}
+
+function getPositiveAxisMidpointAngle(axis: GizmoAxis): number {
+  if (axis === 'x') {
+    // X rotation lives in the Y/Z plane. In X-ring local space,
+    // +Y is local +Y and +Z is local -X.
+    return (3 * Math.PI) / 4;
+  }
+  if (axis === 'y') {
+    // Y rotation lives in the X/Z plane. With the +Y ring orientation,
+    // +X is local +X and +Z is local -Y.
+    return -Math.PI / 4;
+  }
+  // Z rotation lives in the X/Y plane, directly between local +X and +Y.
+  return Math.PI / 4;
 }
 
 /**
@@ -44,6 +86,10 @@ export function GizmoRotation({
   suppressAxisAnimations = false,
   enableLighting = true,
   gizmoPosition,
+  disableRingBillboard = false,
+  handleScale = 1.0,
+  worldAxisDir,
+  axisVisualFlip = 1,
   onDragStart,
   onDrag,
   onDragEnd,
@@ -51,8 +97,9 @@ export function GizmoRotation({
   onPointerLeave,
 }: GizmoRotationProps) {
   const [isDragging, setIsDragging] = useState(false);
-  const handleAngleRef = useRef<number>(0);
-  const targetHandleAngleRef = useRef<number>(0);
+  const positiveAxisMidpointAngle = getPositiveAxisMidpointAngle(axis);
+  const handleAngleRef = useRef<number>(positiveAxisMidpointAngle);
+  const targetHandleAngleRef = useRef<number>(positiveAxisMidpointAngle);
   const billboardRotationRef = useRef<number>(0);
   const lastMouseAngle = useRef<number>(0);
   const shouldFlipRef = useRef(false);
@@ -63,15 +110,26 @@ export function GizmoRotation({
   // Callback refs to stabilize useEffect deps (prevents effect churn during drag)
   const onDragRef = useRef(onDrag);
   const onDragEndRef = useRef(onDragEnd);
-  onDragRef.current = onDrag;
-  onDragEndRef.current = onDragEnd;
   const rotatingArcRef = useRef<THREE.Group>(null);
   const handleRootRef = useRef<THREE.Group>(null);
   const billboardGroupRef = useRef<THREE.Group>(null);
   const pointLightRef = useRef<THREE.PointLight>(null);
   const { camera, gl } = useThree();
 
+  useEffect(() => {
+    onDragRef.current = onDrag;
+    onDragEndRef.current = onDragEnd;
+  }, [onDrag, onDragEnd]);
+
   const computeShouldFlip = useCallback(() => {
+    if (worldAxisDir) {
+      // Use the gizmo's actual local axis direction for flip detection.
+      // This ensures correct sign regardless of gizmo rotation.
+      const cameraOffset = new THREE.Vector3().subVectors(camera.position, gizmoPosition);
+      return cameraOffset.dot(worldAxisDir) > 0;
+    }
+    // Fall back to world-axis comparison when no worldAxisDir is given
+    // (existing behavior for non-rotated gizmos).
     if (axis === 'x') {
       return camera.position.x - gizmoPosition.x > 0;
     }
@@ -79,7 +137,7 @@ export function GizmoRotation({
       return camera.position.y - gizmoPosition.y > 0;
     }
     return camera.position.z - gizmoPosition.z > 0;
-  }, [axis, camera.position, gizmoPosition.x, gizmoPosition.y, gizmoPosition.z]);
+  }, [axis, camera.position, gizmoPosition, worldAxisDir]);
 
   const getGizmoScreenCenter = useCallback(() => {
     const rect = gl.domElement.getBoundingClientRect();
@@ -133,12 +191,22 @@ export function GizmoRotation({
       return Math.atan2(cameraDir.z, cameraDir.y) + Math.PI / 2;
     }
     if (axis === 'y') {
-      return Math.atan2(cameraDir.z, cameraDir.x);
+      // The Y ring is rotated into the X/Z plane with local +Y mapped to
+      // world -Z, so project camera Z with the matching sign.
+      return Math.atan2(-cameraDir.z, cameraDir.x);
     }
     return Math.atan2(cameraDir.y, cameraDir.x);
   }, [axis, camera.position, gizmoPosition]);
 
   React.useEffect(() => {
+    if (disableRingBillboard) {
+      if (isDragging) return;
+      // Center the active arc between the two positive arrow axes after
+      // the drag completes so the handle stays aligned with the new frame.
+      handleAngleRef.current = positiveAxisMidpointAngle;
+      targetHandleAngleRef.current = positiveAxisMidpointAngle;
+      return;
+    }
     if (!suppressAxisAnimations || isDragging) return;
     shouldFlipRef.current = computeShouldFlip();
     const aligned = getCameraAlignedAngle();
@@ -147,11 +215,11 @@ export function GizmoRotation({
 
     const cameraDir = new THREE.Vector3().subVectors(camera.position, gizmoPosition).normalize();
     billboardRotationRef.current = Math.atan2(cameraDir.y, cameraDir.x);
-  }, [camera.position, computeShouldFlip, getCameraAlignedAngle, gizmoPosition, isDragging, suppressAxisAnimations]);
+  }, [camera.position, computeShouldFlip, getCameraAlignedAngle, gizmoPosition, isDragging, positiveAxisMidpointAngle, suppressAxisAnimations, disableRingBillboard]);
 
   // Ref-based temporal smoothing to avoid micro-shimmer from per-frame React state updates.
   useFrame(() => {
-    if (!isDragging) {
+    if (!isDragging && !disableRingBillboard) {
       shouldFlipRef.current = computeShouldFlip();
       targetHandleAngleRef.current = getCameraAlignedAngle();
     }
@@ -185,23 +253,29 @@ export function GizmoRotation({
       pointLightRef.current.position.set(hx, hy, 0);
     }
 
-    const cameraDir = new THREE.Vector3().subVectors(camera.position, gizmoPosition).normalize();
-    const billboardTarget = Math.atan2(cameraDir.y, cameraDir.x);
-    if (suppressAxisAnimations) {
-      billboardRotationRef.current = billboardTarget;
-    } else {
-      billboardRotationRef.current += (billboardTarget - billboardRotationRef.current) * 0.2;
-    }
-    if (billboardGroupRef.current) {
-      billboardGroupRef.current.rotation.x = billboardRotationRef.current;
+    if (!disableRingBillboard) {
+      const cameraDir = new THREE.Vector3().subVectors(camera.position, gizmoPosition).normalize();
+      const billboardTarget = Math.atan2(cameraDir.y, cameraDir.x);
+      if (suppressAxisAnimations) {
+        billboardRotationRef.current = billboardTarget;
+      } else {
+        billboardRotationRef.current += (billboardTarget - billboardRotationRef.current) * 0.2;
+      }
+      if (billboardGroupRef.current) {
+        billboardGroupRef.current.rotation.x = billboardRotationRef.current;
+      }
     }
   }, -1);
 
   // Rotation for each axis
   const rotation: [number, number, number] =
-    axis === 'x' ? [0, Math.PI / 2, 0] : axis === 'y' ? [Math.PI / 2, 0, 0] : [0, 0, 0];
+    axis === 'x' ? [0, Math.PI / 2, 0] : axis === 'y' ? [-Math.PI / 2, 0, 0] : [0, 0, 0];
 
-  const initialHandlePos: [number, number, number] = [GIZMO_SIZES.ringMajorRadius, 0, 0];
+  const initialHandlePos: [number, number, number] = [
+    Math.cos(positiveAxisMidpointAngle) * GIZMO_SIZES.ringMajorRadius,
+    Math.sin(positiveAxisMidpointAngle) * GIZMO_SIZES.ringMajorRadius,
+    0,
+  ];
   
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
     // Ignore right-click to allow camera orbit controls
@@ -213,12 +287,12 @@ export function GizmoRotation({
     }
     
     e.stopPropagation();
-    (e as any).stopped = true; // Mark event as handled for OrbitControls
+    e.stopped = true; // Mark event as handled for OrbitControls
 
     shouldFlipRef.current = computeShouldFlip();
     
     // Calculate initial mouse angle
-    lastMouseAngle.current = getMouseAngle(e.clientX, e.clientY);
+    lastMouseAngle.current = getMousePolar(e.clientX, e.clientY).angle;
     
     const allowed = onDragStart();
     if (allowed === false) {
@@ -246,9 +320,14 @@ export function GizmoRotation({
     window.dispatchEvent(new CustomEvent('dragonfruit:rotation-hint', { detail: { visible: false } }));
   };
 
-  const getMouseAngle = useCallback((clientX: number, clientY: number): number => {
+  const getMousePolar = useCallback((clientX: number, clientY: number): { angle: number; distance: number } => {
     const center = getGizmoScreenCenter();
-    return Math.atan2(clientY - center.y, clientX - center.x);
+    const dx = clientX - center.x;
+    const dy = clientY - center.y;
+    return {
+      angle: Math.atan2(dy, dx),
+      distance: Math.hypot(dx, dy),
+    };
   }, [getGizmoScreenCenter]);
 
   // Global pointer move and up listeners during drag
@@ -256,17 +335,29 @@ export function GizmoRotation({
     if (!isDragging) return;
 
     const handleGlobalPointerMove = (e: PointerEvent) => {
-      const currentMouseAngle = getMouseAngle(e.clientX, e.clientY);
+      const mousePolar = getMousePolar(e.clientX, e.clientY);
+      const currentMouseAngle = mousePolar.angle;
       let deltaAngle = currentMouseAngle - lastMouseAngle.current;
 
       // Handle angle wrapping (crossing -π/π boundary)
       if (deltaAngle > Math.PI) deltaAngle -= 2 * Math.PI;
       if (deltaAngle < -Math.PI) deltaAngle += 2 * Math.PI;
 
+      if (
+        mousePolar.distance < ROTATION_CENTER_DEADZONE_PX
+        || (
+          mousePolar.distance < ROTATION_NEAR_CENTER_JUMP_GUARD_PX
+          && Math.abs(deltaAngle) > ROTATION_NEAR_CENTER_MAX_DELTA
+        )
+      ) {
+        lastMouseAngle.current = currentMouseAngle;
+        return;
+      }
+
       // Compute sign factors for axis inversion and camera flip
       const flipMult = shouldFlipRef.current ? -1 : 1;
       const objectSignFactor = -flipMult;
-      const axisSign = (axis === 'x' || axis === 'z') ? -1 : 1;
+      const axisSign = -1;
 
       const rawObjectDelta = deltaAngle * objectSignFactor;
       rawAccumulatedAngleRef.current += rawObjectDelta;
@@ -298,8 +389,13 @@ export function GizmoRotation({
         lastSnappedAngleRef.current += rawObjectDelta;
       }
 
-      // Visual delta = objectDelta * axisSign (x/z axes invert visual relative to object)
-      const visualDelta = emittedObjectDelta * axisSign;
+      // Visual delta = objectDelta * axisSign. The model applies emitted
+      // object deltas with the opposite sign, so the handle arc mirrors that
+      // application step to move with the visible rotation.
+      // axisVisualFlip allows the parent to invert the visual animation direction
+      // (e.g. when the gizmo's local frame has an inverted axis convention such
+      // as displayY = -cutterY in HolePunchGizmo).
+      const visualDelta = emittedObjectDelta * axisSign * axisVisualFlip;
 
       // Update handle angle for visual feedback (ref-based)
       handleAngleRef.current += visualDelta;
@@ -333,7 +429,7 @@ export function GizmoRotation({
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
     };
-  }, [isDragging, getMouseAngle, axis]);
+  }, [isDragging, getMousePolar, axis, axisVisualFlip]);
 
   // Use GPU picking hover state OR prop-based hover (fallback)
   const effectiveHovered = !suppressHover && (isPickingHovered || isHovered);
@@ -363,13 +459,6 @@ export function GizmoRotation({
       ? GIZMO_COLORS.active
       : ringColors.ring;
 
-  // Emissive intensity based on state (uses effectiveHovered for GPU picking support)
-  const emissiveIntensity = isActive
-    ? GIZMO_LIGHTING.emissiveIntensity.active
-    : effectiveHovered
-    ? GIZMO_LIGHTING.emissiveIntensity.hovered
-    : GIZMO_LIGHTING.emissiveIntensity.idle;
-
   // Point light intensity based on state (uses effectiveHovered for GPU picking support)
   const lightIntensity = isActive
     ? GIZMO_LIGHTING.pointLightIntensity.active
@@ -377,90 +466,21 @@ export function GizmoRotation({
     ? GIZMO_LIGHTING.pointLightIntensity.hovered
     : GIZMO_LIGHTING.pointLightIntensity.idle;
 
-  // Create front arc (90 degrees) - quarter circle
-  const frontArcPoints = useMemo(() => {
-    const points = [];
-    const segments = 72;
-    // Front arc: from -45° to +45° (90° total)
-    const arcAngle = Math.PI / 2; // 90° in radians
-    for (let i = 0; i <= segments; i++) {
-      const angle = (i / segments) * arcAngle - arcAngle / 2; // -45° to +45°
-      points.push(
-        new THREE.Vector3(
-          Math.cos(angle) * GIZMO_SIZES.ringMajorRadius,
-          Math.sin(angle) * GIZMO_SIZES.ringMajorRadius,
-          0
-        )
-      );
-    }
-    return points;
-  }, []);
-
-  const backArcPoints = useMemo(() => {
-    const points = [];
-    const segments = 72;
-    // Back arc: from +90° to +270° (relative to camera direction)
-    for (let i = 0; i <= segments; i++) {
-      const angle = (i / segments) * Math.PI + Math.PI / 2; // +90° to +270°
-      points.push(
-        new THREE.Vector3(
-          Math.cos(angle) * GIZMO_SIZES.ringMajorRadius,
-          Math.sin(angle) * GIZMO_SIZES.ringMajorRadius,
-          0
-        )
-      );
-    }
-    return points;
-  }, []);
+  const frontArcPoints = useMemo(() => getCachedRotationArcPoints('front'), []);
+  const backArcPoints = useMemo(() => getCachedRotationArcPoints('back'), []);
 
   // Ring rotation uses same logic as handle position
   // (The handleAngle already calculated above is what we need)
 
-  // Create gradient tube geometry for the arc (to match axis line thickness)
-  const arcGeometry = useMemo(() => {
-    const segments = 72;
-    const arcAngle = Math.PI / 2; // 90°
-    
-    // Get pure colors based on axis (center of arc)
-    const pureCenterColor = axis === 'x' ? '#ff0000' : axis === 'y' ? '#0ce300' : '#0000ff';
-    // Get end colors (lighter at arc ends)
-    const arcEndColor = axis === 'x' ? '#ff9900' : axis === 'y' ? '#ffcc00' : '#1596ff';
-    
-    const pureColor = new THREE.Color(pureCenterColor);
-    const endColor = new THREE.Color(arcEndColor);
-    
-    // Create curve path for the arc
-    const points: THREE.Vector3[] = [];
-    for (let i = 0; i <= segments; i++) {
-      const angle = (i / segments) * arcAngle - arcAngle / 2;
-      const x = Math.cos(angle) * GIZMO_SIZES.ringMajorRadius;
-      const y = Math.sin(angle) * GIZMO_SIZES.ringMajorRadius;
-      points.push(new THREE.Vector3(x, y, 0));
-    }
-    
-    const curve = new THREE.CatmullRomCurve3(points);
-    const tubeGeometry = new THREE.TubeGeometry(curve, segments, 0.016, 16, false);
-    
-    // Apply gradient colors to tube
-    const colors = new Float32Array(tubeGeometry.attributes.position.count * 3);
-    for (let i = 0; i < tubeGeometry.attributes.position.count; i++) {
-      const x = tubeGeometry.attributes.position.getX(i);
-      const y = tubeGeometry.attributes.position.getY(i);
-      const angle = Math.atan2(y, x);
-      const normalizedAngle = (angle + arcAngle / 2) / arcAngle; // 0 to 1 along arc
-      
-      // Gradient from ends to center
-      const distFromCenter = Math.abs(normalizedAngle - 0.5) * 2;
-      const t = Math.max(0, (distFromCenter - 0.4) / 0.6);
-      const color = new THREE.Color().lerpColors(pureColor, endColor, t);
-      colors[i * 3] = color.r;
-      colors[i * 3 + 1] = color.g;
-      colors[i * 3 + 2] = color.b;
-    }
-    
-    tubeGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    return tubeGeometry;
-  }, [axis]);
+  const arcGeometry = useMemo(() => getCachedRotationArcGeometry(axis), [axis]);
+  const pickGeometry = useMemo(
+    () => getCachedSphereGeometry(Math.max(0.18, GIZMO_SIZES.ringDiamondRadius * 0.9 * handleScale), 16, 16),
+    [handleScale],
+  );
+  const diamondConeGeometry = useMemo(
+    () => getCachedConeGeometry(GIZMO_SIZES.ringDiamondRadius * 0.36, GIZMO_SIZES.ringDiamondRadius, 16),
+    [],
+  );
 
   return (
     <group
@@ -477,7 +497,7 @@ export function GizmoRotation({
         onPointerEnter={handlePointerEnterLocal}
         onPointerLeave={handlePointerLeaveLocal}
       >
-        <sphereGeometry args={[Math.max(0.18, GIZMO_SIZES.ringDiamondRadius * 0.9), 16, 16]} />
+        <primitive object={pickGeometry} attach="geometry" />
         <meshBasicMaterial visible={false} />
       </mesh>
 
@@ -529,7 +549,7 @@ export function GizmoRotation({
       <group
         ref={handleRootRef}
         position={initialHandlePos}
-        scale={isHighlighted ? 1.08 : 1.0}
+        scale={(isHighlighted ? 1.08 : 1.0) * handleScale}
         onPointerDown={interactionsEnabled ? handlePointerDown : undefined}
         onPointerEnter={interactionsEnabled ? handlePointerEnterLocal : undefined}
         onPointerLeave={interactionsEnabled ? handlePointerLeaveLocal : undefined}
@@ -537,10 +557,10 @@ export function GizmoRotation({
         {/* Billboard group to improve arrow readability relative to camera */}
         <group ref={billboardGroupRef}>
           {/* Clockwise-pointing cone along tangent */}
-          <group position={[GIZMO_SIZES.ringDiamondRadius / 2, 0, 0]} rotation={[0, 0, -Math.PI / 2]}>
+          <group position={[GIZMO_SIZES.ringDiamondRadius * 0.52, 0, 0]} rotation={[0, 0, -Math.PI / 2]}>
             {/* Outline - slightly larger with darker color */}
-            <mesh scale={1.15}>
-              <coneGeometry args={[GIZMO_SIZES.ringDiamondRadius * 0.4, GIZMO_SIZES.ringDiamondRadius, 16]} />
+            <mesh scale={1.08}>
+              <primitive object={diamondConeGeometry} attach="geometry" />
               <meshBasicMaterial
                 color={new THREE.Color(diamondPrimaryColor).multiplyScalar(0.3).getHex()}
                 transparent
@@ -550,7 +570,7 @@ export function GizmoRotation({
             </mesh>
             {/* Main colored cone */}
             <mesh>
-              <coneGeometry args={[GIZMO_SIZES.ringDiamondRadius * 0.4, GIZMO_SIZES.ringDiamondRadius, 16]} />
+              <primitive object={diamondConeGeometry} attach="geometry" />
               <meshBasicMaterial
                 color={diamondPrimaryColor}
                 transparent
@@ -561,10 +581,10 @@ export function GizmoRotation({
           </group>
           
           {/* Counter-clockwise-pointing cone along tangent */}
-          <group position={[-GIZMO_SIZES.ringDiamondRadius / 2, 0, 0]} rotation={[0, 0, Math.PI / 2]}>
+          <group position={[-GIZMO_SIZES.ringDiamondRadius * 0.52, 0, 0]} rotation={[0, 0, Math.PI / 2]}>
             {/* Outline - slightly larger with darker color */}
-            <mesh scale={1.15}>
-              <coneGeometry args={[GIZMO_SIZES.ringDiamondRadius * 0.4, GIZMO_SIZES.ringDiamondRadius, 16]} />
+            <mesh scale={1.08}>
+              <primitive object={diamondConeGeometry} attach="geometry" />
               <meshBasicMaterial
                 color={new THREE.Color(diamondSecondaryColor).multiplyScalar(0.32).getHex()}
                 transparent
@@ -574,7 +594,7 @@ export function GizmoRotation({
             </mesh>
             {/* Main colored cone */}
             <mesh>
-              <coneGeometry args={[GIZMO_SIZES.ringDiamondRadius * 0.4, GIZMO_SIZES.ringDiamondRadius, 16]} />
+              <primitive object={diamondConeGeometry} attach="geometry" />
               <meshBasicMaterial
                 color={diamondSecondaryColor}
                 transparent

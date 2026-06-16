@@ -1,7 +1,8 @@
 import type { Anchor, Joint, Vec3 } from '../../types';
 import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
 import type { SupportData } from '../../rendering/SupportBuilder';
-import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
+import type * as THREE from 'three';
+import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
 import { getSettings } from '../../Settings';
 import { resolveConeAxisPolicy } from '../../PlacementLogic/ConeAxisPolicy';
 import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
@@ -17,6 +18,7 @@ export interface AnchorBuildInput {
     tipPos: Vec3;
     tipNormal: Vec3;
     modelId: string;
+    mesh?: THREE.Mesh;
 }
 
 export interface AnchorBuildResult {
@@ -25,7 +27,7 @@ export interface AnchorBuildResult {
 }
 
 export function buildAnchorData(input: AnchorBuildInput): AnchorBuildResult {
-    const { tipPos, tipNormal, modelId } = input;
+    const { tipPos, tipNormal, modelId, mesh } = input;
 
     const settings = getSettings();
     const settingsCodeHex = encodeSupportSettingsHex(settings);
@@ -50,17 +52,6 @@ export function buildAnchorData(input: AnchorBuildInput): AnchorBuildResult {
         standoffAngleThreshold: Math.PI / 4,
     };
 
-    // Contact cone disk offset
-    const diskThickness = tipProfile.type === 'disk'
-        ? calculateDiskThickness(tipNormal, effectiveConeAxis, tipProfile)
-        : 0;
-
-    const coneStartPos: Vec3 = {
-        x: tipPos.x + tipNormal.x * diskThickness,
-        y: tipPos.y + tipNormal.y * diskThickness,
-        z: tipPos.z + tipNormal.z * diskThickness,
-    };
-
     // Compute raft vertical offset (must match RootsRenderer logic)
     const raft = getRaftSettings();
     const hasSolidBottom = raft.bottomMode === 'solid';
@@ -74,16 +65,38 @@ export function buildAnchorData(input: AnchorBuildInput): AnchorBuildResult {
     const targetSocketZ = verticalOffset + effectiveDiskHeight + ANCHOR_ROOT_HEIGHT_MM;
     const dzPerUnit = effectiveConeAxis.z;
     const coneLength = Math.abs(dzPerUnit) > 1e-6
-        ? (targetSocketZ - coneStartPos.z) / dzPerUnit
+        ? (targetSocketZ - tipPos.z) / dzPerUnit
         : tipProfile.lengthMm; // fallback if cone axis is nearly horizontal
 
     // Use the stretched length (but never shorter than the default)
     const effectiveConeLength = Math.max(coneLength, tipProfile.lengthMm);
 
+    const guessedSocketPos: Vec3 = {
+        x: tipPos.x + effectiveConeAxis.x * effectiveConeLength,
+        y: tipPos.y + effectiveConeAxis.y * effectiveConeLength,
+        z: tipPos.z + effectiveConeAxis.z * effectiveConeLength,
+    };
+    const authoredCone = recomputeContactConeForMovedDisk(
+        {
+            id: 'preview-anchor-cone',
+            pos: tipPos,
+            normal: effectiveConeAxis,
+            surfaceNormal: tipNormal,
+            profile: {
+                ...tipProfile,
+                lengthMm: effectiveConeLength,
+                bodyDiameterMm: ANCHOR_JOINT_DIAMETER_MM - 0.1,
+            },
+        },
+        tipPos,
+        tipNormal,
+        guessedSocketPos,
+        mesh,
+    );
     const socketPos: Vec3 = {
-        x: coneStartPos.x + effectiveConeAxis.x * effectiveConeLength,
-        y: coneStartPos.y + effectiveConeAxis.y * effectiveConeLength,
-        z: coneStartPos.z + effectiveConeAxis.z * effectiveConeLength,
+        x: authoredCone.pos.x + (authoredCone.surfaceNormal?.x ?? tipNormal.x) * (authoredCone.diskLengthOverride ?? 0) + authoredCone.normal.x * authoredCone.profile.lengthMm,
+        y: authoredCone.pos.y + (authoredCone.surfaceNormal?.y ?? tipNormal.y) * (authoredCone.diskLengthOverride ?? 0) + authoredCone.normal.y * authoredCone.profile.lengthMm,
+        z: authoredCone.pos.z + (authoredCone.surfaceNormal?.z ?? tipNormal.z) * (authoredCone.diskLengthOverride ?? 0) + authoredCone.normal.z * authoredCone.profile.lengthMm,
     };
 
     // Root and joint are positioned at the socket XY, vertical stack
@@ -109,11 +122,8 @@ export function buildAnchorData(input: AnchorBuildInput): AnchorBuildResult {
     };
 
     const contactCone: ContactCone = {
+        ...authoredCone,
         id: generateUuid(),
-        pos: tipPos,
-        normal: effectiveConeAxis,
-        surfaceNormal: tipNormal,
-        profile: anchorTipProfile,
         socketJointId: socketJoint.id,
     };
 

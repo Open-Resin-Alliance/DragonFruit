@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Card, CardHeader, IconButton, Input } from '@/components/ui/primitives';
+import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 type IslandOverlayControlsProps = {
   enabled: boolean;
@@ -33,7 +34,7 @@ export function IslandOverlayControls({
   onTaperChange,
   islandCount
 }: IslandOverlayControlsProps) {
-  const [expanded, setExpanded] = useState(enabled);
+  const [expanded, setExpanded] = useFloatingPanelCollapse(enabled);
   const [editingColor, setEditingColor] = useState(color);
 
   // Sync editing values when props change

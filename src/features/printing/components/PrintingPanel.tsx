@@ -1,6 +1,7 @@
 import React from 'react';
-import { ChevronDown, Download, FolderOpen, Loader2, Printer, RotateCcw, X } from 'lucide-react';
+import { ChevronDown, Download, ExternalLink, FolderOpen, Loader2, Printer, RotateCcw, X } from 'lucide-react';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 type PrintingPanelProps = {
   outputName: string | null;
@@ -14,15 +15,15 @@ type PrintingPanelProps = {
   canSendToPrinter: boolean;
   sendBusy: boolean;
   sendStatusText: string | null;
-  sendCanRetry?: boolean;
   sendButtonLabel?: string;
   showSendTargetPicker?: boolean;
   onOpenSendTargetPicker?: () => void;
   onDownload: () => void;
   onSendToPrinter: () => void;
   onCancelSendToPrinter?: () => void;
-  onRetrySendToPrinter?: () => void;
-  sliceIntent?: 'file' | 'upload' | 'print' | 'preview' | null;
+  canSendToUvTools?: boolean;
+  onSendToUvTools?: () => void;
+  sliceIntent?: 'file' | 'upload' | 'print' | 'preview' | 'uvtools' | null;
   savedFilePath?: string | null;
 };
 
@@ -38,18 +39,18 @@ export function PrintingPanel({
   canSendToPrinter,
   sendBusy,
   sendStatusText,
-  sendCanRetry = false,
   sendButtonLabel = 'Send to Printer',
   showSendTargetPicker = false,
   onOpenSendTargetPicker,
   onDownload,
   onSendToPrinter,
   onCancelSendToPrinter,
-  onRetrySendToPrinter,
+  canSendToUvTools = false,
+  onSendToUvTools,
   sliceIntent = null,
   savedFilePath = null,
 }: PrintingPanelProps) {
-  const [isExpanded, setIsExpanded] = React.useState(true);
+  const [isExpanded, setIsExpanded] = useFloatingPanelCollapse(true);
   const [revealingSavedPath, setRevealingSavedPath] = React.useState(false);
   const [revealSavedPathError, setRevealSavedPathError] = React.useState<string | null>(null);
 
@@ -74,10 +75,10 @@ export function PrintingPanel({
     }
   }, [isDesktopRuntime, savedPathForReveal]);
 
-  const showSendActionButton = sendBusy || sendCanRetry;
-  const sendActionTitle = sendBusy ? 'Cancel current upload' : 'Retry failed upload';
-  const sendActionLabel = sendBusy ? 'Cancel' : 'Retry';
-  const sendActionHandler = sendBusy ? onCancelSendToPrinter : onRetrySendToPrinter;
+  const showSendActionButton = sendBusy;
+  const sendActionTitle = 'Cancel current upload';
+  const sendActionLabel = 'Cancel';
+  const sendActionHandler = onCancelSendToPrinter;
 
   return (
     <Card className="w-[22rem]">
@@ -103,7 +104,7 @@ export function PrintingPanel({
                 )}
               </svg>
             </IconButton>
-            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Printing</h2>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Printing</h3>
           </>
         )}
       />
@@ -267,6 +268,18 @@ export function PrintingPanel({
                 )}
               </div>
             )
+          )}
+
+          {/* Send to UVTools — shown when file is saved and UVTools integration is enabled */}
+          {canSendToUvTools && onSendToUvTools && savedFilePath && (
+            <Button
+              variant="secondary"
+              className="!h-9 inline-flex items-center justify-center gap-1.5 text-[12px]"
+              onClick={onSendToUvTools}
+            >
+              <ExternalLink className="h-4 w-4" />
+              Send to UVTools
+            </Button>
           )}
         </div>
 
