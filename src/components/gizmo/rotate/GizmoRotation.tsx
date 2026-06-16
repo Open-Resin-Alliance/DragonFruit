@@ -7,6 +7,12 @@ import { Line } from '@react-three/drei';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
 import { snapAngle, SNAP_COARSE, SNAP_FINE, SNAP_STORAGE_KEY } from './snapRotation';
 import type { GizmoAxis } from '../types';
+import {
+  getCachedConeGeometry,
+  getCachedRotationArcGeometry,
+  getCachedRotationArcPoints,
+  getCachedSphereGeometry,
+} from '../gizmoGeometryCache';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
 
@@ -456,90 +462,21 @@ export function GizmoRotation({
     ? GIZMO_LIGHTING.pointLightIntensity.hovered
     : GIZMO_LIGHTING.pointLightIntensity.idle;
 
-  // Create front arc (90 degrees) - quarter circle
-  const frontArcPoints = useMemo(() => {
-    const points = [];
-    const segments = 72;
-    // Front arc: from -45° to +45° (90° total)
-    const arcAngle = Math.PI / 2; // 90° in radians
-    for (let i = 0; i <= segments; i++) {
-      const angle = (i / segments) * arcAngle - arcAngle / 2; // -45° to +45°
-      points.push(
-        new THREE.Vector3(
-          Math.cos(angle) * GIZMO_SIZES.ringMajorRadius,
-          Math.sin(angle) * GIZMO_SIZES.ringMajorRadius,
-          0
-        )
-      );
-    }
-    return points;
-  }, []);
-
-  const backArcPoints = useMemo(() => {
-    const points = [];
-    const segments = 72;
-    // Back arc: from +90° to +270° (relative to camera direction)
-    for (let i = 0; i <= segments; i++) {
-      const angle = (i / segments) * Math.PI + Math.PI / 2; // +90° to +270°
-      points.push(
-        new THREE.Vector3(
-          Math.cos(angle) * GIZMO_SIZES.ringMajorRadius,
-          Math.sin(angle) * GIZMO_SIZES.ringMajorRadius,
-          0
-        )
-      );
-    }
-    return points;
-  }, []);
+  const frontArcPoints = useMemo(() => getCachedRotationArcPoints('front'), []);
+  const backArcPoints = useMemo(() => getCachedRotationArcPoints('back'), []);
 
   // Ring rotation uses same logic as handle position
   // (The handleAngle already calculated above is what we need)
 
-  // Create gradient tube geometry for the arc (to match axis line thickness)
-  const arcGeometry = useMemo(() => {
-    const segments = 72;
-    const arcAngle = Math.PI / 2; // 90°
-    
-    // Get pure colors based on axis (center of arc)
-    const pureCenterColor = axis === 'x' ? '#ff0000' : axis === 'y' ? '#0ce300' : '#0000ff';
-    // Get end colors (lighter at arc ends)
-    const arcEndColor = axis === 'x' ? '#ff9900' : axis === 'y' ? '#ffcc00' : '#1596ff';
-    
-    const pureColor = new THREE.Color(pureCenterColor);
-    const endColor = new THREE.Color(arcEndColor);
-    
-    // Create curve path for the arc
-    const points: THREE.Vector3[] = [];
-    for (let i = 0; i <= segments; i++) {
-      const angle = (i / segments) * arcAngle - arcAngle / 2;
-      const x = Math.cos(angle) * GIZMO_SIZES.ringMajorRadius;
-      const y = Math.sin(angle) * GIZMO_SIZES.ringMajorRadius;
-      points.push(new THREE.Vector3(x, y, 0));
-    }
-    
-    const curve = new THREE.CatmullRomCurve3(points);
-    const tubeGeometry = new THREE.TubeGeometry(curve, segments, 0.016, 16, false);
-    
-    // Apply gradient colors to tube
-    const colors = new Float32Array(tubeGeometry.attributes.position.count * 3);
-    for (let i = 0; i < tubeGeometry.attributes.position.count; i++) {
-      const x = tubeGeometry.attributes.position.getX(i);
-      const y = tubeGeometry.attributes.position.getY(i);
-      const angle = Math.atan2(y, x);
-      const normalizedAngle = (angle + arcAngle / 2) / arcAngle; // 0 to 1 along arc
-      
-      // Gradient from ends to center
-      const distFromCenter = Math.abs(normalizedAngle - 0.5) * 2;
-      const t = Math.max(0, (distFromCenter - 0.4) / 0.6);
-      const color = new THREE.Color().lerpColors(pureColor, endColor, t);
-      colors[i * 3] = color.r;
-      colors[i * 3 + 1] = color.g;
-      colors[i * 3 + 2] = color.b;
-    }
-    
-    tubeGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    return tubeGeometry;
-  }, [axis]);
+  const arcGeometry = useMemo(() => getCachedRotationArcGeometry(axis), [axis]);
+  const pickGeometry = useMemo(
+    () => getCachedSphereGeometry(Math.max(0.18, GIZMO_SIZES.ringDiamondRadius * 0.9 * handleScale), 16, 16),
+    [handleScale],
+  );
+  const diamondConeGeometry = useMemo(
+    () => getCachedConeGeometry(GIZMO_SIZES.ringDiamondRadius * 0.36, GIZMO_SIZES.ringDiamondRadius, 16),
+    [],
+  );
 
   return (
     <group
@@ -556,7 +493,7 @@ export function GizmoRotation({
         onPointerEnter={handlePointerEnterLocal}
         onPointerLeave={handlePointerLeaveLocal}
       >
-        <sphereGeometry args={[Math.max(0.18, GIZMO_SIZES.ringDiamondRadius * 0.9 * handleScale), 16, 16]} />
+        <primitive object={pickGeometry} attach="geometry" />
         <meshBasicMaterial visible={false} />
       </mesh>
 
@@ -619,7 +556,7 @@ export function GizmoRotation({
           <group position={[GIZMO_SIZES.ringDiamondRadius * 0.52, 0, 0]} rotation={[0, 0, -Math.PI / 2]}>
             {/* Outline - slightly larger with darker color */}
             <mesh scale={1.08}>
-              <coneGeometry args={[GIZMO_SIZES.ringDiamondRadius * 0.36, GIZMO_SIZES.ringDiamondRadius, 16]} />
+              <primitive object={diamondConeGeometry} attach="geometry" />
               <meshBasicMaterial
                 color={new THREE.Color(diamondPrimaryColor).multiplyScalar(0.3).getHex()}
                 transparent
@@ -629,7 +566,7 @@ export function GizmoRotation({
             </mesh>
             {/* Main colored cone */}
             <mesh>
-              <coneGeometry args={[GIZMO_SIZES.ringDiamondRadius * 0.36, GIZMO_SIZES.ringDiamondRadius, 16]} />
+              <primitive object={diamondConeGeometry} attach="geometry" />
               <meshBasicMaterial
                 color={diamondPrimaryColor}
                 transparent
@@ -643,7 +580,7 @@ export function GizmoRotation({
           <group position={[-GIZMO_SIZES.ringDiamondRadius * 0.52, 0, 0]} rotation={[0, 0, Math.PI / 2]}>
             {/* Outline - slightly larger with darker color */}
             <mesh scale={1.08}>
-              <coneGeometry args={[GIZMO_SIZES.ringDiamondRadius * 0.36, GIZMO_SIZES.ringDiamondRadius, 16]} />
+              <primitive object={diamondConeGeometry} attach="geometry" />
               <meshBasicMaterial
                 color={new THREE.Color(diamondSecondaryColor).multiplyScalar(0.32).getHex()}
                 transparent
@@ -653,7 +590,7 @@ export function GizmoRotation({
             </mesh>
             {/* Main colored cone */}
             <mesh>
-              <coneGeometry args={[GIZMO_SIZES.ringDiamondRadius * 0.36, GIZMO_SIZES.ringDiamondRadius, 16]} />
+              <primitive object={diamondConeGeometry} attach="geometry" />
               <meshBasicMaterial
                 color={diamondSecondaryColor}
                 transparent

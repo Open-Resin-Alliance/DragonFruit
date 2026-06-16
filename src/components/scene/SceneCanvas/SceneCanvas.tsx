@@ -18,6 +18,7 @@ import { IslandExpansionVisualization } from '@/components/scene/IslandExpansion
 import { MeshClassificationRenderer } from '@/components/scene/MeshClassificationRenderer';
 import { IslandIdLabels } from '@/components/scene/IslandIdLabels';
 import { ScreenSpaceGizmo as UnifiedGizmo } from '@/components/gizmo';
+import { warmTransformGizmoGeometryCache } from '@/components/gizmo/gizmoGeometryCache';
 import { PickingDebugOverlay } from '@/components/picking';
 // DEBUG: temporary twig disk B diameter override — see src/supports/__debug__/
 import { TwigDebugOverrideCard } from '@/supports/__debug__/TwigDebugOverrideCard';
@@ -599,6 +600,28 @@ export function SceneCanvas({
   const LARGE_MODEL_DROP_DEFER_THRESHOLD_POLYS = 1_200_000;
   const BUILD_VOLUME_BOUNDS_EPS_MM = 0.01;
   const OUT_OF_BOUNDS_ROTATE_GRACE_MS = 320;
+
+  React.useEffect(() => {
+    if (mode !== 'prepare' || !activeModelIdProp) return;
+
+    if (typeof window === 'undefined') {
+      warmTransformGizmoGeometryCache();
+      return;
+    }
+
+    const runWarmup = () => {
+      warmTransformGizmoGeometryCache();
+    };
+
+    if (typeof window.requestIdleCallback === 'function') {
+      const idleId = window.requestIdleCallback(runWarmup);
+      return () => window.cancelIdleCallback(idleId);
+    }
+
+    const timeoutId = window.setTimeout(runWarmup, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [activeModelIdProp, mode]);
+
   const supportPathfindingDebugState = React.useSyncExternalStore(
     subscribeToSupportPathfindingDebugState,
     getSupportPathfindingDebugState,

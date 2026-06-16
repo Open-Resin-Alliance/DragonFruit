@@ -195,17 +195,27 @@ export function TransformGizmo({
   const hoverClearRafRef = React.useRef<number | null>(null);
   const viewCullStateRef = React.useRef<ViewCullState>(createDefaultViewCullState());
 
-  const posArray: [number, number, number] = Array.isArray(position)
-    ? position
-    : [position.x, position.y, position.z];
+  const positionX = Array.isArray(position) ? position[0] : position.x;
+  const positionY = Array.isArray(position) ? position[1] : position.y;
+  const positionZ = Array.isArray(position) ? position[2] : position.z;
+  const rotationX = Array.isArray(rotation) ? rotation[0] : rotation.x;
+  const rotationY = Array.isArray(rotation) ? rotation[1] : rotation.y;
+  const rotationZ = Array.isArray(rotation) ? rotation[2] : rotation.z;
 
-  const posVec = Array.isArray(position)
-    ? new THREE.Vector3(...position)
-    : position;
+  const posArray: [number, number, number] = React.useMemo(
+    () => [positionX, positionY, positionZ],
+    [positionX, positionY, positionZ],
+  );
 
-  const rotEuler = Array.isArray(rotation)
-    ? new THREE.Euler(...rotation)
-    : rotation;
+  const posVec = React.useMemo(
+    () => new THREE.Vector3(positionX, positionY, positionZ),
+    [positionX, positionY, positionZ],
+  );
+
+  const rotEuler = React.useMemo(
+    () => new THREE.Euler(rotationX, rotationY, rotationZ),
+    [rotationX, rotationY, rotationZ],
+  );
 
   const rotArray: [number, number, number] = [rotEuler.x, rotEuler.y, rotEuler.z];
 
@@ -225,6 +235,8 @@ export function TransformGizmo({
     if (!gizmoRootRef.current) return;
 
     gizmoRootRef.current.traverse((obj) => {
+      if (obj.userData?.gizmoOverlayPatched === true) return;
+
       obj.frustumCulled = false;
       obj.renderOrder = GIZMO_RENDER_ORDER;
       // Mark only renderable gizmo handle geometry so pointer handlers can detect
@@ -240,7 +252,10 @@ export function TransformGizmo({
       }
 
       const material = (obj as THREE.Mesh).material;
-      if (!material) return;
+      if (!material) {
+        obj.userData.gizmoOverlayPatched = true;
+        return;
+      }
 
       const applyOverlayMaterial = (m: THREE.Material) => {
         if ('depthTest' in m) (m as THREE.Material & { depthTest: boolean }).depthTest = false;
@@ -252,6 +267,8 @@ export function TransformGizmo({
       } else {
         applyOverlayMaterial(material);
       }
+
+      obj.userData.gizmoOverlayPatched = true;
     });
   });
 

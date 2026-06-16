@@ -2,6 +2,7 @@ import React from 'react';
 import { Hand, Move3D, Paintbrush2, LayoutGrid, ArrowDownToLine, FlipHorizontal2, Droplets } from 'lucide-react';
 import type { TransformMode } from '@/hooks/useModelTransform';
 import { usePlatformModifier } from '@/hooks/usePlatformModifier';
+import { warmTransformGizmoGeometryCache } from '@/components/gizmo/gizmoGeometryCache';
 
 interface TransformToolbarProps {
   mode: TransformMode;
@@ -32,6 +33,9 @@ export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformT
   }, [onModeChange]);
 
   const handleModeHoverChange = React.useCallback((next: TransformMode | null) => {
+    if (next === 'transform') {
+      warmTransformGizmoGeometryCache();
+    }
     setHoveredMode(next);
     onModeHover?.(next);
   }, [onModeHover]);
