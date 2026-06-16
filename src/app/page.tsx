@@ -18793,7 +18793,12 @@ export default function Home() {
         ) : scene.mode === 'support' ? (
           <>
             <SupportSidebar key="support-settings" />
-            <IslandsPanel key="support-islands" islands={islandsPoc} hasGeometry={!!scene.geom} />
+            <IslandsPanel
+              key="support-islands"
+              islands={islandsPoc}
+              hasGeometry={!!scene.geom}
+              bottomClearancePx={modelStatsBottomClearancePx}
+            />
           </>
         ) : scene.mode === 'printing' ? (
           <>

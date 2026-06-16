@@ -50,7 +50,7 @@ const fragmentShader = `
   out vec4 fragColor;
 
   // Colors matching original theme
-  const vec3 COLOR_VOXEL = vec3(0.0, 0.33, 1.0);       // Voxel blue
+  const vec3 COLOR_VOXEL = vec3(0.53, 0.81, 0.98);       // Voxel pale blue
   const vec3 COLOR_MINIMA = vec3(0.0, 1.0, 0.0);      // Minima green
   const vec3 COLOR_INTERSECTION = vec3(1.0, 0.0, 0.0); // Intersection red
   const vec3 COLOR_CONSOLIDATED = vec3(0.53, 0.81, 0.98); // Paler blue

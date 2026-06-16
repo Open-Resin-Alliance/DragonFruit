@@ -88,7 +88,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   const [reduceIntersection, setReduceIntersection] = useState<boolean>(false);
   const [intersectionThreshold, setIntersectionThreshold] = useState<number>(0.5);
   const [enableVolumeGlow, setEnableVolumeGlow] = useState<boolean>(true);
-  const [scaleMarkersWithArea, setScaleMarkersWithArea] = useState<boolean>(false);
+  const [scaleMarkersWithArea, setScaleMarkersWithArea] = useState<boolean>(true);
 
   // Filter toggles — default ON ⇒ supported/grounded islands hidden (and skipped by ←/→).
   const [filterToggles, setFilterToggles] = useState<IslandFilterToggles>(DEFAULT_FILTER_TOGGLES);
@@ -253,6 +253,33 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
 
   const allIslands = classifiedResult.islands;
   const stats = classifiedResult.stats;
+
+  const tableStats = useMemo(() => {
+    const annotated = annotateFilterFlags(allIslands.map((i) => ({ ...i })), { supportTips, plateZ });
+    
+    const voxelTotal = annotated.filter(i => i.class === 'voxelOnly' && i.source === 'voxel').length;
+    const voxelUnsupported = annotated.filter(i => i.class === 'voxelOnly' && i.source === 'voxel' && !i.supported && !i.grounded).length;
+    
+    const geomTotal = annotated.filter(i => i.class === 'minimaOnly' && i.source === 'minima').length;
+    const geomUnsupported = annotated.filter(i => i.class === 'minimaOnly' && i.source === 'minima' && !i.supported && !i.grounded).length;
+    
+    const coincidentTotal = annotated.filter(i => i.class === 'intersection' && i.source === 'voxel').length;
+    const coincidentUnsupported = annotated.filter(i => i.class === 'intersection' && i.source === 'voxel' && !i.supported && !i.grounded).length;
+    
+    const allTotal = voxelTotal + geomTotal + coincidentTotal;
+    const allUnsupported = voxelUnsupported + geomUnsupported + coincidentUnsupported;
+    
+    return {
+      voxelTotal,
+      voxelUnsupported,
+      geomTotal,
+      geomUnsupported,
+      coincidentTotal,
+      coincidentUnsupported,
+      allTotal,
+      allUnsupported,
+    };
+  }, [allIslands, supportTips, plateZ]);
 
   // Annotate supported/grounded flags, then apply the visibility toggles. Work on
   // shallow copies so React state objects aren't mutated (contact Vector3 is shared, never mutated).
@@ -467,6 +494,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     setEnableVolumeGlow,
     scaleMarkersWithArea,
     setScaleMarkersWithArea,
+    tableStats,
   };
 }
 

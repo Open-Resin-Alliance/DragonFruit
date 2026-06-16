@@ -9,6 +9,7 @@ import { ISLAND_LAYER_COLORS, markerIdFor } from '@/volumeAnalysis/Islands/islan
 interface IslandsPanelProps {
   islands: UseIslandsReturn;
   hasGeometry: boolean;
+  bottomClearancePx?: number;
 }
 
 /**
@@ -17,8 +18,10 @@ interface IslandsPanelProps {
  * template. Tab-agnostic: relies only on the injected `useIslands` return, so it
  * can be mounted under any `scene.mode` (or relocated to the Analysis tab).
  */
-export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
+export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 220 }: IslandsPanelProps) {
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
+  const computedBottomClearance = React.useMemo(() => Math.max(140, Math.round(bottomClearancePx)), [bottomClearancePx]);
+  const panelMaxHeight = React.useMemo(() => `calc(100vh - var(--topbar-height,48px) - ${computedBottomClearance}px)`, [computedBottomClearance]);
   const {
     scanning,
     scanProgress,
@@ -56,6 +59,7 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
     setEnableVolumeGlow,
     scaleMarkersWithArea,
     setScaleMarkersWithArea,
+    tableStats,
   } = islands;
 
   const [settingsExpanded, setSettingsExpanded] = React.useState(false);
@@ -67,7 +71,7 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
     setConsolidationDistance(0.5);
     setReduceIntersection(false);
     setIntersectionThreshold(0.5);
-    setScaleMarkersWithArea(false);
+    setScaleMarkersWithArea(true);
   }, [setPxMm, setSupportBufMm, setConsolidateVoxel, setConsolidationDistance, setReduceIntersection, setIntersectionThreshold, setScaleMarkersWithArea]);
 
   const voxelOnlyShown = filteredIslands.filter((i) => i.source === 'voxel' && i.class === 'voxelOnly').length;
@@ -79,7 +83,10 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
   const hiddenPucksCount = totalScannedPucks - totalShownPucks;
 
   return (
-    <Card>
+    <Card
+      className="flex flex-col relative"
+      style={expanded ? { maxHeight: panelMaxHeight } : undefined}
+    >
       <CardHeader
         left={(
           <>
@@ -114,7 +121,7 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
       />
 
       {expanded && (
-        <div className="px-2.5 pt-2 pb-3 space-y-2.5">
+        <div className="px-2.5 pt-2 pb-3 space-y-2.5 flex-1 flex flex-col min-h-0">
           <button
             type="button"
             onClick={() => { void islands.onRunScan(); }}
@@ -133,7 +140,7 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
           </button>
 
           {totalScannedPucks > 0 && (
-            <div className="space-y-2">
+            <div className="space-y-2 flex-1 flex flex-col min-h-0">
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -167,7 +174,7 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
 
               {orderedIslands.length > 0 ? (
                 <div
-                  className="border rounded divide-y overflow-y-auto max-h-[120px]"
+                  className="border rounded divide-y overflow-y-auto flex-grow min-h-[120px] max-h-none"
                   style={{
                     borderColor: 'var(--border-subtle)',
                     background: 'var(--surface-0)',
@@ -234,82 +241,105 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
             </div>
           )}
 
-          {totalScannedPucks > 0 && stats && (
-            <div className="space-y-1 pt-0.5 pb-1">
-              <div className="ui-meta flex justify-between">
-                <span>Voxel islands:</span>
-                <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>{stats.voxelTotal}</span>
-              </div>
-              <div className="ui-meta flex justify-between">
-                <span>Mesh minima:</span>
-                <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>{stats.minimaTotal}</span>
-              </div>
-              <div className="ui-meta flex justify-between border-b pb-1 mb-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <span>Intersections (matched):</span>
-                <span className="font-semibold" style={{ color: ISLAND_LAYER_COLORS.intersection }}>{stats.matched}</span>
-              </div>
-              <div className="ui-meta flex justify-between text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                <span>Shown pucks:</span>
-                <span>{totalShownPucks} ({voxelOnlyShown} vox, {minimaOnlyShown} min, {intersectionShown} int)</span>
-              </div>
-              {stats.minimaSupersetOfVoxel && (
-                <div
-                  className="mt-1.5 p-1.5 rounded text-[10px] leading-normal flex items-center gap-1 font-medium"
-                  style={{
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 88%)',
-                    color: 'var(--text-strong)',
-                    border: '1px solid color-mix(in srgb, var(--accent), transparent 50%)'
-                  }}
-                >
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  <span>Verdict: Mesh-minima ⊇ Voxel (100% covered)</span>
-                </div>
-              )}
+          {totalScannedPucks > 0 && tableStats && (
+            <div className="pt-0.5 pb-1">
+              <table className="w-full text-[10px] text-left border-collapse" style={{ color: 'var(--text-strong)' }}>
+                <thead>
+                  <tr className="border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <th className="py-1 font-semibold">Type</th>
+                    <th className="py-1 font-semibold text-right">Unsupported</th>
+                    <th className="py-1 font-semibold text-right pl-6">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <td className="py-1 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: ISLAND_LAYER_COLORS.voxel }} />
+                      <span>Voxel</span>
+                    </td>
+                    <td className="py-1 text-right font-medium">{tableStats.voxelUnsupported}</td>
+                    <td className="py-1 text-right font-medium pl-6">{tableStats.voxelTotal}</td>
+                  </tr>
+                  <tr className="border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <td className="py-1 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: ISLAND_LAYER_COLORS.minima }} />
+                      <span>Geometric</span>
+                    </td>
+                    <td className="py-1 text-right font-medium">{tableStats.geomUnsupported}</td>
+                    <td className="py-1 text-right font-medium pl-6">{tableStats.geomTotal}</td>
+                  </tr>
+                  <tr className="border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <td className="py-1 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: ISLAND_LAYER_COLORS.intersection }} />
+                      <span>Coincident</span>
+                    </td>
+                    <td className="py-1 text-right font-medium">{tableStats.coincidentUnsupported}</td>
+                    <td className="py-1 text-right font-medium pl-6">{tableStats.coincidentTotal}</td>
+                  </tr>
+                  <tr className="font-semibold">
+                    <td className="py-1.5">All</td>
+                    <td className="py-1.5 text-right">{tableStats.allUnsupported}</td>
+                    <td className="py-1.5 text-right pl-6">{tableStats.allTotal}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           )}
 
           {/* Visual Display Toggles & Volumetric Glow */}
-          <div className="space-y-1.5 pt-1.5 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
-            <label className="flex items-center gap-1.5 py-0.5 cursor-pointer">
+          <div className="space-y-2 pt-1.5 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+            <label className="flex items-start gap-1.5 py-0.5 cursor-pointer">
               <input
                 type="checkbox"
                 checked={showVoxelOnly}
                 onChange={(e) => setShowVoxelOnly(e.target.checked)}
-                className="ui-checkbox !w-4 !h-4"
+                className="ui-checkbox !w-4 !h-4 mt-0.5"
               />
               <span
-                className="inline-block w-2.5 h-2.5 rounded-full"
+                className="inline-block w-2 h-2 rounded-full mt-1.5 shrink-0"
                 style={{ background: ISLAND_LAYER_COLORS.voxel }}
               />
-              <span className="ui-meta">Voxel-only ({voxelOnlyShown})</span>
+              <div className="flex flex-col">
+                <span className="ui-meta font-medium">Voxels</span>
+                <span className="text-[10px] leading-tight" style={{ color: 'var(--text-muted)' }}>
+                  Slicing process islands and suspended areas
+                </span>
+              </div>
             </label>
 
-            <label className="flex items-center gap-1.5 py-0.5 cursor-pointer">
+            <label className="flex items-start gap-1.5 py-0.5 cursor-pointer">
               <input
                 type="checkbox"
                 checked={showMinimaOnly}
                 onChange={(e) => setShowMinimaOnly(e.target.checked)}
-                className="ui-checkbox !w-4 !h-4"
+                className="ui-checkbox !w-4 !h-4 mt-0.5"
               />
               <span
-                className="inline-block w-2.5 h-2.5 rounded-full"
+                className="inline-block w-2 h-2 rounded-full mt-1.5 shrink-0"
                 style={{ background: ISLAND_LAYER_COLORS.minima }}
               />
-              <span className="ui-meta">Minima-only ({minimaOnlyShown})</span>
+              <div className="flex flex-col">
+                <span className="ui-meta font-medium">Mesh Geometric Minima</span>
+                <span className="text-[10px] leading-tight" style={{ color: 'var(--text-muted)' }}>
+                  Individual lowest triangles in an area
+                </span>
+              </div>
             </label>
 
-            <label className="flex items-center gap-1.5 py-0.5 cursor-pointer">
+            <label className="flex items-start gap-1.5 py-0.5 cursor-pointer">
               <input
                 type="checkbox"
                 checked={showIntersection}
                 onChange={(e) => setShowIntersection(e.target.checked)}
-                className="ui-checkbox !w-4 !h-4"
+                className="ui-checkbox !w-4 !h-4 mt-0.5"
               />
               <span
-                className="inline-block w-2.5 h-2.5 rounded-full"
+                className="inline-block w-2 h-2 rounded-full mt-1.5 shrink-0"
                 style={{ background: ISLAND_LAYER_COLORS.intersection }}
               />
-              <span className="ui-meta">Intersections ({intersectionShown})</span>
+              <div className="flex flex-col">
+                <span className="ui-meta font-medium">Coincident Voxel & Geometric Islands</span>
+              </div>
             </label>
 
             <label className="flex items-center gap-1.5 py-0.5 cursor-pointer">
@@ -503,10 +533,6 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
                 </div>
               </div>
             )}
-          </div>
-
-          <div className="ui-meta pt-1.5 border-t leading-snug" style={{ borderColor: 'var(--border-subtle)' }}>
-            <p>Classified contact regions in world space. Intersection layers match voxel and mesh candidate islands within 0.5mm XY / 1 layer Z.</p>
           </div>
         </div>
       )}

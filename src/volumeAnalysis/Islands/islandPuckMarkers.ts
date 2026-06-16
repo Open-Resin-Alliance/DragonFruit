@@ -22,7 +22,7 @@ import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogi
  */
 export const PUCK_BASE_RADIUS_MM = 0.1; // 0.2 mm diameter floor
 export const ISLAND_LAYER_COLORS = {
-  voxel: '#0055ff', // blue
+  voxel: '#87cefa', // pale blue
   minima: '#00ff00', // green
   intersection: '#ff0000', // red
 } as const;
