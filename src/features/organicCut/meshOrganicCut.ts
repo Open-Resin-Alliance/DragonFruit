@@ -283,6 +283,11 @@ export async function computeMembranePreview(
   keyTiltRad = 0.0,
   keyTiltAzimuthRad = 0.0,
   keyRollRad = 0.0,
+  mode: 'plane' | 'contour' | 'bounded_plane' = 'plane',
+  sides = 4,
+  radius = 20.0,
+  position: [number, number, number] = [0, 0, 0],
+  rotation: [number, number, number] = [0, 0, 0],
 ): Promise<MembranePreviewResult> {
   const empty: MembranePreviewResult = {
     membrane: null,
@@ -293,7 +298,7 @@ export async function computeMembranePreview(
   };
   const core = await loadTauriCore();
   if (!core) return empty;
-  if (loopPoints.length < 3) return empty;
+  if (mode !== 'bounded_plane' && loopPoints.length < 3) return empty;
 
   const requestJson = JSON.stringify({
     points: loopPoints.map((p) => ({ position: p.position })),
@@ -310,6 +315,11 @@ export async function computeMembranePreview(
     keyTiltRad,
     keyTiltAzimuthRad,
     keyRollRad,
+    mode,
+    sides,
+    radius,
+    position,
+    rotation,
   });
   try {
     const reportJson = await core.invoke<string>('mesh_organic_cut_membrane_preview', { requestJson });

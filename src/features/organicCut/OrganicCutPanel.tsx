@@ -50,6 +50,30 @@ export interface OrganicCutPanelState {
   keyTiltAzimuthRad: number;
   /** Key roll (radians): spin about the key's own axis. Driven by the roll gizmo. */
   keyRollRad: number;
+  sides?: number;
+  radius?: number;
+  planePosition?: [number, number, number];
+  planeRotation?: [number, number, number];
+}
+
+function getSidesLabel(sides: number): string {
+  switch (sides) {
+    case 3: return 'Triangle';
+    case 4: return 'Quad';
+    case 5: return 'Pentagon';
+    case 6: return 'Hexagon';
+    case 7: return 'Heptagon';
+    case 8: return 'Octagon';
+    case 9: return 'Nonagon';
+    case 10: return 'Decagon';
+    case 11: return 'Hendecagon';
+    case 12: return 'Dodecagon';
+    case 13: return 'Tridecagon';
+    case 14: return 'Tetradecagon';
+    case 15: return 'Pentadecagon';
+    case 16: return 'Hexadecagon';
+    default: return `${sides} sides`;
+  }
 }
 
 interface OrganicCutPanelProps {
@@ -156,15 +180,18 @@ export function OrganicCutPanel({
     : undefined;
 
   const isContour = state.cutMode === 'contour';
+  const isBounded = state.cutMode === 'bounded_plane';
   const statusLabel = isContour
     ? pointCount < 3
       ? `Click points around the model to trace the seam (${pointCount}/3+)`
       : `${pointCount} points — ready to cut (contour seam)`
-    : pointCount === 0
-      ? 'Click 2 points across the model to set a flat cut'
-      : pointCount === 1
-        ? '1 point — click one more on the other side'
-        : `${pointCount} points — ready to cut (flat plane)`;
+    : isBounded
+      ? 'Position the bounded cutter plane and cut'
+      : pointCount === 0
+        ? 'Click 2 points across the model to set a flat cut'
+        : pointCount === 1
+          ? '1 point — click one more on the other side'
+          : `${pointCount} points — ready to cut (flat plane)`;
 
   return (
     <Card style={disabledStyle}>
@@ -215,10 +242,10 @@ export function OrganicCutPanel({
           {/* Cut mode: flat plane vs curved contour seam */}
           <div className="rounded-md border p-2 space-y-1.5" style={accentCardStyle}>
             <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Cut Mode</div>
-            <div className="grid grid-cols-2 gap-1">
+            <div className="grid grid-cols-3 gap-1">
               <button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                className="ui-button ui-button-secondary !h-8 px-1 text-[9px] sm:text-[10px] truncate"
                 onClick={() => setState({ cutMode: 'contour' })}
                 disabled={disabled || isApplying}
                 style={state.cutMode === 'contour' ? activeModeStyle : undefined}
@@ -228,7 +255,7 @@ export function OrganicCutPanel({
               </button>
               <button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                className="ui-button ui-button-secondary !h-8 px-1 text-[9px] sm:text-[10px] truncate"
                 onClick={() => setState({ cutMode: 'plane' })}
                 disabled={disabled || isApplying}
                 style={state.cutMode === 'plane' ? activeModeStyle : undefined}
@@ -236,51 +263,248 @@ export function OrganicCutPanel({
               >
                 Flat
               </button>
+              <button
+                type="button"
+                className="ui-button ui-button-secondary !h-8 px-1 text-[9px] sm:text-[10px] truncate"
+                onClick={() => setState({ cutMode: 'bounded_plane' })}
+                disabled={disabled || isApplying}
+                style={state.cutMode === 'bounded_plane' ? activeModeStyle : undefined}
+                title="Slice along a flat plane within a regular polygon or circular boundary."
+              >
+                Bounded
+              </button>
             </div>
           </div>
+
+          {/* Bounded plane specific controls */}
+          {isBounded && (
+            <>
+              {/* Circular Boundary Toggle */}
+              <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between gap-2 text-left"
+                  onClick={() => setState({ sides: state.sides === 64 ? 4 : 64 })}
+                  disabled={disabled || isApplying}
+                  title="Make the cutter boundary circular instead of a regular polygon."
+                >
+                  <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Circular Boundary</span>
+                  <span
+                    className="relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors"
+                    style={{
+                      background: state.sides === 64
+                        ? 'var(--accent)'
+                        : 'color-mix(in srgb, var(--text-muted), transparent 60%)',
+                    }}
+                  >
+                    <span
+                      className="inline-block h-3 w-3 transform rounded-full bg-white transition-transform"
+                      style={{ transform: state.sides === 64 ? 'translateX(14px)' : 'translateX(2px)' }}
+                    />
+                  </span>
+                </button>
+              </div>
+
+              {/* Sides Slider (Regular Polygon) */}
+              {state.sides !== 64 && (
+                <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
+                  <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>
+                    Sides ({getSidesLabel(state.sides ?? 4)})
+                  </label>
+                  <ScrollableNumberField
+                    value={state.sides ?? 4}
+                    onChange={(value) => setState({ sides: clampFloat(value, 3, 16, 0) })}
+                    min={3}
+                    max={16}
+                    step={1}
+                    unit=""
+                    ariaLabel="Number of sides for regular polygon boundary"
+                    disabled={disabled || isApplying}
+                    className="mt-1"
+                  />
+                </div>
+              )}
+
+              {/* Radius Slider */}
+              <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
+                <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Radius</label>
+                <ScrollableNumberField
+                  value={state.radius ?? 20}
+                  onChange={(value) => setState({ radius: clampFloat(value, 1, 250, 1) })}
+                  min={1}
+                  max={250}
+                  step={0.5}
+                  unit="mm"
+                  ariaLabel="Cutter boundary radius in millimeters"
+                  disabled={disabled || isApplying}
+                  className="mt-1"
+                />
+              </div>
+
+              {/* Position Inputs */}
+              <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
+                <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Cutter Position</label>
+                <div className="grid grid-cols-3 gap-1.5 mt-1">
+                  <div>
+                    <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-muted)' }}>X (mm)</label>
+                    <ScrollableNumberField
+                      value={state.planePosition?.[0] ?? 0}
+                      onChange={(value) => setState({
+                        planePosition: [clampFloat(value, -500, 500, 2), state.planePosition?.[1] ?? 0, state.planePosition?.[2] ?? 0]
+                      })}
+                      min={-500}
+                      max={500}
+                      step={0.5}
+                      unit=""
+                      ariaLabel="Cutter X coordinate"
+                      disabled={disabled || isApplying}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-muted)' }}>Y (mm)</label>
+                    <ScrollableNumberField
+                      value={state.planePosition?.[1] ?? 0}
+                      onChange={(value) => setState({
+                        planePosition: [state.planePosition?.[0] ?? 0, clampFloat(value, -500, 500, 2), state.planePosition?.[2] ?? 0]
+                      })}
+                      min={-500}
+                      max={500}
+                      step={0.5}
+                      unit=""
+                      ariaLabel="Cutter Y coordinate"
+                      disabled={disabled || isApplying}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-muted)' }}>Z (mm)</label>
+                    <ScrollableNumberField
+                      value={state.planePosition?.[2] ?? 0}
+                      onChange={(value) => setState({
+                        planePosition: [state.planePosition?.[0] ?? 0, state.planePosition?.[1] ?? 0, clampFloat(value, -500, 500, 2)]
+                      })}
+                      min={-500}
+                      max={500}
+                      step={0.5}
+                      unit=""
+                      ariaLabel="Cutter Z coordinate"
+                      disabled={disabled || isApplying}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Rotation Inputs (X, Y, Z degrees) */}
+              <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
+                <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Cutter Rotation</label>
+                <div className="grid grid-cols-3 gap-1.5 mt-1">
+                  <div>
+                    <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-muted)' }}>X (deg)</label>
+                    <ScrollableNumberField
+                      value={Math.round(((state.planeRotation?.[0] ?? 0) * 180) / Math.PI)}
+                      onChange={(value) => setState({
+                        planeRotation: [
+                          (clampFloat(value, -180, 180, 0) * Math.PI) / 180,
+                          state.planeRotation?.[1] ?? 0,
+                          state.planeRotation?.[2] ?? 0
+                        ]
+                      })}
+                      min={-180}
+                      max={180}
+                      step={1}
+                      unit=""
+                      ariaLabel="Cutter X rotation in degrees"
+                      disabled={disabled || isApplying}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-muted)' }}>Y (deg)</label>
+                    <ScrollableNumberField
+                      value={Math.round(((state.planeRotation?.[1] ?? 0) * 180) / Math.PI)}
+                      onChange={(value) => setState({
+                        planeRotation: [
+                          state.planeRotation?.[0] ?? 0,
+                          (clampFloat(value, -180, 180, 0) * Math.PI) / 180,
+                          state.planeRotation?.[2] ?? 0
+                        ]
+                      })}
+                      min={-180}
+                      max={180}
+                      step={1}
+                      unit=""
+                      ariaLabel="Cutter Y rotation in degrees"
+                      disabled={disabled || isApplying}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-muted)' }}>Z (deg)</label>
+                    <ScrollableNumberField
+                      value={Math.round(((state.planeRotation?.[2] ?? 0) * 180) / Math.PI)}
+                      onChange={(value) => setState({
+                        planeRotation: [
+                          state.planeRotation?.[0] ?? 0,
+                          state.planeRotation?.[1] ?? 0,
+                          (clampFloat(value, -180, 180, 0) * Math.PI) / 180
+                        ]
+                      })}
+                      min={-180}
+                      max={180}
+                      step={1}
+                      unit=""
+                      ariaLabel="Cutter Z rotation in degrees"
+                      disabled={disabled || isApplying}
+                    />
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
 
           {/* Draw mode */}
-          <div className="rounded-md border p-2 space-y-1.5" style={accentCardStyle}>
-            <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Draw Mode</div>
-            <div className="grid grid-cols-2 gap-1">
-              <button
-                type="button"
-                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
-                onClick={() => setState({ drawMode: 'waypoint' })}
-                disabled={disabled || isApplying}
-                style={state.drawMode === 'waypoint' ? activeModeStyle : undefined}
-                title="Click to place points; the tool connects them along the surface."
-              >
-                Waypoint
-              </button>
-              <button
-                type="button"
-                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
-                onClick={() => setState({ drawMode: 'freeDraw' })}
-                disabled={disabled || isApplying}
-                style={state.drawMode === 'freeDraw' ? activeModeStyle : undefined}
-                title="Drag across the surface to paint the seam freehand."
-              >
-                Free-draw
-              </button>
+          {!isBounded && (
+            <div className="rounded-md border p-2 space-y-1.5" style={accentCardStyle}>
+              <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Draw Mode</div>
+              <div className="grid grid-cols-2 gap-1">
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                  onClick={() => setState({ drawMode: 'waypoint' })}
+                  disabled={disabled || isApplying}
+                  style={state.drawMode === 'waypoint' ? activeModeStyle : undefined}
+                  title="Click to place points; the tool connects them along the surface."
+                >
+                  Waypoint
+                </button>
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                  onClick={() => setState({ drawMode: 'freeDraw' })}
+                  disabled={disabled || isApplying}
+                  style={state.drawMode === 'freeDraw' ? activeModeStyle : undefined}
+                  title="Drag across the surface to paint the seam freehand."
+                >
+                  Free-draw
+                </button>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Seam-line smoothing (how much the cut line rounds through waypoints) */}
-          <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
-            <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Seam Smoothing</label>
-            <ScrollableNumberField
-              value={state.smoothing}
-              onChange={(value) => setState({ smoothing: clampFloat(value, 0, 2, 2) })}
-              min={0}
-              max={2}
-              step={0.05}
-              unit=""
-              ariaLabel="Seam line smoothing strength"
-              disabled={disabled || isApplying}
-              className="mt-1"
-            />
-          </div>
+          {!isBounded && (
+            <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
+              <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Seam Smoothing</label>
+              <ScrollableNumberField
+                value={state.smoothing}
+                onChange={(value) => setState({ smoothing: clampFloat(value, 0, 2, 2) })}
+                min={0}
+                max={2}
+                step={0.05}
+                unit=""
+                ariaLabel="Seam line smoothing strength"
+                disabled={disabled || isApplying}
+                className="mt-1"
+              />
+            </div>
+          )}
 
           {/* Cut thickness (the kerf the cut removes). */}
           <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
@@ -337,8 +561,8 @@ export function OrganicCutPanel({
           )}
 
           {/* Registration key: peg + socket so the two halves index together.
-              Contour-only (the flat plane cut has no key support yet). */}
-          {isContour && (
+              Contour & Bounded Plane cuts support keys. */}
+          {(isContour || isBounded) && (
             <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
               <button
                 type="button"

@@ -43,7 +43,7 @@ import { HollowingPanel, type HollowingPanelState } from '../features/hollowing'
 import { HolePunchPanel, type HolePunchPanelState } from '../features/hole-punching/HolePunchPanel';
 import { HolePunchPreviewCylinder } from '@/features/hole-punching/HolePunchPreviewCylinder';
 import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
-import { OrganicCutPanel, OrganicCutTool, OrganicCutKeyGizmo, useOrganicCutSession } from '@/features/organicCut';
+import { OrganicCutPanel, OrganicCutTool, OrganicCutKeyGizmo, OrganicCutPlaneGizmo, useOrganicCutSession } from '@/features/organicCut';
 import { MirrorTool } from '@/features/mirror/MirrorTool';
 import { bakeWithFlips } from '@/features/mirror/logic/bakeWithFlips';
 import { buildMirrorSupportTransforms, reflectTransformAcrossWorldAxis } from '@/features/mirror/logic/buildMirrorSupportTransforms';
@@ -18904,6 +18904,29 @@ export default function Home() {
                       keyTiltRad: tilt,
                       keyTiltAzimuthRad: azimuth,
                       keyRollRad: roll,
+                    })
+                  }
+                  onDragStateChange={handleOrganicCutDragStateChange}
+                />
+              ) : organicCutToolActive && organicCut.panelState.cutMode === 'bounded_plane' ? (
+                <OrganicCutPlaneGizmo
+                  models={scene.models}
+                  activeModelId={displayActiveModelId}
+                  activeTransform={transformMgr.transform}
+                  planePosition={organicCut.panelState.planePosition ?? [0, 0, 0]}
+                  planeRotation={organicCut.panelState.planeRotation ?? [0, 0, 0]}
+                  radius={organicCut.panelState.radius ?? 20}
+                  onPlaneTransformChange={(position, rotation) =>
+                    organicCut.setPanelState({
+                      ...organicCut.panelState,
+                      planePosition: position,
+                      planeRotation: rotation,
+                    })
+                  }
+                  onRadiusChange={(radius) =>
+                    organicCut.setPanelState({
+                      ...organicCut.panelState,
+                      radius,
                     })
                   }
                   onDragStateChange={handleOrganicCutDragStateChange}

@@ -27,10 +27,11 @@ export interface OrganicCutLoopPoint {
  * - `plane`: the flat planar cut (slices along a single plane).
  * - `contour`: the curved "wafer" cut — a soap-film membrane that follows the
  *   drawn loop, splitting along the contoured seam.
+ * - `bounded_plane`: flat planar cut within a regular polygon or circular boundary.
  *
- * MUST match the Rust `CutMode` serde names (lowercase): `plane` | `contour`.
+ * MUST match the Rust `CutMode` serde names (lowercase): `plane` | `contour` | `bounded_plane`.
  */
-export type OrganicCutMode = 'plane' | 'contour';
+export type OrganicCutMode = 'plane' | 'contour' | 'bounded_plane';
 
 /** One organic cut: a closed loop plus the parameters that drive the wafer. */
 export interface OrganicCutSpec {
@@ -101,6 +102,14 @@ export interface OrganicCutSpec {
   keyTiltAzimuthRad?: number;
   /** Key roll (radians): spin about the key's own axis. Serde: `keyRollRad`. */
   keyRollRad?: number;
+  /** Bounded Plane: number of sides of the regular polygon cutter. Serde: `sides`. */
+  sides?: number;
+  /** Bounded Plane: radius. Serde: `radius`. */
+  radius?: number;
+  /** Bounded Plane: 3D position in model-local space. Serde: `position`. */
+  position?: [number, number, number];
+  /** Bounded Plane: 3D rotation in model-local space. Serde: `rotation`. */
+  rotation?: [number, number, number];
 }
 
 /**

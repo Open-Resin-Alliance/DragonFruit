@@ -25,7 +25,7 @@ import {
 } from './meshOrganicCut';
 import type { KeyPreviewKind } from './meshOrganicCut';
 import { cutPlaneFromPoints } from './cutPlane';
-import type * as THREE from 'three';
+import * as THREE from 'three';
 
 /** Minimum points before a cut is possible. 2 = the simplest flat plane cut. */
 const MIN_LOOP_POINTS = 2;
@@ -173,6 +173,10 @@ const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
   keyTiltRad: 0,
   keyTiltAzimuthRad: 0,
   keyRollRad: 0,
+  sides: 4,
+  radius: 20,
+  planePosition: [0, 0, 0],
+  planeRotation: [0, 0, 0],
 };
 
 /** Minimum points before a CONTOUR cut is possible (a real loop needs ≥3). */
@@ -300,7 +304,26 @@ export function useOrganicCutSession({
     // Redo history + selection don't carry across models.
     setRedoStack([]);
     setSelectedIndex(null);
-  }, [activeGeometryKey]);
+
+    // Initialize plane position to bounding box center of active geometry
+    let initialCenter: [number, number, number] = [0, 0, 0];
+    if (activeGeometry) {
+      if (!activeGeometry.boundingBox) {
+        activeGeometry.computeBoundingBox();
+      }
+      const box = activeGeometry.boundingBox;
+      if (box) {
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+        initialCenter = [center.x, center.y, center.z];
+      }
+    }
+    setPanelState((prev) => ({
+      ...prev,
+      planePosition: initialCenter,
+      planeRotation: [0, 0, 0],
+    }));
+  }, [activeGeometryKey, activeGeometry]);
 
   // Undo-restore: when the active model's geometry REVERTS to the exact pre-cut
   // reference we stashed at cut time (scene-history undo restores geometry by
@@ -370,11 +393,13 @@ export function useOrganicCutSession({
   // land first, so the membrane is built from the final seam rather than a stale
   // one (which would otherwise trigger a second rebuild a moment later).
   React.useEffect(() => {
+    const isContour = cutMode === 'contour';
+    const isBounded = cutMode === 'bounded_plane';
     if (
-      cutMode !== 'contour' ||
+      (!isContour && !isBounded) ||
       !toolActive ||
       isDraggingPoint ||
-      loop.length < 3 ||
+      (isContour && loop.length < 3) ||
       !activeGeometry ||
       !activeGeometryKey
     ) {
@@ -416,6 +441,11 @@ export function useOrganicCutSession({
           0,
           0,
           0,
+          panelState.cutMode,
+          panelState.sides,
+          panelState.radius,
+          panelState.planePosition,
+          panelState.planeRotation,
         );
         if (cancelled) return;
         setMembranePreview(result.membrane);
@@ -432,7 +462,28 @@ export function useOrganicCutSession({
     // NOTE: keyTilt/azimuth/roll are intentionally NOT deps — tilt is applied live
     // on the client (see OrganicCutTool's keyTiltMatrix), so changing it must NOT
     // rebuild the soup. Keeping them out is what makes the aim gizmo smooth.
-  }, [toolActive, loop, activeGeometry, activeGeometryKey, cutMode, geodesicPolyline, isDraggingPoint, panelState.membraneSmoothing, panelState.density, panelState.thicknessMm, panelState.generateKey, panelState.keyWidthMm, panelState.keyDepthMm, panelState.keyShape, panelState.keyFilletMm, panelState.keySwapSides]);
+  }, [
+    toolActive,
+    loop,
+    activeGeometry,
+    activeGeometryKey,
+    cutMode,
+    geodesicPolyline,
+    isDraggingPoint,
+    panelState.membraneSmoothing,
+    panelState.density,
+    panelState.thicknessMm,
+    panelState.generateKey,
+    panelState.keyWidthMm,
+    panelState.keyDepthMm,
+    panelState.keyShape,
+    panelState.keyFilletMm,
+    panelState.keySwapSides,
+    panelState.sides,
+    panelState.radius,
+    panelState.planePosition,
+    panelState.planeRotation,
+  ]);
 
   const addPoint = React.useCallback((point: OrganicCutLoopPoint) => {
     setLoop((prev) => [...prev, point]);
@@ -603,6 +654,27 @@ export function useOrganicCutSession({
             keyTiltAzimuthRad: ps.keyTiltAzimuthRad,
             keyRollRad: ps.keyRollRad,
           };
+        } else if (ps.cutMode === 'bounded_plane') {
+          cutSpec = {
+            loopPoints: [],
+            thicknessMm: ps.thicknessMm,
+            smoothing: ps.smoothing,
+            mode: 'bounded_plane' as const,
+            sides: ps.sides,
+            radius: ps.radius,
+            position: ps.planePosition,
+            rotation: ps.planeRotation,
+            cutterThicknessMm: ps.thicknessMm,
+            generateKey: ps.generateKey,
+            keyWidthMm: ps.keyWidthMm,
+            keyDepthMm: ps.keyDepthMm,
+            keyShape: ps.keyShape,
+            keyFilletMm: ps.keyFilletMm,
+            keySwapSides: ps.keySwapSides,
+            keyTiltRad: ps.keyTiltRad,
+            keyTiltAzimuthRad: ps.keyTiltAzimuthRad,
+            keyRollRad: ps.keyRollRad,
+          };
         } else {
           // Compute the plane from the SAME helper the preview uses, so the cut
           // is exactly the plane the user saw. Sent explicitly; Rust splits by it.
@@ -674,10 +746,15 @@ export function useOrganicCutSession({
   }, []); // stable: all inputs read from refs
 
   const pointCount = loop.length;
-  // Contour needs a real loop (≥3 points); flat works with 2.
-  const minPointsForMode = panelState.cutMode === 'contour' ? MIN_CONTOUR_POINTS : MIN_LOOP_POINTS;
+  // Contour needs a real loop (≥3 points); flat works with 2; bounded plane works with 0.
+  const minPointsForMode =
+    panelState.cutMode === 'contour'
+      ? MIN_CONTOUR_POINTS
+      : panelState.cutMode === 'bounded_plane'
+      ? 0
+      : MIN_LOOP_POINTS;
   const canCloseLoop = status === 'drawing' && pointCount >= MIN_LOOP_POINTS;
-  const canApply = pointCount >= minPointsForMode && !isApplying;
+  const canApply = (panelState.cutMode === 'bounded_plane' || pointCount >= minPointsForMode) && !isApplying;
   const canUndoPoint = pointCount > 0;
   const canRedoPoint = redoStack.length > 0;
 

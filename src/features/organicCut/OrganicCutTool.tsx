@@ -244,8 +244,8 @@ export function OrganicCutTool({
   // lands, from the same plane formula the cut uses. Sized to span the model.
   const planePreview = useMemo(() => {
     if (!activeModel) return null;
-    // In contour mode the cut is curved — a flat quad would mislead. Hide it.
-    if (cutMode === 'contour') return null;
+    // In contour mode or bounded plane mode, a simple flat quad derived from waypoints is hidden/irrelevant.
+    if (cutMode === 'contour' || cutMode === 'bounded_plane') return null;
     const plane = cutPlaneFromPoints(loop);
     if (!plane) return null;
 
@@ -267,10 +267,10 @@ export function OrganicCutTool({
     return { span, quat, position: plane.point };
   }, [activeModel, loop, cutMode]);
 
-  // Translucent membrane (curved cutter surface) for contour mode. Built from the
+  // Translucent membrane (curved cutter surface or bounded plane cutter slab). Built from the
   // flat triangle soup Rust returns, so it's EXACTLY the surface the cut uses.
   const membraneGeometry = useMemo(() => {
-    if (cutMode !== 'contour' || !membranePreview || membranePreview.length < 9) return null;
+    if ((cutMode !== 'contour' && cutMode !== 'bounded_plane') || !membranePreview || membranePreview.length < 9) return null;
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(membranePreview, 3));
     geom.computeVertexNormals();
@@ -281,10 +281,10 @@ export function OrganicCutTool({
     return geom;
   }, [cutMode, membranePreview]);
 
-  // Registration-key preview (peg + socket) for contour mode. Built from the flat
+  // Registration-key preview (peg + socket) for contour/bounded_plane mode. Built from the flat
   // soup Rust returns, so it's EXACTLY the key the cut will place.
   const keyGeometry = useMemo(() => {
-    if (cutMode !== 'contour' || !keyPreview || keyPreview.length < 9) return null;
+    if ((cutMode !== 'contour' && cutMode !== 'bounded_plane') || !keyPreview || keyPreview.length < 9) return null;
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(keyPreview, 3));
     geom.computeVertexNormals();
@@ -798,7 +798,7 @@ export function OrganicCutTool({
             Dragging → cyan. SELECTED → blue (the waypoint Delete/right-click will
             remove). Each marker is draggable: a press that moves repositions it; a
             press that doesn't is a select. */}
-        {loop.map((p, idx) => {
+        {cutMode !== 'bounded_plane' && loop.map((p, idx) => {
           const isDragging = draggingIndex === idx;
           const isSelected = selectedIndex === idx;
           const color = isSelected
@@ -841,7 +841,7 @@ export function OrganicCutTool({
         })}
 
         {/* Connecting polyline through the points (and closing segment). */}
-        {loopLine && <primitive object={loopLine} />}
+        {cutMode !== 'bounded_plane' && loopLine && <primitive object={loopLine} />}
       </group>
     </group>
   );
