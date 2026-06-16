@@ -76,7 +76,7 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 220 }: 
     setPxMm(0.05);
     setSupportBufMm(0.25);
     setConsolidateVoxel(true);
-    setConsolidationDistance(0.5);
+    setConsolidationDistance(0.2);
     setReduceIntersection(false);
     setIntersectionThreshold(0.5);
     setScaleMarkersWithArea(true);

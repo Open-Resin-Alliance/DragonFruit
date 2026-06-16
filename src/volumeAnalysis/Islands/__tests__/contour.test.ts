@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { determineContourThreshold, generateContourMarkers } from '../useIslands';
+import { determineContourThreshold, generateContourMarkers, consolidateVoxelIslands } from '../useIslands';
 import type { DetectedIsland } from '../types';
 
 function mockVoxelIsland(id: string, areaMm2: number, contactVoxels?: { x: number; y: number }[]): DetectedIsland {
@@ -89,7 +89,7 @@ test('determineContourThreshold: filters out islands below minAreaForContour', (
   const voxels = [{ x: 0, y: 0 }];
   const islands = [
     mockVoxelIsland('v0', 1.0, voxels),
-    mockVoxelIsland('v1', 0.0001, voxels), // Area is below 4 * px^2 (4 * 0.0025 = 0.01)
+    mockVoxelIsland('v1', 0.05, voxels), // Area is below 0.06 mm²
   ];
   const contoured = determineContourThreshold(islands, 0.05, 20);
   assert.equal(contoured.size, 1);
@@ -102,8 +102,8 @@ test('determineContourThreshold: limits to top K <= maxContourRegions based on b
   // Generate 25 qualified islands
   const islands: DetectedIsland[] = [];
   for (let i = 0; i < 25; i++) {
-    // Large areas for first 6 (5 to 10), then very small areas (0.02)
-    const area = i < 6 ? 10 - i : 0.02;
+    // Large areas for first 6 (5 to 10), then very small areas (0.07)
+    const area = i < 6 ? 10 - i : 0.07;
     islands.push(mockVoxelIsland(`v${i}`, area, voxels));
   }
   const contoured = determineContourThreshold(islands, 0.05, 20);
@@ -111,5 +111,33 @@ test('determineContourThreshold: limits to top K <= maxContourRegions based on b
   assert.ok(contoured.size >= 5 && contoured.size <= 20);
   assert.ok(contoured.has('v0'));
   assert.ok(contoured.has('v5'));
-  assert.ok(!contoured.has('v6')); // Should drop v6 because of the breakpoint gap (4.0 -> 0.02)
+  assert.ok(!contoured.has('v6')); // Should drop v6 because of the breakpoint gap (4.0 -> 0.07)
 });
+
+test('consolidateVoxelIslands: does not consolidate a group containing only solo dots', () => {
+  const v0 = mockVoxelIsland('v0', 0.0025, [{ x: 0.0, y: 0.0 }]);
+  const v1 = mockVoxelIsland('v1', 0.0025, [{ x: 0.2, y: 0.0 }]);
+  
+  const consolidated = consolidateVoxelIslands([v0, v1], 0.3, 0.05);
+  
+  assert.equal(consolidated.length, 2);
+  assert.equal(consolidated[0].id, 'v0');
+  assert.equal(consolidated[1].id, 'v1');
+});
+
+test('consolidateVoxelIslands: dilates and bridges adjacent footprints if at least one is a cluster', () => {
+  // pxMm = 0.05. minAreaForContour = 0.06.
+  // v0 is a cluster (0.08 area)
+  const v0 = mockVoxelIsland('v0', 0.08, [{ x: 0.0, y: 0.0 }]);
+  // v1 is a solo dot (0.0025 area)
+  const v1 = mockVoxelIsland('v1', 0.0025, [{ x: 0.2, y: 0.0 }]);
+  
+  const consolidated = consolidateVoxelIslands([v0, v1], 0.3, 0.05);
+  
+  assert.equal(consolidated.length, 1);
+  const island = consolidated[0];
+  assert.ok(island.contactVoxels);
+  assert.ok(island.contactVoxels.length > 2);
+  assert.equal(island.areaMm2, island.contactVoxels.length * 0.05 * 0.05);
+});
+

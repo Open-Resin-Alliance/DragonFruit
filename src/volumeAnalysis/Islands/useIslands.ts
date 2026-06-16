@@ -84,7 +84,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
 
   // Voxel consolidation & smart intersection states
   const [consolidateVoxel, setConsolidateVoxel] = useState<boolean>(true);
-  const [consolidationDistance, setConsolidationDistance] = useState<number>(0.5);
+  const [consolidationDistance, setConsolidationDistance] = useState<number>(0.2);
   const [reduceIntersection, setReduceIntersection] = useState<boolean>(false);
   const [intersectionThreshold, setIntersectionThreshold] = useState<number>(0.5);
   const [enableVolumeGlow, setEnableVolumeGlow] = useState<boolean>(true);
@@ -244,8 +244,8 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   // Helper to group adjacent voxel islands into consolidated "suspended areas"
   const consolidatedVoxels = useMemo(() => {
     if (!consolidateVoxel) return voxelIslands;
-    return consolidateVoxelIslands(voxelIslands, consolidationDistance);
-  }, [voxelIslands, consolidateVoxel, consolidationDistance]);
+    return consolidateVoxelIslands(voxelIslands, consolidationDistance, pxMm);
+  }, [voxelIslands, consolidateVoxel, consolidationDistance, pxMm]);
 
   // Voxel + mesh-minima, unified. (Part C) adds intersection classification here.
   const classifiedResult = useMemo(() => {
@@ -447,12 +447,14 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       const area = island?.areaMm2 ?? 0;
       const radius = scaleMarkersWithArea && area > 0 ? Math.max(0.1, Math.sqrt(area / Math.PI)) : 0.1;
 
-      // 1. Generate and push the blue voxel blob (either contoured if binned or a single dot if not) as type 3
-      if (island && contouredIds.has(island.id) && island.contactVoxels && island.contactVoxels.length > 0) {
-        const contourBlue = generateContourMarkers(island.contactVoxels, pxMm, m.id, m.baseZ, 3);
-        markers.push(...contourBlue);
-      } else {
-        markers.push({ ...m, radius, type: 3, islandId: m.id });
+      // 1. Generate and push the blue voxel blob (either contoured if binned or a single dot if not) as type 3 if showVoxelOnly is enabled
+      if (showVoxelOnly) {
+        if (island && contouredIds.has(island.id) && island.contactVoxels && island.contactVoxels.length > 0) {
+          const contourBlue = generateContourMarkers(island.contactVoxels, pxMm, m.id, m.baseZ, 3);
+          markers.push(...contourBlue);
+        } else {
+          markers.push({ ...m, radius, type: 3, islandId: m.id });
+        }
       }
 
       // 2. If the island is NOT supported (or if filterToggles.showAlreadySupported is checked), push the red dot marker of type 2
@@ -471,6 +473,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     contouredIds,
     filterToggles,
     pxMm,
+    showVoxelOnly,
   ]);
 
   const clear = useCallback(() => {
@@ -609,10 +612,65 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   };
 }
 
-function consolidateVoxelIslands(islands: DetectedIsland[], epsilonMm: number): DetectedIsland[] {
+function dilateVoxelGrid(voxels: { x: number; y: number }[], pxMm: number, consolidationDistance: number): { x: number; y: number }[] {
+  if (voxels.length === 0) return [];
+
+  const gridSet = new Set<string>();
+  const originalCoords: { ix: number; iy: number }[] = [];
+
+  for (const v of voxels) {
+    const ix = Math.round(v.x / pxMm);
+    const iy = Math.round(v.y / pxMm);
+    const key = `${ix},${iy}`;
+    if (!gridSet.has(key)) {
+      gridSet.add(key);
+      originalCoords.push({ ix, iy });
+    }
+  }
+
+  const rPix = Math.max(1, Math.round(consolidationDistance / (2 * pxMm)));
+  const dilatedSet = new Set<string>();
+  const dilatedVoxels: { x: number; y: number }[] = [];
+
+  const offsets: { dx: number; dy: number }[] = [];
+  for (let dx = -rPix; dx <= rPix; dx++) {
+    for (let dy = -rPix; dy <= rPix; dy++) {
+      if (dx * dx + dy * dy <= rPix * rPix) {
+        offsets.push({ dx, dy });
+      }
+    }
+  }
+
+  for (const coord of originalCoords) {
+    for (const offset of offsets) {
+      const nix = coord.ix + offset.dx;
+      const niy = coord.iy + offset.dy;
+      const nkey = `${nix},${niy}`;
+      if (!dilatedSet.has(nkey)) {
+        dilatedSet.add(nkey);
+        dilatedVoxels.push({ x: nix * pxMm, y: niy * pxMm });
+      }
+    }
+  }
+
+  return dilatedVoxels;
+}
+
+export function consolidateVoxelIslands(islands: DetectedIsland[], epsilonMm: number, pxMm: number): DetectedIsland[] {
   const n = islands.length;
   if (n === 0) return [];
-  if (n === 1) return [{ ...islands[0] }];
+  
+  const minAreaForContour = 0.06; // mm² (resolution-invariant)
+
+  if (n === 1) {
+    const single = { ...islands[0] };
+    if ((single.areaMm2 ?? 0) >= minAreaForContour && single.contactVoxels && single.contactVoxels.length > 0) {
+      const dilated = dilateVoxelGrid(single.contactVoxels, pxMm, epsilonMm);
+      single.contactVoxels = dilated;
+      single.areaMm2 = dilated.length * pxMm * pxMm;
+    }
+    return [single];
+  }
 
   const eps2 = epsilonMm * epsilonMm;
   const parent = Array.from({ length: n }, (_, i) => i);
@@ -651,34 +709,52 @@ function consolidateVoxelIslands(islands: DetectedIsland[], epsilonMm: number): 
 
   const consolidated: DetectedIsland[] = [];
   for (const members of byRoot.values()) {
-    members.sort((a, b) => a.baseZ - b.baseZ);
-    const lowest = members[0];
+    const hasCluster = members.some((m) => (m.areaMm2 ?? 0) >= minAreaForContour);
 
-    let sumX = 0, sumY = 0, totalArea = 0;
-    let minFirstLayer = Infinity, maxLastLayer = -Infinity;
-    const contactVoxels: { x: number; y: number }[] = [];
-    for (const m of members) {
-      sumX += m.contact.x;
-      sumY += m.contact.y;
-      totalArea += m.areaMm2 ?? 0;
-      if (m.layerSpan) {
-        minFirstLayer = Math.min(minFirstLayer, m.layerSpan[0]);
-        maxLastLayer = Math.max(maxLastLayer, m.layerSpan[1]);
+    if (hasCluster) {
+      members.sort((a, b) => a.baseZ - b.baseZ);
+      const lowest = members[0];
+
+      let sumX = 0, sumY = 0, totalArea = 0;
+      let minFirstLayer = Infinity, maxLastLayer = -Infinity;
+      const contactVoxels: { x: number; y: number }[] = [];
+      for (const m of members) {
+        sumX += m.contact.x;
+        sumY += m.contact.y;
+        totalArea += m.areaMm2 ?? 0;
+        if (m.layerSpan) {
+          minFirstLayer = Math.min(minFirstLayer, m.layerSpan[0]);
+          maxLastLayer = Math.max(maxLastLayer, m.layerSpan[1]);
+        }
+        if (m.contactVoxels) {
+          contactVoxels.push(...m.contactVoxels);
+        }
       }
-      if (m.contactVoxels) {
-        contactVoxels.push(...m.contactVoxels);
+
+      const dilatedVoxels = contactVoxels.length > 0
+        ? dilateVoxelGrid(contactVoxels, pxMm, epsilonMm)
+        : undefined;
+
+      const finalArea = (dilatedVoxels && dilatedVoxels.length > 0)
+        ? dilatedVoxels.length * pxMm * pxMm
+        : totalArea;
+
+      const contact = lowest.contact.clone();
+
+      consolidated.push({
+        ...lowest,
+        contact,
+        baseZ: lowest.baseZ,
+        areaMm2: finalArea,
+        layerSpan: minFirstLayer !== Infinity ? [minFirstLayer, maxLastLayer] : undefined,
+        contactVoxels: dilatedVoxels,
+      });
+    } else {
+      // Keep them separate
+      for (const m of members) {
+        consolidated.push({ ...m });
       }
     }
-    const contact = lowest.contact.clone();
-
-    consolidated.push({
-      ...lowest,
-      contact,
-      baseZ: lowest.baseZ,
-      areaMm2: totalArea,
-      layerSpan: minFirstLayer !== Infinity ? [minFirstLayer, maxLastLayer] : undefined,
-      contactVoxels: contactVoxels.length > 0 ? contactVoxels : undefined,
-    });
   }
 
   return consolidated;
@@ -701,8 +777,8 @@ export function determineContourThreshold(
 
   if (candidates.length === 0) return contouredIds;
 
-  // Minimum area to qualify for contouring (e.g. 4+ voxels)
-  const minAreaForContour = 4 * pxMm * pxMm;
+  // Minimum area to qualify for contouring (0.06 mm², resolution-invariant)
+  const minAreaForContour = 0.06;
   const qualified = candidates.filter((i) => (i.areaMm2 ?? 0) >= minAreaForContour);
 
   // Sort qualified candidates descending by area
