@@ -191,7 +191,9 @@ export function GizmoRotation({
       return Math.atan2(cameraDir.z, cameraDir.y) + Math.PI / 2;
     }
     if (axis === 'y') {
-      return Math.atan2(cameraDir.z, cameraDir.x);
+      // The Y ring is rotated into the X/Z plane with local +Y mapped to
+      // world -Z, so project camera Z with the matching sign.
+      return Math.atan2(-cameraDir.z, cameraDir.x);
     }
     return Math.atan2(cameraDir.y, cameraDir.x);
   }, [axis, camera.position, gizmoPosition]);
@@ -355,7 +357,7 @@ export function GizmoRotation({
       // Compute sign factors for axis inversion and camera flip
       const flipMult = shouldFlipRef.current ? -1 : 1;
       const objectSignFactor = -flipMult;
-      const axisSign = (axis === 'x' || axis === 'z') ? -1 : 1;
+      const axisSign = -1;
 
       const rawObjectDelta = deltaAngle * objectSignFactor;
       rawAccumulatedAngleRef.current += rawObjectDelta;
@@ -387,7 +389,9 @@ export function GizmoRotation({
         lastSnappedAngleRef.current += rawObjectDelta;
       }
 
-      // Visual delta = objectDelta * axisSign (x/z axes invert visual relative to object)
+      // Visual delta = objectDelta * axisSign. The model applies emitted
+      // object deltas with the opposite sign, so the handle arc mirrors that
+      // application step to move with the visible rotation.
       // axisVisualFlip allows the parent to invert the visual animation direction
       // (e.g. when the gizmo's local frame has an inverted axis convention such
       // as displayY = -cutterY in HolePunchGizmo).
@@ -425,7 +429,7 @@ export function GizmoRotation({
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
     };
-  }, [isDragging, getMousePolar, axis]);
+  }, [isDragging, getMousePolar, axis, axisVisualFlip]);
 
   // Use GPU picking hover state OR prop-based hover (fallback)
   const effectiveHovered = !suppressHover && (isPickingHovered || isHovered);
