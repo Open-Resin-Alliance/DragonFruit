@@ -85,7 +85,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   // Voxel consolidation & smart intersection states
   const [consolidateVoxel, setConsolidateVoxel] = useState<boolean>(true);
   const [consolidationDistance, setConsolidationDistance] = useState<number>(0.5);
-  const [reduceIntersection, setReduceIntersection] = useState<boolean>(true);
+  const [reduceIntersection, setReduceIntersection] = useState<boolean>(false);
   const [intersectionThreshold, setIntersectionThreshold] = useState<number>(0.5);
   const [enableVolumeGlow, setEnableVolumeGlow] = useState<boolean>(true);
 

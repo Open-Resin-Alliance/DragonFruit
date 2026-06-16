@@ -56,6 +56,17 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
     setEnableVolumeGlow,
   } = islands;
 
+  const [settingsExpanded, setSettingsExpanded] = React.useState(false);
+
+  const handleResetDefaults = React.useCallback(() => {
+    setPxMm(0.05);
+    setSupportBufMm(0.25);
+    setConsolidateVoxel(true);
+    setConsolidationDistance(0.5);
+    setReduceIntersection(false);
+    setIntersectionThreshold(0.5);
+  }, [setPxMm, setSupportBufMm, setConsolidateVoxel, setConsolidationDistance, setReduceIntersection, setIntersectionThreshold]);
+
   const voxelOnlyShown = filteredIslands.filter((i) => i.source === 'voxel' && i.class === 'voxelOnly').length;
   const minimaOnlyShown = filteredIslands.filter((i) => i.source === 'minima' && i.class === 'minimaOnly').length;
   const intersectionShown = filteredIslands.filter((i) => i.class === 'intersection' && i.source === 'voxel').length;
@@ -254,147 +265,51 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
             </div>
           )}
 
-          {/* Detection parameters — sweep then re-scan. Defaults: 0.10mm / 0.60mm. */}
-          <div className="space-y-2.5 pt-1.5 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center justify-between">
-                <label className="ui-meta">Resolution (pixel)</label>
-                <span className="ui-meta" style={{ color: 'var(--text-strong)' }}>{pxMm.toFixed(2)} mm</span>
-              </div>
-              <input
-                type="range"
-                min="0.03"
-                max="0.5"
-                step="0.01"
-                value={pxMm}
-                onChange={(e) => setPxMm(parseFloat(e.target.value))}
-                disabled={scanning}
-                className="ui-range"
-                title="Voxel pixel size. Smaller = finer detail + slower; larger = coarser + faster."
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center justify-between">
-                <label className="ui-meta">Support buffer</label>
-                <span className="ui-meta" style={{ color: 'var(--text-strong)' }}>{supportBufMm.toFixed(2)} mm</span>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.05"
-                value={supportBufMm}
-                onChange={(e) => setSupportBufMm(parseFloat(e.target.value))}
-                disabled={scanning}
-                className="ui-range"
-                title="A region within this distance of the layer below counts as supported. Lower = flags shallower overhangs."
-              />
-            </div>
-            <p className="ui-meta leading-snug" style={{ color: 'var(--text-muted)' }}>
-              Lower buffer flags shallower overhangs. Changes apply on the next scan.
-            </p>
-          </div>
-
-          <label className="flex items-center gap-1.5 py-1 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showVoxelOnly}
-              onChange={(e) => setShowVoxelOnly(e.target.checked)}
-              className="ui-checkbox !w-4 !h-4"
-            />
-            <span
-              className="inline-block w-2.5 h-2.5 rounded-full"
-              style={{ background: ISLAND_LAYER_COLORS.voxel }}
-            />
-            <span className="ui-meta">Voxel-only ({voxelOnlyShown})</span>
-          </label>
-
-          <label className="flex items-center gap-1.5 py-1 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showMinimaOnly}
-              onChange={(e) => setShowMinimaOnly(e.target.checked)}
-              className="ui-checkbox !w-4 !h-4"
-            />
-            <span
-              className="inline-block w-2.5 h-2.5 rounded-full"
-              style={{ background: ISLAND_LAYER_COLORS.minima }}
-            />
-            <span className="ui-meta">Minima-only ({minimaOnlyShown})</span>
-          </label>
-
-          <label className="flex items-center gap-1.5 py-1 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showIntersection}
-              onChange={(e) => setShowIntersection(e.target.checked)}
-              className="ui-checkbox !w-4 !h-4"
-            />
-            <span
-              className="inline-block w-2.5 h-2.5 rounded-full"
-              style={{ background: ISLAND_LAYER_COLORS.intersection }}
-            />
-            <span className="ui-meta">Intersections ({intersectionShown})</span>
-          </label>
- 
-          <div className="space-y-2 pt-1.5 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
-            <label className="flex items-center gap-1.5 cursor-pointer">
+          {/* Visual Display Toggles & Volumetric Glow */}
+          <div className="space-y-1.5 pt-1.5 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+            <label className="flex items-center gap-1.5 py-0.5 cursor-pointer">
               <input
                 type="checkbox"
-                checked={consolidateVoxel}
-                onChange={(e) => setConsolidateVoxel(e.target.checked)}
+                checked={showVoxelOnly}
+                onChange={(e) => setShowVoxelOnly(e.target.checked)}
                 className="ui-checkbox !w-4 !h-4"
               />
-              <span className="ui-meta">Consolidate voxels</span>
+              <span
+                className="inline-block w-2.5 h-2.5 rounded-full"
+                style={{ background: ISLAND_LAYER_COLORS.voxel }}
+              />
+              <span className="ui-meta">Voxel-only ({voxelOnlyShown})</span>
             </label>
- 
-            {consolidateVoxel && (
-              <div className="flex flex-col gap-1 pl-5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Consolidation distance</span>
-                  <span className="text-[10px] font-semibold" style={{ color: 'var(--text-strong)' }}>{consolidationDistance.toFixed(1)} mm</span>
-                </div>
-                <input
-                  type="range"
-                  min="0.1"
-                  max="5.0"
-                  step="0.1"
-                  value={consolidationDistance}
-                  onChange={(e) => setConsolidationDistance(parseFloat(e.target.value))}
-                  className="ui-range"
-                />
-              </div>
-            )}
- 
-            <label className="flex items-center gap-1.5 cursor-pointer">
+
+            <label className="flex items-center gap-1.5 py-0.5 cursor-pointer">
               <input
                 type="checkbox"
-                checked={reduceIntersection}
-                onChange={(e) => setReduceIntersection(e.target.checked)}
+                checked={showMinimaOnly}
+                onChange={(e) => setShowMinimaOnly(e.target.checked)}
                 className="ui-checkbox !w-4 !h-4"
               />
-              <span className="ui-meta">Reduce small intersections</span>
+              <span
+                className="inline-block w-2.5 h-2.5 rounded-full"
+                style={{ background: ISLAND_LAYER_COLORS.minima }}
+              />
+              <span className="ui-meta">Minima-only ({minimaOnlyShown})</span>
             </label>
- 
-            {reduceIntersection && (
-              <div className="flex flex-col gap-1 pl-5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Intersection threshold</span>
-                  <span className="text-[10px] font-semibold" style={{ color: 'var(--text-strong)' }}>{intersectionThreshold.toFixed(1)} mm²</span>
-                </div>
-                <input
-                  type="range"
-                  min="0.1"
-                  max="2.0"
-                  step="0.1"
-                  value={intersectionThreshold}
-                  onChange={(e) => setIntersectionThreshold(parseFloat(e.target.value))}
-                  className="ui-range"
-                />
-              </div>
-            )}
- 
-            <label className="flex items-center gap-1.5 cursor-pointer">
+
+            <label className="flex items-center gap-1.5 py-0.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showIntersection}
+                onChange={(e) => setShowIntersection(e.target.checked)}
+                className="ui-checkbox !w-4 !h-4"
+              />
+              <span
+                className="inline-block w-2.5 h-2.5 rounded-full"
+                style={{ background: ISLAND_LAYER_COLORS.intersection }}
+              />
+              <span className="ui-meta">Intersections ({intersectionShown})</span>
+            </label>
+
+            <label className="flex items-center gap-1.5 py-0.5 cursor-pointer">
               <input
                 type="checkbox"
                 checked={enableVolumeGlow}
@@ -404,7 +319,8 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
               <span className="ui-meta">Volumetric selection glow</span>
             </label>
           </div>
- 
+
+          {/* Filter Toggles */}
           <div className="space-y-1.5 pt-1.5 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
             <label className="flex items-center gap-1.5 cursor-pointer">
               <input
@@ -424,6 +340,152 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
               />
               <span className="ui-meta">Show plate-contact</span>
             </label>
+          </div>
+
+          {/* Voxel Scan Settings Rollup */}
+          <div className="border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+            <button
+              type="button"
+              onClick={() => setSettingsExpanded(!settingsExpanded)}
+              className="flex items-center justify-between w-full py-1 text-left text-[11px] font-semibold uppercase tracking-wider transition-colors hover:text-[var(--accent)]"
+              style={{ color: 'var(--text-strong)' }}
+            >
+              <span>Voxel Scan Settings</span>
+              <svg
+                className="w-3 h-3 transform transition-transform"
+                style={{ color: settingsExpanded ? 'var(--accent)' : 'var(--text-muted)' }}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                {settingsExpanded ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                )}
+              </svg>
+            </button>
+
+            {settingsExpanded && (
+              <div className="mt-2.5 space-y-3 pb-1">
+                {/* Resolution */}
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between">
+                    <label className="ui-meta">Resolution (pixel)</label>
+                    <span className="ui-meta" style={{ color: 'var(--text-strong)' }}>{pxMm.toFixed(2)} mm</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.03"
+                    max="0.5"
+                    step="0.01"
+                    value={pxMm}
+                    onChange={(e) => setPxMm(parseFloat(e.target.value))}
+                    disabled={scanning}
+                    className="ui-range"
+                    title="Voxel pixel size. Smaller = finer detail + slower; larger = coarser + faster."
+                  />
+                </div>
+
+                {/* Support Buffer */}
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between">
+                    <label className="ui-meta">Support buffer</label>
+                    <span className="ui-meta" style={{ color: 'var(--text-strong)' }}>{supportBufMm.toFixed(2)} mm</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={supportBufMm}
+                    onChange={(e) => setSupportBufMm(parseFloat(e.target.value))}
+                    disabled={scanning}
+                    className="ui-range"
+                    title="A region within this distance of the layer below counts as supported. Lower = flags shallower overhangs."
+                  />
+                </div>
+                <p className="ui-meta leading-snug font-normal text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                  Lower buffer flags shallower overhangs. Changes apply on the next scan.
+                </p>
+
+                {/* Consolidate Voxels */}
+                <div className="space-y-2 pt-1.5 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={consolidateVoxel}
+                      onChange={(e) => setConsolidateVoxel(e.target.checked)}
+                      className="ui-checkbox !w-4 !h-4"
+                    />
+                    <span className="ui-meta">Consolidate voxels</span>
+                  </label>
+                  {consolidateVoxel && (
+                    <div className="flex flex-col gap-1 pl-5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Consolidation distance</span>
+                        <span className="text-[10px] font-semibold" style={{ color: 'var(--text-strong)' }}>{consolidationDistance.toFixed(1)} mm</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="5.0"
+                        step="0.1"
+                        value={consolidationDistance}
+                        onChange={(e) => setConsolidationDistance(parseFloat(e.target.value))}
+                        className="ui-range"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Reduce Small Intersections */}
+                <div className="space-y-2 pt-1.5 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={reduceIntersection}
+                      onChange={(e) => setReduceIntersection(e.target.checked)}
+                      className="ui-checkbox !w-4 !h-4"
+                    />
+                    <span className="ui-meta">Reduce small intersections</span>
+                  </label>
+                  {reduceIntersection && (
+                    <div className="flex flex-col gap-1 pl-5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Intersection threshold</span>
+                        <span className="text-[10px] font-semibold" style={{ color: 'var(--text-strong)' }}>{intersectionThreshold.toFixed(1)} mm²</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="2.0"
+                        step="0.1"
+                        value={intersectionThreshold}
+                        onChange={(e) => setIntersectionThreshold(parseFloat(e.target.value))}
+                        className="ui-range"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Reset Defaults button */}
+                <div className="pt-2 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <button
+                    type="button"
+                    onClick={handleResetDefaults}
+                    className="h-7 w-full rounded border px-2 text-[10px] font-semibold transition-colors hover:bg-[color-mix(in_srgb,var(--text-strong),transparent_95%)]"
+                    style={{
+                      borderColor: 'var(--border-subtle)',
+                      background: 'var(--surface-1)',
+                      color: 'var(--text-strong)',
+                    }}
+                  >
+                    Reset Defaults
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="ui-meta pt-1.5 border-t leading-snug" style={{ borderColor: 'var(--border-subtle)' }}>
