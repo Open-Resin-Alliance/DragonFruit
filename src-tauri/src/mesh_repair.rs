@@ -1153,7 +1153,7 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
                 req.sides,
                 req.radius,
                 req.position,
-                [0.0, 0.0, 0.0],
+                req.rotation,
             );
             if let Some(bytes) = source_bytes {
                 let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;

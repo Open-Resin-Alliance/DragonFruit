@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo } from 'react';
+import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { ModelTransform } from '@/hooks/useModelTransform';
@@ -38,6 +39,7 @@ export function OrganicCutPlaneGizmo({
   onRadiusChange,
   onDragStateChange,
 }: OrganicCutPlaneGizmoProps) {
+  const { camera } = useThree();
   const activeModel = useMemo(
     () => models.find((m) => m.id === activeModelId),
     [models, activeModelId],
@@ -106,74 +108,104 @@ export function OrganicCutPlaneGizmo({
       worldPos,
       worldQuat,
       worldEuler,
+      worldMatrix,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planePosition, planeRotation, meshLocalOffset, hasTransform, tpx, tpy, tpz, trx, try_, trz, tsx, tsy, tsz]);
 
+  const initialRadiusRef = React.useRef<number | null>(null);
+  const initialWorldSizeRef = React.useRef<number>(1.0);
+  const initialModelScaleRef = React.useRef<number>(1.0);
+
+  const computeGizmoWorldSize = useCallback(() => {
+    if (!camera || !worldTransform) return 1.0;
+    const { worldPos } = worldTransform;
+    const scaleFactor = 0.04; // default scaleFactor of ScreenSpaceGizmo
+    if (camera instanceof THREE.OrthographicCamera) {
+      const ortho = camera;
+      const worldHeight = (ortho.top - ortho.bottom) / Math.max(1e-6, ortho.zoom);
+      return worldHeight * scaleFactor;
+    }
+    const perspective = camera as THREE.PerspectiveCamera;
+    const distance = perspective.position.distanceTo(worldPos);
+    return distance * scaleFactor;
+  }, [camera, worldTransform]);
+
+  const handleScaleStart = useCallback(() => {
+    initialRadiusRef.current = radius;
+    initialWorldSizeRef.current = computeGizmoWorldSize();
+
+    if (transform) {
+      const scaleX = transform.scale.x ?? 1;
+      const scaleY = transform.scale.y ?? 1;
+      const scaleZ = transform.scale.z ?? 1;
+      initialModelScaleRef.current = (Math.abs(scaleX) + Math.abs(scaleY) + Math.abs(scaleZ)) / 3;
+    } else {
+      initialModelScaleRef.current = 1.0;
+    }
+  }, [radius, computeGizmoWorldSize, transform]);
+
+  const handleScaleEnd = useCallback(() => {
+    initialRadiusRef.current = null;
+  }, []);
+
   const handleGizmoMove = useCallback(
     (delta: THREE.Vector3) => {
-      if (!worldTransform) return;
-      const { localToWorld, worldPos, worldQuat } = worldTransform;
+      if (!transform || !worldTransform) return;
 
-      // Translate world position
-      const newWorldPos = worldPos.clone().add(delta);
-
-      // Re-compose new world matrix (no rotation change during translation)
-      const newWorldMatrix = new THREE.Matrix4().compose(
-        newWorldPos,
-        worldQuat,
-        new THREE.Vector3(1, 1, 1),
-      );
-
-      // Convert back to local space
-      const localToWorldInv = localToWorld.clone().invert();
-      const newLocalMatrix = localToWorldInv.multiply(newWorldMatrix);
-      const newLocalPos = new THREE.Vector3();
-      const newLocalQuat = new THREE.Quaternion();
-      const newLocalScale = new THREE.Vector3();
-      newLocalMatrix.decompose(newLocalPos, newLocalQuat, newLocalScale);
+      // Translate in local space: transform the world delta displacement using localToWorld's inverse.
+      // Set W component to 0 to treat it as a displacement/direction, which handles rotation and scale.
+      const localToWorldInv = worldTransform.localToWorld.clone().invert();
+      const localDelta4 = new THREE.Vector4(delta.x, delta.y, delta.z, 0).applyMatrix4(localToWorldInv);
+      const localDelta = new THREE.Vector3(localDelta4.x, localDelta4.y, localDelta4.z);
 
       onPlaneTransformChange(
-        [newLocalPos.x, newLocalPos.y, newLocalPos.z],
+        [
+          planePosition[0] + localDelta.x,
+          planePosition[1] + localDelta.y,
+          planePosition[2] + localDelta.z,
+        ],
         [planeRotation[0], planeRotation[1], planeRotation[2]],
       );
     },
-    [worldTransform, planeRotation, onPlaneTransformChange],
+    [transform, worldTransform, planePosition, planeRotation, onPlaneTransformChange],
   );
 
   const handleGizmoRotate = useCallback(
     (axis: GizmoAxis, angle: number) => {
       if (!worldTransform) return;
-      const { localToWorld, worldPos, worldQuat } = worldTransform;
 
-      // Define local axis of rotation
-      const localAxis = new THREE.Vector3(
+      const { worldQuat, worldPos, localToWorld } = worldTransform;
+
+      // Define axis of rotation in the gizmo's world space (which is aligned to world axes)
+      const worldAxis = new THREE.Vector3(
         axis === 'x' ? 1 : 0,
         axis === 'y' ? 1 : 0,
         axis === 'z' ? 1 : 0,
       );
 
-      // Transform local axis to world space axis of the gizmo
-      const worldAxis = localAxis.clone().applyQuaternion(worldQuat).normalize();
-      const rotationQuat = new THREE.Quaternion().setFromAxisAngle(worldAxis, angle);
-      const newWorldQuat = rotationQuat.multiply(worldQuat);
+      // Rotate worldQuat around that world axis by -angle to match cursor drag
+      const deltaQuat = new THREE.Quaternion().setFromAxisAngle(worldAxis, -angle);
+      const newWorldQuat = deltaQuat.clone().multiply(worldQuat);
 
-      // Re-compose new world matrix
+      // Create new world matrix (position remains unchanged during pure rotation)
       const newWorldMatrix = new THREE.Matrix4().compose(
         worldPos,
         newWorldQuat,
         new THREE.Vector3(1, 1, 1),
       );
 
-      // Convert back to local space
+      // Transform new world matrix back to local matrix
       const localToWorldInv = localToWorld.clone().invert();
       const newLocalMatrix = localToWorldInv.multiply(newWorldMatrix);
-      const newLocalPos = new THREE.Vector3();
-      const newLocalQuat = new THREE.Quaternion();
-      const newLocalScale = new THREE.Vector3();
-      newLocalMatrix.decompose(newLocalPos, newLocalQuat, newLocalScale);
 
-      const newLocalEuler = new THREE.Euler().setFromQuaternion(newLocalQuat, 'XYZ');
+      const localPos = new THREE.Vector3();
+      const localQuat = new THREE.Quaternion();
+      const localScale = new THREE.Vector3();
+      newLocalMatrix.decompose(localPos, localQuat, localScale);
+
+      // Convert back to Euler angles
+      const newLocalEuler = new THREE.Euler().setFromQuaternion(localQuat, 'XYZ');
 
       onPlaneTransformChange(
         [planePosition[0], planePosition[1], planePosition[2]],
@@ -185,8 +217,13 @@ export function OrganicCutPlaneGizmo({
 
   const handleGizmoScale = useCallback(
     (_axis: GizmoAxis | 'uniform', factor: number) => {
-      // Scale changes the radius parameter uniformly
-      const newRadius = Math.max(1.0, radius * factor);
+      const baseRadius = initialRadiusRef.current ?? radius;
+      const worldSize = initialWorldSizeRef.current;
+      const modelScale = initialModelScaleRef.current;
+
+      // Scale in world-space by the exact distance the mouse moved, then convert to local
+      const deltaRadiusLocal = (worldSize * (factor - 1)) / modelScale;
+      const newRadius = Math.max(1.0, baseRadius + deltaRadiusLocal);
       onRadiusChange(newRadius);
     },
     [radius, onRadiusChange],
@@ -201,12 +238,12 @@ export function OrganicCutPlaneGizmo({
 
   if (!worldTransform) return null;
 
-  const { worldPos, worldEuler } = worldTransform;
+  const { worldPos } = worldTransform;
 
   return (
     <ScreenSpaceGizmo
       position={[worldPos.x, worldPos.y, worldPos.z]}
-      rotation={[worldEuler.x, worldEuler.y, worldEuler.z]}
+      rotation={[0, 0, 0]}
       followMeshRef={false}
       enableMove
       enableRotate
@@ -216,6 +253,8 @@ export function OrganicCutPlaneGizmo({
       onMove={handleGizmoMove}
       onRotate={handleGizmoRotate}
       onScale={handleGizmoScale}
+      onScaleStart={handleScaleStart}
+      onScaleEnd={handleScaleEnd}
       onDragStateChange={handleGizmoDragState}
     />
   );

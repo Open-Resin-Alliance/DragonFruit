@@ -177,6 +177,7 @@ const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
   radius: 20,
   planePosition: [0, 0, 0],
   planeRotation: [0, 0, 0],
+  planeUniformScale: true,
 };
 
 /** Minimum points before a CONTOUR cut is possible (a real loop needs ≥3). */
@@ -358,7 +359,6 @@ export function useOrganicCutSession({
   // recomputes on every point change for maximum responsiveness. In-flight calls
   // are cancelled (the `cancelled` guard) when points change again, so a fast
   // drag never lets a stale result overwrite a newer one.
-  const cutMode = panelState.cutMode;
   React.useEffect(() => {
     if (!toolActive || loop.length < 2 || !activeGeometry || !activeGeometryKey) {
       setGeodesicPolyline(null);
@@ -393,8 +393,8 @@ export function useOrganicCutSession({
   // land first, so the membrane is built from the final seam rather than a stale
   // one (which would otherwise trigger a second rebuild a moment later).
   React.useEffect(() => {
-    const isContour = cutMode === 'contour';
-    const isBounded = cutMode === 'bounded_plane';
+    const isContour = panelState.cutMode === 'contour';
+    const isBounded = panelState.cutMode === 'bounded_plane';
     if (
       (!isContour && !isBounded) ||
       !toolActive ||
@@ -467,7 +467,7 @@ export function useOrganicCutSession({
     loop,
     activeGeometry,
     activeGeometryKey,
-    cutMode,
+    panelState.cutMode,
     geodesicPolyline,
     isDraggingPoint,
     panelState.membraneSmoothing,
@@ -596,7 +596,8 @@ export function useOrganicCutSession({
     const geomKey = activeGeometryKeyRef.current;
     const ps = panelStateRef.current;
     const isContour = ps.cutMode === 'contour';
-    const minPoints = isContour ? MIN_CONTOUR_POINTS : MIN_LOOP_POINTS;
+    const isBoundedPlane = ps.cutMode === 'bounded_plane';
+    const minPoints = isBoundedPlane ? 0 : (isContour ? MIN_CONTOUR_POINTS : MIN_LOOP_POINTS);
     if (currentLoop.length < minPoints) return;
     if (!geom || !geomKey) return;
     const loopSnapshot = currentLoop.slice();
@@ -705,7 +706,6 @@ export function useOrganicCutSession({
 
         // Flat string (not an object) so the Tauri log forwarder shows every
         // field inline instead of collapsing it to "Object".
-        // eslint-disable-next-line no-console
         console.info(
           `[organicCut] cut applied | engine=${result.report.engine}` +
           ` committed=${committed}` +
@@ -734,7 +734,6 @@ export function useOrganicCutSession({
           setSelectedIndex(null);
         }
       } catch (err) {
-        // eslint-disable-next-line no-console
         console.error('[organicCut] cut failed', err);
       } finally {
         if (!cancelled) setIsApplying(false);

@@ -54,6 +54,7 @@ export interface OrganicCutPanelState {
   radius?: number;
   planePosition?: [number, number, number];
   planeRotation?: [number, number, number];
+  planeUniformScale?: boolean;
 }
 
 function getSidesLabel(sides: number): string {
@@ -110,7 +111,6 @@ interface OrganicCutPanelProps {
 export function OrganicCutPanel({
   state,
   onStateChange,
-  sessionStatus,
   pointCount,
   onClearLoop,
   onCloseLoop,
@@ -167,6 +167,21 @@ export function OrganicCutPanel({
   const accentCardStyle: React.CSSProperties = {
     borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 76%)',
     background: 'color-mix(in srgb, var(--accent), var(--surface-1) 95%)',
+  };
+
+  const moveCardStyle: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, #4f8cff, var(--border-subtle) 78%)',
+    background: 'color-mix(in srgb, #4f8cff, var(--surface-1) 94%)',
+  };
+
+  const rotateCardStyle: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, #8f6cff, var(--border-subtle) 80%)',
+    background: 'color-mix(in srgb, #8f6cff, var(--surface-1) 95%)',
+  };
+
+  const scaleCardStyle: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, #2eb67d, var(--border-subtle) 80%)',
+    background: 'color-mix(in srgb, #2eb67d, var(--surface-1) 95%)',
   };
 
   const activeModeStyle: React.CSSProperties = {
@@ -325,28 +340,17 @@ export function OrganicCutPanel({
                 </div>
               )}
 
-              {/* Radius Slider */}
-              <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
-                <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Radius</label>
-                <ScrollableNumberField
-                  value={state.radius ?? 20}
-                  onChange={(value) => setState({ radius: clampFloat(value, 1, 250, 1) })}
-                  min={1}
-                  max={250}
-                  step={0.5}
-                  unit="mm"
-                  ariaLabel="Cutter boundary radius in millimeters"
-                  disabled={disabled || isApplying}
-                  className="mt-1"
-                />
-              </div>
-
-              {/* Position Inputs */}
-              <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
-                <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Cutter Position</label>
+              {/* MOVE SECTION */}
+              <div className="rounded-md border p-2 space-y-1.5" style={moveCardStyle}>
+                <div className="flex w-full items-center justify-between py-0.5 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-strong)' }}>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: '#4f8cff' }} />
+                    Move
+                  </span>
+                </div>
                 <div className="grid grid-cols-3 gap-1.5 mt-1">
                   <div>
-                    <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-muted)' }}>X (mm)</label>
+                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#f87171' }}>X</label>
                     <ScrollableNumberField
                       value={state.planePosition?.[0] ?? 0}
                       onChange={(value) => setState({
@@ -361,7 +365,7 @@ export function OrganicCutPanel({
                     />
                   </div>
                   <div>
-                    <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-muted)' }}>Y (mm)</label>
+                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#4ade80' }}>Y</label>
                     <ScrollableNumberField
                       value={state.planePosition?.[1] ?? 0}
                       onChange={(value) => setState({
@@ -376,7 +380,7 @@ export function OrganicCutPanel({
                     />
                   </div>
                   <div>
-                    <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-muted)' }}>Z (mm)</label>
+                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#60a5fa' }}>Z</label>
                     <ScrollableNumberField
                       value={state.planePosition?.[2] ?? 0}
                       onChange={(value) => setState({
@@ -391,14 +395,28 @@ export function OrganicCutPanel({
                     />
                   </div>
                 </div>
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary w-full !h-7 text-[10px] mt-1"
+                  onClick={() => setState({ planePosition: [0, 0, 0] })}
+                  disabled={disabled || isApplying}
+                  title="Center the cutter plane on the model origin."
+                >
+                  Center
+                </button>
               </div>
 
-              {/* Rotation Inputs (X, Y, Z degrees) */}
-              <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
-                <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Cutter Rotation</label>
+              {/* ROTATE SECTION */}
+              <div className="rounded-md border p-2 space-y-1.5" style={rotateCardStyle}>
+                <div className="flex w-full items-center justify-between py-0.5 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-strong)' }}>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: '#8f6cff' }} />
+                    Rotate
+                  </span>
+                </div>
                 <div className="grid grid-cols-3 gap-1.5 mt-1">
                   <div>
-                    <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-muted)' }}>X (deg)</label>
+                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#f87171' }}>X</label>
                     <ScrollableNumberField
                       value={Math.round(((state.planeRotation?.[0] ?? 0) * 180) / Math.PI)}
                       onChange={(value) => setState({
@@ -417,7 +435,7 @@ export function OrganicCutPanel({
                     />
                   </div>
                   <div>
-                    <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-muted)' }}>Y (deg)</label>
+                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#4ade80' }}>Y</label>
                     <ScrollableNumberField
                       value={Math.round(((state.planeRotation?.[1] ?? 0) * 180) / Math.PI)}
                       onChange={(value) => setState({
@@ -436,7 +454,7 @@ export function OrganicCutPanel({
                     />
                   </div>
                   <div>
-                    <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-muted)' }}>Z (deg)</label>
+                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#60a5fa' }}>Z</label>
                     <ScrollableNumberField
                       value={Math.round(((state.planeRotation?.[2] ?? 0) * 180) / Math.PI)}
                       onChange={(value) => setState({
@@ -455,6 +473,119 @@ export function OrganicCutPanel({
                     />
                   </div>
                 </div>
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary w-full !h-7 text-[10px] mt-1"
+                  onClick={() => setState({ planeRotation: [0, 0, 0] })}
+                  disabled={disabled || isApplying}
+                  title="Reset the cutter rotation."
+                >
+                  Reset Rotation
+                </button>
+              </div>
+
+              {/* SCALE SECTION */}
+              <div className="rounded-md border p-2 space-y-1.5" style={scaleCardStyle}>
+                <div className="flex w-full items-center justify-between py-0.5 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-strong)' }}>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: '#2eb67d' }} />
+                    Scale
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5 mt-1">
+                  <div>
+                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#f87171' }}>X (mm)</label>
+                    <ScrollableNumberField
+                      value={state.radius ? (state.radius * 2) : 40}
+                      onChange={(value) => {
+                        const newRadius = clampFloat(value / 2, 1, 250, 1);
+                        if (state.planeUniformScale) {
+                          const oldRadius = state.radius ?? 20;
+                          const ratio = oldRadius > 0 ? (newRadius / oldRadius) : 1;
+                          const newThickness = clampFloat(state.thicknessMm * ratio, 0.05, 1.5, 2);
+                          setState({ radius: newRadius, thicknessMm: newThickness });
+                        } else {
+                          setState({ radius: newRadius });
+                        }
+                      }}
+                      min={2}
+                      max={500}
+                      step={1}
+                      unit=""
+                      ariaLabel="Cutter X dimension (diameter)"
+                      disabled={disabled || isApplying}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#4ade80' }}>Y (mm)</label>
+                    <ScrollableNumberField
+                      value={state.radius ? (state.radius * 2) : 40}
+                      onChange={() => {}}
+                      min={2}
+                      max={500}
+                      step={1}
+                      unit=""
+                      ariaLabel="Cutter Y dimension (diameter)"
+                      disabled={true}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#60a5fa' }}>Z (mm)</label>
+                    <ScrollableNumberField
+                      value={state.thicknessMm}
+                      onChange={(value) => {
+                        const newThickness = clampFloat(value, 0.05, 1.5, 2);
+                        if (state.planeUniformScale) {
+                          const oldThickness = state.thicknessMm;
+                          const ratio = oldThickness > 0 ? (newThickness / oldThickness) : 1;
+                          const newRadius = clampFloat((state.radius ?? 20) * ratio, 1, 250, 1);
+                          setState({ radius: newRadius, thicknessMm: newThickness });
+                        } else {
+                          setState({ thicknessMm: newThickness });
+                        }
+                      }}
+                      min={0.05}
+                      max={1.5}
+                      step={0.05}
+                      unit=""
+                      ariaLabel="Cutter Z dimension (thickness)"
+                      disabled={disabled || isApplying || state.planeUniformScale}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-2 mt-1">
+                  <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Uniform</span>
+                  <button
+                    type="button"
+                    onClick={() => setState({ planeUniformScale: !state.planeUniformScale })}
+                    disabled={disabled || isApplying}
+                    className="h-7 min-w-[56px] rounded-md border px-2 text-[10px] font-semibold uppercase tracking-wide transition-colors"
+                    style={state.planeUniformScale
+                      ? {
+                          borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                          color: 'var(--accent-contrast)',
+                        }
+                      : {
+                          borderColor: 'var(--border-subtle)',
+                          background: 'var(--surface-1)',
+                          color: 'var(--text-muted)',
+                        }}
+                  >
+                    {state.planeUniformScale ? 'ON' : 'OFF'}
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary w-full !h-7 text-[10px] mt-1"
+                  onClick={() => setState({ radius: 20, thicknessMm: 0.1 })}
+                  disabled={disabled || isApplying}
+                  title="Reset cutter radius and thickness."
+                >
+                  Reset Scale
+                </button>
               </div>
             </>
           )}
@@ -507,20 +638,22 @@ export function OrganicCutPanel({
           )}
 
           {/* Cut thickness (the kerf the cut removes). */}
-          <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
-            <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Cut Thickness</label>
-            <ScrollableNumberField
-              value={state.thicknessMm}
-              onChange={(value) => setState({ thicknessMm: clampFloat(value, 0.05, 1.5, 2) })}
-              min={0.05}
-              max={1.5}
-              step={0.05}
-              unit="mm"
-              ariaLabel="Cut thickness in millimeters"
-              disabled={disabled || isApplying}
-              className="mt-1"
-            />
-          </div>
+          {!isBounded && (
+            <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
+              <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Cut Thickness</label>
+              <ScrollableNumberField
+                value={state.thicknessMm}
+                onChange={(value) => setState({ thicknessMm: clampFloat(value, 0.05, 1.5, 2) })}
+                min={0.05}
+                max={1.5}
+                step={0.05}
+                unit="mm"
+                ariaLabel="Cut thickness in millimeters"
+                disabled={disabled || isApplying}
+                className="mt-1"
+              />
+            </div>
+          )}
 
           {/* Cut smoothing (how smooth/taut the curved cutter surface is).
               Only meaningful for the contour cut. */}

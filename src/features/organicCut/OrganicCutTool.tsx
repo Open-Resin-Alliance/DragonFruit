@@ -88,6 +88,12 @@ interface OrganicCutToolProps {
   keyTiltRad?: number;
   keyTiltAzimuthRad?: number;
   keyRollRad?: number;
+  // Bounded plane coordinates and parameters
+  planePosition?: [number, number, number];
+  planeRotation?: [number, number, number];
+  radius?: number;
+  sides?: number;
+  thicknessMm?: number;
 }
 
 /** Max key tilt (radians) — mirrors the Rust `KEY_MAX_TILT_RAD` (~60°). */
@@ -99,6 +105,146 @@ const MARKER_RADIUS_FRACTION = 0.00075;
 const MARKER_RADIUS_MIN = 0.005;
 const MARKER_RADIUS_MAX = 0.3;
 const LOOP_LINE_BIAS_MM = 0.2;
+
+const computePlaneMeshIntersection = (
+  geometry: THREE.BufferGeometry,
+  planePosition: [number, number, number] | THREE.Vector3,
+  planeNormal: THREE.Vector3,
+  radius: number,
+  cutMode: string,
+  planeRotation: [number, number, number]
+): THREE.Vector3[] => {
+  const points: THREE.Vector3[] = [];
+  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
+  if (!posAttr) return [];
+
+  const array = posAttr.array;
+  const pPos = Array.isArray(planePosition)
+    ? new THREE.Vector3(...planePosition)
+    : planePosition;
+  const pNormal = planeNormal;
+  const pRot = new THREE.Euler(...planeRotation, 'XYZ');
+  const pQuat = new THREE.Quaternion().setFromEuler(pRot);
+  const pQuatInv = pQuat.clone().invert();
+
+  const v0 = new THREE.Vector3();
+  const v1 = new THREE.Vector3();
+  const v2 = new THREE.Vector3();
+
+  const isBounded = cutMode === 'bounded_plane';
+  const R2 = radius * radius;
+
+  for (let i = 0; i < array.length; i += 9) {
+    v0.set(array[i], array[i + 1], array[i + 2]);
+    v1.set(array[i + 3], array[i + 4], array[i + 5]);
+    v2.set(array[i + 6], array[i + 7], array[i + 8]);
+
+    // Compute signed distances
+    const d0 = (v0.x - pPos.x) * pNormal.x + (v0.y - pPos.y) * pNormal.y + (v0.z - pPos.z) * pNormal.z;
+    const d1 = (v1.x - pPos.x) * pNormal.x + (v1.y - pPos.y) * pNormal.y + (v1.z - pPos.z) * pNormal.z;
+    const d2 = (v2.x - pPos.x) * pNormal.x + (v2.y - pPos.y) * pNormal.y + (v2.z - pPos.z) * pNormal.z;
+
+    const sign0 = d0 >= 0;
+    const sign1 = d1 >= 0;
+    const sign2 = d2 >= 0;
+
+    // If all vertices are on the same side, skip
+    if (sign0 === sign1 && sign1 === sign2) continue;
+
+    const segmentPoints: THREE.Vector3[] = [];
+
+    // Edge 0-1
+    if (sign0 !== sign1) {
+      const t = d0 / (d0 - d1);
+      segmentPoints.push(new THREE.Vector3(
+        v0.x + t * (v1.x - v0.x),
+        v0.y + t * (v1.y - v0.y),
+        v0.z + t * (v1.z - v0.z)
+      ));
+    }
+    // Edge 1-2
+    if (sign1 !== sign2) {
+      const t = d1 / (d1 - d2);
+      segmentPoints.push(new THREE.Vector3(
+        v1.x + t * (v2.x - v1.x),
+        v1.y + t * (v2.y - v1.y),
+        v1.z + t * (v2.z - v1.z)
+      ));
+    }
+    // Edge 2-0
+    if (sign2 !== sign0 && segmentPoints.length < 2) {
+      const t = d2 / (d2 - d0);
+      segmentPoints.push(new THREE.Vector3(
+        v2.x + t * (v0.x - v2.x),
+        v2.y + t * (v0.y - v2.y),
+        v2.z + t * (v0.z - v2.z)
+      ));
+    }
+
+    if (segmentPoints.length < 2) continue;
+
+    const pA = segmentPoints[0];
+    const pB = segmentPoints[1];
+
+    if (isBounded) {
+      // Transform to plane local space
+      const localA = pA.clone().sub(pPos).applyQuaternion(pQuatInv);
+      const localB = pB.clone().sub(pPos).applyQuaternion(pQuatInv);
+
+      // Check distance in local XY plane
+      const distA2 = localA.x * localA.x + localA.y * localA.y;
+      const distB2 = localB.x * localB.x + localB.y * localB.y;
+
+      const inA = distA2 <= R2;
+      const inB = distB2 <= R2;
+
+      if (inA && inB) {
+        // Both inside, keep unchanged
+        points.push(pA, pB);
+      } else {
+        // Clip segment to circle of radius R in local plane space
+        const dx = localB.x - localA.x;
+        const dy = localB.y - localA.y;
+        const aCoeff = dx * dx + dy * dy;
+        if (aCoeff > 1e-8) {
+          const bCoeff = 2 * (localA.x * dx + localA.y * dy);
+          const cCoeff = localA.x * localA.x + localA.y * localA.y - R2;
+          const disc = bCoeff * bCoeff - 4 * aCoeff * cCoeff;
+
+          if (disc >= 0) {
+            const sqrtDisc = Math.sqrt(disc);
+            const t1 = (-bCoeff - sqrtDisc) / (2 * aCoeff);
+            const t2 = (-bCoeff + sqrtDisc) / (2 * aCoeff);
+
+            const tMin = Math.min(t1, t2);
+            const tMax = Math.max(t1, t2);
+
+            const tStart = inA ? 0 : Math.max(0, tMin);
+            const tEnd = inB ? 1 : Math.min(1, tMax);
+
+            if (tStart < tEnd) {
+              const pA_clipped = new THREE.Vector3(
+                localA.x + tStart * dx,
+                localA.y + tStart * dy,
+                0
+              ).applyQuaternion(pQuat).add(pPos);
+              const pB_clipped = new THREE.Vector3(
+                localA.x + tEnd * dx,
+                localA.y + tEnd * dy,
+                0
+              ).applyQuaternion(pQuat).add(pPos);
+              points.push(pA_clipped, pB_clipped);
+            }
+          }
+        }
+      }
+    } else {
+      points.push(pA, pB);
+    }
+  }
+
+  return points;
+};
 
 /**
  * In-canvas visualization for the Cutting Mode loop.
@@ -135,6 +281,11 @@ export function OrganicCutTool({
   keyTiltRad = 0,
   keyTiltAzimuthRad = 0,
   keyRollRad = 0,
+  planePosition = [0, 0, 0],
+  planeRotation = [0, 0, 0],
+  radius = 20,
+  sides = 4,
+  thicknessMm = 0.1,
 }: OrganicCutToolProps) {
   const activeModel = useMemo(() => models.find((m) => m.id === activeModelId), [models, activeModelId]);
   const transform = activeTransform || activeModel?.transform;
@@ -270,7 +421,7 @@ export function OrganicCutTool({
   // Translucent membrane (curved cutter surface or bounded plane cutter slab). Built from the
   // flat triangle soup Rust returns, so it's EXACTLY the surface the cut uses.
   const membraneGeometry = useMemo(() => {
-    if ((cutMode !== 'contour' && cutMode !== 'bounded_plane') || !membranePreview || membranePreview.length < 9) return null;
+    if (cutMode !== 'contour' || !membranePreview || membranePreview.length < 9) return null;
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(membranePreview, 3));
     geom.computeVertexNormals();
@@ -280,6 +431,62 @@ export function OrganicCutTool({
     geom.computeBoundingSphere();
     return geom;
   }, [cutMode, membranePreview]);
+
+  // Local cutter geometry for bounded plane mode, built entirely on the client
+  // so it scales, translates, and rotates smoothly and instantly during drags.
+  const localCutterGeometry = useMemo(() => {
+    if (cutMode !== 'bounded_plane') return null;
+
+    // Use thicknessMm as the thickness of the preview cylinder
+    const thickness = thicknessMm;
+    const geom = new THREE.CylinderGeometry(radius, radius, thickness, sides);
+
+    // Rotate the cylinder so its height (Y axis) aligns with the Z axis (which is the cutter axis in Rust)
+    geom.rotateX(Math.PI / 2);
+    geom.computeVertexNormals();
+    geom.computeBoundingBox();
+    geom.computeBoundingSphere();
+    return geom;
+  }, [cutMode, radius, sides, thicknessMm]);
+
+  // Get plane specs for Flat Mode intersection
+  const flatPlaneSpecs = useMemo(() => {
+    if (cutMode !== 'plane') return null;
+    const plane = cutPlaneFromPoints(loop);
+    if (!plane) return null;
+    return {
+      position: plane.point,
+      normal: plane.normal.clone().normalize()
+    };
+  }, [loop, cutMode]);
+
+  const intersectionGeometry = useMemo(() => {
+    if (!activeModel || (cutMode !== 'plane' && cutMode !== 'bounded_plane')) return null;
+
+    let pPos: [number, number, number] | THREE.Vector3;
+    let pNormal: THREE.Vector3;
+    let pRot: [number, number, number];
+
+    if (cutMode === 'bounded_plane') {
+      pPos = planePosition;
+      pRot = planeRotation;
+      pNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(...planeRotation, 'XYZ'))
+      );
+    } else {
+      if (!flatPlaneSpecs) return null;
+      pPos = flatPlaneSpecs.position;
+      pNormal = flatPlaneSpecs.normal;
+      pRot = [0, 0, 0];
+    }
+
+    const geom = activeModel.geometry.geometry;
+    const points = computePlaneMeshIntersection(geom, pPos, pNormal, radius, cutMode, pRot);
+    if (points.length === 0) return null;
+
+    const bufferGeom = new THREE.BufferGeometry().setFromPoints(points);
+    return bufferGeom;
+  }, [activeModel, cutMode, planePosition, planeRotation, radius, flatPlaneSpecs]);
 
   // Registration-key preview (peg + socket) for contour/bounded_plane mode. Built from the flat
   // soup Rust returns, so it's EXACTLY the key the cut will place.
@@ -701,6 +908,44 @@ export function OrganicCutTool({
               />
             </mesh>
           </>
+        )}
+
+        {/* Bounded plane client-side cylinder preview */}
+        {cutMode === 'bounded_plane' && localCutterGeometry && (
+          <group position={planePosition} rotation={new THREE.Euler(...planeRotation, 'XYZ')}>
+            <mesh geometry={localCutterGeometry} renderOrder={997} frustumCulled={false}>
+              <meshBasicMaterial
+                color={0x37ff7a}
+                transparent
+                opacity={0.25}
+                side={THREE.DoubleSide}
+                depthWrite={false}
+              />
+            </mesh>
+            <mesh geometry={localCutterGeometry} renderOrder={998} frustumCulled={false}>
+              <meshBasicMaterial
+                color={0xcccccc}
+                transparent
+                opacity={0.12}
+                wireframe
+                depthTest={false}
+                depthWrite={false}
+              />
+            </mesh>
+          </group>
+        )}
+
+        {/* Intersection outline highlight showing exactly where the plane/cylinder cuts the mesh */}
+        {intersectionGeometry && (
+          <lineSegments geometry={intersectionGeometry} renderOrder={1010} frustumCulled={false}>
+            <lineBasicMaterial
+              color={0xec2a77}
+              transparent
+              opacity={0.9}
+              depthWrite={false}
+              depthTest={false}
+            />
+          </lineSegments>
         )}
 
         {/* Contour membrane preview: the exact curved cutter surface. */}

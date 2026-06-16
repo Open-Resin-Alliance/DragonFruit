@@ -1416,6 +1416,7 @@ export default function Home() {
   const transformHistoryCommitNonceRef = React.useRef(0);
   const pendingHistoryTransformResyncRef = React.useRef(false);
   const suppressNextTransformPersistenceRef = React.useRef(false);
+  const suppressNextModelSyncRef = React.useRef(false);
   const suppressTransformPersistenceCycleCountRef = React.useRef(0);
   const skipNextTransformEndCommitRef = React.useRef<{
     modelId: string;
@@ -11111,6 +11112,11 @@ export default function Home() {
 
   // Sync transform manager when active model changes
   React.useEffect(() => {
+    if (suppressNextModelSyncRef.current) {
+      suppressNextModelSyncRef.current = false;
+      setDisplayActiveModelId(scene.activeModelId);
+      return;
+    }
     if (scene.activeModelId && scene.activeModel) {
       const t = scene.activeModel.transform;
 
@@ -11227,6 +11233,7 @@ export default function Home() {
 
       if (!isFiniteTransform(modelTransform)) {
         if (isFiniteTransform(transformMgr.transform)) {
+          suppressNextModelSyncRef.current = true;
           scene.updateModelTransform(scene.activeModelId, {
             position: transformMgr.transform.position.clone(),
             rotation: transformMgr.transform.rotation.clone(),
@@ -11278,6 +11285,7 @@ export default function Home() {
         }
 
         const isDirectTransformPath = !transformMgr.pendingTransformRef.current;
+        suppressNextModelSyncRef.current = true;
         scene.updateModelTransform(scene.activeModelId, current);
 
         const afterSupportSnapshot = captureTransformSupportSnapshot();
@@ -13743,6 +13751,7 @@ export default function Home() {
           rotation: current.rotation.clone(),
           scale: current.scale.clone(),
         };
+        suppressNextModelSyncRef.current = true;
         transformCommitResult = scene.updateModelTransform(
           scene.activeModelId,
           committedTransform,
@@ -14003,6 +14012,7 @@ export default function Home() {
       return;
     }
 
+    suppressNextModelSyncRef.current = true;
     const transformCommitResult = scene.updateModelTransforms(updates);
     beginSupportDragSyncTransaction(
       transformCommitResult.updated
@@ -19213,6 +19223,11 @@ export default function Home() {
                 keyTiltRad={organicCut.panelState.keyTiltRad}
                 keyTiltAzimuthRad={organicCut.panelState.keyTiltAzimuthRad}
                 keyRollRad={organicCut.panelState.keyRollRad}
+                planePosition={organicCut.panelState.planePosition}
+                planeRotation={organicCut.panelState.planeRotation}
+                radius={organicCut.panelState.radius}
+                sides={organicCut.panelState.sides}
+                thicknessMm={organicCut.panelState.thicknessMm}
               />
             )}
             {scene.mode === 'prepare' && transformMgr.transformMode === 'mirror' && (

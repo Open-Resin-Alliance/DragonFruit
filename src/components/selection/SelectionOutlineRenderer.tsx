@@ -7,7 +7,7 @@
 
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import * as THREE from 'three';
 import { SelectionOutline } from './SelectionOutline';
 
@@ -24,6 +24,7 @@ interface SelectionOutlineRendererProps {
   power?: number;
   /** Rim smoothing range */
   rimMin?: number;
+  /** Rim max */
   rimMax?: number;
   /** Alpha discard threshold */
   alphaCut?: number;
@@ -31,7 +32,6 @@ interface SelectionOutlineRendererProps {
 
 /**
  * SelectionOutlineRenderer - Renders outline for selected model.
- * Listens to selection events for reactive updates.
  */
 export function SelectionOutlineRenderer({
   meshRef,
@@ -43,28 +43,7 @@ export function SelectionOutlineRenderer({
   rimMax,
   alphaCut,
 }: SelectionOutlineRendererProps) {
-  const [isSelected, setIsSelected] = useState(true); // Start selected
-  
-  // Listen for selection changes
-  useEffect(() => {
-    const handleModelClicked = () => {
-      setIsSelected(true);
-    };
-    
-    const handleDeselect = () => {
-      setIsSelected(false);
-    };
-    
-    window.addEventListener('model-clicked', handleModelClicked);
-    window.addEventListener('model-deselected', handleDeselect);
-    
-    return () => {
-      window.removeEventListener('model-clicked', handleModelClicked);
-      window.removeEventListener('model-deselected', handleDeselect);
-    };
-  }, []);
-
-  if (!enabled || !isSelected || !meshRef.current) {
+  if (!enabled) {
     return null;
   }
 
