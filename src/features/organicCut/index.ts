@@ -1,4 +1,4 @@
-export { OrganicCutPanel, type OrganicCutPanelState } from './OrganicCutPanel';
+export { OrganicCutPanel } from './OrganicCutPanel';
 export { OrganicCutTool } from './OrganicCutTool';
 export { OrganicCutKeyGizmo, type OrganicCutKeyGizmoProps } from './OrganicCutKeyGizmo';
 export { OrganicCutPlaneGizmo, type OrganicCutPlaneGizmoProps } from './OrganicCutPlaneGizmo';

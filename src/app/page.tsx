@@ -18278,6 +18278,12 @@ export default function Home() {
                 canCloseLoop={organicCut.canCloseLoop}
                 keyKind={organicCut.keyKind}
                 keyDetail={organicCut.keyDetail}
+                stagedCuts={organicCut.stagedCuts}
+                editingCutId={organicCut.editingCutId}
+                addActiveToQueue={organicCut.addActiveToQueue}
+                adjustStagedCut={organicCut.adjustStagedCut}
+                removeStagedCut={organicCut.removeStagedCut}
+                clearQueue={organicCut.clearQueue}
               />
             )}
 
@@ -19229,6 +19235,8 @@ export default function Home() {
                 radius={organicCut.panelState.radius}
                 sides={organicCut.panelState.sides}
                 thicknessMm={organicCut.panelState.thicknessMm}
+                stagedCuts={organicCut.stagedCuts}
+                editingCutId={organicCut.editingCutId}
               />
             )}
             {scene.mode === 'prepare' && transformMgr.transformMode === 'mirror' && (

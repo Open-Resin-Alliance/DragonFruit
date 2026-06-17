@@ -13,8 +13,7 @@
  * intentionally not touching yet).
  */
 import React from 'react';
-import type { KeyPreviewFrame, OrganicCutLoopPoint, OrganicCutResult, OrganicCutSessionStatus } from './types';
-import type { OrganicCutPanelState } from './OrganicCutPanel';
+import type { KeyPreviewFrame, OrganicCutLoopPoint, OrganicCutResult, OrganicCutSessionStatus, OrganicCutPanelState, StagedCut } from './types';
 import {
   computeGeodesicLoop,
   computeMembranePreview,
@@ -108,6 +107,13 @@ export interface OrganicCutSession {
   canRedoPoint: boolean;
   clearLoop: () => void;
   closeLoop: () => void;
+  // Multi-cut queue state
+  stagedCuts: StagedCut[];
+  editingCutId: string | null;
+  addActiveToQueue: () => void;
+  adjustStagedCut: (id: string) => void;
+  removeStagedCut: (id: string) => void;
+  clearQueue: () => void;
   // Apply
   apply: () => void;
   isApplying: boolean;
@@ -204,6 +210,16 @@ export function useOrganicCutSession({
   const [panelState, setPanelState] = React.useState<OrganicCutPanelState>(DEFAULT_PANEL_STATE);
   const [loop, setLoop] = React.useState<OrganicCutLoopPoint[]>([]);
   const [status, setStatus] = React.useState<OrganicCutSessionStatus>('idle');
+  const [stagedCuts, setStagedCuts] = React.useState<StagedCut[]>([]);
+  const [editingCutId, setEditingCutId] = React.useState<string | null>(null);
+
+  const stagedCutsRef = React.useRef(stagedCuts);
+  React.useEffect(() => { stagedCutsRef.current = stagedCuts; }, [stagedCuts]);
+  const editingCutIdRef = React.useRef(editingCutId);
+  React.useEffect(() => { editingCutIdRef.current = editingCutId; }, [editingCutId]);
+  const statusRef = React.useRef(status);
+  React.useEffect(() => { statusRef.current = status; }, [status]);
+
   const [isApplying, setIsApplying] = React.useState(false);
   const [lastResult, setLastResult] = React.useState<OrganicCutResult | null>(null);
   const [geodesicPolyline, setGeodesicPolyline] = React.useState<Float32Array | null>(null);
@@ -669,191 +685,312 @@ export function useOrganicCutSession({
     });
   }, []);
 
-  const apply = React.useCallback(() => {
-    // Read everything from refs so this callback is STABLE and never stale.
-    const currentLoop = loopRef.current;
-    const geom = activeGeometryRef.current;
-    const geomKey = activeGeometryKeyRef.current;
+  const addActiveToQueue = React.useCallback(() => {
     const ps = panelStateRef.current;
+    const currentLoop = loopRef.current;
     const isContour = ps.cutMode === 'contour';
     const isBoundedPlane = ps.cutMode === 'bounded_plane';
     const minPoints = isBoundedPlane ? 0 : (isContour ? MIN_CONTOUR_POINTS : MIN_LOOP_POINTS);
     if (currentLoop.length < minPoints) return;
+
+    if (editingCutIdRef.current) {
+      const targetId = editingCutIdRef.current;
+      setStagedCuts((prev) =>
+        prev.map((c) =>
+          c.id === targetId
+            ? { ...c, loop: currentLoop.slice(), panelState: { ...ps } }
+            : c
+        )
+      );
+      setEditingCutId(null);
+    } else {
+      const id = crypto.randomUUID?.() ?? Math.random().toString(36).substring(2, 9);
+      let modeName = 'Plane';
+      if (ps.cutMode === 'contour') modeName = 'Contour';
+      else if (ps.cutMode === 'bounded_plane') modeName = 'Bounded';
+      
+      const count = stagedCutsRef.current.length + 1;
+      const name = `Cut ${count} (${modeName})`;
+      
+      const newCut: StagedCut = {
+        id,
+        name,
+        loop: currentLoop.slice(),
+        panelState: { ...ps },
+      };
+      setStagedCuts((prev) => [...prev, newCut]);
+    }
+
+    setLoop([]);
+    setStatus('idle');
+    setSelectedIndex(null);
+    setRedoStack([]);
+  }, []);
+
+  const adjustStagedCut = React.useCallback((id: string) => {
+    setStagedCuts((prev) => {
+      const target = prev.find((c) => c.id === id);
+      if (target) {
+        setEditingCutId(id);
+        setLoop(target.loop.slice());
+        setPanelState({ ...target.panelState });
+        const isBounded = target.panelState.cutMode === 'bounded_plane';
+        const pointsCount = target.loop.length;
+        if (isBounded || pointsCount >= MIN_LOOP_POINTS) {
+          setStatus('closed');
+        } else if (pointsCount > 0) {
+          setStatus('drawing');
+        } else {
+          setStatus('idle');
+        }
+        setSelectedIndex(null);
+        setRedoStack([]);
+      }
+      return prev;
+    });
+  }, []);
+
+  const removeStagedCut = React.useCallback((id: string) => {
+    setStagedCuts((prev) => prev.filter((c) => c.id !== id));
+    if (editingCutIdRef.current === id) {
+      setEditingCutId(null);
+      setLoop([]);
+      setStatus('idle');
+      setSelectedIndex(null);
+      setRedoStack([]);
+    }
+  }, []);
+
+  const clearQueue = React.useCallback(() => {
+    setStagedCuts([]);
+    setEditingCutId(null);
+  }, []);
+
+  const apply = React.useCallback(() => {
+    const currentLoop = loopRef.current;
+    const geom = activeGeometryRef.current;
+    const geomKey = activeGeometryKeyRef.current;
+    const ps = panelStateRef.current;
+    const currentQueue = stagedCutsRef.current;
+    const currentEditingId = editingCutIdRef.current;
+    const currentStatus = statusRef.current;
+
+    // Check if we have anything to cut
+    const isContour = ps.cutMode === 'contour';
+    const isBoundedPlane = ps.cutMode === 'bounded_plane';
+    const minPoints = isBoundedPlane ? 0 : (isContour ? MIN_CONTOUR_POINTS : MIN_LOOP_POINTS);
+    const hasActiveCut = currentLoop.length >= minPoints;
+    const hasQueue = currentQueue.length > 0;
+
+    if (!hasActiveCut && !hasQueue) return;
     if (!geom || !geomKey) return;
-    const loopSnapshot = currentLoop.slice();
-    const geodesic = geodesicPolylineRef.current;
+
+    // 1. Backup active state/queue before cut execution
+    const backupQueue = currentQueue.slice();
+    const backupLoop = currentLoop.slice();
+    const backupPanelState = { ...ps };
+    const backupStatus = currentStatus;
+    const backupEditingId = currentEditingId;
+
+    // Helper function to restore backup on error
+    const restoreBackup = () => {
+      setStagedCuts(backupQueue);
+      setLoop(backupLoop);
+      setPanelState(backupPanelState);
+      setStatus(backupStatus);
+      setEditingCutId(backupEditingId);
+    };
+
+    // 2. Implement mock execution that simulates success/failure:
+    // Fail if plane position X > 50 in active cut or any staged cut
+    let simulatesFailure = false;
+    if (ps.cutMode === 'bounded_plane' && ps.planePosition && ps.planePosition[0] > 50) {
+      simulatesFailure = true;
+    }
+    for (const cut of currentQueue) {
+      if (cut.panelState.cutMode === 'bounded_plane' && cut.panelState.planePosition && cut.panelState.planePosition[0] > 50) {
+        simulatesFailure = true;
+      }
+    }
+
+    if (simulatesFailure) {
+      setIsApplying(true);
+      setTimeout(() => {
+        setIsApplying(false);
+        restoreBackup();
+        alert("Cut failed: plane position X > 50 (simulated failure). Queue and editor state have been retained.");
+      }, 800);
+      return;
+    }
+
     let cancelled = false;
     setIsApplying(true);
+
     void (async () => {
       try {
-        const staged = await stageCutSource(geom, geomKey);
-        if (!staged) {
-          // Not in the Tauri runtime (e.g. browser dev) — nothing to do.
-          return;
-        }
+        if (hasQueue) {
+          // Phase 1 Mock Multi-Cut Execution
+          // Wait 800ms to simulate backend work
+          await new Promise((resolve) => setTimeout(resolve, 800));
+          if (cancelled) return;
 
-        // Contour: send the DENSE on-surface geodesic polyline as the loop so the
-        // membrane traces the real surface crossing (the sparse waypoints alone
-        // wouldn't sever the body). Falls back to the waypoints if the geodesic
-        // hasn't computed yet. No explicit plane — contour ignores it.
-        // Flat: send the waypoints + the exact plane the preview showed.
-        let cutSpec;
-        if (isContour) {
-          const contourLoop =
-            geodesic && geodesic.length >= MIN_CONTOUR_POINTS * 3
-              ? geodesicPolylineToLoopPoints(geodesic)
-              : loopSnapshot;
-          cutSpec = {
-            loopPoints: contourLoop,
-            thicknessMm: ps.thicknessMm,
-            // `smoothing` = seam-line smoothing (the geodesic was already computed
-            // with it, but send it so the cut's loop matches). `membraneSmoothing`
-            // = cutter-surface relaxation. Both 0..1.
-            smoothing: ps.smoothing,
-            membraneSmoothing: ps.membraneSmoothing,
-            mode: 'contour' as const,
-            // The "Wafer Thickness" slider drives the actual kerf. Rust reads
-            // `cutterThicknessMm` for the contour cut (falling back to its default
-            // only when this is <= 0), so send the slider value here — sending it
-            // as `thicknessMm` (a separate field) is what made the slider a no-op.
-            cutterThicknessMm: ps.thicknessMm,
-            // Cut resolution multiplier — raises the cutter poly count. The live
-            // preview reflects this too (so what you see is what gets cut).
-            density: ps.density,
-            // When on, the cut also builds the registration key (peg union'd onto
-            // one half, socket carved from the other). The preview already showed
-            // the exact key this produces.
-            generateKey: ps.generateKey,
-            keyWidthMm: ps.keyWidthMm,
-            keyDepthMm: ps.keyDepthMm,
-            keyShape: ps.keyShape,
-            keyFilletMm: ps.keyFilletMm,
-            keySwapSides: ps.keySwapSides,
-            // Aim/roll: the base-glued lean + spin set by the in-viewport gizmo. The
-            // preview already showed exactly this key (same angles, same shear).
-            keyTiltRad: ps.keyTiltRad,
-            keyTiltAzimuthRad: ps.keyTiltAzimuthRad,
-            keyRollRad: ps.keyRollRad,
-          };
-        } else if (ps.cutMode === 'bounded_plane') {
-          let finalPos = ps.planePosition;
-          let finalRot = ps.planeRotation;
-          if (geomKey && geom) {
-            const model = modelsRef.current.find((m) => m.id === geomKey);
-            if (model) {
-              const modelQuat = quaternionFromGlobalEuler(model.transform.rotation);
-              const localToWorld = new THREE.Matrix4().compose(
-                new THREE.Vector3(model.transform.position.x, model.transform.position.y, model.transform.position.z),
-                modelQuat,
-                new THREE.Vector3(model.transform.scale.x, model.transform.scale.y, model.transform.scale.z)
-              );
-              const modelBbox =
-                geom.boundingBox ??
-                new THREE.Box3().setFromBufferAttribute(geom.getAttribute('position') as THREE.BufferAttribute);
-              const bboxCenter = modelBbox.getCenter(new THREE.Vector3());
-              const offset = new THREE.Vector3(-bboxCenter.x, -bboxCenter.y, -bboxCenter.z);
-
-              const inner = new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z);
-              const localToWorldInv = localToWorld.clone().multiply(inner).invert();
-
-              const pos = ps.planePosition ?? [0, 0, 0];
-              const rot = ps.planeRotation ?? [0, 0, 0];
-              const worldMatrix = new THREE.Matrix4().compose(
-                new THREE.Vector3(...pos),
-                new THREE.Quaternion().setFromEuler(new THREE.Euler(rot[0], rot[1], rot[2], 'XYZ')),
-                new THREE.Vector3(1, 1, 1)
-              );
-
-              const localMatrix = localToWorldInv.multiply(worldMatrix);
-              const localVecPos = new THREE.Vector3();
-              const localQuat = new THREE.Quaternion();
-              const localScale = new THREE.Vector3();
-              localMatrix.decompose(localVecPos, localQuat, localScale);
-
-              const localEuler = new THREE.Euler().setFromQuaternion(localQuat, 'XYZ');
-              finalPos = [localVecPos.x, localVecPos.y, localVecPos.z];
-              finalRot = [localEuler.x, localEuler.y, localEuler.z];
-            }
-          }
-          cutSpec = {
-            loopPoints: [],
-            thicknessMm: ps.thicknessMm,
-            smoothing: ps.smoothing,
-            mode: 'bounded_plane' as const,
-            sides: ps.sides,
-            radius: ps.radius,
-            position: finalPos,
-            rotation: finalRot,
-            cutterThicknessMm: ps.thicknessMm,
-            generateKey: ps.generateKey,
-            keyWidthMm: ps.keyWidthMm,
-            keyDepthMm: ps.keyDepthMm,
-            keyShape: ps.keyShape,
-            keyFilletMm: ps.keyFilletMm,
-            keySwapSides: ps.keySwapSides,
-            keyTiltRad: ps.keyTiltRad,
-            keyTiltAzimuthRad: ps.keyTiltAzimuthRad,
-            keyRollRad: ps.keyRollRad,
-          };
-        } else {
-          // Compute the plane from the SAME helper the preview uses, so the cut
-          // is exactly the plane the user saw. Sent explicitly; Rust splits by it.
-          const plane = cutPlaneFromPoints(loopSnapshot);
-          cutSpec = {
-            loopPoints: loopSnapshot,
-            thicknessMm: ps.thicknessMm,
-            smoothing: ps.smoothing,
-            mode: 'plane' as const,
-            plane: plane
-              ? { normal: [plane.normal.x, plane.normal.y, plane.normal.z] as [number, number, number], offset: plane.offset }
-              : undefined,
-          };
-        }
-        const result = await cutFromCapturedSource({ cut: cutSpec });
-        if (cancelled || !result) return;
-        setLastResult(result);
-
-        // M2: commit the two parts to the scene (replace active model with part
-        // A, add part B as a new model). If the engine fell back to a no-op
-        // (degenerate loop / manifold rejected the mesh), don't mutate the scene
-        // — the two parts are identical to the source and committing would just
-        // duplicate the model.
-        const committed =
-          result.report.engine !== 'noop' && commitPartsRef.current
-            ? commitPartsRef.current(partToGeometry(result.partA), partToGeometry(result.partB))
-            : false;
-
-        // Flat string (not an object) so the Tauri log forwarder shows every
-        // field inline instead of collapsing it to "Object".
-        console.info(
-          `[organicCut] cut applied | engine=${result.report.engine}` +
-          ` committed=${committed}` +
-          ` detail="${result.report.detail ?? ''}"` +
-          ` keyKind=${result.report.keyKind ?? 'n/a'}` +
-          ` keyDetail="${result.report.keyDetail ?? ''}"` +
-          ` source=${result.report.sourceTriangleCount}` +
-          ` partA=${result.report.partATriangleCount}` +
-          ` partB=${result.report.partBTriangleCount}`,
-        );
-
-        if (committed && !cancelled) {
-          // Clear the loop after a successful cut so the tool is ready for the
-          // next one and stale points don't linger on the (now replaced) model.
-          // Remember the loop + the PRE-CUT geometry reference so that an UNDO
-          // (which restores that exact geometry) brings the membrane/loop back.
-          if (geomKey && geom) {
-            undoRestoreRef.current = {
-              modelId: geomKey,
-              geometry: geom,
-              loop: loopSnapshot,
-            };
-          }
+          // Clear queue and active cut state on success
+          setStagedCuts([]);
+          setEditingCutId(null);
           setLoop([]);
           setStatus('idle');
           setSelectedIndex(null);
+          alert("Multi-Cut applied successfully (simulated success). Queue has been cleared.");
+        } else {
+          // Single cut flow (real execution via Tauri, if available)
+          const staged = await stageCutSource(geom, geomKey);
+          if (!staged) {
+            // Not in the Tauri runtime (e.g. browser dev) — simulate success
+            await new Promise((resolve) => setTimeout(resolve, 800));
+            if (cancelled) return;
+            setLoop([]);
+            setStatus('idle');
+            setSelectedIndex(null);
+            alert("Cut applied successfully (simulated dev success).");
+            return;
+          }
+
+          const loopSnapshot = currentLoop.slice();
+          const geodesic = geodesicPolylineRef.current;
+          let cutSpec;
+          if (isContour) {
+            const contourLoop =
+              geodesic && geodesic.length >= MIN_CONTOUR_POINTS * 3
+                ? geodesicPolylineToLoopPoints(geodesic)
+                : loopSnapshot;
+            cutSpec = {
+              loopPoints: contourLoop,
+              thicknessMm: ps.thicknessMm,
+              smoothing: ps.smoothing,
+              membraneSmoothing: ps.membraneSmoothing,
+              mode: 'contour' as const,
+              cutterThicknessMm: ps.thicknessMm,
+              density: ps.density,
+              generateKey: ps.generateKey,
+              keyWidthMm: ps.keyWidthMm,
+              keyDepthMm: ps.keyDepthMm,
+              keyShape: ps.keyShape,
+              keyFilletMm: ps.keyFilletMm,
+              keySwapSides: ps.keySwapSides,
+              keyTiltRad: ps.keyTiltRad,
+              keyTiltAzimuthRad: ps.keyTiltAzimuthRad,
+              keyRollRad: ps.keyRollRad,
+            };
+          } else if (ps.cutMode === 'bounded_plane') {
+            let finalPos = ps.planePosition;
+            let finalRot = ps.planeRotation;
+            if (geomKey && geom) {
+              const model = modelsRef.current.find((m) => m.id === geomKey);
+              if (model) {
+                const modelQuat = quaternionFromGlobalEuler(model.transform.rotation);
+                const localToWorld = new THREE.Matrix4().compose(
+                  new THREE.Vector3(model.transform.position.x, model.transform.position.y, model.transform.position.z),
+                  modelQuat,
+                  new THREE.Vector3(model.transform.scale.x, model.transform.scale.y, model.transform.scale.z)
+                );
+                const modelBbox =
+                  geom.boundingBox ??
+                  new THREE.Box3().setFromBufferAttribute(geom.getAttribute('position') as THREE.BufferAttribute);
+                const bboxCenter = modelBbox.getCenter(new THREE.Vector3());
+                const offset = new THREE.Vector3(-bboxCenter.x, -bboxCenter.y, -bboxCenter.z);
+
+                const inner = new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z);
+                const localToWorldInv = localToWorld.clone().multiply(inner).invert();
+
+                const pos = ps.planePosition ?? [0, 0, 0];
+                const rot = ps.planeRotation ?? [0, 0, 0];
+                const worldMatrix = new THREE.Matrix4().compose(
+                  new THREE.Vector3(...pos),
+                  new THREE.Quaternion().setFromEuler(new THREE.Euler(rot[0], rot[1], rot[2], 'XYZ')),
+                  new THREE.Vector3(1, 1, 1)
+                );
+
+                const localMatrix = localToWorldInv.multiply(worldMatrix);
+                const localVecPos = new THREE.Vector3();
+                const localQuat = new THREE.Quaternion();
+                const localScale = new THREE.Vector3();
+                localMatrix.decompose(localVecPos, localQuat, localScale);
+
+                const localEuler = new THREE.Euler().setFromQuaternion(localQuat, 'XYZ');
+                finalPos = [localVecPos.x, localVecPos.y, localVecPos.z];
+                finalRot = [localEuler.x, localEuler.y, localEuler.z];
+              }
+            }
+            cutSpec = {
+              loopPoints: [],
+              thicknessMm: ps.thicknessMm,
+              smoothing: ps.smoothing,
+              mode: 'bounded_plane' as const,
+              sides: ps.sides,
+              radius: ps.radius,
+              position: finalPos,
+              rotation: finalRot,
+              cutterThicknessMm: ps.thicknessMm,
+              generateKey: ps.generateKey,
+              keyWidthMm: ps.keyWidthMm,
+              keyDepthMm: ps.keyDepthMm,
+              keyShape: ps.keyShape,
+              keyFilletMm: ps.keyFilletMm,
+              keySwapSides: ps.keySwapSides,
+              keyTiltRad: ps.keyTiltRad,
+              keyTiltAzimuthRad: ps.keyTiltAzimuthRad,
+              keyRollRad: ps.keyRollRad,
+            };
+          } else {
+            const plane = cutPlaneFromPoints(loopSnapshot);
+            cutSpec = {
+              loopPoints: loopSnapshot,
+              thicknessMm: ps.thicknessMm,
+              smoothing: ps.smoothing,
+              mode: 'plane' as const,
+              plane: plane
+                ? { normal: [plane.normal.x, plane.normal.y, plane.normal.z] as [number, number, number], offset: plane.offset }
+                : undefined,
+            };
+          }
+
+          const result = await cutFromCapturedSource({ cut: cutSpec });
+          if (cancelled || !result) return;
+          setLastResult(result);
+
+          const committed =
+            result.report.engine !== 'noop' && commitPartsRef.current
+              ? commitPartsRef.current(partToGeometry(result.partA), partToGeometry(result.partB))
+              : false;
+
+          console.info(
+            `[organicCut] cut applied | engine=${result.report.engine}` +
+            ` committed=${committed}` +
+            ` detail="${result.report.detail ?? ''}"` +
+            ` keyKind=${result.report.keyKind ?? 'n/a'}` +
+            ` keyDetail="${result.report.keyDetail ?? ''}"` +
+            ` source=${result.report.sourceTriangleCount}` +
+            ` partA=${result.report.partATriangleCount}` +
+            ` partB=${result.report.partBTriangleCount}`,
+          );
+
+          if (committed && !cancelled) {
+            if (geomKey && geom) {
+              undoRestoreRef.current = {
+                modelId: geomKey,
+                geometry: geom,
+                loop: loopSnapshot,
+              };
+            }
+            setLoop([]);
+            setStatus('idle');
+            setSelectedIndex(null);
+          }
         }
       } catch (err) {
         console.error('[organicCut] cut failed', err);
+        restoreBackup();
+        alert(`Cut failed: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
         if (!cancelled) setIsApplying(false);
       }
@@ -872,7 +1009,7 @@ export function useOrganicCutSession({
       ? 0
       : MIN_LOOP_POINTS;
   const canCloseLoop = status === 'drawing' && pointCount >= MIN_LOOP_POINTS;
-  const canApply = (panelState.cutMode === 'bounded_plane' || pointCount >= minPointsForMode) && !isApplying;
+  const canApply = (panelState.cutMode === 'bounded_plane' || pointCount >= minPointsForMode || stagedCuts.length > 0) && !isApplying;
   const canUndoPoint = pointCount > 0;
   const canRedoPoint = redoStack.length > 0;
 
@@ -905,5 +1042,11 @@ export function useOrganicCutSession({
     keyKind,
     keyDetail,
     keyFrame,
+    stagedCuts,
+    editingCutId,
+    addActiveToQueue,
+    adjustStagedCut,
+    removeStagedCut,
+    clearQueue,
   };
 }

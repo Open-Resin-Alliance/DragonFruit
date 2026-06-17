@@ -163,3 +163,63 @@ export type OrganicCutDrawMode = 'waypoint' | 'freeDraw';
 
 /** Lifecycle of the persistent Cutting Mode tool session (frontend-only state). */
 export type OrganicCutSessionStatus = 'idle' | 'drawing' | 'closed';
+
+export interface OrganicCutPanelState {
+  drawMode: OrganicCutDrawMode;
+  /** Flat planar cut vs curved contour ("wafer") cut along the drawn loop. */
+  cutMode: OrganicCutMode;
+  thicknessMm: number;
+  /** Seam-line smoothing 0..1 — how much the cut line rounds through waypoints. */
+  smoothing: number;
+  /** Membrane smoothing 0..1 — how smooth/taut the curved cutter surface is. */
+  membraneSmoothing: number;
+  /** Wafer density multiplier (1..4) — cutter poly count, applied only at cut. */
+  density: number;
+  /**
+   * When true (contour mode), the cut also generates a registration key: a peg
+   * union'd onto one half and a matching socket carved from the other, so the
+   * halves socket together in one alignment. Off by default.
+   */
+  generateKey: boolean;
+  /** Key base width in mm (model units are mm). The length follows a 1.25× ratio. */
+  keyWidthMm: number;
+  /** Key depth in mm — how far the peg pokes into the body. */
+  keyDepthMm: number;
+  /** Key shape: 'frustum' (tapered box, rotation-locking) or 'dome' (half-sphere). */
+  keyShape: 'frustum' | 'dome';
+  /** Edge fillet radius (mm) — rounds the frustum's corners + tip. 0 = sharp. */
+  keyFilletMm: number;
+  /**
+   * Dome only: when true, the Width/Depth sliders are ratio-locked — dragging one
+   * scales the other to preserve the current proportions (resize as a unit). When
+   * false, each is independent (free oblong control).
+   */
+  keyUniformScale: boolean;
+  /**
+   * Flip which cut half gets the peg vs the socket. False (default): peg on the
+   * +normal side. True: swap them. Lets the user choose which part keeps the peg.
+   */
+  keySwapSides: boolean;
+  /**
+   * Key tilt (radians): how far the key leans off the cut normal. Driven by the
+   * in-viewport aim gizmo (drag the key's tip). The base stays glued flat to the
+   * cut face; the body shears to lean. 0 = straight out.
+   */
+  keyTiltRad: number;
+  /** Key tilt azimuth (radians): which in-plane direction the lean points toward. */
+  keyTiltAzimuthRad: number;
+  /** Key roll (radians): spin about the key's own axis. Driven by the roll gizmo. */
+  keyRollRad: number;
+  sides?: number;
+  radius?: number;
+  planePosition?: [number, number, number];
+  planeRotation?: [number, number, number];
+  planeUniformScale?: boolean;
+}
+
+export interface StagedCut {
+  id: string;
+  name: string;
+  loop: OrganicCutLoopPoint[];
+  panelState: OrganicCutPanelState;
+}

@@ -4,7 +4,7 @@ import type { ThreeEvent } from '@react-three/fiber';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
-import type { KeyPreviewFrame, OrganicCutLoopPoint, OrganicCutMode } from './types';
+import type { KeyPreviewFrame, OrganicCutLoopPoint, OrganicCutMode, StagedCut } from './types';
 import { cutPlaneFromPoints } from './cutPlane';
 
 interface OrganicCutToolProps {
@@ -94,6 +94,8 @@ interface OrganicCutToolProps {
   radius?: number;
   sides?: number;
   thicknessMm?: number;
+  stagedCuts?: StagedCut[];
+  editingCutId?: string | null;
 }
 
 /** Max key tilt (radians) — mirrors the Rust `KEY_MAX_TILT_RAD` (~60°). */
@@ -261,6 +263,33 @@ const computePlaneMeshIntersection = (
  * `meshLocalOffset` (= -bboxCenter). We replicate that exact nesting here so the
  * loop markers land precisely on the picked surface points.
  */
+function StagedLoopLine({ loop }: { loop: OrganicCutLoopPoint[] }) {
+  const line = useMemo(() => {
+    if (loop.length < 2) return null;
+    const pts: number[] = [];
+    for (const p of loop) {
+      pts.push(p.position[0], p.position[1], p.position[2]);
+    }
+    if (loop.length >= 3) {
+      pts.push(loop[0].position[0], loop[0].position[1], loop[0].position[2]);
+    }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    const material = new THREE.LineBasicMaterial({
+      color: 0x4f8cff,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.5,
+    });
+    const lineObj = new THREE.Line(geom, material);
+    lineObj.renderOrder = 999;
+    return lineObj;
+  }, [loop]);
+
+  if (!line) return null;
+  return <primitive object={line} />;
+}
+
 export function OrganicCutTool({
   models,
   activeModelId,
@@ -286,6 +315,8 @@ export function OrganicCutTool({
   radius = 20,
   sides = 4,
   thicknessMm = 0.1,
+  stagedCuts = [],
+  editingCutId = null,
 }: OrganicCutToolProps) {
   const activeModel = useMemo(() => models.find((m) => m.id === activeModelId), [models, activeModelId]);
   const transform = activeTransform || activeModel?.transform;
@@ -391,6 +422,16 @@ export function OrganicCutTool({
     return { glow, hit };
   }, [loopPositions, activeModel]);
 
+  const modelSpan = useMemo(() => {
+    if (!activeModel) return 100;
+    const geometry = activeModel.geometry.geometry;
+    const bbox =
+      geometry.boundingBox ??
+      new THREE.Box3().setFromBufferAttribute(geometry.getAttribute('position') as THREE.BufferAttribute);
+    const size = bbox.getSize(new THREE.Vector3());
+    return Math.max(size.x, size.y, size.z) * 1.4 + 4;
+  }, [activeModel]);
+
   // Live cut-plane preview: a translucent quad showing EXACTLY where the slice
   // lands, from the same plane formula the cut uses. Sized to span the model.
   const planePreview = useMemo(() => {
@@ -400,14 +441,6 @@ export function OrganicCutTool({
     const plane = cutPlaneFromPoints(loop);
     if (!plane) return null;
 
-    const geometry = activeModel.geometry.geometry;
-    const bbox =
-      geometry.boundingBox ??
-      new THREE.Box3().setFromBufferAttribute(geometry.getAttribute('position') as THREE.BufferAttribute);
-    const size = bbox.getSize(new THREE.Vector3());
-    // Make the quad comfortably larger than the model so it clearly spans it.
-    const span = Math.max(size.x, size.y, size.z) * 1.4 + 4;
-
     // Orient a default-Z-facing quad to face the plane normal, positioned at the
     // plane point (the local bbox center is already removed by meshLocalOffset's
     // parent group, and `plane.point` is in the same local space as the loop).
@@ -415,8 +448,8 @@ export function OrganicCutTool({
       new THREE.Vector3(0, 0, 1),
       plane.normal.clone().normalize(),
     );
-    return { span, quat, position: plane.point };
-  }, [activeModel, loop, cutMode]);
+    return { span: modelSpan, quat, position: plane.point };
+  }, [activeModel, loop, cutMode, modelSpan]);
 
   // Translucent membrane (curved cutter surface or bounded plane cutter slab). Built from the
   // flat triangle soup Rust returns, so it's EXACTLY the surface the cut uses.
@@ -1088,6 +1121,45 @@ export function OrganicCutTool({
 
         {/* Connecting polyline through the points (and closing segment). */}
         {cutMode !== 'bounded_plane' && loopLine && <primitive object={loopLine} />}
+
+        {/* Render inactive staged cuts in translucent blue (plane/contour) */}
+        {stagedCuts
+          .filter((cut: StagedCut) => cut.id !== editingCutId && (cut.panelState.cutMode === 'plane' || cut.panelState.cutMode === 'contour'))
+          .map((cut: StagedCut) => {
+            const currentCutMode = cut.panelState.cutMode;
+            const plane = cutPlaneFromPoints(cut.loop);
+            if (!plane) return null;
+            
+            const quat = new THREE.Quaternion().setFromUnitVectors(
+              new THREE.Vector3(0, 0, 1),
+              plane.normal.clone().normalize()
+            );
+            
+            return (
+              <group key={cut.id}>
+                {/* Translucent Plane Quad */}
+                <mesh
+                  position={plane.point}
+                  quaternion={quat}
+                  renderOrder={998}
+                >
+                  <planeGeometry args={[modelSpan, modelSpan]} />
+                  <meshBasicMaterial
+                    color={0x4f8cff}
+                    transparent
+                    opacity={0.18}
+                    side={THREE.DoubleSide}
+                    depthWrite={false}
+                  />
+                </mesh>
+                
+                {/* Loop seam line */}
+                {currentCutMode === 'contour' && cut.loop.length >= 2 && (
+                  <StagedLoopLine loop={cut.loop} />
+                )}
+              </group>
+            );
+          })}
       </group>
     </group>
 
@@ -1115,6 +1187,35 @@ export function OrganicCutTool({
         </mesh>
       </group>
     )}
+
+    {/* Bounded plane client-side cylinder preview (staged cuts) */}
+    {stagedCuts
+      .filter((cut: StagedCut) => cut.id !== editingCutId && cut.panelState.cutMode === 'bounded_plane')
+      .map((cut: StagedCut) => {
+        const radius = cut.panelState.radius ?? 20;
+        const sides = cut.panelState.sides ?? 4;
+        const thickness = cut.panelState.thicknessMm ?? 0.1;
+        const pos = cut.panelState.planePosition ?? [0, 0, 0];
+        const rot = cut.panelState.planeRotation ?? [0, 0, 0];
+        return (
+          <group
+            key={cut.id}
+            position={pos}
+            rotation={new THREE.Euler(rot[0], rot[1], rot[2], 'XYZ')}
+          >
+            <mesh rotation={[Math.PI / 2, 0, 0]} renderOrder={997} frustumCulled={false}>
+              <cylinderGeometry args={[radius, radius, thickness, sides]} />
+              <meshBasicMaterial
+                color={0x4f8cff}
+                transparent
+                opacity={0.18}
+                side={THREE.DoubleSide}
+                depthWrite={false}
+              />
+            </mesh>
+          </group>
+        );
+      })}
   </>
   );
 }

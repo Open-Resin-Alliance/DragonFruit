@@ -1,62 +1,10 @@
 import React from 'react';
-import { Loader2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Loader2, ChevronDown, ChevronRight, Plus, Check, Pencil, Trash2 } from 'lucide-react';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { NumberInput } from '@/components/ui/NumberInput';
-import type { OrganicCutDrawMode, OrganicCutMode, OrganicCutSessionStatus } from './types';
+import type { OrganicCutSessionStatus, OrganicCutPanelState, StagedCut } from './types';
 
-export interface OrganicCutPanelState {
-  drawMode: OrganicCutDrawMode;
-  /** Flat planar cut vs curved contour ("wafer") cut along the drawn loop. */
-  cutMode: OrganicCutMode;
-  thicknessMm: number;
-  /** Seam-line smoothing 0..1 — how much the cut line rounds through waypoints. */
-  smoothing: number;
-  /** Membrane smoothing 0..1 — how smooth/taut the curved cutter surface is. */
-  membraneSmoothing: number;
-  /** Wafer density multiplier (1..4) — cutter poly count, applied only at cut. */
-  density: number;
-  /**
-   * When true (contour mode), the cut also generates a registration key: a peg
-   * union'd onto one half and a matching socket carved from the other, so the
-   * halves socket together in one alignment. Off by default.
-   */
-  generateKey: boolean;
-  /** Key base width in mm (model units are mm). The length follows a 1.25× ratio. */
-  keyWidthMm: number;
-  /** Key depth in mm — how far the peg pokes into the body. */
-  keyDepthMm: number;
-  /** Key shape: 'frustum' (tapered box, rotation-locking) or 'dome' (half-sphere). */
-  keyShape: 'frustum' | 'dome';
-  /** Edge fillet radius (mm) — rounds the frustum's corners + tip. 0 = sharp. */
-  keyFilletMm: number;
-  /**
-   * Dome only: when true, the Width/Depth sliders are ratio-locked — dragging one
-   * scales the other to preserve the current proportions (resize as a unit). When
-   * false, each is independent (free oblong control).
-   */
-  keyUniformScale: boolean;
-  /**
-   * Flip which cut half gets the peg vs the socket. False (default): peg on the
-   * +normal side. True: swap them. Lets the user choose which part keeps the peg.
-   */
-  keySwapSides: boolean;
-  /**
-   * Key tilt (radians): how far the key leans off the cut normal. Driven by the
-   * in-viewport aim gizmo (drag the key's tip). The base stays glued flat to the
-   * cut face; the body shears to lean. 0 = straight out.
-   */
-  keyTiltRad: number;
-  /** Key tilt azimuth (radians): which in-plane direction the lean points toward. */
-  keyTiltAzimuthRad: number;
-  /** Key roll (radians): spin about the key's own axis. Driven by the roll gizmo. */
-  keyRollRad: number;
-  sides?: number;
-  radius?: number;
-  planePosition?: [number, number, number];
-  planeRotation?: [number, number, number];
-  planeUniformScale?: boolean;
-}
 
 function getSidesLabel(sides: number): string {
   switch (sides) {
@@ -131,6 +79,14 @@ interface OrganicCutPanelProps {
   keyKind?: 'frustum' | 'dome' | 'none';
   /** Reason the key shrank / fell back / was skipped (shown as an alert). */
   keyDetail?: string;
+
+  // Queue State & Actions
+  stagedCuts?: StagedCut[];
+  editingCutId?: string | null;
+  addActiveToQueue?: () => void;
+  adjustStagedCut?: (id: string) => void;
+  removeStagedCut?: (id: string) => void;
+  clearQueue?: () => void;
 }
 
 /**
@@ -153,6 +109,12 @@ export function OrganicCutPanel({
   disabled = false,
   keyKind = 'none',
   keyDetail = '',
+  stagedCuts = [],
+  editingCutId = null,
+  addActiveToQueue = () => {},
+  adjustStagedCut = () => {},
+  removeStagedCut = () => {},
+  clearQueue = () => {},
 }: OrganicCutPanelProps) {
   const [expanded, setExpanded] = React.useState(true);
   const [moveExpanded, setMoveExpanded] = React.useState(true);
@@ -328,6 +290,82 @@ export function OrganicCutPanel({
               </button>
             </div>
           </div>
+
+          {/* Add to Multi-Cut / Save Changes */}
+          <button
+            type="button"
+            className="ui-button ui-button-secondary w-full !h-8 px-1.5 py-1 text-xs font-semibold leading-tight disabled:opacity-60 flex items-center justify-center gap-1.5"
+            onClick={addActiveToQueue}
+            disabled={disabled || isApplying || !((state.cutMode === 'bounded_plane') || pointCount >= (state.cutMode === 'contour' ? 3 : 2))}
+          >
+            {editingCutId ? (
+              <>
+                <Check className="w-3.5 h-3.5" />
+                <span>Save Changes</span>
+              </>
+            ) : (
+              <>
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add to Multi-Cut</span>
+              </>
+            )}
+          </button>
+
+          {/* Staged Cuts Queue */}
+          {stagedCuts.length > 0 && (
+            <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
+              <div className="flex justify-between items-center">
+                <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Staged Cuts ({stagedCuts.length})</div>
+                <button
+                  type="button"
+                  className="text-[10px] text-red-400 hover:text-red-300 font-semibold uppercase tracking-wider disabled:opacity-50"
+                  onClick={clearQueue}
+                  disabled={disabled || isApplying}
+                >
+                  Clear Queue
+                </button>
+              </div>
+              <div className="space-y-1 max-h-40 overflow-y-auto scrollbar-thin">
+                {stagedCuts.map((cut) => {
+                  const isCurrentEditing = editingCutId === cut.id;
+                  return (
+                    <div
+                      key={cut.id}
+                      className="flex items-center justify-between rounded p-1.5 text-xs border transition-colors"
+                      style={{
+                        background: isCurrentEditing ? 'color-mix(in srgb, var(--accent), var(--surface-1) 92%)' : 'var(--surface-2)',
+                        borderColor: isCurrentEditing ? 'var(--accent)' : 'var(--border-subtle)',
+                      }}
+                    >
+                      <span className="font-medium truncate flex-1 pr-2" style={{ color: 'var(--text-strong)' }}>
+                        {cut.name}
+                      </span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <IconButton
+                          type="button"
+                          onClick={() => adjustStagedCut(cut.id)}
+                          disabled={disabled || isApplying || isCurrentEditing}
+                          title="Adjust this cut"
+                          className="!p-1 hover:bg-surface-hover rounded animate-none"
+                        >
+                          <Pencil className="w-3 h-3 text-muted hover:text-strong" style={{ display: 'block' }} />
+                        </IconButton>
+                        <IconButton
+                          type="button"
+                          onClick={() => removeStagedCut(cut.id)}
+                          disabled={disabled || isApplying}
+                          title="Remove this cut"
+                          className="!p-1 hover:bg-surface-hover rounded text-red-500 hover:text-red-400"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </IconButton>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Bounded plane specific controls */}
           {isBounded && (
@@ -977,7 +1015,13 @@ export function OrganicCutPanel({
             >
               <span className="inline-flex items-center justify-center gap-1.5">
                 {isApplying && <Loader2 className="h-3 w-3 animate-spin" />}
-                <span>{isApplying ? 'Cutting...' : 'Cut'}</span>
+                <span>
+                  {isApplying
+                    ? 'Cutting...'
+                    : stagedCuts.length > 0
+                    ? `Cut All (${stagedCuts.length})`
+                    : 'Cut'}
+                </span>
               </span>
             </button>
           </div>
