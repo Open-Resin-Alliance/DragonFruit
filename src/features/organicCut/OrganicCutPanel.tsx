@@ -1,7 +1,8 @@
 import React from 'react';
-import { Loader2 } from 'lucide-react';
+import { Loader2, ChevronDown, ChevronRight } from 'lucide-react';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
+import { NumberInput } from '@/components/ui/NumberInput';
 import type { OrganicCutDrawMode, OrganicCutMode, OrganicCutSessionStatus } from './types';
 
 export interface OrganicCutPanelState {
@@ -77,6 +78,37 @@ function getSidesLabel(sides: number): string {
   }
 }
 
+interface SectionHeaderProps {
+  title: string;
+  expanded: boolean;
+  onToggle: () => void;
+  accentColor?: string;
+}
+
+function SectionHeader({ title, expanded, onToggle, accentColor }: SectionHeaderProps) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="flex w-full items-center justify-between py-0.5 text-xs font-semibold uppercase tracking-wide transition-colors"
+      style={{ color: 'var(--text-strong)' }}
+    >
+      <span className="inline-flex items-center gap-1.5">
+        <span
+          className="inline-block h-1.5 w-1.5 rounded-full"
+          style={{ background: accentColor ?? 'var(--accent)' }}
+        />
+        {title}
+      </span>
+      {expanded ? (
+        <ChevronDown className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
+      ) : (
+        <ChevronRight className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
+      )}
+    </button>
+  );
+}
+
 interface OrganicCutPanelProps {
   state: OrganicCutPanelState;
   onStateChange: (next: OrganicCutPanelState) => void;
@@ -123,6 +155,12 @@ export function OrganicCutPanel({
   keyDetail = '',
 }: OrganicCutPanelProps) {
   const [expanded, setExpanded] = React.useState(true);
+  const [moveExpanded, setMoveExpanded] = React.useState(true);
+  const [rotateExpanded, setRotateExpanded] = React.useState(true);
+  const [scaleExpanded, setScaleExpanded] = React.useState(true);
+
+  const compactButtonClass = 'ui-button ui-button-secondary w-full !h-8 px-1.5 text-[10px] sm:text-[11px]';
+  const valueInputClass = 'ui-input h-8 w-full px-1.5 text-xs sm:text-sm text-center tabular-nums no-spinners';
 
   const clampFloat = React.useCallback((value: number, min: number, max: number, decimals = 1) => {
     const safe = Number.isFinite(value) ? value : min;
@@ -341,251 +379,254 @@ export function OrganicCutPanel({
               )}
 
               {/* MOVE SECTION */}
-              <div className="rounded-md border p-2 space-y-1.5" style={moveCardStyle}>
-                <div className="flex w-full items-center justify-between py-0.5 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-strong)' }}>
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: '#4f8cff' }} />
-                    Move
-                  </span>
-                </div>
-                <div className="grid grid-cols-3 gap-1.5 mt-1">
-                  <div>
-                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#f87171' }}>X</label>
-                    <ScrollableNumberField
-                      value={state.planePosition?.[0] ?? 0}
-                      onChange={(value) => setState({
-                        planePosition: [clampFloat(value, -500, 500, 2), state.planePosition?.[1] ?? 0, state.planePosition?.[2] ?? 0]
-                      })}
-                      min={-500}
-                      max={500}
-                      step={0.5}
-                      unit=""
-                      ariaLabel="Cutter X coordinate"
+              <div className="rounded-md border p-2" style={moveCardStyle}>
+                <SectionHeader
+                  title="Move"
+                  expanded={moveExpanded}
+                  onToggle={() => setMoveExpanded(!moveExpanded)}
+                  accentColor="#4f8cff"
+                />
+                {moveExpanded && (
+                  <div className="pt-1.5 space-y-2">
+                    <div className="grid grid-cols-3 gap-1 min-w-0">
+                      <div className="min-w-0">
+                        <label className="ui-meta mb-1 block text-center" style={{ color: '#f87171' }}>X</label>
+                        <NumberInput
+                          value={parseFloat((state.planePosition?.[0] ?? 0).toFixed(2))}
+                          onChange={(value) => setState({
+                            planePosition: [clampFloat(value, -500, 500, 2), state.planePosition?.[1] ?? 0, state.planePosition?.[2] ?? 0]
+                          })}
+                          min={-500}
+                          max={500}
+                          step={0.5}
+                          className={valueInputClass}
+                          disabled={disabled || isApplying}
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <label className="ui-meta mb-1 block text-center" style={{ color: '#4ade80' }}>Y</label>
+                        <NumberInput
+                          value={parseFloat((state.planePosition?.[1] ?? 0).toFixed(2))}
+                          onChange={(value) => setState({
+                            planePosition: [state.planePosition?.[0] ?? 0, clampFloat(value, -500, 500, 2), state.planePosition?.[2] ?? 0]
+                          })}
+                          min={-500}
+                          max={500}
+                          step={0.5}
+                          className={valueInputClass}
+                          disabled={disabled || isApplying}
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <label className="ui-meta mb-1 block text-center" style={{ color: '#60a5fa' }}>Z</label>
+                        <NumberInput
+                          value={parseFloat((state.planePosition?.[2] ?? 0).toFixed(2))}
+                          onChange={(value) => setState({
+                            planePosition: [state.planePosition?.[0] ?? 0, state.planePosition?.[1] ?? 0, clampFloat(value, -500, 500, 2)]
+                          })}
+                          min={-500}
+                          max={500}
+                          step={0.5}
+                          className={valueInputClass}
+                          disabled={disabled || isApplying}
+                        />
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className={compactButtonClass}
+                      onClick={() => setState({ planePosition: [0, 0, 0] })}
                       disabled={disabled || isApplying}
-                    />
+                      title="Center the cutter plane on the model origin."
+                    >
+                      Center
+                    </button>
                   </div>
-                  <div>
-                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#4ade80' }}>Y</label>
-                    <ScrollableNumberField
-                      value={state.planePosition?.[1] ?? 0}
-                      onChange={(value) => setState({
-                        planePosition: [state.planePosition?.[0] ?? 0, clampFloat(value, -500, 500, 2), state.planePosition?.[2] ?? 0]
-                      })}
-                      min={-500}
-                      max={500}
-                      step={0.5}
-                      unit=""
-                      ariaLabel="Cutter Y coordinate"
-                      disabled={disabled || isApplying}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#60a5fa' }}>Z</label>
-                    <ScrollableNumberField
-                      value={state.planePosition?.[2] ?? 0}
-                      onChange={(value) => setState({
-                        planePosition: [state.planePosition?.[0] ?? 0, state.planePosition?.[1] ?? 0, clampFloat(value, -500, 500, 2)]
-                      })}
-                      min={-500}
-                      max={500}
-                      step={0.5}
-                      unit=""
-                      ariaLabel="Cutter Z coordinate"
-                      disabled={disabled || isApplying}
-                    />
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary w-full !h-7 text-[10px] mt-1"
-                  onClick={() => setState({ planePosition: [0, 0, 0] })}
-                  disabled={disabled || isApplying}
-                  title="Center the cutter plane on the model origin."
-                >
-                  Center
-                </button>
+                )}
               </div>
 
               {/* ROTATE SECTION */}
-              <div className="rounded-md border p-2 space-y-1.5" style={rotateCardStyle}>
-                <div className="flex w-full items-center justify-between py-0.5 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-strong)' }}>
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: '#8f6cff' }} />
-                    Rotate
-                  </span>
-                </div>
-                <div className="grid grid-cols-3 gap-1.5 mt-1">
-                  <div>
-                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#f87171' }}>X</label>
-                    <ScrollableNumberField
-                      value={Math.round(((state.planeRotation?.[0] ?? 0) * 180) / Math.PI)}
-                      onChange={(value) => setState({
-                        planeRotation: [
-                          (clampFloat(value, -180, 180, 0) * Math.PI) / 180,
-                          state.planeRotation?.[1] ?? 0,
-                          state.planeRotation?.[2] ?? 0
-                        ]
-                      })}
-                      min={-180}
-                      max={180}
-                      step={1}
-                      unit=""
-                      ariaLabel="Cutter X rotation in degrees"
+              <div className="rounded-md border p-2" style={rotateCardStyle}>
+                <SectionHeader
+                  title="Rotate"
+                  expanded={rotateExpanded}
+                  onToggle={() => setRotateExpanded(!rotateExpanded)}
+                  accentColor="#8f6cff"
+                />
+                {rotateExpanded && (
+                  <div className="pt-1.5 space-y-2">
+                    <div className="grid grid-cols-3 gap-1 min-w-0">
+                      <div className="min-w-0">
+                        <label className="ui-meta mb-1 block text-center" style={{ color: '#f87171' }}>X</label>
+                        <NumberInput
+                          value={Math.round(((state.planeRotation?.[0] ?? 0) * 180) / Math.PI)}
+                          onChange={(value) => setState({
+                            planeRotation: [
+                              (clampFloat(value, -180, 180, 0) * Math.PI) / 180,
+                              state.planeRotation?.[1] ?? 0,
+                              state.planeRotation?.[2] ?? 0
+                            ]
+                          })}
+                          min={-180}
+                          max={180}
+                          step={1}
+                          className={valueInputClass}
+                          disabled={disabled || isApplying}
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <label className="ui-meta mb-1 block text-center" style={{ color: '#4ade80' }}>Y</label>
+                        <NumberInput
+                          value={Math.round(((state.planeRotation?.[1] ?? 0) * 180) / Math.PI)}
+                          onChange={(value) => setState({
+                            planeRotation: [
+                              state.planeRotation?.[0] ?? 0,
+                              (clampFloat(value, -180, 180, 0) * Math.PI) / 180,
+                              state.planeRotation?.[2] ?? 0
+                            ]
+                          })}
+                          min={-180}
+                          max={180}
+                          step={1}
+                          className={valueInputClass}
+                          disabled={disabled || isApplying}
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <label className="ui-meta mb-1 block text-center" style={{ color: '#60a5fa' }}>Z</label>
+                        <NumberInput
+                          value={Math.round(((state.planeRotation?.[2] ?? 0) * 180) / Math.PI)}
+                          onChange={(value) => setState({
+                            planeRotation: [
+                              state.planeRotation?.[0] ?? 0,
+                              state.planeRotation?.[1] ?? 0,
+                              (clampFloat(value, -180, 180, 0) * Math.PI) / 180
+                            ]
+                          })}
+                          min={-180}
+                          max={180}
+                          step={1}
+                          className={valueInputClass}
+                          disabled={disabled || isApplying}
+                        />
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className={compactButtonClass}
+                      onClick={() => setState({ planeRotation: [0, 0, 0] })}
                       disabled={disabled || isApplying}
-                    />
+                      title="Reset the cutter rotation."
+                    >
+                      Reset Rotation
+                    </button>
                   </div>
-                  <div>
-                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#4ade80' }}>Y</label>
-                    <ScrollableNumberField
-                      value={Math.round(((state.planeRotation?.[1] ?? 0) * 180) / Math.PI)}
-                      onChange={(value) => setState({
-                        planeRotation: [
-                          state.planeRotation?.[0] ?? 0,
-                          (clampFloat(value, -180, 180, 0) * Math.PI) / 180,
-                          state.planeRotation?.[2] ?? 0
-                        ]
-                      })}
-                      min={-180}
-                      max={180}
-                      step={1}
-                      unit=""
-                      ariaLabel="Cutter Y rotation in degrees"
-                      disabled={disabled || isApplying}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#60a5fa' }}>Z</label>
-                    <ScrollableNumberField
-                      value={Math.round(((state.planeRotation?.[2] ?? 0) * 180) / Math.PI)}
-                      onChange={(value) => setState({
-                        planeRotation: [
-                          state.planeRotation?.[0] ?? 0,
-                          state.planeRotation?.[1] ?? 0,
-                          (clampFloat(value, -180, 180, 0) * Math.PI) / 180
-                        ]
-                      })}
-                      min={-180}
-                      max={180}
-                      step={1}
-                      unit=""
-                      ariaLabel="Cutter Z rotation in degrees"
-                      disabled={disabled || isApplying}
-                    />
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary w-full !h-7 text-[10px] mt-1"
-                  onClick={() => setState({ planeRotation: [0, 0, 0] })}
-                  disabled={disabled || isApplying}
-                  title="Reset the cutter rotation."
-                >
-                  Reset Rotation
-                </button>
+                )}
               </div>
 
               {/* SCALE SECTION */}
-              <div className="rounded-md border p-2 space-y-1.5" style={scaleCardStyle}>
-                <div className="flex w-full items-center justify-between py-0.5 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-strong)' }}>
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: '#2eb67d' }} />
-                    Scale
-                  </span>
-                </div>
-                <div className="grid grid-cols-3 gap-1.5 mt-1">
-                  <div>
-                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#f87171' }}>X (mm)</label>
-                    <ScrollableNumberField
-                      value={state.radius ? (state.radius * 2) : 40}
-                      onChange={(value) => {
-                        const newRadius = clampFloat(value / 2, 1, 250, 1);
-                        if (state.planeUniformScale) {
-                          const oldRadius = state.radius ?? 20;
-                          const ratio = oldRadius > 0 ? (newRadius / oldRadius) : 1;
-                          const newThickness = clampFloat(state.thicknessMm * ratio, 0.05, 1.5, 2);
-                          setState({ radius: newRadius, thicknessMm: newThickness });
-                        } else {
-                          setState({ radius: newRadius });
-                        }
-                      }}
-                      min={2}
-                      max={500}
-                      step={1}
-                      unit=""
-                      ariaLabel="Cutter X dimension (diameter)"
+              <div className="rounded-md border p-2" style={scaleCardStyle}>
+                <SectionHeader
+                  title="Scale"
+                  expanded={scaleExpanded}
+                  onToggle={() => setScaleExpanded(!scaleExpanded)}
+                  accentColor="#2eb67d"
+                />
+                {scaleExpanded && (
+                  <div className="pt-1.5 space-y-2">
+                    <div className="grid grid-cols-3 gap-1 min-w-0">
+                      <div className="min-w-0">
+                        <label className="ui-meta mb-1 block text-center" style={{ color: '#f87171' }}>X (mm)</label>
+                        <NumberInput
+                          value={parseFloat((state.radius ? (state.radius * 2) : 40).toFixed(2))}
+                          onChange={(value) => {
+                            const newRadius = clampFloat(value / 2, 1, 250, 1);
+                            if (state.planeUniformScale) {
+                              const oldRadius = state.radius ?? 20;
+                              const ratio = oldRadius > 0 ? (newRadius / oldRadius) : 1;
+                              const newThickness = clampFloat(state.thicknessMm * ratio, 0.05, 1.5, 2);
+                              setState({ radius: newRadius, thicknessMm: newThickness });
+                            } else {
+                              setState({ radius: newRadius });
+                            }
+                          }}
+                          min={2}
+                          max={500}
+                          step={1}
+                          className={valueInputClass}
+                          disabled={disabled || isApplying}
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <label className="ui-meta mb-1 block text-center" style={{ color: '#4ade80' }}>Y (mm)</label>
+                        <NumberInput
+                          value={parseFloat((state.radius ? (state.radius * 2) : 40).toFixed(2))}
+                          onChange={() => {}}
+                          min={2}
+                          max={500}
+                          step={1}
+                          className={valueInputClass}
+                          disabled={true}
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <label className="ui-meta mb-1 block text-center" style={{ color: '#60a5fa' }}>Z (mm)</label>
+                        <NumberInput
+                          value={parseFloat((state.thicknessMm).toFixed(2))}
+                          onChange={(value) => {
+                            const newThickness = clampFloat(value, 0.05, 1.5, 2);
+                            if (state.planeUniformScale) {
+                              const oldThickness = state.thicknessMm;
+                              const ratio = oldThickness > 0 ? (newThickness / oldThickness) : 1;
+                              const newRadius = clampFloat((state.radius ?? 20) * ratio, 1, 250, 1);
+                              setState({ radius: newRadius, thicknessMm: newThickness });
+                            } else {
+                              setState({ thicknessMm: newThickness });
+                            }
+                          }}
+                          min={0.05}
+                          max={1.5}
+                          step={0.05}
+                          className={valueInputClass}
+                          disabled={disabled || isApplying || state.planeUniformScale}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Uniform</span>
+                      <button
+                        type="button"
+                        onClick={() => setState({ planeUniformScale: !state.planeUniformScale })}
+                        disabled={disabled || isApplying}
+                        className="h-8 min-w-[72px] rounded-md border px-3 text-[11px] font-semibold uppercase tracking-wide transition-colors"
+                        style={state.planeUniformScale
+                          ? {
+                              borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                              background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                              color: 'var(--accent-contrast)',
+                            }
+                          : {
+                              borderColor: 'var(--border-subtle)',
+                              background: 'var(--surface-1)',
+                              color: 'var(--text-muted)',
+                            }}
+                      >
+                        {state.planeUniformScale ? 'ON' : 'OFF'}
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      className={compactButtonClass}
+                      onClick={() => setState({ radius: 20, thicknessMm: 0.1 })}
                       disabled={disabled || isApplying}
-                    />
+                      title="Reset cutter radius and thickness."
+                    >
+                      Reset Scale
+                    </button>
                   </div>
-                  <div>
-                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#4ade80' }}>Y (mm)</label>
-                    <ScrollableNumberField
-                      value={state.radius ? (state.radius * 2) : 40}
-                      onChange={() => {}}
-                      min={2}
-                      max={500}
-                      step={1}
-                      unit=""
-                      ariaLabel="Cutter Y dimension (diameter)"
-                      disabled={true}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[9px] block mb-0.5 font-medium text-center" style={{ color: '#60a5fa' }}>Z (mm)</label>
-                    <ScrollableNumberField
-                      value={state.thicknessMm}
-                      onChange={(value) => {
-                        const newThickness = clampFloat(value, 0.05, 1.5, 2);
-                        if (state.planeUniformScale) {
-                          const oldThickness = state.thicknessMm;
-                          const ratio = oldThickness > 0 ? (newThickness / oldThickness) : 1;
-                          const newRadius = clampFloat((state.radius ?? 20) * ratio, 1, 250, 1);
-                          setState({ radius: newRadius, thicknessMm: newThickness });
-                        } else {
-                          setState({ thicknessMm: newThickness });
-                        }
-                      }}
-                      min={0.05}
-                      max={1.5}
-                      step={0.05}
-                      unit=""
-                      ariaLabel="Cutter Z dimension (thickness)"
-                      disabled={disabled || isApplying || state.planeUniformScale}
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between gap-2 mt-1">
-                  <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Uniform</span>
-                  <button
-                    type="button"
-                    onClick={() => setState({ planeUniformScale: !state.planeUniformScale })}
-                    disabled={disabled || isApplying}
-                    className="h-7 min-w-[56px] rounded-md border px-2 text-[10px] font-semibold uppercase tracking-wide transition-colors"
-                    style={state.planeUniformScale
-                      ? {
-                          borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                          color: 'var(--accent-contrast)',
-                        }
-                      : {
-                          borderColor: 'var(--border-subtle)',
-                          background: 'var(--surface-1)',
-                          color: 'var(--text-muted)',
-                        }}
-                  >
-                    {state.planeUniformScale ? 'ON' : 'OFF'}
-                  </button>
-                </div>
-
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary w-full !h-7 text-[10px] mt-1"
-                  onClick={() => setState({ radius: 20, thicknessMm: 0.1 })}
-                  disabled={disabled || isApplying}
-                  title="Reset cutter radius and thickness."
-                >
-                  Reset Scale
-                </button>
+                )}
               </div>
             </>
           )}
