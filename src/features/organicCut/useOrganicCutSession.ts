@@ -26,6 +26,9 @@ import {
 import type { KeyPreviewKind } from './meshOrganicCut';
 import { cutPlaneFromPoints } from './cutPlane';
 import * as THREE from 'three';
+import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
+
 
 /** Minimum points before a cut is possible. 2 = the simplest flat plane cut. */
 const MIN_LOOP_POINTS = 2;
@@ -51,6 +54,8 @@ export interface UseOrganicCutSessionArgs {
   activeGeometry: THREE.BufferGeometry | null | undefined;
   /** Stable key identifying the current geometry, for source-stage caching. */
   activeGeometryKey: string | null;
+  /** All loaded models in the scene. */
+  models?: LoadedModel[];
   /**
    * True while a waypoint is being dragged. The membrane preview (heavy Rust
    * round-trip) is suppressed during a drag and rebuilt once on release, so the
@@ -187,9 +192,15 @@ export function useOrganicCutSession({
   toolActive,
   activeGeometry,
   activeGeometryKey,
+  models = [],
   isDraggingPoint = false,
   commitParts,
 }: UseOrganicCutSessionArgs): OrganicCutSession {
+  const modelsRef = React.useRef(models);
+  React.useEffect(() => {
+    modelsRef.current = models;
+  }, [models]);
+
   const [panelState, setPanelState] = React.useState<OrganicCutPanelState>(DEFAULT_PANEL_STATE);
   const [loop, setLoop] = React.useState<OrganicCutLoopPoint[]>([]);
   const [status, setStatus] = React.useState<OrganicCutSessionStatus>('idle');
@@ -306,24 +317,52 @@ export function useOrganicCutSession({
     setRedoStack([]);
     setSelectedIndex(null);
 
-    // Initialize plane position to bounding box center of active geometry
-    let initialCenter: [number, number, number] = [0, 0, 0];
-    if (activeGeometry) {
+    // Initialize plane position to bounding box center of active geometry in WORLD space
+    // but ONLY if it is still at the default [0, 0, 0] position.
+    const isDefault = panelStateRef.current.planePosition &&
+      panelStateRef.current.planePosition[0] === 0 &&
+      panelStateRef.current.planePosition[1] === 0 &&
+      panelStateRef.current.planePosition[2] === 0;
+
+    if (isDefault && activeGeometry && activeGeometryKey) {
+      let initialCenter: [number, number, number] = [0, 0, 0];
       if (!activeGeometry.boundingBox) {
         activeGeometry.computeBoundingBox();
       }
       const box = activeGeometry.boundingBox;
       if (box) {
-        const center = new THREE.Vector3();
-        box.getCenter(center);
-        initialCenter = [center.x, center.y, center.z];
+        const localCenter = new THREE.Vector3();
+        box.getCenter(localCenter);
+
+        // Compute localToWorld matrix for active model
+        const model = modelsRef.current.find((m) => m.id === activeGeometryKey);
+        if (model) {
+          const modelQuat = quaternionFromGlobalEuler(model.transform.rotation);
+          const localToWorld = new THREE.Matrix4().compose(
+            new THREE.Vector3(model.transform.position.x, model.transform.position.y, model.transform.position.z),
+            modelQuat,
+            new THREE.Vector3(model.transform.scale.x, model.transform.scale.y, model.transform.scale.z)
+          );
+          
+          // Replicate StlMesh's inner offset (= -bboxCenter)
+          const geom = model.geometry.geometry;
+          const modelBbox =
+            geom.boundingBox ??
+            new THREE.Box3().setFromBufferAttribute(geom.getAttribute('position') as THREE.BufferAttribute);
+          const bboxCenter = modelBbox.getCenter(new THREE.Vector3());
+          const offset = new THREE.Vector3(-bboxCenter.x, -bboxCenter.y, -bboxCenter.z);
+          
+          // worldCenter = (localCenter + offset) transformed by localToWorld
+          const worldCenter = localCenter.clone().add(offset).applyMatrix4(localToWorld);
+          initialCenter = [worldCenter.x, worldCenter.y, worldCenter.z];
+        }
       }
+      setPanelState((prev) => ({
+        ...prev,
+        planePosition: initialCenter,
+        planeRotation: [0, 0, 0],
+      }));
     }
-    setPanelState((prev) => ({
-      ...prev,
-      planePosition: initialCenter,
-      planeRotation: [0, 0, 0],
-    }));
   }, [activeGeometryKey, activeGeometry]);
 
   // Undo-restore: when the active model's geometry REVERTS to the exact pre-cut
@@ -422,6 +461,47 @@ export function useOrganicCutSession({
         const poly = geodesicPolyline;
         const previewLoop =
           poly && poly.length >= 9 ? geodesicPolylineToLoopPoints(poly) : loop;
+
+        let finalPos = panelState.planePosition;
+        let finalRot = panelState.planeRotation;
+        if (isBounded && activeGeometryKey && activeGeometry) {
+          const model = modelsRef.current.find((m) => m.id === activeGeometryKey);
+          if (model) {
+            const modelQuat = quaternionFromGlobalEuler(model.transform.rotation);
+            const localToWorld = new THREE.Matrix4().compose(
+              new THREE.Vector3(model.transform.position.x, model.transform.position.y, model.transform.position.z),
+              modelQuat,
+              new THREE.Vector3(model.transform.scale.x, model.transform.scale.y, model.transform.scale.z)
+            );
+            const modelBbox =
+              activeGeometry.boundingBox ??
+              new THREE.Box3().setFromBufferAttribute(activeGeometry.getAttribute('position') as THREE.BufferAttribute);
+            const bboxCenter = modelBbox.getCenter(new THREE.Vector3());
+            const offset = new THREE.Vector3(-bboxCenter.x, -bboxCenter.y, -bboxCenter.z);
+
+            const inner = new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z);
+            const localToWorldInv = localToWorld.clone().multiply(inner).invert();
+
+            const pos = panelState.planePosition ?? [0, 0, 0];
+            const rot = panelState.planeRotation ?? [0, 0, 0];
+            const worldMatrix = new THREE.Matrix4().compose(
+              new THREE.Vector3(...pos),
+              new THREE.Quaternion().setFromEuler(new THREE.Euler(rot[0], rot[1], rot[2], 'XYZ')),
+              new THREE.Vector3(1, 1, 1)
+            );
+
+            const localMatrix = localToWorldInv.multiply(worldMatrix);
+            const localVecPos = new THREE.Vector3();
+            const localQuat = new THREE.Quaternion();
+            const localScale = new THREE.Vector3();
+            localMatrix.decompose(localVecPos, localQuat, localScale);
+
+            const localEuler = new THREE.Euler().setFromQuaternion(localQuat, 'XYZ');
+            finalPos = [localVecPos.x, localVecPos.y, localVecPos.z];
+            finalRot = [localEuler.x, localEuler.y, localEuler.z];
+          }
+        }
+
         // The key SOUP is built STRAIGHT (tilt = 0): the live tilt is applied as a
         // client-side rigid rotation of the key mesh (OrganicCutTool), so dragging
         // the aim gizmo never triggers this heavy Rust round-trip. Hence tilt is NOT
@@ -444,8 +524,8 @@ export function useOrganicCutSession({
           panelState.cutMode,
           panelState.sides,
           panelState.radius,
-          panelState.planePosition,
-          panelState.planeRotation,
+          finalPos,
+          finalRot,
         );
         if (cancelled) return;
         setMembranePreview(result.membrane);
@@ -656,6 +736,45 @@ export function useOrganicCutSession({
             keyRollRad: ps.keyRollRad,
           };
         } else if (ps.cutMode === 'bounded_plane') {
+          let finalPos = ps.planePosition;
+          let finalRot = ps.planeRotation;
+          if (geomKey && geom) {
+            const model = modelsRef.current.find((m) => m.id === geomKey);
+            if (model) {
+              const modelQuat = quaternionFromGlobalEuler(model.transform.rotation);
+              const localToWorld = new THREE.Matrix4().compose(
+                new THREE.Vector3(model.transform.position.x, model.transform.position.y, model.transform.position.z),
+                modelQuat,
+                new THREE.Vector3(model.transform.scale.x, model.transform.scale.y, model.transform.scale.z)
+              );
+              const modelBbox =
+                geom.boundingBox ??
+                new THREE.Box3().setFromBufferAttribute(geom.getAttribute('position') as THREE.BufferAttribute);
+              const bboxCenter = modelBbox.getCenter(new THREE.Vector3());
+              const offset = new THREE.Vector3(-bboxCenter.x, -bboxCenter.y, -bboxCenter.z);
+
+              const inner = new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z);
+              const localToWorldInv = localToWorld.clone().multiply(inner).invert();
+
+              const pos = ps.planePosition ?? [0, 0, 0];
+              const rot = ps.planeRotation ?? [0, 0, 0];
+              const worldMatrix = new THREE.Matrix4().compose(
+                new THREE.Vector3(...pos),
+                new THREE.Quaternion().setFromEuler(new THREE.Euler(rot[0], rot[1], rot[2], 'XYZ')),
+                new THREE.Vector3(1, 1, 1)
+              );
+
+              const localMatrix = localToWorldInv.multiply(worldMatrix);
+              const localVecPos = new THREE.Vector3();
+              const localQuat = new THREE.Quaternion();
+              const localScale = new THREE.Vector3();
+              localMatrix.decompose(localVecPos, localQuat, localScale);
+
+              const localEuler = new THREE.Euler().setFromQuaternion(localQuat, 'XYZ');
+              finalPos = [localVecPos.x, localVecPos.y, localVecPos.z];
+              finalRot = [localEuler.x, localEuler.y, localEuler.z];
+            }
+          }
           cutSpec = {
             loopPoints: [],
             thicknessMm: ps.thicknessMm,
@@ -663,8 +782,8 @@ export function useOrganicCutSession({
             mode: 'bounded_plane' as const,
             sides: ps.sides,
             radius: ps.radius,
-            position: ps.planePosition,
-            rotation: ps.planeRotation,
+            position: finalPos,
+            rotation: finalRot,
             cutterThicknessMm: ps.thicknessMm,
             generateKey: ps.generateKey,
             keyWidthMm: ps.keyWidthMm,

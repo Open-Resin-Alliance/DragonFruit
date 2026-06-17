@@ -17459,6 +17459,7 @@ export default function Home() {
     toolActive: organicCutToolActive,
     activeGeometry: scene.activeModel?.geometry.geometry ?? null,
     activeGeometryKey: scene.activeModel?.id ?? null,
+    models: scene.models,
     isDraggingPoint: organicCutDragging,
     commitParts: React.useCallback((partA: THREE.BufferGeometry, partB: THREE.BufferGeometry) => {
       const target = scene.activeModel;

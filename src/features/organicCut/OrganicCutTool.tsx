@@ -461,18 +461,41 @@ export function OrganicCutTool({
   }, [loop, cutMode]);
 
   const intersectionGeometry = useMemo(() => {
-    if (!activeModel || (cutMode !== 'plane' && cutMode !== 'bounded_plane')) return null;
+    if (!activeModel || !transform || (cutMode !== 'plane' && cutMode !== 'bounded_plane')) return null;
 
     let pPos: [number, number, number] | THREE.Vector3;
     let pNormal: THREE.Vector3;
     let pRot: [number, number, number];
 
     if (cutMode === 'bounded_plane') {
-      pPos = planePosition;
-      pRot = planeRotation;
-      pNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(
-        new THREE.Quaternion().setFromEuler(new THREE.Euler(...planeRotation, 'XYZ'))
+      const modelQuat = quaternionFromGlobalEuler(transform.rotation);
+      const localToWorld = new THREE.Matrix4().compose(
+        new THREE.Vector3(transform.position.x, transform.position.y, transform.position.z),
+        modelQuat,
+        new THREE.Vector3(transform.scale.x, transform.scale.y, transform.scale.z)
       );
+      const inner = new THREE.Matrix4().makeTranslation(meshLocalOffset.x, meshLocalOffset.y, meshLocalOffset.z);
+      const localToWorldInv = localToWorld.clone().multiply(inner).invert();
+
+      const worldMatrix = new THREE.Matrix4().compose(
+        new THREE.Vector3(...planePosition),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(planeRotation[0], planeRotation[1], planeRotation[2], 'XYZ')),
+        new THREE.Vector3(1, 1, 1)
+      );
+
+      const localMatrix = localToWorldInv.multiply(worldMatrix);
+      const localPos = new THREE.Vector3();
+      const localQuat = new THREE.Quaternion();
+      const localScale = new THREE.Vector3();
+      localMatrix.decompose(localPos, localQuat, localScale);
+
+      pPos = localPos;
+      pNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(localQuat);
+      pRot = [
+        new THREE.Euler().setFromQuaternion(localQuat, 'XYZ').x,
+        new THREE.Euler().setFromQuaternion(localQuat, 'XYZ').y,
+        new THREE.Euler().setFromQuaternion(localQuat, 'XYZ').z,
+      ];
     } else {
       if (!flatPlaneSpecs) return null;
       pPos = flatPlaneSpecs.position;
@@ -486,7 +509,7 @@ export function OrganicCutTool({
 
     const bufferGeom = new THREE.BufferGeometry().setFromPoints(points);
     return bufferGeom;
-  }, [activeModel, cutMode, planePosition, planeRotation, radius, flatPlaneSpecs]);
+  }, [activeModel, transform, meshLocalOffset, cutMode, planePosition, planeRotation, radius, flatPlaneSpecs]);
 
   // Registration-key preview (peg + socket) for contour/bounded_plane mode. Built from the flat
   // soup Rust returns, so it's EXACTLY the key the cut will place.
@@ -862,11 +885,12 @@ export function OrganicCutTool({
   if (!activeModelId || !activeModel || !transform) return null;
 
   return (
-    <group
-      position={transform.position}
-      quaternion={currentQuaternion}
-      scale={transform.scale}
-    >
+    <>
+      <group
+        position={transform.position}
+        quaternion={currentQuaternion}
+        scale={transform.scale}
+      >
       <group position={meshLocalOffset}>
         {/* Invisible copy of the model geometry used ONLY as a manual raycast
             target for dragging waypoints. Sharing this group's local space means
@@ -910,30 +934,7 @@ export function OrganicCutTool({
           </>
         )}
 
-        {/* Bounded plane client-side cylinder preview */}
-        {cutMode === 'bounded_plane' && localCutterGeometry && (
-          <group position={planePosition} rotation={new THREE.Euler(...planeRotation, 'XYZ')}>
-            <mesh geometry={localCutterGeometry} renderOrder={997} frustumCulled={false}>
-              <meshBasicMaterial
-                color={0x37ff7a}
-                transparent
-                opacity={0.25}
-                side={THREE.DoubleSide}
-                depthWrite={false}
-              />
-            </mesh>
-            <mesh geometry={localCutterGeometry} renderOrder={998} frustumCulled={false}>
-              <meshBasicMaterial
-                color={0xcccccc}
-                transparent
-                opacity={0.12}
-                wireframe
-                depthTest={false}
-                depthWrite={false}
-              />
-            </mesh>
-          </group>
-        )}
+
 
         {/* Intersection outline highlight showing exactly where the plane/cylinder cuts the mesh */}
         {intersectionGeometry && (
@@ -1089,5 +1090,31 @@ export function OrganicCutTool({
         {cutMode !== 'bounded_plane' && loopLine && <primitive object={loopLine} />}
       </group>
     </group>
+
+    {/* Bounded plane client-side cylinder preview */}
+    {cutMode === 'bounded_plane' && localCutterGeometry && (
+      <group position={planePosition} rotation={new THREE.Euler(planeRotation[0], planeRotation[1], planeRotation[2], 'XYZ')}>
+        <mesh geometry={localCutterGeometry} renderOrder={997} frustumCulled={false}>
+          <meshBasicMaterial
+            color={0x37ff7a}
+            transparent
+            opacity={0.25}
+            side={THREE.DoubleSide}
+            depthWrite={false}
+          />
+        </mesh>
+        <mesh geometry={localCutterGeometry} renderOrder={998} frustumCulled={false}>
+          <meshBasicMaterial
+            color={0xcccccc}
+            transparent
+            opacity={0.12}
+            wireframe
+            depthTest={false}
+            depthWrite={false}
+          />
+        </mesh>
+      </group>
+    )}
+  </>
   );
 }
