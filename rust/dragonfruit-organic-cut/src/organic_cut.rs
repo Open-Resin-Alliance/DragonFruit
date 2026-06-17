@@ -421,6 +421,7 @@ pub fn organic_cut(mesh: IndexedMesh, options: &OrganicCutOptions) -> OrganicCut
 struct CutterInfo {
     position: Vec3,
     normal: Vec3,
+    radius: f32,
 }
 
 pub fn organic_multi_cut(
@@ -471,7 +472,11 @@ pub fn organic_multi_cut(
                     
                     let cutter_pos = Vec3::new(cut.position[0], cut.position[1], cut.position[2]);
                     let cutter_normal = crate::membrane::rotate_xyz(Vec3::new(0.0, 0.0, 1.0), cut.rotation);
-                    cutter_infos.push(CutterInfo { position: cutter_pos, normal: cutter_normal });
+                    cutter_infos.push(CutterInfo {
+                        position: cutter_pos,
+                        normal: cutter_normal,
+                        radius: cut.radius,
+                    });
 
                     let membrane = crate::membrane::build_flat_polygon_membrane(
                         cut.sides,
@@ -506,7 +511,19 @@ pub fn organic_multi_cut(
                     }
                     loop_centroid = loop_centroid.scale(1.0 / loop_pts.len() as f32);
                     let cutter_normal = best_fit_plane_normal(&cut.loop_points, loop_centroid).unwrap_or(Vec3::new(0.0, 0.0, 1.0));
-                    cutter_infos.push(CutterInfo { position: loop_centroid, normal: cutter_normal });
+                    
+                    let mut max_radius = 0.0f32;
+                    for &p in &loop_pts {
+                        let dist = p.sub(loop_centroid).length();
+                        if dist > max_radius {
+                            max_radius = dist;
+                        }
+                    }
+                    cutter_infos.push(CutterInfo {
+                        position: loop_centroid,
+                        normal: cutter_normal,
+                        radius: max_radius,
+                    });
 
                     if cut.generate_key {
                         keys_to_apply.push((cut_index, membrane, cut.clone()));
@@ -539,6 +556,8 @@ pub fn organic_multi_cut(
                     };
                     let n = plane.normal;
                     let plane_pos = plane.point;
+                    let bbox_center = mesh.bbox().center();
+                    let plane_center = bbox_center.sub(n.scale(bbox_center.sub(plane_pos).dot(n)));
                     let diag = mesh.bbox().diag().max(1e-3);
                     let radius = diag * 2.0;
                     let thickness = if cut.cutter_thickness_mm > 0.0 {
@@ -558,20 +577,24 @@ pub fn organic_multi_cut(
                     let v = n.cross(u);
 
                     for vertex in &mut prism.positions {
-                        *vertex = u.scale(vertex.x).add(v.scale(vertex.y)).add(n.scale(vertex.z)).add(plane_pos);
+                        *vertex = u.scale(vertex.x).add(v.scale(vertex.y)).add(n.scale(vertex.z)).add(plane_center);
                     }
                     let c_manifold = crate::membrane::to_manifold(&prism)
                         .map_err(|e| format!("Cut {} cutter slab invalid: {e}", cut_index + 1))?;
 
-                    cutter_infos.push(CutterInfo { position: plane_pos, normal: n });
+                    cutter_infos.push(CutterInfo {
+                        position: plane_center,
+                        normal: n,
+                        radius: f32::INFINITY,
+                    });
 
                     let c = [
-                        u.scale(-radius).add(v.scale(-radius)).add(plane_pos),
-                        u.scale(radius).add(v.scale(-radius)).add(plane_pos),
-                        u.scale(radius).add(v.scale(radius)).add(plane_pos),
-                        u.scale(-radius).add(v.scale(radius)).add(plane_pos),
+                        u.scale(-radius).add(v.scale(-radius)).add(plane_center),
+                        u.scale(radius).add(v.scale(-radius)).add(plane_center),
+                        u.scale(radius).add(v.scale(radius)).add(plane_center),
+                        u.scale(-radius).add(v.scale(radius)).add(plane_center),
                     ];
-                    let vertices = vec![c[0], c[1], c[2], c[3], plane_pos];
+                    let vertices = vec![c[0], c[1], c[2], c[3], plane_center];
                     let triangles = vec![
                         [4, 0, 1],
                         [4, 1, 2],
@@ -624,11 +647,23 @@ pub fn organic_multi_cut(
                 }
                 let c = crate::membrane::mesh_centroid(&island);
                 
-                // Find closest cutter spec
+                // Find closest cutter spec using a unified projection-based distance metric
                 let mut closest_idx = 0;
                 let mut min_dist = f32::INFINITY;
                 for (idx, info) in cutter_infos.iter().enumerate() {
-                    let dist = c.sub(info.position).length();
+                    let proj = c.sub(info.position);
+                    let perp_dist = proj.dot(info.normal);
+                    let proj_on_plane = proj.sub(info.normal.scale(perp_dist));
+                    let radial_dist = proj_on_plane.length();
+
+                    let dist = if radial_dist <= info.radius {
+                        perp_dist.abs()
+                    } else {
+                        // Closest point on the cutter boundary
+                        let boundary_point = info.position.add(proj_on_plane.scale(info.radius / radial_dist));
+                        c.sub(boundary_point).length()
+                    };
+
                     if dist < min_dist {
                         min_dist = dist;
                         closest_idx = idx;
@@ -1336,6 +1371,38 @@ mod tests {
         let outcome = organic_multi_cut(mesh, &options).expect("multi_cut with keys success");
         assert_eq!(outcome.report.engine, "multi_cut");
         assert!(outcome.report.key_kind.contains("frustum"));
+        assert!(outcome.part_a.triangle_count() > 0);
+        assert!(outcome.part_b.triangle_count() > 0);
+    }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn multi_cut_offset_model_classification() {
+        let mut soup = cube_soup(10.0);
+        for i in 0..soup.len() / 3 {
+            soup[i * 3] += 100.0;
+            soup[i * 3 + 1] += 100.0;
+        }
+        let mesh = IndexedMesh::from_triangle_soup(&soup, 1e-6);
+
+        let options = OrganicMultiCutOptions {
+            cuts: vec![
+                OrganicCutSpec {
+                    mode: CutMode::Plane,
+                    loop_points: vec![],
+                    plane: Some(CutPlaneSpec { normal: [0.0, 0.0, 1.0], offset: 4.0 }),
+                    ..Default::default()
+                },
+                OrganicCutSpec {
+                    mode: CutMode::Plane,
+                    loop_points: vec![],
+                    plane: Some(CutPlaneSpec { normal: [0.0, 0.0, 1.0], offset: 6.0 }),
+                    ..Default::default()
+                },
+            ],
+        };
+        let outcome = organic_multi_cut(mesh, &options).expect("multi_cut offset success");
+        assert_eq!(outcome.report.engine, "multi_cut");
         assert!(outcome.part_a.triangle_count() > 0);
         assert!(outcome.part_b.triangle_count() > 0);
     }
