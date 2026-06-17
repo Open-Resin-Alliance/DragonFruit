@@ -24,6 +24,6 @@ pub use crate::key::{
     DEFAULT_KEY_DEPTH_MM, DEFAULT_KEY_TOLERANCE_MM, DEFAULT_KEY_WIDTH_MM, KEY_MAX_TILT_RAD,
 };
 pub use crate::organic_cut::{
-    organic_cut, CutMode, OrganicCutLoopPoint, OrganicCutOptions, OrganicCutOutcome, OrganicCutReport,
+    organic_cut, organic_multi_cut, CutMode, OrganicCutLoopPoint, OrganicCutOptions, OrganicMultiCutOptions, OrganicCutOutcome, OrganicCutReport,
     OrganicCutSpec,
 };

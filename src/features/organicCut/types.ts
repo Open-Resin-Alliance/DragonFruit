@@ -85,7 +85,7 @@ export interface OrganicCutSpec {
   /** Key depth in mm (how far the peg pokes in). Serde field: `keyDepthMm`. */
   keyDepthMm?: number;
   /** Key shape: 'frustum' (default) or 'dome'. Serde field: `keyShape`. */
-  keyShape?: 'frustum' | 'dome';
+  keyShape?: 'frustum' | 'dome' | (string & {});
   /** Edge fillet radius in mm (rounds frustum corners + tip). Serde: `keyFilletMm`. */
   keyFilletMm?: number;
   /** Flip which half gets the peg vs the socket. Serde field: `keySwapSides`. */
@@ -130,6 +130,10 @@ export interface KeyPreviewFrame {
 
 export interface OrganicCutOptions {
   cut: OrganicCutSpec;
+}
+
+export interface OrganicMultiCutOptions {
+  cuts: OrganicCutSpec[];
 }
 
 export interface OrganicCutReport {
@@ -186,7 +190,7 @@ export interface OrganicCutPanelState {
   /** Key depth in mm — how far the peg pokes into the body. */
   keyDepthMm: number;
   /** Key shape: 'frustum' (tapered box, rotation-locking) or 'dome' (half-sphere). */
-  keyShape: 'frustum' | 'dome';
+  keyShape: 'frustum' | 'dome' | (string & {});
   /** Edge fillet radius (mm) — rounds the frustum's corners + tip. 0 = sharp. */
   keyFilletMm: number;
   /**
@@ -222,4 +226,5 @@ export interface StagedCut {
   name: string;
   loop: OrganicCutLoopPoint[];
   panelState: OrganicCutPanelState;
+  geodesicPolyline?: Float32Array | null;
 }

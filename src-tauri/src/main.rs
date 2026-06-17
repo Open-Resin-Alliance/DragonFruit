@@ -3269,6 +3269,7 @@ fn main() {
             mesh_repair::mesh_organic_cut_staged,
             mesh_repair::mesh_organic_cut_capture_staged_source,
             mesh_repair::mesh_organic_cut_from_captured_source,
+            mesh_repair::mesh_organic_multi_cut_from_captured_source,
             mesh_repair::mesh_organic_cut_read_part_a,
             mesh_repair::mesh_organic_cut_read_part_b,
             mesh_repair::mesh_organic_cut_geodesic_loop,

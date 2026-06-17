@@ -1898,7 +1898,7 @@ fn closest_on_tri(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> (Vec3, f32) {
 }
 
 /// Centroid of a mesh's vertices (cheap proxy for "where is this island").
-fn mesh_centroid(mesh: &IndexedMesh) -> Vec3 {
+pub(crate) fn mesh_centroid(mesh: &IndexedMesh) -> Vec3 {
     if mesh.positions.is_empty() {
         return Vec3::ZERO;
     }
@@ -1936,7 +1936,7 @@ pub(crate) fn split_into_two_sides(membrane: &Membrane, islands: Vec<IndexedMesh
 
 /// Concatenate several meshes into one (offsetting triangle indices). The pieces
 /// stay disjoint islands within a single `IndexedMesh` — fine for a scene part.
-fn concat_meshes(meshes: Vec<IndexedMesh>) -> IndexedMesh {
+pub(crate) fn concat_meshes(meshes: Vec<IndexedMesh>) -> IndexedMesh {
     let mut positions: Vec<Vec3> = Vec::new();
     let mut triangles: Vec<[u32; 3]> = Vec::new();
     for m in meshes {
@@ -2293,7 +2293,7 @@ fn widen_membrane_boundary(m: &mut Membrane, amount: f32) {
 ///
 /// Returns `(membrane, slab)`. `density` is the already-clamped resolution
 /// multiplier. `Err` if the membrane can't be built from the loop.
-fn build_contour_cutter(
+pub(crate) fn build_contour_cutter(
     _mesh: &IndexedMesh,
     loop_pts: &[Vec3],
     thickness_mm: f32,

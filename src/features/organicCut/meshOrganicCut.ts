@@ -10,7 +10,7 @@
  * M1: the backend cut is a no-op, so both parts come back equal to the source.
  */
 import * as THREE from 'three';
-import type { KeyPreviewFrame, OrganicCutLoopPoint, OrganicCutOptions, OrganicCutReport, OrganicCutResult } from './types';
+import type { KeyPreviewFrame, OrganicCutLoopPoint, OrganicCutOptions, OrganicMultiCutOptions, OrganicCutReport, OrganicCutResult } from './types';
 
 type TauriInvoke = <T>(
   cmd: string,
@@ -173,6 +173,23 @@ export async function cutFromCapturedSource(
 }
 
 /**
+ * Runs a simultaneous multi-cut against the previously captured source.
+ * Returns both parts + a report.
+ */
+export async function multiCutFromCapturedSource(
+  options: OrganicMultiCutOptions,
+): Promise<OrganicCutResult | null> {
+  const core = await loadTauriCore();
+  if (!core) return null;
+
+  const optionsJson = JSON.stringify(options);
+  const reportJson = await core.invoke<string>('mesh_organic_multi_cut_from_captured_source', { optionsJson });
+  const report = JSON.parse(reportJson) as OrganicCutReport;
+  const { partA, partB } = await readBothParts(core.invoke);
+  return { report, partA, partB };
+}
+
+/**
  * One-shot: stage the geometry and run the cut, returning both parts.
  * Convenience for the non-preview "Apply" path.
  */
@@ -277,7 +294,7 @@ export async function computeMembranePreview(
   generateKey = false,
   keyWidthMm = 2.0,
   keyDepthMm = 2.5,
-  keyShape: 'frustum' | 'dome' = 'frustum',
+  keyShape: 'frustum' | 'dome' | (string & {}) = 'frustum',
   keyFilletMm = 0.0,
   keySwapSides = false,
   keyTiltRad = 0.0,

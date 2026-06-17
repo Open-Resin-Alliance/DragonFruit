@@ -174,6 +174,13 @@ pub struct OrganicCutOptions {
     pub cut: OrganicCutSpec,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganicMultiCutOptions {
+    #[serde(default)]
+    pub cuts: Vec<OrganicCutSpec>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrganicCutReport {
@@ -408,6 +415,300 @@ pub fn organic_cut(mesh: IndexedMesh, options: &OrganicCutOptions) -> OrganicCut
     {
         let _ = options;
         noop_outcome(mesh, "manifold feature disabled".to_string())
+    }
+}
+
+struct CutterInfo {
+    position: Vec3,
+    normal: Vec3,
+}
+
+pub fn organic_multi_cut(
+    mesh: IndexedMesh,
+    options: &OrganicMultiCutOptions,
+) -> Result<OrganicCutOutcome, String> {
+    #[cfg(feature = "manifold")]
+    {
+        use manifold_csg::Manifold;
+        let source_triangle_count = mesh.triangle_count();
+
+        // 1. Load model as a manifold
+        let src_positions: Vec<f32> = mesh.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
+        let src_indices: Vec<u32> = mesh.triangles.iter().flat_map(|t| *t).collect();
+
+        let model = Manifold::from_mesh_f32(&src_positions, 3, &src_indices)
+            .map_err(|err| format!("manifold rejected source mesh: {err:?} (tris={source_triangle_count})"))?;
+        if model.is_empty() || model.num_tri() == 0 {
+            return Err("source mesh produced an empty manifold (non-watertight?)".to_string());
+        }
+
+        if options.cuts.is_empty() {
+            return Err("The cuts did not fully sever the model (parts remain connected). Please ensure all connecting paths are cut.".to_string());
+        }
+
+        let mut cutters = Vec::new();
+        let mut cutter_infos = Vec::new();
+        let mut keys_to_apply = Vec::new();
+
+        // 2. Build cutter manifold for each cut spec
+        for (cut_index, cut) in options.cuts.iter().enumerate() {
+            let cutter = match cut.mode {
+                CutMode::BoundedPlane => {
+                    let thickness = if cut.cutter_thickness_mm > 0.0 {
+                        cut.cutter_thickness_mm
+                    } else {
+                        crate::membrane::DEFAULT_CUTTER_THICKNESS_MM
+                    };
+                    let prism = crate::membrane::build_polygon_prism_transformed(
+                        cut.sides,
+                        cut.radius,
+                        thickness,
+                        cut.position,
+                        cut.rotation,
+                    );
+                    let c_manifold = crate::membrane::to_manifold(&prism)
+                        .map_err(|e| format!("Cut {} cutter slab invalid: {e}", cut_index + 1))?;
+                    
+                    let cutter_pos = Vec3::new(cut.position[0], cut.position[1], cut.position[2]);
+                    let cutter_normal = crate::membrane::rotate_xyz(Vec3::new(0.0, 0.0, 1.0), cut.rotation);
+                    cutter_infos.push(CutterInfo { position: cutter_pos, normal: cutter_normal });
+
+                    let membrane = crate::membrane::build_flat_polygon_membrane(
+                        cut.sides,
+                        cut.radius,
+                        cut.position,
+                        cut.rotation,
+                    );
+                    if cut.generate_key {
+                        keys_to_apply.push((cut_index, membrane, cut.clone()));
+                    }
+                    
+                    c_manifold
+                }
+                CutMode::Contour => {
+                    let loop_pts: Vec<Vec3> = cut.loop_points.iter().map(|p| Vec3::new(p.position[0], p.position[1], p.position[2])).collect();
+                    if loop_pts.len() < 3 {
+                        return Err(format!("Cut {} needs >=3 loop points (got {})", cut_index + 1, loop_pts.len()));
+                    }
+                    let density = cut.density.clamp(1.0, 4.0) as f64;
+                    let thickness = if cut.cutter_thickness_mm > 0.0 {
+                        cut.cutter_thickness_mm
+                    } else {
+                        crate::membrane::DEFAULT_CUTTER_THICKNESS_MM
+                    };
+                    let (membrane, slab) = crate::membrane::build_contour_cutter(&mesh, &loop_pts, thickness, cut.membrane_smoothing, density)?;
+                    let c_manifold = crate::membrane::to_manifold(&slab)
+                        .map_err(|e| format!("Cut {} cutter slab invalid: {e}", cut_index + 1))?;
+
+                    let mut loop_centroid = Vec3::ZERO;
+                    for &p in &loop_pts {
+                        loop_centroid = loop_centroid.add(p);
+                    }
+                    loop_centroid = loop_centroid.scale(1.0 / loop_pts.len() as f32);
+                    let cutter_normal = best_fit_plane_normal(&cut.loop_points, loop_centroid).unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                    cutter_infos.push(CutterInfo { position: loop_centroid, normal: cutter_normal });
+
+                    if cut.generate_key {
+                        keys_to_apply.push((cut_index, membrane, cut.clone()));
+                    }
+
+                    c_manifold
+                }
+                CutMode::Plane => {
+                    let plane = match &cut.plane {
+                        Some(p) => {
+                            let n = Vec3::new(p.normal[0], p.normal[1], p.normal[2]);
+                            let nlen = n.length();
+                            if nlen < 1e-6 {
+                                return Err(format!("Cut {} explicit plane has a zero-length normal", cut_index + 1));
+                            }
+                            let normal = n.scale(1.0 / nlen);
+                            CutPlane {
+                                normal,
+                                offset: p.offset,
+                                point: normal.scale(p.offset),
+                            }
+                        }
+                        None => plane_from_loop(&cut.loop_points).ok_or_else(|| {
+                            format!(
+                                "Cut {} could not derive a plane from loop ({} points)",
+                                cut_index + 1,
+                                cut.loop_points.len()
+                            )
+                        })?,
+                    };
+                    let n = plane.normal;
+                    let plane_pos = plane.point;
+                    let diag = mesh.bbox().diag().max(1e-3);
+                    let radius = diag * 2.0;
+                    let thickness = if cut.cutter_thickness_mm > 0.0 {
+                        cut.cutter_thickness_mm
+                    } else {
+                        crate::membrane::DEFAULT_CUTTER_THICKNESS_MM
+                    };
+
+                    let mut prism = crate::membrane::build_polygon_prism(4, radius, thickness);
+                    let seed = if n.x.abs() < 0.9 { Vec3::new(1.0, 0.0, 0.0) } else { Vec3::new(0.0, 1.0, 0.0) };
+                    let u = seed.sub(n.scale(seed.dot(n)));
+                    let ulen = u.length();
+                    if ulen < 1e-9 {
+                        return Err(format!("Cut {} plane normal is degenerate", cut_index + 1));
+                    }
+                    let u = u.scale(1.0 / ulen);
+                    let v = n.cross(u);
+
+                    for vertex in &mut prism.positions {
+                        *vertex = u.scale(vertex.x).add(v.scale(vertex.y)).add(n.scale(vertex.z)).add(plane_pos);
+                    }
+                    let c_manifold = crate::membrane::to_manifold(&prism)
+                        .map_err(|e| format!("Cut {} cutter slab invalid: {e}", cut_index + 1))?;
+
+                    cutter_infos.push(CutterInfo { position: plane_pos, normal: n });
+
+                    let c = [
+                        u.scale(-radius).add(v.scale(-radius)).add(plane_pos),
+                        u.scale(radius).add(v.scale(-radius)).add(plane_pos),
+                        u.scale(radius).add(v.scale(radius)).add(plane_pos),
+                        u.scale(-radius).add(v.scale(radius)).add(plane_pos),
+                    ];
+                    let vertices = vec![c[0], c[1], c[2], c[3], plane_pos];
+                    let triangles = vec![
+                        [4, 0, 1],
+                        [4, 1, 2],
+                        [4, 2, 3],
+                        [4, 3, 0],
+                    ];
+                    let boundary = vec![0, 1, 2, 3];
+                    let membrane = crate::membrane::Membrane { vertices, triangles, boundary };
+                    
+                    if cut.generate_key {
+                        keys_to_apply.push((cut_index, membrane, cut.clone()));
+                    }
+
+                    c_manifold
+                }
+            };
+
+            // 3. Validate intersection: Run model.intersection(&cutter)
+            let intersection = model.intersection(&cutter);
+            if intersection.is_empty() || intersection.num_tri() == 0 {
+                return Err(format!("Cut {} does not intersect the model. Please adjust its position.", cut_index + 1));
+            }
+
+            cutters.push(cutter);
+        }
+
+        // 4. Union all cutters
+        let mut combined_cutter = cutters[0].clone();
+        for c in cutters.iter().skip(1) {
+            combined_cutter = combined_cutter.union(c);
+        }
+
+        // 5. Subtract combined cutter from model manifold
+        let sliced = model.difference(&combined_cutter);
+
+        // 6. Decompose
+        let parts = sliced.decompose();
+        if parts.len() < 2 {
+            return Err("The cuts did not fully sever the model (parts remain connected). Please ensure all connecting paths are cut.".to_string());
+        }
+
+        // 7. Classify islands using nearest-cutter classification
+        let mut part_a_islands = Vec::new();
+        let mut part_b_islands = Vec::new();
+
+        for p in parts {
+            if let Some(island) = crate::membrane::manifold_to_indexed(&p) {
+                if island.triangles.is_empty() {
+                    continue;
+                }
+                let c = crate::membrane::mesh_centroid(&island);
+                
+                // Find closest cutter spec
+                let mut closest_idx = 0;
+                let mut min_dist = f32::INFINITY;
+                for (idx, info) in cutter_infos.iter().enumerate() {
+                    let dist = c.sub(info.position).length();
+                    if dist < min_dist {
+                        min_dist = dist;
+                        closest_idx = idx;
+                    }
+                }
+                let closest_info = &cutter_infos[closest_idx];
+                let side = c.sub(closest_info.position).dot(closest_info.normal);
+                if side >= 0.0 {
+                    part_a_islands.push(island);
+                } else {
+                    part_b_islands.push(island);
+                }
+            }
+        }
+
+        if part_a_islands.is_empty() || part_b_islands.is_empty() {
+            return Err("The cuts did not fully sever the model (parts remain connected). Please ensure all connecting paths are cut.".to_string());
+        }
+
+        // 8. Group and concatenate
+        let mut part_a = crate::membrane::concat_meshes(part_a_islands);
+        let mut part_b = crate::membrane::concat_meshes(part_b_islands);
+
+        let mut key_kinds = Vec::new();
+        let mut key_details = Vec::new();
+
+        // 9. Apply keys sequentially
+        for (cut_index, membrane, cut) in keys_to_apply {
+            let keyed = crate::key::apply_key(
+                &mesh,
+                part_a,
+                part_b,
+                &membrane,
+                crate::key::KeyShape::from_str_or_default(&cut.key_shape),
+                cut.key_swap_sides,
+                crate::key::KeyTilt::new(
+                    cut.key_tilt_rad,
+                    cut.key_tilt_azimuth_rad,
+                    cut.key_roll_rad,
+                ),
+                cut.key_width_mm,
+                cut.key_depth_mm,
+                cut.key_fillet_mm,
+                crate::key::DEFAULT_KEY_TOLERANCE_MM,
+            );
+            part_a = keyed.part_a;
+            part_b = keyed.part_b;
+            if keyed.kind != crate::key::KeyKind::None {
+                key_kinds.push(format!("Cut {}: {}", cut_index + 1, keyed.kind.as_str()));
+            }
+            if !keyed.detail.is_empty() {
+                key_details.push(format!("Cut {}: {}", cut_index + 1, keyed.detail));
+            }
+        }
+
+        let key_kind = if key_kinds.is_empty() {
+            "none".to_string()
+        } else {
+            key_kinds.join(", ")
+        };
+
+        let key_detail = key_details.join("; ");
+
+        let report = OrganicCutReport {
+            source_triangle_count,
+            part_a_triangle_count: part_a.triangle_count(),
+            part_b_triangle_count: part_b.triangle_count(),
+            engine: "multi_cut".to_string(),
+            detail: String::new(),
+            key_kind,
+            key_detail,
+        };
+
+        Ok(OrganicCutOutcome { part_a, part_b, report })
+    }
+    #[cfg(not(feature = "manifold"))]
+    {
+        let _ = mesh;
+        let _ = options;
+        Err("manifold feature disabled".to_string())
     }
 }
 
@@ -967,5 +1268,75 @@ mod tests {
         let outcome = organic_cut(mesh, &options);
         assert_eq!(outcome.report.engine, "noop");
         assert!(outcome.report.detail.contains("Bounded plane did not fully sever"));
+    }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn multi_cut_two_planes_splits_cube() {
+        let mesh = IndexedMesh::from_triangle_soup(&cube_soup(10.0), 1e-6);
+        let options = OrganicMultiCutOptions {
+            cuts: vec![
+                OrganicCutSpec {
+                    mode: CutMode::Plane,
+                    loop_points: vec![],
+                    plane: Some(CutPlaneSpec { normal: [0.0, 0.0, 1.0], offset: 4.0 }),
+                    ..Default::default()
+                },
+                OrganicCutSpec {
+                    mode: CutMode::Plane,
+                    loop_points: vec![],
+                    plane: Some(CutPlaneSpec { normal: [0.0, 0.0, 1.0], offset: 6.0 }),
+                    ..Default::default()
+                },
+            ],
+        };
+        let outcome = organic_multi_cut(mesh, &options).expect("multi_cut success");
+        assert_eq!(outcome.report.engine, "multi_cut");
+        assert!(outcome.part_a.triangle_count() > 0);
+        assert!(outcome.part_b.triangle_count() > 0);
+    }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn multi_cut_non_intersecting_fails() {
+        let mesh = IndexedMesh::from_triangle_soup(&cube_soup(10.0), 1e-6);
+        let options = OrganicMultiCutOptions {
+            cuts: vec![
+                OrganicCutSpec {
+                    mode: CutMode::Plane,
+                    loop_points: vec![],
+                    plane: Some(CutPlaneSpec { normal: [0.0, 0.0, 1.0], offset: 15.0 }), // outside cube [0,10]^3
+                    ..Default::default()
+                },
+            ],
+        };
+        let res = organic_multi_cut(mesh, &options);
+        assert!(res.is_err());
+        assert!(res.err().unwrap().contains("does not intersect the model"));
+    }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn multi_cut_with_keys() {
+        let mesh = IndexedMesh::from_triangle_soup(&cube_soup(10.0), 1e-6);
+        let options = OrganicMultiCutOptions {
+            cuts: vec![
+                OrganicCutSpec {
+                    mode: CutMode::Plane,
+                    loop_points: vec![],
+                    plane: Some(CutPlaneSpec { normal: [0.0, 0.0, 1.0], offset: 5.0 }),
+                    generate_key: true,
+                    key_width_mm: 2.0,
+                    key_depth_mm: 2.0,
+                    key_shape: "frustum".to_string(),
+                    ..Default::default()
+                },
+            ],
+        };
+        let outcome = organic_multi_cut(mesh, &options).expect("multi_cut with keys success");
+        assert_eq!(outcome.report.engine, "multi_cut");
+        assert!(outcome.report.key_kind.contains("frustum"));
+        assert!(outcome.part_a.triangle_count() > 0);
+        assert!(outcome.part_b.triangle_count() > 0);
     }
 }

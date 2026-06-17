@@ -18,6 +18,7 @@ import {
   computeGeodesicLoop,
   computeMembranePreview,
   cutFromCapturedSource,
+  multiCutFromCapturedSource,
   isCutSourceStaged,
   partToGeometry,
   stageCutSource,
@@ -693,12 +694,15 @@ export function useOrganicCutSession({
     const minPoints = isBoundedPlane ? 0 : (isContour ? MIN_CONTOUR_POINTS : MIN_LOOP_POINTS);
     if (currentLoop.length < minPoints) return;
 
+    const geodesic = geodesicPolylineRef.current;
+    const geodesicCopy = geodesic ? new Float32Array(geodesic) : null;
+
     if (editingCutIdRef.current) {
       const targetId = editingCutIdRef.current;
       setStagedCuts((prev) =>
         prev.map((c) =>
           c.id === targetId
-            ? { ...c, loop: currentLoop.slice(), panelState: { ...ps } }
+            ? { ...c, loop: currentLoop.slice(), panelState: { ...ps }, geodesicPolyline: geodesicCopy }
             : c
         )
       );
@@ -717,6 +721,7 @@ export function useOrganicCutSession({
         name,
         loop: currentLoop.slice(),
         panelState: { ...ps },
+        geodesicPolyline: geodesicCopy,
       };
       setStagedCuts((prev) => [...prev, newCut]);
     }
@@ -725,6 +730,7 @@ export function useOrganicCutSession({
     setStatus('idle');
     setSelectedIndex(null);
     setRedoStack([]);
+    setGeodesicPolyline(null);
   }, []);
 
   const adjustStagedCut = React.useCallback((id: string) => {
@@ -745,6 +751,11 @@ export function useOrganicCutSession({
         }
         setSelectedIndex(null);
         setRedoStack([]);
+        if (target.geodesicPolyline) {
+          setGeodesicPolyline(new Float32Array(target.geodesicPolyline));
+        } else {
+          setGeodesicPolyline(null);
+        }
       }
       return prev;
     });
@@ -758,6 +769,7 @@ export function useOrganicCutSession({
       setStatus('idle');
       setSelectedIndex(null);
       setRedoStack([]);
+      setGeodesicPolyline(null);
     }
   }, []);
 
@@ -801,46 +813,160 @@ export function useOrganicCutSession({
       setEditingCutId(backupEditingId);
     };
 
-    // 2. Implement mock execution that simulates success/failure:
-    // Fail if plane position X > 50 in active cut or any staged cut
-    let simulatesFailure = false;
-    if (ps.cutMode === 'bounded_plane' && ps.planePosition && ps.planePosition[0] > 50) {
-      simulatesFailure = true;
-    }
-    for (const cut of currentQueue) {
-      if (cut.panelState.cutMode === 'bounded_plane' && cut.panelState.planePosition && cut.panelState.planePosition[0] > 50) {
-        simulatesFailure = true;
-      }
-    }
-
-    if (simulatesFailure) {
-      setIsApplying(true);
-      setTimeout(() => {
-        setIsApplying(false);
-        restoreBackup();
-        alert("Cut failed: plane position X > 50 (simulated failure). Queue and editor state have been retained.");
-      }, 800);
-      return;
-    }
-
     let cancelled = false;
     setIsApplying(true);
 
     void (async () => {
       try {
         if (hasQueue) {
-          // Phase 1 Mock Multi-Cut Execution
-          // Wait 800ms to simulate backend work
-          await new Promise((resolve) => setTimeout(resolve, 800));
-          if (cancelled) return;
+          const staged = await stageCutSource(geom, geomKey);
+          if (!staged) {
+            // Not in the Tauri runtime (e.g. browser dev) — simulate success
+            await new Promise((resolve) => setTimeout(resolve, 800));
+            if (cancelled) return;
+            setStagedCuts([]);
+            setEditingCutId(null);
+            setLoop([]);
+            setStatus('idle');
+            setSelectedIndex(null);
+            setGeodesicPolyline(null);
+            alert("Multi-Cut applied successfully (simulated dev success).");
+            return;
+          }
 
-          // Clear queue and active cut state on success
-          setStagedCuts([]);
-          setEditingCutId(null);
-          setLoop([]);
-          setStatus('idle');
-          setSelectedIndex(null);
-          alert("Multi-Cut applied successfully (simulated success). Queue has been cleared.");
+          const cutsSpec = currentQueue.map((cut) => {
+            const cutPs = cut.panelState;
+            const cutIsContour = cutPs.cutMode === 'contour';
+            const cutIsBounded = cutPs.cutMode === 'bounded_plane';
+            
+            if (cutIsContour) {
+              const contourLoop =
+                cut.geodesicPolyline && cut.geodesicPolyline.length >= MIN_CONTOUR_POINTS * 3
+                  ? geodesicPolylineToLoopPoints(cut.geodesicPolyline)
+                  : cut.loop;
+              return {
+                loopPoints: contourLoop,
+                thicknessMm: cutPs.thicknessMm,
+                smoothing: cutPs.smoothing,
+                membraneSmoothing: cutPs.membraneSmoothing,
+                mode: 'contour' as const,
+                cutterThicknessMm: cutPs.thicknessMm,
+                density: cutPs.density,
+                generateKey: cutPs.generateKey,
+                keyWidthMm: cutPs.keyWidthMm,
+                keyDepthMm: cutPs.keyDepthMm,
+                keyShape: cutPs.keyShape,
+                keyFilletMm: cutPs.keyFilletMm,
+                keySwapSides: cutPs.keySwapSides,
+                keyTiltRad: cutPs.keyTiltRad,
+                keyTiltAzimuthRad: cutPs.keyTiltAzimuthRad,
+                keyRollRad: cutPs.keyRollRad,
+              };
+            } else if (cutIsBounded) {
+              let finalPos = cutPs.planePosition;
+              let finalRot = cutPs.planeRotation;
+              if (geomKey && geom) {
+                const model = modelsRef.current.find((m) => m.id === geomKey);
+                if (model) {
+                  const modelQuat = quaternionFromGlobalEuler(model.transform.rotation);
+                  const localToWorld = new THREE.Matrix4().compose(
+                    new THREE.Vector3(model.transform.position.x, model.transform.position.y, model.transform.position.z),
+                    modelQuat,
+                    new THREE.Vector3(model.transform.scale.x, model.transform.scale.y, model.transform.scale.z)
+                  );
+                  const modelBbox =
+                    geom.boundingBox ??
+                    new THREE.Box3().setFromBufferAttribute(geom.getAttribute('position') as THREE.BufferAttribute);
+                  const bboxCenter = modelBbox.getCenter(new THREE.Vector3());
+                  const offset = new THREE.Vector3(-bboxCenter.x, -bboxCenter.y, -bboxCenter.z);
+
+                  const inner = new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z);
+                  const localToWorldInv = localToWorld.clone().multiply(inner).invert();
+
+                  const pos = cutPs.planePosition ?? [0, 0, 0];
+                  const rot = cutPs.planeRotation ?? [0, 0, 0];
+                  const worldMatrix = new THREE.Matrix4().compose(
+                    new THREE.Vector3(...pos),
+                    new THREE.Quaternion().setFromEuler(new THREE.Euler(rot[0], rot[1], rot[2], 'XYZ')),
+                    new THREE.Vector3(1, 1, 1)
+                  );
+
+                  const localMatrix = localToWorldInv.multiply(worldMatrix);
+                  const localVecPos = new THREE.Vector3();
+                  const localQuat = new THREE.Quaternion();
+                  const localScale = new THREE.Vector3();
+                  localMatrix.decompose(localVecPos, localQuat, localScale);
+
+                  const localEuler = new THREE.Euler().setFromQuaternion(localQuat, 'XYZ');
+                  finalPos = [localVecPos.x, localVecPos.y, localVecPos.z];
+                  finalRot = [localEuler.x, localEuler.y, localEuler.z];
+                }
+              }
+              return {
+                loopPoints: [],
+                thicknessMm: cutPs.thicknessMm,
+                smoothing: cutPs.smoothing,
+                mode: 'bounded_plane' as const,
+                sides: cutPs.sides,
+                radius: cutPs.radius,
+                position: finalPos,
+                rotation: finalRot,
+                cutterThicknessMm: cutPs.thicknessMm,
+                generateKey: cutPs.generateKey,
+                keyWidthMm: cutPs.keyWidthMm,
+                keyDepthMm: cutPs.keyDepthMm,
+                keyShape: cutPs.keyShape,
+                keyFilletMm: cutPs.keyFilletMm,
+                keySwapSides: cutPs.keySwapSides,
+                keyTiltRad: cutPs.keyTiltRad,
+                keyTiltAzimuthRad: cutPs.keyTiltAzimuthRad,
+                keyRollRad: cutPs.keyRollRad,
+              };
+            } else {
+              const plane = cutPlaneFromPoints(cut.loop);
+              return {
+                loopPoints: cut.loop,
+                thicknessMm: cutPs.thicknessMm,
+                smoothing: cutPs.smoothing,
+                mode: 'plane' as const,
+                plane: plane
+                  ? { normal: [plane.normal.x, plane.normal.y, plane.normal.z] as [number, number, number], offset: plane.offset }
+                  : undefined,
+              };
+            }
+          });
+
+          const result = await multiCutFromCapturedSource({ cuts: cutsSpec });
+          if (cancelled || !result) return;
+          setLastResult(result);
+
+          const committed =
+            result.report.engine !== 'noop' && commitPartsRef.current
+              ? commitPartsRef.current(partToGeometry(result.partA), partToGeometry(result.partB))
+              : false;
+
+          console.info(
+            `[organicCut] multi-cut applied | engine=${result.report.engine}` +
+            ` committed=${committed}` +
+            ` detail="${result.report.detail ?? ''}"` +
+            ` keyKind=${result.report.keyKind ?? 'n/a'}` +
+            ` keyDetail="${result.report.keyDetail ?? ''}"` +
+            ` source=${result.report.sourceTriangleCount}` +
+            ` partA=${result.report.partATriangleCount}` +
+            ` partB=${result.report.partBTriangleCount}`,
+          );
+
+          if (committed && !cancelled) {
+            setStagedCuts([]);
+            setEditingCutId(null);
+            setLoop([]);
+            setStatus('idle');
+            setSelectedIndex(null);
+            setGeodesicPolyline(null);
+          } else {
+            restoreBackup();
+            throw new Error(result.report.detail || "Multi-Cut failed to sever the model.");
+          }
         } else {
           // Single cut flow (real execution via Tauri, if available)
           const staged = await stageCutSource(geom, geomKey);

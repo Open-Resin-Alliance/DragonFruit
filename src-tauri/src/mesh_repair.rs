@@ -20,7 +20,7 @@ use dragonfruit_mesh_repair::{
     HollowOptions, HollowSession, IndexedMesh, RepairOptions, Vec3,
 };
 // The organic cut feature now lives in its own crate.
-use dragonfruit_organic_cut::{organic_cut, GeodesicSolver, OrganicCutOptions};
+use dragonfruit_organic_cut::{organic_cut, organic_multi_cut, GeodesicSolver, OrganicCutOptions, OrganicMultiCutOptions};
 use serde::Deserialize;
 use tauri::ipc::Response;
 
@@ -206,6 +206,14 @@ fn parse_organic_cut_options(options_json: &str) -> OrganicCutOptions {
     }
 
     serde_json::from_str::<OrganicCutOptions>(options_json).unwrap_or_default()
+}
+
+fn parse_organic_multi_cut_options(options_json: &str) -> OrganicMultiCutOptions {
+    if options_json.trim().is_empty() {
+        return OrganicMultiCutOptions::default();
+    }
+
+    serde_json::from_str::<OrganicMultiCutOptions>(options_json).unwrap_or_default()
 }
 
 #[derive(Deserialize)]
@@ -956,6 +964,40 @@ pub async fn mesh_organic_cut_from_captured_source(options_json: String) -> Resu
         .map_err(|e| format!("organic cut part B lock poisoned: {e}"))? = Some(part_b_soup);
 
     serde_json::to_string(&report).map_err(|e| format!("serialize organic cut report: {e}"))
+}
+
+/// Runs a multi-cut against the captured source mesh without mutating the
+/// regular staged mesh buffer. Stashes both parts for read-back.
+#[tauri::command]
+pub async fn mesh_organic_multi_cut_from_captured_source(options_json: String) -> Result<String, String> {
+    let options = parse_organic_multi_cut_options(&options_json);
+    let source_bytes = organic_cut_source_bytes()
+        .lock()
+        .map_err(|e| format!("organic cut source lock poisoned: {e}"))?
+        .clone()
+        .ok_or_else(|| {
+            "No captured organic cut source — call mesh_organic_cut_capture_staged_source first"
+                .to_string()
+        })?;
+
+    let (part_a_soup, part_b_soup, report) = tauri::async_runtime::spawn_blocking(move || {
+        let mesh = io::staged::load_positions_le(&source_bytes).map_err(|e| e.to_string())?;
+        let outcome = organic_multi_cut(mesh, &options)?;
+        let a: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&outcome.part_a.to_triangle_soup()).to_vec();
+        let b: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&outcome.part_b.to_triangle_soup()).to_vec();
+        Ok::<_, String>((a, b, outcome.report))
+    })
+    .await
+    .map_err(|e| format!("organic multi cut task panicked: {e}"))??;
+
+    *organic_cut_part_a_bytes()
+        .lock()
+        .map_err(|e| format!("organic cut part A lock poisoned: {e}"))? = Some(part_a_soup);
+    *organic_cut_part_b_bytes()
+        .lock()
+        .map_err(|e| format!("organic cut part B lock poisoned: {e}"))? = Some(part_b_soup);
+
+    serde_json::to_string(&report).map_err(|e| format!("serialize organic multi cut report: {e}"))
 }
 
 /// Returns the most recent organic-cut part A positions as raw LE bytes.

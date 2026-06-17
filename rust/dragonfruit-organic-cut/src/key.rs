@@ -656,53 +656,34 @@ fn build_sharp_frustum(
     ];
     IndexedMesh { positions, triangles: faces.to_vec() }
 }
+pub trait RegistrationKeyGenerator: Send + Sync {
+    fn kind(&self) -> KeyKind;
+    fn fit(&self, clearance: &Clearance, width_mm: f32, depth_mm: f32) -> Option<(Box<dyn RegistrationKeyGenerator>, String)>;
+    fn half_diagonal(&self, tolerance: f32) -> f32;
+    fn depth(&self) -> f32;
+    fn build_peg(&self, frame: &KeyFrame, lean: LeanXform, fillet_mm: f32) -> IndexedMesh;
+    fn build_socket(&self, frame: &KeyFrame, tolerance: f32, lean: LeanXform, fillet_mm: f32) -> IndexedMesh;
+    fn clone_box(&self) -> Box<dyn RegistrationKeyGenerator>;
+}
 
-/// The decided key for a cut: which rung of the fit ladder, at what size, plus a
-/// human-readable reason (for the report + the user alert). Computed by
-/// [`decide_key`] from the frame + measured clearance — SHARED by the real cut
-/// ([`apply_key`]) and the live preview ([`build_key_preview_soup`]) so the
-/// preview shows exactly the key that will be cut.
+impl Clone for Box<dyn RegistrationKeyGenerator> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
+}
+
 #[derive(Debug, Clone)]
-pub enum KeyPlan {
-    Frustum { dims: FrustumDims, detail: String },
-    Dome { dims: DomeDims, detail: String },
-    None { detail: String },
+pub struct FrustumGenerator {
+    pub dims: Option<FrustumDims>,
 }
 
-impl KeyPlan {
-    pub fn kind(&self) -> KeyKind {
-        match self {
-            KeyPlan::Frustum { .. } => KeyKind::Frustum,
-            KeyPlan::Dome { .. } => KeyKind::Dome,
-            KeyPlan::None { .. } => KeyKind::None,
-        }
+impl RegistrationKeyGenerator for FrustumGenerator {
+    fn kind(&self) -> KeyKind {
+        KeyKind::Frustum
     }
-    pub fn detail(&self) -> &str {
-        match self {
-            KeyPlan::Frustum { detail, .. }
-            | KeyPlan::Dome { detail, .. }
-            | KeyPlan::None { detail } => detail,
-        }
-    }
-}
 
-/// Run the **fit ladder** purely as a sizing decision (no booleans). The ladder's
-/// start depends on the requested `shape`:
-/// - `Frustum`: tapered frustum (shrunk to keep ≥1 mm of wall) → dome fallback →
-///   no key. The dome is an automatic safety net for a too-thin part.
-/// - `Dome`: half-sphere directly (the user chose it on purpose) → no key. No
-///   frustum fallback — a dome is the deliberately-smaller choice.
-///
-/// Clearance is measured against the **socket** (the larger of peg/socket) so both
-/// halves keep ≥`KEY_WALL_MARGIN_MM` of material.
-fn decide_key(
-    clearance: &Clearance,
-    nominal: FrustumDims,
-    nominal_dome: DomeDims,
-    shape: KeyShape,
-) -> KeyPlan {
-    if shape == KeyShape::Frustum {
-        // Rung 1: tapered frustum at the requested size, shrunk only if needed.
+    fn fit(&self, clearance: &Clearance, width_mm: f32, depth_mm: f32) -> Option<(Box<dyn RegistrationKeyGenerator>, String)> {
+        let nominal = FrustumDims::from_width_depth(width_mm, depth_mm);
         if let Some(dims) = clearance.fit_frustum(nominal) {
             let shrunk = dims.width < nominal.width - 1e-4 || dims.depth < nominal.depth - 1e-4;
             let detail = if shrunk {
@@ -713,24 +694,58 @@ fn decide_key(
             } else {
                 String::new()
             };
-            return KeyPlan::Frustum { dims, detail };
-        }
-        // Rung 2: frustum didn't fit → automatic dome fallback. Use a round-ish
-        // hemisphere sized from the frustum width (not the oblong request) so the
-        // safety-net key fits where the frustum couldn't.
-        let fallback = DomeDims::from_width_depth(nominal.width, nominal.width);
-        if let Some(dims) = clearance.fit_dome(fallback) {
-            return KeyPlan::Dome {
-                dims,
-                detail: format!(
+            Some((Box::new(FrustumGenerator { dims: Some(dims) }), detail))
+        } else {
+            let fallback = DomeDims::from_width_depth(width_mm, width_mm);
+            if let Some(dims) = clearance.fit_dome(fallback) {
+                let detail = format!(
                     "Key fell back to a half-sphere ({:.2}×{:.2} mm, {:.2} mm deep) — the part is too thin for a full key.",
                     dims.half_w * 2.0, dims.half_l * 2.0, dims.depth
-                ),
-            };
+                );
+                Some((Box::new(DomeGenerator { dims: Some(dims) }), detail))
+            } else {
+                None
+            }
         }
-    } else {
-        // Dome chosen explicitly: place the oblong half-ellipsoid (shrunk to fit).
-        // No frustum fallback — the dome is the deliberately smaller, round option.
+    }
+
+    fn half_diagonal(&self, tolerance: f32) -> f32 {
+        let dims = self.dims.expect("must be fitted");
+        0.5 * dims.width.hypot(dims.length) + tolerance
+    }
+
+    fn depth(&self) -> f32 {
+        let dims = self.dims.expect("must be fitted");
+        dims.depth
+    }
+
+    fn build_peg(&self, frame: &KeyFrame, lean: LeanXform, fillet_mm: f32) -> IndexedMesh {
+        let dims = self.dims.expect("must be fitted");
+        build_frustum_leaned(frame, dims, 0.0, fillet_mm, lean)
+    }
+
+    fn build_socket(&self, frame: &KeyFrame, tolerance: f32, lean: LeanXform, fillet_mm: f32) -> IndexedMesh {
+        let dims = self.dims.expect("must be fitted");
+        build_frustum_leaned(frame, dims, tolerance, fillet_mm + tolerance, lean)
+    }
+
+    fn clone_box(&self) -> Box<dyn RegistrationKeyGenerator> {
+        Box::new(self.clone())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DomeGenerator {
+    pub dims: Option<DomeDims>,
+}
+
+impl RegistrationKeyGenerator for DomeGenerator {
+    fn kind(&self) -> KeyKind {
+        KeyKind::Dome
+    }
+
+    fn fit(&self, clearance: &Clearance, width_mm: f32, depth_mm: f32) -> Option<(Box<dyn RegistrationKeyGenerator>, String)> {
+        let nominal_dome = DomeDims::from_width_depth(width_mm, depth_mm);
         if let Some(dims) = clearance.fit_dome(nominal_dome) {
             let shrunk = dims.half_w < nominal_dome.half_w - 1e-4
                 || dims.depth < nominal_dome.depth - 1e-4;
@@ -742,22 +757,89 @@ fn decide_key(
             } else {
                 String::new()
             };
-            return KeyPlan::Dome { dims, detail };
+            Some((Box::new(DomeGenerator { dims: Some(dims) }), detail))
+        } else {
+            None
         }
     }
 
-    // Final rung: no key fits.
-    KeyPlan::None {
-        detail: "No key placed — the part is too thin for any key.".to_string(),
+    fn half_diagonal(&self, tolerance: f32) -> f32 {
+        let dims = self.dims.expect("must be fitted");
+        dims.half_w.max(dims.half_l) + tolerance
+    }
+
+    fn depth(&self) -> f32 {
+        let dims = self.dims.expect("must be fitted");
+        dims.depth
+    }
+
+    fn build_peg(&self, frame: &KeyFrame, lean: LeanXform, _fillet_mm: f32) -> IndexedMesh {
+        let dims = self.dims.expect("must be fitted");
+        build_dome_leaned(frame, dims.half_w, dims.half_l, dims.depth, 0.0, DOME_SEGMENTS, lean)
+    }
+
+    fn build_socket(&self, frame: &KeyFrame, tolerance: f32, lean: LeanXform, _fillet_mm: f32) -> IndexedMesh {
+        let dims = self.dims.expect("must be fitted");
+        build_dome_leaned(frame, dims.half_w, dims.half_l, dims.depth, tolerance, DOME_SEGMENTS, lean)
+    }
+
+    fn clone_box(&self) -> Box<dyn RegistrationKeyGenerator> {
+        Box::new(self.clone())
     }
 }
 
-/// Place a key across the cut, honoring the fit ladder via [`decide_key`]. The
-/// chosen rung + reason ride back on the [`KeyOutcome`] so the report and the user
-/// alert agree with the preview.
-///
-/// A degenerate frame, or any boolean failure, yields the parts UNCHANGED with
-/// `KeyKind::None` + a reason — a failed key must NEVER destroy the cut result.
+impl KeyShape {
+    pub fn generator(&self) -> Box<dyn RegistrationKeyGenerator> {
+        match self {
+            KeyShape::Frustum => Box::new(FrustumGenerator { dims: None }),
+            KeyShape::Dome => Box::new(DomeGenerator { dims: None }),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum KeyPlan {
+    Fitted {
+        generator: Box<dyn RegistrationKeyGenerator>,
+        detail: String,
+    },
+    None {
+        detail: String,
+    },
+}
+
+impl KeyPlan {
+    pub fn kind(&self) -> KeyKind {
+        match self {
+            KeyPlan::Fitted { generator, .. } => generator.kind(),
+            KeyPlan::None { .. } => KeyKind::None,
+        }
+    }
+    pub fn detail(&self) -> &str {
+        match self {
+            KeyPlan::Fitted { detail, .. } | KeyPlan::None { detail } => detail,
+        }
+    }
+}
+
+fn decide_key(
+    clearance: &Clearance,
+    width_mm: f32,
+    depth_mm: f32,
+    generator: &dyn RegistrationKeyGenerator,
+) -> KeyPlan {
+    if let Some((fitted_gen, detail)) = generator.fit(clearance, width_mm, depth_mm) {
+        KeyPlan::Fitted {
+            generator: fitted_gen,
+            detail,
+        }
+    } else {
+        KeyPlan::None {
+            detail: "No key placed — the part is too thin for any key.".to_string(),
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn apply_key(
     model: &IndexedMesh,
@@ -785,38 +867,17 @@ pub fn apply_key(
         }
     };
 
-    // Flip which half gets the peg vs the socket. By default the peg roots in
-    // part_a (the membrane's +normal side) and protrudes into part_b's socket. To
-    // swap, mirror the placement frame (negate the axis, keeping a right-handed
-    // basis by swapping u/v) AND swap the two part roles — then the SAME downstream
-    // logic (peg onto the first arg, socket from the second) puts the peg on part_b
-    // and the socket on part_a. Geometry is otherwise identical, so the fit ladder
-    // and clearance below are unchanged.
     let (frame, part_a, part_b) = if swap_sides {
         (flip_frame_sides(&frame0), part_b, part_a)
     } else {
         (frame0, part_a, part_b)
     };
-    // The lean+roll are applied at BUILD time as a rigid body rotation about the base
-    // (with a glued-flat collar), NOT folded into the frame — so the frame stays the
-    // natural tangent frame for clearance probing. `orig_for_lean` carries that frame
-    // for computing the world lean direction.
     let orig_for_lean = frame;
 
-    // Local thickness is measured against the ORIGINAL un-cut model, NOT the split
-    // parts: the parts each have a cut FACE right at the anchor, so a probe ray
-    // from there hits that face ~half a kerf away (≈0.05 mm) instead of the real
-    // far wall — making every part look paper-thin. The un-cut body has solid
-    // material through the anchor, so the rays travel to the true outer walls.
-    // (This matches the preview, which probes the model and sizes correctly.)
     let clearance = Clearance::probe(&frame, model, model);
-    let nominal = FrustumDims::from_width_depth(width_mm, depth_mm);
-    let nominal_dome = DomeDims::from_width_depth(width_mm, depth_mm);
-    let plan = decide_key(&clearance, nominal, nominal_dome, shape);
+    let generator = shape.generator();
+    let plan = decide_key(&clearance, width_mm, depth_mm, &*generator);
 
-    // The KeyOutcome from apply_frustum/apply_dome holds (peg-half, socket-half) in
-    // (part_a, part_b). When we swapped roles above, swap them back so the returned
-    // part_a/part_b match the caller's original orientation.
     let unswap = |mut out: KeyOutcome| -> KeyOutcome {
         if swap_sides {
             std::mem::swap(&mut out.part_a, &mut out.part_b);
@@ -825,33 +886,19 @@ pub fn apply_key(
     };
 
     match plan {
-        KeyPlan::Frustum { dims, detail } => {
-            let out = unswap(apply_frustum(part_a, part_b, &frame, &orig_for_lean, tilt, dims, fillet_mm, tolerance));
-            if out.kind == KeyKind::Frustum {
-                KeyOutcome { detail, ..out }
-            } else {
-                // Boolean failed despite fitting — report as no key, parts intact.
-                KeyOutcome {
-                    kind: KeyKind::None,
-                    detail: format!("No key placed — frustum boolean failed: {}", out.detail),
-                    ..out
-                }
-            }
-        }
-        KeyPlan::Dome { dims, detail } => {
-            let out = unswap(apply_dome(part_a, part_b, &frame, &orig_for_lean, tilt, dims, tolerance));
-            if out.kind == KeyKind::Dome {
+        KeyPlan::Fitted { generator, detail } => {
+            let out = unswap(apply_fitted_key(part_a, part_b, &frame, &orig_for_lean, tilt, &*generator, fillet_mm, tolerance));
+            let expected_kind = generator.kind();
+            if out.kind == expected_kind {
                 KeyOutcome { detail, ..out }
             } else {
                 KeyOutcome {
                     kind: KeyKind::None,
-                    detail: format!("No key placed — dome boolean failed: {}", out.detail),
+                    detail: format!("No key placed — {:?} boolean failed: {}", expected_kind, out.detail),
                     ..out
                 }
             }
         }
-        // No key placed → return the parts in the CALLER's orientation. part_a/
-        // part_b here are still in swapped roles if we swapped, so put them back.
         KeyPlan::None { detail } => {
             let (pa, pb) = if swap_sides { (part_b, part_a) } else { (part_a, part_b) };
             KeyOutcome { part_a: pa, part_b: pb, kind: KeyKind::None, detail }
@@ -859,16 +906,6 @@ pub fn apply_key(
     }
 }
 
-/// Build the registration key the cut WOULD place, as a flat triangle soup (9 f32
-/// per triangle, model-local) for the live preview — peg AND socket together, of
-/// the chosen rung (frustum or dome). Mirrors the truthful cutter preview: it
-/// builds the membrane the same way the cut does, derives the same frame, probes
-/// clearance against the model, and runs the SAME [`decide_key`] ladder — so the
-/// preview is exactly what cuts.
-///
-/// Returns `(soup, kind, detail)`. On no key (too thin / degenerate), the soup is
-/// empty and `detail` explains why (for the alert). `None` only if the membrane
-/// itself can't be built from the loop.
 #[allow(clippy::too_many_arguments)]
 pub fn build_key_preview_soup_from_membrane(
     model: &IndexedMesh,
@@ -893,49 +930,30 @@ pub fn build_key_preview_soup_from_membrane(
         }
     };
 
-    // At preview time the body isn't split yet; probe clearance against the whole
-    // model on both sides (its walls are the same walls the halves will have).
-    // Probe the natural (swapped) frame — the lean/roll are applied at build time as
-    // a rigid rotation, not folded into the probe frame (matches `apply_key`).
     let placed = if swap_sides { flip_frame_sides(&frame) } else { frame };
     let orig_for_lean = placed;
     let clearance = Clearance::probe(&placed, model, model);
-    let nominal = FrustumDims::from_width_depth(width_mm, depth_mm);
-    let nominal_dome = DomeDims::from_width_depth(width_mm, depth_mm);
-    let plan = decide_key(&clearance, nominal, nominal_dome, shape);
-    // The build frame must MATCH what `apply_key` uses so the preview is exactly
-    // what cuts: extrude the peg toward part_b, with the rigid lean about the base.
+    let generator = shape.generator();
+    let plan = decide_key(&clearance, width_mm, depth_mm, &*generator);
     let build_frame = frame_extruding_toward_part_b(&placed);
-    // Sink uses the base half-diagonal so the tilted base stays buried (matches
-    // apply_frustum/apply_dome; the socket footprint is a hair larger).
+    
     let half_diag = match &plan {
-        KeyPlan::Frustum { dims, .. } => 0.5 * dims.width.hypot(dims.length) + tolerance,
-        KeyPlan::Dome { dims, .. } => (dims.half_w.max(dims.half_l)) + tolerance,
+        KeyPlan::Fitted { generator, .. } => generator.half_diagonal(tolerance),
         KeyPlan::None { .. } => 0.0,
     };
     let lean = LeanXform::for_build(&orig_for_lean, &build_frame, &tilt, half_diag);
 
     let mut soup: Vec<f32> = Vec::new();
     let (kind, detail) = match &plan {
-        KeyPlan::Frustum { dims, detail } => {
-            // peg + socket — matching apply_frustum so the preview is exactly what
-            // cuts (rigid lean applied identically, socket fillet = peg fillet + tol).
-            append_soup(&mut soup, &build_frustum_leaned(&build_frame, *dims, 0.0, fillet_mm, lean));
-            append_soup(&mut soup, &build_frustum_leaned(&build_frame, *dims, tolerance, fillet_mm + tolerance, lean));
-            (KeyKind::Frustum, detail.clone())
-        }
-        KeyPlan::Dome { dims, detail } => {
-            append_soup(&mut soup, &build_dome_leaned(&build_frame, dims.half_w, dims.half_l, dims.depth, 0.0, DOME_SEGMENTS, lean));
-            append_soup(&mut soup, &build_dome_leaned(&build_frame, dims.half_w, dims.half_l, dims.depth, tolerance, DOME_SEGMENTS, lean));
-            (KeyKind::Dome, detail.clone())
+        KeyPlan::Fitted { generator, detail } => {
+            let peg_mesh = generator.build_peg(&build_frame, lean, fillet_mm);
+            let socket_mesh = generator.build_socket(&build_frame, tolerance, lean, fillet_mm);
+            append_soup(&mut soup, &peg_mesh);
+            append_soup(&mut soup, &socket_mesh);
+            (generator.kind(), detail.clone())
         }
         KeyPlan::None { detail } => (KeyKind::None, detail.clone()),
     };
-    // Report the placement frame for the gizmo. We hand back the NATURAL tangent
-    // basis (the swapped `placed`): anchor = base center, axis = the +normal the key
-    // roots against (toward the peg's half), and u/v the in-plane basis. The frontend
-    // mounts the rotation gizmo at the anchor oriented to this frame, and converts
-    // gizmo rotations into tilt/azimuth/roll. `tip` is the leaned apex (model-local).
     let info = build_key_frame_info(&placed, &build_frame, &plan, lean);
     Some((soup, kind, detail, info))
 }
@@ -972,27 +990,16 @@ pub fn build_key_preview_soup(
     )
 }
 
-/// Placement-frame info handed to the frontend so the aim/roll gizmo sits exactly
-/// on the previewed key. All in model-local coords (the same space as the soup).
 #[derive(Debug, Clone, Copy)]
 pub struct KeyFrameInfo {
-    /// Base center (pivot for tilt/roll).
     pub anchor: Vec3,
-    /// The +normal the key roots against (un-tilted; the tilt-0 axis direction).
     pub axis: Vec3,
-    /// In-plane basis (width / length directions), already rolled-out to the
-    /// un-rolled natural basis so the frontend computes azimuth in a stable frame.
     pub u: Vec3,
     pub v: Vec3,
-    /// The leaned TIP point (apex of the peg) in model-local coords — where the
-    /// aim handle is drawn. Reflects the current tilt/azimuth/roll rigid rotation.
     pub tip: Vec3,
-    /// Peg height (depth along the build axis to the tip), for handle scaling.
     pub depth: f32,
 }
 
-/// Compute the [`KeyFrameInfo`] for a decided plan: the tip is the apex of the peg
-/// after the rigid lean rotation, in model-local coords.
 fn build_key_frame_info(
     natural: &KeyFrame,
     build_frame: &KeyFrame,
@@ -1000,13 +1007,9 @@ fn build_key_frame_info(
     lean: LeanXform,
 ) -> Option<KeyFrameInfo> {
     let depth = match plan {
-        KeyPlan::Frustum { dims, .. } => dims.depth,
-        KeyPlan::Dome { dims, .. } => dims.depth,
+        KeyPlan::Fitted { generator, .. } => generator.depth(),
         KeyPlan::None { .. } => return None,
     };
-    // The tip sits at local (0, 0, depth) in the build frame, transformed by the lean
-    // (it's above the collar, so this is the full rigid rotation — the tip leans in
-    // both lateral AND axial directions).
     let (tx, ty, tz) = lean.apply(0.0, 0.0, depth);
     let tip = build_frame
         .anchor
@@ -1023,7 +1026,6 @@ fn build_key_frame_info(
     })
 }
 
-/// Append a mesh's triangles to a flat soup (9 f32 per triangle, model-local).
 fn append_soup(soup: &mut Vec<f32>, mesh: &IndexedMesh) {
     for t in &mesh.triangles {
         for &vi in t {
@@ -1033,41 +1035,21 @@ fn append_soup(soup: &mut Vec<f32>, mesh: &IndexedMesh) {
     }
 }
 
-/// Union the nominal frustum peg onto `part_a` and difference the grown socket
-/// from `part_b`. On any boolean failure, returns the parts UNCHANGED with a
-/// `None` kind + reason — a failed key must never destroy the cut result.
-///
-/// EXTRUSION DIRECTION: `frame.axis` points into `part_a` (the +normal side). The
-/// peg must protrude FROM part_a's cut face INTO part_b's region so it fills the
-/// socket on reassembly — i.e. it extrudes along `−axis` (toward part_b). We build
-/// in a flipped frame (`axis` negated) whose wide base sits on the cut plane and
-/// whose body+tip extend toward part_b. The union with part_a bonds along the cut
-/// face; the difference carves the matching cavity from part_b in the same place.
-#[allow(clippy::too_many_arguments)]
-fn apply_frustum(
+fn apply_fitted_key(
     part_a: IndexedMesh,
     part_b: IndexedMesh,
     frame: &KeyFrame,
     orig_for_lean: &KeyFrame,
     tilt: KeyTilt,
-    dims: FrustumDims,
-    fillet: f32,
+    generator: &dyn RegistrationKeyGenerator,
+    fillet_mm: f32,
     tolerance: f32,
 ) -> KeyOutcome {
     let build_frame = frame_extruding_toward_part_b(frame);
-    // Rigid lean rotation about the base (identity when tilt == 0 && roll == 0): the
-    // body keeps its shape, a thin collar at the base stays glued flat on the cut
-    // face. Peg and socket share the SAME lean so the socket follows the peg exactly.
-    // The lean's sink depends on the base half-diagonal so the tilted base stays
-    // buried. Use the SOCKET's footprint (slightly larger) so both share one sink.
-    let half_diag = 0.5 * ((dims.width).hypot(dims.length)) + tolerance;
+    let half_diag = generator.half_diagonal(tolerance);
     let lean = LeanXform::for_build(orig_for_lean, &build_frame, &tilt, half_diag);
-    let peg_mesh = build_frustum_leaned(&build_frame, dims, 0.0, fillet, lean);
-    // The socket is the peg offset outward by `tolerance`; a uniform offset of a
-    // rounded-rect grows the corner radius by the same amount, so the socket's fillet
-    // is peg fillet + tolerance. The lean is a rigid rotation applied identically to
-    // both, so the dilated socket provably contains the leaned peg.
-    let socket_mesh = build_frustum_leaned(&build_frame, dims, tolerance, fillet + tolerance, lean);
+    let peg_mesh = generator.build_peg(&build_frame, lean, fillet_mm);
+    let socket_mesh = generator.build_socket(&build_frame, tolerance, lean, fillet_mm);
 
     let result = (|| -> Result<(IndexedMesh, IndexedMesh), String> {
         let a = to_manifold(&part_a).map_err(|e| format!("part_a invalid: {e}"))?;
@@ -1079,9 +1061,9 @@ fn apply_frustum(
         let b_keyed = b.difference(&socket);
 
         let a_out = crate::membrane::manifold_to_indexed(&a_keyed)
-            .ok_or("part_a union produced empty result")?;
+            .ok_or("union produced empty result")?;
         let b_out = crate::membrane::manifold_to_indexed(&b_keyed)
-            .ok_or("part_b difference produced empty result")?;
+            .ok_or("difference produced empty result")?;
         Ok((a_out, b_out))
     })();
 
@@ -1089,7 +1071,7 @@ fn apply_frustum(
         Ok((a_out, b_out)) => KeyOutcome {
             part_a: a_out,
             part_b: b_out,
-            kind: KeyKind::Frustum,
+            kind: generator.kind(),
             detail: String::new(),
         },
         Err(reason) => KeyOutcome {
@@ -1376,57 +1358,7 @@ fn build_dome_leaned(
     IndexedMesh { positions, triangles }
 }
 
-/// Union the dome peg onto `part_a`, difference the grown dome socket from
-/// `part_b`. Same failure contract as [`apply_frustum`].
-fn apply_dome(
-    part_a: IndexedMesh,
-    part_b: IndexedMesh,
-    frame: &KeyFrame,
-    orig_for_lean: &KeyFrame,
-    tilt: KeyTilt,
-    dims: DomeDims,
-    tolerance: f32,
-) -> KeyOutcome {
-    let build_frame = frame_extruding_toward_part_b(frame);
-    // Rigid lean rotation about the base (identity when tilt == 0 && roll == 0): the
-    // bulge keeps its shape and is sunk so the tilted mouth disk stays buried. Peg +
-    // socket share the SAME rigid lean, so the dilated socket contains the leaned peg.
-    let half_diag = dims.half_w.max(dims.half_l) + tolerance;
-    let lean = LeanXform::for_build(orig_for_lean, &build_frame, &tilt, half_diag);
-    let peg_mesh =
-        build_dome_leaned(&build_frame, dims.half_w, dims.half_l, dims.depth, 0.0, DOME_SEGMENTS, lean);
-    let socket_mesh =
-        build_dome_leaned(&build_frame, dims.half_w, dims.half_l, dims.depth, tolerance, DOME_SEGMENTS, lean);
 
-    let result = (|| -> Result<(IndexedMesh, IndexedMesh), String> {
-        let a = to_manifold(&part_a).map_err(|e| format!("part_a invalid: {e}"))?;
-        let b = to_manifold(&part_b).map_err(|e| format!("part_b invalid: {e}"))?;
-        let peg = to_manifold(&peg_mesh).map_err(|e| format!("dome peg invalid: {e}"))?;
-        let socket = to_manifold(&socket_mesh).map_err(|e| format!("dome socket invalid: {e}"))?;
-        let a_keyed = a.union(&peg);
-        let b_keyed = b.difference(&socket);
-        let a_out = crate::membrane::manifold_to_indexed(&a_keyed)
-            .ok_or("dome union produced empty result")?;
-        let b_out = crate::membrane::manifold_to_indexed(&b_keyed)
-            .ok_or("dome difference produced empty result")?;
-        Ok((a_out, b_out))
-    })();
-
-    match result {
-        Ok((a_out, b_out)) => KeyOutcome {
-            part_a: a_out,
-            part_b: b_out,
-            kind: KeyKind::Dome,
-            detail: String::new(),
-        },
-        Err(reason) => KeyOutcome {
-            part_a,
-            part_b,
-            kind: KeyKind::None,
-            detail: reason,
-        },
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -2011,5 +1943,73 @@ mod tests {
         );
         assert!(to_manifold(&out.part_a).is_ok(), "keyed part_a watertight");
         assert!(to_manifold(&out.part_b).is_ok(), "keyed part_b watertight");
+    }
+
+    #[derive(Debug, Clone)]
+    struct CylinderGenerator {
+        depth: f32,
+        radius: f32,
+    }
+
+    impl RegistrationKeyGenerator for CylinderGenerator {
+        fn kind(&self) -> KeyKind {
+            KeyKind::Dome
+        }
+
+        fn fit(&self, _clearance: &Clearance, _width_mm: f32, _depth_mm: f32) -> Option<(Box<dyn RegistrationKeyGenerator>, String)> {
+            Some((Box::new(self.clone()), "custom cylinder fit".to_string()))
+        }
+
+        fn half_diagonal(&self, tolerance: f32) -> f32 {
+            self.radius + tolerance
+        }
+
+        fn depth(&self) -> f32 {
+            self.depth
+        }
+
+        fn build_peg(&self, frame: &KeyFrame, lean: LeanXform, _fillet_mm: f32) -> IndexedMesh {
+            build_dome_leaned(frame, self.radius, self.radius, self.depth, 0.0, DOME_SEGMENTS, lean)
+        }
+
+        fn build_socket(&self, frame: &KeyFrame, tolerance: f32, lean: LeanXform, _fillet_mm: f32) -> IndexedMesh {
+            build_dome_leaned(frame, self.radius, self.radius, self.depth, tolerance, DOME_SEGMENTS, lean)
+        }
+
+        fn clone_box(&self) -> Box<dyn RegistrationKeyGenerator> {
+            Box::new(self.clone())
+        }
+    }
+
+    #[test]
+    fn extensibility_of_registration_key_types() {
+        let mem = flat_membrane(10.0);
+        let frame = frame_from_membrane(&mem).expect("frame");
+        let orig = frame;
+        let generator = CylinderGenerator { depth: 4.0, radius: 2.0 };
+        let build_frame = frame_extruding_toward_part_b(&frame);
+        let lean = LeanXform::for_build(&orig, &build_frame, &KeyTilt::default(), generator.half_diagonal(0.1));
+        
+        let peg = generator.build_peg(&build_frame, lean, 0.0);
+        let socket = generator.build_socket(&build_frame, 0.1, lean, 0.0);
+        
+        assert!(to_manifold(&peg).is_ok());
+        assert!(to_manifold(&socket).is_ok());
+        
+        let clearance = Clearance {
+            depth_b: 10.0,
+            lat_u_neg: 10.0,
+            lat_u_pos: 10.0,
+            lat_v_neg: 10.0,
+            lat_v_pos: 10.0,
+        };
+        let plan = decide_key(&clearance, 4.0, 4.0, &generator);
+        match plan {
+            KeyPlan::Fitted { generator: fitted_gen, detail } => {
+                assert_eq!(fitted_gen.kind(), KeyKind::Dome);
+                assert_eq!(detail, "custom cylinder fit");
+            }
+            _ => panic!("Expected Fitted plan"),
+        }
     }
 }
