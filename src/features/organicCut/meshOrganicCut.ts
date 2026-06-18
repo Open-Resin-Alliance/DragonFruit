@@ -307,6 +307,7 @@ export async function computeMembranePreview(
   rotation: [number, number, number] = [0, 0, 0],
   keyFlatMm = 1.0,
   keyToleranceMm = 0.1,
+  keyTaperAngleDeg = 10.0,
 ): Promise<MembranePreviewResult> {
   const empty: MembranePreviewResult = {
     membrane: null,
@@ -341,6 +342,7 @@ export async function computeMembranePreview(
     rotation,
     keyFlatMm,
     keyToleranceMm,
+    keyTaperAngleDeg,
   });
   try {
     const reportJson = await core.invoke<string>('mesh_organic_cut_membrane_preview', { requestJson });

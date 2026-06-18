@@ -281,6 +281,9 @@ struct GeodesicRequestDto {
     /// Clearance tolerance/gap in mm.
     #[serde(default)]
     pub key_tolerance_mm: Option<f32>,
+    /// Taper angle in degrees for Tapered Profile cut.
+    #[serde(default)]
+    pub key_taper_angle_deg: Option<f32>,
     /// Which cut mode we are in (plane, contour, bounded_plane).
     #[serde(default)]
     mode: dragonfruit_organic_cut::CutMode,
@@ -346,6 +349,7 @@ impl Default for GeodesicRequestDto {
             key_roll_rad: 0.0,
             key_flat_mm: None,
             key_tolerance_mm: None,
+            key_taper_angle_deg: None,
             mode: dragonfruit_organic_cut::CutMode::Plane,
             sides: 4,
             radius: 20.0,
@@ -1226,6 +1230,7 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
                             key_depth_mm,
                             key_fillet_mm,
                             tolerance_val,
+                            req.key_taper_angle_deg.unwrap_or(10.0),
                         )
                     {
                         key_soup = ks;
@@ -1259,6 +1264,7 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
                         key_depth_mm,
                         key_fillet_mm,
                         tolerance_val,
+                        req.key_taper_angle_deg.unwrap_or(10.0),
                     )
                 {
                     key_soup = ks;

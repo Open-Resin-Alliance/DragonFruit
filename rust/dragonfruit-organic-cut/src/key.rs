@@ -800,6 +800,7 @@ pub struct TaperedProfileGenerator {
     pub flat_mm: f32,
     pub depth: Option<f32>,
     pub tolerance: f32,
+    pub taper_angle_deg: f32,
 }
 
 impl RegistrationKeyGenerator for TaperedProfileGenerator {
@@ -833,6 +834,7 @@ impl RegistrationKeyGenerator for TaperedProfileGenerator {
                     flat_mm,
                     depth: Some(depth),
                     tolerance: self.tolerance,
+                    taper_angle_deg: self.taper_angle_deg,
                 }),
                 detail,
             ))
@@ -914,8 +916,12 @@ impl TaperedProfileGenerator {
         let s_base = ((r_avg - w) / r_avg).max(0.05);
         let s_socket_base = ((r_avg - w + g) / r_avg).max(s_base + 1e-4);
         
-        let s_tip = s_base * 0.5;
-        let s_socket_tip = s_socket_base * 0.5;
+        let depth = self.depth.unwrap_or(0.0);
+        let theta_rad = self.taper_angle_deg.to_radians();
+        let delta_r = depth * theta_rad.tan();
+        
+        let s_tip = (s_base - delta_r / r_avg).max(0.05);
+        let s_socket_tip = (s_socket_base - delta_r / r_avg).max(s_tip + 1e-4);
 
         let (scale_base, scale_tip) = if g > 0.0 {
             (s_socket_base, s_socket_tip)
@@ -924,7 +930,7 @@ impl TaperedProfileGenerator {
         };
 
         let z0 = -g - KEY_BASE_OVERLAP_MM;
-        let z1 = self.depth.unwrap_or(0.0) + g;
+        let z1 = depth + g;
 
         let local_to_world = |x: f32, y: f32, z: f32| -> Vec3 {
             let (lx, ly, lz) = lean.apply(x, y, z);
@@ -977,7 +983,7 @@ impl TaperedProfileGenerator {
 }
 
 impl KeyShape {
-    pub fn generator(&self, membrane: Option<&Membrane>, tolerance: f32) -> Box<dyn RegistrationKeyGenerator> {
+    pub fn generator(&self, membrane: Option<&Membrane>, tolerance: f32, taper_angle_deg: f32) -> Box<dyn RegistrationKeyGenerator> {
         match self {
             KeyShape::Frustum => Box::new(FrustumGenerator { dims: None }),
             KeyShape::Dome => Box::new(DomeGenerator { dims: None }),
@@ -986,6 +992,7 @@ impl KeyShape {
                 flat_mm: 1.0,
                 depth: None,
                 tolerance,
+                taper_angle_deg,
             }),
         }
     }
@@ -1047,6 +1054,7 @@ pub fn apply_key(
     depth_mm: f32,
     fillet_mm: f32,
     tolerance: f32,
+    taper_angle_deg: f32,
 ) -> KeyOutcome {
     let frame0 = match frame_from_membrane(membrane) {
         Some(f) => f,
@@ -1069,7 +1077,7 @@ pub fn apply_key(
     let orig_for_lean = frame;
 
     let clearance = Clearance::probe(&frame, model, model);
-    let generator = shape.generator(Some(membrane), tolerance);
+    let generator = shape.generator(Some(membrane), tolerance, taper_angle_deg);
     let plan = decide_key(&clearance, width_mm, depth_mm, &*generator);
 
     let unswap = |mut out: KeyOutcome| -> KeyOutcome {
@@ -1111,6 +1119,7 @@ pub fn build_key_preview_soup_from_membrane(
     depth_mm: f32,
     fillet_mm: f32,
     tolerance: f32,
+    taper_angle_deg: f32,
 ) -> Option<(Vec<f32>, KeyKind, String, Option<KeyFrameInfo>)> {
     let frame = match frame_from_membrane(membrane) {
         Some(f) => f,
@@ -1127,7 +1136,7 @@ pub fn build_key_preview_soup_from_membrane(
     let placed = if swap_sides { flip_frame_sides(&frame) } else { frame };
     let orig_for_lean = placed;
     let clearance = Clearance::probe(&placed, model, model);
-    let generator = shape.generator(Some(membrane), tolerance);
+    let generator = shape.generator(Some(membrane), tolerance, taper_angle_deg);
     let plan = decide_key(&clearance, width_mm, depth_mm, &*generator);
     let build_frame = frame_extruding_toward_part_b(&placed);
     
@@ -1165,6 +1174,7 @@ pub fn build_key_preview_soup(
     depth_mm: f32,
     fillet_mm: f32,
     tolerance: f32,
+    taper_angle_deg: f32,
 ) -> Option<(Vec<f32>, KeyKind, String, Option<KeyFrameInfo>)> {
     use crate::membrane::{build_membrane_full, CONTOUR_SUBDIVISIONS, DEFAULT_GRID_DIVISIONS};
 
@@ -1181,6 +1191,7 @@ pub fn build_key_preview_soup(
         depth_mm,
         fillet_mm,
         tolerance,
+        taper_angle_deg,
     )
 }
 
@@ -1693,7 +1704,7 @@ mod tests {
         let mem = flat_membrane(10.0);
 
         let a_tris_before = part_a.triangle_count();
-        let out = apply_key(&model, part_a, part_b, &mem, KeyShape::Frustum, false, KeyTilt::default(), 5.0, 5.0, 0.0, 0.1);
+        let out = apply_key(&model, part_a, part_b, &mem, KeyShape::Frustum, false, KeyTilt::default(), 5.0, 5.0, 0.0, 0.1, 10.0);
 
         assert_eq!(out.kind, KeyKind::Frustum, "frustum key placed: {}", out.detail);
         assert!(
@@ -1716,7 +1727,7 @@ mod tests {
 
         let b_tris_before = part_b.triangle_count();
         // swap_sides = true → peg unions onto part_b, socket carves part_a.
-        let out = apply_key(&model, part_a, part_b, &mem, KeyShape::Frustum, true, KeyTilt::default(), 5.0, 5.0, 0.0, 0.1);
+        let out = apply_key(&model, part_a, part_b, &mem, KeyShape::Frustum, true, KeyTilt::default(), 5.0, 5.0, 0.0, 0.1, 10.0);
 
         assert_eq!(out.kind, KeyKind::Frustum, "swapped frustum key placed: {}", out.detail);
         assert!(
@@ -1770,7 +1781,7 @@ mod tests {
         let key_d = 5.0;
         assert!(key_d > 4.0, "test premise: requested depth exceeds the part");
 
-        let out = apply_key(&model, part_a, part_b.clone(), &mem, KeyShape::Frustum, false, KeyTilt::default(), key_w, key_d, 0.0, 0.1);
+        let out = apply_key(&model, part_a, part_b.clone(), &mem, KeyShape::Frustum, false, KeyTilt::default(), key_w, key_d, 0.0, 0.1, 10.0);
 
         assert_eq!(out.kind, KeyKind::Frustum, "still a frustum, just smaller: {}", out.detail);
         assert!(out.detail.contains("shrunk"), "reports the shrink: {:?}", out.detail);
@@ -1803,7 +1814,7 @@ mod tests {
         // ~2.0 mm deep part_b: below the frustum's depth floor (1 mm key + 1 mm
         // wall + 0.1 mm tol = 2.1 mm needed) but the shallower dome still fits.
         let (model1, pa, pb) = split_halves(20.0, 2.0);
-        let dome_out = apply_key(&model1, pa, pb, &mem, KeyShape::Frustum, false, KeyTilt::default(), 5.0, 5.0, 0.0, 0.1);
+        let dome_out = apply_key(&model1, pa, pb, &mem, KeyShape::Frustum, false, KeyTilt::default(), 5.0, 5.0, 0.0, 0.1, 10.0);
         assert_eq!(dome_out.kind, KeyKind::Dome, "dome fallback: {}", dome_out.detail);
         assert!(
             dome_out.detail.contains("half-sphere"),
@@ -1815,7 +1826,7 @@ mod tests {
         // the parts come back UNCHANGED.
         let (model2, pa2, pb2) = split_halves(20.0, 0.5);
         let pb2_tris = pb2.triangle_count();
-        let none_out = apply_key(&model2, pa2, pb2, &mem, KeyShape::Frustum, false, KeyTilt::default(), 5.0, 5.0, 0.0, 0.1);
+        let none_out = apply_key(&model2, pa2, pb2, &mem, KeyShape::Frustum, false, KeyTilt::default(), 5.0, 5.0, 0.0, 0.1, 10.0);
         assert_eq!(none_out.kind, KeyKind::None, "no key: {}", none_out.detail);
         assert!(none_out.detail.contains("too thin"), "no-key reason: {:?}", none_out.detail);
         assert_eq!(
@@ -1832,7 +1843,7 @@ mod tests {
         let mem = flat_membrane(10.0);
         // Plenty thick for a frustum — but we ask for a dome explicitly.
         let (model, pa, pb) = split_halves(20.0, 20.0);
-        let out = apply_key(&model, pa, pb, &mem, KeyShape::Dome, false, KeyTilt::default(), 5.0, 5.0, 0.0, 0.1);
+        let out = apply_key(&model, pa, pb, &mem, KeyShape::Dome, false, KeyTilt::default(), 5.0, 5.0, 0.0, 0.1, 10.0);
         assert_eq!(
             out.kind,
             KeyKind::Dome,
@@ -1856,7 +1867,7 @@ mod tests {
             Vec3::new(-5.0, 5.0, 0.0),
         ];
         let (soup, kind, _detail, _frame) =
-            build_key_preview_soup(&model, &loop_pts, DEFAULT_MEMBRANE_SMOOTHING, 1.0, KeyShape::Frustum, false, KeyTilt::default(), 5.0, 5.0, 0.0, 0.1)
+            build_key_preview_soup(&model, &loop_pts, DEFAULT_MEMBRANE_SMOOTHING, 1.0, KeyShape::Frustum, false, KeyTilt::default(), 5.0, 5.0, 0.0, 0.1, 10.0)
                 .expect("preview builds");
         assert_eq!(kind, KeyKind::Frustum, "healthy box → frustum key preview");
         assert!(!soup.is_empty(), "preview soup non-empty");
@@ -1879,7 +1890,7 @@ mod tests {
         // on each side of the cut for unswapped vs swapped.
         let z_extent = |swap: bool| -> (f32, f32) {
             let (soup, _, _, _) = build_key_preview_soup(
-                &model, &loop_pts, DEFAULT_MEMBRANE_SMOOTHING, 1.0, KeyShape::Frustum, swap, KeyTilt::default(), 5.0, 5.0, 0.0, 0.1,
+                &model, &loop_pts, DEFAULT_MEMBRANE_SMOOTHING, 1.0, KeyShape::Frustum, swap, KeyTilt::default(), 5.0, 5.0, 0.0, 0.1, 10.0,
             )
             .expect("preview builds");
             let mut lo = f32::INFINITY;
@@ -2063,7 +2074,7 @@ mod tests {
         let mem = flat_membrane(10.0);
         let a_before = part_a.triangle_count();
         let tilt = KeyTilt::new(40.0_f32.to_radians(), 0.7, 0.3);
-        let out = apply_key(&model, part_a, part_b, &mem, KeyShape::Frustum, false, tilt, 4.0, 4.0, 0.0, 0.1);
+        let out = apply_key(&model, part_a, part_b, &mem, KeyShape::Frustum, false, tilt, 4.0, 4.0, 0.0, 0.1, 10.0);
         assert_eq!(out.kind, KeyKind::Frustum, "tilted key placed: {}", out.detail);
         assert!(out.part_a.triangle_count() > a_before, "peg bonded to part_a");
         assert!(to_manifold(&out.part_a).is_ok(), "tilted part_a watertight");
@@ -2115,7 +2126,7 @@ mod tests {
         let b_before = split.part_b.triangle_count();
 
         // Now key the REAL parts — clearance probes against the original `model`.
-        let out = apply_key(&model, split.part_a, split.part_b, &split.membrane, KeyShape::Frustum, false, KeyTilt::default(), 5.0, 5.0, 0.0, 0.1);
+        let out = apply_key(&model, split.part_a, split.part_b, &split.membrane, KeyShape::Frustum, false, KeyTilt::default(), 5.0, 5.0, 0.0, 0.1, 10.0);
 
         assert_eq!(
             out.kind,
@@ -2211,35 +2222,33 @@ mod tests {
     fn tapered_profile_is_watertight_and_fits() {
         let mem = flat_membrane(10.0);
         let frame = frame_from_membrane(&mem).expect("frame");
-        let generator = TaperedProfileGenerator {
-            membrane: Some(mem.clone()),
-            flat_mm: 1.0,
-            depth: Some(4.0),
-            tolerance: 0.1,
-        };
         let build_frame = frame_extruding_toward_part_b(&frame);
-        let lean = LeanXform::for_build(&frame, &build_frame, &KeyTilt::default(), generator.half_diagonal(0.1));
-        
-        let peg = generator.build_peg(&build_frame, lean, 0.0);
-        let socket = generator.build_socket(&build_frame, 0.1, lean, 0.0);
-        
-        let peg_m = to_manifold(&peg).expect("tapered profile peg is watertight");
-        let socket_m = to_manifold(&socket).expect("tapered profile socket is watertight");
-        
-        println!("peg volume: {}", peg_m.volume());
-        println!("socket volume: {}", socket_m.volume());
-        
-        assert!(peg_m.num_tri() > 0, "non-empty peg");
-        assert!(socket_m.num_tri() > 0, "non-empty socket");
-        
-        let leftover = peg_m.difference(&socket_m);
-        println!("leftover volume: {}", leftover.volume());
-        println!("leftover tris: {}", leftover.num_tri());
-        
-        assert!(
-            leftover.is_empty() || leftover.num_tri() == 0,
-            "tapered profile peg fits inside grown socket (leftover = {})",
-            leftover.num_tri()
-        );
+
+        for angle in [0.0_f32, 10.0, 30.0] {
+            let generator = TaperedProfileGenerator {
+                membrane: Some(mem.clone()),
+                flat_mm: 1.0,
+                depth: Some(4.0),
+                tolerance: 0.1,
+                taper_angle_deg: angle,
+            };
+            let lean = LeanXform::for_build(&frame, &build_frame, &KeyTilt::default(), generator.half_diagonal(0.1));
+            
+            let peg = generator.build_peg(&build_frame, lean, 0.0);
+            let socket = generator.build_socket(&build_frame, 0.1, lean, 0.0);
+            
+            let peg_m = to_manifold(&peg).unwrap_or_else(|e| panic!("tapered profile peg ({angle} deg) watertight: {e}"));
+            let socket_m = to_manifold(&socket).unwrap_or_else(|e| panic!("tapered profile socket ({angle} deg) watertight: {e}"));
+            
+            assert!(peg_m.num_tri() > 0, "non-empty peg");
+            assert!(socket_m.num_tri() > 0, "non-empty socket");
+            
+            let leftover = peg_m.difference(&socket_m);
+            assert!(
+                leftover.is_empty() || leftover.num_tri() == 0,
+                "tapered profile peg ({angle} deg) fits inside grown socket (leftover = {})",
+                leftover.num_tri()
+            );
+        }
     }
 }

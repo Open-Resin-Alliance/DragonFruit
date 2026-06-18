@@ -173,6 +173,7 @@ const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
   keyDepthMm: 2.5,
   keyFlatMm: 1.0,
   keyToleranceMm: 0.1,
+  keyTaperAngleDeg: 10,
   // Default key shape — the rotation-locking tapered frustum.
   keyShape: 'frustum',
   // Edge fillet 0.2mm by default (lightly rounded corners + tip); user tunes live.
@@ -547,6 +548,7 @@ export function useOrganicCutSession({
           finalRot,
           panelState.keyFlatMm,
           panelState.keyToleranceMm,
+          panelState.keyTaperAngleDeg,
         );
         if (cancelled) return;
         setMembranePreview(result.membrane);
@@ -869,6 +871,7 @@ export function useOrganicCutSession({
                 keyRollRad: cutPs.keyRollRad,
                 keyFlatMm: cutPs.keyFlatMm,
                 keyToleranceMm: cutPs.keyToleranceMm,
+                keyTaperAngleDeg: cutPs.keyTaperAngleDeg,
               };
             } else if (cutIsBounded) {
               let finalPos = cutPs.planePosition;
@@ -931,6 +934,7 @@ export function useOrganicCutSession({
                 keyRollRad: cutPs.keyRollRad,
                 keyFlatMm: cutPs.keyFlatMm,
                 keyToleranceMm: cutPs.keyToleranceMm,
+                keyTaperAngleDeg: cutPs.keyTaperAngleDeg,
               };
             } else {
               const plane = cutPlaneFromPoints(cut.loop);
@@ -953,6 +957,7 @@ export function useOrganicCutSession({
                 keyRollRad: cutPs.keyRollRad,
                 keyFlatMm: cutPs.keyFlatMm,
                 keyToleranceMm: cutPs.keyToleranceMm,
+                keyTaperAngleDeg: cutPs.keyTaperAngleDeg,
               };
             }
           });
@@ -1029,6 +1034,7 @@ export function useOrganicCutSession({
               keyRollRad: ps.keyRollRad,
               keyFlatMm: ps.keyFlatMm,
               keyToleranceMm: ps.keyToleranceMm,
+              keyTaperAngleDeg: ps.keyTaperAngleDeg,
             };
           } else if (ps.cutMode === 'bounded_plane') {
             let finalPos = ps.planePosition;
@@ -1091,6 +1097,7 @@ export function useOrganicCutSession({
               keyRollRad: ps.keyRollRad,
               keyFlatMm: ps.keyFlatMm,
               keyToleranceMm: ps.keyToleranceMm,
+              keyTaperAngleDeg: ps.keyTaperAngleDeg,
             };
           } else {
             const plane = cutPlaneFromPoints(loopSnapshot);
@@ -1113,6 +1120,7 @@ export function useOrganicCutSession({
               keyRollRad: ps.keyRollRad,
               keyFlatMm: ps.keyFlatMm,
               keyToleranceMm: ps.keyToleranceMm,
+              keyTaperAngleDeg: ps.keyTaperAngleDeg,
             };
           }
 

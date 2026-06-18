@@ -921,6 +921,23 @@ export function OrganicCutPanel({
                       />
                     </div>
                   )}
+                  {/* Taper Angle — profile key only. */}
+                  {state.keyShape === 'tapered_profile' && (
+                    <div>
+                      <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Taper Angle</label>
+                      <ScrollableNumberField
+                        value={state.keyTaperAngleDeg}
+                        onChange={(value) => setState({ keyTaperAngleDeg: clampFloat(value, 0, 45, 0) })}
+                        min={0}
+                        max={45}
+                        step={1}
+                        unit="°"
+                        ariaLabel="Key taper angle in degrees"
+                        disabled={disabled || isApplying}
+                        className="mt-1"
+                      />
+                    </div>
+                  )}
                   {/* Depth — applies to all shapes. */}
                   <div>
                     <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Key Depth</label>

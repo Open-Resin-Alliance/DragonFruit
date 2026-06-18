@@ -90,6 +90,8 @@ export interface OrganicCutSpec {
   keyFlatMm?: number;
   /** Gap/tolerance in mm between peg and socket. Serde field: `keyToleranceMm`. */
   keyToleranceMm?: number;
+  /** Taper angle in degrees for profile key. Serde field: `keyTaperAngleDeg`. */
+  keyTaperAngleDeg?: number;
   /** Edge fillet radius in mm (rounds frustum corners + tip). Serde: `keyFilletMm`. */
   keyFilletMm?: number;
   /** Flip which half gets the peg vs the socket. Serde field: `keySwapSides`. */
@@ -199,6 +201,8 @@ export interface OrganicCutPanelState {
   keyFlatMm: number;
   /** Gap/tolerance in mm between peg and socket. */
   keyToleranceMm: number;
+  /** Taper angle in degrees for profile key. */
+  keyTaperAngleDeg: number;
   /** Edge fillet radius (mm) — rounds the frustum's corners + tip. 0 = sharp. */
   keyFilletMm: number;
   /**

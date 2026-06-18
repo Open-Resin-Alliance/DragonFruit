@@ -141,6 +141,13 @@ pub struct OrganicCutSpec {
     /// Key tolerance in mm — gap/tolerance between peg and socket. Defaults to 0.1 mm.
     #[serde(default = "default_key_tolerance")]
     pub key_tolerance_mm: f32,
+    /// Key taper angle in degrees for Tapered Profile cut. Defaults to 10.0 degrees.
+    #[serde(default = "default_key_taper_angle")]
+    pub key_taper_angle_deg: f32,
+}
+
+fn default_key_taper_angle() -> f32 {
+    10.0
 }
 
 fn default_sides() -> usize {
@@ -726,6 +733,7 @@ pub fn organic_multi_cut(
                 cut.key_depth_mm,
                 cut.key_fillet_mm,
                 cut.key_tolerance_mm,
+                cut.key_taper_angle_deg,
             );
             part_a = keyed.part_a;
             part_b = keyed.part_b;
@@ -856,6 +864,7 @@ fn organic_cut_bounded_plane(
             options.cut.key_depth_mm,
             options.cut.key_fillet_mm,
             options.cut.key_tolerance_mm,
+            options.cut.key_taper_angle_deg,
         );
         part_a = keyed.part_a;
         part_b = keyed.part_b;
@@ -942,6 +951,7 @@ fn organic_cut_contour(
             options.cut.key_depth_mm,
             options.cut.key_fillet_mm,
             options.cut.key_tolerance_mm,
+            options.cut.key_taper_angle_deg,
         );
         part_a = keyed.part_a;
         part_b = keyed.part_b;
@@ -1063,6 +1073,7 @@ fn organic_cut_plane(
                     options.cut.key_depth_mm,
                     options.cut.key_fillet_mm,
                     options.cut.key_tolerance_mm,
+                    options.cut.key_taper_angle_deg,
                 );
                 part_a = keyed.part_a;
                 part_b = keyed.part_b;
