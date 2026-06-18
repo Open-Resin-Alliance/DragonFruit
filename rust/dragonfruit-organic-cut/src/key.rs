@@ -80,6 +80,8 @@ pub enum KeyShape {
     Frustum,
     /// Half-sphere dome (round, locates but does not lock rotation).
     Dome,
+    /// Tapered profile (matches the exact cross-section of the model).
+    TaperedProfile,
 }
 
 impl KeyShape {
@@ -87,6 +89,7 @@ impl KeyShape {
     pub fn from_str_or_default(s: &str) -> Self {
         match s {
             "dome" => KeyShape::Dome,
+            "tapered_profile" => KeyShape::TaperedProfile,
             _ => KeyShape::Frustum,
         }
     }
@@ -99,6 +102,8 @@ pub enum KeyKind {
     Frustum,
     /// Half-sphere dome (chosen explicitly, OR the thin-part frustum fallback).
     Dome,
+    /// Tapered profile (chosen explicitly).
+    TaperedProfile,
     /// No key placed (the part was too thin for any key).
     None,
 }
@@ -108,6 +113,7 @@ impl KeyKind {
         match self {
             KeyKind::Frustum => "frustum",
             KeyKind::Dome => "dome",
+            KeyKind::TaperedProfile => "tapered_profile",
             KeyKind::None => "none",
         }
     }
@@ -788,11 +794,199 @@ impl RegistrationKeyGenerator for DomeGenerator {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct TaperedProfileGenerator {
+    pub membrane: Option<Membrane>,
+    pub flat_mm: f32,
+    pub depth: Option<f32>,
+    pub tolerance: f32,
+}
+
+impl RegistrationKeyGenerator for TaperedProfileGenerator {
+    fn kind(&self) -> KeyKind {
+        KeyKind::TaperedProfile
+    }
+
+    fn fit(&self, clearance: &Clearance, width_mm: f32, depth_mm: f32) -> Option<(Box<dyn RegistrationKeyGenerator>, String)> {
+        let flat_mm = width_mm.clamp(0.1, 5.0);
+        let m = KEY_WALL_MARGIN_MM;
+        let tol = self.tolerance;
+
+        let max_depth = (clearance.depth_b - m - tol).max(0.0);
+        let depth = depth_mm.min(max_depth);
+
+        if depth < KEY_MIN_DEPTH_MM {
+            None
+        } else {
+            let shrunk = depth < depth_mm - 1e-4;
+            let detail = if shrunk {
+                format!(
+                    "key shrunk to fit (1 mm wall): {:.2} mm flat border, {:.2} mm deep",
+                    flat_mm, depth
+                )
+            } else {
+                String::new()
+            };
+            Some((
+                Box::new(TaperedProfileGenerator {
+                    membrane: self.membrane.clone(),
+                    flat_mm,
+                    depth: Some(depth),
+                    tolerance: self.tolerance,
+                }),
+                detail,
+            ))
+        }
+    }
+
+    fn half_diagonal(&self, tolerance: f32) -> f32 {
+        let membrane = match &self.membrane {
+            Some(m) => m,
+            None => return tolerance,
+        };
+        if membrane.vertices.is_empty() {
+            return tolerance;
+        }
+        let mut anchor = Vec3::ZERO;
+        for &p in &membrane.vertices {
+            anchor = anchor.add(p);
+        }
+        anchor = anchor.scale(1.0 / membrane.vertices.len() as f32);
+
+        let mut max_d: f32 = 0.0;
+        for &p in &membrane.vertices {
+            let d = p.sub(anchor).length();
+            if d > max_d {
+                max_d = d;
+            }
+        }
+        max_d + tolerance
+    }
+
+    fn depth(&self) -> f32 {
+        self.depth.unwrap_or(0.0)
+    }
+
+    fn build_peg(&self, frame: &KeyFrame, lean: LeanXform, _fillet_mm: f32) -> IndexedMesh {
+        self.build_mesh(frame, 0.0, lean)
+    }
+
+    fn build_socket(&self, frame: &KeyFrame, tolerance: f32, lean: LeanXform, _fillet_mm: f32) -> IndexedMesh {
+        self.build_mesh(frame, tolerance, lean)
+    }
+
+    fn clone_box(&self) -> Box<dyn RegistrationKeyGenerator> {
+        Box::new(self.clone())
+    }
+}
+
+impl TaperedProfileGenerator {
+    fn build_mesh(&self, frame: &KeyFrame, grow: f32, lean: LeanXform) -> IndexedMesh {
+        let membrane = match &self.membrane {
+            Some(m) => m,
+            None => return IndexedMesh { positions: Vec::new(), triangles: Vec::new() },
+        };
+        if membrane.vertices.is_empty() || membrane.triangles.is_empty() {
+            return IndexedMesh { positions: Vec::new(), triangles: Vec::new() };
+        }
+
+        let anchor = frame.anchor;
+        let to_local = |p: Vec3| -> (f32, f32, f32) {
+            let d = p.sub(anchor);
+            (d.dot(frame.u), d.dot(frame.v), d.dot(frame.axis))
+        };
+
+        let mut r_sum = 0.0;
+        let mut count = 0;
+        for &bi in &membrane.boundary {
+            let v = membrane.vertices[bi as usize];
+            let (lx, ly, _) = to_local(v);
+            let r = lx.hypot(ly);
+            r_sum += r;
+            count += 1;
+        }
+        let r_avg = if count > 0 { r_sum / count as f32 } else { 1.0 };
+
+        let r_avg = r_avg.max(0.1);
+        let w = self.flat_mm.min(r_avg * 0.9);
+        let g = grow.max(0.0);
+        
+        let s_base = ((r_avg - w) / r_avg).max(0.05);
+        let s_socket_base = ((r_avg - w + g) / r_avg).max(s_base + 1e-4);
+        
+        let s_tip = s_base * 0.5;
+        let s_socket_tip = s_socket_base * 0.5;
+
+        let (scale_base, scale_tip) = if g > 0.0 {
+            (s_socket_base, s_socket_tip)
+        } else {
+            (s_base, s_tip)
+        };
+
+        let z0 = -g - KEY_BASE_OVERLAP_MM;
+        let z1 = self.depth.unwrap_or(0.0) + g;
+
+        let local_to_world = |x: f32, y: f32, z: f32| -> Vec3 {
+            let (lx, ly, lz) = lean.apply(x, y, z);
+            frame
+                .anchor
+                .add(frame.u.scale(lx))
+                .add(frame.v.scale(ly))
+                .add(frame.axis.scale(lz))
+        };
+
+        let m_len = membrane.vertices.len();
+        let mut positions = Vec::with_capacity(2 * m_len);
+
+        for &v in &membrane.vertices {
+            let (lx, ly, _) = to_local(v);
+            let px = lx * scale_base;
+            let py = ly * scale_base;
+            positions.push(local_to_world(px, py, z0));
+        }
+
+        for &v in &membrane.vertices {
+            let (lx, ly, _) = to_local(v);
+            let px = lx * scale_tip;
+            let py = ly * scale_tip;
+            positions.push(local_to_world(px, py, z1));
+        }
+
+        let mut triangles = Vec::new();
+
+        for t in &membrane.triangles {
+            triangles.push([t[0], t[1], t[2]]);
+        }
+
+        let offset = m_len as u32;
+        for t in &membrane.triangles {
+            triangles.push([t[0] + offset, t[2] + offset, t[1] + offset]);
+        }
+
+        let b_len = membrane.boundary.len();
+        for i in 0..b_len {
+            let b0 = membrane.boundary[i];
+            let b1 = membrane.boundary[(i + 1) % b_len];
+            
+            triangles.push([b0, b1 + offset, b1]);
+            triangles.push([b0, b0 + offset, b1 + offset]);
+        }
+
+        IndexedMesh { positions, triangles }
+    }
+}
+
 impl KeyShape {
-    pub fn generator(&self) -> Box<dyn RegistrationKeyGenerator> {
+    pub fn generator(&self, membrane: Option<&Membrane>, tolerance: f32) -> Box<dyn RegistrationKeyGenerator> {
         match self {
             KeyShape::Frustum => Box::new(FrustumGenerator { dims: None }),
             KeyShape::Dome => Box::new(DomeGenerator { dims: None }),
+            KeyShape::TaperedProfile => Box::new(TaperedProfileGenerator {
+                membrane: membrane.cloned(),
+                flat_mm: 1.0,
+                depth: None,
+                tolerance,
+            }),
         }
     }
 }
@@ -875,7 +1069,7 @@ pub fn apply_key(
     let orig_for_lean = frame;
 
     let clearance = Clearance::probe(&frame, model, model);
-    let generator = shape.generator();
+    let generator = shape.generator(Some(membrane), tolerance);
     let plan = decide_key(&clearance, width_mm, depth_mm, &*generator);
 
     let unswap = |mut out: KeyOutcome| -> KeyOutcome {
@@ -933,7 +1127,7 @@ pub fn build_key_preview_soup_from_membrane(
     let placed = if swap_sides { flip_frame_sides(&frame) } else { frame };
     let orig_for_lean = placed;
     let clearance = Clearance::probe(&placed, model, model);
-    let generator = shape.generator();
+    let generator = shape.generator(Some(membrane), tolerance);
     let plan = decide_key(&clearance, width_mm, depth_mm, &*generator);
     let build_frame = frame_extruding_toward_part_b(&placed);
     
@@ -2011,5 +2205,41 @@ mod tests {
             }
             _ => panic!("Expected Fitted plan"),
         }
+    }
+
+    #[test]
+    fn tapered_profile_is_watertight_and_fits() {
+        let mem = flat_membrane(10.0);
+        let frame = frame_from_membrane(&mem).expect("frame");
+        let generator = TaperedProfileGenerator {
+            membrane: Some(mem.clone()),
+            flat_mm: 1.0,
+            depth: Some(4.0),
+            tolerance: 0.1,
+        };
+        let build_frame = frame_extruding_toward_part_b(&frame);
+        let lean = LeanXform::for_build(&frame, &build_frame, &KeyTilt::default(), generator.half_diagonal(0.1));
+        
+        let peg = generator.build_peg(&build_frame, lean, 0.0);
+        let socket = generator.build_socket(&build_frame, 0.1, lean, 0.0);
+        
+        let peg_m = to_manifold(&peg).expect("tapered profile peg is watertight");
+        let socket_m = to_manifold(&socket).expect("tapered profile socket is watertight");
+        
+        println!("peg volume: {}", peg_m.volume());
+        println!("socket volume: {}", socket_m.volume());
+        
+        assert!(peg_m.num_tri() > 0, "non-empty peg");
+        assert!(socket_m.num_tri() > 0, "non-empty socket");
+        
+        let leftover = peg_m.difference(&socket_m);
+        println!("leftover volume: {}", leftover.volume());
+        println!("leftover tris: {}", leftover.num_tri());
+        
+        assert!(
+            leftover.is_empty() || leftover.num_tri() == 0,
+            "tapered profile peg fits inside grown socket (leftover = {})",
+            leftover.num_tri()
+        );
     }
 }

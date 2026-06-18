@@ -135,6 +135,12 @@ pub struct OrganicCutSpec {
     /// rectangle / oblong dome footprint. Default 0.
     #[serde(default)]
     pub key_roll_rad: f32,
+    /// Flat width in mm for Tapered Profile cut. Defaults to 1.0 mm.
+    #[serde(default = "default_key_flat")]
+    pub key_flat_mm: f32,
+    /// Key tolerance in mm — gap/tolerance between peg and socket. Defaults to 0.1 mm.
+    #[serde(default = "default_key_tolerance")]
+    pub key_tolerance_mm: f32,
 }
 
 fn default_sides() -> usize {
@@ -165,6 +171,12 @@ fn default_half() -> f32 {
 /// serde default for the density multiplier (1.0 = default resolution).
 fn default_one() -> f32 {
     1.0
+}
+fn default_key_flat() -> f32 {
+    1.0
+}
+fn default_key_tolerance() -> f32 {
+    0.1
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -692,22 +704,28 @@ pub fn organic_multi_cut(
 
         // 9. Apply keys sequentially
         for (cut_index, membrane, cut) in keys_to_apply {
+            let key_shape = crate::key::KeyShape::from_str_or_default(&cut.key_shape);
+            let width_val = if key_shape == crate::key::KeyShape::TaperedProfile {
+                cut.key_flat_mm
+            } else {
+                cut.key_width_mm
+            };
             let keyed = crate::key::apply_key(
                 &mesh,
                 part_a,
                 part_b,
                 &membrane,
-                crate::key::KeyShape::from_str_or_default(&cut.key_shape),
+                key_shape,
                 cut.key_swap_sides,
                 crate::key::KeyTilt::new(
                     cut.key_tilt_rad,
                     cut.key_tilt_azimuth_rad,
                     cut.key_roll_rad,
                 ),
-                cut.key_width_mm,
+                width_val,
                 cut.key_depth_mm,
                 cut.key_fillet_mm,
-                crate::key::DEFAULT_KEY_TOLERANCE_MM,
+                cut.key_tolerance_mm,
             );
             part_a = keyed.part_a;
             part_b = keyed.part_b;
@@ -816,22 +834,28 @@ fn organic_cut_bounded_plane(
     let (mut key_kind, mut key_detail) = (crate::key::KeyKind::None, String::new());
 
     if options.cut.generate_key {
+        let key_shape = crate::key::KeyShape::from_str_or_default(&options.cut.key_shape);
+        let width_val = if key_shape == crate::key::KeyShape::TaperedProfile {
+            options.cut.key_flat_mm
+        } else {
+            options.cut.key_width_mm
+        };
         let keyed = crate::key::apply_key(
             mesh,
             part_a,
             part_b,
             &membrane,
-            crate::key::KeyShape::from_str_or_default(&options.cut.key_shape),
+            key_shape,
             options.cut.key_swap_sides,
             crate::key::KeyTilt::new(
                 options.cut.key_tilt_rad,
                 options.cut.key_tilt_azimuth_rad,
                 options.cut.key_roll_rad,
             ),
-            options.cut.key_width_mm,
+            width_val,
             options.cut.key_depth_mm,
             options.cut.key_fillet_mm,
-            crate::key::DEFAULT_KEY_TOLERANCE_MM,
+            options.cut.key_tolerance_mm,
         );
         part_a = keyed.part_a;
         part_b = keyed.part_b;
@@ -896,22 +920,28 @@ fn organic_cut_contour(
     // part_b. A failed/skipped key NEVER fails the cut — `apply_key` returns the
     // parts unchanged with `KeyKind::None` + a reason in that case.
     if options.cut.generate_key {
+        let key_shape = crate::key::KeyShape::from_str_or_default(&options.cut.key_shape);
+        let width_val = if key_shape == crate::key::KeyShape::TaperedProfile {
+            options.cut.key_flat_mm
+        } else {
+            options.cut.key_width_mm
+        };
         let keyed = crate::key::apply_key(
             mesh,
             part_a,
             part_b,
             &split.membrane,
-            crate::key::KeyShape::from_str_or_default(&options.cut.key_shape),
+            key_shape,
             options.cut.key_swap_sides,
             crate::key::KeyTilt::new(
                 options.cut.key_tilt_rad,
                 options.cut.key_tilt_azimuth_rad,
                 options.cut.key_roll_rad,
             ),
-            options.cut.key_width_mm,
+            width_val,
             options.cut.key_depth_mm,
             options.cut.key_fillet_mm,
-            crate::key::DEFAULT_KEY_TOLERANCE_MM,
+            options.cut.key_tolerance_mm,
         );
         part_a = keyed.part_a;
         part_b = keyed.part_b;
@@ -994,14 +1024,62 @@ fn organic_cut_plane(
         ));
     }
 
+    let mut part_a = part_a;
+    let mut part_b = part_b;
+    let (mut key_kind, mut key_detail) = (crate::key::KeyKind::None, String::new());
+
+    if options.cut.generate_key {
+        let loop_pts: Vec<Vec3> = options.cut.loop_points.iter()
+            .map(|p| Vec3::new(p.position[0], p.position[1], p.position[2]))
+            .collect();
+        if loop_pts.len() >= 3 {
+            let density = options.cut.density.clamp(1.0, 4.0) as f64;
+            let membrane = crate::membrane::build_membrane_full(
+                &loop_pts,
+                crate::membrane::CONTOUR_SUBDIVISIONS,
+                options.cut.membrane_smoothing,
+                crate::membrane::DEFAULT_GRID_DIVISIONS * density,
+            );
+            if let Some(membrane) = membrane {
+                let key_shape = crate::key::KeyShape::from_str_or_default(&options.cut.key_shape);
+                let width_val = if key_shape == crate::key::KeyShape::TaperedProfile {
+                    options.cut.key_flat_mm
+                } else {
+                    options.cut.key_width_mm
+                };
+                let keyed = crate::key::apply_key(
+                    mesh,
+                    part_a,
+                    part_b,
+                    &membrane,
+                    key_shape,
+                    options.cut.key_swap_sides,
+                    crate::key::KeyTilt::new(
+                        options.cut.key_tilt_rad,
+                        options.cut.key_tilt_azimuth_rad,
+                        options.cut.key_roll_rad,
+                    ),
+                    width_val,
+                    options.cut.key_depth_mm,
+                    options.cut.key_fillet_mm,
+                    options.cut.key_tolerance_mm,
+                );
+                part_a = keyed.part_a;
+                part_b = keyed.part_b;
+                key_kind = keyed.kind;
+                key_detail = keyed.detail;
+            }
+        }
+    }
+
     let report = OrganicCutReport {
         source_triangle_count,
         part_a_triangle_count: part_a.triangle_count(),
         part_b_triangle_count: part_b.triangle_count(),
         engine: "plane".to_string(),
         detail: String::new(),
-        key_kind: "none".to_string(),
-        key_detail: String::new(),
+        key_kind: key_kind.as_str().to_string(),
+        key_detail,
     };
     Ok(OrganicCutOutcome {
         part_a,

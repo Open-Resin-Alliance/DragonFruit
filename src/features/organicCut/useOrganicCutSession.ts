@@ -171,6 +171,8 @@ const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
   // (1.25× ratio); depth 2.5mm. The user tunes these live.
   keyWidthMm: 2.0,
   keyDepthMm: 2.5,
+  keyFlatMm: 1.0,
+  keyToleranceMm: 0.1,
   // Default key shape — the rotation-locking tapered frustum.
   keyShape: 'frustum',
   // Edge fillet 0.2mm by default (lightly rounded corners + tip); user tunes live.
@@ -543,6 +545,8 @@ export function useOrganicCutSession({
           panelState.radius,
           finalPos,
           finalRot,
+          panelState.keyFlatMm,
+          panelState.keyToleranceMm,
         );
         if (cancelled) return;
         setMembranePreview(result.membrane);
@@ -576,6 +580,8 @@ export function useOrganicCutSession({
     panelState.keyShape,
     panelState.keyFilletMm,
     panelState.keySwapSides,
+    panelState.keyFlatMm,
+    panelState.keyToleranceMm,
     panelState.sides,
     panelState.radius,
     panelState.planePosition,
@@ -861,6 +867,8 @@ export function useOrganicCutSession({
                 keyTiltRad: cutPs.keyTiltRad,
                 keyTiltAzimuthRad: cutPs.keyTiltAzimuthRad,
                 keyRollRad: cutPs.keyRollRad,
+                keyFlatMm: cutPs.keyFlatMm,
+                keyToleranceMm: cutPs.keyToleranceMm,
               };
             } else if (cutIsBounded) {
               let finalPos = cutPs.planePosition;
@@ -921,6 +929,8 @@ export function useOrganicCutSession({
                 keyTiltRad: cutPs.keyTiltRad,
                 keyTiltAzimuthRad: cutPs.keyTiltAzimuthRad,
                 keyRollRad: cutPs.keyRollRad,
+                keyFlatMm: cutPs.keyFlatMm,
+                keyToleranceMm: cutPs.keyToleranceMm,
               };
             } else {
               const plane = cutPlaneFromPoints(cut.loop);
@@ -932,6 +942,17 @@ export function useOrganicCutSession({
                 plane: plane
                   ? { normal: [plane.normal.x, plane.normal.y, plane.normal.z] as [number, number, number], offset: plane.offset }
                   : undefined,
+                generateKey: cutPs.generateKey,
+                keyWidthMm: cutPs.keyWidthMm,
+                keyDepthMm: cutPs.keyDepthMm,
+                keyShape: cutPs.keyShape,
+                keyFilletMm: cutPs.keyFilletMm,
+                keySwapSides: cutPs.keySwapSides,
+                keyTiltRad: cutPs.keyTiltRad,
+                keyTiltAzimuthRad: cutPs.keyTiltAzimuthRad,
+                keyRollRad: cutPs.keyRollRad,
+                keyFlatMm: cutPs.keyFlatMm,
+                keyToleranceMm: cutPs.keyToleranceMm,
               };
             }
           });
@@ -1006,6 +1027,8 @@ export function useOrganicCutSession({
               keyTiltRad: ps.keyTiltRad,
               keyTiltAzimuthRad: ps.keyTiltAzimuthRad,
               keyRollRad: ps.keyRollRad,
+              keyFlatMm: ps.keyFlatMm,
+              keyToleranceMm: ps.keyToleranceMm,
             };
           } else if (ps.cutMode === 'bounded_plane') {
             let finalPos = ps.planePosition;
@@ -1066,6 +1089,8 @@ export function useOrganicCutSession({
               keyTiltRad: ps.keyTiltRad,
               keyTiltAzimuthRad: ps.keyTiltAzimuthRad,
               keyRollRad: ps.keyRollRad,
+              keyFlatMm: ps.keyFlatMm,
+              keyToleranceMm: ps.keyToleranceMm,
             };
           } else {
             const plane = cutPlaneFromPoints(loopSnapshot);
@@ -1077,6 +1102,17 @@ export function useOrganicCutSession({
               plane: plane
                 ? { normal: [plane.normal.x, plane.normal.y, plane.normal.z] as [number, number, number], offset: plane.offset }
                 : undefined,
+              generateKey: ps.generateKey,
+              keyWidthMm: ps.keyWidthMm,
+              keyDepthMm: ps.keyDepthMm,
+              keyShape: ps.keyShape,
+              keyFilletMm: ps.keyFilletMm,
+              keySwapSides: ps.keySwapSides,
+              keyTiltRad: ps.keyTiltRad,
+              keyTiltAzimuthRad: ps.keyTiltAzimuthRad,
+              keyRollRad: ps.keyRollRad,
+              keyFlatMm: ps.keyFlatMm,
+              keyToleranceMm: ps.keyToleranceMm,
             };
           }
 

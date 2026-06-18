@@ -85,7 +85,11 @@ export interface OrganicCutSpec {
   /** Key depth in mm (how far the peg pokes in). Serde field: `keyDepthMm`. */
   keyDepthMm?: number;
   /** Key shape: 'frustum' (default) or 'dome'. Serde field: `keyShape`. */
-  keyShape?: 'frustum' | 'dome' | (string & {});
+  keyShape?: 'frustum' | 'dome' | 'tapered_profile' | (string & {});
+  /** Flat width in mm for profile key. Serde field: `keyFlatMm`. */
+  keyFlatMm?: number;
+  /** Gap/tolerance in mm between peg and socket. Serde field: `keyToleranceMm`. */
+  keyToleranceMm?: number;
   /** Edge fillet radius in mm (rounds frustum corners + tip). Serde: `keyFilletMm`. */
   keyFilletMm?: number;
   /** Flip which half gets the peg vs the socket. Serde field: `keySwapSides`. */
@@ -190,7 +194,11 @@ export interface OrganicCutPanelState {
   /** Key depth in mm — how far the peg pokes into the body. */
   keyDepthMm: number;
   /** Key shape: 'frustum' (tapered box, rotation-locking) or 'dome' (half-sphere). */
-  keyShape: 'frustum' | 'dome' | (string & {});
+  keyShape: 'frustum' | 'dome' | 'tapered_profile' | (string & {});
+  /** Flat width in mm for profile key. */
+  keyFlatMm: number;
+  /** Gap/tolerance in mm between peg and socket. */
+  keyToleranceMm: number;
   /** Edge fillet radius (mm) — rounds the frustum's corners + tip. 0 = sharp. */
   keyFilletMm: number;
   /**

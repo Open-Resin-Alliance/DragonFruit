@@ -275,6 +275,12 @@ struct GeodesicRequestDto {
     /// Key roll (radians) — spin about the key's own axis. Default 0.
     #[serde(default)]
     key_roll_rad: f32,
+    /// Flat width in mm for Tapered Profile cut.
+    #[serde(default)]
+    pub key_flat_mm: Option<f32>,
+    /// Clearance tolerance/gap in mm.
+    #[serde(default)]
+    pub key_tolerance_mm: Option<f32>,
     /// Which cut mode we are in (plane, contour, bounded_plane).
     #[serde(default)]
     mode: dragonfruit_organic_cut::CutMode,
@@ -338,6 +344,8 @@ impl Default for GeodesicRequestDto {
             key_tilt_rad: 0.0,
             key_tilt_azimuth_rad: 0.0,
             key_roll_rad: 0.0,
+            key_flat_mm: None,
+            key_tolerance_mm: None,
             mode: dragonfruit_organic_cut::CutMode::Plane,
             sides: 4,
             radius: 20.0,
@@ -1171,6 +1179,13 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
         req.key_roll_rad,
     );
 
+    let width_val = if key_shape == dragonfruit_organic_cut::KeyShape::TaperedProfile {
+        req.key_flat_mm.unwrap_or(1.0)
+    } else {
+        key_width_mm
+    };
+    let tolerance_val = req.key_tolerance_mm.unwrap_or(0.1);
+
     // Use the captured cut SOURCE mesh so the preview can apply the real loop
     // offset (needs surface normals) and show the REAL cutter slab — exactly what
     // cuts. Falls back to the bare-membrane preview if no source is captured yet.
@@ -1207,10 +1222,10 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
                             key_shape,
                             key_swap_sides,
                             key_tilt,
-                            key_width_mm,
+                            width_val,
                             key_depth_mm,
                             key_fillet_mm,
-                            dragonfruit_organic_cut::DEFAULT_KEY_TOLERANCE_MM,
+                            tolerance_val,
                         )
                     {
                         key_soup = ks;
@@ -1240,10 +1255,10 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
                         key_shape,
                         key_swap_sides,
                         key_tilt,
-                        key_width_mm,
+                        width_val,
                         key_depth_mm,
                         key_fillet_mm,
-                        dragonfruit_organic_cut::DEFAULT_KEY_TOLERANCE_MM,
+                        tolerance_val,
                     )
                 {
                     key_soup = ks;

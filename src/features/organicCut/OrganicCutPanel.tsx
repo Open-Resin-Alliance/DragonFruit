@@ -807,7 +807,7 @@ export function OrganicCutPanel({
                 <div className="space-y-1.5 pt-0.5">
                   <div>
                     <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Key Shape</label>
-                    <div className="mt-1 grid grid-cols-2 gap-1">
+                    <div className="mt-1 grid grid-cols-3 gap-1">
                       <button
                         type="button"
                         className="ui-button ui-button-secondary !h-7 whitespace-nowrap px-1.5 text-[10px]"
@@ -827,6 +827,16 @@ export function OrganicCutPanel({
                         title="Half-sphere peg — locates the parts but allows rotation."
                       >
                         Dome
+                      </button>
+                      <button
+                        type="button"
+                        className="ui-button ui-button-secondary !h-7 whitespace-nowrap px-1.5 text-[10px]"
+                        onClick={() => setState({ keyShape: 'tapered_profile' })}
+                        disabled={disabled || isApplying}
+                        style={state.keyShape === 'tapered_profile' ? activeModeStyle : undefined}
+                        title="Tapered profile peg — matching the object's outer boundary cross-section."
+                      >
+                        Profile
                       </button>
                     </div>
                   </div>
@@ -873,27 +883,45 @@ export function OrganicCutPanel({
                     );
                   })()}
                   {/* Width — frustum: sets just width; dome: ratio-locks depth
-                      when Uniform Scale is on. */}
-                  <div>
-                    <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Key Width</label>
-                    <ScrollableNumberField
-                      value={state.keyWidthMm}
-                      onChange={(value) =>
-                        state.keyShape === 'dome'
-                          ? setDomeDim('width', value)
-                          : setState({ keyWidthMm: clampFloat(value, 1, 20, 1) })
-                      }
-                      min={1}
-                      max={20}
-                      step={0.5}
-                      unit="mm"
-                      ariaLabel="Key width in millimeters"
-                      disabled={disabled || isApplying}
-                      className="mt-1"
-                    />
-                  </div>
-                  {/* Depth — applies to BOTH shapes now (dome bulge into the body
-                      / frustum peg depth). Dome ratio-locks width when Uniform. */}
+                      when Uniform Scale is on. Hidden for Tapered Profile. */}
+                  {state.keyShape !== 'tapered_profile' && (
+                    <div>
+                      <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Key Width</label>
+                      <ScrollableNumberField
+                        value={state.keyWidthMm}
+                        onChange={(value) =>
+                          state.keyShape === 'dome'
+                            ? setDomeDim('width', value)
+                            : setState({ keyWidthMm: clampFloat(value, 1, 20, 1) })
+                        }
+                        min={1}
+                        max={20}
+                        step={0.5}
+                        unit="mm"
+                        ariaLabel="Key width in millimeters"
+                        disabled={disabled || isApplying}
+                        className="mt-1"
+                      />
+                    </div>
+                  )}
+                  {/* Flat Width — profile key only. */}
+                  {state.keyShape === 'tapered_profile' && (
+                    <div>
+                      <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Flat Width</label>
+                      <ScrollableNumberField
+                        value={state.keyFlatMm}
+                        onChange={(value) => setState({ keyFlatMm: clampFloat(value, 0.1, 2.0, 1) })}
+                        min={0.1}
+                        max={2.0}
+                        step={0.1}
+                        unit="mm"
+                        ariaLabel="Flat border width in millimeters"
+                        disabled={disabled || isApplying}
+                        className="mt-1"
+                      />
+                    </div>
+                  )}
+                  {/* Depth — applies to all shapes. */}
                   <div>
                     <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Key Depth</label>
                     <ScrollableNumberField
@@ -908,6 +936,21 @@ export function OrganicCutPanel({
                       step={0.5}
                       unit="mm"
                       ariaLabel="Key depth in millimeters"
+                      disabled={disabled || isApplying}
+                      className="mt-1"
+                    />
+                  </div>
+                  {/* Key Tolerance — clearance between peg and socket. */}
+                  <div>
+                    <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Key Tolerance</label>
+                    <ScrollableNumberField
+                      value={state.keyToleranceMm}
+                      onChange={(value) => setState({ keyToleranceMm: clampFloat(value, 0, 0.5, 2) })}
+                      min={0}
+                      max={0.5}
+                      step={0.05}
+                      unit="mm"
+                      ariaLabel="Clearance tolerance in millimeters"
                       disabled={disabled || isApplying}
                       className="mt-1"
                     />
