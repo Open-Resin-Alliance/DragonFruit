@@ -1,6 +1,19 @@
 # Normalize all text files to LF on commit.
 * text=auto eol=lf
 
+# Source code — force text treatment so git never second-guesses the heuristic.
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.js   text eol=lf
+*.jsx  text eol=lf
+*.mjs  text eol=lf
+*.cjs  text eol=lf
+*.json text eol=lf
+*.css  text eol=lf
+*.md   text eol=lf
+*.po   text eol=lf
+*.sh   text eol=lf
+
 # Binaries — never touch line endings.
 *.png binary
 *.jpg binary
