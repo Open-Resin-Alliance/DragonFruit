@@ -50,6 +50,12 @@ export interface OrganicCutPanelState {
   keyTiltAzimuthRad: number;
   /** Key roll (radians): spin about the key's own axis. Driven by the roll gizmo. */
   keyRollRad: number;
+  /**
+   * Render the translucent cut-plan preview (flat plane quad / contour membrane +
+   * registration key) in the 3D view. When off, only the seam line + loop markers
+   * draw, so the model is unobscured while drawing. On by default.
+   */
+  showPreview: boolean;
 }
 
 interface OrganicCutPanelProps {
@@ -264,6 +270,34 @@ export function OrganicCutPanel({
                 Free-draw
               </button>
             </div>
+          </div>
+
+          {/* Show Preview: render the translucent cut-plan surfaces (plane quad /
+              membrane + key) on or off. Off → only the seam line + markers draw,
+              so the model is unobscured while drawing. */}
+          <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
+            <button
+              type="button"
+              className="flex w-full items-center justify-between gap-2 text-left"
+              onClick={() => setState({ showPreview: !state.showPreview })}
+              disabled={disabled || isApplying}
+              title="Show or hide the translucent cut preview in the 3D view. The drawn seam and points stay visible either way."
+            >
+              <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Show Preview</span>
+              <span
+                className="relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors"
+                style={{
+                  background: state.showPreview
+                    ? 'var(--accent)'
+                    : 'color-mix(in srgb, var(--text-muted), transparent 60%)',
+                }}
+              >
+                <span
+                  className="inline-block h-3 w-3 transform rounded-full bg-white transition-transform"
+                  style={{ transform: state.showPreview ? 'translateX(14px)' : 'translateX(2px)' }}
+                />
+              </span>
+            </button>
           </div>
 
           {/* Seam-line smoothing (how much the cut line rounds through waypoints) */}

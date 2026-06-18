@@ -19562,7 +19562,7 @@ export default function Home() {
             onOrganicCutClick={organicCutToolActive ? handleOrganicCutClick : undefined}
             organicCutDragging={organicCutDragging}
             organicCutKeyGizmo={
-              organicCutToolActive && organicCut.panelState.cutMode === 'contour' ? (
+              organicCutToolActive && organicCut.panelState.cutMode === 'contour' && organicCut.panelState.showPreview ? (
                 <OrganicCutKeyGizmo
                   models={scene.models}
                   activeModelId={displayActiveModelId}
@@ -19892,6 +19892,7 @@ export default function Home() {
                 keyTiltRad={organicCut.panelState.keyTiltRad}
                 keyTiltAzimuthRad={organicCut.panelState.keyTiltAzimuthRad}
                 keyRollRad={organicCut.panelState.keyRollRad}
+                showPreview={organicCut.panelState.showPreview}
               />
             )}
             {scene.mode === 'prepare' && transformMgr.transformMode === 'mirror' && (

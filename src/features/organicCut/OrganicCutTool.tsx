@@ -88,6 +88,13 @@ interface OrganicCutToolProps {
   keyTiltRad?: number;
   keyTiltAzimuthRad?: number;
   keyRollRad?: number;
+  /**
+   * Show the translucent cut-plan preview surfaces (the flat plane quad, the
+   * contour membrane + its wireframe, and the registration key). When false,
+   * only the seam line + loop markers (the editable handles) draw, so the model
+   * is unobscured. Default true.
+   */
+  showPreview?: boolean;
 }
 
 /** Max key tilt (radians) — mirrors the Rust `KEY_MAX_TILT_RAD` (~60°). */
@@ -135,6 +142,7 @@ export function OrganicCutTool({
   keyTiltRad = 0,
   keyTiltAzimuthRad = 0,
   keyRollRad = 0,
+  showPreview = true,
 }: OrganicCutToolProps) {
   const activeModel = useMemo(() => models.find((m) => m.id === activeModelId), [models, activeModelId]);
   const transform = activeTransform || activeModel?.transform;
@@ -704,7 +712,7 @@ export function OrganicCutTool({
         )}
 
         {/* Contour membrane preview: the exact curved cutter surface. */}
-        {membraneGeometry && (
+        {showPreview && membraneGeometry && (
           <mesh geometry={membraneGeometry} renderOrder={997} frustumCulled={false}>
             <meshBasicMaterial
               color={0x37ff7a}
@@ -717,7 +725,7 @@ export function OrganicCutTool({
         )}
 
         {/* Wireframe overlay so the triangulation (grid remesh) is visible. */}
-        {membraneWireframe && (
+        {showPreview && membraneWireframe && (
           <lineSegments geometry={membraneWireframe} renderOrder={998} frustumCulled={false}>
             <lineBasicMaterial
               color={0xcccccc}
@@ -739,7 +747,7 @@ export function OrganicCutTool({
             key instantly with no Rust round-trip. Wrapped in a group carrying that
             matrix (identity when un-tilted). It's CLIPPED at the wafer so only the
             portion going into the body (part_b side) shows — not the overhang above. */}
-        {keyGeometry && (
+        {showPreview && keyGeometry && (
           <group
             matrixAutoUpdate={false}
             ref={(g) => {
@@ -777,7 +785,7 @@ export function OrganicCutTool({
         )}
 
         {/* Live translucent cut-plane preview (what the slice will look like). */}
-        {planePreview && (
+        {showPreview && planePreview && (
           <mesh
             position={planePreview.position}
             quaternion={planePreview.quat}

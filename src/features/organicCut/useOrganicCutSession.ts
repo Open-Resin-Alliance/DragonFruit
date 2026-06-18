@@ -173,6 +173,9 @@ const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
   keyTiltRad: 0,
   keyTiltAzimuthRad: 0,
   keyRollRad: 0,
+  // Cut-plan preview on by default — the user sees where the cut lands; the
+  // toggle hides it for an unobscured view of the model while drawing.
+  showPreview: true,
 };
 
 /** Minimum points before a CONTOUR cut is possible (a real loop needs ≥3). */
