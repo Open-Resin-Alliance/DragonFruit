@@ -1,15 +1,15 @@
 [submodule "plugins/ctb"]
 	path = plugins/ctb
-	url = ../df-plugin-ctb.git
+	url = https://github.com/Open-Resin-Alliance/df-plugin-ctb.git
 [submodule "plugins/sdcp-v3"]
 	path = plugins/sdcp-v3
-	url = ../df-plugin-sdcp-v3.git
+	url = https://github.com/Open-Resin-Alliance/df-plugin-sdcp-v3.git
 [submodule "plugins/anycubic"]
 	path = plugins/anycubic
-	url = ../df-plugin-anycubic.git
+	url = https://github.com/Open-Resin-Alliance/df-plugin-anycubic.git
 [submodule "plugins/elegoo"]
 	path = plugins/elegoo
-	url = ../df-plugin-elegoo
+	url = https://github.com/Open-Resin-Alliance/df-plugin-elegoo
 [submodule "plugins/sirayatech"]
 	path = plugins/sirayatech
 	url = https://github.com/Open-Resin-Alliance/df-plugin-sirayatech
