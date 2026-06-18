@@ -13,9 +13,45 @@ msgstr ""
 "Language-Team: \n"
 "Plural-Forms: \n"
 
+#: src/components/layout/EmptySceneState.tsx:52
+msgid "{deltaDays}d"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:45
+#~ msgid "{deltaDays}d ago"
+#~ msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:48
+msgid "{deltaHours}h"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:42
+#~ msgid "{deltaHours}h ago"
+#~ msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:44
+msgid "{deltaMin}m"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:39
+#~ msgid "{deltaMin}m ago"
+#~ msgstr ""
+
 #: src/app/page.tsx:3529
 msgid "Add Joint"
 msgstr "Ajouter une jonction"
+
+#: src/components/layout/EmptySceneState.tsx:522
+msgid "Add or switch printer anytime from the top bar."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:494
+msgid "Add Printer"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:93
+msgid "Anti-aliasing: nothing to anti-alias."
+msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:27
 msgid "Arrange"
@@ -29,17 +65,40 @@ msgstr ""
 msgid "Auto-arrange models on plate"
 msgstr "Disposer automatiquement les modèles sur le plateau"
 
+#. Badge shown in the top of the empty workspace when the app is a beta build. Uppercase label.
+#: src/components/layout/EmptySceneState.tsx:432
+msgid "BETA VERSION"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:441
+msgid "Bring in a mesh or scene to start preparing, analyzing, supporting, and exporting your print."
+msgstr ""
+
 #: src/components/layout/TopBar.tsx:617
 msgid "Build and tune supports"
+msgstr ""
+
+#. Shown in place of file size when the file is in cache but its size is unknown. Adjective/state label.
+#: src/components/layout/EmptySceneState.tsx:660
+msgid "cached"
 msgstr ""
 
 #: src/components/ui/EditorContextMenu.tsx:48
 msgid "Copy"
 msgstr "Copier"
 
+#: src/components/layout/EmptySceneState.tsx:381
+#: src/components/layout/EmptySceneState.tsx:384
+msgid "Could not reopen this file from cache."
+msgstr ""
+
 #: src/components/controls/TransformToolbar.tsx:25
 msgid "Create cavity or open-face shell"
 msgstr "Créer une cavité ou une coque ouverte"
+
+#: src/components/layout/EmptySceneState.tsx:71
+msgid "Currently displaying nothing at maximum fidelity."
+msgstr ""
 
 #: src/components/ui/EditorContextMenu.tsx:47
 msgid "Cut"
@@ -48,6 +107,19 @@ msgstr "Couper"
 #: src/components/ui/EditorContextMenu.tsx:46
 msgid "Delete"
 msgstr "Supprimer"
+
+#. Paraphrase of Yoda's line from Star Wars: The Empire Strikes Back (1980): "Do or do not. There is no try."
+#: src/components/layout/EmptySceneState.tsx:76
+msgid "Do or do not. There is no try... oh wait, just click Load Mesh."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:74
+msgid "Drag a file in. The platform is judging you."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:695
+msgid "Drop supported files"
+msgstr ""
 
 #: src/app/page.tsx:3535
 #: src/components/ui/EditorContextMenu.tsx:85
@@ -58,6 +130,19 @@ msgstr "Éditeur"
 msgid "Editor context menu"
 msgstr "Menu contextuel de l'éditeur"
 
+#. Paraphrase of "Elementary, my dear Watson", the line associated with Sherlock Holmes (Arthur Conan Doyle stories; multiple film and TV adaptations).
+#: src/components/layout/EmptySceneState.tsx:87
+msgid "Elementary, my dear user — load a model."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:436
+msgid "Empty workspace"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:63
+msgid "Every great print starts with an empty scene."
+msgstr ""
+
 #: src/components/layout/TopBar.tsx:622
 msgid "Export"
 msgstr ""
@@ -66,12 +151,115 @@ msgstr ""
 msgid "Finalize and export output"
 msgstr ""
 
+#: src/components/layout/EmptySceneState.tsx:479
+msgid "Get started"
+msgstr ""
+
 #: src/components/controls/TransformToolbar.tsx:25
 msgid "Hollow"
 msgstr "Évider"
 
+#. Paraphrase of Walter White's line from Breaking Bad, S04E06 "Cornered": "I am the one who knocks."
+#: src/components/layout/EmptySceneState.tsx:79
+msgid "I am the one who slices."
+msgstr ""
+
+#. Paraphrase of the Terminator's line from The Terminator (1984): "I'll be back."
+#: src/components/layout/EmptySceneState.tsx:84
+msgid "I'll be back. (Drop a file and I really will be.)"
+msgstr ""
+
+#. Adaptation of the English proverb "Idle hands are the devil's workshop".
+#: src/components/layout/EmptySceneState.tsx:72
+msgid "Idle hands do no slicing."
+msgstr ""
+
+#. Section header label above the file import buttons. Noun, not imperative verb.
+#: src/components/layout/EmptySceneState.tsx:536
+msgid "Import"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:569
+msgid "Import Scene"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:454
+msgid "Importing your file…"
+msgstr ""
+
+#. Parody of the tagline for Alien (1979): "In space, no one can hear you scream."
+#: src/components/layout/EmptySceneState.tsx:77
+msgid "In space, no one can hear you slice."
+msgstr ""
+
 #: src/components/layout/TopBar.tsx:631
 msgid "Inspect sliced layers before printing"
+msgstr ""
+
+#. Paraphrase of Admiral Ackbar's line from Star Wars: Return of the Jedi (1983): "It's a trap!"
+#: src/components/layout/EmptySceneState.tsx:85
+msgid "It's a trap! ...just kidding, drop your STL."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:95
+msgid "Join the Open Resin Alliance!"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:33
+#: src/components/layout/EmptySceneState.tsx:36
+#~ msgid "just now"
+#~ msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:516
+msgid "Keep going without a printer. You can add one later."
+msgstr ""
+
+#. Prefix before a relative time string, e.g. "last opened 5m ago". The time part is a separate translated string.
+#: src/components/layout/EmptySceneState.tsx:643
+#~ msgid "last opened"
+#~ msgstr ""
+
+#. Shows when a recent file was last accessed. {0} is a translated relative time (e.g. "just now", "5m ago"). Place {0} wherever the time fits in your language.
+#: src/components/layout/EmptySceneState.tsx:644
+#~ msgid "last opened {0}"
+#~ msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:653
+msgid "last opened {period} ago"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:644
+#~ msgid "last opened {relativeOpenedAt}"
+#~ msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:644
+#~ msgid "last opened {timeAgo}"
+#~ msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:652
+msgid "last opened just now"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:92
+msgid "Layer 0 of 0. Living dangerously."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:550
+msgid "Load Mesh"
+msgstr ""
+
+#. Shown in place of file size while a recent file is being reopened. Keep it short.
+#: src/components/layout/EmptySceneState.tsx:659
+msgid "loading…"
+msgstr ""
+
+#. File type badge on the recent files list. Noun — labels a mesh file (.stl, .obj, .3mf).
+#: src/components/layout/EmptySceneState.tsx:644
+msgid "Mesh"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:553
+msgid "Mesh Files (.stl, .obj, .3mf)"
 msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:24
@@ -90,10 +278,36 @@ msgstr "Modifier"
 msgid "Move, rotate, and scale"
 msgstr "Déplacer, pivoter et redimensionner"
 
+#: src/components/layout/EmptySceneState.tsx:606
+msgid "No recent files yet."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:91
+msgid "No supports needed for an empty scene."
+msgstr ""
+
+#. Play on "all men are created equal" from the United States Declaration of Independence (1776).
+#: src/components/layout/EmptySceneState.tsx:97
+msgid "Not all slicers are created equal. This one's free!"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:65
+msgid "Nothing to see here. Yet."
+msgstr ""
+
 #. Toolbar button label. Short for "lay the model flat on a selected face"; keep it terse so the toolbar pill stays narrow.
 #: src/components/controls/TransformToolbar.tsx:23
 msgid "On-Face"
 msgstr "Sur face"
+
+#. Paraphrase of Boromir's line from The Lord of the Rings: The Fellowship of the Ring (2001): "One does not simply walk into Mordor."
+#: src/components/layout/EmptySceneState.tsx:83
+msgid "One does not simply import a mesh... or actually, you just click a button."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:497
+msgid "Open printer library and add one now."
+msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:23
 msgid "Orient flat against plate"
@@ -103,6 +317,10 @@ msgstr "Orienter à plat contre le plateau"
 msgid "Paste"
 msgstr "Coller"
 
+#: src/components/layout/EmptySceneState.tsx:457
+msgid "Please hang tight while we prepare your scene."
+msgstr ""
+
 #: src/components/layout/TopBar.tsx:608
 msgid "Prepare"
 msgstr ""
@@ -111,9 +329,36 @@ msgstr ""
 msgid "Printing"
 msgstr ""
 
+#: src/components/layout/EmptySceneState.tsx:59
+msgid "Ready for your next adventure?"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:591
+msgid "Recent files"
+msgstr ""
+
+#. placeholder {0}: entry.name
+#: src/components/layout/EmptySceneState.tsx:631
+msgid "Reopen {0}"
+msgstr ""
+
 #: src/components/ui/EditorContextMenu.tsx:50
 msgid "Repair"
 msgstr "Réparer"
+
+#. Paraphrase of Doc Brown's line from Back to the Future (1985): "Roads? Where we're going, we don't need roads."
+#: src/components/layout/EmptySceneState.tsx:88
+msgid "Roads? Where we're printing, we don't need roads."
+msgstr ""
+
+#. File type badge on the recent files list. Noun — labels a saved scene file (.voxl, .lys).
+#: src/components/layout/EmptySceneState.tsx:643
+msgid "Scene"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:572
+msgid "Scene Files (.voxl, .lys)"
+msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:26
 msgid "Sculpt and smooth surface"
@@ -139,6 +384,88 @@ msgstr ""
 msgid "Supports"
 msgstr "Supports"
 
+#: src/components/layout/EmptySceneState.tsx:67
+msgid "Suspiciously empty in here."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:60
+msgid "The build plate awaits."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:73
+msgid "The build volume misses you."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:70
+msgid "The resin is ready. Are you?"
+msgstr ""
+
+#. Paraphrase of "The spice must flow" from Dune (novel by Frank Herbert, 1965; films 1984 and 2021).
+#: src/components/layout/EmptySceneState.tsx:86
+msgid "The spice must flow. The resin must cure."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:68
+msgid "This scene is aggressively unoccupied."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:62
+msgid "Time to make something real."
+msgstr ""
+
+#. Tip shown below the import buttons. <0> wraps the highlighted label 'Load Mesh'; <1> wraps 'Import Scene'. Keep both placeholders in your translation.
+#: src/components/layout/EmptySceneState.tsx:579
+msgid "Tip: Start with <0>Load Mesh</0> for clean prints, or <1>Import Scene</1> to continue an existing setup."
+msgstr ""
+
 #: src/app/page.tsx:3524
 msgid "Toggle Curve"
 msgstr "Basculer la courbe"
+
+#: src/components/layout/EmptySceneState.tsx:695
+msgid "Unsupported File Type"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:715
+msgid "Unsupported format detected. Please drop STL, OBJ, 3MF, VOXL, or LYS files."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:513
+msgid "Use without Printer"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:90
+msgid "Waiting for first layer adhesion... to reality."
+msgstr ""
+
+#. Paraphrase of Chief Brody's line from Jaws (1975): "You're gonna need a bigger boat."
+#: src/components/layout/EmptySceneState.tsx:82
+msgid "We're gonna need a bigger build plate."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:61
+msgid "What are we printing today?"
+msgstr ""
+
+#. Paraphrase of the Joker's line from The Dark Knight (2008): "Why so serious?"
+#: src/components/layout/EmptySceneState.tsx:81
+msgid "Why so empty?"
+msgstr ""
+
+#. Paraphrase of the Spider-Man motto, originating in Amazing Fantasy #15 (1962): "With great power comes great responsibility."
+#: src/components/layout/EmptySceneState.tsx:80
+msgid "With great resin comes great responsibility."
+msgstr ""
+
+#. Paraphrase of Gandalf's line from The Lord of the Rings: The Fellowship of the Ring (2001): "You shall not pass!"
+#: src/components/layout/EmptySceneState.tsx:78
+msgid "You shall not pass... until you load a model."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:66
+msgid "Your models called. They want to be sliced."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:69
+msgid "Zero polygons. Infinite potential."
+msgstr ""
