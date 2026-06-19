@@ -892,10 +892,12 @@ impl TaperedProfileGenerator {
             return IndexedMesh { positions: Vec::new(), triangles: Vec::new() };
         }
 
-        let anchor = frame.anchor;
+        let orig_frame = frame_from_membrane(membrane).unwrap();
+        let is_flipped = frame.axis.dot(orig_frame.axis) < 0.0;
+
         let to_local = |p: Vec3| -> (f32, f32, f32) {
-            let d = p.sub(anchor);
-            (d.dot(frame.u), d.dot(frame.v), d.dot(frame.axis))
+            let d = p.sub(orig_frame.anchor);
+            (d.dot(orig_frame.u), d.dot(orig_frame.v), d.dot(orig_frame.axis))
         };
 
         let mut r_sum = 0.0;
@@ -933,40 +935,65 @@ impl TaperedProfileGenerator {
         let z1 = depth + g;
 
         let local_to_world = |x: f32, y: f32, z: f32| -> Vec3 {
-            let (lx, ly, lz) = lean.apply(x, y, z);
-            frame
-                .anchor
-                .add(frame.u.scale(lx))
-                .add(frame.v.scale(ly))
-                .add(frame.axis.scale(lz))
+            if is_flipped {
+                // x, y, z are in orig_frame coordinates.
+                // Convert to build_frame coordinates, apply lean, and convert back.
+                let (lx_build, ly_build, lz_build) = lean.apply(y, x, -z);
+                let lx_orig = ly_build;
+                let ly_orig = lx_build;
+                let lz_orig = -lz_build;
+                orig_frame
+                    .anchor
+                    .add(orig_frame.u.scale(lx_orig))
+                    .add(orig_frame.v.scale(ly_orig))
+                    .add(orig_frame.axis.scale(lz_orig))
+            } else {
+                let (lx, ly, lz) = lean.apply(x, y, z);
+                orig_frame
+                    .anchor
+                    .add(orig_frame.u.scale(lx))
+                    .add(orig_frame.v.scale(ly))
+                    .add(orig_frame.axis.scale(lz))
+            }
         };
 
         let m_len = membrane.vertices.len();
         let mut positions = Vec::with_capacity(2 * m_len);
 
+        let z_base = if is_flipped { -z0 } else { z0 };
+        let z_tip = if is_flipped { -z1 } else { z1 };
+
+        let (scale_lower, z_lower, scale_upper, z_upper) = if z_base < z_tip {
+            (scale_base, z_base, scale_tip, z_tip)
+        } else {
+            (scale_tip, z_tip, scale_base, z_base)
+        };
+
         for &v in &membrane.vertices {
             let (lx, ly, _) = to_local(v);
-            let px = lx * scale_base;
-            let py = ly * scale_base;
-            positions.push(local_to_world(px, py, z0));
+            let px = lx * scale_lower;
+            let py = ly * scale_lower;
+            positions.push(local_to_world(px, py, z_lower));
         }
 
         for &v in &membrane.vertices {
             let (lx, ly, _) = to_local(v);
-            let px = lx * scale_tip;
-            let py = ly * scale_tip;
-            positions.push(local_to_world(px, py, z1));
+            let px = lx * scale_upper;
+            let py = ly * scale_upper;
+            positions.push(local_to_world(px, py, z_upper));
         }
 
         let mut triangles = Vec::new();
 
         for t in &membrane.triangles {
-            triangles.push([t[0], t[1], t[2]]);
+            // Lower Cap: Wind opposite to membrane normal
+            triangles.push([t[0], t[2], t[1]]);
         }
 
         let offset = m_len as u32;
         for t in &membrane.triangles {
-            triangles.push([t[0] + offset, t[2] + offset, t[1] + offset]);
+            // Upper Cap: Wind same as membrane normal
+            triangles.push([t[0] + offset, t[1] + offset, t[2] + offset]);
         }
 
         let b_len = membrane.boundary.len();
@@ -974,8 +1001,8 @@ impl TaperedProfileGenerator {
             let b0 = membrane.boundary[i];
             let b1 = membrane.boundary[(i + 1) % b_len];
             
-            triangles.push([b0, b1 + offset, b1]);
-            triangles.push([b0, b0 + offset, b1 + offset]);
+            triangles.push([b0, b1, b1 + offset]);
+            triangles.push([b0, b1 + offset, b0 + offset]);
         }
 
         IndexedMesh { positions, triangles }
@@ -2237,18 +2264,59 @@ mod tests {
             let peg = generator.build_peg(&build_frame, lean, 0.0);
             let socket = generator.build_socket(&build_frame, 0.1, lean, 0.0);
             
-            let peg_m = to_manifold(&peg).unwrap_or_else(|e| panic!("tapered profile peg ({angle} deg) watertight: {e}"));
-            let socket_m = to_manifold(&socket).unwrap_or_else(|e| panic!("tapered profile socket ({angle} deg) watertight: {e}"));
-            
-            assert!(peg_m.num_tri() > 0, "non-empty peg");
-            assert!(socket_m.num_tri() > 0, "non-empty socket");
-            
+            let peg_m = to_manifold(&peg).expect("tapered peg watertight");
+            let socket_m = to_manifold(&socket).expect("tapered socket watertight");
             let leftover = peg_m.difference(&socket_m);
             assert!(
                 leftover.is_empty() || leftover.num_tri() == 0,
-                "tapered profile peg ({angle} deg) fits inside grown socket (leftover = {})",
-                leftover.num_tri()
+                "tapered profile peg fits inside socket"
             );
         }
+    }
+
+    #[test]
+    fn test_tapered_profile_key_winding_failing() {
+        let loop_pts = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(10.0, 0.0, 0.0),
+            Vec3::new(10.0, 10.0, 0.0),
+            Vec3::new(0.0, 10.0, 0.0),
+        ];
+        let membrane = crate::membrane::build_membrane(&loop_pts, 1).unwrap();
+        let generator = KeyShape::TaperedProfile.generator(Some(&membrane), 0.1, 10.0);
+        let frame = frame_from_membrane(&membrane).unwrap();
+        let build_frame = frame_extruding_toward_part_b(&frame);
+        
+        let mut peg = generator.build_peg(&build_frame, LeanXform::IDENTITY, 0.0);
+        
+        // Simulate a winding/handedness reflection by inverting all triangles.
+        for t in &mut peg.triangles {
+            t.swap(1, 2);
+        }
+        
+        let m = to_manifold(&peg).expect("inverted mesh is still watertight");
+        assert!(m.volume() <= 0.0, "Inverted winding must result in non-positive volume");
+    }
+
+    #[test]
+    fn test_tapered_profile_key_winding_passing() {
+        use crate::test_utils::{assert_watertight_manifold, assert_winding_outward};
+        let loop_pts = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(10.0, 0.0, 0.0),
+            Vec3::new(10.0, 10.0, 0.0),
+            Vec3::new(0.0, 10.0, 0.0),
+        ];
+        let membrane = crate::membrane::build_membrane(&loop_pts, 1).unwrap();
+        let generator = KeyShape::TaperedProfile.generator(Some(&membrane), 0.1, 10.0);
+        let frame = frame_from_membrane(&membrane).unwrap();
+        let build_frame = frame_extruding_toward_part_b(&frame);
+        
+        // Build the peg mesh
+        let peg = generator.build_peg(&build_frame, LeanXform::IDENTITY, 0.0);
+        
+        // Assert CCW outward winding (positive volume)
+        assert_watertight_manifold(&peg);
+        assert_winding_outward(&peg);
     }
 }

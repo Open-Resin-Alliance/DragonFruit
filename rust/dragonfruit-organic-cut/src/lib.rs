@@ -17,6 +17,9 @@ pub mod key;
 pub mod membrane;
 pub mod organic_cut;
 
+#[cfg(test)]
+pub(crate) mod test_utils;
+
 pub use crate::geodesic::{surface_loop_from_mesh, surface_loop_positions, GeodesicSolver};
 #[cfg(feature = "manifold")]
 pub use crate::key::{
