@@ -2010,4 +2010,34 @@ mod tests {
         crate::test_utils::assert_watertight_manifold(&outcome.part_a);
         crate::test_utils::assert_watertight_manifold(&outcome.part_b);
     }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn test_cuff_cut_forces_topological_mapping() {
+        let mesh = crate::test_utils::overhanging_cuff();
+        // Cut loop at Z=2.0 (below connection of cuff), but shaped like a saddle loop
+        // where centroids of both halves are on the positive side of the saddle membrane.
+        // For example, Z values are Z=3.0 at X=+-12, and Z=1.0 at Y=+-12.
+        // This forces standard centroid classification to fail (empty Side B),
+        // exercising our new watertight topological mapping.
+        let loop_pts = vec![
+            OrganicCutLoopPoint { position: [12.0, 0.0, 3.0], normal: [1.0, 0.0, 0.0] },
+            OrganicCutLoopPoint { position: [0.0, 12.0, 1.0], normal: [0.0, 1.0, 0.0] },
+            OrganicCutLoopPoint { position: [-12.0, 0.0, 3.0], normal: [-1.0, 0.0, 0.0] },
+            OrganicCutLoopPoint { position: [0.0, -12.0, 1.0], normal: [0.0, -1.0, 0.0] },
+        ];
+        let options = OrganicCutOptions {
+            cut: OrganicCutSpec {
+                loop_points: loop_pts,
+                mode: CutMode::Contour,
+                ..Default::default()
+            }
+        };
+        
+        let outcome = organic_cut(mesh, &options);
+        assert_eq!(outcome.report.engine, "membrane");
+        
+        crate::test_utils::assert_watertight_manifold(&outcome.part_a);
+        crate::test_utils::assert_watertight_manifold(&outcome.part_b);
+    }
 }

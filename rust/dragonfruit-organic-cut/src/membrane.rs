@@ -1976,42 +1976,115 @@ pub(crate) fn split_into_two_sides(
 
         // B. Identify loop vertices on the source mesh (the geodesic loop barrier)
         let mut source_loop_vertex_ids = ahash::AHashSet::new();
-        if let Some(loop_pts) = loop_pts {
-            for &p in loop_pts {
-                let key = quantize(p);
-                if let Some(&v_id) = coord_to_source_id.get(&key) {
-                    source_loop_vertex_ids.insert(v_id);
-                }
-            }
+
+        // Retrieve or build the points representing the loop
+        let boundary_pts_vec: Vec<Vec3>;
+        let pts_to_use: &[Vec3] = if let Some(pts) = loop_pts {
+            pts
         } else {
-            // Proximity fallback
-            let cell_size = 0.2f32;
-            let inv_cell = 1.0 / cell_size;
-            let mut grid: ahash::AHashMap<(i32, i32, i32), Vec<Vec3>> = ahash::AHashMap::new();
-            for &b_idx in &membrane.boundary {
-                let p = membrane.vertices[b_idx as usize];
+            boundary_pts_vec = membrane.boundary.iter()
+                .map(|&idx| membrane.vertices[idx as usize])
+                .collect();
+            &boundary_pts_vec
+        };
+
+        if !pts_to_use.is_empty() {
+            // 1. Compute the average edge length of the source mesh to scale our search radius
+            let mut sum_edge_len = 0.0f32;
+            let mut edge_count = 0;
+            for t in &src.triangles {
+                let p0 = src.positions[t[0] as usize];
+                let p1 = src.positions[t[1] as usize];
+                let p2 = src.positions[t[2] as usize];
+                sum_edge_len += p0.sub(p1).length() + p1.sub(p2).length() + p2.sub(p0).length();
+                edge_count += 3;
+            }
+            let avg_edge_len = if edge_count > 0 { sum_edge_len / edge_count as f32 } else { 1.0f32 };
+
+            // 2. Initial pass: find vertices in the source mesh within a generous radius of the loop
+            let initial_radius = (avg_edge_len * 3.0).max(2.0);
+            let inv_cell = 1.0 / initial_radius;
+            let mut loop_grid: ahash::AHashMap<(i32, i32, i32), Vec<Vec3>> = ahash::AHashMap::new();
+            for &p in pts_to_use {
                 let key = (
                     (p.x * inv_cell).floor() as i32,
                     (p.y * inv_cell).floor() as i32,
                     (p.z * inv_cell).floor() as i32,
                 );
-                grid.entry(key).or_default().push(p);
+                loop_grid.entry(key).or_default().push(p);
             }
 
-            let max_dist_sq = 0.3 * 0.3;
+            let mut near_verts = ahash::AHashSet::new();
+            let initial_radius_sq = initial_radius * initial_radius;
             for (v_id, &pos) in src.positions.iter().enumerate() {
                 let cx = (pos.x * inv_cell).floor() as i32;
                 let cy = (pos.y * inv_cell).floor() as i32;
                 let cz = (pos.z * inv_cell).floor() as i32;
                 let mut close = false;
-                'outer: for dx in -1..=1 {
+                'outer_near: for dx in -1..=1 {
                     for dy in -1..=1 {
                         for dz in -1..=1 {
-                            if let Some(bucket) = grid.get(&(cx + dx, cy + dy, cz + dz)) {
+                            if let Some(bucket) = loop_grid.get(&(cx + dx, cy + dy, cz + dz)) {
                                 for &q in bucket {
-                                    if pos.sub(q).dot(pos.sub(q)) <= max_dist_sq {
+                                    if pos.sub(q).dot(pos.sub(q)) <= initial_radius_sq {
                                         close = true;
-                                        break 'outer;
+                                        break 'outer_near;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if close {
+                    near_verts.insert(v_id as u32);
+                }
+            }
+
+            // 3. Find the maximum edge length of all source triangles touching the loop vicinity
+            let mut max_local_edge_len = 0.0f32;
+            for t in &src.triangles {
+                if near_verts.contains(&t[0]) || near_verts.contains(&t[1]) || near_verts.contains(&t[2]) {
+                    let p0 = src.positions[t[0] as usize];
+                    let p1 = src.positions[t[1] as usize];
+                    let p2 = src.positions[t[2] as usize];
+                    let l0 = p0.sub(p1).length();
+                    let l1 = p1.sub(p2).length();
+                    let l2 = p2.sub(p0).length();
+                    max_local_edge_len = max_local_edge_len.max(l0).max(l1).max(l2);
+                }
+            }
+            if max_local_edge_len == 0.0 {
+                max_local_edge_len = avg_edge_len;
+            }
+
+            // 4. Set final barrier distance to 1.5 * local max edge length
+            let barrier_dist = max_local_edge_len * 1.5;
+            let barrier_dist_sq = barrier_dist * barrier_dist;
+
+            let inv_cell_final = 1.0 / barrier_dist;
+            let mut final_grid: ahash::AHashMap<(i32, i32, i32), Vec<Vec3>> = ahash::AHashMap::new();
+            for &p in pts_to_use {
+                let key = (
+                    (p.x * inv_cell_final).floor() as i32,
+                    (p.y * inv_cell_final).floor() as i32,
+                    (p.z * inv_cell_final).floor() as i32,
+                );
+                final_grid.entry(key).or_default().push(p);
+            }
+
+            for (v_id, &pos) in src.positions.iter().enumerate() {
+                let cx = (pos.x * inv_cell_final).floor() as i32;
+                let cy = (pos.y * inv_cell_final).floor() as i32;
+                let cz = (pos.z * inv_cell_final).floor() as i32;
+                let mut close = false;
+                'outer_barrier: for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        for dz in -1..=1 {
+                            if let Some(bucket) = final_grid.get(&(cx + dx, cy + dy, cz + dz)) {
+                                for &q in bucket {
+                                    if pos.sub(q).dot(pos.sub(q)) <= barrier_dist_sq {
+                                        close = true;
+                                        break 'outer_barrier;
                                     }
                                 }
                             }
