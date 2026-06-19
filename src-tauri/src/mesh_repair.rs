@@ -20,6 +20,7 @@ use dragonfruit_mesh_repair::{
     analyze, classify_support_split, hollow_voxel, io, punch_cylinders, repair, HolePunchOptions,
     HollowOptions, HollowSession, IndexedMesh, RepairOptions, Vec3,
 };
+use rayon::prelude::*;
 use serde::Deserialize;
 use tauri::ipc::Response;
 
@@ -772,9 +773,7 @@ fn encode_stl_response(
     is_preview: bool,
 ) -> Result<Vec<u8>, String> {
     let tri_count = mesh.triangles.len();
-    let soup = mesh.to_triangle_soup(); // Vec<f32>, 9 floats per triangle
-    let positions_bytes: &[u8] = bytemuck::cast_slice(&soup);
-    let positions_len = positions_bytes.len();
+    let positions_len = tri_count * 9 * std::mem::size_of::<f32>();
     let normals_len = tri_count * 9 * std::mem::size_of::<f32>();
     let response_len = STL_RESPONSE_HEADER_BYTES
         .checked_add(positions_len)
@@ -798,32 +797,44 @@ fn encode_stl_response(
     );
     result.extend_from_slice(&original_triangle_count.to_le_bytes());
     result.extend_from_slice(&(tri_count as u32).to_le_bytes());
-    result.extend_from_slice(positions_bytes);
-
-    // Compute per-vertex normals from the indexed mesh.
-    // For each triangle: face normal = normalize(cross(v1-v0, v2-v0))
-    for tri in &mesh.triangles {
-        let p0 = mesh.positions[tri[0] as usize];
-        let p1 = mesh.positions[tri[1] as usize];
-        let p2 = mesh.positions[tri[2] as usize];
-
-        let e1 = p1.sub(p0);
-        let e2 = p2.sub(p0);
-        let face_normal = e1.cross(e2);
-        let len = face_normal.length();
-        let n = if len > 1e-10 {
-            face_normal.scale(1.0 / len)
-        } else {
-            Vec3::ZERO
-        };
-
-        // Three vertices, same face normal
-        for _ in 0..3 {
-            result.extend_from_slice(&n.x.to_le_bytes());
-            result.extend_from_slice(&n.y.to_le_bytes());
-            result.extend_from_slice(&n.z.to_le_bytes());
-        }
-    }
+    result.resize(response_len, 0);
+    let (position_output, normal_output) =
+        result[STL_RESPONSE_HEADER_BYTES..].split_at_mut(positions_len);
+    position_output
+        .par_chunks_mut(9 * std::mem::size_of::<f32>())
+        .zip(mesh.triangles.par_iter())
+        .for_each(|(output, triangle)| {
+            let vertices = [
+                mesh.positions[triangle[0] as usize],
+                mesh.positions[triangle[1] as usize],
+                mesh.positions[triangle[2] as usize],
+            ];
+            for (vertex_output, vertex) in output.chunks_exact_mut(12).zip(vertices) {
+                vertex_output[0..4].copy_from_slice(&vertex.x.to_le_bytes());
+                vertex_output[4..8].copy_from_slice(&vertex.y.to_le_bytes());
+                vertex_output[8..12].copy_from_slice(&vertex.z.to_le_bytes());
+            }
+        });
+    normal_output
+        .par_chunks_mut(9 * std::mem::size_of::<f32>())
+        .zip(mesh.triangles.par_iter())
+        .for_each(|(output, triangle)| {
+            let p0 = mesh.positions[triangle[0] as usize];
+            let p1 = mesh.positions[triangle[1] as usize];
+            let p2 = mesh.positions[triangle[2] as usize];
+            let face_normal = p1.sub(p0).cross(p2.sub(p0));
+            let len = face_normal.length();
+            let normal = if len > 1e-10 {
+                face_normal.scale(1.0 / len)
+            } else {
+                Vec3::ZERO
+            };
+            for normal_output in output.chunks_exact_mut(12) {
+                normal_output[0..4].copy_from_slice(&normal.x.to_le_bytes());
+                normal_output[4..8].copy_from_slice(&normal.y.to_le_bytes());
+                normal_output[8..12].copy_from_slice(&normal.z.to_le_bytes());
+            }
+        });
 
     log::info!(
         "[load_stl_file] {} triangles, {} MB positions + {} MB normals",
@@ -869,6 +880,64 @@ fn binary_stl_bounds(path: &std::path::Path, triangle_count: u32) -> Result<(Vec
         }
     }
     Ok((min, max))
+}
+
+fn simplify_preview_region(
+    path: &std::path::Path,
+    triangle_count: usize,
+    target_ratio: f64,
+) -> Result<IndexedMesh, String> {
+    let bucket_file =
+        std::fs::File::open(path).map_err(|e| format!("Failed opening STL preview bucket: {e}"))?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, bucket_file);
+    let mut record = [0u8; 50];
+    let mut soup = Vec::with_capacity(triangle_count * 9);
+    for _ in 0..triangle_count {
+        reader
+            .read_exact(&mut record)
+            .map_err(|e| format!("Failed reading STL preview bucket: {e}"))?;
+        for offset in [12, 24, 36] {
+            let vertex = read_binary_stl_vertex(&record, offset);
+            soup.extend_from_slice(&[vertex.x, vertex.y, vertex.z]);
+        }
+    }
+
+    let chunk = IndexedMesh::from_triangle_soup(&soup, 1e-8);
+    let indices: Vec<u32> = chunk
+        .triangles
+        .iter()
+        .flat_map(|triangle| triangle.iter().copied())
+        .collect();
+    let target_index_count =
+        ((indices.len() as f64 * target_ratio).floor() as usize).max(3) / 3 * 3;
+    let vertex_bytes: &[u8] = bytemuck::cast_slice(&chunk.positions);
+    let vertices = meshopt::VertexDataAdapter::new(vertex_bytes, std::mem::size_of::<Vec3>(), 0)
+        .map_err(|e| format!("Failed preparing preview simplifier: {e}"))?;
+    let simplified = meshopt::simplify(
+        &indices,
+        &vertices,
+        target_index_count,
+        1.0,
+        meshopt::SimplifyOptions::LockBorder | meshopt::SimplifyOptions::Regularize,
+        None,
+    );
+    let selected = if simplified.is_empty() {
+        &indices
+    } else {
+        &simplified
+    };
+    let mut output = IndexedMesh {
+        positions: Vec::with_capacity(selected.len()),
+        triangles: Vec::with_capacity(selected.len() / 3),
+    };
+    for triangle in selected.chunks_exact(3) {
+        let base = output.positions.len() as u32;
+        output.positions.push(chunk.positions[triangle[0] as usize]);
+        output.positions.push(chunk.positions[triangle[1] as usize]);
+        output.positions.push(chunk.positions[triangle[2] as usize]);
+        output.triangles.push([base, base + 1, base + 2]);
+    }
+    Ok(output)
 }
 
 fn load_binary_stl_preview(
@@ -947,57 +1016,44 @@ fn load_binary_stl_preview(
         positions: Vec::with_capacity(target_triangles.saturating_mul(3)),
         triangles: Vec::with_capacity(target_triangles),
     };
-    for (bucket, &bucket_triangle_count) in bucket_counts.iter().enumerate() {
-        if bucket_triangle_count == 0 {
-            continue;
-        }
-        let bucket_file = std::fs::File::open(temp_dir.0.join(format!("{bucket}.bin")))
-            .map_err(|e| format!("Failed opening STL preview bucket: {e}"))?;
-        let mut bucket_reader = BufReader::with_capacity(1024 * 1024, bucket_file);
-        let mut soup = Vec::with_capacity(bucket_triangle_count * 9);
-        for _ in 0..bucket_triangle_count {
-            bucket_reader
-                .read_exact(&mut record)
-                .map_err(|e| format!("Failed reading STL preview bucket: {e}"))?;
-            for offset in [12, 24, 36] {
-                let vertex = read_binary_stl_vertex(&record, offset);
-                soup.extend_from_slice(&[vertex.x, vertex.y, vertex.z]);
-            }
-        }
-        let chunk = IndexedMesh::from_triangle_soup(&soup, 1e-8);
-        let indices: Vec<u32> = chunk
-            .triangles
-            .iter()
-            .flat_map(|triangle| triangle.iter().copied())
-            .collect();
-        let target_index_count =
-            ((indices.len() as f64 * target_ratio).floor() as usize).max(3) / 3 * 3;
-        let vertex_bytes: &[u8] = bytemuck::cast_slice(&chunk.positions);
-        let vertices =
-            meshopt::VertexDataAdapter::new(vertex_bytes, std::mem::size_of::<Vec3>(), 0)
-                .map_err(|e| format!("Failed preparing preview simplifier: {e}"))?;
-        let simplified = meshopt::simplify(
-            &indices,
-            &vertices,
-            target_index_count,
-            1.0,
-            meshopt::SimplifyOptions::LockBorder | meshopt::SimplifyOptions::Regularize,
-            None,
+    let regions: Vec<(usize, usize)> = bucket_counts
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, count)| *count > 0)
+        .collect();
+    let worker_count = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(2)
+        .min(4);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(worker_count)
+        .thread_name(|index| format!("stl-preview-{index}"))
+        .build()
+        .map_err(|e| format!("Failed creating STL preview worker pool: {e}"))?;
+    let simplified_regions: Vec<Result<(usize, usize, IndexedMesh), String>> = pool.install(|| {
+        regions
+            .par_iter()
+            .map(|&(bucket, count)| {
+                simplify_preview_region(
+                    &temp_dir.0.join(format!("{bucket}.bin")),
+                    count,
+                    target_ratio,
+                )
+                .map(|mesh| (bucket, count, mesh))
+            })
+            .collect()
+    });
+    for region in simplified_regions {
+        let (bucket, bucket_triangle_count, region) = region?;
+        let vertex_base = output.positions.len() as u32;
+        output.positions.extend(region.positions);
+        output.triangles.extend(
+            region
+                .triangles
+                .into_iter()
+                .map(|[a, b, c]| [a + vertex_base, b + vertex_base, c + vertex_base]),
         );
-        let selected = if simplified.is_empty() {
-            &indices
-        } else {
-            &simplified
-        };
-
-        for triangle in selected.chunks_exact(3) {
-            let base = output.positions.len() as u32;
-            output.positions.push(chunk.positions[triangle[0] as usize]);
-            output.positions.push(chunk.positions[triangle[1] as usize]);
-            output.positions.push(chunk.positions[triangle[2] as usize]);
-            output.triangles.push([base, base + 1, base + 2]);
-        }
-
         log::info!(
             "[load_stl_file] Topology-safe preview region {}/{}: {} source triangles, {} total output triangles",
             bucket + 1,
