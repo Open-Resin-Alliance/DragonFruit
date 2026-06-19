@@ -157,6 +157,7 @@ export interface ContactDisk {
     surfaceNormal: Vec3;
     coneAxis: Vec3;
     diskLengthOverride?: number;
+    placementSurface?: 'interior' | 'exterior';
     profile: ContactDiskProfile;
     contactDiameterMm: number;
 }
@@ -205,6 +206,7 @@ export interface Anchor extends SupportEntity {
 export interface Brace extends SupportEntity {
     startKnotId: string;
     endKnotId: string;
+    placementSurface?: 'interior' | 'exterior';
     curve?: BraceCurve;
     profile: {
         diameter: number;

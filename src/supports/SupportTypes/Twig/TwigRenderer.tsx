@@ -214,6 +214,7 @@ export const TwigRenderer = React.memo(function TwigRenderer({
       scene,
       initialEvent,
       modelId: twig.modelId,
+      placementSurface: (diskKey === 'contactDiskA' ? twig.contactDiskA : twig.contactDiskB).placementSurface,
       onHit: ({ point, surfaceNormal }: ContactDiskDragHit) => {
         const snap = getSnapshot();
         const latestTwig = snap.twigs[twig.id];

@@ -25,6 +25,7 @@ src-tauri/gen/
 
 # environment files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # logs/debug
 .pnpm-debug.log*
@@ -46,6 +47,7 @@ next-env.d.ts
 /supports_legacy
 conversion/
 Scratch/
+.scratch/
 todo_list
 tsc_output.txt
 
@@ -64,6 +66,9 @@ conversion/
 # misc
 *.pem
 .DS_Store
+
+# Tauri updater signing private key (keep secret!)
+.tauri/app.key
 
 # Generated build artifacts that cause rebuild loops
 src-tauri/generated_crate_requirements.toml

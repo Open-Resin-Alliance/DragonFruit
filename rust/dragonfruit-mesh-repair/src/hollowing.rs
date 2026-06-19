@@ -65,6 +65,16 @@ pub struct HollowOptions {
     /// spheres at removed-voxel centers for a near-instant preview that is
     /// sufficient for interactively adjusting hollowing parameters.
     pub preview_voxel_spheres: bool,
+    /// Unit quaternion `[x, y, z, w]` to rotate the source mesh before
+    /// voxelizing. The output mesh is inversely rotated so DragonFruit's
+    /// unrotated mesh stays in sync with the rotated scene transform.
+    /// Default identity `[0, 0, 0, 1]` means no rotation.
+    #[serde(default = "default_rotation_quat")]
+    pub rotation_quat: [f32; 4],
+}
+
+const fn default_rotation_quat() -> [f32; 4] {
+    [0.0, 0.0, 0.0, 1.0]
 }
 
 impl Default for HollowOptions {
@@ -83,6 +93,7 @@ impl Default for HollowOptions {
             smooth_internal_surfaces: true,
             internal_chamfer_passes: 2,
             preview_voxel_spheres: false,
+            rotation_quat: [0.0, 0.0, 0.0, 1.0],
         }
     }
 }
@@ -172,6 +183,9 @@ pub struct HollowSession {
     source_triangle_count: usize,
     occupied_voxels: usize,
     voxel_resolution: u16,
+    /// The rotation quaternion used when building this session.
+    /// Stored so callers can detect when a session rebuild is needed.
+    rotation_quat: [f32; 4],
 }
 
 #[derive(Clone, Copy)]
@@ -281,7 +295,17 @@ const SHELL_DIST_BACKWARD: [((isize, isize, isize), f32); 13] = [
     ((1, 0, 0), 1.0_f32),
 ];
 
-pub fn hollow_voxel(mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome {
+pub fn hollow_voxel(mut mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome {
+    // Apply rotation so the voxel grid aligns with the rotated model.
+    let is_identity = options.rotation_quat[0] == 0.0
+        && options.rotation_quat[1] == 0.0
+        && options.rotation_quat[2] == 0.0;
+    if !is_identity {
+        for p in &mut mesh.positions {
+            *p = p.rotate_by_quat(options.rotation_quat);
+        }
+    }
+
     let source_triangle_count = mesh.triangle_count();
     if source_triangle_count == 0 || mesh.positions.is_empty() {
         return HollowOutcome {
@@ -585,7 +609,7 @@ pub fn hollow_voxel(mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome
 
     // Optional voxel-level chamfering on cavity boundaries to turn hard
     // orthogonal internal steps into printable ~45° transitions.
-    if options.internal_chamfer_passes > 0 {
+    if options.internal_chamfer_passes > 0 && !options.smooth_internal_surfaces {
         let passes = effective_internal_cavity_chamfer_passes(
             options.shell_thickness_mm,
             shell_voxels_f,
@@ -614,7 +638,7 @@ pub fn hollow_voxel(mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome
 
     let removed_voxels = occupied_voxels.saturating_sub(keep.iter().filter(|v| **v).count());
 
-    let (out_mesh, cavity_mesh) = if options.preview_voxel_spheres {
+    let (mut out_mesh, cavity_mesh) = if options.preview_voxel_spheres {
         // Sphere preview: skip the expensive mesh building entirely.
         // The frontend will render spheres at removed_voxel_centers instead.
         (mesh.clone(), IndexedMesh::default())
@@ -647,19 +671,13 @@ pub fn hollow_voxel(mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome
         (out, cavity)
     };
     let output_triangle_count = out_mesh.triangle_count();
-
-    let maybe_cavity = if cavity_mesh.triangles.is_empty() {
+    let mut maybe_cavity = if cavity_mesh.triangles.is_empty() {
         None
     } else {
         Some(cavity_mesh)
     };
-
-    HollowOutcome {
-        mesh: out_mesh,
-        cavity_mesh: maybe_cavity,
-        preview_infill_mesh: if options.preview_cavity_only
-            && matches!(options.mode, HollowMode::Infill)
-        {
+    let mut preview_infill_mesh =
+        if options.preview_cavity_only && matches!(options.mode, HollowMode::Infill) {
             let mesh = build_smooth_infill_mesh(
                 &source_bbox,
                 &grid,
@@ -676,10 +694,55 @@ pub fn hollow_voxel(mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome
             }
         } else {
             None
-        },
-        removed_voxel_centers: collect_removed_voxel_centers(&grid, &solid, &keep),
-        removed_voxel_indices: collect_removed_voxel_indices(&grid, &solid, &keep),
-        blocked_voxel_centers: collect_blocked_voxel_centers(&grid, &options.blocked_voxel_indices),
+        };
+    let mut removed_voxel_centers = collect_removed_voxel_centers(&grid, &solid, &keep);
+    let removed_voxel_indices = collect_removed_voxel_indices(&grid, &solid, &keep);
+    let mut blocked_voxel_centers =
+        collect_blocked_voxel_centers(&grid, &options.blocked_voxel_indices);
+
+    // Unrotate all outputs so DragonFruit's own (unrotated) geometry stays in
+    // sync with what Rust produces.
+    if !is_identity {
+        let inv_quat = [
+            -options.rotation_quat[0],
+            -options.rotation_quat[1],
+            -options.rotation_quat[2],
+            options.rotation_quat[3],
+        ];
+        for p in &mut out_mesh.positions {
+            *p = p.rotate_by_quat(inv_quat);
+        }
+        if let Some(ref mut cm) = maybe_cavity {
+            for p in &mut cm.positions {
+                *p = p.rotate_by_quat(inv_quat);
+            }
+        }
+        if let Some(ref mut im) = preview_infill_mesh {
+            for p in &mut im.positions {
+                *p = p.rotate_by_quat(inv_quat);
+            }
+        }
+        for chunk in removed_voxel_centers.chunks_exact_mut(3) {
+            let v = Vec3::new(chunk[0], chunk[1], chunk[2]).rotate_by_quat(inv_quat);
+            chunk[0] = v.x;
+            chunk[1] = v.y;
+            chunk[2] = v.z;
+        }
+        for chunk in blocked_voxel_centers.chunks_exact_mut(3) {
+            let v = Vec3::new(chunk[0], chunk[1], chunk[2]).rotate_by_quat(inv_quat);
+            chunk[0] = v.x;
+            chunk[1] = v.y;
+            chunk[2] = v.z;
+        }
+    }
+
+    HollowOutcome {
+        mesh: out_mesh,
+        cavity_mesh: maybe_cavity,
+        preview_infill_mesh,
+        removed_voxel_centers,
+        removed_voxel_indices,
+        blocked_voxel_centers,
         blocked_voxel_indices: options
             .blocked_voxel_indices
             .clone()
@@ -703,6 +766,24 @@ pub fn hollow_voxel(mesh: IndexedMesh, options: &HollowOptions) -> HollowOutcome
 
 impl HollowSession {
     pub fn new(mesh: IndexedMesh, voxel_resolution: u16) -> Self {
+        Self::with_rotation(mesh, voxel_resolution, [0.0, 0.0, 0.0, 1.0])
+    }
+
+    pub fn with_rotation(
+        mut mesh: IndexedMesh,
+        voxel_resolution: u16,
+        rotation_quat: [f32; 4],
+    ) -> Self {
+        // Apply rotation to mesh positions so the voxel grid aligns with the
+        // rotated model. The output will be unrotated before returning.
+        let is_identity =
+            rotation_quat[0] == 0.0 && rotation_quat[1] == 0.0 && rotation_quat[2] == 0.0;
+        if !is_identity {
+            for p in &mut mesh.positions {
+                *p = p.rotate_by_quat(rotation_quat);
+            }
+        }
+
         let source_triangle_count = mesh.triangle_count();
         let source_bbox = mesh.bbox();
         let diag = source_bbox.max.sub(source_bbox.min);
@@ -909,11 +990,17 @@ impl HollowSession {
             source_triangle_count,
             occupied_voxels,
             voxel_resolution,
+            rotation_quat,
         }
     }
 
     pub fn voxel_resolution(&self) -> u16 {
         self.voxel_resolution
+    }
+
+    /// The rotation quaternion used when creating this session.
+    pub fn rotation_quat(&self) -> [f32; 4] {
+        self.rotation_quat
     }
 
     pub fn run(&self, options: &HollowOptions) -> HollowOutcome {
@@ -975,7 +1062,7 @@ impl HollowSession {
             }
         }
 
-        if options.internal_chamfer_passes > 0 {
+        if options.internal_chamfer_passes > 0 && !options.smooth_internal_surfaces {
             let passes = effective_internal_cavity_chamfer_passes(
                 options.shell_thickness_mm,
                 shell_voxels_f,
@@ -1007,7 +1094,7 @@ impl HollowSession {
         let removed_voxels = self
             .occupied_voxels
             .saturating_sub(keep.iter().filter(|v| **v).count());
-        let (out_mesh, cavity_mesh) = if options.preview_voxel_spheres {
+        let (mut out_mesh, cavity_mesh) = if options.preview_voxel_spheres {
             // Sphere preview: skip the expensive mesh building entirely.
             (self.source_mesh.clone(), IndexedMesh::default())
         } else {
@@ -1039,19 +1126,13 @@ impl HollowSession {
             (out, cavity)
         };
         let output_triangle_count = out_mesh.triangle_count();
-
-        let maybe_cavity = if cavity_mesh.triangles.is_empty() {
+        let mut maybe_cavity = if cavity_mesh.triangles.is_empty() {
             None
         } else {
             Some(cavity_mesh)
         };
-
-        HollowOutcome {
-            mesh: out_mesh,
-            cavity_mesh: maybe_cavity,
-            preview_infill_mesh: if options.preview_cavity_only
-                && matches!(options.mode, HollowMode::Infill)
-            {
+        let mut preview_infill_mesh =
+            if options.preview_cavity_only && matches!(options.mode, HollowMode::Infill) {
                 let mesh = build_smooth_infill_mesh(
                     &self.source_bbox,
                     &self.grid,
@@ -1068,13 +1149,59 @@ impl HollowSession {
                 }
             } else {
                 None
-            },
-            removed_voxel_centers: collect_removed_voxel_centers(&self.grid, &self.solid, &keep),
-            removed_voxel_indices: collect_removed_voxel_indices(&self.grid, &self.solid, &keep),
-            blocked_voxel_centers: collect_blocked_voxel_centers(
-                &self.grid,
-                &options.blocked_voxel_indices,
-            ),
+            };
+        let mut removed_voxel_centers =
+            collect_removed_voxel_centers(&self.grid, &self.solid, &keep);
+        let removed_voxel_indices = collect_removed_voxel_indices(&self.grid, &self.solid, &keep);
+        let mut blocked_voxel_centers =
+            collect_blocked_voxel_centers(&self.grid, &options.blocked_voxel_indices);
+
+        // Unrotate all outputs so DragonFruit's own (unrotated) geometry
+        // stays in sync with what Rust produces.
+        let inv_quat = [
+            -self.rotation_quat[0],
+            -self.rotation_quat[1],
+            -self.rotation_quat[2],
+            self.rotation_quat[3],
+        ];
+        let is_identity = self.rotation_quat[0] == 0.0
+            && self.rotation_quat[1] == 0.0
+            && self.rotation_quat[2] == 0.0;
+        if !is_identity {
+            for p in &mut out_mesh.positions {
+                *p = p.rotate_by_quat(inv_quat);
+            }
+            if let Some(ref mut cm) = maybe_cavity {
+                for p in &mut cm.positions {
+                    *p = p.rotate_by_quat(inv_quat);
+                }
+            }
+            if let Some(ref mut im) = preview_infill_mesh {
+                for p in &mut im.positions {
+                    *p = p.rotate_by_quat(inv_quat);
+                }
+            }
+            for chunk in removed_voxel_centers.chunks_exact_mut(3) {
+                let v = Vec3::new(chunk[0], chunk[1], chunk[2]).rotate_by_quat(inv_quat);
+                chunk[0] = v.x;
+                chunk[1] = v.y;
+                chunk[2] = v.z;
+            }
+            for chunk in blocked_voxel_centers.chunks_exact_mut(3) {
+                let v = Vec3::new(chunk[0], chunk[1], chunk[2]).rotate_by_quat(inv_quat);
+                chunk[0] = v.x;
+                chunk[1] = v.y;
+                chunk[2] = v.z;
+            }
+        }
+
+        HollowOutcome {
+            mesh: out_mesh,
+            cavity_mesh: maybe_cavity,
+            preview_infill_mesh,
+            removed_voxel_centers,
+            removed_voxel_indices,
+            blocked_voxel_centers,
             blocked_voxel_indices: options
                 .blocked_voxel_indices
                 .clone()
@@ -1295,6 +1422,8 @@ fn organic_boundary_mesh(
             for x in 0..grid.nx.saturating_sub(1) {
                 let mut has_kept = false;
                 let mut has_carved = false;
+                let mut has_scalar_positive = false;
+                let mut has_scalar_negative = false;
 
                 for (corner_i, &(dx, dy, dz)) in CUBE_CORNERS.iter().enumerate() {
                     let vx = x + dx;
@@ -1308,9 +1437,16 @@ fn organic_boundary_mesh(
                     has_kept |= corner_kept[corner_i];
                     has_carved |= corner_carved[corner_i];
                     corner_scalar[corner_i] = scalar_field[vi];
+                    if corner_kept[corner_i] || corner_carved[corner_i] {
+                        if corner_scalar[corner_i] >= 0.0 {
+                            has_scalar_positive = true;
+                        } else {
+                            has_scalar_negative = true;
+                        }
+                    }
                 }
 
-                if !has_kept || !has_carved {
+                if !(has_kept && has_carved) && !(has_scalar_positive && has_scalar_negative) {
                     continue;
                 }
 
@@ -1562,16 +1698,53 @@ fn polygonize_cavity_tetrahedron(
     let tet_edges = [(0usize, 1usize), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)];
     let mut intersections = [Vec3::ZERO; 4];
     let mut intersection_count = 0usize;
+    let mut side = [None; 4];
+    let mut scalar_positive_count = 0usize;
+    let mut scalar_negative_count = 0usize;
+
+    for (local_i, &corner_i) in tet.iter().enumerate() {
+        if !(kept[corner_i] || carved[corner_i]) {
+            continue;
+        }
+
+        let is_positive = scalar[corner_i] >= 0.0;
+        side[local_i] = Some(is_positive);
+        if is_positive {
+            scalar_positive_count += 1;
+        } else {
+            scalar_negative_count += 1;
+        }
+    }
+
+    // Prefer the blurred scalar field for contouring. The previous extractor
+    // only crossed hard kept/carved voxel labels, which let smoothing slide
+    // vertices along a blocky voxel edge network but not escape that network.
+    // If the scalar field is locally degenerate, fall back to hard labels so a
+    // disabled or numerically flat field still produces a closed cavity wall.
+    let use_scalar_sides = scalar_positive_count > 0 && scalar_negative_count > 0;
+    if !use_scalar_sides {
+        for (local_i, &corner_i) in tet.iter().enumerate() {
+            side[local_i] = if kept[corner_i] {
+                Some(true)
+            } else if carved[corner_i] {
+                Some(false)
+            } else {
+                None
+            };
+        }
+    }
 
     for (ea, eb) in tet_edges {
         let ia = tet[ea];
         let ib = tet[eb];
-        let a_pos = kept[ia];
-        let b_pos = kept[ib];
-        let a_neg = carved[ia];
-        let b_neg = carved[ib];
+        let Some(a_positive) = side[ea] else {
+            continue;
+        };
+        let Some(b_positive) = side[eb] else {
+            continue;
+        };
 
-        if !((a_pos && b_neg) || (a_neg && b_pos)) {
+        if a_positive == b_positive {
             continue;
         }
 
@@ -1580,7 +1753,7 @@ fn polygonize_cavity_tetrahedron(
         let va = scalar[ia];
         let vb = scalar[ib];
         let denom = va - vb;
-        let t = if denom.abs() <= 1e-6 {
+        let t = if !use_scalar_sides || denom.abs() <= 1e-6 {
             0.5
         } else {
             (va / denom).clamp(0.0, 1.0)
@@ -1598,13 +1771,17 @@ fn polygonize_cavity_tetrahedron(
     let mut negative_centroid = Vec3::ZERO;
     let mut positive_count = 0usize;
     let mut negative_count = 0usize;
-    for &i in &tet {
-        if kept[i] {
-            positive_centroid = positive_centroid.add(positions[i]);
-            positive_count += 1;
-        } else if carved[i] {
-            negative_centroid = negative_centroid.add(positions[i]);
-            negative_count += 1;
+    for (local_i, &corner_i) in tet.iter().enumerate() {
+        match side[local_i] {
+            Some(true) => {
+                positive_centroid = positive_centroid.add(positions[corner_i]);
+                positive_count += 1;
+            }
+            Some(false) => {
+                negative_centroid = negative_centroid.add(positions[corner_i]);
+                negative_count += 1;
+            }
+            None => {}
         }
     }
 
@@ -1943,27 +2120,27 @@ fn effective_internal_cavity_smoothing_profile(
     // not enough to aggressively reshape or pinch the cavity wall.
     if shell_thickness_mm < 1.5 || shell_voxels_f < 2.5 {
         return InternalCavitySmoothingProfile {
-            scalar_field_blur_iterations: 2,
-            taubin_iterations: 4,
-            taubin_max_step_scale: 0.30,
+            scalar_field_blur_iterations: 3,
+            taubin_iterations: 8,
+            taubin_max_step_scale: 0.38,
         };
     }
 
     // Moderate shells get a medium smoothing pass.
     if shell_voxels_f < 3.5 {
         return InternalCavitySmoothingProfile {
-            scalar_field_blur_iterations: 3,
-            taubin_iterations: 6,
-            taubin_max_step_scale: 0.36,
+            scalar_field_blur_iterations: 6,
+            taubin_iterations: 12,
+            taubin_max_step_scale: 0.50,
         };
     }
 
     // Thick shells benefit from heavier smoothing to produce a noticeably
     // cleaner, more organic inner cavity surface.
     InternalCavitySmoothingProfile {
-        scalar_field_blur_iterations: 5,
-        taubin_iterations: 8,
-        taubin_max_step_scale: 0.42,
+        scalar_field_blur_iterations: 9,
+        taubin_iterations: 18,
+        taubin_max_step_scale: 0.62,
     }
 }
 
@@ -2506,9 +2683,14 @@ fn filter_source_mesh_for_openings(
 }
 
 fn point_in_drain_hole_cylinder(p: Vec3, hole: &DrainHoleSpec, bbox: &Aabb, voxel_mm: f32) -> bool {
-    let cx = hole.center_norm[0].clamp(0.0, 1.0);
-    let cy = hole.center_norm[1].clamp(0.0, 1.0);
-    let cz = hole.center_norm[2].clamp(0.0, 1.0);
+    // If the hole center is outside the bbox, the cylinder cannot contain
+    // any point inside the mesh — bail early.
+    if hole.center_norm.iter().any(|&c| c < 0.0 || c > 1.0) {
+        return false;
+    }
+    let cx = hole.center_norm[0];
+    let cy = hole.center_norm[1];
+    let cz = hole.center_norm[2];
     let center = Vec3::new(
         bbox.min.x + (bbox.max.x - bbox.min.x) * cx,
         bbox.min.y + (bbox.max.y - bbox.min.y) * cy,
@@ -2541,9 +2723,13 @@ fn apply_drain_hole_corridor(
     bbox: &Aabb,
     voxel_mm: f32,
 ) {
-    let cx = hole.center_norm[0].clamp(0.0, 1.0);
-    let cy = hole.center_norm[1].clamp(0.0, 1.0);
-    let cz = hole.center_norm[2].clamp(0.0, 1.0);
+    // If the hole center is outside the bbox, no corridor to carve.
+    if hole.center_norm.iter().any(|&c| c < 0.0 || c > 1.0) {
+        return;
+    }
+    let cx = hole.center_norm[0];
+    let cy = hole.center_norm[1];
+    let cz = hole.center_norm[2];
     let center = Vec3::new(
         bbox.min.x + (bbox.max.x - bbox.min.x) * cx,
         bbox.min.y + (bbox.max.y - bbox.min.y) * cy,
@@ -3067,9 +3253,13 @@ fn punch_cylinders_manifold(
             continue;
         }
 
-        let cx = punch.center_norm[0].clamp(0.0, 1.0);
-        let cy = punch.center_norm[1].clamp(0.0, 1.0);
-        let cz = punch.center_norm[2].clamp(0.0, 1.0);
+        // Do not clamp center_norm to [0,1] — the gizmo allows pulling holes
+        // outside the model bbox, and the cylinder should remain exactly where
+        // the user placed it. If the cylinder does not intersect the mesh the
+        // boolean is a no-op (correct), and partial intersections cut correctly.
+        let cx = punch.center_norm[0];
+        let cy = punch.center_norm[1];
+        let cz = punch.center_norm[2];
         let center = Vec3::new(
             bbox.min.x + (bbox.max.x - bbox.min.x) * cx,
             bbox.min.y + (bbox.max.y - bbox.min.y) * cy,
@@ -3295,9 +3485,13 @@ fn refine_solid_near_punches_with_parity(
     let mut parity_cache: Vec<Option<bool>> = vec![None; solid.len()];
 
     for hole in punches {
-        let cx = hole.center_norm[0].clamp(0.0, 1.0);
-        let cy = hole.center_norm[1].clamp(0.0, 1.0);
-        let cz = hole.center_norm[2].clamp(0.0, 1.0);
+        // Skip holes positioned outside the bbox — they cannot intersect the mesh.
+        if hole.center_norm.iter().any(|&c| c < 0.0 || c > 1.0) {
+            continue;
+        }
+        let cx = hole.center_norm[0];
+        let cy = hole.center_norm[1];
+        let cz = hole.center_norm[2];
         let center = Vec3::new(
             bbox.min.x + (bbox.max.x - bbox.min.x) * cx,
             bbox.min.y + (bbox.max.y - bbox.min.y) * cy,
@@ -3570,9 +3764,13 @@ fn triangle_overlaps_drain_hole_cylinder(
     bbox: &Aabb,
     voxel_mm: f32,
 ) -> bool {
-    let cx = hole.center_norm[0].clamp(0.0, 1.0);
-    let cy = hole.center_norm[1].clamp(0.0, 1.0);
-    let cz = hole.center_norm[2].clamp(0.0, 1.0);
+    // If the hole center is outside the bbox, no triangle can overlap it.
+    if hole.center_norm.iter().any(|&c| c < 0.0 || c > 1.0) {
+        return false;
+    }
+    let cx = hole.center_norm[0];
+    let cy = hole.center_norm[1];
+    let cz = hole.center_norm[2];
     let center = Vec3::new(
         bbox.min.x + (bbox.max.x - bbox.min.x) * cx,
         bbox.min.y + (bbox.max.y - bbox.min.y) * cy,
@@ -3779,14 +3977,14 @@ mod tests {
     #[test]
     fn thin_shells_use_reduced_internal_smoothing_until_there_is_enough_slack() {
         let thin = effective_internal_cavity_smoothing_profile(1.0, true, 2.4);
-        assert_eq!(thin.scalar_field_blur_iterations, 2);
-        assert_eq!(thin.taubin_iterations, 4);
+        assert_eq!(thin.scalar_field_blur_iterations, 3);
+        assert_eq!(thin.taubin_iterations, 8);
         assert!(thin.taubin_max_step_scale < 0.42);
 
         let thick = effective_internal_cavity_smoothing_profile(2.0, true, 4.0);
-        assert_eq!(thick.scalar_field_blur_iterations, 5);
-        assert_eq!(thick.taubin_iterations, 8);
-        assert!((thick.taubin_max_step_scale - 0.42).abs() < 1e-5);
+        assert_eq!(thick.scalar_field_blur_iterations, 9);
+        assert_eq!(thick.taubin_iterations, 18);
+        assert!((thick.taubin_max_step_scale - 0.62).abs() < 1e-5);
 
         let disabled = effective_internal_cavity_smoothing_profile(2.0, false, 4.0);
         assert_eq!(disabled.scalar_field_blur_iterations, 0);
@@ -3796,26 +3994,30 @@ mod tests {
     #[test]
     fn internal_smoothing_profile_backs_off_progressively_before_disabling() {
         let full = InternalCavitySmoothingProfile {
-            scalar_field_blur_iterations: 5,
-            taubin_iterations: 8,
-            taubin_max_step_scale: 0.42,
+            scalar_field_blur_iterations: 9,
+            taubin_iterations: 18,
+            taubin_max_step_scale: 0.62,
         };
 
         let reduced_once = reduced_internal_cavity_smoothing_profile(full).unwrap();
-        assert_eq!(reduced_once.scalar_field_blur_iterations, 2);
-        assert_eq!(reduced_once.taubin_iterations, 4);
+        assert_eq!(reduced_once.scalar_field_blur_iterations, 4);
+        assert_eq!(reduced_once.taubin_iterations, 9);
         assert!(reduced_once.taubin_max_step_scale < full.taubin_max_step_scale);
 
         let reduced_twice = reduced_internal_cavity_smoothing_profile(reduced_once).unwrap();
-        assert_eq!(reduced_twice.scalar_field_blur_iterations, 1);
-        assert_eq!(reduced_twice.taubin_iterations, 2);
+        assert_eq!(reduced_twice.scalar_field_blur_iterations, 2);
+        assert_eq!(reduced_twice.taubin_iterations, 4);
         assert!(reduced_twice.taubin_max_step_scale < reduced_once.taubin_max_step_scale);
 
         let reduced_thrice = reduced_internal_cavity_smoothing_profile(reduced_twice).unwrap();
-        assert_eq!(reduced_thrice.scalar_field_blur_iterations, 0);
-        assert_eq!(reduced_thrice.taubin_iterations, 1);
+        assert_eq!(reduced_thrice.scalar_field_blur_iterations, 1);
+        assert_eq!(reduced_thrice.taubin_iterations, 2);
 
-        let disabled = reduced_internal_cavity_smoothing_profile(reduced_thrice).unwrap();
+        let reduced_fourth = reduced_internal_cavity_smoothing_profile(reduced_thrice).unwrap();
+        assert_eq!(reduced_fourth.scalar_field_blur_iterations, 0);
+        assert_eq!(reduced_fourth.taubin_iterations, 1);
+
+        let disabled = reduced_internal_cavity_smoothing_profile(reduced_fourth).unwrap();
         assert!(disabled.is_disabled());
         assert!(reduced_internal_cavity_smoothing_profile(disabled).is_none());
     }
@@ -3844,6 +4046,32 @@ mod tests {
         assert!(
             field[2] > 0.0,
             "blocked kept voxels deep in the cavity should remain positive"
+        );
+    }
+
+    #[test]
+    fn cavity_polygonizer_uses_scalar_sign_not_only_hard_voxel_labels() {
+        let positions = [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(1.0, 1.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(0.0, 1.0, 1.0),
+        ];
+        let scalar = [1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+        let kept = [true; 8];
+        let carved = [false; 8];
+        let mut soup = Vec::new();
+
+        polygonize_cavity_tetrahedron(&mut soup, [0, 5, 1, 6], &positions, &scalar, &kept, &carved);
+
+        assert_eq!(
+            soup.len(),
+            9,
+            "scalar sign changes should contour through same-label voxel edges"
         );
     }
 

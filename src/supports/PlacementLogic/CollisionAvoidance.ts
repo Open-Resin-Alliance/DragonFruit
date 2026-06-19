@@ -2,8 +2,7 @@ import * as THREE from 'three';
 import { Vec3 } from '../types';
 import { checkShaftCollision } from './CollisionUtils';
 import { SDFCache } from './Pathfinding/SDFCache';
-
-const sdfCacheByMeshUuid = new Map<string, SDFCache>();
+import { getOrCreateSDFCache } from './Pathfinding/SmartPlacementV2';
 const DEFAULT_FRUSTUM_SEGMENT_COUNT = 5;
 
 export interface CollisionFrustumProfile {
@@ -17,16 +16,11 @@ function getOrCreateCollisionSdf(mesh: THREE.Mesh): SDFCache | null {
     if (!geometry?.boundsTree) {
         return null;
     }
-
-    const existing = sdfCacheByMeshUuid.get(mesh.uuid);
-    if (existing) {
-        existing.refreshMatrix();
-        return existing;
-    }
-
-    const sdf = new SDFCache(mesh, { cellSize: 0.25 });
+    // Use the shared pool — if a precomputed SDF grid has been loaded
+    // (via tryLoadPrecomputedSDFForMesh), it will be injected into this
+    // cache and all lookups become O(1) hash hits.
+    const sdf = getOrCreateSDFCache(mesh, 0.5);
     sdf.refreshMatrix();
-    sdfCacheByMeshUuid.set(mesh.uuid, sdf);
     return sdf;
 }
 
@@ -51,6 +45,35 @@ export function isCollisionSegmentBlocked(
     mesh: THREE.Mesh,
 ): boolean {
     return segmentBlockedWithBestAvailableMethod(start, end, collisionRadius, mesh);
+}
+
+/**
+ * SDF-based shaft collision check — replaces BVH whisker-ray `checkShaftCollision`.
+ *
+ * Uses `sdf.segmentBlocked()` with adaptive sphere tracing, which is more
+ * accurate than the 9-ray bundle and benefits from the precomputed SDF grid
+ * when available. Falls back to BVH raycasting if no BVH/SDF is available.
+ *
+ * @param start  - Start of the shaft segment (world-space mm)
+ * @param end    - End of the shaft segment (world-space mm)
+ * @param shaftRadius - Shaft radius in mm (used as clearance margin)
+ * @param mesh   - The model mesh
+ */
+export function isShaftBlocked(
+    start: Vec3,
+    end: Vec3,
+    shaftRadius: number,
+    mesh: THREE.Mesh,
+): boolean {
+    const sdf = getOrCreateCollisionSdf(mesh);
+    if (sdf) {
+        return sdf.segmentBlocked(
+            start.x, start.y, start.z,
+            end.x, end.y, end.z,
+            shaftRadius,
+        );
+    }
+    return checkShaftCollision(start, end, shaftRadius, mesh).hit;
 }
 
 export function isCollisionFrustumBlocked(

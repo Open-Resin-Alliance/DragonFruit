@@ -13,6 +13,7 @@ type PointerEventLike = {
 };
 
 const IMMEDIATE_MODEL_HOVER_UNSET = Symbol('immediate-model-hover-unset');
+let interiorSupportInteractionDepth = 0;
 
 type ImmediateModelHoverWindow = Window & {
     __dragonfruitLastImmediateModelHoverId?: string | null | typeof IMMEDIATE_MODEL_HOVER_UNSET;
@@ -28,8 +29,17 @@ function isWithinTargetSubtree(object: THREE.Object3D | null | undefined, target
     return false;
 }
 
+export function setInteriorSupportInteractionActive(active: boolean) {
+    interiorSupportInteractionDepth = Math.max(0, interiorSupportInteractionDepth + (active ? 1 : -1));
+}
+
+export function isInteriorSupportInteractionActive() {
+    return interiorSupportInteractionDepth > 0;
+}
+
 export function getFrontBlockingModelId(event: PointerEventLike | null | undefined, targetRoot: THREE.Object3D | null | undefined): string | null {
     if (!targetRoot) return null;
+    if (isInteriorSupportInteractionActive()) return null;
 
     const intersections = Array.isArray(event?.intersections) ? event.intersections : [];
     const { clipLower, clipUpper } = getClipBounds();

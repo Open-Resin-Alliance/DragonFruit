@@ -10,7 +10,10 @@ interface GridSettingsCardProps {
 }
 
 export function GridSettingsCard({ grid, onChange }: GridSettingsCardProps) {
-    const compactInputClass = 'ui-input w-full h-[36px] px-3 py-2 text-base no-spinners';
+    const unitHint = (unit: string) => (
+        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>{unit}</span>
+    );
+    const compactInputClass = 'ui-input w-full h-[36px] px-3 py-2 text-base text-center no-spinners';
 
     const enabled = grid.enabled;
 
@@ -48,18 +51,22 @@ export function GridSettingsCard({ grid, onChange }: GridSettingsCardProps) {
             <div className={`grid grid-cols-1 gap-1.5 ${!enabled ? 'opacity-80' : ''}`}>
                 <label className="flex flex-col gap-0.5 w-full">
                     <span className="text-[11px] font-medium" style={{ color: !enabled ? 'color-mix(in srgb, var(--text-muted), black 32%)' : 'var(--text-muted)' }}>Spacing</span>
-                    <NumberInput
-                        value={grid.spacingMm}
-                        disabled={!enabled}
-                        step={0.1}
-                        onChange={(val) => {
-                            let safeVal = val;
-                            if (safeVal < 1) safeVal = 1;
-                            if (safeVal > 10) safeVal = 10;
-                            onChange({ spacingMm: safeVal });
-                        }}
-                        className={`${compactInputClass} w-full disabled:opacity-60 disabled:cursor-not-allowed`}
-                    />
+                    <div className="relative">
+                        <NumberInput
+                            value={grid.spacingMm}
+                            disabled={!enabled}
+                            step={0.1}
+                            showStepper={false}
+                            onChange={(val) => {
+                                let safeVal = val;
+                                if (safeVal < 1) safeVal = 1;
+                                if (safeVal > 10) safeVal = 10;
+                                onChange({ spacingMm: safeVal });
+                            }}
+                            className={`${compactInputClass} w-full disabled:opacity-60 disabled:cursor-not-allowed`}
+                        />
+                        {unitHint('mm')}
+                    </div>
                 </label>
             </div>
         </div>

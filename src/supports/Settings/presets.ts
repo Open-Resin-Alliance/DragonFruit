@@ -70,14 +70,17 @@ const DETAIL_PRESET: SupportPreset = {
     description: 'Fine supports for delicate features',
     hotkey: '1',
     icon: '🔬',
-    isBuiltIn: true,
+    isBuiltIn: false,
+    pinnedSlot: 1,
     settings: {
         tip: {
             shape: 'cone',
-            contactDiameterMm: 0.2,
+            contactDiameterMm: 0.22,
             bodyDiameterMm: 0.8,
-            lengthMm: 2.0,
+            lengthMm: 2.5,
             penetrationMm: 0,
+            coneAngleMode: 'adaptive',
+            adaptiveConeAngleOffsetDeg: 60,
             coneAngleDeg: 100,
             breakpointMm: 0,
         },
@@ -90,9 +93,9 @@ const DETAIL_PRESET: SupportPreset = {
         },
         roots: {
             shape: 'cylinder',
-            diameterMm: 4.0,
-            diskHeightMm: 0.3,
-            coneHeightMm: 1.2,
+            diameterMm: 2.0,
+            diskHeightMm: 0.5,
+            coneHeightMm: 1.0,
             neckDiameterMm: 0.8,
             neckBlend: 0.7,
         },
@@ -117,6 +120,8 @@ const DETAIL_PRESET: SupportPreset = {
             stickVsTwigCutoffMm: 5.0,
         },
         autoBracing: createDefaultAutoBracingSettings(),
+        devToolsEnabled: false,
+        devTools: createDefaultSettings().devTools,
     },
 };
 
@@ -126,8 +131,27 @@ const STRUCTURE_PRESET: SupportPreset = {
     description: 'Balanced supports for general use',
     hotkey: '2',
     icon: '🏗️',
-    isBuiltIn: true,
-    settings: createDefaultSettings(),
+    isBuiltIn: false,
+    pinnedSlot: 2,
+    settings: {
+        ...createDefaultSettings(),
+        tip: {
+            ...createDefaultSettings().tip,
+            contactDiameterMm: 0.28,
+            lengthMm: 2.5,
+        },
+        shaft: {
+            ...createDefaultSettings().shaft,
+            diameterMm: 1.0,
+            secondaryDiameterMm: 1.0,
+        },
+        roots: {
+            ...createDefaultSettings().roots,
+            diameterMm: 2.0,
+            diskHeightMm: 0.5,
+            coneHeightMm: 1.0,
+        },
+    },
 };
 
 const ANCHOR_PRESET: SupportPreset = {
@@ -136,29 +160,32 @@ const ANCHOR_PRESET: SupportPreset = {
     description: 'Heavy supports for large overhangs',
     hotkey: '3',
     icon: '⚓',
-    isBuiltIn: true,
+    isBuiltIn: false,
+    pinnedSlot: 3,
     settings: {
         tip: {
             shape: 'cone',
             contactDiameterMm: 0.4,
-            bodyDiameterMm: 1.5,
-            lengthMm: 3.0,
+            bodyDiameterMm: 1.2,
+            lengthMm: 2.5,
             penetrationMm: 0,
+            coneAngleMode: 'adaptive',
+            adaptiveConeAngleOffsetDeg: 60,
             coneAngleDeg: 100,
             breakpointMm: 0,
         },
         shaft: {
             shape: 'cylinder',
-            diameterMm: 1.5,
-            secondaryDiameterMm: 1.5,
+            diameterMm: 1.2,
+            secondaryDiameterMm: 1.2,
             isStraight: true,
             maxAngleDeg: 80,
         },
         roots: {
             shape: 'cylinder',
-            diameterMm: 7.0,
+            diameterMm: 2.0,
             diskHeightMm: 0.5,
-            coneHeightMm: 2.0,
+            coneHeightMm: 1.0,
             neckDiameterMm: 1.5,
             neckBlend: 0.7,
         },
@@ -183,6 +210,8 @@ const ANCHOR_PRESET: SupportPreset = {
             stickVsTwigCutoffMm: 5.0,
         },
         autoBracing: createDefaultAutoBracingSettings(),
+        devToolsEnabled: false,
+        devTools: createDefaultSettings().devTools,
     },
 };
 
@@ -225,6 +254,7 @@ function loadPresetsFromStorage(): PresetCollection {
                     defaults.byId[id] = {
                         ...fallbackPreset,
                         name: parsedPreset.name || fallbackPreset.name,
+                        pinnedSlot: parsedPreset.pinnedSlot ?? fallbackPreset.pinnedSlot,
                         settings: normalizePresetSettings(
                             parsedPreset.settings,
                             fallbackPreset.settings,
@@ -247,6 +277,7 @@ function loadPresetsFromStorage(): PresetCollection {
                         description: parsedPreset.description || 'User custom preset',
                         icon: parsedPreset.icon || '👤',
                         isBuiltIn: false,
+                        pinnedSlot: parsedPreset.pinnedSlot ?? undefined,
                         settings: normalizePresetSettings(
                             parsedPreset.settings,
                             createDefaultSettings(),
@@ -335,6 +366,50 @@ export function getPresetList(): SupportPreset[] {
     return presets.allIds.map((id) => presets.byId[id]).filter(Boolean);
 }
 
+export function getPinnedPresets(): SupportPreset[] {
+    return presets.allIds
+        .map((id) => presets.byId[id])
+        .filter((p): p is SupportPreset => Boolean(p && p.pinnedSlot != null))
+        .sort((a, b) => (a.pinnedSlot ?? 99) - (b.pinnedSlot ?? 99));
+}
+
+export function getUnpinnedPresets(): SupportPreset[] {
+    return presets.allIds
+        .map((id) => presets.byId[id])
+        .filter((p): p is SupportPreset => Boolean(p && p.pinnedSlot == null));
+}
+
+export function getPresetForPinnedSlot(slot: number): SupportPreset | null {
+    for (const preset of Object.values(presets.byId)) {
+        if (preset.pinnedSlot === slot) return preset;
+    }
+    return null;
+}
+
+export function setPresetPinnedSlot(id: string, slot: number | null): void {
+    if (!presets.byId[id]) {
+        console.warn('[PresetStore] Cannot pin, preset not found:', id);
+        return;
+    }
+
+    // If assigning a slot, unassign any other preset that currently has it
+    if (slot != null) {
+        for (const other of Object.values(presets.byId)) {
+            if (other.id !== id && other.pinnedSlot === slot) {
+                other.pinnedSlot = undefined;
+            }
+        }
+    }
+
+    presets.byId[id] = {
+        ...presets.byId[id],
+        pinnedSlot: slot ?? undefined,
+    };
+
+    savePresetsToStorage();
+    notify();
+}
+
 export function getPresetById(id: string): SupportPreset | undefined {
     return presets.byId[id];
 }
@@ -386,17 +461,19 @@ export function checkPresetDrift(current: SupportSettings): void {
     const presetSettings = presets.byId[activeId].settings;
 
     // Deep compare ESSENTIAL fields only.
-    // Exclude: grid, tip.coneAngleMode, tip.adaptiveConeAngleOffsetDeg, tip.coneAngleDeg
-    // (And raft is separate)
+    // Exclude: grid (And raft is separate)
 
     const isDifferent =
-        // Tip (excluding cone angles)
+        // Tip
         current.tip.shape !== presetSettings.tip.shape ||
         current.tip.contactDiameterMm !== presetSettings.tip.contactDiameterMm ||
         current.tip.bodyDiameterMm !== presetSettings.tip.bodyDiameterMm ||
         current.tip.lengthMm !== presetSettings.tip.lengthMm ||
         current.tip.penetrationMm !== presetSettings.tip.penetrationMm ||
         current.tip.breakpointMm !== presetSettings.tip.breakpointMm ||
+        current.tip.coneAngleMode !== presetSettings.tip.coneAngleMode ||
+        current.tip.adaptiveConeAngleOffsetDeg !== presetSettings.tip.adaptiveConeAngleOffsetDeg ||
+        current.tip.coneAngleDeg !== presetSettings.tip.coneAngleDeg ||
         // Shaft
         JSON.stringify(current.shaft) !== JSON.stringify(presetSettings.shaft) ||
         // Roots
@@ -440,13 +517,6 @@ export function setActivePreset(id: string | null): void {
         grid: {
             ...current.grid, // Use current, ignore preset
         },
-        // Preserve current Cone Control Angle settings (Tip)
-        tip: {
-            ...preset.settings.tip,
-            coneAngleMode: current.tip.coneAngleMode,
-            adaptiveConeAngleOffsetDeg: current.tip.adaptiveConeAngleOffsetDeg,
-            coneAngleDeg: current.tip.coneAngleDeg,
-        },
         // Preserve current Auto Bracing settings
         autoBracing: {
             ...current.autoBracing,
@@ -479,13 +549,6 @@ export function savePreset(id: string): void {
         ...current,
         grid: {
             ...existingPreset.settings.grid, // Keep what was in the preset
-        },
-        tip: {
-            ...current.tip,
-            // Restore cone angle settings from existing preset to avoid saving current ones
-            coneAngleMode: existingPreset.settings.tip.coneAngleMode,
-            adaptiveConeAngleOffsetDeg: existingPreset.settings.tip.adaptiveConeAngleOffsetDeg,
-            coneAngleDeg: existingPreset.settings.tip.coneAngleDeg,
         },
         autoBracing: {
             ...existingPreset.settings.autoBracing,
@@ -526,10 +589,7 @@ export function updateCustomPresetMetadata(id: string, name: string, description
         return;
     }
 
-    if (presets.byId[id].isBuiltIn) {
-        console.warn('[PresetStore] Cannot update built-in preset metadata:', id);
-        return;
-    }
+    // All presets are now editable (no built-in lock)
 
     const uniqueName = ensureUniqueName(name, id);
     const sanitizedDescription = sanitizePresetDescription(description);
@@ -602,25 +662,58 @@ export function createPreset(name: string): SupportPreset {
     return preset;
 }
 
+export function restoreFactoryDefaults(): void {
+    // Reset factory presets to their original definitions and re-pin to slots 1-3
+    const factoryPresets: Record<string, SupportPreset> = {
+        detail: { ...DETAIL_PRESET, pinnedSlot: 1 },
+        structure: { ...STRUCTURE_PRESET, pinnedSlot: 2 },
+        anchor: { ...ANCHOR_PRESET, pinnedSlot: 3 },
+    };
+
+    (['detail', 'structure', 'anchor'] as const).forEach((id) => {
+        presets.byId[id] = {
+            ...factoryPresets[id],
+            settings: normalizePresetSettings(
+                factoryPresets[id].settings,
+                createDefaultSettings(),
+            ),
+        };
+    });
+
+    // Unpin all user-created presets (anything that isn't detail/structure/anchor)
+    presets.allIds.forEach((id) => {
+        if (id === 'detail' || id === 'structure' || id === 'anchor') return;
+        const preset = presets.byId[id];
+        if (preset) {
+            presets.byId[id] = { ...preset, pinnedSlot: undefined };
+        }
+    });
+
+    // Ensure factory IDs are first in the ordering
+    const factoryIds = ['detail', 'structure', 'anchor'];
+    const userIds = presets.allIds.filter((id) => !factoryIds.includes(id));
+    presets.allIds = [...factoryIds, ...userIds];
+
+    savePresetsToStorage();
+    notify();
+    console.log('[PresetStore] Restored factory defaults, unpinned user presets');
+}
+
 export function deletePreset(id: string): void {
     if (!presets.byId[id]) {
         console.warn('[PresetStore] Cannot delete, preset not found:', id);
         return;
     }
 
-    // Prevent deleting built-in presets
-    if (presets.byId[id].isBuiltIn) {
-        console.warn('[PresetStore] Cannot delete built-in preset:', id);
-        return;
-    }
+    // All presets are now deletable (no built-in lock)
 
     // Remove from byId and allIds
     delete presets.byId[id];
     presets.allIds = presets.allIds.filter((pid) => pid !== id);
 
-    // If deleted preset was active, fall back to 'structure' if available
+    // If deleted preset was active, fall back to first available
     if (presets.activePresetId === id) {
-        presets.activePresetId = presets.byId['structure'] ? 'structure' : (presets.allIds[0] ?? null);
+        presets.activePresetId = presets.allIds[0] ?? null;
     }
 
     savePresetsToStorage();

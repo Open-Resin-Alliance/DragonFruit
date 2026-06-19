@@ -12,7 +12,7 @@ function makeOpenSdf(overrides?: Partial<Pick<SDFCache, 'distanceAt' | 'isBlocke
         isBlocked: () => false,
         segmentBlocked: () => false,
         ...overrides,
-    } as SDFCache;
+    } as unknown as SDFCache;
 }
 
 test('resolveCommittedBaseCandidate falls through to a farther snapped node when the nearest base is blocked', () => {
@@ -88,3 +88,28 @@ test('resolveCommittedBaseCandidate prefers a farther snapped base when it makes
     assert.deepEqual(resolved?.basePos, { x: 4, y: 0, z: 0 });
     assert.equal(resolved?.inboundLateralMm, 0);
 });
+
+test('resolveCommittedBaseCandidate applies subGridOffset when grid is disabled', () => {
+    const sdf = makeOpenSdf();
+    const resolved = resolveCommittedBaseCandidate({
+        preferredBottomPos: { x: 1.2, y: 3.4, z: 0 },
+        lastSegmentStart: { x: 1.2, y: 3.4, z: 6 },
+        rootTopZ: 3,
+        gridEnabled: false,
+        spacingMm: 4,
+        maxNearestNodeSearchRings: 1,
+        sdf,
+        diskHeight: 1,
+        coneHeight: 2,
+        rootsRadius: 1.5,
+        shaftRadius: 0.75,
+        clearance: 0.8,
+        subGridOffset: { x: 0.1, y: -0.2 },
+    });
+
+    assert.ok(resolved);
+    // basePos should be shifted by subGridOffset: 1.2 + 0.1 = 1.3, 3.4 - 0.2 = 3.2
+    assert.ok(Math.abs(resolved.basePos.x - 1.3) < 0.00001);
+    assert.ok(Math.abs(resolved.basePos.y - 3.2) < 0.00001);
+});
+

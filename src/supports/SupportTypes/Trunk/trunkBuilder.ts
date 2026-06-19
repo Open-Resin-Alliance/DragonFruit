@@ -21,6 +21,7 @@ import type { SnappedTrunkRouteResult, TrunkRouteResult } from './trunkRouteType
 import { gridSnappedXYFromKey } from '../../PlacementLogic/Grid/gridMath';
 import { normalizeFirstConstructionJoint, withCentralStraightSupportJoint } from './trunkConstructionJoints';
 import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
+import { perfMark, perfMeasureWithSpike } from '../../PlacementLogic/Pathfinding/pathfindingPerf';
 
 function uuidv4() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
@@ -160,11 +161,11 @@ export interface TrunkBuildResult {
  */
 // ---------------------------------------------------------------------------
 // Placement result cache — covers V2 A* + V1 fallback together.
-// Multi-entry LRU per model (24 slots) avoids cache thrashing when the cursor
-// sweeps through a transition zone at the 0.5mm quantisation boundary.
+// Multi-entry LRU per model (24 slots) avoids cache thrashing while staying
+// tight enough that trunk/stick decisions revalidate near collision boundaries.
 // ---------------------------------------------------------------------------
-const PLACEMENT_CACHE_QUANT = 0.5; // mm — matches SDF cell size
-const NORMAL_CACHE_QUANT = 0.05;   // ~2.9° buckets
+const PLACEMENT_CACHE_QUANT = 0.1; // mm - keep hover cache tight near collision/cavity boundaries
+const NORMAL_CACHE_QUANT = 0.02;   // ~1.1 degree buckets
 const MAX_PLACEMENT_CACHE_ENTRIES = 24;
 
 // Map<modelId, Map<cacheKey, result>> — insertion-ordered for FIFO eviction
@@ -206,10 +207,6 @@ export function clearPlacementCache(modelId?: string): void {
 export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
     const { tipPos, tipNormal, modelId, mesh, overrides, isPreview } = input;
 
-    // Placement computation always runs (no cache). This ensures preview and click
-    // use consistent logic and settings, preventing the mismatches that occurred
-    // when coarse preview results were cached and reused for click placement.
-
     // Read current settings
     const settings = getSettings();
     const tipProfile = buildTipProfile(settings, overrides);
@@ -233,17 +230,34 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
     if (mesh) {
         // V2 grid A* pathfinder (SDF-backed).
         // Both preview and click use FULL collision checks to ensure consistent safety.
-        // Preview uses lower budget (1200 expansions) for responsiveness, but same
-        // collision detection rigor as click. This trades slightly slower preview
-        // exploration for correct collision avoidance.
+        // Preview uses lower budget (800 expansions) for responsiveness.
         const v2Context = isPreview ? { maxExpansions: 800 } : undefined;
-        const result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
-        placement = result;
+
+        // Cache key: position + normal quantised at 0.5mm / 0.05 normal.
+        // Only used for preview → preview reuse; click-time bypasses cache
+        // to ensure fresh collision validation against any moved models.
+        const cacheKey = isPreview ? placementCacheKey(tipPos, tipNormal) : null;
+        const cached = cacheKey ? getPlacementCache(modelId, cacheKey) : undefined;
+
+        if (cached) {
+            placement = cached;
+        } else {
+            perfMark('trunk:v2-placement');
+            const result = calculateSmartPlacementV2({ ...placementInput, mesh, modelId }, v2Context);
+            perfMeasureWithSpike('trunk:v2-placement', 'trunk:v2-placement');
+            placement = result;
+            if (cacheKey) {
+                setPlacementCache(modelId, cacheKey, placement);
+            }
+        }
     } else {
         placement = calculateStandardPlacement(placementInput);
     }
 
-    return buildTrunkDataFromPlacement(input, placement);
+    perfMark('trunk:build-from-placement');
+    const built = buildTrunkDataFromPlacement(input, placement);
+    perfMeasureWithSpike('trunk:build-from-placement', 'trunk:build-from-placement');
+    return built;
 }
 
 export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: TrunkPlacementResult): TrunkBuildResult {

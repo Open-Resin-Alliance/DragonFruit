@@ -45,7 +45,9 @@ type MeshSettingsTabProps = {
   heatmapColors: string[];
   onHeatmapColorChange: (index: number, color: string) => void;
   selectionColor: string;
+  onSelectionColorChange: (color: string) => void;
   hoverColor: string;
+  onHoverColorChange: (color: string) => void;
   selectionHighlightMode: SelectionHighlightMode;
   onSelectionHighlightModeChange: (mode: SelectionHighlightMode) => void;
   hoverTintStrength: number;
@@ -80,7 +82,9 @@ export function MeshSettingsTab({
   heatmapColors,
   onHeatmapColorChange,
   selectionColor,
+  onSelectionColorChange,
   hoverColor,
+  onHoverColorChange,
   selectionHighlightMode,
   onSelectionHighlightModeChange,
   hoverTintStrength,
@@ -486,7 +490,7 @@ export function MeshSettingsTab({
           </span>
           <div className="flex-1 min-w-0">
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Selection
+              Selection &amp; Hover
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
               How selected and hovered models are emphasized throughout the app.
@@ -514,49 +518,44 @@ export function MeshSettingsTab({
               <div className="text-xs font-semibold mb-2" style={{ color: 'var(--text-strong)' }}>Colors</div>
               <div className="grid gap-2 sm:grid-cols-2">
                 <div className="space-y-1">
-                  <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Selection (Theme Accent)</div>
+                  <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Selection Color</div>
                   <div className="flex items-center gap-2">
                     <input
                       type="color"
                       value={selectionColor}
-                      readOnly
-                      disabled
+                      onChange={(e) => onSelectionColorChange(e.target.value)}
                       className="h-8 w-10 shrink-0 rounded border"
-                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', opacity: 0.7 }}
+                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
                     />
                     <input
                       type="text"
                       value={selectionColor}
-                      readOnly
+                      onChange={(e) => onSelectionColorChange(e.target.value)}
                       className="ui-input h-8 w-[7.5rem] min-w-0"
                       placeholder="#ec2a77"
                     />
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Hover (Theme Accent Hover)</div>
+                  <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Hover Color</div>
                   <div className="flex items-center gap-2">
                     <input
                       type="color"
                       value={hoverColor}
-                      readOnly
-                      disabled
+                      onChange={(e) => onHoverColorChange(e.target.value)}
                       className="h-8 w-10 shrink-0 rounded border"
-                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', opacity: 0.7 }}
+                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
                     />
                     <input
                       type="text"
                       value={hoverColor}
-                      readOnly
+                      onChange={(e) => onHoverColorChange(e.target.value)}
                       className="ui-input h-8 w-[7.5rem] min-w-0"
                       placeholder="#ec2a77"
                     />
                   </div>
                 </div>
               </div>
-              <p className="mt-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Managed by <strong>UI &amp; Theme</strong> → <strong>Accent</strong> and <strong>Accent Hover</strong>.
-              </p>
             </div>
 
             <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>

@@ -133,8 +133,9 @@ export function useBranchPlacement() {
         const normal = calculateSmoothedNormal(hit);
         const pos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
         const modelId = hit.object.userData?.modelId || 'unknown';
+        const placementSurface = hit.object.userData?.supportPlacementSurface === 'interior' ? 'interior' : undefined;
 
-        branchPlacementStore.setTip(pos, normal, modelId);
+        branchPlacementStore.setTip(pos, normal, modelId, placementSurface);
 
         console.log('[BranchPlacement] Tip set at', pos, 'awaiting base click on support');
     }, [binding, isPlacementHardDisabled]);

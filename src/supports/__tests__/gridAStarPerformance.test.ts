@@ -11,7 +11,13 @@ function makeOpenSdf(): SDFCache {
         distanceAtWithin: () => Infinity,
         isBlocked: () => false,
         segmentBlocked: () => false,
-    } as SDFCache;
+        hasPrecomputed: false,
+        hasHeightmap: false,
+        getBlockedZ: () => NaN,
+        columnIsClear: () => true,
+        loadPrecomputed: () => {},
+        loadHeightmap: () => {},
+    } as unknown as SDFCache;
 }
 
 test('gridAStar descends tall clear spans without lateral fan-out', () => {

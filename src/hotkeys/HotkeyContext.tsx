@@ -24,8 +24,10 @@ export function HotkeyProvider({ children }: { children: React.ReactNode }) {
             const stored = localStorage.getItem(HOTKEY_STORAGE_KEY);
             if (stored) {
                 const parsed = JSON.parse(stored);
-                // Merge with defaults to ensure any new keys added to the app are present
-                setConfig(prev => deepMerge(prev, parsed));
+                // Merge with defaults to ensure any new keys added to the app are present,
+                // and strip any stored entries whose actions no longer exist in the defaults
+                const cleaned = stripStaleActions(DEFAULT_KEYBINDINGS, parsed);
+                setConfig(prev => deepMerge(prev, cleaned));
             }
         } catch (e) {
             console.error('Failed to load hotkeys', e);
@@ -74,6 +76,32 @@ export function useHotkeyConfig() {
         throw new Error('useHotkeyConfig must be used within a HotkeyProvider');
     }
     return context;
+}
+
+// Strip any stored category entries whose actions don't exist in the current defaults.
+// This automatically cleans up old hotkeys (e.g. APPLY_DETAIL) that have been removed.
+function stripStaleActions(defaults: HotkeyConfig, stored: any): any {
+    const result: any = {};
+    for (const category in stored) {
+        if (!stored.hasOwnProperty(category)) continue;
+        if (!defaults[category]) {
+            // Entire category no longer exists — drop it
+            continue;
+        }
+        const categoryDefaults = defaults[category];
+        const categoryStored = stored[category];
+        const cleanedCategory: any = {};
+        for (const action in categoryStored) {
+            if (!categoryStored.hasOwnProperty(action)) continue;
+            if (!categoryDefaults[action]) {
+                // Action no longer exists in defaults — drop it
+                continue;
+            }
+            cleanedCategory[action] = categoryStored[action];
+        }
+        result[category] = cleanedCategory;
+    }
+    return result;
 }
 
 // Helper to merge stored config with defaults (to pick up new default keys and keep user overrides)

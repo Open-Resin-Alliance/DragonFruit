@@ -36,6 +36,11 @@ export interface HollowOptions {
   /** When true, skip the smoothed cavity mesh and render spheres at
    *  removed-voxel centers for a near-instant preview. */
   previewVoxelSpheres?: boolean;
+  /** Unit quaternion [x, y, z, w] to rotate the mesh before voxelizing,
+   *  so pillar infills align with the model's scene rotation. The output
+   *  is inversely rotated so DragonFruit's unrotated geometry stays in sync.
+   *  Default identity [0,0,0,1] means no rotation. */
+  rotationQuat?: [number, number, number, number];
 }
 
 export interface HollowReport {

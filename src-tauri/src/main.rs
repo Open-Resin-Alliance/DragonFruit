@@ -1,7 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod astar;
 mod mesh_repair;
 mod network;
+mod sdf;
+mod updater_channel;
+
 fn default_minimum_aa_alpha_percent() -> f32 {
     35.0
 }
@@ -230,7 +234,7 @@ pub(crate) struct StageFileAppender {
     pub len: u64,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, PartialEq)]
 pub(crate) struct StageMeshStats {
     pub chunks_received: u64,
     pub append_ns_total: u64,
@@ -2879,6 +2883,46 @@ async fn reveal_in_file_manager(path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn discover_uvtools_path(candidates: Vec<String>) -> Result<Option<String>, String> {
+    // Check candidate absolute paths first
+    for candidate in &candidates {
+        let p = std::path::Path::new(candidate);
+        if p.exists() && p.is_file() {
+            return Ok(Some(candidate.clone()));
+        }
+    }
+
+    // Check PATH for UVTools.exe
+    if let Ok(path_env) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_env) {
+            let exe_candidate = dir.join("UVTools.exe");
+            if exe_candidate.exists() && exe_candidate.is_file() {
+                return Ok(Some(exe_candidate.to_string_lossy().to_string()));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+#[tauri::command]
+async fn launch_external_process(exe_path: String, file_arg: String) -> Result<(), String> {
+    let exe_path = exe_path.trim().to_string();
+    let file_arg = file_arg.trim().to_string();
+
+    if exe_path.is_empty() {
+        return Err("Executable path is empty".to_string());
+    }
+
+    std::process::Command::new(&exe_path)
+        .arg(&file_arg)
+        .spawn()
+        .map_err(|e| format!("Failed to launch external process: {e}"))?;
+
+    Ok(())
+}
+
 /// Returns the path to the log-level preference file.
 /// This is intentionally computed with raw env vars so it can be called
 /// before the Tauri app (and its path resolver) is initialised.
@@ -3111,6 +3155,11 @@ fn main() {
             .level_for("rustls", log::LevelFilter::Warn)
             .level_for("h2", log::LevelFilter::Warn)
             .level_for("tokio_tungstenite", log::LevelFilter::Warn)
+            // Updater plugin logs ERROR for non-2XX endpoint responses (expected
+            // during dev when no release exists yet). The frontend handles
+            // surfacing real update failures to the user, so suppress the
+            // Rust-side noise here.
+            .level_for("tauri_plugin_updater", log::LevelFilter::Off)
             .max_file_size(5_000_000)
             .rotation_strategy(RotationStrategy::KeepOne)
             .build()
@@ -3196,6 +3245,12 @@ fn main() {
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_plugin_macos_fps::init());
 
+    // Updater plugin — checks GitHub releases for new versions and handles
+    // download + install across all platforms.
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    // Process plugin — needed for app relaunch after update installs.
+    let builder = builder.plugin(tauri_plugin_process::init());
+
     builder
         .invoke_handler(tauri::generate_handler![
             slice_solid_native,
@@ -3240,6 +3295,8 @@ fn main() {
             scene_autosave_read_manifest,
             scene_autosave_read_voxl_bytes,
             reveal_in_file_manager,
+            launch_external_process,
+            discover_uvtools_path,
             set_log_level_pref,
             read_log_tail,
             open_log_file,
@@ -3277,7 +3334,16 @@ fn main() {
             mesh_repair::mesh_organic_cut_membrane_preview,
             mesh_repair::mesh_organic_cut_read_membrane,
             mesh_repair::mesh_organic_cut_read_key,
-            mesh_repair::mesh_repair_read_positions
+            mesh_repair::mesh_repair_read_positions,
+            mesh_repair::load_stl_file,
+            sdf::compute_sdf_from_staged,
+            sdf::compute_heightmap_from_staged,
+            sdf::invalidate_sdf_cache,
+            astar::run_astar_pathfinding,
+            updater_channel::check_updates,
+            updater_channel::perform_update,
+            updater_channel::get_saved_update_channel,
+            updater_channel::save_update_channel
         ])
         .run(tauri::generate_context!())
         .expect("error while running DragonFruit desktop app");

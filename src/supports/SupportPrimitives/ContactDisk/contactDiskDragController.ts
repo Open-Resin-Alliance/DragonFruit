@@ -21,7 +21,11 @@ interface ContactDiskDragSessionOptions {
     onEnd?: () => void;
     initialEvent?: PointerEvent | MouseEvent | any;
     modelId?: string | null;
+    placementSurface?: 'interior' | 'exterior';
 }
+
+const _interiorCavityRaycaster = new THREE.Raycaster();
+const _interiorCavityRaycastMesh = new THREE.Mesh();
 
 function extractPointerButton(event: any): number | undefined {
     return event?.button ?? event?.nativeEvent?.button;
@@ -53,13 +57,48 @@ function collectModelMeshes(root: THREE.Object3D, targetModelId?: string | null)
 }
 
 export function startContactDiskDragSession(options: ContactDiskDragSessionOptions): ContactDiskDragSession {
-    const { camera, domElement, scene, onHit, onEnd, initialEvent, modelId } = options;
+    const { camera, domElement, scene, onHit, onEnd, initialEvent, modelId, placementSurface } = options;
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     const modelMeshes = collectModelMeshes(scene, modelId);
     let stopped = false;
     let rafId: number | null = null;
     let pendingEvent: PointerEvent | MouseEvent | null = null;
+
+    const findInteriorCavityHit = (
+        ray: THREE.Ray,
+        modelMesh: THREE.Object3D,
+        cavityGeometry: THREE.BufferGeometry,
+        targetModelId: string,
+    ): THREE.Intersection | null => {
+        const rc = _interiorCavityRaycaster;
+        rc.ray.copy(ray);
+        rc.near = 0;
+        rc.far = 500;
+        (rc as any).firstHitOnly = true;
+
+        const mesh = _interiorCavityRaycastMesh;
+        mesh.geometry = cavityGeometry;
+        mesh.matrixWorld.copy(modelMesh.matrixWorld);
+        mesh.matrixAutoUpdate = false;
+        mesh.userData = {
+            modelId: targetModelId,
+            supportPlacementSurface: 'interior',
+            cavityGeometry,
+        };
+
+        const hits: THREE.Intersection[] = [];
+        mesh.raycast(rc, hits);
+
+        rc.near = 0;
+        rc.far = Infinity;
+        (rc as any).firstHitOnly = false;
+
+        if (hits.length === 0) return null;
+        const hit = hits[0];
+        hit.object = mesh;
+        return hit;
+    };
 
     const processPointerEvent = (event: PointerEvent | MouseEvent | any) => {
         const pointerPosition = getPointerClientPosition(event);
@@ -77,6 +116,17 @@ export function startContactDiskDragSession(options: ContactDiskDragSessionOptio
         const hits = raycaster.intersectObjects(modelMeshes, true);
         let hit = hits[0];
         if (!hit) return;
+
+        if (placementSurface === 'interior') {
+            const cavityGeometry = (hit.object.userData as any)?.cavityGeometry as THREE.BufferGeometry | undefined;
+            const hitModelId = (hit.object.userData as any)?.modelId as string | undefined;
+            if (cavityGeometry && hitModelId) {
+                const interiorHit = findInteriorCavityHit(raycaster.ray, hit.object, cavityGeometry, hitModelId);
+                if (interiorHit) {
+                    hit = interiorHit;
+                }
+            }
+        }
 
         // If the hit is in the clipped (invisible) zone, skip past it to
         // find the visible inner wall so contact disks attach correctly

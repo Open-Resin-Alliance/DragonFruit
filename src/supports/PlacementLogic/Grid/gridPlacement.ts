@@ -14,11 +14,12 @@ import { gridNodeKeyFromXY, gridSnappedXYFromKey } from './gridMath';
 import type { DecideGridPlacementArgs, GridPlacementDecision } from './types';
 import { getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { calculateKnotPositionOnSegmentFromT } from '../../SupportPrimitives/Knot/knotUtils';
-import { checkShaftCollision } from '../CollisionUtils';
+import { isShaftBlocked, isCollisionSegmentBlocked } from '../CollisionAvoidance';
 import * as THREE from 'three';
 import { generateUuid } from '../../../utils/uuid';
 import { buildAnchorData } from '../../SupportTypes/Anchor/anchorBuilder';
 import { buildLeafData } from '../../SupportTypes/Leaf/leafBuilder';
+import { perfMark, perfMeasureWithSpike } from '../Pathfinding/pathfindingPerf';
 
 const MIN_TRUNK_CLEARANCE_MM = 0.05;
 const ANCHOR_HEIGHT_THRESHOLD_MM = 5.0;
@@ -237,19 +238,12 @@ function branchCollidesWithMesh(
     knot: Knot,
     tipPos: Vec3,
     tipNormal: Vec3,
-    modelId: string,
+    _modelId: string,
     mesh: THREE.Mesh,
     shaftDiameterMm: number
 ): boolean {
-    // Lightweight collision check: approximate branch geometry using nominal
-    // cone axis from the tip normal instead of doing full socket search via
-    // buildBranchData → findBestBranchConePlacement. This avoids expensive
-    // BVH socket searches for every knot candidate during grid placement.
     const radius = shaftDiameterMm / 2 + 0.25;
 
-    // Approximate socket position: tipPos offset by nominal cone length along
-    // the surface normal. This is a reasonable proxy for the actual socket
-    // position that findBestBranchConePlacement would compute.
     const settings = getSettings();
     const nominalConeLengthMm = settings.tip.lengthMm;
     const socketApprox: Vec3 = {
@@ -258,22 +252,10 @@ function branchCollidesWithMesh(
         z: tipPos.z + tipNormal.z * nominalConeLengthMm,
     };
 
-    const raycaster = new THREE.Raycaster();
-
-    // Middle joint: midpoint between knot and approximated socket
-    const midPos: Vec3 = {
-        x: (knot.pos.x + socketApprox.x) / 2,
-        y: (knot.pos.y + socketApprox.y) / 2,
-        z: (knot.pos.z + socketApprox.z) / 2,
-    };
-
-    // Bottom segment: Knot → Middle joint
-    if (checkShaftCollision(knot.pos, midPos, radius, mesh, raycaster).hit) return true;
-
-    // Top segment: Middle joint → Approximated socket
-    if (checkShaftCollision(midPos, socketApprox, radius, mesh, raycaster).hit) return true;
-
-    return false;
+    // Check the full knot→socket segment as a single shaft (SDF-based,
+    // benefits from precomputed grid). Splitting into two segments is
+    // unnecessary — the SDF's adaptive sphere tracing handles curvature.
+    return isShaftBlocked(knot.pos, socketApprox, radius, mesh);
 }
 
 function getHostDiameterMmFromKnot(knot: Knot, settings: DecideGridPlacementArgs['settings']): number {
@@ -406,8 +388,6 @@ function findHostTrunkAtNode(snapshot: SupportState, modelId: string, nodeKey: s
 }
 
 // Reusable raycaster for trunk collision checks — avoids allocating one per call.
-const _trunkCollisionRaycaster = new THREE.Raycaster();
-
 function trunkCollidesWithMesh(
     candidate: TrunkBuildResult,
     settings: DecideGridPlacementArgs['settings'],
@@ -416,14 +396,14 @@ function trunkCollidesWithMesh(
     const trunk = candidate.trunk;
     const root = candidate.root;
     const collisionRadius = settings.shaft.diameterMm / 2 + MIN_TRUNK_CLEARANCE_MM;
-    const raycaster = _trunkCollisionRaycaster;
 
     for (let segIndex = 0; segIndex < trunk.segments.length; segIndex++) {
         const endpoints = getTrunkSegmentEndpointsWithSettings(trunk, root, segIndex, settings);
         if (!endpoints) continue;
 
-        const hit = checkShaftCollision(endpoints.start, endpoints.end, collisionRadius, mesh, raycaster);
-        if (hit.hit) return true;
+        if (isShaftBlocked(endpoints.start, endpoints.end, collisionRadius, mesh)) {
+            return true;
+        }
     }
 
     return false;
@@ -471,7 +451,11 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
             nodeKey,
         );
     if (!host) {
+        // Grid-mode trunk candidates are built without the flexible mesh router,
+        // so preview and click must share this collision gate.
+        perfMark('grid:trunk-collision');
         const collidesWithGroundRoute = Boolean(mesh && trunkCollidesWithMesh(snappedCandidate, settings, mesh));
+        perfMeasureWithSpike('grid:trunk-collision', 'grid:collision-check');
         if (!collidesWithGroundRoute) {
             return {
                 kind: 'place_trunk',
@@ -521,6 +505,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
     }
 
     // --- Step 1: Attach to the co-located host. ---
+    perfMark('grid:attach-search');
     const selectedKnot = selectHighestValidAttachment({
         hostTrunk: host.trunk,
         hostRoot: host.root,
@@ -532,6 +517,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
         tipNormal,
         modelId,
     });
+    perfMeasureWithSpike('grid:attach-search', 'grid:attachment-search');
 
     if (!selectedKnot) {
         return {
@@ -548,6 +534,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
     }
 
     // --- Step 2: Build branch on the fixed node. ---
+    perfMark('grid:branch-build');
     const { branch, supportData } = buildBranchData({
         tipPos,
         tipNormal,
@@ -555,6 +542,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
         parentKnot: selectedKnot,
         mesh,
     });
+    perfMeasureWithSpike('grid:branch-build', 'branch:build');
 
     const hostTrunkContactZ = host.trunk.contactCone?.pos.z ?? Number.NEGATIVE_INFINITY;
     const candidateContactZ = tipPos.z;

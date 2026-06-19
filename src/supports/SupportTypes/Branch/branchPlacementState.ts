@@ -12,6 +12,7 @@ import type { SupportData } from '../../rendering/SupportBuilder';
 import type { Vec3 } from '../../types';
 
 type Stage = 'idle' | 'awaitingBase';
+type PlacementSurface = 'interior' | 'exterior';
 
 interface BranchPlacementState {
     altActive: boolean;
@@ -19,6 +20,7 @@ interface BranchPlacementState {
     tipPosition: Vec3 | null;
     tipNormal: Vec3 | null;
     modelId: string;
+    placementSurface?: PlacementSurface;
     previewData: SupportData | null;
     snapTarget: {
         targetId: string;
@@ -39,6 +41,7 @@ const initialState: BranchPlacementState = {
     tipPosition: null,
     tipNormal: null,
     modelId: 'unknown',
+    placementSurface: undefined,
     previewData: null,
     snapTarget: null,
     justFinalized: false,
@@ -91,12 +94,13 @@ export const branchPlacementStore = {
         notify();
     },
 
-    setTip(tipPosition: Vec3, tipNormal: Vec3, modelId: string) {
+    setTip(tipPosition: Vec3, tipNormal: Vec3, modelId: string, placementSurface?: PlacementSurface) {
         state = {
             ...state,
             tipPosition,
             tipNormal,
             modelId,
+            placementSurface,
             stage: 'awaitingBase',
             justFinalized: false, // Clear the flag when starting new placement
         };

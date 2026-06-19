@@ -15,6 +15,7 @@ import { applyImportDefaultsToSupportPayload, getSavedImportDefaultsSettings } f
 import type { SupportSettings } from './Settings/types';
 import { createDefaultSettings } from './Settings/types';
 import { decodeSupportSettingsHex, encodeSupportSettingsHex } from './Settings/supportSettingsCodec';
+import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from './SupportTypes/Twig/twigTaper';
 
 export type { SupportState } from './types';
 
@@ -512,7 +513,7 @@ function computeClosestTOnSegmentFromPoint(
     return THREE.MathUtils.clamp(ap.dot(ab) / abLenSq, 0, 1);
 }
 
-function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots' | 'trunks' | 'branches' | 'braces' | 'leaves' | 'knots'>): {
+function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots' | 'trunks' | 'branches' | 'braces' | 'leaves' | 'twigs' | 'knots'>): {
     knots: Record<string, Knot>;
     leaves: Record<string, Leaf>;
 } {
@@ -530,6 +531,25 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
             branchSegmentMap.set(segment.id, { branch, segment, segmentIndex });
         });
     }
+
+    // Twig hosts: a leaf/brace knot can attach to a twig segment (LYS import, PR #156).
+    // Without this map the knot's host segment is unresolved during normalization, so
+    // its diameter degenerates to the renderer default (oversized) and its position is
+    // never reconciled to the twig. Twig segment endpoints are the segment's two joints
+    // (same contract useKnotInteraction.resolveEndpoints uses for twig hosts).
+    const twigSegmentMap = new Map<string, { twig: Twig; segment: Segment; segmentIndex: number }>();
+    for (const twig of Object.values(snapshot.twigs)) {
+        twig.segments.forEach((segment, segmentIndex) => {
+            twigSegmentMap.set(segment.id, { twig, segment, segmentIndex });
+        });
+    }
+    const getTwigSegmentEndpoints = (segment: Segment): { start: Vec3; end: Vec3 } | null => {
+        if (!segment.bottomJoint || !segment.topJoint) return null;
+        return {
+            start: { ...segment.bottomJoint.pos },
+            end: { ...segment.topJoint.pos },
+        };
+    };
 
     // Track branch parent knots that currently host descendants.
     // If a branch parent knot is hosting descendants, keep it projected to ensure
@@ -609,6 +629,17 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
                             branchRef.segmentIndex,
                             parentKnot,
                         );
+                    }
+                }
+            }
+
+            if (!segment || !endpoints) {
+                const twigRef = twigSegmentMap.get(knot.parentShaftId);
+                if (twigRef) {
+                    const twigEndpoints = getTwigSegmentEndpoints(twigRef.segment);
+                    if (twigEndpoints) {
+                        segment = twigRef.segment;
+                        endpoints = twigEndpoints;
                     }
                 }
             }
@@ -762,9 +793,23 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
                 braceHostKnotIds.has(knot.id)
                 && effectiveNormalizationHint === 'braceImported'
                 && Number.isFinite(knot.diameter as number);
+            // Twig hosts size their knots by the 10% taper rule (matching native
+            // LeafPlacementController / twigBuilder), NOT the generic segment+0.1mm
+            // used by trunk/branch. Without this a twig-hosted knot is normalized to
+            // segment.diameter + 0.1 — slightly oversized and unlike a hand-placed leaf.
+            const twigHostRef = twigSegmentMap.get(nextParentShaftId);
+            let twigKnotDiameter: number | null = null;
+            if (twigHostRef) {
+                const localTwigDia = resolveTwigDiameterAtSegmentT(twigHostRef.twig, nextParentShaftId, t);
+                if (localTwigDia !== null && localTwigDia > 0) {
+                    twigKnotDiameter = twigJointDiameterForLocalDiameter(localTwigDia);
+                }
+            }
             const computedDiameter = preserveImportedBraceUniformDiameter
                 ? (knot.diameter as number)
-                : activeSegment.diameter + JOINT_DIAMETER_OFFSET_MM;
+                : twigKnotDiameter !== null
+                    ? twigKnotDiameter
+                    : activeSegment.diameter + JOINT_DIAMETER_OFFSET_MM;
             const parentShaftChanged = nextParentShaftId !== knot.parentShaftId;
 
             const dx = computedPos.x - authoredPos.x;

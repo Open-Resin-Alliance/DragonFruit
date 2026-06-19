@@ -44,6 +44,20 @@ type PanelAttachment = {
 
 type AttachmentPanelRect = PanelRect & { id: string };
 
+type CollapsiblePanelRegistration = {
+  expanded: boolean;
+  setExpanded: React.Dispatch<React.SetStateAction<boolean>>;
+  autoCollapse: boolean;
+};
+
+type FloatingPanelStackContextValue = {
+  registerCollapsiblePanel: (panelId: string, registration: CollapsiblePanelRegistration) => () => void;
+  requestPanelExpand: (panelId: string) => void;
+};
+
+const FloatingPanelStackContext = React.createContext<FloatingPanelStackContextValue | null>(null);
+const FloatingPanelItemContext = React.createContext<string | null>(null);
+
 type FloatingPanelItemProps = {
   id: string;
   index: number;
@@ -56,6 +70,37 @@ type FloatingPanelItemProps = {
   onSizeChange: (id: string, size: PanelSize) => void;
   children: React.ReactNode;
 };
+
+export function useFloatingPanelCollapse(defaultExpanded = true, options?: { autoCollapse?: boolean }) {
+  const stack = React.useContext(FloatingPanelStackContext);
+  const panelId = React.useContext(FloatingPanelItemContext);
+  const [expanded, setExpandedState] = React.useState(defaultExpanded);
+  const autoCollapse = options?.autoCollapse ?? true;
+
+  React.useLayoutEffect(() => {
+    if (!stack || !panelId) return undefined;
+
+    return stack.registerCollapsiblePanel(panelId, {
+      expanded,
+      setExpanded: setExpandedState,
+      autoCollapse,
+    });
+  }, [autoCollapse, expanded, panelId, stack]);
+
+  const setExpanded = React.useCallback<React.Dispatch<React.SetStateAction<boolean>>>((next) => {
+    const resolved = typeof next === 'function'
+      ? (next as (value: boolean) => boolean)(expanded)
+      : next;
+
+    if (resolved && !expanded && stack && panelId) {
+      stack.requestPanelExpand(panelId);
+    }
+
+    setExpandedState(resolved);
+  }, [expanded, panelId, stack]);
+
+  return [expanded, setExpanded] as const;
+}
 
 type WindowContextMenuState = {
   panelId: string;
@@ -73,7 +118,6 @@ const DEFAULT_PANEL_WIDTH = 320;
 const DEFAULT_PANEL_HEIGHT = 150;
 const PANEL_WIDTH_OVERRIDES: Record<string, number> = {
   'visual-settings': 48,
-  'prepare-smoothing-settings': 340,
   'transform-debug-overlay': 420,
 };
 const PANEL_SCALE_EXEMPT_IDS = new Set<string>(['support-settings']);
@@ -509,6 +553,39 @@ function getAttachmentDesiredPosition(
   };
 }
 
+function addAssociationEdge(edges: Map<string, Set<string>>, from: string, to: string) {
+  const fromEdges = edges.get(from) ?? new Set<string>();
+  fromEdges.add(to);
+  edges.set(from, fromEdges);
+
+  const toEdges = edges.get(to) ?? new Set<string>();
+  toEdges.add(from);
+  edges.set(to, toEdges);
+}
+
+function collectVerticalAssociationGroup(rootId: string, edges: Map<string, Set<string>>) {
+  const result = new Set<string>([rootId]);
+  const queue = [rootId];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) break;
+
+    for (const next of edges.get(current) ?? []) {
+      if (result.has(next)) continue;
+      result.add(next);
+      queue.push(next);
+    }
+  }
+
+  return result;
+}
+
+function estimateStackHeight(panelIds: string[], getSize: (panelId: string) => PanelSize, panelGap: number) {
+  if (panelIds.length === 0) return 0;
+  return panelIds.reduce((total, panelId) => total + getSize(panelId).height, 0) + panelGap * (panelIds.length - 1);
+}
+
 function buildSeededPositions(
   orderedPanelIds: string[],
   profile: LayoutProfile | null,
@@ -619,6 +696,7 @@ function FloatingPanelItem({
   return (
     <div
       ref={itemRef}
+      data-panel-id={id}
       className="absolute pointer-events-auto"
       style={{
         left: position.x,
@@ -659,9 +737,11 @@ function FloatingPanelItem({
         rightClickGestureRef.current = null;
       }}
     >
-      <div className="w-full [&>*]:!w-full">
-        {children}
-      </div>
+      <FloatingPanelItemContext.Provider value={id}>
+        <div className="w-full [&>*]:!w-full">
+          {children}
+        </div>
+      </FloatingPanelItemContext.Provider>
     </div>
   );
 }
@@ -673,6 +753,9 @@ function FloatingPanelItem({
 export function FloatingPanelStack({ children }: { children: React.ReactNode }) {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const panelSizesRef = React.useRef<Record<string, PanelSize>>({});
+  const expandedPanelSizesRef = React.useRef<Record<string, PanelSize>>({});
+  const collapsedPanelSizesRef = React.useRef<Record<string, PanelSize>>({});
+  const collapsiblePanelsRef = React.useRef<Record<string, CollapsiblePanelRegistration>>({});
   const dragRef = React.useRef<{ id: string; offsetX: number; offsetY: number } | null>(null);
 
   const [panelPositions, setPanelPositions] = React.useState<Record<string, PanelPosition>>({});
@@ -683,6 +766,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
   const [dropPreview, setDropPreview] = React.useState<DropPreview | null>(null);
   const [windowContextMenu, setWindowContextMenu] = React.useState<WindowContextMenuState | null>(null);
   const [persistLayout, setPersistLayout] = React.useState<boolean>(() => isFloatingLayoutPersistenceEnabled());
+  const [collapsibleRegistryVersion, setCollapsibleRegistryVersion] = React.useState(0);
 
   const panelIdsRef = React.useRef<string[]>([]);
   const panelPositionsRef = React.useRef<Record<string, PanelPosition>>({});
@@ -695,7 +779,10 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
   const panelEntries = React.useMemo(() => flattenPanelChildren(children), [children]);
   const panelIds = React.useMemo(() => panelEntries.map((entry) => entry.id), [panelEntries]);
   const panelIdsSignature = React.useMemo(() => panelIds.join('\u001f'), [panelIds]);
-  const stablePanelIds = React.useMemo(() => panelIds, [panelIdsSignature]);
+  const stablePanelIds = React.useMemo(
+    () => (panelIdsSignature.length > 0 ? panelIdsSignature.split('\u001f') : []),
+    [panelIdsSignature],
+  );
   const panelWidthScale = React.useMemo(() => {
     const width = containerSize.width;
     const height = containerSize.height;
@@ -751,25 +838,127 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
     [containerSize, getPanelSize, layoutProfile, orderedPanelIds, panelGap],
   );
 
-  const collectProfileAnchorDescendants = React.useCallback((rootId: string) => {
-    const anchors = layoutProfile?.anchors ?? {};
-    const result = new Set<string>();
-    const queue: string[] = [rootId];
+  const buildVerticalAssociationEdges = React.useCallback(() => {
+    const validIds = new Set(panelIdsRef.current);
+    const edges = new Map<string, Set<string>>();
 
-    while (queue.length > 0) {
-      const current = queue.shift();
-      if (!current) break;
+    for (const [panelId, rule] of Object.entries(layoutProfile?.anchors ?? {})) {
+      if (rule.side !== 'below' && rule.side !== 'above') continue;
+      if (!validIds.has(panelId) || !validIds.has(rule.to)) continue;
+      if (manualOverrideRef.current[panelId]) continue;
+      addAssociationEdge(edges, panelId, rule.to);
+    }
 
-      for (const [panelId, rule] of Object.entries(anchors)) {
-        if (rule.to !== current) continue;
-        if (result.has(panelId) || panelId === rootId) continue;
-        result.add(panelId);
-        queue.push(panelId);
+    for (const [panelId, attachments] of Object.entries(attachmentMemoryRef.current)) {
+      if (!validIds.has(panelId)) continue;
+
+      for (const attachment of attachments) {
+        if (attachment.side !== 'below' && attachment.side !== 'above') continue;
+        if (!validIds.has(attachment.to)) continue;
+        addAssociationEdge(edges, panelId, attachment.to);
       }
     }
 
-    return result;
+    return edges;
   }, [layoutProfile]);
+
+  const getPredictedPanelSize = React.useCallback((panelId: string, expandedOverride?: boolean): PanelSize => {
+    const registration = collapsiblePanelsRef.current[panelId];
+    const isExpanded = expandedOverride ?? registration?.expanded;
+
+    if (registration) {
+      if (isExpanded) {
+        return expandedPanelSizesRef.current[panelId] ?? panelSizesRef.current[panelId] ?? { width: getPanelWidth(panelId), height: DEFAULT_PANEL_HEIGHT };
+      }
+
+      return collapsedPanelSizesRef.current[panelId] ?? panelSizesRef.current[panelId] ?? { width: getPanelWidth(panelId), height: 48 };
+    }
+
+    return panelSizesRef.current[panelId] ?? { width: getPanelWidth(panelId), height: DEFAULT_PANEL_HEIGHT };
+  }, [getPanelWidth]);
+
+  const getAssociatedPanelOrder = React.useCallback((panelIdsInGroup: Set<string>) => {
+    const orderIndexById = new Map(orderedPanelIds.map((panelId, index) => [panelId, index] as const));
+
+    return [...panelIdsInGroup].sort((a, b) => {
+      const aPos = panelPositionsRef.current[a];
+      const bPos = panelPositionsRef.current[b];
+      if (aPos && bPos && Math.abs(aPos.y - bPos.y) > 0.5) {
+        return aPos.y - bPos.y;
+      }
+
+      return (orderIndexById.get(a) ?? Number.MAX_SAFE_INTEGER)
+        - (orderIndexById.get(b) ?? Number.MAX_SAFE_INTEGER);
+    });
+  }, [orderedPanelIds]);
+
+  const requestPanelExpand = React.useCallback((panelId: string) => {
+    if (!panelId) return;
+
+    const edges = buildVerticalAssociationEdges();
+    const group = collectVerticalAssociationGroup(panelId, edges);
+    const associatedIds = getAssociatedPanelOrder(group)
+      .filter((id) => collapsiblePanelsRef.current[id]);
+
+    if (associatedIds.length <= 1) return;
+
+    const topY = associatedIds.reduce((minY, id) => {
+      const pos = panelPositionsRef.current[id];
+      return pos ? Math.min(minY, pos.y) : minY;
+    }, Number.POSITIVE_INFINITY);
+
+    const availableHeight = containerSize.height - (Number.isFinite(topY) ? topY : PANEL_MARGIN) - PANEL_MARGIN;
+    let predictedHeight = estimateStackHeight(
+      associatedIds,
+      (id) => getPredictedPanelSize(id, id === panelId ? true : undefined),
+      panelGap,
+    );
+
+    if (predictedHeight <= availableHeight) return;
+
+    const targetIndex = associatedIds.indexOf(panelId);
+    const candidates = associatedIds
+      .filter((id) => id !== panelId)
+      .filter((id) => {
+        const registration = collapsiblePanelsRef.current[id];
+        return registration?.expanded && registration.autoCollapse;
+      })
+      .sort((a, b) => Math.abs(associatedIds.indexOf(a) - targetIndex) - Math.abs(associatedIds.indexOf(b) - targetIndex));
+
+    for (const candidateId of candidates) {
+      const expandedSize = getPredictedPanelSize(candidateId, true);
+      const collapsedSize = getPredictedPanelSize(candidateId, false);
+      collapsiblePanelsRef.current[candidateId]?.setExpanded(false);
+      predictedHeight -= Math.max(0, expandedSize.height - collapsedSize.height);
+
+      if (predictedHeight <= availableHeight) break;
+    }
+  }, [buildVerticalAssociationEdges, containerSize.height, getAssociatedPanelOrder, getPredictedPanelSize, panelGap]);
+
+  const registerCollapsiblePanel = React.useCallback((
+    panelId: string,
+    registration: CollapsiblePanelRegistration,
+  ) => {
+    collapsiblePanelsRef.current = {
+      ...collapsiblePanelsRef.current,
+      [panelId]: registration,
+    };
+    setCollapsibleRegistryVersion((version) => version + 1);
+
+    return () => {
+      if (collapsiblePanelsRef.current[panelId] !== registration) return;
+
+      const next = { ...collapsiblePanelsRef.current };
+      delete next[panelId];
+      collapsiblePanelsRef.current = next;
+      setCollapsibleRegistryVersion((version) => version + 1);
+    };
+  }, []);
+
+  const floatingPanelStackContext = React.useMemo<FloatingPanelStackContextValue>(() => ({
+    registerCollapsiblePanel,
+    requestPanelExpand,
+  }), [registerCollapsiblePanel, requestPanelExpand]);
 
   React.useEffect(() => {
     panelIdsRef.current = stablePanelIds;
@@ -1029,6 +1218,21 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
       [panelId]: size,
     };
 
+    const registration = collapsiblePanelsRef.current[panelId];
+    if (registration) {
+      if (registration.expanded) {
+        expandedPanelSizesRef.current = {
+          ...expandedPanelSizesRef.current,
+          [panelId]: size,
+        };
+      } else {
+        collapsedPanelSizesRef.current = {
+          ...collapsedPanelSizesRef.current,
+          [panelId]: size,
+        };
+      }
+    }
+
     setPanelSizeVersion((v) => v + 1);
 
     setPanelPositions((previous) => {
@@ -1106,6 +1310,92 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
       return next;
     });
   }, [containerSize, getPanelSize, panelGap]);
+
+  React.useEffect(() => {
+    if (activeDragPanelId) return;
+
+    const edges = buildVerticalAssociationEdges();
+    const visited = new Set<string>();
+    const orderIndexById = new Map(orderedPanelIds.map((panelId, index) => [panelId, index] as const));
+
+    for (const rootId of panelIdsRef.current) {
+      if (visited.has(rootId)) continue;
+
+      const group = collectVerticalAssociationGroup(rootId, edges);
+      group.forEach((id) => visited.add(id));
+
+      const associatedIds = [...group]
+        .filter((id) => collapsiblePanelsRef.current[id]?.autoCollapse)
+        .sort((a, b) => {
+          const aPos = panelPositionsRef.current[a];
+          const bPos = panelPositionsRef.current[b];
+          if (aPos && bPos && Math.abs(aPos.y - bPos.y) > 0.5) {
+            return aPos.y - bPos.y;
+          }
+
+          return (orderIndexById.get(a) ?? Number.MAX_SAFE_INTEGER)
+            - (orderIndexById.get(b) ?? Number.MAX_SAFE_INTEGER);
+        });
+
+      if (associatedIds.length <= 1) continue;
+
+      const topY = associatedIds.reduce((minY, id) => {
+        const pos = panelPositionsRef.current[id];
+        return pos ? Math.min(minY, pos.y) : minY;
+      }, Number.POSITIVE_INFINITY);
+      const availableHeight = containerSize.height - (Number.isFinite(topY) ? topY : PANEL_MARGIN) - PANEL_MARGIN;
+
+      let predictedHeight = estimateStackHeight(associatedIds, getPredictedPanelSize, panelGap);
+      let hasColumnBreak = false;
+
+      for (const [from, targets] of edges) {
+        if (!group.has(from)) continue;
+        const fromRegistration = collapsiblePanelsRef.current[from];
+        const fromPos = panelPositionsRef.current[from];
+        if (!fromRegistration?.expanded || !fromPos) continue;
+
+        for (const to of targets) {
+          if (from > to || !group.has(to)) continue;
+          const toRegistration = collapsiblePanelsRef.current[to];
+          const toPos = panelPositionsRef.current[to];
+          if (!toRegistration?.expanded || !toPos) continue;
+
+          if (Math.abs(fromPos.x - toPos.x) > CHAIN_ATTACH_TOLERANCE * 2) {
+            hasColumnBreak = true;
+            break;
+          }
+        }
+
+        if (hasColumnBreak) break;
+      }
+
+      if (predictedHeight <= availableHeight && !hasColumnBreak) continue;
+
+      const candidates = associatedIds
+        .slice(1)
+        .reverse()
+        .filter((id) => collapsiblePanelsRef.current[id]?.expanded);
+
+      for (const candidateId of candidates) {
+        const expandedSize = getPredictedPanelSize(candidateId, true);
+        const collapsedSize = getPredictedPanelSize(candidateId, false);
+        collapsiblePanelsRef.current[candidateId]?.setExpanded(false);
+        predictedHeight -= Math.max(0, expandedSize.height - collapsedSize.height);
+
+        if (predictedHeight <= availableHeight) break;
+      }
+    }
+  }, [
+    activeDragPanelId,
+    buildVerticalAssociationEdges,
+    collapsibleRegistryVersion,
+    containerSize.height,
+    getPredictedPanelSize,
+    orderedPanelIds,
+    panelGap,
+    panelPositions,
+    panelSizeVersion,
+  ]);
 
   const snapPanelToNearestSpot = React.useCallback((panelId: string, position: PanelPosition) => {
     const size = getPanelSize(panelId);
@@ -1345,7 +1635,18 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
 
       return next;
     });
-  }, [closeWindowContextMenu, seededPositions]);
+
+    // Reset any manual width set by a resize handle — directly set the correct default
+    if (typeof document !== 'undefined') {
+      const panelEl = document.querySelector(`[data-panel-id="${panelId}"]`) as HTMLElement | null;
+      if (panelEl) {
+        const base = PANEL_WIDTH_OVERRIDES[panelId] ?? DEFAULT_PANEL_WIDTH;
+        const scale = panelWidthScale;
+        const defaultWidth = Math.max(72, Math.round(base * scale));
+        panelEl.style.width = `${defaultWidth}px`;
+      }
+    }
+  }, [closeWindowContextMenu, seededPositions, panelWidthScale]);
 
   const resetAllWindows = React.useCallback(() => {
     closeWindowContextMenu();
@@ -1426,10 +1727,11 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 1080;
 
   return (
-    <div
-      ref={containerRef}
-      className="absolute left-0 right-0 top-[var(--topbar-height)] bottom-0 z-10 pointer-events-none"
-    >
+    <FloatingPanelStackContext.Provider value={floatingPanelStackContext}>
+      <div
+        ref={containerRef}
+        className="absolute left-0 right-0 top-[var(--topbar-height)] bottom-0 z-10 pointer-events-none"
+      >
       {panelEntries.map((entry, index) => {
         const panelId = entry.id;
         const panelPosition = panelPositions[panelId] ?? seededPositions[panelId] ?? {
@@ -1516,6 +1818,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
           </button>
         </div>
       ) : null}
-    </div>
+      </div>
+    </FloatingPanelStackContext.Provider>
   );
 }

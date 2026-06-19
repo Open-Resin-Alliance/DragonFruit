@@ -89,6 +89,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
             scene,
             initialEvent: e,
             modelId: trunk.modelId,
+            placementSurface: trunk.contactCone?.placementSurface,
             onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
                 const latest = getSnapshot().trunks[trunk.id];
                 if (!latest?.contactCone) return;

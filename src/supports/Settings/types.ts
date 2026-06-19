@@ -66,6 +66,7 @@ export interface ShaftProfile {
     secondaryDiameterMm?: number;
     isStraight: boolean;
     maxAngleDeg?: number;
+    routingAlgorithm?: 'astar' | 'potential';
 }
 
 export interface RootsProfile {
@@ -101,6 +102,29 @@ export interface MeshToMeshSettings {
     stickVsTwigCutoffMm: number;
 }
 
+export interface DevToolsSettings {
+    routingAlgorithm: 'astar' | 'potential';
+    fieldDeterministic: boolean;
+    clearanceMm: number;
+    marginMm: number;
+    repulsionStrength: number;
+    stepMm: number;
+    maxLateralMm: number;
+    tangentWeight: number;
+    maxNearestNodeSearchRings: number;
+    coneStretchLinearWeight: number;
+    coneStretchQuadraticWeight: number;
+    coneAngleWeight: number;
+    maxConeStretchRatio: number;
+    maxVerticalAttachmentDistanceMm: number;
+    maxHorizontalAttachmentDistanceMm: number;
+    minHorizontalLeafAngleDeg: number;
+    maxLeafStretchFactor: number;
+    maxConeAngleDevDeg: number;
+    verticalKnotSpacingMm: number;
+    maxBranchesPerTrunk: number;
+}
+
 // --- Main Settings Interface ---
 
 export interface SupportSettings {
@@ -112,6 +136,8 @@ export interface SupportSettings {
     grid: GridSettings;
     meshToMesh: MeshToMeshSettings;
     autoBracing: AutoBracingSettings;
+    devToolsEnabled: boolean;
+    devTools: DevToolsSettings;
 }
 
 // --- Default Factory ---
@@ -140,6 +166,7 @@ export function createDefaultSettings(): SupportSettings {
             secondaryDiameterMm: DEFAULT_SHAFT_DIAMETER_MM,
             isStraight: true,
             maxAngleDeg: DEFAULT_SHAFT_MAX_ANGLE_DEG,
+            routingAlgorithm: 'potential',
         },
         roots: {
             shape: 'cylinder',
@@ -170,6 +197,29 @@ export function createDefaultSettings(): SupportSettings {
             stickVsTwigCutoffMm: DEFAULT_MESH_TO_MESH_STICK_VS_TWIG_CUTOFF_MM,
         },
         autoBracing: createDefaultAutoBracingSettings(),
+        devToolsEnabled: false,
+        devTools: {
+            routingAlgorithm: 'potential',
+            fieldDeterministic: true,
+            clearanceMm: 1.5,
+            marginMm: 2.5,
+            repulsionStrength: 8.0,
+            stepMm: 1.0,
+            maxLateralMm: 30.0,
+            tangentWeight: 0.5,
+            maxNearestNodeSearchRings: 12,
+            coneStretchLinearWeight: 7.5,
+            coneStretchQuadraticWeight: 4.0,
+            coneAngleWeight: 0.04,
+            maxConeStretchRatio: 0.52,
+            maxVerticalAttachmentDistanceMm: 40.0,
+            maxHorizontalAttachmentDistanceMm: 15.0,
+            minHorizontalLeafAngleDeg: 30.0,
+            maxLeafStretchFactor: 2.0,
+            maxConeAngleDevDeg: 30.0,
+            verticalKnotSpacingMm: 3.0,
+            maxBranchesPerTrunk: 3,
+        },
     };
 }
 
@@ -182,6 +232,8 @@ export interface SupportPreset {
     hotkey?: string;
     icon?: string;
     isBuiltIn: boolean;
+    /** Pinned slot (1-4) for quick-access hotkeys, or undefined if unpinned. */
+    pinnedSlot?: number;
     settings: SupportSettings;
     createdAt?: number;
     updatedAt?: number;

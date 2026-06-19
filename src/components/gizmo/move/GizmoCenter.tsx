@@ -4,6 +4,7 @@ import React, { useRef, useState, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { ThreeEvent, useFrame, useThree } from '@react-three/fiber';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
+import { getCachedCircleGeometry, getCachedRingGeometry, getCachedSphereGeometry } from '../gizmoGeometryCache';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
 
@@ -259,6 +260,16 @@ export function GizmoCenter({
     : effectiveHovered
     ? GIZMO_LIGHTING.pointLightIntensity.hovered
     : GIZMO_LIGHTING.pointLightIntensity.idle;
+  const pickGeometry = React.useMemo(() => getCachedSphereGeometry(GIZMO_SIZES.centerRadius * 1.08, 24, 24), []);
+  const discGeometry = React.useMemo(() => getCachedCircleGeometry(GIZMO_SIZES.centerRadius * 1.05, 32), []);
+  const borderRingGeometry = React.useMemo(
+    () => getCachedRingGeometry(GIZMO_SIZES.centerRadius * 1.0, GIZMO_SIZES.centerRadius * 1.05, 32),
+    [],
+  );
+  const haloRingGeometry = React.useMemo(
+    () => getCachedRingGeometry(GIZMO_SIZES.centerRadius * 1.1, GIZMO_SIZES.centerRadius * 1.32, 32),
+    [],
+  );
 
   return (
     <group>
@@ -272,7 +283,7 @@ export function GizmoCenter({
         onPointerEnter={handlePointerEnterLocal}
         onPointerLeave={handlePointerLeaveLocal}
       >
-        <sphereGeometry args={[GIZMO_SIZES.centerRadius * 1.08, 24, 24]} />
+        <primitive object={pickGeometry} attach="geometry" />
         <meshBasicMaterial
           visible={false}
           depthTest={false}
@@ -282,7 +293,7 @@ export function GizmoCenter({
       
       {/* Filled disc */}
       <mesh onPointerDown={handlePointerDown} onPointerEnter={handlePointerEnterLocal} onPointerLeave={handlePointerLeaveLocal}>
-        <circleGeometry args={[GIZMO_SIZES.centerRadius * 1.05, 32]} />
+        <primitive object={discGeometry} attach="geometry" />
         <meshBasicMaterial
           color={centerColor}
           transparent
@@ -294,7 +305,7 @@ export function GizmoCenter({
       
       {/* White border ring */}
       <mesh onPointerDown={handlePointerDown} onPointerEnter={handlePointerEnterLocal} onPointerLeave={handlePointerLeaveLocal}>
-        <ringGeometry args={[GIZMO_SIZES.centerRadius * 1.0, GIZMO_SIZES.centerRadius * 1.05, 32]} />
+        <primitive object={borderRingGeometry} attach="geometry" />
         <meshBasicMaterial
           color={isDimmed ? dimmedColor : "#ffffff"}
           transparent
@@ -307,7 +318,7 @@ export function GizmoCenter({
       {/* Hover/active halo */}
       {isHighlighted && !isDimmed && !isHidden && (
         <mesh>
-          <ringGeometry args={[GIZMO_SIZES.centerRadius * 1.1, GIZMO_SIZES.centerRadius * 1.32, 32]} />
+          <primitive object={haloRingGeometry} attach="geometry" />
           <meshBasicMaterial
             color={isActive ? GIZMO_COLORS.active : GIZMO_COLORS.hover}
             transparent

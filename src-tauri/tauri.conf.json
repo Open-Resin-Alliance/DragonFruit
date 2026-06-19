@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DragonFruit",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "identifier": "org.openresinalliance.dragonfruit",
   "build": {
     "beforeDevCommand": "npm run predev:once && npm run dev",
@@ -11,6 +11,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": "v1Compatible",
     "fileAssociations": [
       {
         "ext": [
@@ -31,6 +32,15 @@
     ]
   },
   "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU0NjE2N0VERDQ3RjYwMDcKUldRSFlIL1U3V2RoNVBnc0hoWnU5NnZSdkhSRys5OFFRVXpHNWhsd3ZwRGYwc1N1UkpLR3htWmkK",
+      "endpoints": [
+        "https://github.com/Open-Resin-Alliance/DragonFruit/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    },
     "macos-fps": {
       "enabled": true
     }

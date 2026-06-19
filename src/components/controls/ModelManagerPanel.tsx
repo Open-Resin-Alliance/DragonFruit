@@ -4,8 +4,7 @@ import {
   EyeOff,
   Box,
   AlertTriangle,
-  Upload,
-  FolderInput,
+
   Folder,
   FolderOpen,
   ChevronRight,
@@ -17,10 +16,12 @@ import {
   Info,
   Crosshair,
   Wrench,
+  Scissors,
 } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { formatMeshStatsForDisplay } from '@/utils/meshStatsFormatting';
+import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 type SelectMode = 'single' | 'toggle' | 'add';
 
@@ -37,6 +38,8 @@ interface ModelManagerPanelProps {
   onGroupModels?: (modelIds: string[]) => void;
   onUngroupModels?: (modelIds: string[]) => void;
   onUngroupGroup?: (groupId: string) => void;
+  /** Splits a multi-body 3MF model into independent models (pre-computed split bodies). */
+  onSplitImportGroup?: (modelId: string) => void;
   onRenameGroup?: (groupId: string, nextName: string) => void;
   onRenameModel?: (id: string, nextName: string) => void;
   onModelContextMenu?: (id: string, position: { x: number; y: number }) => void;
@@ -44,10 +47,7 @@ interface ModelManagerPanelProps {
   onOpenSupportsInfo?: (id: string) => void;
   onDelete: (id: string) => void;
   onVisibilityChange: (id: string, visible: boolean) => void;
-  onLoadMeshClick?: () => void;
-  onLoadMeshChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  onImportSceneClick?: () => void;
-  onImportSceneChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
+
   dimmed?: boolean;
   bottomClearancePx?: number;
 }
@@ -96,6 +96,7 @@ export function ModelManagerPanel({
   onGroupModels,
   onUngroupModels,
   onUngroupGroup,
+  onSplitImportGroup,
   onRenameGroup,
   onRenameModel,
   onModelContextMenu,
@@ -103,14 +104,10 @@ export function ModelManagerPanel({
   onOpenSupportsInfo,
   onDelete: _onDelete,
   onVisibilityChange,
-  onLoadMeshClick,
-  onLoadMeshChange,
-  onImportSceneClick,
-  onImportSceneChange,
   dimmed = false,
   bottomClearancePx = 220,
 }: ModelManagerPanelProps) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<Record<string, boolean>>({});
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [renamingGroupName, setRenamingGroupName] = useState('');
@@ -118,10 +115,38 @@ export function ModelManagerPanel({
   const [renamingModelName, setRenamingModelName] = useState('');
   const [renamingModelSuffix, setRenamingModelSuffix] = useState('');
   const [contextMenu, setContextMenu] = useState<PanelContextMenuState | null>(null);
-  const [useCompactQuickActionLabels, setUseCompactQuickActionLabels] = useState(false);
-  const quickActionsGridRef = useRef<HTMLDivElement | null>(null);
   void _onDelete;
-  const hasImportSceneAction = Boolean(onImportSceneChange);
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const resizeDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const getParentPanel = (el: HTMLElement): HTMLElement | null =>
+    el.closest('.absolute.pointer-events-auto') as HTMLElement | null;
+
+  const handleResizePointerDown = React.useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const handle = e.currentTarget as HTMLElement;
+    const parent = getParentPanel(handle);
+    if (!parent) return;
+    const rect = parent.getBoundingClientRect();
+    resizeDragRef.current = { startX: e.clientX, startWidth: rect.width };
+    handle.setPointerCapture(e.pointerId);
+  }, []);
+
+  const handleResizePointerMove = React.useCallback((e: React.PointerEvent) => {
+    const drag = resizeDragRef.current;
+    if (!drag) return;
+    const handle = e.currentTarget as HTMLElement;
+    const parent = getParentPanel(handle);
+    if (!parent) return;
+    const dx = e.clientX - drag.startX;
+    const newWidth = Math.max(280, Math.min(600, drag.startWidth + dx));
+    parent.style.width = `${newWidth}px`;
+  }, []);
+
+  const handleResizePointerUp = React.useCallback((e: React.PointerEvent) => {
+    resizeDragRef.current = null;
+  }, []);
 
   const selectedSet = useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
 
@@ -171,15 +196,18 @@ export function ModelManagerPanel({
         : []);
   }, [models, outsidePlateModelIds]);
 
+  const contextModelId = contextMenu?.modelId;
+  const contextGroupId = contextMenu?.groupId;
+
   const contextModel = useMemo(() => {
-    if (!contextMenu?.modelId) return null;
-    return models.find((m) => m.id === contextMenu.modelId) ?? null;
-  }, [contextMenu, models]);
+    if (!contextModelId) return null;
+    return models.find((m) => m.id === contextModelId) ?? null;
+  }, [contextModelId, models]);
 
   const contextGroup = useMemo(() => {
-    if (!contextMenu?.groupId) return null;
-    return grouped.find((g) => g.id === contextMenu.groupId) ?? null;
-  }, [contextMenu, grouped]);
+    if (!contextGroupId) return null;
+    return grouped.find((g) => g.id === contextGroupId) ?? null;
+  }, [contextGroupId, grouped]);
 
   const selectedGroupedCount = useMemo(() => {
     if (selectedModelIds.length === 0) return 0;
@@ -199,8 +227,8 @@ export function ModelManagerPanel({
   const computedBottomClearance = Math.max(140, Math.round(bottomClearancePx));
   const panelMaxHeight = `calc(100vh - var(--topbar-height) - ${computedBottomClearance}px)`;
   const panelClassName = dimmed
-    ? 'opacity-60 pointer-events-none transition-opacity duration-150 flex flex-col'
-    : 'transition-opacity duration-150 flex flex-col';
+    ? 'opacity-60 pointer-events-none transition-opacity duration-150 flex flex-col relative'
+    : 'transition-opacity duration-150 flex flex-col relative';
   const panelStyle: React.CSSProperties = {
     ...(dimmed ? { filter: 'grayscale(0.25)' } : {}),
     ...(expanded ? { maxHeight: panelMaxHeight } : {}),
@@ -303,61 +331,6 @@ export function ModelManagerPanel({
     };
   }, [contextMenu]);
 
-  useEffect(() => {
-    const grid = quickActionsGridRef.current;
-    if (!grid) return;
-
-    const computeCompactMode = (width: number) => {
-      const compactThreshold = hasImportSceneAction ? 312 : 184;
-      const hysteresisPx = 12;
-      setUseCompactQuickActionLabels((prev) => {
-        const enterCompactThreshold = compactThreshold - hysteresisPx;
-        const leaveCompactThreshold = compactThreshold + hysteresisPx;
-        if (prev) {
-          return width <= leaveCompactThreshold;
-        }
-        return width < enterCompactThreshold;
-      });
-    };
-
-    computeCompactMode(grid.clientWidth);
-
-    if (typeof ResizeObserver === 'undefined') {
-      return;
-    }
-
-    const observer = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect.width;
-      if (typeof width === 'number') {
-        computeCompactMode(width);
-      }
-    });
-
-    observer.observe(grid);
-    return () => observer.disconnect();
-  }, [hasImportSceneAction]);
-
-  const triggerMeshPicker = React.useCallback(() => {
-    if (onLoadMeshClick) {
-      onLoadMeshClick();
-      return;
-    }
-
-    if (typeof document === 'undefined') return;
-    const input = document.getElementById('models-card-mesh-input') as HTMLInputElement | null;
-    input?.click();
-  }, [onLoadMeshClick]);
-
-  const triggerScenePicker = React.useCallback(() => {
-    if (onImportSceneClick) {
-      onImportSceneClick();
-      return;
-    }
-
-    if (typeof document === 'undefined') return;
-    const input = document.getElementById('models-card-scene-input') as HTMLInputElement | null;
-    input?.click();
-  }, [onImportSceneClick]);
 
   return (
     <Card
@@ -412,56 +385,6 @@ export function ModelManagerPanel({
 
       {expanded && (
         <div className="px-2.5 pt-1 pb-2.5 space-y-2 flex flex-col flex-1 min-h-0">
-          <div
-            className="rounded-md border p-2"
-            style={{ background: 'var(--surface-1)', borderColor: 'var(--border-subtle)' }}
-          >
-            <div
-              ref={quickActionsGridRef}
-              className={`grid gap-2 ${hasImportSceneAction ? 'grid-cols-2' : 'grid-cols-1'}`}
-            >
-              <button
-                type="button"
-                onClick={triggerMeshPicker}
-                className="ui-button ui-button-primary inline-flex min-w-0 items-center justify-center gap-1.5 min-h-9 !px-2 text-[11px] leading-none"
-                title="Load Mesh"
-              >
-                <Upload className="w-3.5 h-3.5 shrink-0" />
-                <span className="whitespace-nowrap">{useCompactQuickActionLabels ? 'Mesh' : 'Load Mesh'}</span>
-              </button>
-              <input
-                id="models-card-mesh-input"
-                type="file"
-                accept=".stl,.obj,.3mf,.zip"
-                multiple
-                onChange={onLoadMeshChange}
-                className="hidden"
-              />
-
-              {hasImportSceneAction && (
-                <>
-                  <button
-                    type="button"
-                    onClick={triggerScenePicker}
-                    className="ui-button ui-button-accent inline-flex min-w-0 items-center justify-center gap-1.5 min-h-9 !px-2 text-[11px] leading-none"
-                    title="Import Scene"
-                  >
-                    <FolderInput className="w-3.5 h-3.5 shrink-0" />
-                    <span className="whitespace-nowrap">{useCompactQuickActionLabels ? 'Scene' : 'Import Scene'}</span>
-                  </button>
-                  <input
-                    id="models-card-scene-input"
-                    type="file"
-                    accept=".voxl,.lys,.zip"
-                    onChange={onImportSceneChange}
-                    className="hidden"
-                  />
-                </>
-              )}
-            </div>
-
-          </div>
-
           <div className="space-y-1 overflow-y-auto custom-scrollbar pr-0.5 flex-1 min-h-0">
             {models.length === 0 ? (
               <div className="text-xs text-center py-2 italic" style={{ color: 'var(--text-muted)' }}>
@@ -474,6 +397,7 @@ export function ModelManagerPanel({
                 const isGroupFullySelected = selectedCount > 0 && selectedCount === group.models.length;
                 const isGroupPartiallySelected = selectedCount > 0 && !isGroupFullySelected;
                 const showHeader = group.isGrouped;
+                const showChildren = !showHeader || !isCollapsed;
 
                 return (
                   <div
@@ -486,36 +410,36 @@ export function ModelManagerPanel({
                         }
                       : undefined}
                   >
-                        {showHeader && (
-                          <div
-                            className="px-1.5 py-1 rounded border flex items-center gap-1.5 cursor-pointer transition-colors"
-                            style={isGroupFullySelected
-                              ? {
-                                  background: 'color-mix(in srgb, var(--accent), var(--surface-2) 90%)',
-                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                                }
-                              : isGroupPartiallySelected
-                                ? {
-                                    background: 'color-mix(in srgb, var(--accent), var(--surface-2) 94%)',
-                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-                                  }
-                                : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
-                            onClick={(e) => {
-                              const mode: GroupSelectMode = (e.ctrlKey || e.metaKey || e.shiftKey) ? 'add' : 'single';
-                              selectFolder(group, mode);
-                            }}
-                            onContextMenu={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setContextMenu({
-                                x: e.clientX,
-                                y: e.clientY,
-                                groupId: group.id,
-                                groupName: group.name,
-                                isSystemGroup: group.isSystemGroup,
-                              });
-                            }}
-                          >
+                    {showHeader && (
+                      <div
+                        className="px-1.5 py-1 rounded border flex items-center gap-1.5 cursor-pointer transition-colors"
+                        style={isGroupFullySelected
+                          ? {
+                              background: 'color-mix(in srgb, var(--accent), var(--surface-2) 90%)',
+                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                            }
+                          : isGroupPartiallySelected
+                            ? {
+                                background: 'color-mix(in srgb, var(--accent), var(--surface-2) 94%)',
+                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+                              }
+                            : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
+                        onClick={(e) => {
+                          const mode: GroupSelectMode = (e.ctrlKey || e.metaKey || e.shiftKey) ? 'add' : 'single';
+                          selectFolder(group, mode);
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setContextMenu({
+                            x: e.clientX,
+                            y: e.clientY,
+                            groupId: group.id,
+                            groupName: group.name,
+                            isSystemGroup: group.isSystemGroup,
+                          });
+                        }}
+                      >
                         <button
                           type="button"
                           className="inline-flex items-center justify-center rounded p-0.5 hover:bg-black/20"
@@ -573,7 +497,7 @@ export function ModelManagerPanel({
                       </div>
                     )}
 
-                    {(!showHeader || !isCollapsed) && (
+                    {showChildren && (
                       <div
                         className={showHeader ? 'ml-1.5 space-y-1 pl-1' : 'space-y-1'}
                       >
@@ -867,6 +791,24 @@ export function ModelManagerPanel({
                   </button>
                 )}
 
+                {contextModel.splitBodies && onSplitImportGroup && (
+                  <>
+                    <div className="my-1 h-px" style={{ background: 'var(--border-subtle)' }} />
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+                      style={{ color: 'var(--text-strong)' }}
+                      onClick={() => {
+                        onSplitImportGroup(contextModel.id);
+                        closeContextMenu();
+                      }}
+                    >
+                      <Scissors className="h-3.5 w-3.5" />
+                      <span>Split to Bodies</span>
+                    </button>
+                  </>
+                )}
+
                 {onModelContextMenu && (
                   <button
                     type="button"
@@ -886,6 +828,24 @@ export function ModelManagerPanel({
           </div>
         </div>
       )}
+      {/* Horizontal resize handle on the right edge */}
+      <div
+        className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:opacity-100 opacity-0 transition-opacity"
+        style={{
+          background: 'transparent',
+        }}
+        onPointerDown={handleResizePointerDown}
+        onPointerMove={handleResizePointerMove}
+        onPointerUp={handleResizePointerUp}
+        onPointerCancel={handleResizePointerUp}
+      >
+        <div
+          className="absolute right-0 top-0 bottom-0 w-[3px] rounded-full transition-colors"
+          style={{
+            background: 'color-mix(in srgb, var(--accent), transparent 60%)',
+          }}
+        />
+      </div>
     </Card>
   );
 }

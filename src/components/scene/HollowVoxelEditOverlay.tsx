@@ -129,7 +129,7 @@ function buildInstanceData(
         blockedVoxelCenters[base] + offsetX,
         blockedVoxelCenters[base + 1] + offsetY,
         blockedVoxelCenters[base + 2] + offsetZ,
-        true,
+        blockedVoxelIndexSet.has(idx),
       );
     }
   }

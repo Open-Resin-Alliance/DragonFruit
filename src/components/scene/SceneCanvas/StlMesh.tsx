@@ -24,6 +24,8 @@ import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion
 
 // Scratch raycaster reused for clip-zone fallback raycasts.
 const _clipFallbackRaycaster = new THREE.Raycaster();
+const _interiorCavityRaycaster = new THREE.Raycaster();
+const _interiorCavityRaycastMesh = new THREE.Mesh();
 
 // Mini-cache for clip-aware fallback raycasts.  Near the clip boundary the
 // primary hit oscillates between visible/clipped zones, causing a BVH
@@ -94,6 +96,40 @@ function findClipAwareHit(
   }
   _clipCacheKey = cacheKey;
   _clipCacheResult = hit;
+  return hit;
+}
+
+function findInteriorCavityHit(
+  ray: THREE.Ray,
+  modelMesh: THREE.Object3D,
+  cavityGeometry: THREE.BufferGeometry,
+  modelId: string,
+): THREE.Intersection | null {
+  const rc = _interiorCavityRaycaster;
+  rc.ray.copy(ray);
+  rc.near = 0;
+  rc.far = 500;
+  (rc as any).firstHitOnly = true;
+
+  const mesh = _interiorCavityRaycastMesh;
+  mesh.geometry = cavityGeometry;
+  mesh.matrixWorld.copy(modelMesh.matrixWorld);
+  mesh.matrixAutoUpdate = false;
+  mesh.userData = {
+    modelId,
+    supportPlacementSurface: 'interior',
+  };
+
+  const hits: THREE.Intersection[] = [];
+  mesh.raycast(rc, hits);
+
+  rc.near = 0;
+  rc.far = Infinity;
+  (rc as any).firstHitOnly = false;
+
+  if (hits.length === 0) return null;
+  const hit = hits[0];
+  hit.object = mesh;
   return hit;
 }
 
@@ -179,6 +215,9 @@ function StlMeshComponent({
   isExternallyHovered,
   deferExternalTransformUpdates,
   supportSectionGeometry,
+  higherContrastModelEdges = false,
+  edgeGeometry,
+  blockerEditMode = false,
   interiorView = false,
   cavityGeometry,
   children,
@@ -200,6 +239,12 @@ function StlMeshComponent({
   heatmapBlend?: number;
   heatmapContrast?: number;
   heatmapColors?: string[];
+  /** When true, overlays black edge lines on model geometry for better shape definition. */
+  higherContrastModelEdges?: boolean;
+  /** Pre-computed hard-edge geometry for Higher Contrast Model Edges overlay. */
+  edgeGeometry?: THREE.EdgesGeometry | null;
+  /** When true, suppresses the edge overlay (e.g. during voxel blocker editing). */
+  blockerEditMode?: boolean;
   interiorView?: boolean;
   /** Interior cavity mesh to render as solid in Interior View Mode. */
   cavityGeometry?: THREE.BufferGeometry | null;
@@ -338,6 +383,10 @@ function StlMeshComponent({
     const colorAttr = geometry.getAttribute('color');
     return !!colorAttr && colorAttr.count > 0;
   }, [geometry]);
+
+  // Edges geometry for Higher Contrast Model Edges overlay.
+  // Pre-computed during geometry import — no render-time cost.
+  const edgeLinesGeometry = edgeGeometry ?? null;
 
   // Internal ref for the mesh element to control raycasting
   const internalMeshRef = React.useRef<THREE.Mesh>(null);
@@ -822,7 +871,7 @@ if (uDitherAmount > 0.0) {
           else if (actualMeshRef) (actualMeshRef as React.MutableRefObject<THREE.Mesh | null>).current = node;
           if (node) applyRaycastDisabledState();
         }}
-        userData={{ modelId, thumbnailTintTarget: 'modelMesh' }}
+        userData={{ modelId, thumbnailTintTarget: 'modelMesh', cavityGeometry }}
         geometry={geometry}
         position={meshLocalOffset}
         renderOrder={baseShaderType === 'xray' ? 10010 : isSupportDimmed ? 2 : 0}
@@ -900,12 +949,9 @@ if (uDitherAmount > 0.0) {
               (clipUpper != null && e.point.z > clipUpper) ||
               (clipLower != null && e.point.z < clipLower);
             if (isClippedHit || (interiorView && cavityGeometry)) {
-              const fallback = findClipAwareHit(
-                e.ray, e.object,
-                interiorView && cavityGeometry ? null : clipLower,
-                interiorView && cavityGeometry ? null : clipUpper,
-                e.distance,
-              );
+              const fallback = interiorView && cavityGeometry
+                ? findInteriorCavityHit(e.ray, e.object, cavityGeometry, modelId)
+                : findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
               if (!fallback) return;
               clickHit = fallback;
             }
@@ -967,12 +1013,9 @@ if (uDitherAmount > 0.0) {
               (clipUpper != null && e.point.z > clipUpper) ||
               (clipLower != null && e.point.z < clipLower);
             if (isClippedHit || (interiorView && cavityGeometry)) {
-              const fallback = findClipAwareHit(
-                e.ray, e.object,
-                interiorView && cavityGeometry ? null : clipLower,
-                interiorView && cavityGeometry ? null : clipUpper,
-                e.distance,
-              );
+              const fallback = interiorView && cavityGeometry
+                ? findInteriorCavityHit(e.ray, e.object, cavityGeometry, modelId)
+                : findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
               if (!fallback) return;
               clickHit = fallback;
             }
@@ -1076,7 +1119,7 @@ if (uDitherAmount > 0.0) {
             if (!hasExternalHoverSource) schedulePointerHover(true);
             onModelHoverModelChange?.(modelId);
             emitImmediateModelHover(modelId);
-            const interiorHit = findClipAwareHit(e.ray, e.object, null, null, e.distance);
+            const interiorHit = findInteriorCavityHit(e.ray, e.object, cavityGeometry, modelId);
             onModelHoverPointChange?.(interiorHit?.point.clone() ?? e.point.clone());
           } else {
             if (!hasExternalHoverSource) schedulePointerHover(true);
@@ -1091,7 +1134,7 @@ if (uDitherAmount > 0.0) {
               const fallback = findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
               hoverHit = fallback ?? null;
             } else if (interiorViewRedirect) {
-              hoverHit = findClipAwareHit(e.ray, e.object, null, null, e.distance) ?? null;
+              hoverHit = findInteriorCavityHit(e.ray, e.object, cavityGeometry, modelId) ?? null;
             }
             onHolePunchHover(hoverHit);
           }
@@ -1141,12 +1184,9 @@ if (uDitherAmount > 0.0) {
               (clipLower != null && e.point.z < clipLower);
             if (isClippedHit || (interiorView && cavityGeometry)) {
               // Redirect to interior surface (cross-section clip zone or interior view)
-              const fallback = findClipAwareHit(
-                e.ray, e.object,
-                interiorView && cavityGeometry ? null : clipLower,
-                interiorView && cavityGeometry ? null : clipUpper,
-                e.distance,
-              );
+              const fallback = interiorView && cavityGeometry
+                ? findInteriorCavityHit(e.ray, e.object, cavityGeometry, modelId)
+                : findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
               if (!fallback) {
                 onSupportHover(null);
                 return;
@@ -1333,6 +1373,12 @@ if (uDitherAmount > 0.0) {
         <mesh geometry={geometry} position={meshLocalOffset} renderOrder={1} raycast={() => null}>
           <OpaqueWireOverlayMaterial clippingPlanes={planes} />
         </mesh>
+      )}
+
+      {!interiorView && higherContrastModelEdges && !showOpaqueWireOverlay && baseShaderType !== 'wireframe' && !blockerEditMode && edgeLinesGeometry && (
+        <lineSegments geometry={edgeLinesGeometry} position={meshLocalOffset} renderOrder={2} raycast={() => null}>
+          <lineBasicMaterial color="#000000" transparent opacity={0.55} depthTest polygonOffset polygonOffsetFactor={-1} polygonOffsetUnits={-1} clippingPlanes={planes} />
+        </lineSegments>
       )}
 
       {outOfBoundsMaterial && (

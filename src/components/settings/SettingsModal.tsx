@@ -8,12 +8,15 @@ import { MeshSettingsTab } from '@/components/settings/MeshSettingsTab';
 import { PluginsSettingsTab } from '@/components/settings/PluginsSettingsTab';
 import { LocalBackupsSettingsTab } from '@/components/settings/LocalBackupsSettingsTab';
 import { SceneAutosaveSettingsTab } from '@/components/settings/SceneAutosaveSettingsTab';
+import { UvToolsSettingsTab } from '@/components/settings/UvToolsSettingsTab';
 import { LoggingSettingsTab, getSavedLogLevel, saveLogLevel, type LogLevelFilter } from '@/components/settings/LoggingSettingsTab';
 import { SpaceMouseSettingsTab } from '@/components/settings/SpaceMouseSettingsTab';
 import { UISettingsTab } from './UISettingsTab';
+import { UpdatesSettingsTab } from '@/features/updater/UpdatesSettingsTab';
+import { getUpdateChannel, type UpdateChannel } from '@/features/updater/updateBridge';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
 import { PerformanceSettingsTab, type SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
-import { AlertTriangle, Check, Edit3, ExternalLink, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Save, Settings2, Trash2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
+import { AlertTriangle, Check, CloudDownload, Edit3, ExternalLink, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Save, Settings2, Trash2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   applyThemeCustomColors,
@@ -92,6 +95,12 @@ import {
   saveSlicingPerformanceSettings,
   type SlicingPerformanceSettings,
 } from '@/components/settings/performancePreferences';
+import {
+  DEFAULT_UVTOOLS_SETTINGS,
+  getSavedUvToolsSettings,
+  saveUvToolsSettings,
+  type UvToolsSettings,
+} from '@/components/settings/uvToolsPreferences';
 import { outputFormatUsesPngLayers } from '@/features/slicing/formats/registry';
 import type { SelectionHighlightMode } from '@/components/selection';
 import {
@@ -173,9 +182,11 @@ type SettingsModalProps = {
   slicingThumbnailRenderSettings: SlicingThumbnailRenderSettings;
   onSlicingThumbnailRenderSettingsChange: (settings: SlicingThumbnailRenderSettings) => void;
   activeOutputFormat?: string | null;
+  /** Optional: open to a specific tab on mount */
+  initialTab?: SettingsTabKey;
 };
 
-type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'sceneAutosave' | 'backups' | 'ui' | 'hotkeys' | 'logging' | 'about';
+export type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'sceneAutosave' | 'backups' | 'uvtools' | 'ui' | 'hotkeys' | 'logging' | 'updates' | 'about';
 type SettingsTabTone = 'primary' | 'secondary';
 
 export function SettingsModal({
@@ -222,8 +233,9 @@ export function SettingsModal({
   slicingThumbnailRenderSettings,
   onSlicingThumbnailRenderSettingsChange,
   activeOutputFormat,
+  initialTab,
 }: SettingsModalProps) {
-  const [activeTab, setActiveTab] = useState<SettingsTabKey>('general');
+  const [activeTab, setActiveTab] = useState<SettingsTabKey>(initialTab ?? 'general');
 
   const [draftMeshColor, setDraftMeshColor] = useState(meshColor);
   const [draftShaderType, setDraftShaderType] = useState(shaderType);
@@ -250,6 +262,7 @@ export function SettingsModal({
   const [draftCameraTrackpadOrbitAcceleration, setDraftCameraTrackpadOrbitAcceleration] = useState<number>(() => getSavedCameraTrackpadSettings().orbitAcceleration);
   const [draftCameraTrackpadZoomAcceleration, setDraftCameraTrackpadZoomAcceleration] = useState<number>(() => getSavedCameraTrackpadSettings().zoomAcceleration);
   const [draftCameraScope, setDraftCameraScope] = useState<CameraScopeMode>(() => getSavedWorkspaceCameraSettings().scope);
+  const [draftHigherContrastModelEdges, setDraftHigherContrastModelEdges] = useState<boolean>(() => getSavedWorkspaceCameraSettings().higherContrastModelEdges);
   const [draftThemePreference, setDraftThemePreference] = useState(getSavedThemePreference());
   const [draftThemePreset, setDraftThemePreset] = useState<ThemePreset>(getSavedThemePreset());
   const [draftThemeColors, setDraftThemeColors] = useState<ThemeCustomColors>(getSavedThemeCustomColors());
@@ -267,7 +280,9 @@ export function SettingsModal({
   const [draftView3dSettings, setDraftView3dSettings] = useState<View3DSettings>(() => view3dSettings ?? getSavedView3DSettings());
   const [draftSlicingPerformanceSettings, setDraftSlicingPerformanceSettings] = useState<SlicingPerformanceSettings>(() => getSavedSlicingPerformanceSettings());
   const [draftSlicingThumbnailRenderSettings, setDraftSlicingThumbnailRenderSettings] = useState<SlicingThumbnailRenderSettings>(() => slicingThumbnailRenderSettings ?? DEFAULT_SLICING_THUMBNAIL_RENDER_SETTINGS);
+  const [draftUvToolsSettings, setDraftUvToolsSettings] = useState<UvToolsSettings>(() => getSavedUvToolsSettings());
   const [draftLogLevel, setDraftLogLevel] = useState<LogLevelFilter>(() => getSavedLogLevel());
+  const [updateChannel, setUpdateChannel] = useState<UpdateChannel>('stable');
   const [showRestoreDefaultsConfirm, setShowRestoreDefaultsConfirm] = useState(false);
   const [showThemeSaveConfirm, setShowThemeSaveConfirm] = useState(false);
   const [showThemeRenameDialog, setShowThemeRenameDialog] = useState(false);
@@ -286,6 +301,11 @@ export function SettingsModal({
   const [isLightTheme, setIsLightTheme] = useState(false);
   const didCommitThemeDraftRef = React.useRef(false);
   const showPngCompressionControls = outputFormatUsesPngLayers(activeOutputFormat ?? undefined);
+
+  // Load saved update channel preference.
+  React.useEffect(() => {
+    getUpdateChannel().then(setUpdateChannel);
+  }, []);
 
   const accentSecondaryActionColor = isLightTheme
     ? 'color-mix(in srgb, #4f8a08, var(--text-strong) 30%)'
@@ -340,6 +360,7 @@ export function SettingsModal({
     setDraftCameraTrackpadOrbitAcceleration(getSavedCameraTrackpadSettings().orbitAcceleration);
     setDraftCameraTrackpadZoomAcceleration(getSavedCameraTrackpadSettings().zoomAcceleration);
     setDraftCameraScope(getSavedWorkspaceCameraSettings().scope);
+    setDraftHigherContrastModelEdges(getSavedWorkspaceCameraSettings().higherContrastModelEdges);
     setDraftThemePreference(getSavedThemePreference());
     setDraftThemePreset(savedThemePreset);
     setDraftThemeColors(getSavedThemeCustomColors());
@@ -353,6 +374,7 @@ export function SettingsModal({
     setDraftView3dSettings(view3dSettings ?? getSavedView3DSettings());
     setDraftSlicingPerformanceSettings(getSavedSlicingPerformanceSettings());
     setDraftSlicingThumbnailRenderSettings(slicingThumbnailRenderSettings ?? DEFAULT_SLICING_THUMBNAIL_RENDER_SETTINGS);
+    setDraftUvToolsSettings(getSavedUvToolsSettings());
     setDraftLogLevel(getSavedLogLevel());
   }, [
     ambientIntensity,
@@ -674,6 +696,7 @@ export function SettingsModal({
     setDraftCameraTrackpadOrbitAcceleration(DEFAULT_CAMERA_TRACKPAD_SETTINGS.orbitAcceleration);
     setDraftCameraTrackpadZoomAcceleration(DEFAULT_CAMERA_TRACKPAD_SETTINGS.zoomAcceleration);
     setDraftCameraScope(DEFAULT_WORKSPACE_CAMERA_SETTINGS.scope);
+    setDraftHigherContrastModelEdges(DEFAULT_WORKSPACE_CAMERA_SETTINGS.higherContrastModelEdges);
     setDraftThemePreference('dark');
     setDraftThemePreset('dragonfruit-dark');
     setDraftThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
@@ -686,6 +709,7 @@ export function SettingsModal({
     setDraftView3dSettings(DEFAULT_VIEW3D_SETTINGS);
     setDraftSlicingPerformanceSettings(DEFAULT_SLICING_PERFORMANCE_SETTINGS);
     setDraftSlicingThumbnailRenderSettings(DEFAULT_SLICING_THUMBNAIL_RENDER_SETTINGS);
+    setDraftUvToolsSettings(DEFAULT_UVTOOLS_SETTINGS);
   }, []);
 
   const handleRestoreDefaults = React.useCallback(() => {
@@ -766,8 +790,10 @@ export function SettingsModal({
       scope: draftCameraScope,
       defaults: draftWorkspaceCameraDefaults,
       selectionHighlightDefaults: getSavedWorkspaceCameraSettings().selectionHighlightDefaults,
+      higherContrastModelEdges: draftHigherContrastModelEdges,
     });
     saveSlicingPerformanceSettings(draftSlicingPerformanceSettings);
+    saveUvToolsSettings(draftUvToolsSettings);
     onSlicingThumbnailRenderSettingsChange(draftSlicingThumbnailRenderSettings);
     const normalized3dView = normalizeView3DSettings(draftView3dSettings);
     saveView3DSettings(normalized3dView);
@@ -795,6 +821,7 @@ export function SettingsModal({
     draftSelectedTintStrength,
     draftSelectionHighlightMode,
     draftCameraScope,
+    draftHigherContrastModelEdges,
     draftThemePreset,
     draftShaderType,
     draftToonSteps,
@@ -815,6 +842,7 @@ export function SettingsModal({
     draftWorkspaceCameraDefaults,
     draftSlicingPerformanceSettings,
     draftSlicingThumbnailRenderSettings,
+    draftUvToolsSettings,
     draftView3dSettings,
     draftXrayOpacity,
     draftHeatmapBlend,
@@ -1060,10 +1088,22 @@ export function SettingsModal({
       icon: ArchiveRestore,
       tone: 'secondary',
     },
+    uvtools: {
+      label: 'UVTools',
+      description: 'Send sliced files to UVTools for analysis',
+      icon: ExternalLink,
+      tone: 'secondary',
+    },
     logging: {
       label: 'Logging',
       description: 'Log file location and verbosity',
       icon: ScrollText,
+      tone: 'secondary',
+    },
+    updates: {
+      label: 'Updates',
+      description: 'Check for new versions and manage channels',
+      icon: CloudDownload,
       tone: 'secondary',
     },
     about: {
@@ -1075,12 +1115,13 @@ export function SettingsModal({
   };
 
   const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys'];
-  const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'sceneAutosave', 'backups', 'logging', 'about'];
+  const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'sceneAutosave', 'backups', 'uvtools', 'logging', 'updates', 'about'];
+
 
   const ActiveTabIcon = tabMeta[activeTab].icon;
   const activeTabColor = tabMeta[activeTab].tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
   const isAboutTab = activeTab === 'about';
-  const usesInternalTabScrollLayout = isAboutTab || activeTab === 'hotkeys';
+  const usesInternalTabScrollLayout = isAboutTab || activeTab === 'hotkeys' || activeTab === 'updates';
   const isBetaBuildChannel = DRAGONFRUIT_BUILD_CHANNEL.includes('beta');
   const buildStatusLabel = isBetaBuildChannel
     ? 'BETA VERSION'
@@ -1269,13 +1310,15 @@ export function SettingsModal({
           </div>
 
           <div className={usesInternalTabScrollLayout ? 'flex-1 min-h-0 flex flex-col p-4' : 'flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4'}>
-            <div className="mb-3 rounded-lg border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
-              <div className="flex items-center gap-2">
-                <ActiveTabIcon className="h-4 w-4" style={{ color: activeTabColor }} />
-                <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{tabMeta[activeTab].label}</h3>
+            {activeTab !== 'about' && activeTab !== 'updates' && (
+              <div className="mb-3 rounded-lg border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+                <div className="flex items-center gap-2">
+                  <ActiveTabIcon className="h-4 w-4" style={{ color: activeTabColor }} />
+                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{tabMeta[activeTab].label}</h3>
+                </div>
+                <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>{tabMeta[activeTab].description}</p>
               </div>
-              <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>{tabMeta[activeTab].description}</p>
-            </div>
+            )}
 
             <div key={activeTab} className={usesInternalTabScrollLayout ? 'animate-[settingsTabIn_180ms_ease-out] flex-1 min-h-0 flex flex-col' : 'animate-[settingsTabIn_180ms_ease-out]'}>
               {activeTab === 'general' && (
@@ -1309,6 +1352,8 @@ export function SettingsModal({
                   onCameraTrackpadZoomAccelerationChange={setDraftCameraTrackpadZoomAcceleration}
                   workspaceCameraDefaults={draftWorkspaceCameraDefaults}
                   onWorkspaceCameraModeChange={handleWorkspaceCameraModeChange}
+                  higherContrastModelEdges={draftHigherContrastModelEdges}
+                  onHigherContrastModelEdgesChange={setDraftHigherContrastModelEdges}
                 />
               )}
               {activeTab === 'workspaces' && (
@@ -1344,7 +1389,9 @@ export function SettingsModal({
                   heatmapColors={draftHeatmapColors}
                   onHeatmapColorChange={handleDraftHeatmapColorChange}
                   selectionColor={draftSelectionColor}
+                  onSelectionColorChange={setDraftSelectionColor}
                   hoverColor={draftHoverColor}
+                  onHoverColorChange={setDraftHoverColor}
                   selectionHighlightMode={draftSelectionHighlightMode}
                   onSelectionHighlightModeChange={setDraftSelectionHighlightMode}
                   hoverTintStrength={draftHoverTintStrength}
@@ -1397,10 +1444,22 @@ export function SettingsModal({
               {activeTab === 'plugins' && <PluginsSettingsTab />}
               {activeTab === 'sceneAutosave' && <SceneAutosaveSettingsTab />}
               {activeTab === 'backups' && <LocalBackupsSettingsTab />}
+              {activeTab === 'uvtools' && (
+                <UvToolsSettingsTab
+                  uvToolsSettings={draftUvToolsSettings}
+                  onUvToolsSettingsChange={setDraftUvToolsSettings}
+                />
+              )}
               {activeTab === 'logging' && (
                 <LoggingSettingsTab
                   logLevel={draftLogLevel}
                   onLogLevelChange={setDraftLogLevel}
+                />
+              )}
+              {activeTab === 'updates' && (
+                <UpdatesSettingsTab
+                  channel={updateChannel}
+                  onChannelChange={setUpdateChannel}
                 />
               )}
               {activeTab === 'about' && (
@@ -1414,43 +1473,37 @@ export function SettingsModal({
                           background: 'linear-gradient(145deg, color-mix(in srgb, var(--accent), var(--surface-0) 95%), color-mix(in srgb, var(--accent-secondary), var(--surface-0) 94%))',
                         }}
                       >
-                        <div className="flex flex-wrap items-start justify-between gap-4">
-                          <div className="min-w-0 flex-1">
-                            <img
-                              src="/dragonfruit_assets/branding/text_logo.svg"
-                              alt="DragonFruit"
-                              className="h-8 w-auto object-contain"
-                              style={isLightTheme ? { filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.35))' } : undefined}
-                            />
-                            <p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                              DragonFruit is an open-source slicer for resin 3D printing.
-                            </p>
-                          </div>
+                        <div className="relative flex items-center justify-center">
+                          <img
+                            src="/dragonfruit_assets/branding/text_logo.svg"
+                            alt="DragonFruit"
+                            className="h-9 w-auto object-contain"
+                            style={isLightTheme ? { filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.35))' } : undefined}
+                          />
+                          <span
+                            className="absolute right-0 top-0 inline-flex shrink-0 rounded-full px-2.5 py-0.5 text-[12px] font-semibold"
+                            style={{
+                              color: '#ffffff',
+                              background: 'linear-gradient(135deg, #3b0764 0%, #991b1b 50%, #9a3412 100%)',
+                            }}
+                          >
+                            An Open Resin Alliance Project
+                          </span>
                         </div>
 
-                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <div className="mt-3 flex flex-wrap items-center justify-center gap-2.5">
                           <span
-                            className="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold tabular-nums"
+                            className="inline-flex rounded-full border px-2.5 py-0.5 text-[12px] font-semibold tabular-nums"
                             style={{
                               color: 'var(--text-strong)',
                               borderColor: 'color-mix(in srgb, var(--border-subtle), white 8%)',
                               background: 'color-mix(in srgb, var(--surface-1), transparent 8%)',
                             }}
                           >
-                            v{DRAGONFRUIT_VERSION}
+                            Version {DRAGONFRUIT_VERSION}
                           </span>
                           <span
-                            className="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                            style={{
-                              color: 'var(--accent-secondary-contrast)',
-                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)',
-                              background: 'color-mix(in srgb, var(--accent-secondary), transparent 24%)',
-                            }}
-                          >
-                            An Open Resin Alliance Project
-                          </span>
-                          <span
-                            className="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                            className="inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-semibold"
                             style={buildStatusStyle}
                           >
                             {buildStatusLabel}
@@ -1657,39 +1710,98 @@ export function SettingsModal({
                             </div>                      
                           </div>
                           
+                          <div
+                            className="rounded-lg border px-3 py-2.5"
+                            style={{
+                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
+                            }}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                                  SinXIV
+                                </div>
+                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  Open Resin Alliance
+                                </div>
+                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  File Format QA, Edge Case Discovery, and Testing. Finds creative ways to break things so the rest of us don't have to.
+                                </div>
+                              </div>
+                              <div
+                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                                style={{
+                                  color: 'var(--accent-secondary-contrast)',
+                                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
+                                  background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
+                                }}
+                              >
+                                Contributor
+                              </div>          
+                            </div>                      
+                          </div>
+                          
+                          <div
+                            className="rounded-lg border px-3 py-2.5"
+                            style={{
+                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
+                            }}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                                  Aaron Baca
+                                </div>
+                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  Open Resin Alliance
+                                </div>
+                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                                  Likes anti-aliasing and long walks on the beach. Also automation, scripting, and general bugfixes.
+                                </div>
+                              </div>
+                              <div
+                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                                style={{
+                                  color: 'var(--accent-secondary-contrast)',
+                                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
+                                  background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
+                                }}
+                              >
+                                Contributor
+                              </div>          
+                            </div>                      
+                          </div>
+                          
                         </div>
                       </div>
+                      
 
-                      <div className="rounded-lg border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 25%)' }}>
+                      <div className="rounded-lg border px-3 py-2 text-center" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 25%)' }}>
                         <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                          DragonFruit is actively evolving. Expect rapid iteration and workflow improvements.
+                          DragonFruit is under active development - expect frequent updates and iterative improvements to workflows and features.
                         </div>
                       </div>
                     </div>
                   </div>
 
-                  <div className="shrink-0 rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                    <h5 className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                      Open Resin Alliance
-                    </h5>
-
-                    <div className="mt-2 flex items-center gap-4 rounded-lg border px-3 py-3" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 52%)', background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 94%)' }}>
+                  <div className="flex items-center gap-4 rounded-xl border px-4 py-3" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 52%)', background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 94%)' }}>
                       <img
                         src={ORA_LOGO_DARK_URL}
                         alt="Open Resin Alliance"
-                        className="h-24 w-auto object-contain shrink-0"
+                        className="h-14 w-auto object-contain shrink-0"
                         style={isLightTheme ? { filter: 'drop-shadow(0 1px 4px rgba(0,0,0,0.3))' } : undefined}
                       />
 
-                      <div className="min-w-0 flex-1 space-y-1.5">
-                        <div className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--text-strong)' }}>
-                          <Github className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />
-                          <span className="font-semibold">Repository:</span>
+                      <div className="min-w-0 flex-1 space-y-2 text-center">
+                        <div className="flex items-center justify-center gap-2 text-[12px]">
+                          <Github className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--accent)' }} />
                           <a
                             href={DRAGONFRUIT_REPO_URL}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 underline underline-offset-2"
+                            className="inline-flex items-center gap-1 underline underline-offset-2 font-mono tracking-tighter"
                             style={{ color: 'var(--accent)' }}
                           >
                             Open-Resin-Alliance/DragonFruit
@@ -1697,15 +1809,19 @@ export function SettingsModal({
                           </a>
                         </div>
 
-                        <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                          Status: Private GitHub Repo until public launch, then open-source.
-                        </div>
-                        <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                          License: TBD (GPLv3 or similar open-source license likely)
+                        <div className="flex items-center justify-center gap-2 text-[12px]" style={{ color: 'var(--text-strong)' }}>
+                          <ScrollText className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--accent)' }} />
+                          <span className="font-mono tracking-tighter">AGPL-3.0-or-later</span>
                         </div>
                       </div>
+
+                      <img
+                        src="/dragonfruit_assets/branding/simple_icon.svg"
+                        alt=""
+                        aria-hidden="true"
+                        className="h-10 w-auto object-contain shrink-0"
+                      />
                     </div>
-                  </div>
                 </div>
               )}
             </div>

@@ -8,17 +8,16 @@ on:
         required: true
         type: string
         default: dev
-      skip_linux:
-        description: Skip Linux/Flatpak build (use artifacts from PR check)
-        required: false
-        type: boolean
-        default: false
       pr_run_id:
-        description: Workflow run ID of the PR check to download Linux artifacts from
+        description: Workflow run ID of the PR check to download macOS artifacts from
         required: false
         type: string
       pr_number:
         description: PR number (for fork PR checkout)
+        required: false
+        type: string
+      release_name:
+        description: 'Override release name (e.g. "Feature: Test"). Inferred from branch if empty.'
         required: false
         type: string
   issue_comment:
@@ -125,6 +124,26 @@ jobs:
               core.info(`PR is from a fork (${pr.head.repo.full_name}) — will dispatch on base ref.`);
             }
 
+      - name: Extract custom release name from comment
+        id: extract_name
+        if: steps.check_access.outputs.result == 'granted'
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            const body = context.payload.comment.body;
+            // Everything after "/nightly " (with trailing space) is the custom name
+            const prefix = '/nightly';
+            if (body.startsWith(prefix)) {
+              const rest = body.slice(prefix.length).trim();
+              if (rest) {
+                core.info(`Custom release name detected: "${rest}"`);
+                return rest;
+              }
+            }
+            core.info('No custom release name in comment.');
+            return '';
+
       - name: Add nightly-build label
         if: steps.check_access.outputs.result == 'granted'
         env:
@@ -139,12 +158,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_BRANCH: ${{ steps.pr_info.outputs.head_ref }}
           BASE_BRANCH: ${{ steps.pr_info.outputs.base_ref }}
+          RELEASE_NAME: ${{ steps.extract_name.outputs.result }}
         run: |
-          gh workflow run build-nightly.yml \
-            --repo "${{ github.repository }}" \
-            --ref "$BASE_BRANCH" \
-            -f branch="$HEAD_BRANCH" \
-            -f pr_number="${{ github.event.issue.number }}"
+          CMD="gh workflow run build-nightly.yml \
+            --repo \"${{ github.repository }}\" \
+            --ref \"$BASE_BRANCH\" \
+            -f branch=\"$HEAD_BRANCH\" \
+            -f pr_number=\"${{ github.event.issue.number }}\""
+
+          if [[ -n "$RELEASE_NAME" ]]; then
+            CMD="$CMD -f release_name=\"$RELEASE_NAME\""
+          fi
+
+          eval "$CMD"
 
       - name: Acknowledge activation
         if: steps.check_access.outputs.result == 'granted'
@@ -155,7 +181,7 @@ jobs:
         run: |
           gh issue comment "$PR" \
             --repo "${{ github.repository }}" \
-            --body $'### 🚀 Nightly Build Triggered\n\nA nightly build has been dispatched for branch **`'"${BRANCH}"$'**\n\n| What | How |\n|------|-----|\n| **This build** | Check the [Actions tab]('"${{ github.server_url }}/${{ github.repository }}/actions/workflows/build-nightly.yml"$') for progress |\n| **Future commits** | Each new push will rebuild after Linux check passes |\n| **Deactivate** | Remove the `nightly-build` label to stop auto-builds |\n\n> The pre-release tag will be updated in-place so the download link stays the same.'
+            --body $'### 🚀 Nightly Build Triggered\n\nA nightly build has been dispatched for branch **`'"${BRANCH}"$'**\n\n| What | How |\n|------|-----|\n| **This build** | Check the [Actions tab]('"${{ github.server_url }}/${{ github.repository }}/actions/workflows/build-nightly.yml"$') for progress |\n| **Future commits** | Each new push will rebuild after macOS check passes |\n| **Deactivate** | Remove the `nightly-build` label to stop auto-builds |\n\n> The pre-release tag will be updated in-place so the download link stays the same.'
 
   # ── Derive metadata (branch, tag, names) ────────────────────────────────
   derive:
@@ -205,6 +231,8 @@ jobs:
       - name: Derive release metadata
         id: meta
         shell: bash
+        env:
+          RELEASE_NAME_OVERRIDE: ${{ inputs.release_name }}
         run: |
           version="$(node -p "require('./package.json').version")"
           commit_hash="$(git rev-parse --short HEAD)"
@@ -215,24 +243,34 @@ jobs:
           safe_branch="${branch_name//\//_}"
 
           # Human-readable release name
-          human_name="$branch_name"
-          case "$branch_name" in
-            feat/*) human_name="Feature: ${branch_name#feat/}" ;;
-            fix/*)  human_name="Fix: ${branch_name#fix/}" ;;
-            chore/*) human_name="Chore: ${branch_name#chore/}" ;;
-            refactor/*) human_name="Refactor: ${branch_name#refactor/}" ;;
-            docs/*) human_name="Docs: ${branch_name#docs/}" ;;
-            perf/*) human_name="Perf: ${branch_name#perf/}" ;;
-            ci/*)   human_name="CI: ${branch_name#ci/}" ;;
-            *)      human_name="Nightly: ${branch_name}" ;;
-          esac
+          if [[ -n "$RELEASE_NAME_OVERRIDE" ]]; then
+            human_name="$RELEASE_NAME_OVERRIDE"
+          else
+            human_name="$branch_name"
+            case "$branch_name" in
+              feat/*) human_name="Feature: ${branch_name#feat/}" ;;
+              fix/*)  human_name="Fix: ${branch_name#fix/}" ;;
+              chore/*) human_name="Chore: ${branch_name#chore/}" ;;
+              refactor/*) human_name="Refactor: ${branch_name#refactor/}" ;;
+              docs/*) human_name="Docs: ${branch_name#docs/}" ;;
+              perf/*) human_name="Perf: ${branch_name#perf/}" ;;
+              ci/*)   human_name="CI: ${branch_name#ci/}" ;;
+              *)      human_name="Nightly: ${branch_name}" ;;
+            esac
 
-          # Capitalize the descriptive part
-          rest="${human_name#*: }"
-          prefix="${human_name%%: *}"
-          first_char="$(printf '%s' "${rest:0:1}" | tr '[:lower:]' '[:upper:]')"
-          capitalized="${first_char}${rest:1}"
-          human_name="${prefix}: ${capitalized}"
+            # Replace underscores and hyphens with spaces, then title-case each word
+            rest="${human_name#*: }"
+            prefix="${human_name%%: *}"
+            rest="${rest//_/ }"
+            rest="${rest//-/ }"
+            capitalized=""
+            for word in $rest; do
+              first="$(printf '%s' "${word:0:1}" | tr '[:lower:]' '[:upper:]')"
+              capitalized="${capitalized}${first}${word:1} "
+            done
+            capitalized="${capitalized% }"
+            human_name="${prefix}: ${capitalized}"
+          fi
 
           release_tag="nightly_${safe_branch}"
 
@@ -244,49 +282,43 @@ jobs:
           echo "commit_hash=${commit_hash}" >> "$GITHUB_OUTPUT"
           echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
 
-  # ── Fetch Linux artifacts from PR check run ────────────────────────────
-  fetch-linux-artifacts:
-    if: github.event_name == 'workflow_dispatch' && inputs.skip_linux == 'true' && inputs.pr_run_id
+  # ── Fetch macOS DMG from PR check run ──────────────────────────────────
+  fetch-macos-artifacts:
+    if: github.event_name == 'workflow_dispatch' && inputs.pr_run_id
     needs:
       - derive
     runs-on: ubuntu-latest
     steps:
-      - name: Download Linux build artifacts from PR check
+      - name: Download macOS DMG from PR check
         uses: actions/download-artifact@v4
         with:
-          path: linux-artifacts
+          path: macos-artifacts
           run-id: ${{ inputs.pr_run_id }}
           github-token: ${{ github.token }}
 
-      - name: Rename Linux artifacts to nightly convention
+      - name: Rename DMG to nightly convention
         shell: bash
         env:
           SAFE_BRANCH: ${{ needs.derive.outputs.safe_branch }}
           COMMIT_HASH: ${{ needs.derive.outputs.commit_hash }}
           VERSION: ${{ needs.derive.outputs.version }}
         run: |
+          find macos-artifacts -name "*.dmg" -type f 2>/dev/null || echo "No .dmg files found"
           nightly_tag="${SAFE_BRANCH}_${COMMIT_HASH}_${VERSION}_DragonFruit_nightly"
+          src="$(find macos-artifacts -name "*.dmg" -type f | head -1)"
+          if [ -n "$src" ]; then
+            cp -v "$src" "macos-artifacts/${nightly_tag}.dmg"
+          else
+            echo "No DMG file found in downloaded artifacts"
+            exit 1
+          fi
 
-          for f in linux-artifacts/linux-deb/*.deb; do
-            [ -e "$f" ] && cp -v "$f" "linux-artifacts/linux-deb/${nightly_tag}.deb"
-          done
-          for f in linux-artifacts/linux-rpm/*.rpm; do
-            [ -e "$f" ] && cp -v "$f" "linux-artifacts/linux-rpm/${nightly_tag}.rpm"
-          done
-
-      - name: Upload renamed deb
+      - name: Upload renamed DMG
         uses: actions/upload-artifact@v4
         with:
-          name: dragonfruit-linux-deb
-          path: linux-artifacts/linux-deb/*_DragonFruit_nightly.deb
-          if-no-files-found: warn
-
-      - name: Upload renamed rpm
-        uses: actions/upload-artifact@v4
-        with:
-          name: dragonfruit-linux-rpm
-          path: linux-artifacts/linux-rpm/*_DragonFruit_nightly.rpm
-          if-no-files-found: warn
+          name: dragonfruit-macos-universal
+          path: macos-artifacts/*_DragonFruit_nightly.dmg
+          if-no-files-found: error
 
   # ── Build matrix ────────────────────────────────────────────────────────
   build-tauri:
@@ -297,12 +329,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
-            build_kind: tauri
-            args: --target universal-apple-darwin --bundles app,dmg
-            artifact_name: dragonfruit-macos-universal
-            cmake_archs: "arm64;x86_64"
-            df_build_triple: universal-apple-darwin
           - platform: windows-latest
             build_kind: tauri
             args: --target x86_64-pc-windows-msvc --bundles nsis
@@ -319,7 +345,7 @@ jobs:
           submodules: recursive
 
       - name: Install Linux system dependencies
-        if: matrix.platform == 'ubuntu-22.04' && (github.event_name != 'workflow_dispatch' || inputs.skip_linux != 'true')
+        if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
@@ -332,8 +358,6 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -343,30 +367,16 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build Tauri bundle
+      - name: Build Tauri bundle (Windows)
         if: matrix.build_kind == 'tauri'
         uses: tauri-apps/tauri-action@v0
-        env:
-          APPIMAGE_EXTRACT_AND_RUN: ${{ matrix.platform == 'ubuntu-22.04' && '1' || '' }}
-          CMAKE_OSX_ARCHITECTURES: ${{ matrix.cmake_archs || '' }}
-          DF_BUILD_TARGET_TRIPLE: ${{ matrix.df_build_triple || '' }}
         with:
           tauriScript: npx tauri
           args: ${{ matrix.args }}
 
-      - name: Embed QuickLook extension + verify universal bundle
-        if: matrix.platform == 'macos-latest'
-        run: |
-          node scripts/macos-embed-appex.mjs --target ${{ matrix.df_build_triple }}
-          node scripts/verify-universal-bundle.mjs
-
-      - name: Install AppStream + desktop-file validators
-        if: matrix.build_kind == 'flatpak'
-        run: sudo apt-get install -y appstream desktop-file-utils
-
       - name: Install Flatpak build tooling
         if: matrix.build_kind == 'flatpak'
-        run: sudo apt-get install -y flatpak flatpak-builder
+        run: sudo apt-get install -y flatpak flatpak-builder appstream desktop-file-utils
 
       - name: Prepare XDG runtime directory
         if: matrix.build_kind == 'flatpak'
@@ -388,12 +398,12 @@ jobs:
             org.freedesktop.Sdk//24.08 \
             org.freedesktop.Platform//24.08
 
-      - name: Build Tauri app (CEF variant on Linux)
-        if: matrix.build_kind == 'flatpak' && (github.event_name != 'workflow_dispatch' || inputs.skip_linux != 'true')
+      - name: Build Tauri app for Flatpak
+        if: matrix.build_kind == 'flatpak'
         run: node scripts/tauri-build.mjs --target x86_64-unknown-linux-gnu --no-bundle
 
-      - name: Rename installer artifact
-        if: matrix.build_kind == 'tauri' && (matrix.platform == 'macos-latest' || matrix.platform == 'windows-latest')
+      - name: Rename Windows installer
+        if: matrix.build_kind == 'tauri'
         shell: bash
         env:
           SAFE_BRANCH: ${{ needs.derive.outputs.safe_branch }}
@@ -402,21 +412,12 @@ jobs:
         run: |
           nightly_tag="${SAFE_BRANCH}_${COMMIT_HASH}_${VERSION}_DragonFruit_nightly"
 
-          if [[ "${{ matrix.platform }}" == "macos-latest" ]]; then
-            src="src-tauri/target/*/release/bundle/dmg/*.dmg"
-            dst="${nightly_tag}.dmg"
-          else
-            src="src-tauri/target/*/release/bundle/nsis/*-setup.exe"
-            dst="${nightly_tag}.exe"
-          fi
-
-          # There should be exactly one match
-          for f in $src; do
-            mv -v "$f" "$(dirname "$f")/$dst"
+          for f in src-tauri/target/*/release/bundle/nsis/*-setup.exe; do
+            [ -e "$f" ] && mv -v "$f" "$(dirname "$f")/${nightly_tag}.exe"
           done
 
       - name: Rename flatpak artifact
-        if: matrix.build_kind == 'flatpak' && (github.event_name != 'workflow_dispatch' || inputs.skip_linux != 'true')
+        if: matrix.build_kind == 'flatpak'
         shell: bash
         env:
           SAFE_BRANCH: ${{ needs.derive.outputs.safe_branch }}
@@ -425,27 +426,92 @@ jobs:
         run: |
           nightly_tag="${SAFE_BRANCH}_${COMMIT_HASH}_${VERSION}_DragonFruit_nightly"
 
-          src="src-tauri/target/release/bundle/flatpak/*.flatpak"
-          dst="${nightly_tag}.flatpak"
-
-          for f in $src; do
-            mv -v "$f" "$(dirname "$f")/$dst"
+          for f in src-tauri/target/release/bundle/flatpak/*.flatpak; do
+            [ -e "$f" ] && mv -v "$f" "$(dirname "$f")/${nightly_tag}.flatpak"
           done
 
-      - name: Upload installer artifact
-        if: matrix.build_kind == 'tauri' && (matrix.platform == 'macos-latest' || matrix.platform == 'windows-latest')
+      - name: Upload Windows installer
+        if: matrix.build_kind == 'tauri'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.platform == 'macos-latest' && 'src-tauri/target/*/release/bundle/dmg/*_DragonFruit_nightly.dmg' || 'src-tauri/target/*/release/bundle/nsis/*_DragonFruit_nightly.exe' }}
+          path: src-tauri/target/*/release/bundle/nsis/*_DragonFruit_nightly.exe
           if-no-files-found: error
 
       - name: Upload flatpak artifact
-        if: matrix.build_kind == 'flatpak' && (github.event_name != 'workflow_dispatch' || inputs.skip_linux != 'true')
+        if: matrix.build_kind == 'flatpak'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: src-tauri/target/release/bundle/flatpak/*_DragonFruit_nightly.flatpak
+          if-no-files-found: error
+
+  # ── Fallback: build macOS Universal natively (manual dispatch, no PR check) ─
+  build-macos-fallback:
+    name: Build macOS Universal (fallback)
+    if: always() && github.event_name == 'workflow_dispatch' && (!inputs.pr_run_id || needs.fetch-macos-artifacts.result != 'success')
+    needs:
+      - derive
+      - fetch-macos-artifacts
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.derive.outputs.checkout_ref }}
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.18.0"
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri universal macOS bundle
+        uses: tauri-apps/tauri-action@v0
+        env:
+          CMAKE_OSX_ARCHITECTURES: "arm64;x86_64"
+          DF_BUILD_TARGET_TRIPLE: universal-apple-darwin
+        with:
+          tauriScript: npx tauri
+          args: --target universal-apple-darwin --bundles app,dmg
+
+      - name: Embed QuickLook extension + verify universal bundle
+        run: |
+          node scripts/macos-embed-appex.mjs --target universal-apple-darwin
+          node scripts/verify-universal-bundle.mjs
+
+      - name: Rename DMG for nightly release
+        shell: bash
+        env:
+          SAFE_BRANCH: ${{ needs.derive.outputs.safe_branch }}
+          COMMIT_HASH: ${{ needs.derive.outputs.commit_hash }}
+          VERSION: ${{ needs.derive.outputs.version }}
+        run: |
+          nightly_tag="${SAFE_BRANCH}_${COMMIT_HASH}_${VERSION}_DragonFruit_nightly"
+
+          for f in src-tauri/target/*/release/bundle/dmg/*.dmg; do
+            [ -e "$f" ] && mv -v "$f" "$(dirname "$f")/${nightly_tag}.dmg"
+          done
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dragonfruit-macos-universal
+          path: src-tauri/target/*/release/bundle/dmg/*_DragonFruit_nightly.dmg
           if-no-files-found: error
 
   # ── Publish nightly prerelease ──────────────────────────────────────────
@@ -455,7 +521,8 @@ jobs:
     needs:
       - derive
       - build-tauri
-      - fetch-linux-artifacts
+      - fetch-macos-artifacts
+      - build-macos-fallback
     runs-on: ubuntu-latest
     steps:
       - name: Download build artifacts

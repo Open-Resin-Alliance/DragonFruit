@@ -1,7 +1,7 @@
-name: PR Linux Build Check
+name: PR macOS Build Check
 
 on:
-  pull_request:
+  pull_request_target:
     types:
       - opened
       - synchronize
@@ -13,9 +13,9 @@ permissions:
   pull-requests: write
 
 jobs:
-  linux-build:
-    name: Linux compile check
-    runs-on: ubuntu-22.04
+  macos-build:
+    name: macOS compile check (Universal)
+    runs-on: macos-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
       commit_hash: ${{ steps.version.outputs.commit_hash }}
@@ -23,12 +23,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           submodules: recursive
-
-      - name: Install Linux system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -39,7 +35,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-gnu
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -56,38 +52,26 @@ jobs:
           echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
           echo "commit_hash=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Compile Linux bundle
+      - name: Build Tauri universal macOS bundle
         uses: tauri-apps/tauri-action@v0
         env:
-          APPIMAGE_EXTRACT_AND_RUN: "1"
+          CMAKE_OSX_ARCHITECTURES: "arm64;x86_64"
+          DF_BUILD_TARGET_TRIPLE: universal-apple-darwin
+          # Tauri updater signing — set these as repo secrets:
+          # TAURI_SIGNING_PRIVATE_KEY — content of .tauri/app.key
+          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD — optional password set during key gen
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tauriScript: npx tauri
-          args: --target x86_64-unknown-linux-gnu --bundles deb,rpm
+          args: --target universal-apple-darwin --bundles app,dmg
 
-      - name: Install Flatpak build tooling
-        run: sudo apt-get install -y flatpak flatpak-builder appstream desktop-file-utils
-
-      - name: Prepare XDG runtime directory
+      - name: Embed QuickLook extension + verify universal bundle
         run: |
-          mkdir -p "$RUNNER_TEMP/xdg-runtime"
-          chmod 700 "$RUNNER_TEMP/xdg-runtime"
-          echo "XDG_RUNTIME_DIR=$RUNNER_TEMP/xdg-runtime" >> "$GITHUB_ENV"
+          node scripts/macos-embed-appex.mjs --target universal-apple-darwin
+          node scripts/verify-universal-bundle.mjs
 
-      - name: Configure Flathub remote
-        run: |
-          flatpak remote-add --user --if-not-exists \
-            flathub https://flathub.org/repo/flathub.flatpakrepo
-
-      - name: Install Flatpak runtime dependencies (user)
-        run: |
-          flatpak --user install -y --noninteractive flathub \
-            org.freedesktop.Sdk//24.08 \
-            org.freedesktop.Platform//24.08
-
-      - name: Build Tauri app for Flatpak
-        run: node scripts/tauri-build.mjs --target x86_64-unknown-linux-gnu --no-bundle
-
-      - name: Rename Linux artifacts for nightly release
+      - name: Rename DMG for nightly handoff
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -95,49 +79,31 @@ jobs:
         run: |
           nightly_tag="pr-${COMMIT_HASH}_${VERSION}_DragonFruit_nightly"
 
-          for f in src-tauri/target/release/bundle/deb/*.deb; do
-            [ -e "$f" ] && mv -v "$f" "$(dirname "$f")/${nightly_tag}.deb"
+          for f in src-tauri/target/*/release/bundle/dmg/*.dmg; do
+            [ -e "$f" ] && mv -v "$f" "$(dirname "$f")/${nightly_tag}.dmg"
           done
 
-          for f in src-tauri/target/release/bundle/rpm/*.rpm; do
-            [ -e "$f" ] && mv -v "$f" "$(dirname "$f")/${nightly_tag}.rpm"
-          done
-
-      - name: Upload deb artifact
+      - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-deb
-          path: src-tauri/target/release/bundle/deb/*_DragonFruit_nightly.deb
-          if-no-files-found: error
-
-      - name: Upload rpm artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-rpm
-          path: src-tauri/target/release/bundle/rpm/*_DragonFruit_nightly.rpm
-          if-no-files-found: error
-
-      - name: Upload flatpak artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-flatpak
-          path: src-tauri/target/release/bundle/flatpak/*.flatpak
+          name: macos-dmg
+          path: src-tauri/target/*/release/bundle/dmg/*_DragonFruit_nightly.dmg
           if-no-files-found: error
 
   comment-status:
-    name: Comment Linux build status
+    name: Comment macOS build status
     runs-on: ubuntu-latest
     needs:
-      - linux-build
+      - macos-build
     if: always()
     steps:
       - name: Upsert PR status comment
         uses: actions/github-script@v7
         env:
-          BUILD_RESULT: ${{ needs.linux-build.result }}
+          BUILD_RESULT: ${{ needs.macos-build.result }}
         with:
           script: |
-            const marker = "<!-- dragonfruit-linux-build-status -->";
+            const marker = "<!-- dragonfruit-macos-build-status -->";
             const result = process.env.BUILD_RESULT;
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -157,21 +123,21 @@ jobs:
                 title: "Compilation Succeeded",
                 badge: "Passed",
                 color: "brightgreen",
-                body: "The PR compiled successfully for Linux."
+                body: "The PR compiled successfully for macOS (Universal)."
               },
               failure: {
                 icon: emojiMap.failure,
                 title: "Compilation Failed",
                 badge: "Failed",
                 color: "red",
-                body: "The Linux compile check failed. Please inspect the workflow logs for details."
+                body: "The macOS compile check failed. Please inspect the workflow logs for details."
               },
               cancelled: {
                 icon: emojiMap.cancelled,
                 title: "Compilation Cancelled",
                 badge: "Cancelled",
                 color: "yellow",
-                body: "The Linux compile check did not finish because the workflow was cancelled."
+                body: "The macOS compile check did not finish because the workflow was cancelled."
               }
             };
 
@@ -180,7 +146,7 @@ jobs:
               title: `Compilation Ended: ${result}`,
               badge: result,
               color: "grey",
-              body: "The Linux compile check finished with a non-standard result."
+              body: "The macOS compile check finished with a non-standard result."
             };
 
             const commitSha = context.payload.pull_request?.head?.sha?.slice(0, 7) || "unknown";
@@ -188,7 +154,7 @@ jobs:
 
             const body = [
               marker,
-              `## ${status.icon} Linux Build Check — ${status.title}`,
+              `## ${status.icon} macOS Build Check — ${status.title}`,
               "",
               `| | |`,
               `|---|---|`,
@@ -201,7 +167,7 @@ jobs:
               "",
               "---",
               "",
-              "> 💡 This check runs automatically on every push to the PR."
+              "> 💡 This check runs automatically on every push to the PR. The macOS DMG is handed off to the nightly workflow when the `nightly-build` label is set."
             ].join("\n");
 
             const comments = await github.paginate(github.rest.issues.listComments, {
@@ -235,7 +201,7 @@ jobs:
   dispatch-nightly:
     name: Dispatch nightly build if labeled
     needs:
-      - linux-build
+      - macos-build
     if: >
       success() &&
       contains(github.event.pull_request.labels.*.name, 'nightly-build')
@@ -257,6 +223,5 @@ jobs:
             --repo "${{ github.repository }}" \
             --ref "$BASE_BRANCH" \
             -f branch="$HEAD_BRANCH" \
-            -f skip_linux=true \
             -f pr_run_id="$RUN_ID" \
             -f pr_number="$PR_NUMBER"

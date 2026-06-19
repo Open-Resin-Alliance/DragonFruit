@@ -1,7 +1,8 @@
 'use client';
 
 import React from 'react';
-import { Bug, ClipboardCopy, Database, LayoutGrid, RotateCcw } from 'lucide-react';
+import { Bug, ClipboardCopy, Database, Languages, LayoutGrid, RotateCcw } from 'lucide-react';
+import { LanguageSwitcher } from '@/components/ui/LanguageSwitcher';
 import type { ImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
 import {
   FLOATING_LAYOUT_DEBUG_REQUEST_EVENT,
@@ -82,6 +83,48 @@ export function GeneralSettingsTab({
 
   return (
     <div className="space-y-3">
+      <section
+        className="rounded-lg border p-3"
+        style={{
+          background: 'var(--surface-1)',
+          borderColor: 'var(--border-subtle)',
+        }}
+      >
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+            }}
+          >
+            <Languages className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Language
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Choose the interface language. Detected from your system on first run; your choice is remembered.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Interface language
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Applied immediately across the app.
+              </div>
+            </div>
+            <LanguageSwitcher />
+          </div>
+        </div>
+      </section>
+
       <section
         className="rounded-lg border p-3"
         style={{
@@ -393,89 +436,6 @@ export function GeneralSettingsTab({
         </div>
       </section>
 
-      <section
-        className="rounded-lg border p-3"
-        style={{
-          background: 'var(--surface-1)',
-          borderColor: 'var(--border-subtle)',
-        }}
-      >
-        <div className="flex items-start gap-2">
-          <span
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
-            }}
-          >
-            <Bug className="h-4 w-4" style={{ color: 'var(--accent)' }} />
-          </span>
-          <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Debug
-            </h3>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Dump floating window layout JSON for diagnostics, bug reports, or reproducible UX state.
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={handleDumpCurrentLayout}
-              className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center gap-1.5"
-            >
-              <Database className="h-4 w-4 shrink-0" />
-              Dump Current Layout JSON
-            </button>
-
-            <button
-              type="button"
-              onClick={handleDumpSavedLayout}
-              className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center gap-1.5"
-            >
-              <Database className="h-4 w-4 shrink-0" />
-              Dump Saved Layout JSON
-            </button>
-
-            <button
-              type="button"
-              onClick={handleCopyDump}
-              disabled={!layoutDump}
-              className="ui-button ui-button-primary !h-9 !px-3 !py-0 text-sm inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <ClipboardCopy className="h-4 w-4 shrink-0" />
-              Copy JSON
-            </button>
-          </div>
-
-          {dumpStatus && (
-            <div className="mt-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              {dumpStatus}
-            </div>
-          )}
-
-          <div className="mt-2">
-            <label className="text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>
-              Layout JSON
-            </label>
-            <textarea
-              value={layoutDump}
-              readOnly
-              spellCheck={false}
-              placeholder="Click a dump button to capture layout JSON..."
-              className="mt-1 w-full rounded-md border p-2 font-mono text-[11px] leading-4 min-h-[180px] resize-y"
-              style={{
-                borderColor: 'var(--border-subtle)',
-                background: 'color-mix(in srgb, var(--surface-0), black 5%)',
-                color: 'var(--text-strong)',
-              }}
-            />
-          </div>
-        </div>
-      </section>
     </div>
   );
 }

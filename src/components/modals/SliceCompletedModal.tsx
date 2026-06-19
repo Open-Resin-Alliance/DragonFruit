@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { CheckCircle2, FolderOpen } from 'lucide-react';
+import { CheckCircle2, ExternalLink, FolderOpen } from 'lucide-react';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 
 type SliceCompletedModalProps = {
@@ -9,6 +9,8 @@ type SliceCompletedModalProps = {
   onClose: () => void;
   filePath: string | null;
   slicingTimeMs: number | null;
+  /** When set, replaces the Close button with Open UVTools + Open Directory. */
+  onOpenInUvTools?: (filePath: string) => void;
 };
 
 export function SliceCompletedModal({
@@ -16,6 +18,7 @@ export function SliceCompletedModal({
   onClose,
   filePath,
   slicingTimeMs,
+  onOpenInUvTools,
 }: SliceCompletedModalProps) {
   const [openDirectoryError, setOpenDirectoryError] = React.useState<string | null>(null);
 
@@ -69,7 +72,28 @@ export function SliceCompletedModal({
       closeAriaLabel="Close slicing finished modal"
       onClose={onClose}
       onBackdropClick={onClose}
-      actions={(
+      actions={onOpenInUvTools ? (
+        <>
+          <button
+            type="button"
+            onClick={() => filePath && onOpenInUvTools(filePath)}
+            disabled={!filePath}
+            className="ui-button ui-button-accent !h-9 px-3 text-sm inline-flex items-center gap-1.5 disabled:opacity-45"
+          >
+            <ExternalLink className="w-4 h-4" />
+            Open in UVTools
+          </button>
+          <button
+            type="button"
+            onClick={handleOpenDirectory}
+            disabled={!filePath}
+            className="ui-button ui-button-secondary !h-9 px-3 text-sm inline-flex items-center gap-1.5 disabled:opacity-45"
+          >
+            <FolderOpen className="w-4 h-4" />
+            Open Directory
+          </button>
+        </>
+      ) : (
         <>
           <button
             type="button"

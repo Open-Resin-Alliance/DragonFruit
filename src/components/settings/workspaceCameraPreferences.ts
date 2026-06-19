@@ -10,6 +10,7 @@ export type WorkspaceCameraSettings = {
   scope: CameraScopeMode;
   defaults: WorkspaceCameraDefaults;
   selectionHighlightDefaults: WorkspaceSelectionHighlightDefaults;
+  higherContrastModelEdges: boolean;
 };
 
 export const WORKSPACE_CAMERA_SETTINGS_STORAGE_KEY = 'workspace-camera-settings';
@@ -31,6 +32,7 @@ export const DEFAULT_WORKSPACE_CAMERA_SETTINGS: WorkspaceCameraSettings = {
     export: 'tint',
     printing: 'tint',
   },
+  higherContrastModelEdges: false,
 };
 
 let cachedWorkspaceCameraSettings: WorkspaceCameraSettings = DEFAULT_WORKSPACE_CAMERA_SETTINGS;
@@ -62,6 +64,10 @@ function normalizeSelectionHighlightMode(input: unknown): SelectionHighlightMode
   return 'tint';
 }
 
+function normalizeBoolean(input: unknown, fallback: boolean): boolean {
+  return typeof input === 'boolean' ? input : fallback;
+}
+
 export function normalizeWorkspaceCameraSettings(input: unknown): WorkspaceCameraSettings {
   if (!input || typeof input !== 'object') return DEFAULT_WORKSPACE_CAMERA_SETTINGS;
 
@@ -90,6 +96,7 @@ export function normalizeWorkspaceCameraSettings(input: unknown): WorkspaceCamer
       export: normalizeSelectionHighlightMode(selectionHighlightDefaults.export),
       printing: normalizeSelectionHighlightMode(selectionHighlightDefaults.printing),
     },
+    higherContrastModelEdges: normalizeBoolean(candidate.higherContrastModelEdges, false),
   };
 }
 

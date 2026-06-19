@@ -3,6 +3,7 @@ import { LayoutGrid, Loader2, RotateCw } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Button, Card, CardHeader, IconButton, Select } from '@/components/ui/primitives';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
+import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 export type ArrangeAnchorMode = 'center' | 'front_left' | 'front_right' | 'back_left' | 'back_right';
 export type ArrangeLayoutMode = 'auto' | 'array';
@@ -106,8 +107,8 @@ export function ArrangePanel({
   isApplying = false,
   disableArrangeActions = false,
 }: ArrangePanelProps) {
-  const [expanded, setExpanded] = React.useState(true);
-  const isArrangeAllDisabled = modelCount <= 1 || isApplying || disableArrangeActions;
+  const [expanded, setExpanded] = useFloatingPanelCollapse(true);
+  const isArrangeAllDisabled = modelCount <= 0 || isApplying || disableArrangeActions;
   const isArrangeSelectedDisabled = selectedModelCount === 0 || isApplying || disableArrangeActions;
   const panelCardStyle: React.CSSProperties = {
     borderColor: 'var(--border-subtle)',

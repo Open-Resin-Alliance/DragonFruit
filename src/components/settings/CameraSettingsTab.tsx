@@ -27,6 +27,8 @@ interface CameraSettingsTabProps {
   onCameraTrackpadZoomAccelerationChange: (value: number) => void;
   workspaceCameraDefaults: WorkspaceCameraDefaults;
   onWorkspaceCameraModeChange: (workspace: SupportMode, mode: CameraProjectionMode) => void;
+  higherContrastModelEdges?: boolean;
+  onHigherContrastModelEdgesChange?: (value: boolean) => void;
 }
 
 const workspaceMeta: Array<{ key: SupportMode; label: string; hint: string }> = [
@@ -55,6 +57,8 @@ export function CameraSettingsTab({
   onCameraTrackpadZoomAccelerationChange,
   workspaceCameraDefaults,
   onWorkspaceCameraModeChange,
+  higherContrastModelEdges = false,
+  onHigherContrastModelEdgesChange,
 }: CameraSettingsTabProps) {
   const [activeWorkspace, setActiveWorkspace] = React.useState<SupportMode>('prepare');
   const usingGlobalScope = cameraScope === 'global';
@@ -334,6 +338,66 @@ export function CameraSettingsTab({
                 );
               })}
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Rendering — Higher Contrast Model Edges ── */}
+      <section
+        className="rounded-lg border p-3"
+        style={{
+          background: 'var(--surface-1)',
+          borderColor: 'var(--border-subtle)',
+        }}
+      >
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+            }}
+          >
+            <CameraIcon className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Higher Contrast Model Edges
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Overlay black edge lines on model geometry to improve shape definition.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Edge lines
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Draws black outlines along hard edges of the model for better visual clarity.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => onHigherContrastModelEdgesChange?.(!higherContrastModelEdges)}
+              className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+              style={higherContrastModelEdges
+                ? {
+                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                    color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
+                  }
+                : {
+                    borderColor: 'var(--border-subtle)',
+                    background: 'var(--surface-1)',
+                    color: 'var(--text-muted)',
+                  }}
+            >
+              {higherContrastModelEdges ? 'On' : 'Off'}
+            </button>
           </div>
         </div>
       </section>

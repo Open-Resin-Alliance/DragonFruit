@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, CircleHelp, Cpu, Download, Edit3, Layers3, Loader2, Play, Printer, Timer, X } from 'lucide-react';
+import { ChevronDown, CircleHelp, Cpu, Download, Edit3, ExternalLink, Layers3, Loader2, Play, Printer, Timer, X } from 'lucide-react';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
+import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
 import { MaterialAntiAliasingSection, type MaterialDraft } from '@/components/settings/profileFormAtoms';
 import {
@@ -36,6 +37,10 @@ import {
   getSavedSlicingPerformanceSettings,
   saveSlicingPerformanceSettings,
 } from '@/components/settings/performancePreferences';
+import {
+  getSavedUvToolsSettings,
+  resolveUvToolsExecutablePath,
+} from '@/components/settings/uvToolsPreferences';
 import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, getSlicerEngineVersion } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { computePhysicalAaConfig, type AaPreset as AaAutoPreset } from '@/features/slicing/autoAaPhysics';
 import {
@@ -50,7 +55,7 @@ import {
   type SavedCurve,
 } from './LutCurveEditor';
 
-export type SliceIntent = 'file' | 'upload' | 'print' | 'preview';
+export type SliceIntent = 'file' | 'upload' | 'print' | 'preview' | 'uvtools';
 
 interface SlicingPanelProps {
   models: LoadedModel[];
@@ -423,7 +428,7 @@ function readSliceIntentByPrinterProfile(): Record<string, SliceIntent> {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const next: Record<string, SliceIntent> = {};
     for (const [key, value] of Object.entries(parsed)) {
-      if (value === 'file' || value === 'upload' || value === 'print' || value === 'preview') {
+      if (value === 'file' || value === 'upload' || value === 'print' || value === 'preview' || value === 'uvtools') {
         next[key] = value;
       }
     }
@@ -774,12 +779,12 @@ export function SlicingPanel({
   onBeforeSlicingRun,
   resolveOutputPathForIntent,
 }: SlicingPanelProps) {
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useFloatingPanelCollapse(true);
   const [sliceIntent, setSliceIntent] = useState<SliceIntent>(() => {
     const id = (getActivePrinterProfile(getProfileStoreSnapshot())?.id ?? '').trim();
     if (!id) return 'file';
     const remembered = readSliceIntentByPrinterProfile()[id];
-    if (remembered === 'file' || remembered === 'upload' || remembered === 'print' || remembered === 'preview') return remembered;
+    if (remembered === 'file' || remembered === 'upload' || remembered === 'print' || remembered === 'preview' || remembered === 'uvtools') return remembered;
     return 'file';
   });
   const [sliceIntentMenuOpen, setSliceIntentMenuOpen] = useState(false);
@@ -1145,6 +1150,9 @@ export function SlicingPanel({
     if (!Number.isFinite(printerBitDepth) || printerBitDepth <= 0) {
       return null;
     }
+    // 8-bit (or higher) displays don't need dithering — return null so the
+    // auto-dither gate below stays disabled.
+    if (Math.round(printerBitDepth) >= 8) return null;
     return Math.max(2, Math.min(7, Math.round(printerBitDepth)));
   }, [activePrinterProfile?.bitDepth?.bits]);
   const autoDitherRequiredForPrinter = printerDitherBitDepth != null && printerDitherBitDepth !== 8;
@@ -1213,12 +1221,16 @@ export function SlicingPanel({
     };
   }, []);
 
+  const uvToolsSettings = useMemo(() => getSavedUvToolsSettings(), []);
+  const canUvTools = uvToolsSettings.enabled;
+
   const effectiveSliceIntent = useMemo<SliceIntent>(() => {
     if (isShiftHeld) return 'preview';
     if (sliceIntent === 'upload' && !canUpload) return 'file';
     if (sliceIntent === 'print' && !canPrint) return 'file';
+    if (sliceIntent === 'uvtools' && !canUvTools) return 'file';
     return sliceIntent;
-  }, [canPrint, canUpload, isShiftHeld, sliceIntent]);
+  }, [canPrint, canUpload, canUvTools, isShiftHeld, sliceIntent]);
   // 'preview' is always available regardless of network state
   const sliceFilenameBase = useMemo(
     () => resolveSliceFilenameBase(models, activeModel),
@@ -1232,7 +1244,7 @@ export function SlicingPanel({
     }
 
     const remembered = readSliceIntentByPrinterProfile()[activePrinterProfileId];
-    if (remembered === 'file' || remembered === 'upload' || remembered === 'print') {
+    if (remembered === 'file' || remembered === 'upload' || remembered === 'print' || remembered === 'uvtools') {
       setSliceIntent(remembered);
       return;
     }
@@ -2398,11 +2410,11 @@ export function SlicingPanel({
     return () => document.removeEventListener('mousedown', handler);
   }, [sliceIntentMenuOpen]);
 
-  // If menu is open and network options disappear, close the menu.
+  // If menu is open and menu options disappear, close the menu.
   useEffect(() => {
-    if ((canUpload || canPrint) || !sliceIntentMenuOpen) return;
+    if ((canUpload || canPrint || canUvTools) || !sliceIntentMenuOpen) return;
     setSliceIntentMenuOpen(false);
-  }, [canUpload, canPrint, sliceIntentMenuOpen]);
+  }, [canUpload, canPrint, canUvTools, sliceIntentMenuOpen]);
 
   // Populate the slice trigger ref so parent can call slice from outside
   useEffect(() => {
@@ -2489,7 +2501,7 @@ export function SlicingPanel({
                   )}
                 </svg>
               </IconButton>
-              <h2 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Slicing</h2>
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Slicing</h3>
             </>
           )}
           hideDivider={!isExpanded}
@@ -2527,7 +2539,7 @@ export function SlicingPanel({
                 )}
               </svg>
             </IconButton>
-            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Slicing</h2>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Slicing</h3>
           </>
         )}
         hideDivider={!isExpanded}
@@ -3660,14 +3672,15 @@ export function SlicingPanel({
             const isDisabled = isSlicingZip || isAutoAaPending || !activePrinterProfile || !materialProfileForSlicing || models.length === 0;
             type IconType = React.FC<{ className?: string }>;
             const intentOptions: { key: SliceIntent; label: string; Icon: IconType; enabled: boolean; menuOnly?: boolean }[] = [
-              { key: 'file',    label: 'Slice to File',  Icon: Download as IconType, enabled: true },
-              { key: 'upload',  label: 'Slice & Upload', Icon: Printer  as IconType, enabled: canUpload },
-              { key: 'print',   label: 'Slice & Print',  Icon: Play     as IconType, enabled: canPrint },
-              { key: 'preview', label: 'Just Slice',     Icon: Cpu      as IconType, enabled: true, menuOnly: true },
+              { key: 'file',    label: 'Slice to File',      Icon: Download as IconType, enabled: true },
+              { key: 'upload',  label: 'Slice & Upload',     Icon: Printer  as IconType, enabled: canUpload },
+              { key: 'print',   label: 'Slice & Print',      Icon: Play     as IconType, enabled: canPrint },
+              { key: 'uvtools', label: 'Send to UVTools',    Icon: ExternalLink as IconType, enabled: canUvTools },
+              { key: 'preview', label: 'Just Slice',         Icon: Cpu      as IconType, enabled: true, menuOnly: true },
             ];
             const current = intentOptions.find((o) => o.key === effectiveSliceIntent) ?? intentOptions[0]!;
             const CurrentIcon = current.Icon;
-            const hasNetworkOptions = canUpload || canPrint;
+            const hasMenuOptions = canUpload || canPrint || canUvTools;
             return (
               <div ref={sliceIntentAnchorRef} className="relative w-full">
                 <div className="flex items-center gap-0.5">
@@ -3675,12 +3688,12 @@ export function SlicingPanel({
                     type="button"
                     onClick={() => { void handleSliceZipExport(); }}
                     disabled={isDisabled}
-                    className={`ui-button ui-button-primary flex-1 !h-9 text-sm inline-flex items-center justify-center gap-1.5 ${hasNetworkOptions && !isShiftHeld ? 'rounded-r-none' : ''} ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
+                    className={`ui-button ui-button-primary flex-1 !h-9 text-sm inline-flex items-center justify-center gap-1.5 ${hasMenuOptions && !isShiftHeld ? 'rounded-r-none' : ''} ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
                   >
                     <CurrentIcon className="w-4 h-4 shrink-0" />
                     {isSlicingZip ? 'Slicing…' : isAutoAaPending ? 'Profiling AA…' : current.label}
                   </button>
-                  {hasNetworkOptions && !isShiftHeld && (
+                  {hasMenuOptions && !isShiftHeld && (
                     <button
                       type="button"
                       onClick={() => {

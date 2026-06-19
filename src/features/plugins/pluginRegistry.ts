@@ -530,16 +530,21 @@ function sanitizeMaterialTemplate(input: unknown): Omit<MaterialProfile, 'id' | 
   };
 }
 
-const BUILTIN_COMPLEX_PLUGINS: InstalledProfilePlugin[] = getBuiltinComplexPluginDefinitions().map((definition) => ({
-  manifest: {
-    schemaVersion: 1,
-    ...definition.manifest,
-  },
-  enabled: true,
-  source: 'builtin' as const,
-  sourceUrl: `builtin://plugins/${definition.id}`,
-  installedAt: new Date(0).toISOString(),
-}));
+const BUILTIN_COMPLEX_PLUGINS: InstalledProfilePlugin[] = getBuiltinComplexPluginDefinitions()
+  .flatMap((definition) => {
+    const manifest = sanitizeManifest({
+      schemaVersion: 1,
+      ...definition.manifest,
+    });
+    if (!manifest) return [];
+    return [{
+      manifest,
+      enabled: true,
+      source: 'builtin' as const,
+      sourceUrl: `builtin://plugins/${definition.id}`,
+      installedAt: new Date(0).toISOString(),
+    }];
+  });
 
 let hydrated = false;
 let externalPlugins: InstalledProfilePlugin[] = [];

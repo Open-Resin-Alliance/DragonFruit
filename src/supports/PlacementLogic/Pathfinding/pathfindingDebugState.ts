@@ -78,16 +78,32 @@ export interface SupportPathfindingDebugSnapshot {
     wideStepMm?: number;
 }
 
+export interface PotentialFieldDebugTuning {
+    marginMm: number;
+    repulsionStrength: number;
+    stepMm: number;
+    maxLateralMm: number;
+    tangentWeight: number;
+}
+
 interface SupportPathfindingDebugState {
     enabled: boolean;
     tuningEnabled: boolean;
     snapshot: SupportPathfindingDebugSnapshot | null;
+    pfTuning: PotentialFieldDebugTuning;
 }
 
 let state: SupportPathfindingDebugState = {
     enabled: false,
     tuningEnabled: false,
     snapshot: null,
+    pfTuning: {
+        marginMm: 2.5,
+        repulsionStrength: 8.0,
+        stepMm: 1.0,
+        maxLateralMm: 30.0,
+        tangentWeight: 0.5,
+    },
 };
 
 const listeners = new Set<() => void>();
@@ -150,3 +166,27 @@ export function setSupportPathfindingDebugSnapshot(snapshot: SupportPathfindingD
     };
     emit();
 }
+
+export function getPotentialFieldTuning(): PotentialFieldDebugTuning {
+    return state.pfTuning;
+}
+
+export function setPotentialFieldTuning(tuning: Partial<PotentialFieldDebugTuning>): void {
+    state = {
+        ...state,
+        pfTuning: {
+            ...state.pfTuning,
+            ...tuning,
+        },
+    };
+    emit();
+}
+
+// ---------- Performance diagnostics bridge ----------
+
+export {
+    getPerfReport,
+    getPerfSummary,
+    configurePerf as setPathfindingPerfConfig,
+    resetPerf as resetPathfindingPerf,
+} from './pathfindingPerf';

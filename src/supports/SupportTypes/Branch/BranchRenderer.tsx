@@ -97,6 +97,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
       scene,
       initialEvent: e,
       modelId: branch.modelId,
+      placementSurface: branch.contactCone?.placementSurface,
       onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
         const latest = getSnapshot().branches[branch.id];
         if (!latest?.contactCone) return;
@@ -109,6 +110,12 @@ export const BranchRenderer = React.memo(function BranchRenderer({
         }).branch;
         liveDragBranchRef.current = {
           ...rebuilt,
+          contactCone: rebuilt.contactCone
+            ? {
+                ...rebuilt.contactCone,
+                placementSurface: latest.contactCone.placementSurface,
+              }
+            : rebuilt.contactCone,
           id: latest.id,
           parentKnotId: latest.parentKnotId,
           settingsCodeHex: latest.settingsCodeHex,

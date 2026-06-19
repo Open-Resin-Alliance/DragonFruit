@@ -3,6 +3,7 @@ import type { SupportData } from '../../rendering/SupportBuilder';
 import type { Vec3 } from '../../types';
 
 type Stage = 'idle' | 'awaitingBase';
+type PlacementSurface = 'interior' | 'exterior';
 
 interface LeafPlacementState {
     hotkeyActive: boolean;
@@ -10,6 +11,7 @@ interface LeafPlacementState {
     tipPosition: Vec3 | null;
     surfaceNormal: Vec3 | null;
     modelId: string;
+    placementSurface?: PlacementSurface;
     previewData: SupportData | null;
     snapTarget: {
         targetId: string;
@@ -28,6 +30,7 @@ const initialState: LeafPlacementState = {
     tipPosition: null,
     surfaceNormal: null,
     modelId: 'unknown',
+    placementSurface: undefined,
     previewData: null,
     snapTarget: null,
     justFinalized: false,
@@ -84,12 +87,13 @@ export const leafPlacementStore = {
         notify();
     },
 
-    setTip(tipPosition: Vec3, surfaceNormal: Vec3, modelId: string) {
+    setTip(tipPosition: Vec3, surfaceNormal: Vec3, modelId: string, placementSurface?: PlacementSurface) {
         state = {
             ...state,
             tipPosition,
             surfaceNormal,
             modelId,
+            placementSurface,
             stage: 'awaitingBase',
             justFinalized: false,
         };
@@ -143,6 +147,7 @@ export const leafPlacementStore = {
             && state.tipPosition === nextState.tipPosition
             && state.surfaceNormal === nextState.surfaceNormal
             && state.modelId === nextState.modelId
+            && state.placementSurface === nextState.placementSurface
             && state.previewData === nextState.previewData
             && state.hoverPosition === nextState.hoverPosition
             && state.snapTarget === nextState.snapTarget

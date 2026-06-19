@@ -105,32 +105,29 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
         }
     },
     PRESETS: {
-        APPLY_DETAIL: {
+        SLOT_1: {
             key: '1',
-            description: 'Apply Detail Preset'
+            description: 'Pinned Slot 1'
         },
-        APPLY_STRUCTURE: {
+        SLOT_2: {
             key: '2',
-            description: 'Apply Structure Preset'
+            description: 'Pinned Slot 2'
         },
-        APPLY_ANCHOR: {
+        SLOT_3: {
             key: '3',
-            description: 'Apply Anchor Preset'
+            description: 'Pinned Slot 3'
         },
-        APPLY_CUSTOM_1: {
-            key: '1',
-            modifier: 'ctrl',
-            description: 'Apply Custom 1 Preset'
+        SLOT_4: {
+            key: '4',
+            description: 'Pinned Slot 4'
         },
-        APPLY_CUSTOM_2: {
-            key: '2',
-            modifier: 'ctrl',
-            description: 'Apply Custom 2 Preset'
+        SLOT_5: {
+            key: '5',
+            description: 'Pinned Slot 5'
         },
-        APPLY_CUSTOM_3: {
-            key: '3',
-            modifier: 'ctrl',
-            description: 'Apply Custom 3 Preset'
+        SLOT_6: {
+            key: '6',
+            description: 'Pinned Slot 6'
         }
     },
     ROTATION: {

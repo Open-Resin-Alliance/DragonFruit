@@ -916,3 +916,20 @@ export async function cleanupAllPrintTempArtifacts(): Promise<number> {
 
   return core.invoke<number>('cleanup_all_print_temp_files');
 }
+
+/**
+ * Launch an external executable with a file path argument (e.g., UVTools).
+ * This is a fire-and-forget spawn — the UI does not wait for the process to exit.
+ */
+export async function launchExternalProcess(exePath: string, fileArg: string): Promise<void> {
+  const core = await loadTauriCore();
+  if (!core) {
+    console.warn('[launchExternalProcess] Not available outside Tauri runtime.');
+    return;
+  }
+
+  await core.invoke<void>('launch_external_process', {
+    exePath,
+    fileArg,
+  });
+}

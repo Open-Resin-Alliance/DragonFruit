@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import * as THREE from 'three';
 
 import type { TrunkPlacementResult } from '../PlacementLogic/StandardPlacement';
 import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
@@ -387,4 +388,47 @@ test('decideGridPlacement rejects when the fixed preferred host cannot accept an
     assert.equal(decision.kind, 'reject');
     assert.equal(decision.nodeKey, '0,0');
     assert.equal(decision.reason, 'NO_VALID_ATTACHMENT');
+});
+
+test('decideGridPlacement applies the same trunk collision gate for preview and commit', () => {
+    const settings = makeSettings();
+    setSettings(settings);
+
+    const snapshot = makeEmptySnapshot();
+    const candidate = buildStraightFixture({
+        x: 0,
+        y: 0,
+        tipZ: 10,
+        socketZ: 9,
+    });
+
+    const blocker = new THREE.Mesh(
+        new THREE.BoxGeometry(2, 2, 2),
+        new THREE.MeshBasicMaterial(),
+    );
+    blocker.position.set(0, 0, 4.5);
+    blocker.updateMatrixWorld(true);
+
+    const baseArgs = {
+        settings,
+        snapshot,
+        candidate: candidate.build,
+        tipPos: candidate.input.tipPos,
+        tipNormal: candidate.input.tipNormal,
+        modelId: MODEL_ID,
+        mesh: blocker,
+    };
+
+    const previewDecision = decideGridPlacement({
+        ...baseArgs,
+        isPreview: true,
+    });
+    const commitDecision = decideGridPlacement(baseArgs);
+
+    assert.equal(previewDecision.kind, 'reject');
+    assert.equal(commitDecision.kind, 'reject');
+    assert.equal(previewDecision.nodeKey, '0,0');
+    assert.equal(commitDecision.nodeKey, '0,0');
+    assert.equal(previewDecision.reason, 'COLLISION_WITH_MODEL');
+    assert.equal(commitDecision.reason, 'COLLISION_WITH_MODEL');
 });

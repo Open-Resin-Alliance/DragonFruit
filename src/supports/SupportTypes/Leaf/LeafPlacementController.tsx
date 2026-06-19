@@ -32,13 +32,20 @@ interface ShaftHoverDetail {
     point?: Vec3 | null;
 }
 
+type PlacementSurface = 'interior' | 'exterior';
+
+function markContactPlacementSurface<T extends { placementSurface?: PlacementSurface } | undefined>(contact: T, surface?: PlacementSurface): T {
+    if (!contact || !surface) return contact;
+    return { ...contact, placementSurface: surface } as T;
+}
+
 // Pooled scratch objects — reused each frame to avoid per-frame GC pressure.
 const _buildPlate = new THREE.Plane();
 const _upVec = new THREE.Vector3();
 const _planeHit = new THREE.Vector3();
 
 export function LeafPlacementController() {
-    const { isActive, stage, tipPosition, surfaceNormal, modelId } = useLeafPlacementState();
+    const { isActive, stage, tipPosition, surfaceNormal, modelId, placementSurface } = useLeafPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const kickstandState = useKickstandStoreState();
     const { getHotkey } = useHotkeyConfig();
@@ -76,15 +83,19 @@ export function LeafPlacementController() {
                 includeBranches: true,
                 includeBraces: true,
                 includeTwigs: true,
+                includeSticks: true,
+                placementSurface,
             }),
             ...buildKickstandPathSnapTargets(kickstandState),
         ];
     }, [
         stage,
+        placementSurface,
         supportState.trunks,
         supportState.branches,
         supportState.braces,
         supportState.twigs,
+        supportState.sticks,
         kickstandState.kickstands,
     ]);
 
@@ -498,14 +509,20 @@ export function LeafPlacementController() {
                 hostDiameterMm,
                 mesh: resolveTipMesh(),
             });
+            const markedLeaf = placementSurface
+                ? {
+                    ...leaf,
+                    contactCone: markContactPlacementSurface(leaf.contactCone, placementSurface),
+                }
+                : leaf;
 
             addKnot(parentKnot);
-            addLeaf(leaf);
+            addLeaf(markedLeaf);
 
             pushHistory({
                 type: SUPPORT_ADD_LEAF,
                 payload: {
-                    leaf,
+                    leaf: markedLeaf,
                     knot: parentKnot,
                 },
             });
@@ -533,7 +550,7 @@ export function LeafPlacementController() {
 
         window.addEventListener('click', handleClick, true);
         return () => window.removeEventListener('click', handleClick, true);
-    }, [isActive, stage, tipPosition, surfaceNormal, modelId, leafBinding, resolveTipMesh]);
+    }, [isActive, stage, tipPosition, surfaceNormal, modelId, placementSurface, leafBinding, resolveTipMesh]);
 
     useEffect(() => {
         if (!isActive) {

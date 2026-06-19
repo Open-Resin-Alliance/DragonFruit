@@ -49,6 +49,13 @@ interface ShaftHoverDetail {
     point?: Vec3 | null;
 }
 
+type PlacementSurface = 'interior' | 'exterior';
+
+function markContactPlacementSurface<T extends { placementSurface?: PlacementSurface } | undefined>(contact: T, surface?: PlacementSurface): T {
+    if (!contact || !surface) return contact;
+    return { ...contact, placementSurface: surface } as T;
+}
+
 // Scratch raycaster reused for clip-zone fallback raycasts (same pattern as StlMesh).
 const _branchClipFallbackRaycaster = new THREE.Raycaster();
 
@@ -83,8 +90,46 @@ function findClipAwareHitForBranch(
   return hit;
 }
 
+const _branchInteriorCavityRaycaster = new THREE.Raycaster();
+const _branchInteriorCavityRaycastMesh = new THREE.Mesh();
+
+function findInteriorCavityHitForBranch(
+    ray: THREE.Ray,
+    modelMesh: THREE.Object3D,
+    cavityGeometry: THREE.BufferGeometry,
+    modelId: string,
+): THREE.Intersection | null {
+    const rc = _branchInteriorCavityRaycaster;
+    rc.ray.copy(ray);
+    rc.near = 0;
+    rc.far = 500;
+    (rc as any).firstHitOnly = true;
+
+    const mesh = _branchInteriorCavityRaycastMesh;
+    mesh.geometry = cavityGeometry;
+    mesh.matrixWorld.copy(modelMesh.matrixWorld);
+    mesh.matrixAutoUpdate = false;
+    mesh.userData = {
+        modelId,
+        supportPlacementSurface: 'interior',
+        cavityGeometry,
+    };
+
+    const hits: THREE.Intersection[] = [];
+    mesh.raycast(rc, hits);
+
+    rc.near = 0;
+    rc.far = Infinity;
+    (rc as any).firstHitOnly = false;
+
+    if (hits.length === 0) return null;
+    const hit = hits[0];
+    hit.object = mesh;
+    return hit;
+}
+
 export function BranchPlacementController() {
-    const { isActive, altActive, stage, tipPosition, tipNormal, modelId } = useBranchPlacementState();
+    const { isActive, altActive, stage, tipPosition, tipNormal, modelId, placementSurface } = useBranchPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const immediateModelHoverId = useImmediateModelHoverId();
     const { getHotkey } = useHotkeyConfig();
@@ -171,8 +216,11 @@ export function BranchPlacementController() {
             includeTrunks: true,
             includeBranches: true,
             includeBraces: true,
+            includeTwigs: true,
+            includeSticks: true,
+            placementSurface,
         });
-    }, [stage, supportState.trunks, supportState.branches, supportState.braces]);
+    }, [stage, placementSurface, supportState.trunks, supportState.branches, supportState.braces, supportState.twigs, supportState.sticks]);
 
     const targetById = useMemo(() => {
         return buildPrimarySnapTargetIndex(allTargets);
@@ -552,6 +600,22 @@ export function BranchPlacementController() {
                     if (intersects.length > 0) {
                         meshHit = intersects[0];
 
+                        if (placementSurface === 'interior') {
+                            const cavityGeometry = meshHit.object.userData?.cavityGeometry as THREE.BufferGeometry | undefined;
+                            const hitModelId = meshHit.object.userData?.modelId as string | undefined;
+                            if (cavityGeometry && hitModelId) {
+                                const interiorHit = findInteriorCavityHitForBranch(
+                                    raycaster.ray,
+                                    meshHit.object,
+                                    cavityGeometry,
+                                    hitModelId,
+                                );
+                                if (interiorHit) {
+                                    meshHit = interiorHit;
+                                }
+                            }
+                        }
+
                         // If the hit falls within the clipped (invisible) region,
                         // re-raycast past the clipped surface to find the visible inner wall.
                         const { clipLower, clipUpper } = getClipBounds();
@@ -600,25 +664,27 @@ export function BranchPlacementController() {
                         if (lastPreviewSignatureRef.current !== meshLinkSignature) {
                             lastPreviewSignatureRef.current = meshLinkSignature;
 
-                            if (kind === 'twig') {
-                                const { twig } = buildTwig({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal });
-                                const startPos = twig.segments[0]?.bottomJoint?.pos ?? tipPosition;
-                                branchPlacementStore.setPreviewData({
-                                    id: 'preview-meshlink',
-                                    startPos,
-                                    segments: twig.segments,
-                                    contactDisks: [twig.contactDiskA, twig.contactDiskB],
-                                });
-                            } else {
-                                const { stick } = buildStick({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal });
-                                const startPos = stick.segments[0]?.bottomJoint?.pos ?? tipPosition;
-                                branchPlacementStore.setPreviewData({
-                                    id: 'preview-meshlink',
-                                    startPos,
-                                    segments: stick.segments,
-                                    contactCones: [stick.contactConeA, stick.contactConeB],
-                                });
-                            }
+                             if (kind === 'twig') {
+                                 const { twig, error } = buildTwig({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal, mesh: resolveTipMesh() });
+                                 const startPos = twig.segments[0]?.bottomJoint?.pos ?? tipPosition;
+                                 branchPlacementStore.setPreviewData({
+                                     id: 'preview-meshlink',
+                                     startPos,
+                                     segments: twig.segments,
+                                     contactDisks: [twig.contactDiskA, twig.contactDiskB],
+                                     error,
+                                 });
+                             } else {
+                                 const { stick, error } = buildStick({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal, mesh: resolveTipMesh() });
+                                 const startPos = stick.segments[0]?.bottomJoint?.pos ?? tipPosition;
+                                 branchPlacementStore.setPreviewData({
+                                     id: 'preview-meshlink',
+                                     startPos,
+                                     segments: stick.segments,
+                                     contactCones: [stick.contactConeA, stick.contactConeB],
+                                     error,
+                                 });
+                             }
                         }
                         return;
                     }
@@ -698,30 +764,48 @@ export function BranchPlacementController() {
                 if (meshHover.modelId !== modelId) return;
 
                 if (kind === 'twig') {
-                    const { twig } = buildTwig({
+                    const { twig, error } = buildTwig({
                         modelId,
                         aPos: tipPosition,
                         aNormal: tipNormal,
                         bPos: meshHover.pos,
                         bNormal: meshHover.normal,
+                        mesh: resolveTipMesh(),
                     });
-                    addTwig(twig);
+                    if (error) return;
+                    const markedTwig = placementSurface
+                        ? {
+                            ...twig,
+                            contactDiskA: markContactPlacementSurface(twig.contactDiskA, placementSurface),
+                            contactDiskB: markContactPlacementSurface(twig.contactDiskB, placementSurface),
+                        }
+                        : twig;
+                    addTwig(markedTwig);
                     pushHistory({
                         type: SUPPORT_ADD_TWIG,
-                        payload: { twig },
+                        payload: { twig: markedTwig },
                     });
                 } else {
-                    const { stick } = buildStick({
+                    const { stick, error } = buildStick({
                         modelId,
                         aPos: tipPosition,
                         aNormal: tipNormal,
                         bPos: meshHover.pos,
                         bNormal: meshHover.normal,
+                        mesh: resolveTipMesh(),
                     });
-                    addStick(stick);
+                    if (error) return;
+                    const markedStick = placementSurface
+                        ? {
+                            ...stick,
+                            contactConeA: markContactPlacementSurface(stick.contactConeA, placementSurface),
+                            contactConeB: markContactPlacementSurface(stick.contactConeB, placementSurface),
+                        }
+                        : stick;
+                    addStick(markedStick);
                     pushHistory({
                         type: SUPPORT_ADD_STICK,
-                        payload: { stick },
+                        payload: { stick: markedStick },
                     });
                 }
 
@@ -758,14 +842,20 @@ export function BranchPlacementController() {
             });
 
             console.log('[BranchPlacement] Creating branch via snap click', branch);
+            const markedBranch = placementSurface
+                ? {
+                    ...branch,
+                    contactCone: markContactPlacementSurface(branch.contactCone, placementSurface),
+                }
+                : branch;
 
             addKnot(parentKnot);
-            addBranch(branch);
+            addBranch(markedBranch);
 
             pushHistory({
                 type: SUPPORT_ADD_BRANCH,
                 payload: {
-                    branch,
+                    branch: markedBranch,
                     knot: parentKnot,
                 },
             });
@@ -779,7 +869,7 @@ export function BranchPlacementController() {
 
         window.addEventListener('click', handleClick, true);
         return () => window.removeEventListener('click', handleClick, true);
-    }, [isActive, stage, tipPosition, tipNormal, modelId, resetSnapping, resolveTipMesh]);
+    }, [isActive, stage, tipPosition, tipNormal, modelId, placementSurface, resetSnapping, resolveTipMesh]);
 
     // Reset snapping when deactivated
     useEffect(() => {

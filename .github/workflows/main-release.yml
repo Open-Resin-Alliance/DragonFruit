@@ -137,6 +137,11 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: ${{ matrix.platform == 'ubuntu-22.04' && '1' || '' }}
           CMAKE_OSX_ARCHITECTURES: ${{ matrix.cmake_archs || '' }}
           DF_BUILD_TARGET_TRIPLE: ${{ matrix.df_build_triple || '' }}
+          # Tauri updater signing — set these as repo secrets:
+          # TAURI_SIGNING_PRIVATE_KEY — content of .tauri/app.key
+          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD — optional password set during key gen
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tauriScript: npx tauri
           args: ${{ matrix.args }}
@@ -179,12 +184,13 @@ jobs:
         if: matrix.build_kind == 'flatpak'
         run: node scripts/tauri-build.mjs --target x86_64-unknown-linux-gnu --no-bundle
 
-      - name: Upload installer artifact
+      - name: Upload installer + updater artifacts
         if: matrix.build_kind == 'tauri' && (matrix.platform == 'macos-latest' || matrix.platform == 'windows-latest')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.platform == 'macos-latest' && 'src-tauri/target/*/release/bundle/dmg/*.dmg' || 'src-tauri/target/*/release/bundle/nsis/*-setup.exe' }}
+          path: |
+            ${{ matrix.platform == 'macos-latest' && 'src-tauri/target/*/release/bundle/dmg/*' || 'src-tauri/target/*/release/bundle/nsis/*' }}
           if-no-files-found: error
 
       - name: Upload flatpak artifact

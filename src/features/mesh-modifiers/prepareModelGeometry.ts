@@ -142,10 +142,12 @@ export async function prepareModelGeometryForOutput(model: LoadedModel): Promise
   const modifiers = model.meshModifiers;
   const hollowing = modifiers?.hollowing;
   const shouldApplyHollowing = Boolean(hollowing?.enabled && !hollowing.bakedIntoGeometry);
-  const shouldApplyPunches = !modifiers?.holePunchesBakedIntoGeometry;
-  const punches = shouldApplyPunches
-    ? (modifiers?.holePunches ?? []).filter((placement) => placement.radiusMm > 0 && placement.depthMm > 0)
-    : [];
+  // Hole punches are never auto-applied during slice/export — the user must
+  // explicitly bake them first (via the hole-punch panel's Apply button or a
+  // pre-slice confirmation dialog). This prevents unapplied LYS-imported holes
+  // from silently corrupting the sliced output.
+  const shouldApplyPunches = false;
+  const punches: ModelHolePunchPlacement[] = [];
 
   if (!shouldApplyHollowing && punches.length === 0) {
     return {
@@ -165,6 +167,7 @@ export async function prepareModelGeometryForOutput(model: LoadedModel): Promise
   if (shouldApplyHollowing && hollowing) {
     const maxExtent = Math.max(sourceBounds.size.x, sourceBounds.size.y, sourceBounds.size.z);
     const voxelResolution = Math.min(192, Math.max(24, Math.round(maxExtent / Math.max(0.05, hollowing.voxelSizeMm))));
+    const quat = new THREE.Quaternion().setFromEuler(model.transform.rotation);
     const hollowOptions: HollowOptions = {
       mode: hollowing.mode,
       voxelResolution,
@@ -177,6 +180,7 @@ export async function prepareModelGeometryForOutput(model: LoadedModel): Promise
       previewCavityOnly: false,
       smoothInternalSurfaces: true,
       internalChamferPasses: 2,
+      rotationQuat: [quat.x, quat.y, quat.z, quat.w],
     };
 
     const hollowResult = await hollowFromGeometry(workingGeometry, hollowOptions);

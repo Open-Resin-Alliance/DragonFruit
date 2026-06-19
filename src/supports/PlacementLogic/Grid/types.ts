@@ -65,4 +65,6 @@ export interface DecideGridPlacementArgs {
     tipNormal: Vec3;
     modelId: string;
     mesh?: THREE.Mesh;
+    /** When true, skip expensive click-time-only checks (e.g. full segment raycasts). */
+    isPreview?: boolean;
 }

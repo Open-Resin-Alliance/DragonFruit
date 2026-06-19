@@ -23,9 +23,9 @@ test('search envelope expands with taller supports and appends the computed oute
         spacingMm: 4,
     });
 
-    assert.equal(envelope.maxTotalLateralMm, 75);
-    assert.equal(envelope.rescueSweepRadiiMm.includes(72), true);
-    assert.equal(envelope.rescueSweepRadiiMm[envelope.rescueSweepRadiiMm.length - 1], 75);
+    assert.equal(envelope.maxTotalLateralMm, 62.5);
+    assert.equal(envelope.rescueSweepRadiiMm.includes(60), true);
+    assert.equal(envelope.rescueSweepRadiiMm[envelope.rescueSweepRadiiMm.length - 1], 62.5);
 });
 
 test('search envelope caps very tall supports so the router does not wander unboundedly', () => {
@@ -35,6 +35,7 @@ test('search envelope caps very tall supports so the router does not wander unbo
         spacingMm: 4,
     });
 
-    assert.equal(envelope.maxTotalLateralMm, 120);
-    assert.equal(envelope.rescueSweepRadiiMm[envelope.rescueSweepRadiiMm.length - 1], 120);
+    assert.equal(envelope.maxTotalLateralMm, 72);
+    assert.equal(envelope.rescueSweepRadiiMm[envelope.rescueSweepRadiiMm.length - 1], 72);
 });
+

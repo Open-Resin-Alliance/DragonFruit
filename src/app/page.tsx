@@ -1,12 +1,15 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
 import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Plus, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
+import { GlobalUpdateIndicator } from '@/features/updater/GlobalUpdateIndicator';
 import { EmptySceneState } from '@/components/layout/EmptySceneState';
 import { IslandScanCard } from '@/components/controls/IslandScanCard';
 import { IslandOverlayControls } from '@/components/controls/IslandOverlayControls';
@@ -42,6 +45,7 @@ import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothin
 import { HollowingPanel, type HollowingPanelState } from '../features/hollowing';
 import { HolePunchPanel, type HolePunchPanelState } from '../features/hole-punching/HolePunchPanel';
 import { HolePunchPreviewCylinder } from '@/features/hole-punching/HolePunchPreviewCylinder';
+import { HolePunchGizmo } from '@/features/hole-punching/HolePunchGizmo';
 import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
 import { OrganicCutPanel, OrganicCutTool, OrganicCutKeyGizmo, useOrganicCutSession } from '@/features/organicCut';
 import { MirrorTool } from '@/features/mirror/MirrorTool';
@@ -59,6 +63,7 @@ import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
 import { DestructiveTransformModal } from '@/components/modals/DestructiveTransformModal';
 import { PrintingResliceModal } from '@/components/modals/PrintingResliceModal';
 import { SliceCompletedModal } from '@/components/modals/SliceCompletedModal';
+import { UvToolsLaunchingModal } from '@/components/modals/UvToolsLaunchingModal';
 import { ZipFilePickerModal } from '@/components/modals/ZipFilePickerModal';
 import { extractFilesFromZip, getFileExtensionLower } from '@/utils/zipImport';
 import {
@@ -154,6 +159,7 @@ import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/
 import {
   cleanupStalePrintTempArtifacts,
   deletePrintTempArtifactPath,
+  launchExternalProcess,
   pickSavePathWithNativeDialog,
   pickOpenFilesWithNativeDialog,
   readPrintLayerPreviewPngFromPath,
@@ -162,6 +168,10 @@ import {
   savePrintArtifactWithNativeDialog,
   writeBytesToNativePath,
 } from '@/features/slicing/tauri/nativeSlicerBridge';
+import {
+  getSavedUvToolsSettings,
+  resolveUvToolsExecutablePath,
+} from '@/components/settings/uvToolsPreferences';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, toggleSegmentCurve, transformSupportsForModel, updateTrunk, updateBranch, updateTwig, updateStick } from '@/supports/state';
 import {
   getKickstandSnapshot,
@@ -292,6 +302,106 @@ type HomeSupportCollectionsSnapshot = Pick<
   'trunks' | 'branches' | 'leaves' | 'twigs' | 'sticks' | 'braces' | 'roots' | 'knots'
 >;
 
+/**
+ * Transforms Float32Array voxel centers from model-local to world space
+ * by applying `(center - geometryCenter) * scale * quaternion + position`.
+ * Used to render voxel cubes outside the model's rotated group.
+ */
+function transformVoxelCentersToWorld(
+  voxelCenters: Float32Array,
+  geometryCenter: THREE.Vector3,
+  scale: THREE.Vector3,
+  quaternion: THREE.Quaternion,
+  position: THREE.Vector3,
+): Float32Array {
+  const count = Math.floor(voxelCenters.length / 3);
+  const out = new Float32Array(voxelCenters.length);
+  const tmp = new THREE.Vector3();
+  for (let i = 0; i < count; i += 1) {
+    const base = i * 3;
+    tmp.set(voxelCenters[base], voxelCenters[base + 1], voxelCenters[base + 2]);
+    tmp.sub(geometryCenter);
+    tmp.multiply(scale);
+    tmp.applyQuaternion(quaternion);
+    tmp.add(position);
+    out[base] = tmp.x;
+    out[base + 1] = tmp.y;
+    out[base + 2] = tmp.z;
+  }
+  return out;
+}
+
+/**
+ * Renders HollowVoxelPreview in world space by pre-transforming the voxel
+ * centers using the model's position/rotation/scale, then passing meshOffset
+ * as zero since positions are already in world coordinates.
+ */
+function WorldSpaceVoxelPreview({
+  voxelCenters,
+  voxelSizeMm,
+  modelTransform: { position, quaternion, scale },
+  geometryCenter,
+}: {
+  voxelCenters: Float32Array;
+  voxelSizeMm: number;
+  modelTransform: { position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 };
+  geometryCenter: THREE.Vector3;
+}) {
+  const worldCenters = React.useMemo(
+    () => transformVoxelCentersToWorld(voxelCenters, geometryCenter, scale, quaternion, position),
+    [voxelCenters, geometryCenter, scale, quaternion, position],
+  );
+  return (
+    <HollowVoxelPreview
+      voxelCenters={worldCenters}
+      voxelSizeMm={voxelSizeMm}
+      meshOffset={new THREE.Vector3(0, 0, 0)}
+    />
+  );
+}
+
+/**
+ * Renders HollowVoxelEditOverlay in world space (same transform logic).
+ */
+function WorldSpaceVoxelEditOverlay({
+  voxelCenters,
+  blockedVoxelCenters,
+  voxelRadiusMm,
+  blockedVoxelIndexSet,
+  modelTransform: { position, quaternion, scale },
+  geometryCenter,
+  onToggleVoxel,
+}: {
+  voxelCenters: Float32Array;
+  blockedVoxelCenters?: Float32Array;
+  voxelRadiusMm: number;
+  blockedVoxelIndexSet: Set<number>;
+  modelTransform: { position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 };
+  geometryCenter: THREE.Vector3;
+  onToggleVoxel?: (voxelIndex: number) => void;
+}) {
+  const worldCenters = React.useMemo(
+    () => transformVoxelCentersToWorld(voxelCenters, geometryCenter, scale, quaternion, position),
+    [voxelCenters, geometryCenter, scale, quaternion, position],
+  );
+  const worldBlockedCenters = React.useMemo(
+    () => blockedVoxelCenters
+      ? transformVoxelCentersToWorld(blockedVoxelCenters, geometryCenter, scale, quaternion, position)
+      : undefined,
+    [blockedVoxelCenters, geometryCenter, scale, quaternion, position],
+  );
+  return (
+    <HollowVoxelEditOverlay
+      voxelCenters={worldCenters}
+      blockedVoxelCenters={worldBlockedCenters}
+      voxelRadiusMm={voxelRadiusMm}
+      blockedVoxelIndexSet={blockedVoxelIndexSet}
+      meshOffset={new THREE.Vector3(0, 0, 0)}
+      onToggleVoxel={onToggleVoxel}
+    />
+  );
+}
+
 function countRecordEntries(record: Record<string, unknown>): number {
   let count = 0;
   for (const _key in record) {
@@ -346,6 +456,7 @@ type HolePunchPlacementState = {
   modelId: string;
   worldPoint: THREE.Vector3;
   worldNormal: THREE.Vector3;
+  worldFrame?: HolePunchWorldFrame;
   localPoint: THREE.Vector3;
   localNormal: THREE.Vector3;
   radiusMm: number;
@@ -353,6 +464,42 @@ type HolePunchPlacementState = {
   depthMm: number;
   depthMode: 'manual' | 'auto';
 };
+
+type HolePunchWorldFrame = {
+  xAxis: THREE.Vector3;
+  yAxis: THREE.Vector3;
+  zAxis: THREE.Vector3;
+};
+
+const HOLE_PUNCH_FRAME_REFERENCE_X = new THREE.Vector3(1, 0, 0);
+const HOLE_PUNCH_FRAME_REFERENCE_Z = new THREE.Vector3(0, 0, 1);
+
+function createHolePunchWorldFrame(worldNormal: THREE.Vector3): HolePunchWorldFrame {
+  const yAxis = worldNormal.clone();
+  if (yAxis.lengthSq() <= 1e-12) {
+    yAxis.set(0, 0, -1);
+  } else {
+    yAxis.normalize();
+  }
+  const displayY = yAxis.clone().negate();
+  const upReference = Math.abs(displayY.dot(HOLE_PUNCH_FRAME_REFERENCE_Z)) < 0.92
+    ? HOLE_PUNCH_FRAME_REFERENCE_Z.clone()
+    : HOLE_PUNCH_FRAME_REFERENCE_X.clone();
+  const displayZ = upReference
+    .sub(displayY.clone().multiplyScalar(upReference.dot(displayY)))
+    .normalize();
+  const xAxis = displayY.clone().cross(displayZ).normalize();
+  const zAxis = displayZ.negate();
+  return { xAxis, yAxis, zAxis };
+}
+
+function cloneHolePunchWorldFrame(frame: HolePunchWorldFrame): HolePunchWorldFrame {
+  return {
+    xAxis: frame.xAxis.clone(),
+    yAxis: frame.yAxis.clone(),
+    zAxis: frame.zAxis.clone(),
+  };
+}
 
 function normalizeDirectionTuple(x: number, y: number, z: number): [number, number, number] {
   const dir = new THREE.Vector3(x, y, z);
@@ -364,7 +511,7 @@ function normalizeDirectionTuple(x: number, y: number, z: number): [number, numb
 }
 
 function toPersistedHolePunchPlacements(
-  model: { geometry: GeometryWithBounds },
+  model: { geometry: GeometryWithBounds; transform?: ModelTransform },
   placements: HolePunchPlacementState[],
 ): ModelHolePunchPlacement[] {
   const geometry = model.geometry.geometry;
@@ -374,18 +521,55 @@ function toPersistedHolePunchPlacements(
   const size = bbox.getSize(new THREE.Vector3());
   const toNorm = (value: number, min: number, span: number) => (span <= 1e-9 ? 0.5 : (value - min) / span);
 
+  // When a model transform is available, derive localPoint/localNormal from
+  // worldPoint/worldNormal at serialization time so they always stay consistent
+  // with the model's current transform — even if the draft state has drifted
+  // (e.g. after gizmo manipulation). When transform is unavailable (legacy
+  // callers like hollow-apply that only pass a bare geometry), fall back to
+  // the stored localPoint/localNormal in the draft state.
+  let inverseModelMatrix: THREE.Matrix4 | null = null;
+  let inverseNormalMatrix: THREE.Matrix3 | null = null;
+  if (model.transform) {
+    const meshMatrix = new THREE.Matrix4()
+      .compose(
+        model.transform.position.clone(),
+        quaternionFromGlobalEuler(model.transform.rotation),
+        model.transform.scale.clone(),
+      )
+      .multiply(new THREE.Matrix4().makeTranslation(
+        -model.geometry.center.x,
+        -model.geometry.center.y,
+        -model.geometry.center.z,
+      ));
+    inverseModelMatrix = meshMatrix.clone().invert();
+
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(meshMatrix);
+    inverseNormalMatrix = normalMatrix.clone().invert();
+  }
+
   return placements.map((placement) => {
-    const direction = normalizeDirectionTuple(
-      placement.localNormal.x,
-      placement.localNormal.y,
-      placement.localNormal.z,
-    );
+    let localPoint: THREE.Vector3;
+    let localNormal: THREE.Vector3;
+    if (inverseModelMatrix && inverseNormalMatrix) {
+      // Derive from world-space values — always consistent with current transform.
+      localPoint = placement.worldPoint.clone().applyMatrix4(inverseModelMatrix);
+      localNormal = placement.worldNormal
+        .clone()
+        .applyMatrix3(inverseNormalMatrix)
+        .normalize();
+    } else {
+      // Fallback: use stored values (legacy path).
+      localPoint = placement.localPoint;
+      localNormal = placement.localNormal;
+    }
+
+    const direction = normalizeDirectionTuple(localNormal.x, localNormal.y, localNormal.z);
     return {
       id: placement.id,
       centerNorm: [
-        toNorm(placement.localPoint.x, bbox.min.x, size.x),
-        toNorm(placement.localPoint.y, bbox.min.y, size.y),
-        toNorm(placement.localPoint.z, bbox.min.z, size.z),
+        toNorm(localPoint.x, bbox.min.x, size.x),
+        toNorm(localPoint.y, bbox.min.y, size.y),
+        toNorm(localPoint.z, bbox.min.z, size.z),
       ],
       radiusMm: placement.radiusMm,
       radiusYMm: placement.radiusYMm,
@@ -440,12 +624,14 @@ function fromPersistedHolePunchPlacements(
 
     const worldPoint = localPoint.clone().applyMatrix4(meshMatrix);
     const worldNormal = localNormal.clone().applyNormalMatrix(normalMatrix).normalize();
+    const worldFrame = createHolePunchWorldFrame(worldNormal);
 
     return {
       id: placement.id,
       modelId: model.id,
       worldPoint,
       worldNormal,
+      worldFrame,
       localPoint,
       localNormal,
       radiusMm: placement.radiusMm,
@@ -1339,6 +1525,7 @@ function readNumberField(payload: JsonObject, key: string): number | null {
 }
 
 export default function Home() {
+  const { _ } = useLingui();
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
   const importSceneFile = scene.importSceneFile;
@@ -1365,6 +1552,11 @@ export default function Home() {
 
   // Ref for supports group (used for export)
   const supportsRef = React.useRef<THREE.Group | null>(null);
+  // Hide support geometry in hollowing mode — it just gets in the way.
+  React.useEffect(() => {
+    const hidden = scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing';
+    if (supportsRef.current) supportsRef.current.visible = !hidden;
+  }, [scene.mode, transformMgr.transformMode]);
   // Ref for the drag-wrapper group around supports/rafts (live gizmo transform)
   const supportDragGroupRef = React.useRef<THREE.Group | null>(null);
   const exportThumbnailCaptureRef = React.useRef<(() => Promise<Uint8Array | null>) | null>(null);
@@ -1679,6 +1871,7 @@ export default function Home() {
     moved: boolean;
   } | null>(null);
   const suppressHolePunchClickPlacementIdRef = React.useRef<string | null>(null);
+  const suppressHolePunchGizmoReleaseClickUntilRef = React.useRef(0);
   const [isApplyingHollowing, setIsApplyingHollowing] = React.useState(false);
   const [pendingModifierResetAction, setPendingModifierResetAction] = React.useState<PendingModifierResetAction | null>(null);
   const [pendingBlockerResetState, setPendingBlockerResetState] = React.useState<HollowingPanelState | null>(null);
@@ -1806,12 +1999,15 @@ export default function Home() {
   const printingBaseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
   const printingInFlightBaseResinMlRef = React.useRef<Map<string, Promise<number | null>>>(new Map());
   const lastCompletedResinEstimateSignatureRef = React.useRef<string>('');
+  const [showUnappliedHolePunchModal, setShowUnappliedHolePunchModal] = React.useState(false);
+  const unappliedHolePunchResolveRef = React.useRef<((action: 'apply' | 'skip') => void) | null>(null);
   const [showPrintingResliceModal, setShowPrintingResliceModal] = React.useState(false);
   const [showSliceCompletedModal, setShowSliceCompletedModal] = React.useState(false);
   const [sliceCompletedModalData, setSliceCompletedModalData] = React.useState<{
     filePath: string | null;
     slicingTimeMs: number | null;
   }>({ filePath: null, slicingTimeMs: null });
+  const [uvToolsLaunchingPath, setUvToolsLaunchingPath] = React.useState<string | null>(null);
   const [shouldAutoSliceOnExportEntry, setShouldAutoSliceOnExportEntry] = React.useState(false);
   const [printingSendBusy, setPrintingSendBusy] = React.useState(false);
   const [printingSendStatusText, setPrintingSendStatusText] = React.useState<string | null>(null);
@@ -3326,18 +3522,18 @@ export default function Home() {
     return [
       {
         id: 'supports-toggle-curve' as const,
-        label: 'Toggle Curve',
+        label: msg`Toggle Curve`,
         icon: RefreshCw,
       },
       {
         id: 'supports-add-joint' as const,
-        label: 'Add Joint',
+        label: msg`Add Joint`,
         icon: Plus,
       },
     ];
   }, []);
 
-  const editorContextMenuTitle = scene.mode === 'support' ? 'Supports' : 'Editor';
+  const editorContextMenuTitle = scene.mode === 'support' ? _(msg`Supports`) : _(msg`Editor`);
   const editorContextMenuItems = scene.mode === 'support' ? supportContextMenuItems : undefined;
   const editorContextMenuDisabledActions = React.useMemo(() => {
     if (scene.mode === 'support') {
@@ -3928,7 +4124,7 @@ export default function Home() {
       setShouldAutoSliceOnExportEntry(false);
       scene.setMode('printing');
     } else {
-      // 'file': write to pre-selected destination, then navigate to printing workspace.
+      // 'file' or 'uvtools': write to pre-selected destination, then navigate to printing workspace.
       const destinationPath = preSliceFileDestinationPathRef.current?.trim() || '';
       preSliceFileDestinationPathRef.current = null;
 
@@ -3940,6 +4136,22 @@ export default function Home() {
         && normalizePathForCompare(destinationPath) === normalizePathForCompare(nativePathForIntent)
       ) {
         setCompletedSaveDestinationPath(destinationPath);
+
+        // If intent is 'uvtools', show launching modal and fire UVTools
+        if (intent === 'uvtools') {
+          setUvToolsLaunchingPath(destinationPath);
+          const uvToolsSettings = getSavedUvToolsSettings();
+          const exePath = resolveUvToolsExecutablePath(uvToolsSettings);
+          launchExternalProcess(exePath, destinationPath)
+            .then(() => {
+              setTimeout(() => setUvToolsLaunchingPath(null), 5000);
+            })
+            .catch((err) => {
+              console.warn('[UVTools] Failed to launch UVTools:', err);
+              setTimeout(() => setUvToolsLaunchingPath(null), 5000);
+            });
+        }
+
         setShouldAutoSliceOnExportEntry(false);
         scene.setMode('printing');
         return;
@@ -3999,7 +4211,24 @@ export default function Home() {
           }
         }
 
-        if (savedPath) setCompletedSaveDestinationPath(savedPath);
+        if (savedPath) {
+          setCompletedSaveDestinationPath(savedPath);
+
+          // If intent is 'uvtools', show launching modal and fire UVTools
+          if (intent === 'uvtools') {
+            setUvToolsLaunchingPath(savedPath);
+            const uvToolsSettings = getSavedUvToolsSettings();
+            const exePath = resolveUvToolsExecutablePath(uvToolsSettings);
+            launchExternalProcess(exePath, savedPath)
+              .then(() => {
+                setTimeout(() => setUvToolsLaunchingPath(null), 5000);
+              })
+              .catch((err) => {
+                console.warn('[UVTools] Failed to launch UVTools:', err);
+                setTimeout(() => setUvToolsLaunchingPath(null), 5000);
+              });
+          }
+        }
         setShouldAutoSliceOnExportEntry(false);
         scene.setMode('printing');
       };
@@ -5110,7 +5339,7 @@ export default function Home() {
       return true;
     }
 
-    if (intent === 'file') {
+    if (intent === 'file' || intent === 'uvtools') {
       try {
         const destinationPath = await pickSavePathWithNativeDialog(suggestedSliceOutputFilename);
         if (!destinationPath || destinationPath.trim().length === 0) {
@@ -8201,6 +8430,15 @@ export default function Home() {
     setTimeout(resolve, 0);
   }), []);
 
+  const createPathBackedStlFile = React.useCallback((sourcePath: string, name: string): File => {
+    const file = new File([], name, {
+      type: getDroppedFileMimeType(name),
+      lastModified: Date.now(),
+    });
+    (file as File & { filePath?: string }).filePath = sourcePath;
+    return file;
+  }, []);
+
   const pickFilesWithNativeDialog = React.useCallback(async (category: 'mesh' | 'scene', multiple: boolean): Promise<File[] | null> => {
     if (!isDesktopRuntime()) return null;
 
@@ -8242,13 +8480,16 @@ export default function Home() {
             progress: null,
           });
 
-          const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
           const name = resolvedName;
-
-          files.push(new File([new Uint8Array(bytes)], name, {
-            type: getDroppedFileMimeType(name),
-            lastModified: Date.now(),
-          }));
+          if (getFileExtensionLower(name) === '.stl') {
+            files.push(createPathBackedStlFile(sourcePath, name));
+          } else {
+            const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
+            files.push(new File([new Uint8Array(bytes)], name, {
+              type: getDroppedFileMimeType(name),
+              lastModified: Date.now(),
+            }));
+          }
         } catch (error) {
           console.warn(`[Picker] Failed reading picked file path: ${entry.path}`, error);
         }
@@ -8270,7 +8511,7 @@ export default function Home() {
       console.warn(`[Picker] Native ${category} picker failed, falling back to web input.`, error);
       return null;
     }
-  }, [isDesktopRuntime, waitForUiTick]);
+  }, [createPathBackedStlFile, isDesktopRuntime, waitForUiTick]);
 
   const pickFilesWithWebInput = React.useCallback((accept: string, multiple: boolean): Promise<File[]> => {
     return new Promise((resolve) => {
@@ -8368,7 +8609,7 @@ export default function Home() {
       if (nativeFiles.length === 0) return;
       const expanded = await expandPickedFilesWithZip(nativeFiles, 'mesh');
       if (expanded.meshFiles.length > 0) {
-        scene.onFileChange(buildSyntheticFileChangeEvent(expanded.meshFiles));
+        void scene.loadFiles(expanded.meshFiles);
       }
       if (expanded.sceneFiles.length > 0) {
         await importSceneFilesWithPluginWarning(expanded.sceneFiles, { resultingScenePath: null });
@@ -9671,12 +9912,16 @@ export default function Home() {
 
       for (const sourcePath of normalizedSupportedPaths) {
         try {
-          const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
           const name = getFileNameFromPath(sourcePath);
-          files.push(new File([new Uint8Array(bytes)], name, {
-            type: getDroppedFileMimeType(name),
-            lastModified: Date.now(),
-          }));
+          if (getFileExtensionLower(name) === '.stl') {
+            files.push(createPathBackedStlFile(sourcePath, name));
+          } else {
+            const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
+            files.push(new File([new Uint8Array(bytes)], name, {
+              type: getDroppedFileMimeType(name),
+              lastModified: Date.now(),
+            }));
+          }
         } catch (error) {
           console.warn(`[DragDrop] Failed reading dropped file path: ${sourcePath}`, error);
         }
@@ -9686,7 +9931,7 @@ export default function Home() {
     } catch {
       return [] as File[];
     }
-  }, []);
+  }, [createPathBackedStlFile]);
 
   const sceneModeRef = React.useRef(scene.mode);
   const createFilesFromTauriDroppedPathsRef = React.useRef(createFilesFromTauriDroppedPaths);
@@ -9982,6 +10227,10 @@ export default function Home() {
 
   const handleUngroupFolder = React.useCallback((groupId: string) => {
     scene.ungroupGroup(groupId);
+  }, [scene]);
+
+  const handleSplitImportGroup = React.useCallback((modelId: string) => {
+    scene.splitImportGroup(modelId);
   }, [scene]);
 
   const handleRenameFolder = React.useCallback((groupId: string, nextName: string) => {
@@ -12567,7 +12816,59 @@ export default function Home() {
 
     const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
 
-    if (visibleModels.length <= 1) return;
+    if (visibleModels.length <= 1) {
+      if (visibleModels.length === 1) {
+        const model = visibleModels[0];
+        const t = getArrangeTransform(model);
+        const dims = getModelSupportAwareDimensionsMm(model, undefined, t);
+
+        const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+        const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
+        const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+        const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
+        const sm = scene.view3dSettings.safetyMarginMm;
+        const minX = rawMinX + Math.max(0, sm?.left ?? 0);
+        const maxX = rawMaxX - Math.max(0, sm?.right ?? 0);
+        const minY = rawMinY + Math.max(0, sm?.front ?? 0);
+        const maxY = rawMaxY - Math.max(0, sm?.back ?? 0);
+
+        let centerX: number;
+        let centerY: number;
+        if (arrangeAnchorMode === 'front_left') {
+          centerX = minX + dims.width * 0.5;
+          centerY = minY + dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'front_right') {
+          centerX = maxX - dims.width * 0.5;
+          centerY = minY + dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'back_left') {
+          centerX = minX + dims.width * 0.5;
+          centerY = maxY - dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'back_right') {
+          centerX = maxX - dims.width * 0.5;
+          centerY = maxY - dims.depth * 0.5;
+        } else {
+          centerX = (minX + maxX) * 0.5;
+          centerY = (minY + maxY) * 0.5;
+        }
+
+        // Arrange and Duplicate previews should never overlap.
+        setDuplicateApplySourceModel(null);
+        setDuplicateApplySourceTransform(null);
+        setDuplicateSourcePreviewTransform(null);
+        setDuplicatePreviewTransforms([]);
+        setDuplicateTotalCopies(1);
+
+        applyArrangeTransforms([{
+          id: model.id,
+          transform: {
+            position: new THREE.Vector3(centerX, centerY, t.position.z),
+            rotation: t.rotation.clone(),
+            scale: t.scale.clone(),
+          },
+        }]);
+      }
+      return;
+    }
 
     // Arrange and Duplicate previews should never overlap.
     setDuplicateApplySourceModel(null);
@@ -13014,8 +13315,6 @@ export default function Home() {
           }),
         ],
       );
-
-      transformMgr.setTransformMode('select');
     } finally {
       const elapsed = performance.now() - startedAt;
       if (elapsed < minSpinnerMs) {
@@ -13031,7 +13330,59 @@ export default function Home() {
     if (isAutoArranging) return;
 
     const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
-    if (visibleModels.length <= 1) return;
+    if (visibleModels.length <= 1) {
+      if (visibleModels.length === 1) {
+        const model = visibleModels[0];
+        const t = getArrangeTransform(model);
+        const dims = getModelSupportAwareDimensionsMm(model, undefined, t);
+
+        const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+        const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
+        const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+        const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
+        const sm = scene.view3dSettings.safetyMarginMm;
+        const minX = rawMinX + Math.max(0, sm?.left ?? 0);
+        const maxX = rawMaxX - Math.max(0, sm?.right ?? 0);
+        const minY = rawMinY + Math.max(0, sm?.front ?? 0);
+        const maxY = rawMaxY - Math.max(0, sm?.back ?? 0);
+
+        let centerX: number;
+        let centerY: number;
+        if (arrangeAnchorMode === 'front_left') {
+          centerX = minX + dims.width * 0.5;
+          centerY = minY + dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'front_right') {
+          centerX = maxX - dims.width * 0.5;
+          centerY = minY + dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'back_left') {
+          centerX = minX + dims.width * 0.5;
+          centerY = maxY - dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'back_right') {
+          centerX = maxX - dims.width * 0.5;
+          centerY = maxY - dims.depth * 0.5;
+        } else {
+          centerX = (minX + maxX) * 0.5;
+          centerY = (minY + maxY) * 0.5;
+        }
+
+        // Arrange and Duplicate previews should never overlap.
+        setDuplicateApplySourceModel(null);
+        setDuplicateApplySourceTransform(null);
+        setDuplicateSourcePreviewTransform(null);
+        setDuplicatePreviewTransforms([]);
+        setDuplicateTotalCopies(1);
+
+        applyArrangeTransforms([{
+          id: model.id,
+          transform: {
+            position: new THREE.Vector3(centerX, centerY, t.position.z),
+            rotation: t.rotation.clone(),
+            scale: t.scale.clone(),
+          },
+        }]);
+      }
+      return;
+    }
 
     // Arrange and Duplicate previews should never overlap.
     setDuplicateApplySourceModel(null);
@@ -13071,7 +13422,6 @@ export default function Home() {
 
       if (updates.length > 1) {
         applyArrangeTransforms(updates);
-        transformMgr.setTransformMode('select');
       }
     } finally {
       const elapsed = performance.now() - startedAt;
@@ -13213,7 +13563,66 @@ export default function Home() {
     if (isAutoArranging) return;
 
     const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
-    if (visibleModels.length <= 1) return;
+    if (visibleModels.length <= 1) {
+      if (visibleModels.length === 1) {
+        const model = visibleModels[0];
+        const t = getArrangeTransform(model);
+        const dims = getModelSupportAwareDimensionsMm(model, undefined, t);
+
+        const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+        const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
+        const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+        const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
+        const sm = scene.view3dSettings.safetyMarginMm;
+        const minX = rawMinX + Math.max(0, sm?.left ?? 0);
+        const maxX = rawMaxX - Math.max(0, sm?.right ?? 0);
+        const minY = rawMinY + Math.max(0, sm?.front ?? 0);
+        const maxY = rawMaxY - Math.max(0, sm?.back ?? 0);
+
+        let centerX: number;
+        let centerY: number;
+        if (arrangeAnchorMode === 'front_left') {
+          centerX = minX + dims.width * 0.5;
+          centerY = minY + dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'front_right') {
+          centerX = maxX - dims.width * 0.5;
+          centerY = minY + dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'back_left') {
+          centerX = minX + dims.width * 0.5;
+          centerY = maxY - dims.depth * 0.5;
+        } else if (arrangeAnchorMode === 'back_right') {
+          centerX = maxX - dims.width * 0.5;
+          centerY = maxY - dims.depth * 0.5;
+        } else {
+          centerX = (minX + maxX) * 0.5;
+          centerY = (minY + maxY) * 0.5;
+        }
+
+        // Arrange and Duplicate previews should never overlap.
+        setDuplicateApplySourceModel(null);
+        setDuplicateApplySourceTransform(null);
+        setDuplicateSourcePreviewTransform(null);
+        setDuplicatePreviewTransforms([]);
+        setDuplicateTotalCopies(1);
+
+        applyArrangeTransforms([{
+          id: model.id,
+          transform: {
+            position: new THREE.Vector3(centerX, centerY, t.position.z),
+            rotation: t.rotation.clone(),
+            scale: t.scale.clone(),
+          },
+        }]);
+      }
+      return;
+    }
+
+    // Arrange and Duplicate previews should never overlap.
+    setDuplicateApplySourceModel(null);
+    setDuplicateApplySourceTransform(null);
+    setDuplicateSourcePreviewTransform(null);
+    setDuplicatePreviewTransforms([]);
+    setDuplicateTotalCopies(1);
 
     const minSpinnerMs = 220;
     const startedAt = performance.now();
@@ -13227,7 +13636,6 @@ export default function Home() {
       if (updates.length <= 1) return;
 
       applyArrangeTransforms(updates);
-      transformMgr.setTransformMode('select');
     } finally {
       const elapsed = performance.now() - startedAt;
       if (elapsed < minSpinnerMs) {
@@ -13351,6 +13759,15 @@ export default function Home() {
   React.useEffect(() => {
     if (scene.mode !== 'export') return;
     if (scene.models.length === 0) return;
+
+    // Check for unapplied hole punches and warn the user.
+    const hasUnapplied = scene.models.some((model) => {
+      const p = model.meshModifiers?.holePunches;
+      return p && p.length > 0 && !model.meshModifiers?.holePunchesBakedIntoGeometry;
+    });
+    if (hasUnapplied && unappliedHolePunchResolveRef.current === null) {
+      setShowUnappliedHolePunchModal(true);
+    }
 
     // In export mode, select all visible models for tinting
     const visibleModels = scene.models.filter((model) => model.visible);
@@ -14932,6 +15349,8 @@ export default function Home() {
         return;
       }
 
+      const holesWereAlreadyBaked = activeModel.meshModifiers?.holePunchesBakedIntoGeometry === true;
+
       const existingSource = hollowingSourceByModelIdRef.current.get(activeModel.id);
       const needsNewSource = !existingSource || !persistedHollowing?.enabled;
 
@@ -14945,6 +15364,7 @@ export default function Home() {
           const restoredFromSnapshot = geometryFromSnapshot(persistedHollowing);
           sourceGeometry = restoredFromSnapshot ?? activeModel.geometry.geometry.clone();
         } else {
+          // Use the current geometry which may already have baked holes.
           sourceGeometry = activeModel.geometry.geometry.clone();
         }
 
@@ -14966,6 +15386,7 @@ export default function Home() {
         );
         const bboxSize = bbox.getSize(new THREE.Vector3());
         const maxExtent = Math.max(bboxSize.x, bboxSize.y, bboxSize.z);
+        const applyQuat = new THREE.Quaternion().setFromEuler(activeModel.transform.rotation);
         const options: HollowOptions = {
           mode: effectiveHollowMode,
           voxelResolution: computeVoxelResolution(worldMmToLocalMm(hollowingState.voxelSizeMm, shellScaleFactor), maxExtent),
@@ -14979,6 +15400,7 @@ export default function Home() {
           previewCavityOnly: false,
           smoothInternalSurfaces: true,
           internalChamferPasses: 2,
+          rotationQuat: [applyQuat.x, applyQuat.y, applyQuat.z, applyQuat.w],
         };
         const sourceGeometryKey = buildGeometryVersionKey(sourceGeometry);
         const staged = await stageHollowPreviewSource(
@@ -15089,7 +15511,11 @@ export default function Home() {
           { geometry: { geometry: nextGeometry } as GeometryWithBounds },
           nextHolePunchPlacements.filter((placement) => placement.modelId === activeModel.id),
         ).filter((placement) => placement.radiusMm > 0 && placement.depthMm > 0);
-        const shouldAutoReapplyHolePunches = persistedHolePunches.length > 0;
+
+        // When holes were already baked before hollowing, they were passed as
+        // drainHoles to the hollower which already cut them — no re-apply needed.
+        // Only auto-reapply holes that were in draft state (not yet baked).
+        const shouldAutoReapplyHolePunches = !holesWereAlreadyBaked && persistedHolePunches.length > 0;
 
         persistActiveModelModifiers({
           ...(activeModel.meshModifiers ?? {}),
@@ -15113,10 +15539,14 @@ export default function Home() {
               : true,
           },
           holePunches: persistedHolePunches,
-          holePunchAppliedPlacements: [],
-          holePunchesBakedIntoGeometry: false,
-          holePunchSourcePositionsBase64: undefined,
-          holePunchSourcePositionCount: undefined,
+          holePunchAppliedPlacements: holesWereAlreadyBaked ? persistedHolePunches : [],
+          holePunchesBakedIntoGeometry: holesWereAlreadyBaked,
+          holePunchSourcePositionsBase64: holesWereAlreadyBaked
+            ? (activeModel.meshModifiers?.holePunchSourcePositionsBase64 ?? undefined)
+            : undefined,
+          holePunchSourcePositionCount: holesWereAlreadyBaked
+            ? (activeModel.meshModifiers?.holePunchSourcePositionCount ?? undefined)
+            : undefined,
         });
 
         if (shouldAutoReapplyHolePunches) {
@@ -15173,8 +15603,10 @@ export default function Home() {
       hollowing: {
         enabled: false,
         bakedIntoGeometry: false,
-        sourcePositionsBase64: activeModel.meshModifiers?.hollowing?.sourcePositionsBase64,
-        sourcePositionCount: activeModel.meshModifiers?.hollowing?.sourcePositionCount,
+        // Clear the source snapshot — hollowing was reset so the snapshot is
+        // stale (it may contain holes that have since been removed).
+        sourcePositionsBase64: undefined,
+        sourcePositionCount: undefined,
         blockedVoxelIndices: [],
         mode: defaultHollowingState.mode,
         voxelSizeMm: defaultHollowingState.voxelSizeMm,
@@ -15185,10 +15617,13 @@ export default function Home() {
         openFace: defaultHollowingState.openFace,
         openFaceSelected: true,
       },
-      holePunchAppliedPlacements: [],
-      holePunchesBakedIntoGeometry: false,
-      holePunchSourcePositionsBase64: undefined,
-      holePunchSourcePositionCount: undefined,
+      // Preserve hole punch baked state — the geometry restored from the
+      // hollowing source still contains any pre-baked holes, so the system
+      // must not lose track of them.
+      holePunchAppliedPlacements: activeModel.meshModifiers?.holePunches ?? [],
+      holePunchesBakedIntoGeometry: activeModel.meshModifiers?.holePunchesBakedIntoGeometry === true,
+      holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
+      holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
     });
   }, [defaultHollowingState, persistActiveModelModifiers, scene.activeModel]);
 
@@ -15230,8 +15665,8 @@ export default function Home() {
       hollowing: {
         enabled: false,
         bakedIntoGeometry: false,
-        sourcePositionsBase64: activeModel.meshModifiers?.hollowing?.sourcePositionsBase64,
-        sourcePositionCount: activeModel.meshModifiers?.hollowing?.sourcePositionCount,
+        sourcePositionsBase64: undefined,
+        sourcePositionCount: undefined,
         blockedVoxelIndices: [],
         // Keep current settings — don't reset to defaults.
         mode: hollowingState.mode,
@@ -15245,10 +15680,10 @@ export default function Home() {
           ? isShellOpenFaceSelected
           : true,
       },
-      holePunchAppliedPlacements: [],
-      holePunchesBakedIntoGeometry: false,
-      holePunchSourcePositionsBase64: undefined,
-      holePunchSourcePositionCount: undefined,
+      holePunchAppliedPlacements: activeModel.meshModifiers?.holePunches ?? [],
+      holePunchesBakedIntoGeometry: activeModel.meshModifiers?.holePunchesBakedIntoGeometry === true,
+      holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
+      holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
     });
   }, [hollowingState, isShellOpenFaceSelected, persistActiveModelModifiers, scene.activeModel]);
 
@@ -15866,6 +16301,7 @@ export default function Home() {
       ...base,
       worldPoint: hit.point.clone(),
       worldNormal,
+      worldFrame: createHolePunchWorldFrame(worldNormal),
       localPoint,
       localNormal,
       depthMm: resolvedDepthMm,
@@ -15890,6 +16326,11 @@ export default function Home() {
 
     const hitModelId = (hit.object.userData?.modelId as string | undefined) ?? activeModel.id;
     if (hitModelId !== activeModel.id) return;
+
+    if (selectedHolePunchPlacementIds.length > 0 && Date.now() < suppressHolePunchGizmoReleaseClickUntilRef.current) {
+      setHolePunchHoverPlacement(null);
+      return;
+    }
 
     if (hollowingState.mode === 'shell_open_face' && !isShellOpenFaceSelected) {
       const pickedOpenFace = inferOpenFaceFromHit(hit, hollowingState.openFace);
@@ -16070,18 +16511,218 @@ export default function Home() {
     }
   }, [persistHolePunchPlacementsForModel, scene.activeModel]);
 
+  /**
+   * Gizmo-based placement move — applies the delta directly without snapping
+   * to surface normals, giving the user precise axis-constrained control.
+   */
+  const holePunchGizmoDragRef = React.useRef<{
+    placementId: string;
+    startWorldPoint: THREE.Vector3;
+    startLocalPoint: THREE.Vector3;
+    accumulatedDelta: THREE.Vector3;
+    /** Inverse model matrix (world→local) captured at drag start, used to
+     *  convert the world-space gizmo delta into the model's local coordinate
+     *  space so the persisted localPoint stays accurate for Rust. */
+    inverseModelMatrix: THREE.Matrix4;
+  } | null>(null);
+
+  const handleHolePunchGizmoMoveStart = React.useCallback((placementId: string) => {
+    const placement = holePunchPlacementsRef.current.find((candidate) => candidate.id === placementId);
+    if (!placement) {
+      holePunchGizmoDragRef.current = null;
+      return;
+    }
+
+    // Compute the inverse model matrix so we can convert the world-space
+    // gizmo delta into the model's local coordinate space. This keeps
+    // localPoint accurate for Rust serialization even when the model is
+    // rotated.
+    let inverseModelMatrix: THREE.Matrix4;
+    const activeModel = scene.activeModel;
+    if (activeModel && placement.modelId === activeModel.id) {
+      const meshMatrix = new THREE.Matrix4()
+        .compose(
+          activeModel.transform.position.clone(),
+          quaternionFromGlobalEuler(activeModel.transform.rotation),
+          activeModel.transform.scale.clone(),
+        )
+        .multiply(new THREE.Matrix4().makeTranslation(
+          -activeModel.geometry.center.x,
+          -activeModel.geometry.center.y,
+          -activeModel.geometry.center.z,
+        ));
+      inverseModelMatrix = meshMatrix.invert();
+    } else {
+      // Fallback: identity matrix (world = local), preserves old behavior.
+      inverseModelMatrix = new THREE.Matrix4();
+    }
+
+    holePunchGizmoDragRef.current = {
+      placementId,
+      startWorldPoint: placement.worldPoint.clone(),
+      startLocalPoint: placement.localPoint.clone(),
+      accumulatedDelta: new THREE.Vector3(),
+      inverseModelMatrix,
+    };
+  }, [scene.activeModel]);
+
+  const handleHolePunchGizmoMove = React.useCallback((
+    placementId: string,
+    delta: THREE.Vector3,
+  ) => {
+    const drag = holePunchGizmoDragRef.current;
+    if (!drag || drag.placementId !== placementId) return;
+
+    drag.accumulatedDelta.add(delta);
+    const nextWorldPoint = drag.startWorldPoint.clone().add(drag.accumulatedDelta);
+    // Convert the new world point back to model local space using the
+    // inverse matrix captured at drag start. Directly adding the world-space
+    // delta to the local point would be wrong when the model has a rotation.
+    const nextLocalPoint = nextWorldPoint.clone().applyMatrix4(drag.inverseModelMatrix);
+
+    setHolePunchPlacements((previous) => {
+      const nextPlacements = previous.map((placement) => {
+        if (placement.id !== placementId) return placement;
+        return {
+          ...placement,
+          worldPoint: nextWorldPoint.clone(),
+          localPoint: nextLocalPoint.clone(),
+        };
+      });
+      holePunchPlacementsRef.current = nextPlacements;
+      return nextPlacements;
+    });
+  }, []);
+
+  const handleHolePunchGizmoMoveEnd = React.useCallback((placementId: string) => {
+    if (!holePunchGizmoDragRef.current || holePunchGizmoDragRef.current.placementId !== placementId) return;
+
+    suppressHolePunchGizmoReleaseClickUntilRef.current = Date.now() + 250;
+    holePunchGizmoDragRef.current = null;
+    const activeModel = scene.activeModel;
+    if (activeModel) {
+      persistHolePunchPlacementsForModel(activeModel, holePunchPlacementsRef.current);
+    }
+  }, [persistHolePunchPlacementsForModel, scene.activeModel]);
+
+  /**
+   * Gizmo-based placement rotation — updates the cylinder normal without
+   * snapping, giving the user precise rotational control via the gizmo rings.
+   */
+  const holePunchGizmoRotateRef = React.useRef<{ placementId: string } | null>(null);
+
+  const handleHolePunchGizmoRotateStart = React.useCallback((placementId: string) => {
+    holePunchGizmoRotateRef.current = { placementId };
+  }, []);
+
+  const handleHolePunchGizmoRotate = React.useCallback((
+    placementId: string,
+    newNormal: THREE.Vector3,
+    worldFrame: HolePunchWorldFrame,
+  ) => {
+    if (!holePunchGizmoRotateRef.current || holePunchGizmoRotateRef.current.placementId !== placementId) return;
+
+    // Convert the world-space normal to local space using the inverse
+    // normal matrix, so the persisted direction stays accurate for Rust.
+    let localNormal = newNormal.clone();
+    const activeModel = scene.activeModel;
+    if (activeModel) {
+      const meshMatrix = new THREE.Matrix4()
+        .compose(
+          activeModel.transform.position.clone(),
+          quaternionFromGlobalEuler(activeModel.transform.rotation),
+          activeModel.transform.scale.clone(),
+        )
+        .multiply(new THREE.Matrix4().makeTranslation(
+          -activeModel.geometry.center.x,
+          -activeModel.geometry.center.y,
+          -activeModel.geometry.center.z,
+        ));
+      const normalMatrix = new THREE.Matrix3().getNormalMatrix(meshMatrix);
+      const inverseNormalMatrix = normalMatrix.clone().invert();
+      localNormal = newNormal.clone().applyMatrix3(inverseNormalMatrix).normalize();
+    }
+
+    setHolePunchPlacements((previous) => {
+      const nextPlacements = previous.map((placement) => {
+        if (placement.id !== placementId) return placement;
+        return {
+          ...placement,
+          worldNormal: newNormal.clone(),
+          worldFrame: cloneHolePunchWorldFrame(worldFrame),
+          localNormal,
+        };
+      });
+      holePunchPlacementsRef.current = nextPlacements;
+      return nextPlacements;
+    });
+  }, [scene.activeModel]);
+
+  const handleHolePunchGizmoRotateEnd = React.useCallback((placementId: string) => {
+    if (!holePunchGizmoRotateRef.current || holePunchGizmoRotateRef.current.placementId !== placementId) return;
+
+    suppressHolePunchGizmoReleaseClickUntilRef.current = Date.now() + 250;
+    holePunchGizmoRotateRef.current = null;
+    const activeModel = scene.activeModel;
+    if (activeModel) {
+      persistHolePunchPlacementsForModel(activeModel, holePunchPlacementsRef.current);
+    }
+  }, [persistHolePunchPlacementsForModel, scene.activeModel]);
+
   const handleDeleteSelectedHolePunchPlacement = React.useCallback(() => {
     const activeModel = scene.activeModel;
     if (!activeModel || selectedHolePunchPlacementIds.length === 0) return;
 
     const selectedIds = new Set(selectedHolePunchPlacementIds);
     const nextPlacements = holePunchPlacements.filter((placement) => !selectedIds.has(placement.id));
+    const remainingForModel = nextPlacements.filter((p) => p.modelId === activeModel.id);
+    const holesWereBaked = activeModel.meshModifiers?.holePunchesBakedIntoGeometry === true;
+
     setHolePunchPlacements(nextPlacements);
     setSelectedHolePunchPlacementIds([]);
     setHoveredHolePunchPlacementId(null);
     setHolePunchHoverPlacement(null);
-    persistHolePunchPlacementsForModel(activeModel, nextPlacements);
-  }, [holePunchPlacements, persistHolePunchPlacementsForModel, scene.activeModel, selectedHolePunchPlacementIds]);
+
+    // If holes were baked and we just deleted the last placement for the
+    // active model, restore the pre-punch geometry so the boolean cut is
+    // actually undone — otherwise the hole remains in the mesh and the
+    // hollowing cache keeps pointing at stale geometry.
+    if (holesWereBaked && remainingForModel.length === 0) {
+      const restored = geometryFromSnapshot({
+        sourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
+        sourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
+      });
+      if (restored) {
+        const restoredGeometry = restored.clone();
+        const replaced = scene.replaceModelGeometry(activeModel.id, restoredGeometry, 'Hole Punching (Removed)');
+        if (!replaced) {
+          restoredGeometry.dispose();
+        }
+        restored.dispose();
+      }
+      hollowingSourceByModelIdRef.current.delete(activeModel.id);
+      // Clear the preview result cache too — it may hold a stale result from
+      // when the hole was still present.
+      for (const [key, entry] of hollowPreviewResultCacheRef.current.entries()) {
+        if (entry.modelId === activeModel.id) {
+          disposeHollowPreviewCacheEntry(entry);
+          hollowPreviewResultCacheRef.current.delete(key);
+        }
+      }
+      persistActiveModelModifiers({
+        ...(activeModel.meshModifiers ?? {}),
+        holePunches: [],
+        holePunchAppliedPlacements: [],
+        holePunchesBakedIntoGeometry: false,
+        // Clear the source snapshot — pre-punch geometry was already restored
+        // so there's nothing left to apply.
+        holePunchSourcePositionsBase64: undefined,
+        holePunchSourcePositionCount: undefined,
+      });
+    } else {
+      persistHolePunchPlacementsForModel(activeModel, nextPlacements);
+    }
+  }, [holePunchPlacements, persistActiveModelModifiers, persistHolePunchPlacementsForModel, scene.activeModel, selectedHolePunchPlacementIds]);
 
   React.useEffect(() => {
     const unregister = registerDeleteHandler(
@@ -16162,13 +16803,18 @@ export default function Home() {
       restored.dispose();
     }
 
+    // Pre-punch geometry was restored — invalidate the hollowing source cache
+    // so the next hollowing preview uses the hole-free geometry.
+    hollowingSourceByModelIdRef.current.delete(activeModel.id);
+
     setHolePunchPlacements((previous) => {
       const updated = previous.filter((placement) => placement.modelId !== activeModelId);
       persistActiveModelModifiers({
         ...(activeModel.meshModifiers ?? {}),
         holePunches: [],
         holePunchAppliedPlacements: [],
-        holePunchesBakedIntoGeometry: true,
+        // Pre-punch geometry was restored — no holes are baked into it.
+        holePunchesBakedIntoGeometry: false,
         holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
         holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
       });
@@ -16318,11 +16964,16 @@ export default function Home() {
           restored.dispose();
         }
 
+        // Pre-punch geometry was restored — clear the hollowing cache so the
+        // next preview resolves from the hole-free geometry.
+        hollowingSourceByModelIdRef.current.delete(activeModel.id);
+
         persistActiveModelModifiers({
           ...(activeModel.meshModifiers ?? {}),
           holePunches: [],
           holePunchAppliedPlacements: [],
-          holePunchesBakedIntoGeometry: true,
+          // No holes remain in the geometry after restoring the pre-punch source.
+          holePunchesBakedIntoGeometry: false,
           holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
           holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
         });
@@ -16420,27 +17071,25 @@ export default function Home() {
               toNorm(shiftedStartMm.z, sourceBbox.min.z, sourceSize.z),
             ];
 
-            // Backend currently clamps centerNorm to [0,1]. Mirror that here so
-            // we can compensate length and keep inside depth exact.
-            const clampedStartNorm: [number, number, number] = [
-              Math.max(0, Math.min(1, shiftedStartNorm[0])),
-              Math.max(0, Math.min(1, shiftedStartNorm[1])),
-              Math.max(0, Math.min(1, shiftedStartNorm[2])),
-            ];
-
-            const clampedStartMm = new THREE.Vector3(
-              toMm(clampedStartNorm[0], sourceBbox.min.x, sourceSize.x),
-              toMm(clampedStartNorm[1], sourceBbox.min.y, sourceSize.y),
-              toMm(clampedStartNorm[2], sourceBbox.min.z, sourceSize.z),
+            // No longer clamp centerNorm to [0,1] — the Rust backend now
+            // accepts out-of-bounds values so holes pulled outside the model
+            // bbox via the gizmo stay exactly where the user positioned them.
+            // The outside-protrusion shift may push the start past the bbox
+            // boundary; compute the effective extra length from the actual
+            // (unclamped) offset between surface center and shifted start.
+            const shiftedStartMmActual = new THREE.Vector3(
+              toMm(shiftedStartNorm[0], sourceBbox.min.x, sourceSize.x),
+              toMm(shiftedStartNorm[1], sourceBbox.min.y, sourceSize.y),
+              toMm(shiftedStartNorm[2], sourceBbox.min.z, sourceSize.z),
             );
 
             const effectiveOutsideMm = Math.max(
               0,
-              surfaceCenterMm.clone().sub(clampedStartMm).dot(axis),
+              surfaceCenterMm.clone().sub(shiftedStartMmActual).dot(axis),
             );
 
             return {
-              centerNorm: clampedStartNorm,
+              centerNorm: shiftedStartNorm,
               radiusMm: localRadiusMm,
               radiusYMm: localRadiusYMm,
               direction: [axis.x, axis.y, axis.z] as [number, number, number],
@@ -16513,6 +17162,11 @@ export default function Home() {
           sourceGeometry.dispose();
         }
 
+        // Hole-punched geometry just replaced the model — invalidate the
+        // hollowing source cache so future hollowing previews resolve from
+        // the current (hole-punched) geometry rather than a stale snapshot.
+        hollowingSourceByModelIdRef.current.delete(activeModel.id);
+
         persistActiveModelModifiers({
           ...(activeModel.meshModifiers ?? {}),
           holePunches: persisted,
@@ -16568,8 +17222,14 @@ export default function Home() {
       return sourceEntry.geometry;
     }
 
-    const restoredFromSnapshot = activeModel.meshModifiers?.hollowing?.sourcePositionsBase64
-      ? geometryFromSnapshot(activeModel.meshModifiers.hollowing)
+    // Only restore from the hollowing snapshot if hollowing is actually baked
+    // (or at least enabled). If hollowing was reset/cleared, the snapshot is a
+    // stale copy of the pre-hollowing geometry which may have holes that have
+    // since been removed — using it would make the preview ignore hole changes.
+    const h = activeModel.meshModifiers?.hollowing;
+    const snapshotIsValid = h?.sourcePositionsBase64 && (h.bakedIntoGeometry || h.enabled);
+    const restoredFromSnapshot = snapshotIsValid
+      ? geometryFromSnapshot(h)
       : null;
     if (restoredFromSnapshot) {
       hollowingSourceByModelIdRef.current.set(activeModel.id, { geometry: restoredFromSnapshot });
@@ -16646,13 +17306,16 @@ export default function Home() {
     );
     const bboxSize = bbox.getSize(new THREE.Vector3());
     const maxExtent = Math.max(bboxSize.x, bboxSize.y, bboxSize.z);
+    const previewQuat = new THREE.Quaternion().setFromEuler(activeModel.transform.rotation);
     const options: HollowOptions = {
       ...buildHollowingOptions(activeModel.transform.scale, maxExtent, {
         preview: true,
         previewShellThicknessMm,
       }, previewState),
+      drainHoles: [],
       previewCavityOnly: true,
       previewVoxelSpheres: true,
+      rotationQuat: [previewQuat.x, previewQuat.y, previewQuat.z, previewQuat.w],
     };
     const optionsKey = JSON.stringify(options);
     const previewKey = `${activeModel.id}::${sourceGeometryKey}::${optionsKey}`;
@@ -16992,12 +17655,21 @@ export default function Home() {
       cavityGeometryByModelIdRef.current.delete(modelId);
     }
 
+    // If the active model's cavity geometry was just removed, exit interior view
+    // so the user doesn't get stuck with no way to toggle it off.
+    if (
+      interiorView &&
+      (!scene.activeModel || !cavityGeometryByModelIdRef.current.has(scene.activeModel.id))
+    ) {
+      setInteriorView(false);
+    }
+
     for (const [cacheKey, entry] of hollowPreviewResultCacheRef.current.entries()) {
       if (liveIds.has(entry.modelId)) continue;
       disposeHollowPreviewCacheEntry(entry);
       hollowPreviewResultCacheRef.current.delete(cacheKey);
     }
-  }, [scene.models]);
+  }, [scene.models, interiorView, setInteriorView]);
 
   // Restore cavity geometry from persisted data for models with baked hollowing.
   React.useEffect(() => {
@@ -17168,11 +17840,20 @@ export default function Home() {
 
   const handleDoneHollowVoxelEditing = React.useCallback(() => {
     const nextIndices = [...editingBlockedHollowVoxelIndices].sort((a, b) => a - b);
+    const prevIndices = [...blockedHollowVoxelIndices].sort((a, b) => a - b);
+    const hasChanges = nextIndices.length !== prevIndices.length
+      || nextIndices.some((v, i) => v !== prevIndices[i]);
+
+    if (!hasChanges) {
+      setHollowingEditMode(false);
+      return;
+    }
+
     commitBlockedHollowVoxelIndices(nextIndices);
     clearHollowPreview();
     setHollowingEditMode(false);
     setIsApplyingBlockersHollowing(true);
-  }, [clearHollowPreview, commitBlockedHollowVoxelIndices, editingBlockedHollowVoxelIndices]);
+  }, [blockedHollowVoxelIndices, clearHollowPreview, commitBlockedHollowVoxelIndices, editingBlockedHollowVoxelIndices]);
 
   React.useEffect(() => {
     if (canUseAutoHolePunchDepth || holePunchState.depthMode !== 'auto') {
@@ -17241,7 +17922,24 @@ export default function Home() {
       activeModel,
       activeModel.meshModifiers?.holePunches ?? [],
     );
-    setHolePunchPlacements(persistedPlacements);
+
+    // Preserve worldFrame from current draft placements when the id matches
+    // and the normal is unchanged. This prevents the persist round-trip from
+    // dropping X/Z-axis rotation (around the cylinder's own axis) applied via
+    // the gizmo — without this the gizmo rotation snaps back on release.
+    setHolePunchPlacements((previous) => {
+      const prevById = new Map(previous.map((p) => [p.id, p]));
+      return persistedPlacements.map((placement) => {
+        const prev = prevById.get(placement.id);
+        if (
+          prev?.worldFrame
+          && placement.worldNormal.distanceToSquared(prev.worldNormal) < 1e-8
+        ) {
+          return { ...placement, worldFrame: prev.worldFrame };
+        }
+        return placement;
+      });
+    });
     setHoveredHolePunchPlacementId((previous) => (
       previous && persistedPlacements.some((placement) => placement.id === previous)
         ? previous
@@ -17371,12 +18069,14 @@ export default function Home() {
     const bboxSize = bbox.getSize(new THREE.Vector3());
     const maxExtent = Math.max(bboxSize.x, bboxSize.y, bboxSize.z);
 
+    const debounceQuat = new THREE.Quaternion().setFromEuler(activeModel.transform.rotation);
     const options: HollowOptions = {
       ...buildHollowingOptions(activeModel.transform.scale, maxExtent, {
         preview: true,
         previewShellThicknessMm,
       }),
       previewCavityOnly: true,
+      rotationQuat: [debounceQuat.x, debounceQuat.y, debounceQuat.z, debounceQuat.w],
     };
     const optionsKey = JSON.stringify(options);
     const previewKey = `${activeModel.id}::${sourceGeometryKey}::${optionsKey}`;
@@ -17419,8 +18119,7 @@ export default function Home() {
   const handlePlaceOnFace = React.useCallback((modelId: string) => {
     if (scene.activeModelId !== modelId) return;
     handleTransformEnd('rotate');
-    transformMgr.setTransformMode('transform');
-  }, [handleTransformEnd, scene.activeModelId, transformMgr]);
+  }, [handleTransformEnd, scene.activeModelId]);
 
   const handlePlaceOnFaceBeforeApply = React.useCallback((_normal: THREE.Vector3, continueApply: () => void) => {
     return requestDestructiveTransformSupportDeletionWithContinuation('Place On Face', continueApply);
@@ -18057,6 +18756,8 @@ export default function Home() {
         heatmapColors={scene.heatmapColors}
         onHeatmapColorChange={scene.onHeatmapColorChange}
         isSlicingBusy={isSlicingBusy}
+        onLoadMeshChange={handleLoadMeshChangeWithZip}
+        onImportSceneChange={handleImportSceneChangeWithZip}
         onSaveScene={() => { void handleTopBarSaveScene(); }}
         onOpenScene={handleTopBarOpenScene}
         onCloseProgram={handleRequestProgramClose}
@@ -18068,6 +18769,8 @@ export default function Home() {
         warnBeforeProfileSettingsOpen={Boolean(printingArtifact && !printingArtifactIsInvalid)}
         onOpenMonitor={() => setPrintingMonitorModalOpen(true)}
       />
+
+      <GlobalUpdateIndicator />
 
       <FloatingPanelStack>
         {scene.mode === 'prepare' ? (
@@ -18084,6 +18787,7 @@ export default function Home() {
               onGroupModels={handleGroupSelectedModels}
               onUngroupModels={handleUngroupSelectedModels}
               onUngroupGroup={handleUngroupFolder}
+              onSplitImportGroup={handleSplitImportGroup}
               onRenameGroup={handleRenameFolder}
               onRenameModel={handleRenameModel}
               onModelContextMenu={handleModelListContextMenu}
@@ -18091,10 +18795,6 @@ export default function Home() {
               onOpenSupportsInfo={handleOpenModelSupportsInfo}
               onDelete={scene.deleteModel}
               onVisibilityChange={scene.setModelVisibility}
-              onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
-              onLoadMeshChange={handleLoadMeshChangeWithZip}
-              onImportSceneClick={() => { void handleOpenSceneDialog(); }}
-              onImportSceneChange={handleImportSceneChangeWithZip}
               dimmed={showEmptySceneDialog || importOverlayState.active}
               bottomClearancePx={modelStatsBottomClearancePx}
             />
@@ -18173,43 +18873,7 @@ export default function Home() {
             )}
 
             {scene.geom && transformMgr.transformMode === 'smoothing' && (
-              <div
-                key="prepare-smoothing-settings"
-                className="ui-panel rounded-lg border shadow-lg overflow-hidden"
-                style={{ borderColor: 'var(--border-subtle)' }}
-              >
-                <div
-                  className="px-2.5 py-2.5 flex items-center gap-2.5"
-                >
-                  <IconButton
-                    onClick={() => setPrepareSmoothingSettingsExpanded((prev) => !prev)}
-                    className="!p-0.5"
-                    title={prepareSmoothingSettingsExpanded ? 'Collapse card' : 'Expand card'}
-                  >
-                    <svg
-                      className="w-3 h-3 transform transition-transform"
-                      style={{ color: prepareSmoothingSettingsExpanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      {prepareSmoothingSettingsExpanded ? (
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                      ) : (
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                      )}
-                    </svg>
-                  </IconButton>
-                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    Mesh Smoothing
-                  </h3>
-                </div>
-                {prepareSmoothingSettingsExpanded && (
-                  <div className="max-h-[calc(100vh-var(--topbar-height)-88px)] overflow-hidden">
-                    <MeshSmoothingSettingsPanel />
-                  </div>
-                )}
-              </div>
+              <MeshSmoothingSettingsPanel key="prepare-smoothing-settings" />
             )}
 
             {scene.geom && transformMgr.transformMode === 'hollowing' && (
@@ -18469,7 +19133,7 @@ export default function Home() {
               onBeforeSliceStart={handleBeforeSliceStart}
               onBeforeSlicingRun={handlePreSliceSceneSave}
               resolveOutputPathForIntent={(intent) => (
-                intent === 'file'
+                intent === 'file' || intent === 'uvtools'
                   ? (preSliceFileDestinationPathRef.current?.trim() || null)
                   : null
               )}
@@ -18503,6 +19167,15 @@ export default function Home() {
               onDownload={handleDownloadPrintArtifact}
               onSendToPrinter={handleSendToPrinter}
               onCancelSendToPrinter={handleCancelSendToPrinter}
+              canSendToUvTools={getSavedUvToolsSettings().enabled}
+              onSendToUvTools={() => {
+                const fp = completedSaveDestinationPath;
+                if (!fp) return;
+                const s = getSavedUvToolsSettings();
+                launchExternalProcess(resolveUvToolsExecutablePath(s), fp).catch((err) =>
+                  console.warn('[UVTools] Failed to launch from printing panel:', err),
+                );
+              }}
               sliceIntent={completedSliceIntent}
               savedFilePath={completedSaveDestinationPath}
             />
@@ -18929,6 +19602,8 @@ export default function Home() {
             leafHoverPosition={supports.leafPlacement.hoverPosition}
             gpuPickingTest={false}
             selectionHighlightMode={effectiveSelectionHighlightMode}
+            higherContrastModelEdges={workspaceCameraSettings.higherContrastModelEdges}
+            blockerEditMode={hollowingEditMode}
             selectionColor={scene.selectionColor}
             hoverColor={scene.hoverColor}
             hoverTintStrength={effectiveHoverTintStrengthForScene}
@@ -18955,11 +19630,11 @@ export default function Home() {
                 ? scene.models.find((model) => model.id === hollowPreview.modelId) ?? null
                 : null;
               const activeModelId = scene.activeModel?.id ?? null;
-              const showHolePunchMarkers = (
+              const isInHollowingTool = scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing';
+              const showDraftHolePunchMarkers = (
                 interiorView
                 || (
-                  scene.mode === 'prepare'
-                  && transformMgr.transformMode === 'hollowing'
+                  isInHollowingTool
                   && !isShellFaceSelectionPending
                   && !hollowingEditMode
                 )
@@ -18982,18 +19657,23 @@ export default function Home() {
                 <>
                   {ghostData && LysGhostOverlay ? <LysGhostOverlay data={ghostData} visible /> : null}
 
-                  {showHolePunchMarkers && placedPunches.map((placement) => {
-                    const isInHollowingTool = scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing';
+                  {placedPunches.map((placement) => {
+                    const isApplied = appliedHolePunchPlacementIds.has(placement.id);
+                    // Draft markers (blue, unapplied) always show so the user
+                    // can see what needs applying. Applied markers (orange/grey)
+                    // only show in prepare/hollowing mode.
+                    if (isApplied && !showDraftHolePunchMarkers) return null;
                     return (
                       <HolePunchPreviewCylinder
                         key={`hole-punch-placement-${placement.id}`}
                         position={placement.worldPoint}
                         normal={placement.worldNormal}
+                        frame={placement.worldFrame}
                         radiusMm={placement.radiusMm}
                         radiusYMm={placement.radiusYMm}
                         lengthMm={placement.depthMm}
                         cavityBoundaryDepthMm={holePunchCavityBoundaryDepthMm}
-                        applied={appliedHolePunchPlacementIds.has(placement.id)}
+                        applied={isApplied}
                         variant={isInHollowingTool && selectedHolePunchPlacementIdSet.has(placement.id)
                           ? 'selected'
                           : isInHollowingTool && placement.id === hoveredHolePunchPlacementId
@@ -19022,7 +19702,7 @@ export default function Home() {
                     );
                   })}
 
-                  {showHolePunchMarkers && hoverPunchPreview && (
+                  {showDraftHolePunchMarkers && hoverPunchPreview && (
                     <HolePunchPreviewCylinder
                       key="hole-punch-hover-preview"
                       position={hoverPunchPreview.worldPoint}
@@ -19035,73 +19715,94 @@ export default function Home() {
                     />
                   )}
 
-                  {hollowPreview && previewModel && hollowingEditMode && !(isHollowingApplied && !isHollowingDirty) && (
-                    <group
-                      position={previewModel.transform.position}
-                      quaternion={quaternionFromGlobalEuler(previewModel.transform.rotation)}
-                      scale={previewModel.transform.scale}
-                    >
-                      <HollowVoxelEditOverlay
-                        voxelCenters={hollowPreview.removedVoxelCenters}
-                        blockedVoxelCenters={hollowPreview.blockedVoxelCenters}
-                        voxelRadiusMm={Math.max(hollowPreview.report.voxelSizeMm, 0.2)}
-                        blockedVoxelIndexSet={blockedPreviewVoxelInstanceIdSet}
-                        meshOffset={new THREE.Vector3(
-                          -previewModel.geometry.center.x,
-                          -previewModel.geometry.center.y,
-                          -previewModel.geometry.center.z,
+                  {isInHollowingTool && selectedHolePunchPlacementIds.length === 1 && (() => {
+                    const selectedPlacement = placedPunches.find(
+                      (p) => selectedHolePunchPlacementIdSet.has(p.id),
+                    );
+                    if (!selectedPlacement) return null;
+                    return (
+                      <HolePunchGizmo
+                        key={`hole-punch-gizmo-${selectedPlacement.id}`}
+                        placement={selectedPlacement}
+                        onMoveStart={() => handleHolePunchGizmoMoveStart(selectedPlacement.id)}
+                        onMove={(delta) => handleHolePunchGizmoMove(selectedPlacement.id, delta)}
+                        onMoveEnd={() => handleHolePunchGizmoMoveEnd(selectedPlacement.id)}
+                        onRotateStart={() => handleHolePunchGizmoRotateStart(selectedPlacement.id)}
+                        onRotate={(newNormal, worldFrame) => handleHolePunchGizmoRotate(
+                          selectedPlacement.id,
+                          newNormal,
+                          worldFrame,
                         )}
-                        onToggleVoxel={toggleBlockedHollowVoxelIndex}
+                        onRotateEnd={() => handleHolePunchGizmoRotateEnd(selectedPlacement.id)}
                       />
-                    </group>
+                    );
+                  })()}
+
+                  {hollowPreview && previewModel && hollowingEditMode && !(isHollowingApplied && !isHollowingDirty) && (
+                    <WorldSpaceVoxelEditOverlay
+                      voxelCenters={hollowPreview.removedVoxelCenters}
+                      blockedVoxelCenters={hollowPreview.blockedVoxelCenters}
+                      voxelRadiusMm={Math.max(hollowPreview.report.voxelSizeMm, 0.2)}
+                      blockedVoxelIndexSet={blockedPreviewVoxelInstanceIdSet}
+                      modelTransform={{
+                        position: previewModel.transform.position,
+                        quaternion: quaternionFromGlobalEuler(previewModel.transform.rotation),
+                        scale: previewModel.transform.scale,
+                      }}
+                      geometryCenter={previewModel.geometry.center}
+                      onToggleVoxel={toggleBlockedHollowVoxelIndex}
+                    />
                   )}
 
                   {hollowPreview && previewModel && !hollowingEditMode && !(isHollowingApplied && !isHollowingDirty) && (
-                    <group
-                      position={previewModel.transform.position}
-                      quaternion={quaternionFromGlobalEuler(previewModel.transform.rotation)}
-                      scale={previewModel.transform.scale}
-                    >
-                      {hollowPreview.previewVoxelSpheres ? (
-                        <HollowVoxelPreview
+                    <>
+                      {hollowPreview.previewVoxelSpheres && (
+                        <WorldSpaceVoxelPreview
                           voxelCenters={hollowPreview.removedVoxelCenters}
                           voxelSizeMm={hollowPreview.report.voxelSizeMm}
-                          meshOffset={new THREE.Vector3(
-                            -previewModel.geometry.center.x,
-                            -previewModel.geometry.center.y,
-                            -previewModel.geometry.center.z,
-                          )}
+                          modelTransform={{
+                            position: previewModel.transform.position,
+                            quaternion: quaternionFromGlobalEuler(previewModel.transform.rotation),
+                            scale: previewModel.transform.scale,
+                          }}
+                          geometryCenter={previewModel.geometry.center}
                         />
-                      ) : (
-                        <mesh
-                          geometry={hollowPreview.geometry}
-                          position={new THREE.Vector3(
-                            -previewModel.geometry.center.x,
-                            -previewModel.geometry.center.y,
-                            -previewModel.geometry.center.z,
-                          )}
-                          raycast={() => null}
-                          renderOrder={6}
-                        >
-                          <meshStandardMaterial
-                            color={'#66ecff'}
-                            emissive={'#3be6f2'}
-                            emissiveIntensity={0.18}
-                            transparent
-                            opacity={0.62}
-                            depthTest
-                            depthWrite={false}
-                            side={THREE.DoubleSide}
-                            roughness={0.65}
-                            metalness={0.0}
-                          />
-                        </mesh>
                       )}
-                      {hollowPreview.infillGeometry && (
-                        <mesh
-                          geometry={hollowPreview.infillGeometry}
-                          position={new THREE.Vector3(
-                            -previewModel.geometry.center.x,
+                      <group
+                        position={previewModel.transform.position}
+                        quaternion={quaternionFromGlobalEuler(previewModel.transform.rotation)}
+                        scale={previewModel.transform.scale}
+                      >
+                        {!hollowPreview.previewVoxelSpheres && (
+                          <mesh
+                            geometry={hollowPreview.geometry}
+                            position={new THREE.Vector3(
+                              -previewModel.geometry.center.x,
+                              -previewModel.geometry.center.y,
+                              -previewModel.geometry.center.z,
+                            )}
+                            raycast={() => null}
+                            renderOrder={6}
+                          >
+                            <meshStandardMaterial
+                              color={'#66ecff'}
+                              emissive={'#3be6f2'}
+                              emissiveIntensity={0.18}
+                              transparent
+                              opacity={0.62}
+                              depthTest
+                              depthWrite={false}
+                              side={THREE.DoubleSide}
+                              roughness={0.65}
+                              metalness={0.0}
+                            />
+                          </mesh>
+                        )}
+                        {hollowPreview.infillGeometry && (
+                          <mesh
+                            geometry={hollowPreview.infillGeometry}
+                            position={new THREE.Vector3(
+                              -previewModel.geometry.center.x,
                             -previewModel.geometry.center.y,
                             -previewModel.geometry.center.z,
                           )}
@@ -19123,7 +19824,8 @@ export default function Home() {
                         </mesh>
                       )}
                     </group>
-                  )}
+                  </>
+                )}
                 </>
               );
             }}
@@ -19504,6 +20206,18 @@ export default function Home() {
         onClose={() => setShowSliceCompletedModal(false)}
         filePath={sliceCompletedModalData.filePath}
         slicingTimeMs={sliceCompletedModalData.slicingTimeMs}
+        onOpenInUvTools={getSavedUvToolsSettings().enabled ? (fp) => {
+          const s = getSavedUvToolsSettings();
+          launchExternalProcess(resolveUvToolsExecutablePath(s), fp).catch((err) =>
+            console.warn('[UVTools] Failed to launch from completed dialog:', err),
+          );
+        } : undefined}
+      />
+
+      <UvToolsLaunchingModal
+        isOpen={uvToolsLaunchingPath !== null}
+        filePath={uvToolsLaunchingPath}
+        onLaunchComplete={() => setUvToolsLaunchingPath(null)}
       />
 
       <ModelSupportsModal
@@ -19511,6 +20225,59 @@ export default function Home() {
         onClose={() => setSupportsInfoModelId(null)}
         model={scene.models.find((m) => m.id === supportsInfoModelId) ?? null}
       />
+
+      <StructuredDialogModal
+        open={showUnappliedHolePunchModal}
+        ariaLabel="Unapplied hole punches"
+        title="Unapplied Holes"
+        subtitle="Some models have unapplied hole punches"
+        icon={<AlertTriangle className="h-4 w-4" />}
+        iconTone="warning"
+        closeAriaLabel="Close"
+        onClose={() => {
+          setShowUnappliedHolePunchModal(false);
+          unappliedHolePunchResolveRef.current?.('skip');
+          unappliedHolePunchResolveRef.current = null;
+        }}
+        actions={(
+          <>
+            <button
+              type="button"
+              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              onClick={() => {
+                setShowUnappliedHolePunchModal(false);
+                unappliedHolePunchResolveRef.current?.('skip');
+                unappliedHolePunchResolveRef.current = null;
+              }}
+            >
+              Continue Without
+            </button>
+            <button
+              type="button"
+              className="ui-button ui-button-accent !h-9 px-3 text-xs"
+              onClick={() => {
+                setShowUnappliedHolePunchModal(false);
+                unappliedHolePunchResolveRef.current = null;
+                // Defer so the modal closes before apply starts.
+                setTimeout(() => { handleApplyHolePunch(); }, 0);
+              }}
+            >
+              Apply Now
+            </button>
+          </>
+        )}
+      >
+        <div className="space-y-2">
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            One or more models have hole punches that haven&apos;t been applied.
+            Hole punches must be baked into the geometry before slicing or they
+            will not appear in the output.
+          </p>
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            <strong>Do you want to apply them now?</strong>
+          </p>
+        </div>
+      </StructuredDialogModal>
 
       <DestructiveTransformModal
         isOpen={pendingDestructiveTransform !== null}
@@ -19721,17 +20488,17 @@ export default function Home() {
                 </span>
               </p>
 
-              <div className="flex items-center justify-end gap-2 pt-1">
+              <div className="grid grid-cols-2 gap-2 pt-1">
                 <button
                   type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                  className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
                   onClick={() => scene.resolveSceneImportPlacementPrompt('load_as_is')}
                 >
                   Load As-Is
                 </button>
                 <button
                   type="button"
-                  className="ui-button ui-button-accent !h-9 px-3 text-xs"
+                  className="ui-button ui-button-accent !h-9 w-full px-3 text-xs"
                   onClick={() => scene.resolveSceneImportPlacementPrompt('auto_arrange')}
                 >
                   Auto-Arrange
@@ -19848,10 +20615,10 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="flex items-center justify-end gap-2 pt-1">
+                <div className="grid grid-cols-2 gap-2 pt-1">
                   <button
                     type="button"
-                    className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                    className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
                     disabled={isManualRepairing}
                     onClick={() => setManualRepairModelId(null)}
                   >
@@ -19859,7 +20626,7 @@ export default function Home() {
                   </button>
                   <button
                     type="button"
-                    className="ui-button ui-button-accent !h-9 px-3 text-xs flex items-center gap-1.5 disabled:opacity-60"
+                    className="ui-button ui-button-accent !h-9 w-full px-3 text-xs flex items-center justify-center gap-1.5 disabled:opacity-60"
                     disabled={isManualRepairing}
                     onClick={() => {
                       const id = manualRepairModelId;
@@ -20037,15 +20804,21 @@ export default function Home() {
           <>
             <button
               type="button"
-              className="ui-button ui-button-danger !h-9 px-3 text-xs"
+              className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
+              style={{
+                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
+                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
+                color: 'var(--danger)',
+              }}
               disabled={closeUnsavedChangesBusy !== 'none'}
               onClick={handleDiscardAndCloseProgram}
             >
-              Close Without Saving
+              <Trash2 className="w-3.5 h-3.5" />
+              Discard Changes
             </button>
             <button
               type="button"
-              className="ui-button ui-button-accent !h-9 px-3 text-xs"
+              className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
               disabled={closeUnsavedChangesBusy !== 'none'}
               onClick={handleSaveAndCloseProgram}
             >
@@ -20060,7 +20833,7 @@ export default function Home() {
             : 'Close DragonFruit now?'}
         </p>
         <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-          <strong>Save &amp; Close</strong> keeps your latest edits. <strong>Close Without Saving</strong> discards them.
+          <strong>Please ensure you have saved any important work.</strong>
         </p>
       </StructuredDialogModal>
 
@@ -20267,17 +21040,17 @@ export default function Home() {
                   )}
               </p>
 
-              <div className="flex items-center justify-end gap-2 pt-1">
+              <div className="grid grid-cols-2 gap-2 pt-1">
                 <button
                   type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                  className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
                   onClick={() => setPrintingMonitorPendingConfirmation(null)}
                 >
                   {printingMonitorPendingConfirmation.kind === 'plate' ? 'Keep File' : 'Keep Printing'}
                 </button>
                 <button
                   type="button"
-                  className="ui-button !h-9 px-3 text-xs"
+                  className="ui-button !h-9 w-full px-3 text-xs"
                   style={
                     printingMonitorPendingConfirmation.kind === 'plate'
                       ? (

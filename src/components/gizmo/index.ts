@@ -7,5 +7,6 @@
 
 export { TransformGizmo } from './TransformGizmo';
 export { ScreenSpaceGizmo } from './ScreenSpaceGizmo';
+export { LocalSpaceGizmo } from './LocalSpaceGizmo';
 export type { TransformGizmoProps, GizmoConfig, GizmoAxis, GizmoOperation } from './types';
 export { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING, DEFAULT_GIZMO_CONFIG } from './constants';

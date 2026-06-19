@@ -93,6 +93,7 @@ export const StickRenderer = React.memo(function StickRenderer({
       scene,
       initialEvent,
       modelId: stick.modelId,
+      placementSurface: cone.placementSurface,
       onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
         const latestStick = getSnapshot().sticks[stick.id];
         const latestCone = latestStick?.[coneKey] as ContactCone | undefined;

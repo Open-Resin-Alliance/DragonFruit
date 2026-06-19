@@ -5,6 +5,11 @@ import type { ThreeEvent } from '@react-three/fiber';
 interface HolePunchPreviewCylinderProps {
   position: THREE.Vector3;
   normal: THREE.Vector3;
+  frame?: {
+    xAxis: THREE.Vector3;
+    yAxis: THREE.Vector3;
+    zAxis: THREE.Vector3;
+  };
   radiusMm: number;
   radiusYMm?: number;
   lengthMm: number;
@@ -21,7 +26,7 @@ interface HolePunchPreviewCylinderProps {
 }
 
 const UP = new THREE.Vector3(0, 1, 0);
-const PUNCH_PREVIEW_OUTSIDE_PROTRUSION_MM = 0.25;
+const PUNCH_PREVIEW_OUTSIDE_PROTRUSION_MM = 0.65;
 const APPLIED_PREVIEW_RADIUS_INSET_MM = 0.01;
 // Interaction mesh stays high-priority for reliable hover/click targeting.
 const PUNCH_PREVIEW_RENDER_ORDER_INTERACTION = 10021;
@@ -31,6 +36,7 @@ const PUNCH_PREVIEW_RENDER_ORDER_NORMAL_OUTSIDE = 5;
 export function HolePunchPreviewCylinder({
   position,
   normal,
+  frame,
   radiusMm,
   radiusYMm,
   lengthMm,
@@ -57,29 +63,33 @@ export function HolePunchPreviewCylinder({
     : effectiveRadiusY;
 
   const safeNormal = React.useMemo(() => {
-    const n = normal.clone();
+    const n = frame?.yAxis.clone() ?? normal.clone();
     if (n.lengthSq() <= 1e-10) {
       n.set(0, 0, 1);
     } else {
       n.normalize();
     }
     return n;
-  }, [normal]);
+  }, [frame, normal]);
 
   const quaternion = React.useMemo(() => {
+    if (frame) {
+      const matrix = new THREE.Matrix4().makeBasis(
+        frame.xAxis.clone().normalize(),
+        frame.yAxis.clone().normalize(),
+        frame.zAxis.clone().normalize(),
+      );
+      return new THREE.Quaternion().setFromRotationMatrix(matrix).normalize();
+    }
+
     const q = new THREE.Quaternion();
     q.setFromUnitVectors(UP, safeNormal);
     return q;
-  }, [safeNormal]);
+  }, [frame, safeNormal]);
 
   // Split into two segments so we can layer them differently vs xray:
   // - inside segment (below xray)
   // - 0.25mm outside segment (above xray)
-  const insideDisplayPosition = React.useMemo(
-    () => position.clone().add(safeNormal.clone().multiplyScalar(insideDepth * 0.5)),
-    [insideDepth, position, safeNormal],
-  );
-
   const outsideDisplayPosition = React.useMemo(
     () => position.clone().add(safeNormal.clone().multiplyScalar(-outsideDepth * 0.5)),
     [outsideDepth, position, safeNormal],

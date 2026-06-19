@@ -101,7 +101,10 @@ export function RaftSettingsCard({ settings, onChange, activeModelId, selectedMo
         </button>
     );
 
-    const compactInputClass = 'ui-input w-full h-[36px] px-3 py-2 text-base no-spinners';
+    const unitHint = (unit: string) => (
+        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>{unit}</span>
+    );
+    const compactInputClass = 'ui-input w-full h-[36px] px-3 py-2 text-base text-center no-spinners';
 
     const isWallEnabled = settings.bottomMode === 'solid' && settings.wallEnabled;
 
@@ -129,20 +132,28 @@ export function RaftSettingsCard({ settings, onChange, activeModelId, selectedMo
                         <>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.thickness')}>
                                 <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Thickness</span>
-                                <NumberInput
-                                    value={settings.thickness}
-                                    onChange={(val) => onChange({ thickness: val })}
-                                    step={0.1}
-                                    className={compactInputClass}
-                                />
+                                <div className="relative">
+                                    <NumberInput
+                                        value={settings.thickness}
+                                        onChange={(val) => onChange({ thickness: val })}
+                                        step={0.1}
+                                        showStepper={false}
+                                        className={compactInputClass}
+                                    />
+                                    {unitHint('mm')}
+                                </div>
                             </label>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.chamferAngle')}>
                                 <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Chamfer Angle</span>
-                                <NumberInput
-                                    value={settings.chamferAngle}
-                                    onChange={(val) => onChange({ chamferAngle: val })}
-                                    className={compactInputClass}
-                                />
+                                <div className="relative">
+                                    <NumberInput
+                                        value={settings.chamferAngle}
+                                        onChange={(val) => onChange({ chamferAngle: val })}
+                                        showStepper={false}
+                                        className={compactInputClass}
+                                    />
+                                    {unitHint('°')}
+                                </div>
                             </label>
                         </>
                     )}
@@ -151,21 +162,29 @@ export function RaftSettingsCard({ settings, onChange, activeModelId, selectedMo
                         <>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.lineWidthMm')}>
                                 <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Line Width</span>
-                                <NumberInput
-                                    value={settings.lineWidthMm}
-                                    onChange={(val) => onChange({ lineWidthMm: val })}
-                                    step={0.1}
-                                    className={compactInputClass}
-                                />
+                                <div className="relative">
+                                    <NumberInput
+                                        value={settings.lineWidthMm}
+                                        onChange={(val) => onChange({ lineWidthMm: val })}
+                                        step={0.1}
+                                        showStepper={false}
+                                        className={compactInputClass}
+                                    />
+                                    {unitHint('mm')}
+                                </div>
                             </label>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.lineHeightMm')}>
                                 <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Line Height</span>
-                                <NumberInput
-                                    value={settings.lineHeightMm}
-                                    onChange={(val) => onChange({ lineHeightMm: val })}
-                                    step={0.1}
-                                    className={compactInputClass}
-                                />
+                                <div className="relative">
+                                    <NumberInput
+                                        value={settings.lineHeightMm}
+                                        onChange={(val) => onChange({ lineHeightMm: val })}
+                                        step={0.1}
+                                        showStepper={false}
+                                        className={compactInputClass}
+                                    />
+                                    {unitHint('mm')}
+                                </div>
                             </label>
                         </>
                     )}
@@ -174,39 +193,55 @@ export function RaftSettingsCard({ settings, onChange, activeModelId, selectedMo
                         <>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.wallHeight')}>
                                 <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Wall Height</span>
-                                <NumberInput
-                                    value={settings.wallHeight}
-                                    onChange={(val) => onChange({ wallHeight: val })}
-                                    step={0.1}
-                                    className={compactInputClass}
-                                />
+                                <div className="relative">
+                                    <NumberInput
+                                        value={settings.wallHeight}
+                                        onChange={(val) => onChange({ wallHeight: val })}
+                                        step={0.1}
+                                        showStepper={false}
+                                        className={compactInputClass}
+                                    />
+                                    {unitHint('mm')}
+                                </div>
                             </label>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.wallThickness')}>
                                 <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Wall Thickness</span>
-                                <NumberInput
-                                    value={settings.wallThickness}
-                                    onChange={(val) => onChange({ wallThickness: val })}
-                                    step={0.1}
-                                    className={compactInputClass}
-                                />
+                                <div className="relative">
+                                    <NumberInput
+                                        value={settings.wallThickness}
+                                        onChange={(val) => onChange({ wallThickness: val })}
+                                        step={0.1}
+                                        showStepper={false}
+                                        className={compactInputClass}
+                                    />
+                                    {unitHint('mm')}
+                                </div>
                             </label>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.crenulationGapWidth')}>
                                 <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Gap Width</span>
-                                <NumberInput
-                                    value={settings.crenulationGapWidth}
-                                    onChange={(val) => onChange({ crenulationGapWidth: val })}
-                                    step={0.1}
-                                    className={compactInputClass}
-                                />
+                                <div className="relative">
+                                    <NumberInput
+                                        value={settings.crenulationGapWidth}
+                                        onChange={(val) => onChange({ crenulationGapWidth: val })}
+                                        step={0.1}
+                                        showStepper={false}
+                                        className={compactInputClass}
+                                    />
+                                    {unitHint('mm')}
+                                </div>
                             </label>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.crenulationSpacing')}>
                                 <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Gap Spacing</span>
-                                <NumberInput
-                                    value={settings.crenulationSpacing}
-                                    onChange={(val) => onChange({ crenulationSpacing: val })}
-                                    step={0.1}
-                                    className={compactInputClass}
-                                />
+                                <div className="relative">
+                                    <NumberInput
+                                        value={settings.crenulationSpacing}
+                                        onChange={(val) => onChange({ crenulationSpacing: val })}
+                                        step={0.1}
+                                        showStepper={false}
+                                        className={compactInputClass}
+                                    />
+                                    {unitHint('mm')}
+                                </div>
                             </label>
                         </>
                     )}

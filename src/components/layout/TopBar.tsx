@@ -2,13 +2,13 @@
 
 import React, { useState } from 'react';
 import { ViewTypeDropdown } from '@/components/controls/ViewTypeDropdown';
-import { SettingsModal } from '@/components/settings/SettingsModal';
+import { SettingsModal, type SettingsTabKey } from '@/components/settings/SettingsModal';
 import { ProfileSettingsModal } from '@/components/settings/ProfileSettingsModal';
 import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { Button } from '@/components/ui/primitives';
-import { Activity, AlertTriangle, ChevronDown, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, Square, X } from 'lucide-react';
+import { Activity, AlertTriangle, ChevronDown, FolderInput, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, Square, Upload, X } from 'lucide-react';
 import {
   applyThemeCustomColors,
   getSavedThemeCustomColors,
@@ -20,6 +20,7 @@ import {
   dispatchProfileSettingsModalOpenChange,
   type ProfileSettingsTab,
 } from '@/components/settings/profileModalEvents';
+import { OPEN_SETTINGS_ABOUT_EVENT } from '@/features/updater/updateNotificationEvents';
 import {
   getActivePrinterProfile,
   getProfileStoreSnapshot,
@@ -28,7 +29,7 @@ import {
   selectPrinterNetworkDevice,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
-import { getInstalledProfilePlugins } from '@/features/plugins/pluginRegistry';
+
 import type { View3DSettings } from '@/components/settings/view3dPreferences';
 import type { SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
 
@@ -86,6 +87,8 @@ interface TopBarProps {
   isSlicingBusy?: boolean;
   onSaveScene?: () => void;
   onOpenScene?: () => void;
+  onLoadMeshChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onImportSceneChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onCloseProgram?: () => void;
   showMonitorButton?: boolean;
   monitorButtonActive?: boolean;
@@ -147,6 +150,8 @@ export function TopBar({
   heatmapColors,
   onHeatmapColorChange,
   isSlicingBusy = false,
+  onLoadMeshChange,
+  onImportSceneChange,
   onSaveScene,
   onOpenScene,
   onCloseProgram,
@@ -159,6 +164,7 @@ export function TopBar({
   warnBeforeProfileSettingsOpen = false,
 }: TopBarProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTabKey>('general');
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [profileModalTab, setProfileModalTab] = useState<'printer' | 'material'>('printer');
   const [profileModalOpenPrinterLibraryToken, setProfileModalOpenPrinterLibraryToken] = useState(0);
@@ -179,16 +185,6 @@ export function TopBar({
     innerWidth: 0,
     innerHeight: 0,
   }));
-  const MIN_GOOD_WIDTH = 1920;
-  const MIN_GOOD_HEIGHT = 1080;
-  const showLayoutWarning =
-    windowMetrics.innerWidth > 0
-    && (windowMetrics.innerWidth < MIN_GOOD_WIDTH || windowMetrics.innerHeight < MIN_GOOD_HEIGHT);
-  const layoutMetricsLabel =
-    windowMetrics.innerWidth > 0
-      ? `${windowMetrics.innerWidth}×${windowMetrics.innerHeight}`
-      : 'detecting…';
-  const layoutWarningTitle = `Layout tip: Current window ${layoutMetricsLabel}. For full panel comfort use ≥ ${MIN_GOOD_WIDTH}×${MIN_GOOD_HEIGHT} and maximize the app window.`;
   const topbarActionsDisabled = isSlicingBusy;
   const [isAppMenuOpen, setIsAppMenuOpen] = useState(false);
   const [appMenuPosition, setAppMenuPosition] = useState<{ x: number; y: number } | null>(null);
@@ -489,19 +485,24 @@ export function TopBar({
     };
   }, []);
 
+  // Listen for event to open Settings → About tab (from update notification).
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleOpenSettingsAbout = () => {
+      setSettingsInitialTab('about');
+      setIsSettingsOpen(true);
+    };
+
+    window.addEventListener(OPEN_SETTINGS_ABOUT_EVENT, handleOpenSettingsAbout);
+    return () => {
+      window.removeEventListener(OPEN_SETTINGS_ABOUT_EVENT, handleOpenSettingsAbout);
+    };
+  }, []);
+
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
-  const athenaPresetIds = React.useMemo(() => {
-    const athenaPlugin = getInstalledProfilePlugins().find(
-      (plugin) => plugin.enabled && plugin.manifest.id === 'athena-builtin',
-    );
-    return new Set((athenaPlugin?.manifest.printerPresets ?? []).map((preset) => preset.presetId));
-  }, []);
-  const isAthenaPublicBetaProfile = React.useMemo(() => {
-    const officialPresetId = activePrinterProfile?.officialPresetId?.trim();
-    if (!officialPresetId) return false;
-    return athenaPresetIds.has(officialPresetId);
-  }, [activePrinterProfile?.officialPresetId, athenaPresetIds]);
+
 
   React.useEffect(() => {
     setPrinterThumbnailFailed(false);
@@ -607,30 +608,23 @@ export function TopBar({
       locked: false,
     },
     {
-      mode: 'analysis',
-      label: 'Analysis',
-      step: 2,
-      hint: 'Inspect islands and diagnostics',
-      locked: !hasModels,
-    },
-    {
       mode: 'support',
       label: 'Support',
-      step: 3,
+      step: 2,
       hint: 'Build and tune supports',
       locked: !hasModels,
     },
     {
       mode: 'export',
       label: 'Export',
-      step: 4,
+      step: 3,
       hint: 'Finalize and export output',
       locked: !hasModels,
     },
     {
       mode: 'printing',
       label: 'Printing',
-      step: 5,
+      step: 4,
       hint: 'Inspect sliced layers before printing',
       locked: !hasModels || !hasPrintingData,
     },
@@ -824,6 +818,50 @@ export function TopBar({
               type="button"
               onClick={() => {
                 closeAppMenu();
+                if (typeof document === 'undefined') return;
+                const input = document.getElementById('topbar-mesh-input') as HTMLInputElement | null;
+                input?.click();
+              }}
+              disabled={topbarActionsDisabled || !onLoadMeshChange}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
+              style={{
+                color: (topbarActionsDisabled || !onLoadMeshChange) ? 'var(--text-muted)' : 'var(--text-strong)',
+                opacity: (topbarActionsDisabled || !onLoadMeshChange) ? 0.55 : 1,
+              }}
+              role="menuitem"
+            >
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <Upload className="h-3.5 w-3.5" />
+              </span>
+              <span>Import Mesh…</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                closeAppMenu();
+                if (typeof document === 'undefined') return;
+                const input = document.getElementById('topbar-scene-input') as HTMLInputElement | null;
+                input?.click();
+              }}
+              disabled={topbarActionsDisabled || !onImportSceneChange}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
+              style={{
+                color: (topbarActionsDisabled || !onImportSceneChange) ? 'var(--text-muted)' : 'var(--text-strong)',
+                opacity: (topbarActionsDisabled || !onImportSceneChange) ? 0.55 : 1,
+              }}
+              role="menuitem"
+            >
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <FolderInput className="h-3.5 w-3.5" />
+              </span>
+              <span>Import Scene…</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                closeAppMenu();
                 void handleCloseProgram();
               }}
               className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
@@ -838,6 +876,22 @@ export function TopBar({
           </div>
         </div>
       )}
+
+      <input
+        id="topbar-mesh-input"
+        type="file"
+        accept=".stl,.obj,.3mf,.zip"
+        multiple
+        onChange={onLoadMeshChange}
+        className="hidden"
+      />
+      <input
+        id="topbar-scene-input"
+        type="file"
+        accept=".voxl,.lys,.zip"
+        onChange={onImportSceneChange}
+        className="hidden"
+      />
 
       {isPrinterQuickMenuOpen && printerQuickMenuPosition && hasTopbarFleetUnits && activePrinterProfile && (
         <div
@@ -945,14 +999,13 @@ export function TopBar({
             style={{ background: 'color-mix(in srgb, var(--border-subtle), transparent 10%)' }}
           />
 
-          <div className={`relative grid grid-cols-5 gap-2 ${topbarActionsDisabled ? 'pointer-events-none' : 'pointer-events-auto'}`}>
+          <div className={`relative grid grid-cols-4 gap-2 ${topbarActionsDisabled ? 'pointer-events-none' : 'pointer-events-auto'}`}>
             {steps.map((item) => {
               const active = mode === item.mode;
               const locked = item.locked;
-              const analysisComingSoon = item.mode === 'analysis' && isAthenaPublicBetaProfile;
-              const disabled = locked || topbarActionsDisabled || analysisComingSoon;
-              const nativeDisabled = disabled && !analysisComingSoon;
-              const visuallyDimmed = topbarActionsDisabled || (locked && !analysisComingSoon);
+              const disabled = locked || topbarActionsDisabled;
+              const nativeDisabled = disabled;
+              const visuallyDimmed = topbarActionsDisabled || locked;
               const printingLocked = item.mode === 'printing' && locked;
 
               return (
@@ -986,8 +1039,6 @@ export function TopBar({
                   }
                   title={topbarActionsDisabled
                     ? 'Slicing in progress. Topbar actions are temporarily disabled.'
-                    : analysisComingSoon
-                    ? 'Coming Soon! Analysis workspace for Athena public beta is temporarily unavailable.'
                     : locked
                     ? (item.mode === 'printing'
                       ? 'Run slicing in Export to unlock Printing preview'
@@ -1021,26 +1072,7 @@ export function TopBar({
                     <Lock className="h-3 w-3 ml-auto" style={{ color: 'var(--text-muted)' }} />
                   )}
 
-                  {analysisComingSoon && (
-                    <div
-                      className="pointer-events-none absolute right-0 top-full mt-2 z-[70] w-[190px] rounded-md border px-2.5 py-2 text-[12px] leading-tight opacity-0 -translate-y-1 transition-all duration-150 group-hover:opacity-100 group-hover:translate-y-0"
-                      style={{
-                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 35%)',
-                        background: 'color-mix(in srgb, var(--surface-0), black 10%)',
-                        color: 'var(--text-muted)',
-                        boxShadow: '0 10px 24px rgba(0,0,0,0.28)',
-                      }}
-                      role="tooltip"
-                      aria-hidden="true"
-                    >
-                      <div className="font-semibold mb-0.5" style={{ color: 'var(--text-strong)' }}>
-                        Coming Soon!
-                      </div>
-                      <div>
-                        Analysis Workspace is still under development! We appreciate your patience as we work to bring this feature to life in a future update.
-                      </div>
-                    </div>
-                  )}
+
                 </button>
               );
             })}
@@ -1050,41 +1082,6 @@ export function TopBar({
 
       <div className="ml-auto flex w-[320px] items-center justify-end gap-2 pr-2">
         <div className={`flex items-center gap-2 transition-opacity ${topbarActionsDisabled ? 'opacity-45 pointer-events-none' : ''}`}>
-          {showLayoutWarning && (
-            <div className="relative group" data-no-window-drag="true">
-              <Button
-                type="button"
-                variant="secondary"
-                className="!p-2"
-                aria-label="Layout tip"
-                data-no-window-drag="true"
-              >
-                <AlertTriangle
-                  className="w-4 h-4"
-                  style={{ color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)' }}
-                />
-              </Button>
-
-              <div
-                className="pointer-events-none absolute right-0 top-full mt-2 z-[70] w-[300px] rounded-md border px-2.5 py-2 text-[10px] leading-tight opacity-0 -translate-y-1 transition-all duration-150 group-hover:opacity-100 group-hover:translate-y-0"
-                style={{
-                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 35%)',
-                  background: 'color-mix(in srgb, var(--surface-0), black 10%)',
-                  color: 'var(--text-muted)',
-                  boxShadow: '0 10px 24px rgba(0,0,0,0.28)',
-                }}
-                role="tooltip"
-                aria-hidden="true"
-              >
-                <div className="font-semibold mb-0.5" style={{ color: 'var(--text-strong)' }}>
-                  Layout tip
-                </div>
-                <div>
-                  Current window: {layoutMetricsLabel}. For full panel comfort use ≥ {MIN_GOOD_WIDTH}×{MIN_GOOD_HEIGHT} and maximize the app window.
-                </div>
-              </div>
-            </div>
-          )}
           <ViewTypeDropdown
             value={viewTypeOverride}
             onChange={onViewTypeOverrideChange}
@@ -1249,17 +1246,17 @@ export function TopBar({
                 You can continue to adjust profiles, but you’ll be prompted to re-slice before printing with the updated settings.
               </p>
 
-              <div className="flex items-center justify-end gap-2 pt-1">
+              <div className="grid grid-cols-2 gap-2 pt-1">
                 <button
                   type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                  className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
                   onClick={() => setShowProfileChangeWarning(false)}
                 >
                   Keep Current Profiles
                 </button>
                 <button
                   type="button"
-                  className="ui-button !h-9 px-3 text-xs"
+                  className="ui-button !h-9 w-full px-3 text-xs"
                   style={{
                     borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
                     background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
@@ -1280,7 +1277,8 @@ export function TopBar({
 
       <SettingsModal
         isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
+        onClose={() => { setIsSettingsOpen(false); setSettingsInitialTab('general'); }}
+        initialTab={settingsInitialTab}
         meshColor={meshColor}
         onMeshColorChange={onMeshColorChange}
         selectionColor={selectionColor}

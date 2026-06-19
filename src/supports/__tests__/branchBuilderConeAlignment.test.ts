@@ -13,10 +13,10 @@ import type { Knot, Vec3 } from '../types';
 
 function makeBlockingMesh(): THREE.Mesh {
     const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.2, 2.5, 0.75),
+        new THREE.BoxGeometry(0.2, 0.2, 0.75),
         new THREE.MeshBasicMaterial(),
     );
-    mesh.position.set(0.7, 0, 0.75);
+    mesh.position.set(0.7, 0, -0.4);
     mesh.updateMatrixWorld(true);
     return mesh;
 }

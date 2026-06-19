@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import type { Vec3 } from '@/supports/types';
 import type { GridAStarDebugPassSnapshot, SupportPathfindingDebugSnapshot } from '@/supports/PlacementLogic/Pathfinding/pathfindingDebugState';
 
+
 function buildPositionArray(points: Vec3[]): Float32Array {
   const positions = new Float32Array(points.length * 3);
   for (let i = 0; i < points.length; i += 1) {
@@ -195,7 +196,7 @@ export function SupportPathfindingDebugHud({
   return (
     <div
       style={{
-        pointerEvents: 'none',
+        pointerEvents: 'auto',
         position: 'absolute',
         left: 12,
         top: 12,
@@ -334,6 +335,11 @@ export function SupportPathfindingDebugHud({
               {event.details ? <span style={{ color: '#94a3b8' }}> | {event.details}</span> : null}
             </div>
           ))}
+        </div>
+      )}
+      {tuningApplied && (
+        <div style={{ marginTop: 10, borderTop: '1px solid rgba(148, 163, 184, 0.3)', paddingTop: 8 }}>
+          <div style={{ color: '#94a3b8' }}>Potential Field is now the permanent default routing algorithm.</div>
         </div>
       )}
     </div>

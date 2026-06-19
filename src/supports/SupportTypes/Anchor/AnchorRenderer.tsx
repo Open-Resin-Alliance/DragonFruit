@@ -80,6 +80,7 @@ export const AnchorRenderer = React.memo(function AnchorRenderer({
             scene,
             initialEvent: e,
             modelId: anchor.modelId,
+            placementSurface: anchor.contactCone?.placementSurface,
             onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
                 const latest = getSnapshot().anchors[anchor.id];
                 if (!latest?.contactCone) return;

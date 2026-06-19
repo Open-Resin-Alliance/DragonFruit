@@ -18,6 +18,7 @@ import { IslandExpansionVisualization } from '@/components/scene/IslandExpansion
 import { MeshClassificationRenderer } from '@/components/scene/MeshClassificationRenderer';
 import { IslandIdLabels } from '@/components/scene/IslandIdLabels';
 import { ScreenSpaceGizmo as UnifiedGizmo } from '@/components/gizmo';
+import { warmTransformGizmoGeometryCache } from '@/components/gizmo/gizmoGeometryCache';
 import { PickingDebugOverlay } from '@/components/picking';
 // DEBUG: temporary twig disk B diameter override — see src/supports/__debug__/
 import { TwigDebugOverrideCard } from '@/supports/__debug__/TwigDebugOverrideCard';
@@ -372,6 +373,8 @@ export function SceneCanvas({
   jointPlacementPreview,
   gpuPickingTest,
   selectionHighlightMode,
+  higherContrastModelEdges = false,
+  blockerEditMode = false,
   blockSupportPlacement,
   supportsRef,
   supportDragGroupRef,
@@ -515,6 +518,8 @@ export function SceneCanvas({
   jointPlacementPreview?: { pos: { x: number; y: number; z: number }; diameter: number } | null;
   gpuPickingTest?: boolean;
   selectionHighlightMode?: SelectionHighlightMode;
+  higherContrastModelEdges?: boolean;
+  blockerEditMode?: boolean;
   blockSupportPlacement?: boolean;
   supportsRef?: React.RefObject<THREE.Group | null>;
   supportDragGroupRef?: React.RefObject<THREE.Group | null>;
@@ -607,6 +612,28 @@ export function SceneCanvas({
   const LARGE_MODEL_DROP_DEFER_THRESHOLD_POLYS = 1_200_000;
   const BUILD_VOLUME_BOUNDS_EPS_MM = 0.01;
   const OUT_OF_BOUNDS_ROTATE_GRACE_MS = 320;
+
+  React.useEffect(() => {
+    if (mode !== 'prepare' || !activeModelIdProp) return;
+
+    if (typeof window === 'undefined') {
+      warmTransformGizmoGeometryCache();
+      return;
+    }
+
+    const runWarmup = () => {
+      warmTransformGizmoGeometryCache();
+    };
+
+    if (typeof window.requestIdleCallback === 'function') {
+      const idleId = window.requestIdleCallback(runWarmup);
+      return () => window.cancelIdleCallback(idleId);
+    }
+
+    const timeoutId = window.setTimeout(runWarmup, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [activeModelIdProp, mode]);
+
   const supportPathfindingDebugState = React.useSyncExternalStore(
     subscribeToSupportPathfindingDebugState,
     getSupportPathfindingDebugState,
@@ -2461,6 +2488,23 @@ export function SceneCanvas({
     return Array.from(new Set(ids));
   }, [activeModelId, multiGizmoSupportPreviewIds]);
 
+  // World-to-local inverse matrices per model, used by interior support
+  // filtering to transform world-space support positions into the cavity
+  // geometry's local space for BVH closest-point queries.
+  const modelWorldInverseById = React.useMemo(() => {
+    const map = new Map<string, THREE.Matrix4>();
+    for (const model of models) {
+      const t = model.transform;
+      const mat = new THREE.Matrix4().compose(
+        t.position,
+        quaternionFromGlobalEuler(t.rotation),
+        t.scale,
+      );
+      map.set(model.id, mat.invert());
+    }
+    return map;
+  }, [models]);
+
   const resolveMarqueeSelectedIds = React.useCallback((selection: {
     start: { x: number; y: number };
     current: { x: number; y: number };
@@ -4016,8 +4060,8 @@ export function SceneCanvas({
     });
   }, [buildPlateOpacity, isCameraBelowBuildPlate]);
 
-  const hidePlateContactPrimitives = plateContactCullActive;
-  const hideRaftPrimitives = mode === 'support' && plateContactCullActive;
+  const hidePlateContactPrimitives = plateContactCullActive || (mode === 'prepare' && transformMode === 'hollowing');
+  const hideRaftPrimitives = (mode === 'support' && plateContactCullActive) || (mode === 'prepare' && transformMode === 'hollowing');
   const hideGridHelpers = false;
   const modifyToolActive = mode === 'prepare' && transformMode === 'transform';
   const navigationLodActive = isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting || isLayerScrubbing;
@@ -5387,6 +5431,9 @@ export function SceneCanvas({
                       heatmapColors={heatmapColors ?? emptyHeatmapColors}
                       interiorView={interiorView}
                       cavityGeometry={cavityGeometryByModelId?.get(model.id) ?? null}
+                      higherContrastModelEdges={higherContrastModelEdges}
+                      edgeGeometry={model.geometry.edgeGeometry}
+                      blockerEditMode={blockerEditMode}
                       transform={animatedTransform}
                       mode={mode}
                       transformMode={transformMode}
@@ -5469,6 +5516,9 @@ export function SceneCanvas({
                             outOfBoundsMin={shaderOutOfBoundsBounds?.min ?? null}
                             outOfBoundsMax={shaderOutOfBoundsBounds?.max ?? null}
                             outOfBoundsStripeColor={outOfBoundsStripeColor}
+                            interiorView={interiorView}
+                            cavityGeometryByModelId={cavityGeometryByModelId}
+                            modelWorldInverseById={modelWorldInverseById}
                           />
                         </group>
                       )}
@@ -5770,6 +5820,9 @@ export function SceneCanvas({
                   leafPlacementPreview={leafPlacementPreviewForRenderer}
                   bracePlacementPreview={bracePlacementPreviewForRenderer}
                   kickstandPlacementPreview={kickstandPlacementPreviewForRenderer}
+                  interiorView={interiorView}
+                  cavityGeometryByModelId={cavityGeometryByModelId}
+                  modelWorldInverseById={modelWorldInverseById}
                 />
               )}
               </group>{/* end supportDragGroupRef */}
@@ -5877,6 +5930,9 @@ export function SceneCanvas({
                   raftHoverized={raftHoverized}
                   passive
                   supportRenderRefreshNonce={supportRenderRefreshNonce}
+                  interiorView={interiorView}
+                  cavityGeometryByModelId={cavityGeometryByModelId}
+                  modelWorldInverseById={modelWorldInverseById}
                 />
               )}
 

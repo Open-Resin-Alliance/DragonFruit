@@ -521,7 +521,14 @@ export function applyTrunkReplacement(plan: TrunkReplacementPlan, historyBefore?
         });
 
         addKnot(newParentKnot);
-        addLeaf({ ...built.leaf, id: existingLeaf.id });
+        addLeaf({
+            ...built.leaf,
+            id: existingLeaf.id,
+            contactCone: {
+                ...built.leaf.contactCone,
+                placementSurface: existingLeaf.contactCone?.placementSurface,
+            },
+        });
     }
 
     // Remove the promoted branch (it becomes the new trunk).
