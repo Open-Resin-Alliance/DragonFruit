@@ -162,12 +162,13 @@ export interface UseOrganicCutSessionArgs {
    */
   isDraggingPoint?: boolean;
   /**
-   * Commit the two split parts to the scene: replace the active model's geometry
-   * with part A, and add part B as a new independent model. Supplied by the host
-   * (page.tsx) so this hook stays decoupled from the scene-collection API.
-   * Returns false if the commit could not be performed.
+   * Commit the split parts to the scene: replace the active model's geometry with
+   * `parts[0]` and add `parts[1..]` as new independent models. A multi-loop cut may
+   * pass more than two parts (one per freed piece). Supplied by the host (page.tsx)
+   * so this hook stays decoupled from the scene-collection API. Returns false if
+   * the commit could not be performed.
    */
-  commitParts?: (partA: THREE.BufferGeometry, partB: THREE.BufferGeometry) => boolean;
+  commitParts?: (parts: THREE.BufferGeometry[]) => boolean;
 }
 
 export interface OrganicCutSession {
@@ -937,14 +938,13 @@ export function useOrganicCutSession({
         if (cancelled || !result) return;
         setLastResult(result);
 
-        // M2: commit the two parts to the scene (replace active model with part
-        // A, add part B as a new model). If the engine fell back to a no-op
-        // (degenerate loop / manifold rejected the mesh), don't mutate the scene
-        // — the two parts are identical to the source and committing would just
-        // duplicate the model.
+        // Commit every part to the scene (replace the active model with the first,
+        // add the rest as new models — a multi-loop cut can free several pieces). If
+        // the engine fell back to a no-op (degenerate loop / manifold rejected the
+        // mesh) there are no parts, so don't mutate the scene.
         const committed =
-          result.report.engine !== 'noop' && commitPartsRef.current
-            ? commitPartsRef.current(partToGeometry(result.partA), partToGeometry(result.partB))
+          result.report.engine !== 'noop' && result.parts.length > 0 && commitPartsRef.current
+            ? commitPartsRef.current(result.parts.map((p) => partToGeometry(p)))
             : false;
 
         // Flat string (not an object) so the Tauri log forwarder shows every
@@ -953,6 +953,7 @@ export function useOrganicCutSession({
         console.info(
           `[organicCut] cut applied | engine=${result.report.engine}` +
           ` committed=${committed}` +
+          ` parts=${result.parts.length}` +
           ` detail="${result.report.detail ?? ''}"` +
           ` keyKind=${result.report.keyKind ?? 'n/a'}` +
           ` keyDetail="${result.report.keyDetail ?? ''}"` +

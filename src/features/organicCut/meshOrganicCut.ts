@@ -52,11 +52,8 @@ type OrganicCutReadCommand =
   | 'mesh_organic_cut_read_membrane'
   | 'mesh_organic_cut_read_key';
 
-async function readPositionsFromCommand(
-  invoke: TauriInvoke,
-  command: OrganicCutReadCommand,
-): Promise<Float32Array> {
-  const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>(command);
+/** Decode raw LE bytes (ArrayBuffer / Uint8Array / number[]) into an f32 array. */
+function decodeF32(bytes: ArrayBuffer | Uint8Array | number[], label: string): Float32Array {
   let u8: Uint8Array;
   if (bytes instanceof ArrayBuffer) {
     u8 = new Uint8Array(bytes);
@@ -65,14 +62,27 @@ async function readPositionsFromCommand(
   } else if (Array.isArray(bytes)) {
     u8 = new Uint8Array(bytes);
   } else {
-    throw new Error(`${command} returned unexpected type`);
+    throw new Error(`${label} returned unexpected type`);
   }
-
   // Copy into a fresh, aligned buffer before viewing as f32 (the IPC buffer may
   // be a non-zero byteOffset view, which Float32Array can't wrap directly).
   const copy = new Uint8Array(u8.byteLength);
   copy.set(u8);
   return new Float32Array(copy.buffer);
+}
+
+async function readPositionsFromCommand(
+  invoke: TauriInvoke,
+  command: OrganicCutReadCommand,
+): Promise<Float32Array> {
+  const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>(command);
+  return decodeF32(bytes, command);
+}
+
+/** Read the cut part at `index` (model-local triangle soup). */
+async function readPartAtIndex(invoke: TauriInvoke, index: number): Promise<Float32Array> {
+  const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>('mesh_organic_cut_read_part', { index });
+  return decodeF32(bytes, `mesh_organic_cut_read_part[${index}]`);
 }
 
 function expandGeometryToTriangleSoup(geometry: THREE.BufferGeometry): Float32Array {
@@ -112,10 +122,10 @@ async function stageGeometryToStagedMesh(
   });
 }
 
-async function readBothParts(invoke: TauriInvoke): Promise<{ partA: Float32Array; partB: Float32Array }> {
-  const partA = await readPositionsFromCommand(invoke, 'mesh_organic_cut_read_part_a');
-  const partB = await readPositionsFromCommand(invoke, 'mesh_organic_cut_read_part_b');
-  return { partA, partB };
+/** Read all `count` parts the cut produced (in order, largest first). */
+async function readAllParts(invoke: TauriInvoke, count: number): Promise<Float32Array[]> {
+  if (count <= 0) return [];
+  return Promise.all(Array.from({ length: count }, (_, i) => readPartAtIndex(invoke, i)));
 }
 
 /**
@@ -157,7 +167,8 @@ export async function stageCutSource(
 
 /**
  * Runs an organic cut against the previously captured source without mutating
- * the staged mesh buffer. Returns both parts + a report.
+ * the staged mesh buffer. Returns ALL parts + a report. A multi-loop cut that
+ * frees several pieces returns >2 parts (one per piece).
  */
 export async function cutFromCapturedSource(
   options: OrganicCutOptions,
@@ -168,12 +179,12 @@ export async function cutFromCapturedSource(
   const optionsJson = JSON.stringify(options);
   const reportJson = await core.invoke<string>('mesh_organic_cut_from_captured_source', { optionsJson });
   const report = JSON.parse(reportJson) as OrganicCutReport;
-  const { partA, partB } = await readBothParts(core.invoke);
-  return { report, partA, partB };
+  const parts = await readAllParts(core.invoke, report.partCount ?? 0);
+  return { report, parts };
 }
 
 /**
- * One-shot: stage the geometry and run the cut, returning both parts.
+ * One-shot: stage the geometry and run the cut, returning all parts.
  * Convenience for the non-preview "Apply" path.
  */
 export async function cutFromGeometry(
@@ -190,8 +201,8 @@ export async function cutFromGeometry(
   const optionsJson = JSON.stringify(options);
   const reportJson = await core.invoke<string>('mesh_organic_cut_staged', { optionsJson });
   const report = JSON.parse(reportJson) as OrganicCutReport;
-  const { partA, partB } = await readBothParts(core.invoke);
-  return { report, partA, partB };
+  const parts = await readAllParts(core.invoke, report.partCount ?? 0);
+  return { report, parts };
 }
 
 /**

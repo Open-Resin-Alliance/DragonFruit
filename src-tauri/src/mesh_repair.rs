@@ -49,8 +49,13 @@ static PUNCH_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// Captured source mesh for repeated non-mutating organic-cut runs.
 static ORGANIC_CUT_SOURCE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// Result of the most recent organic cut: the two split parts (LE f32 soup).
+/// Legacy: `part_a` = first part, `part_b` = the rest of `ORGANIC_CUT_PARTS_BYTES`
+/// concatenated. New callers read `ORGANIC_CUT_PARTS_BYTES` by index instead.
 static ORGANIC_CUT_PART_A_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 static ORGANIC_CUT_PART_B_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+/// All parts of the most recent organic cut (LE f32 soup each), in order — the
+/// authoritative result. A multi-loop cut that frees several pieces has >2 entries.
+static ORGANIC_CUT_PARTS_BYTES: OnceLock<Mutex<Vec<Vec<u8>>>> = OnceLock::new();
 /// Most recent geodesic loop polyline (LE f32 positions, 3 per point).
 static ORGANIC_CUT_GEODESIC_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// Cached geodesic solver (mesh + topology + vertex graph) for the captured
@@ -116,6 +121,10 @@ fn organic_cut_part_a_bytes() -> &'static Mutex<Option<Vec<u8>>> {
 
 fn organic_cut_part_b_bytes() -> &'static Mutex<Option<Vec<u8>>> {
     ORGANIC_CUT_PART_B_BYTES.get_or_init(|| Mutex::new(None))
+}
+
+fn organic_cut_parts_bytes() -> &'static Mutex<Vec<Vec<u8>>> {
+    ORGANIC_CUT_PARTS_BYTES.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 fn organic_cut_geodesic_bytes() -> &'static Mutex<Option<Vec<u8>>> {
@@ -865,16 +874,20 @@ pub async fn mesh_punch_read_positions() -> Result<Response, String> {
 pub async fn mesh_organic_cut_staged(options_json: String) -> Result<String, String> {
     let options = parse_organic_cut_options(&options_json);
     let bytes = read_staging_bytes()?;
-    let (part_a, part_b, report) = tauri::async_runtime::spawn_blocking(move || {
+    let (parts, report) = tauri::async_runtime::spawn_blocking(move || {
         let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
         let outcome = organic_cut(mesh, &options);
-        Ok::<_, String>((outcome.part_a, outcome.part_b, outcome.report))
+        Ok::<_, String>((outcome.parts, outcome.report))
     })
     .await
     .map_err(|e| format!("organic cut task panicked: {e}"))??;
 
-    let part_a_soup: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&part_a.to_triangle_soup()).to_vec();
-    let part_b_soup: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&part_b.to_triangle_soup()).to_vec();
+    let parts_soup: Vec<Vec<u8>> = parts
+        .iter()
+        .map(|p| bytemuck::cast_slice::<f32, u8>(&p.to_triangle_soup()).to_vec())
+        .collect();
+    let part_a_soup = parts_soup.first().cloned().unwrap_or_default();
+    let part_b_soup: Vec<u8> = parts_soup.iter().skip(1).flatten().copied().collect();
 
     *organic_cut_part_a_bytes()
         .lock()
@@ -882,9 +895,15 @@ pub async fn mesh_organic_cut_staged(options_json: String) -> Result<String, Str
     *organic_cut_part_b_bytes()
         .lock()
         .map_err(|e| format!("organic cut part B lock poisoned: {e}"))? = Some(part_b_soup);
+    *organic_cut_parts_bytes()
+        .lock()
+        .map_err(|e| format!("organic cut parts lock poisoned: {e}"))? = parts_soup;
 
-    // Keep the staged buffer pointed at part A so existing read paths stay valid.
-    replace_staging_with_mesh(&part_a)?;
+    // Keep the staged buffer pointed at the first part so existing read paths stay
+    // valid (no-op cut → no parts → leave the staged mesh as-is).
+    if let Some(first) = parts.first() {
+        replace_staging_with_mesh(first)?;
+    }
     serde_json::to_string(&report).map_err(|e| format!("serialize organic cut report: {e}"))
 }
 
@@ -924,24 +943,48 @@ pub async fn mesh_organic_cut_from_captured_source(options_json: String) -> Resu
                 .to_string()
         })?;
 
-    let (part_a_soup, part_b_soup, report) = tauri::async_runtime::spawn_blocking(move || {
+    let (parts_soup, report) = tauri::async_runtime::spawn_blocking(move || {
         let mesh = io::staged::load_positions_le(&source_bytes).map_err(|e| e.to_string())?;
         let outcome = organic_cut(mesh, &options);
-        let a: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&outcome.part_a.to_triangle_soup()).to_vec();
-        let b: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&outcome.part_b.to_triangle_soup()).to_vec();
-        Ok::<_, String>((a, b, outcome.report))
+        let parts: Vec<Vec<u8>> = outcome
+            .parts
+            .iter()
+            .map(|p| bytemuck::cast_slice::<f32, u8>(&p.to_triangle_soup()).to_vec())
+            .collect();
+        Ok::<_, String>((parts, outcome.report))
     })
     .await
     .map_err(|e| format!("organic cut task panicked: {e}"))??;
 
+    // Legacy part A/B: first part, then the rest concatenated (the frontend now
+    // reads `mesh_organic_cut_read_part` by index instead, driven by `partCount`).
+    let part_a_soup = parts_soup.first().cloned().unwrap_or_default();
+    let part_b_soup: Vec<u8> = parts_soup.iter().skip(1).flatten().copied().collect();
     *organic_cut_part_a_bytes()
         .lock()
         .map_err(|e| format!("organic cut part A lock poisoned: {e}"))? = Some(part_a_soup);
     *organic_cut_part_b_bytes()
         .lock()
         .map_err(|e| format!("organic cut part B lock poisoned: {e}"))? = Some(part_b_soup);
+    *organic_cut_parts_bytes()
+        .lock()
+        .map_err(|e| format!("organic cut parts lock poisoned: {e}"))? = parts_soup;
 
     serde_json::to_string(&report).map_err(|e| format!("serialize organic cut report: {e}"))
+}
+
+/// Returns the most recent organic-cut part at `index` as raw LE f32 soup bytes.
+/// Indices run `0..report.partCount`; a multi-loop cut that frees several pieces
+/// exposes each as its own part. Out-of-range indices error.
+#[tauri::command]
+pub async fn mesh_organic_cut_read_part(index: usize) -> Result<Response, String> {
+    let bytes = organic_cut_parts_bytes()
+        .lock()
+        .map_err(|e| format!("organic cut parts lock poisoned: {e}"))?
+        .get(index)
+        .cloned()
+        .ok_or_else(|| format!("No organic cut part at index {index} — run a cut first"))?;
+    Ok(Response::new(bytes))
 }
 
 /// Returns the most recent organic-cut part A positions as raw LE bytes.

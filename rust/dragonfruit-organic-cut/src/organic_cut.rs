@@ -216,12 +216,22 @@ pub struct OrganicCutReport {
     /// Empty when a nominal key was placed or no key was requested.
     #[serde(default)]
     pub key_detail: String,
+    /// How many separate parts the cut produced (= `OrganicCutOutcome::parts.len()`).
+    /// A multi-loop cut that frees several pieces (e.g. both of Squirtle's arms) is
+    /// >2; a plane/single-loop cut is 2; a no-op is 0/1. The frontend reads exactly
+    /// this many parts back and commits each as its own model.
+    #[serde(default)]
+    pub part_count: usize,
 }
 
-/// Result of an organic cut: the two parts plus a report.
+/// Result of an organic cut: the resulting parts plus a report.
+///
+/// `parts` is the ORDERED list of every separate solid the cut produced (largest
+/// first) — 2 for a plane/single-loop cut, more when a multi-loop cut frees several
+/// pieces (e.g. both of Squirtle's arms), empty on a no-op. It's the single source
+/// of truth: the caller commits each entry as its own model.
 pub struct OrganicCutOutcome {
-    pub part_a: IndexedMesh,
-    pub part_b: IndexedMesh,
+    pub parts: Vec<IndexedMesh>,
     pub report: OrganicCutReport,
 }
 
@@ -359,20 +369,20 @@ fn best_fit_plane_normal(points: &[OrganicCutLoopPoint], centroid: Vec3) -> Opti
 
 fn noop_outcome(mesh: IndexedMesh, detail: String) -> OrganicCutOutcome {
     let source_triangle_count = mesh.triangle_count();
-    let part_a = mesh.clone();
-    let part_b = mesh;
     let report = OrganicCutReport {
         source_triangle_count,
-        part_a_triangle_count: part_a.triangle_count(),
-        part_b_triangle_count: part_b.triangle_count(),
+        part_a_triangle_count: source_triangle_count,
+        part_b_triangle_count: source_triangle_count,
         engine: "noop".to_string(),
         detail,
         key_kind: "none".to_string(),
         key_detail: String::new(),
+        // A no-op didn't split anything — no parts to commit (the frontend skips
+        // committing on engine == "noop" anyway).
+        part_count: 0,
     };
     OrganicCutOutcome {
-        part_a,
-        part_b,
+        parts: Vec::new(),
         report,
     }
 }
@@ -591,21 +601,37 @@ fn organic_cut_contour(
             };
         }
 
+        // Split into the FINAL separate solids: the body is one component, and each
+        // freed piece (e.g. each arm) is its own. `part_b` held them merged so the
+        // per-seam key booleans could run locally; now decompose it so every piece
+        // becomes its own part. The body (`part_a`) is one component but decompose
+        // it too in case a cut split it further. Largest first → body leads.
+        let mut parts: Vec<IndexedMesh> = Vec::new();
+        parts.extend(crate::membrane::decompose_components(&part_a));
+        parts.extend(crate::membrane::decompose_components(&part_b));
+        parts.sort_by(|a, b| b.triangles.len().cmp(&a.triangles.len()));
+
+        // Report part-A/B triangle counts as "body" vs "everything else" for the
+        // log; `part_count` carries the real number of pieces.
+        let part_a_tris = parts.first().map(|p| p.triangle_count()).unwrap_or(0);
+        let part_b_tris: usize = parts.iter().skip(1).map(|p| p.triangle_count()).sum();
         let report = OrganicCutReport {
             source_triangle_count,
-            part_a_triangle_count: part_a.triangle_count(),
-            part_b_triangle_count: part_b.triangle_count(),
+            part_a_triangle_count: part_a_tris,
+            part_b_triangle_count: part_b_tris,
             engine: "membrane".to_string(),
             detail: format!(
-                "multi-loop cut: {} loops, {} components, membrane tris={}",
+                "multi-loop cut: {} loops, {} components, {} parts, membrane tris={}",
                 loops.len(),
                 component_count,
+                parts.len(),
                 membrane_tris
             ),
             key_kind: key_kind.as_str().to_string(),
             key_detail,
+            part_count: parts.len(),
         };
-        return Ok(OrganicCutOutcome { part_a, part_b, report });
+        return Ok(OrganicCutOutcome { parts, report });
     }
 
     // SINGLE-LOOP: the classic curved cut, which also supports the registration key
@@ -650,16 +676,19 @@ fn organic_cut_contour(
         key_detail = keyed.detail;
     }
 
+    // A single-loop cut is exactly two parts.
+    let parts = vec![part_a, part_b];
     let report = OrganicCutReport {
         source_triangle_count,
-        part_a_triangle_count: part_a.triangle_count(),
-        part_b_triangle_count: part_b.triangle_count(),
+        part_a_triangle_count: parts[0].triangle_count(),
+        part_b_triangle_count: parts[1].triangle_count(),
         engine: "membrane".to_string(),
         detail: format!("membrane tris={membrane_tris}"),
         key_kind: key_kind.as_str().to_string(),
         key_detail,
+        part_count: parts.len(),
     };
-    Ok(OrganicCutOutcome { part_a, part_b, report })
+    Ok(OrganicCutOutcome { parts, report })
 }
 
 #[cfg(feature = "manifold")]
@@ -725,20 +754,18 @@ fn organic_cut_plane(
         ));
     }
 
+    let parts = vec![part_a, part_b];
     let report = OrganicCutReport {
         source_triangle_count,
-        part_a_triangle_count: part_a.triangle_count(),
-        part_b_triangle_count: part_b.triangle_count(),
+        part_a_triangle_count: parts[0].triangle_count(),
+        part_b_triangle_count: parts[1].triangle_count(),
         engine: "plane".to_string(),
         detail: String::new(),
         key_kind: "none".to_string(),
         key_detail: String::new(),
+        part_count: parts.len(),
     };
-    Ok(OrganicCutOutcome {
-        part_a,
-        part_b,
-        report,
-    })
+    Ok(OrganicCutOutcome { parts, report })
 }
 
 #[cfg(feature = "manifold")]
@@ -891,8 +918,8 @@ mod tests {
         };
         let outcome = organic_cut(mesh, &options);
         assert_eq!(outcome.report.engine, "plane");
-        assert!(outcome.part_a.triangle_count() > 0, "part A empty 1");
-        assert!(outcome.part_b.triangle_count() > 0, "part B empty");
+        assert!(outcome.parts[0].triangle_count() > 0, "part A empty 1");
+        assert!(outcome.parts[1].triangle_count() > 0, "part B empty");
     }
 
     #[cfg(feature = "manifold")]
@@ -912,8 +939,8 @@ mod tests {
         };
         let outcome = organic_cut(mesh, &options);
         assert_eq!(outcome.report.engine, "plane");
-        assert!(outcome.part_a.triangle_count() > 0, "part A empty (explicit)");
-        assert!(outcome.part_b.triangle_count() > 0, "part B empty (explicit)");
+        assert!(outcome.parts[0].triangle_count() > 0, "part A empty (explicit)");
+        assert!(outcome.parts[1].triangle_count() > 0, "part B empty (explicit)");
     }
 
     #[cfg(feature = "manifold")]
@@ -940,8 +967,8 @@ mod tests {
         };
         let outcome = organic_cut(mesh, &options);
         assert_eq!(outcome.report.engine, "membrane", "should use the membrane engine");
-        assert!(outcome.part_a.triangle_count() > 0, "part A empty");
-        assert!(outcome.part_b.triangle_count() > 0, "part B empty");
+        assert!(outcome.parts[0].triangle_count() > 0, "part A empty");
+        assert!(outcome.parts[1].triangle_count() > 0, "part B empty");
     }
 
     #[cfg(feature = "manifold")]
@@ -981,8 +1008,50 @@ mod tests {
             "expected a key placed per seam, key_detail={}",
             outcome.report.key_detail
         );
-        assert!(outcome.part_a.triangle_count() > 0, "part A empty");
-        assert!(outcome.part_b.triangle_count() > 0, "part B empty");
+        assert!(outcome.parts[0].triangle_count() > 0, "part A empty");
+        assert!(outcome.parts[1].triangle_count() > 0, "part B empty");
+    }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn multi_loop_cut_yields_one_part_per_freed_piece() {
+        // The bug fix: two band cuts through a bar free THREE pieces (bottom /
+        // middle / top). They must come back as three SEPARATE parts — not the body
+        // plus one merged "everything else" mesh (which is what made Squirtle's two
+        // arms a single part). No key, so geometry isn't perturbed.
+        let size = 30.0_f32;
+        let mesh = IndexedMesh::from_triangle_soup(&cube_soup(size), 1e-6);
+        let band = |z: f32| -> Vec<OrganicCutLoopPoint> {
+            let steps = 8usize;
+            let f = |i: usize| size * i as f32 / steps as f32;
+            let mut pts = Vec::new();
+            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [f(i), 0.0, z], normal: [0.0; 3] }); }
+            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [size, f(i), z], normal: [0.0; 3] }); }
+            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [size - f(i), size, z], normal: [0.0; 3] }); }
+            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [0.0, size - f(i), z], normal: [0.0; 3] }); }
+            pts
+        };
+        let options = OrganicCutOptions {
+            cut: OrganicCutSpec {
+                loop_points: band(10.0),
+                extra_loops: vec![band(20.0)],
+                mode: CutMode::Contour,
+                ..Default::default()
+            },
+        };
+        let outcome = organic_cut(mesh, &options);
+        assert_eq!(outcome.report.engine, "membrane");
+        assert_eq!(
+            outcome.parts.len(),
+            3,
+            "two cuts across the bar should yield 3 separate parts, got {} (detail={})",
+            outcome.parts.len(),
+            outcome.report.detail
+        );
+        assert_eq!(outcome.report.part_count, 3);
+        for (i, p) in outcome.parts.iter().enumerate() {
+            assert!(p.triangle_count() > 0, "part {i} empty");
+        }
     }
 
     #[cfg(feature = "manifold")]
@@ -1037,8 +1106,8 @@ mod tests {
         let two = run(vec![mk_key(true), mk_key(true)]);
         assert_ne!(two.report.key_kind, "none");
 
-        let one_tris = one.part_a.triangle_count() + one.part_b.triangle_count();
-        let two_tris = two.part_a.triangle_count() + two.part_b.triangle_count();
+        let one_tris: usize = one.parts.iter().map(|p| p.triangle_count()).sum();
+        let two_tris: usize = two.parts.iter().map(|p| p.triangle_count()).sum();
         assert!(
             two_tris > one_tris,
             "keying both loops ({two_tris} tris) should add more geometry than keying one ({one_tris}) \
@@ -1095,7 +1164,10 @@ mod tests {
         let options = OrganicCutOptions::default(); // empty loop
         let outcome = organic_cut(mesh, &options);
         assert_eq!(outcome.report.engine, "noop");
-        assert_eq!(outcome.part_a.triangle_count(), src_tris);
-        assert_eq!(outcome.part_b.triangle_count(), src_tris);
+        // A no-op produces no parts (the frontend skips committing it); the source
+        // size is still echoed in the report for diagnostics.
+        assert!(outcome.parts.is_empty(), "no-op should produce no parts");
+        assert_eq!(outcome.report.part_count, 0);
+        assert_eq!(outcome.report.part_a_triangle_count, src_tris);
     }
 }

@@ -166,14 +166,22 @@ export interface OrganicCutReport {
   keyKind?: 'frustum' | 'dome' | 'none';
   /** Reason the key shrank / fell back / was skipped (for an after-cut alert). */
   keyDetail?: string;
+  /**
+   * How many separate parts the cut produced. 2 for a plane/single-loop cut; more
+   * when a multi-loop cut frees several pieces (e.g. both of Squirtle's arms); 0 on
+   * a no-op. The frontend reads exactly this many parts back.
+   */
+  partCount?: number;
 }
 
 export interface OrganicCutResult {
   report: OrganicCutReport;
-  /** Part A positions as a flat triangle soup (9 floats per triangle). */
-  partA: Float32Array;
-  /** Part B positions as a flat triangle soup (9 floats per triangle). */
-  partB: Float32Array;
+  /**
+   * Every part the cut produced, in order (largest first) — each a flat triangle
+   * soup (9 floats per triangle), model-local. 2 for a normal cut; more when a
+   * multi-loop cut frees several pieces. Each is committed as its own model.
+   */
+  parts: Float32Array[];
 }
 
 /** Which drawing mode the Cutting Mode tool session is in. */

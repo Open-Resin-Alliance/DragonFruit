@@ -2569,15 +2569,14 @@ export function useSceneCollectionManager() {
    * stale `modelsRef`/history snapshots and loses one of the pieces. Used by the
    * Organic Cut tool. Returns the new (part B) model id, or null on failure.
    */
-  const splitModelInTwo = useCallback((
+  const splitModelIntoParts = useCallback((
     sourceId: string,
-    partAGeometry: THREE.BufferGeometry,
-    partBGeometry: THREE.BufferGeometry,
+    partGeometries: THREE.BufferGeometry[],
     historyDescription: string,
-  ): string | null => {
+  ): string[] | null => {
     const currentModels = modelsRef.current;
     const source = currentModels.find((m) => m.id === sourceId);
-    if (!source) return null;
+    if (!source || partGeometries.length === 0) return null;
 
     // KEEP BOTH PARTS EXACTLY WHERE THEY WERE CUT (nothing moves in 3D space).
     //
@@ -2632,57 +2631,59 @@ export function useSceneCollectionManager() {
       return pos ? Math.floor(pos.count / 3) : 0;
     };
 
-    const partAGeom = buildBounds(partAGeometry);
-    const partBGeom = buildBounds(partBGeometry);
-    const newId = generateId();
+    // The source becomes the FIRST part; every other part is appended as a new
+    // model. (A multi-loop cut can free several pieces, so there may be >2 parts.)
+    const built = partGeometries.map(buildBounds);
+    const extraIds = built.slice(1).map(() => generateId());
 
-    // Compensated positions keep each part exactly where it was cut.
-    const partAPosition = positionForPart(partAGeom.center);
-    const partBPosition = positionForPart(partBGeom.center);
+    const before = captureSceneSnapshot(currentModels, activeModelIdRef.current, selectedModelIdsRef.current, { includeSupportState: false });
 
-    const partBModel: LoadedModel = {
-      id: newId,
-      name: `${source.name} Cut`,
+    const part0 = built[0];
+    const part0Position = positionForPart(part0.center);
+
+    const extraModels: LoadedModel[] = built.slice(1).map((pg, i) => ({
+      id: extraIds[i],
+      // Number the pieces when there are several ("Cut 2", "Cut 3"); keep the plain
+      // "Cut" name for the usual two-part split.
+      name: built.length > 2 ? `${source.name} Cut ${i + 2}` : `${source.name} Cut`,
       groupId: source.groupId,
       groupName: source.groupName,
       fileUrl: '',
       fileSizeBytes: source.fileSizeBytes,
-      geometry: partBGeom,
+      geometry: pg,
       transform: {
-        position: partBPosition,
+        position: positionForPart(pg.center),
         rotation: source.transform.rotation.clone(),
         scale: source.transform.scale.clone(),
       },
       visible: true,
       color: source.color,
-      polygonCount: polyCount(partBGeometry),
+      polygonCount: polyCount(pg.geometry),
       meshModifiers: source.meshModifiers ? clonePlainObject(source.meshModifiers) : undefined,
-    };
+    }));
 
-    const before = captureSceneSnapshot(currentModels, activeModelIdRef.current, selectedModelIdsRef.current, { includeSupportState: false });
-
-    // ONE atomic update: source becomes part A (geometry swapped + position
-    // compensated so it doesn't shift), part B is appended.
+    // ONE atomic update: source becomes part 0 (geometry swapped + position
+    // compensated so it doesn't shift), the rest are appended.
     const nextModels = [
       ...currentModels.map((m) => (
         m.id === sourceId
           ? {
               ...m,
-              geometry: partAGeom,
-              polygonCount: polyCount(partAGeometry),
+              geometry: part0,
+              polygonCount: polyCount(part0.geometry),
               transform: {
-                position: partAPosition,
+                position: part0Position,
                 rotation: m.transform.rotation.clone(),
                 scale: m.transform.scale.clone(),
               },
             }
           : m
       )),
-      partBModel,
+      ...extraModels,
     ];
     setModels(nextModels);
 
-    // Defer flattening-plane computation for both new geometries.
+    // Defer flattening-plane computation for every new geometry.
     const scheduleIdle = (cb: () => void) => {
       if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
         (window as any).requestIdleCallback(cb, { timeout: 250 });
@@ -2691,11 +2692,11 @@ export function useSceneCollectionManager() {
       }
     };
     scheduleIdle(() => {
-      const planesA = computeFlatteningPlanes(partAGeometry);
-      const planesB = computeFlatteningPlanes(partBGeometry);
+      const planes = built.map((b) => computeFlatteningPlanes(b.geometry));
       setModels((prev) => prev.map((m) => {
-        if (m.id === sourceId) return { ...m, geometry: { ...m.geometry, flatteningPlanes: planesA } };
-        if (m.id === newId) return { ...m, geometry: { ...m.geometry, flatteningPlanes: planesB } };
+        if (m.id === sourceId) return { ...m, geometry: { ...m.geometry, flatteningPlanes: planes[0] } };
+        const ei = extraIds.indexOf(m.id);
+        if (ei >= 0) return { ...m, geometry: { ...m.geometry, flatteningPlanes: planes[ei + 1] } };
         return m;
       }));
     });
@@ -2703,7 +2704,7 @@ export function useSceneCollectionManager() {
     const after = captureSceneSnapshot(nextModels, activeModelIdRef.current, selectedModelIdsRef.current, { includeSupportState: false });
     pushSceneSnapshotHistory(before, after, historyDescription);
 
-    return newId;
+    return extraIds;
   }, [generateId, pushSceneSnapshotHistory]);
 
   const finalizeModelGeometryPostProcessing = useCallback((id: string) => {
@@ -4647,7 +4648,7 @@ export function useSceneCollectionManager() {
     setModelTransformRaw,
     replaceModelGeometry,
     addModelFromGeometry,
-    splitModelInTwo,
+    splitModelIntoParts,
     finalizeModelGeometryPostProcessing,
     setModelManualZMoveOverride,
     setModelVisibility,

@@ -1705,6 +1705,33 @@ pub fn split_by_cutter(
     parts
 }
 
+/// Decompose a mesh into its connected components (the disjoint solids it
+/// contains), largest first. Returns `[mesh]` when it has a single component or the
+/// manifold conversion fails — so the caller always gets at least the input back.
+/// Used by the multi-loop cut to split the merged "everything but the body" mesh
+/// back into one part per freed piece.
+pub fn decompose_components(mesh: &IndexedMesh) -> Vec<IndexedMesh> {
+    if mesh.triangles.is_empty() {
+        return Vec::new();
+    }
+    match to_manifold(mesh) {
+        Ok(m) => {
+            let mut parts: Vec<IndexedMesh> = m
+                .decompose()
+                .iter()
+                .filter_map(manifold_to_indexed)
+                .filter(|p| !p.triangles.is_empty())
+                .collect();
+            if parts.is_empty() {
+                return vec![mesh.clone()];
+            }
+            parts.sort_by(|a, b| b.triangles.len().cmp(&a.triangles.len()));
+            parts
+        }
+        Err(_) => vec![mesh.clone()],
+    }
+}
+
 /// Signed distance from `p` to the membrane surface: positive on the membrane's
 /// +normal side, negative on the −normal side. Found by the nearest membrane
 /// triangle, signing by that triangle's geometric normal. This is how we decide
