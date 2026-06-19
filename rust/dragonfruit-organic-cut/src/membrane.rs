@@ -498,12 +498,65 @@ fn orient_membrane(m: &mut Membrane) {
         }
     }
 
-    // The flood-fill makes winding CONSISTENT (all triangles agree with their
-    // neighbours). Whether the patch faces "up" or "down" overall doesn't matter:
-    // the slab copies this winding for the top sheet and reverses it for the
-    // bottom, and the side wall is keyed to the boundary ring — all consistent
-    // regardless of the global facing. (An earlier global-flip heuristic here was
-    // buggy and inverted correctly-wound patches → removed.)
+    // Ensure a consistent global winding direction by aligning the membrane's
+    // average normal with a stable reference normal (the PCA normal of the vertices),
+    // which is invariant to the loop points drawing order/direction.
+    let mut avg_n = Vec3::ZERO;
+    for t in &m.triangles {
+        let a = m.vertices[t[0] as usize];
+        let b = m.vertices[t[1] as usize];
+        let c = m.vertices[t[2] as usize];
+        avg_n = avg_n.add(b.sub(a).cross(c.sub(a)));
+    }
+
+    let mut centroid = Vec3::ZERO;
+    for &v in &m.vertices {
+        centroid = centroid.add(v);
+    }
+    if !m.vertices.is_empty() {
+        centroid = centroid.scale(1.0 / m.vertices.len() as f32);
+    }
+
+    let mut xx = 0.0f64;
+    let mut xy = 0.0f64;
+    let mut xz = 0.0f64;
+    let mut yy = 0.0f64;
+    let mut yz = 0.0f64;
+    let mut zz = 0.0f64;
+    for &v in &m.vertices {
+        let dx = (v.x - centroid.x) as f64;
+        let dy = (v.y - centroid.y) as f64;
+        let dz = (v.z - centroid.z) as f64;
+        xx += dx * dx;
+        xy += dx * dy;
+        xz += dx * dz;
+        yy += dy * dy;
+        yz += dy * dz;
+        zz += dz * dz;
+    }
+
+    let det_x = yy * zz - yz * yz;
+    let det_y = xx * zz - xz * xz;
+    let det_z = xx * yy - xy * xy;
+    let det_max = det_x.max(det_y).max(det_z);
+
+    if det_max > 1e-12 {
+        let ref_normal = if det_max == det_x {
+            Vec3::new(det_x as f32, (xz * yz - xy * zz) as f32, (xy * yz - xz * yy) as f32)
+        } else if det_max == det_y {
+            Vec3::new((xz * yz - xy * zz) as f32, det_y as f32, (xy * xz - yz * xx) as f32)
+        } else {
+            Vec3::new((xy * yz - xz * yy) as f32, (xy * xz - yz * xx) as f32, det_z as f32)
+        };
+
+        if avg_n.dot(ref_normal) < 0.0 {
+            for t in &mut m.triangles {
+                let tmp = t[1];
+                t[1] = t[2];
+                t[2] = tmp;
+            }
+        }
+    }
 }
 
 /// Shortest distance from 2D point `p` to any edge of the polygon.
@@ -4262,5 +4315,38 @@ mod tests {
         // Check that our variable thickness prevents self-intersections
         assert_eq!(count_self_intersections(&slab), 0, "Slab has self-intersections!");
         crate::test_utils::assert_watertight_manifold(&slab);
+    }
+
+    #[test]
+    fn test_membrane_orientation_invariance_to_loop_direction() {
+        let loop_pts = square_loop(10.0);
+        let mut loop_pts_reversed = loop_pts.clone();
+        loop_pts_reversed.reverse();
+
+        let m1 = build_membrane(&loop_pts, 2).expect("m1");
+        let m2 = build_membrane(&loop_pts_reversed, 2).expect("m2");
+
+        let avg_normal = |m: &Membrane| -> Vec3 {
+            let mut sum_n = Vec3::ZERO;
+            for t in &m.triangles {
+                let a = m.vertices[t[0] as usize];
+                let b = m.vertices[t[1] as usize];
+                let c = m.vertices[t[2] as usize];
+                sum_n = sum_n.add(b.sub(a).cross(c.sub(a)));
+            }
+            let len = sum_n.length();
+            if len > 1e-6 {
+                sum_n.scale(1.0 / len)
+            } else {
+                Vec3::new(0.0, 0.0, 1.0)
+            }
+        };
+
+        let n1 = avg_normal(&m1);
+        let n2 = avg_normal(&m2);
+
+        // Dot product should be close to 1.0 (pointing in the same direction)
+        let dot = n1.dot(n2);
+        assert!(dot > 0.99, "Membrane normals should be invariant to loop direction, got dot = {}", dot);
     }
 }
