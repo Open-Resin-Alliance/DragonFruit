@@ -2342,19 +2342,20 @@ pub fn side_of_mesh(membrane: &Membrane, mesh: &IndexedMesh) -> f32 {
 }
 
 /// Contour cut along SEVERAL loops in ONE operation. Builds a cutter slab per
-/// loop, unions them into a single watertight cutter, differences it from the
-/// model once, and decomposes into connected components.
+/// loop and differences them from the model one at a time, then decomposes into
+/// connected components.
 ///
-/// This is what frees a body that connects in several places — e.g. a tail joined
-/// to the body at two posts with an air tunnel between them. With one big loop the
-/// soap-film membrane would have to span the air gap (producing bad geometry that
-/// fails to sever); here each loop wraps only solid, so every membrane is simple
-/// and valid, and the union cuts all the bridges at once.
+/// This frees a body that connects in several places — e.g. a tail joined to the
+/// body at two posts, or both arms on opposite sides. Each loop wraps only solid,
+/// so every membrane is simple and valid, and the per-slab differences carve all
+/// the bridges. (Differencing slab-by-slab, rather than subtracting their union,
+/// avoids the boolean backend collapsing a union of thin far-apart slabs to
+/// nothing — which left the model unsevered.)
 ///
 /// The components are grouped largest-vs-rest (see [`group_largest_vs_rest`]):
 /// `part_a` is the biggest piece (the body), `part_b` is everything else (the
-/// freed piece(s)). Returns `Err` (caller falls back to the plane) when fewer than
-/// two loops are valid, a cutter is invalid, or the cut leaves a single component.
+/// freed piece(s)). Returns `Err` when fewer than two loops are valid, a cutter is
+/// invalid, or the cut leaves a single component (a loop didn't wrap through).
 pub fn contour_split_multi(
     mesh: &IndexedMesh,
     loops: &[Vec<Vec3>],
@@ -2364,13 +2365,17 @@ pub fn contour_split_multi(
 ) -> Result<ContourSplitMulti, String> {
     let density = density.clamp(1.0, 4.0) as f64;
 
-    // Build a cutter slab per loop and union them into one manifold. Keep the
-    // slabs concatenated too, so the seam-band refinement covers every loop.
-    let mut cutter: Option<manifold_csg::Manifold> = None;
+    // Build a cutter slab per loop. Keep each as its OWN manifold (we difference
+    // them from the model one at a time below) plus a concatenated soup for the
+    // seam-band refinement. We deliberately do NOT union the slabs into a single
+    // cutter: union'ing thin, far-apart slabs (e.g. arms on opposite sides of the
+    // body) can collapse to a degenerate/empty manifold in the boolean backend,
+    // and differencing that severs nothing. `A − B − C` is equivalent to
+    // `A − (B ∪ C)` but avoids that fragile union entirely.
+    let mut slab_manifolds: Vec<manifold_csg::Manifold> = Vec::new();
     let mut combined_slab = IndexedMesh { positions: Vec::new(), triangles: Vec::new() };
     let mut membranes: Vec<Membrane> = Vec::new();
     let mut membrane_tris = 0usize;
-    let mut built = 0usize;
     for (i, lp) in loops.iter().enumerate() {
         if lp.len() < 3 {
             continue;
@@ -2387,28 +2392,38 @@ pub fn contour_split_multi(
             combined_slab.triangles.push([t[0] + base, t[1] + base, t[2] + base]);
         }
 
-        cutter = Some(match cutter {
-            None => m,
-            Some(c) => c.union(&m),
-        });
+        slab_manifolds.push(m);
         membranes.push(membrane);
-        built += 1;
     }
-    let cutter = cutter.ok_or_else(|| "no valid loops (each needs >=3 points)".to_string())?;
-    if built < 2 {
-        return Err(format!("multi-loop cut needs >=2 valid loops (got {built})"));
+    if slab_manifolds.len() < 2 {
+        return Err(format!(
+            "multi-loop cut needs >=2 valid loops (got {})",
+            slab_manifolds.len()
+        ));
     }
 
-    // Refine the model near the COMBINED slabs before the boolean (smoother cut
+    // Refine the model near the COMBINED slabs before the booleans (smoother cut
     // edges), exactly as the single-loop path does around its one slab.
     let diag = mesh.bbox().diag().max(1e-3);
     let band = diag * DEFAULT_REFINE_BAND_FRACTION;
     let target = diag * DEFAULT_REFINE_TARGET_FRACTION / density as f32;
     let max_levels = DEFAULT_REFINE_MAX_LEVELS + (density.round() as u32).saturating_sub(1);
     let refined = refine_model_near_slab(mesh, &combined_slab, band, target, max_levels);
-    let model = to_manifold(&refined).map_err(|e| format!("model invalid: {e}"))?;
 
-    let islands = split_by_cutter(&model, &cutter);
+    // Difference each slab from the model in turn, then decompose into the freed
+    // solids. Each difference carves one loop's kerf; the model accumulates them.
+    let mut cut_model = to_manifold(&refined).map_err(|e| format!("model invalid: {e}"))?;
+    for sm in &slab_manifolds {
+        cut_model = cut_model.difference(sm);
+    }
+    let mut islands: Vec<IndexedMesh> = cut_model
+        .decompose()
+        .iter()
+        .filter_map(manifold_to_indexed)
+        .filter(|m| !m.triangles.is_empty())
+        .collect();
+    islands.sort_by(|a, b| b.triangles.len().cmp(&a.triangles.len()));
+
     let component_count = islands.len();
     if component_count < 2 {
         return Err(format!(

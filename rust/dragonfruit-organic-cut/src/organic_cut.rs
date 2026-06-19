@@ -395,14 +395,21 @@ fn noop_outcome(mesh: IndexedMesh, detail: String) -> OrganicCutOutcome {
 pub fn organic_cut(mesh: IndexedMesh, options: &OrganicCutOptions) -> OrganicCutOutcome {
     #[cfg(feature = "manifold")]
     {
-        // Contour mode: try the curved membrane cut first. On ANY failure (loop
-        // doesn't wrap through the body, membrane invalid, etc.) fall back to the
-        // flat plane cut so the user still gets *a* cut. The plane itself then
-        // falls back to no-op if it also fails.
+        // Contour mode: try the curved membrane cut first.
         if options.cut.mode == CutMode::Contour {
             match organic_cut_contour(&mesh, options) {
                 Ok(outcome) => return outcome,
                 Err(reason) => {
+                    // A MULTI-LOOP cut has no meaningful single-plane fallback — a
+                    // plane derived from one loop would slice straight through the
+                    // model (the "really bad geometry" we set out to avoid). Don't
+                    // destroy the mesh: return a no-op with the reason so the user
+                    // can fix the loops. Only a SINGLE-loop contour falls back to the
+                    // flat plane cut (still a sensible cut through that one seam).
+                    if !options.cut.extra_loops.is_empty() {
+                        eprintln!("[dragonfruit-mesh-repair] multi-loop contour cut failed (no plane fallback): {reason}");
+                        return noop_outcome(mesh, format!("multi-loop contour cut failed: {reason}"));
+                    }
                     eprintln!("[dragonfruit-mesh-repair] contour cut fell back to plane: {reason}");
                     // Fall through to the plane path, preserving WHY in the detail.
                     return match organic_cut_plane(&mesh, options) {
