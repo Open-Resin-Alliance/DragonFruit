@@ -996,13 +996,27 @@ impl TaperedProfileGenerator {
             triangles.push([t[0] + offset, t[1] + offset, t[2] + offset]);
         }
 
+        let mut lower_edges = ahash::AHashSet::with_capacity(membrane.triangles.len() * 3);
+        for t in &membrane.triangles {
+            lower_edges.insert((t[0], t[2]));
+            lower_edges.insert((t[2], t[1]));
+            lower_edges.insert((t[1], t[0]));
+        }
+
         let b_len = membrane.boundary.len();
         for i in 0..b_len {
             let b0 = membrane.boundary[i];
             let b1 = membrane.boundary[(i + 1) % b_len];
+            let b0_up = b0 + offset;
+            let b1_up = b1 + offset;
             
-            triangles.push([b0, b1, b1 + offset]);
-            triangles.push([b0, b1 + offset, b0 + offset]);
+            if lower_edges.contains(&(b0, b1)) {
+                triangles.push([b1, b0, b0_up]);
+                triangles.push([b1, b0_up, b1_up]);
+            } else {
+                triangles.push([b0, b1, b1_up]);
+                triangles.push([b0, b1_up, b0_up]);
+            }
         }
 
         IndexedMesh { positions, triangles }
@@ -2318,5 +2332,36 @@ mod tests {
         // Assert CCW outward winding (positive volume)
         assert_watertight_manifold(&peg);
         assert_winding_outward(&peg);
+    }
+
+    #[test]
+    fn test_tapered_profile_key_invariance_to_loop_direction() {
+        use crate::test_utils::assert_watertight_manifold;
+        let loop_pts = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(10.0, 0.0, 0.0),
+            Vec3::new(10.0, 10.0, 0.0),
+            Vec3::new(0.0, 10.0, 0.0),
+        ];
+        let mut loop_pts_reversed = loop_pts.clone();
+        loop_pts_reversed.reverse();
+
+        // 1. Build keys for CCW loop
+        let membrane_ccw = crate::membrane::build_membrane(&loop_pts, 1).unwrap();
+        let gen_ccw = KeyShape::TaperedProfile.generator(Some(&membrane_ccw), 0.1, 10.0);
+        let frame_ccw = frame_from_membrane(&membrane_ccw).unwrap();
+        let build_frame_ccw = frame_extruding_toward_part_b(&frame_ccw);
+        let peg_ccw = gen_ccw.build_peg(&build_frame_ccw, LeanXform::IDENTITY, 0.0);
+
+        // 2. Build keys for CW loop (reversed coordinates)
+        let membrane_cw = crate::membrane::build_membrane(&loop_pts_reversed, 1).unwrap();
+        let gen_cw = KeyShape::TaperedProfile.generator(Some(&membrane_cw), 0.1, 10.0);
+        let frame_cw = frame_from_membrane(&membrane_cw).unwrap();
+        let build_frame_cw = frame_extruding_toward_part_b(&frame_cw);
+        let peg_cw = gen_cw.build_peg(&build_frame_cw, LeanXform::IDENTITY, 0.0);
+
+        // Both must be completely watertight manifolds!
+        assert_watertight_manifold(&peg_ccw);
+        assert_watertight_manifold(&peg_cw);
     }
 }
