@@ -836,7 +836,7 @@ fn organic_cut_bounded_plane(
         options.cut.rotation,
     );
 
-    let (mut part_a, mut part_b) = crate::membrane::split_into_two_sides(&membrane, islands)
+    let (mut part_a, mut part_b) = crate::membrane::split_into_two_sides(&membrane, islands, Some(mesh), None)
         .ok_or_else(|| "Bounded plane did not fully sever the model (multiple islands but all on one side) — please increase the radius or reposition the cutter".to_string())?;
 
     let (mut key_kind, mut key_detail) = (crate::key::KeyKind::None, String::new());
@@ -1623,5 +1623,105 @@ mod tests {
             assert!(dist < 1e-6, "Vertex deviated from plane: {:?}", v);
         }
     }
-}
 
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn test_concentric_elbow_bracer_failing() {
+        // We simulate the old centroid projection logic by calling split_into_two_sides with source_mesh = None.
+        // On a concentric elbow bracer (which is a multi-shell setup: arm + sleeve), if we cut it,
+        // we get 4 output islands.
+        let mesh = crate::test_utils::concentric_elbow_bracer();
+        
+        let loop_pts = vec![
+            OrganicCutLoopPoint { position: [12.0, 0.0, 0.0], normal: [1.0, 0.0, 0.0] },
+            OrganicCutLoopPoint { position: [0.0, 12.0, 0.0], normal: [0.0, 1.0, 0.0] },
+            OrganicCutLoopPoint { position: [-12.0, 0.0, 0.0], normal: [-1.0, 0.0, 0.0] },
+            OrganicCutLoopPoint { position: [0.0, -12.0, 0.0], normal: [0.0, -1.0, 0.0] },
+        ];
+        
+        let density = 1.0;
+        let loop_positions: Vec<Vec3> = loop_pts.iter().map(|p| Vec3::new(p.position[0], p.position[1], p.position[2])).collect();
+        let (membrane, slab) = crate::membrane::build_contour_cutter(&mesh, &loop_positions, 0.1, 0.5, density).unwrap();
+        
+        let diag = mesh.bbox().diag().max(1e-3);
+        let band = diag * crate::membrane::DEFAULT_REFINE_BAND_FRACTION;
+        let target = diag * crate::membrane::DEFAULT_REFINE_TARGET_FRACTION / density as f32;
+        let max_levels = crate::membrane::DEFAULT_REFINE_MAX_LEVELS;
+        let refined = crate::membrane::refine_model_near_slab(&mesh, &slab, band, target, max_levels);
+        
+        let model = crate::membrane::to_manifold(&refined).unwrap();
+        let cutter = crate::membrane::to_manifold(&slab).unwrap();
+        let islands = crate::membrane::split_by_cutter(&model, &cutter);
+        
+        assert_eq!(islands.len(), 4);
+        
+        // Call split_into_two_sides with source_mesh = None (forcing old centroid logic).
+        // Since the sleeve and cylinder centroids are symmetric and centered on Z=0,
+        // we create 3 mock slabs whose centroids are all on the positive side of a saddle membrane (Z > 2.0).
+        let m_pts = vec![
+            Vec3::new(-10.0, 0.0, 0.0),
+            Vec3::new(0.0, 10.0, 2.0),
+            Vec3::new(10.0, 0.0, 0.0),
+            Vec3::new(0.0, -10.0, 2.0),
+        ];
+        let mem = crate::membrane::build_membrane(&m_pts, 1).unwrap();
+        let s0 = crate::membrane::axis_aligned_slab(Vec3::new(-2.0, -2.0, 3.0), Vec3::new(2.0, 2.0, 4.0));
+        let s1 = crate::membrane::axis_aligned_slab(Vec3::new(-8.0, -8.0, 3.0), Vec3::new(-6.0, -6.0, 4.0));
+        let s2 = crate::membrane::axis_aligned_slab(Vec3::new(6.0, 6.0, 3.0), Vec3::new(8.0, 8.0, 4.0));
+        
+        let result = crate::membrane::split_into_two_sides(&mem, vec![s0, s1, s2], None, None);
+        assert!(result.is_none(), "Old centroid classification should have failed (returned None) because all 3 centroids are on Side A");
+    }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn test_concentric_elbow_bracer_passing() {
+        let mesh = crate::test_utils::concentric_elbow_bracer();
+        // Equator loop at Z=0 cutting both sleeve and cylinder
+        let loop_pts = vec![
+            OrganicCutLoopPoint { position: [12.0, 0.0, 0.0], normal: [1.0, 0.0, 0.0] },
+            OrganicCutLoopPoint { position: [0.0, 12.0, 0.0], normal: [0.0, 1.0, 0.0] },
+            OrganicCutLoopPoint { position: [-12.0, 0.0, 0.0], normal: [-1.0, 0.0, 0.0] },
+            OrganicCutLoopPoint { position: [0.0, -12.0, 0.0], normal: [0.0, -1.0, 0.0] },
+        ];
+        let options = OrganicCutOptions {
+            cut: OrganicCutSpec {
+                loop_points: loop_pts,
+                mode: CutMode::Contour,
+                ..Default::default()
+            }
+        };
+        
+        let outcome = organic_cut(mesh, &options);
+        assert_eq!(outcome.report.engine, "membrane");
+        
+        crate::test_utils::assert_watertight_manifold(&outcome.part_a);
+        crate::test_utils::assert_watertight_manifold(&outcome.part_b);
+    }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn test_single_shell_with_overhanging_cuff() {
+        let mesh = crate::test_utils::overhanging_cuff();
+        // Cut loop at Z=2.0 (below the connection of cuff at Z=5.0, but crossing the overhanging cuff region from Z=1.0 to Z=5.0)
+        let loop_pts = vec![
+            OrganicCutLoopPoint { position: [12.0, 0.0, 2.0], normal: [1.0, 0.0, 0.0] },
+            OrganicCutLoopPoint { position: [0.0, 12.0, 2.0], normal: [0.0, 1.0, 0.0] },
+            OrganicCutLoopPoint { position: [-12.0, 0.0, 2.0], normal: [-1.0, 0.0, 0.0] },
+            OrganicCutLoopPoint { position: [0.0, -12.0, 2.0], normal: [0.0, -1.0, 0.0] },
+        ];
+        let options = OrganicCutOptions {
+            cut: OrganicCutSpec {
+                loop_points: loop_pts,
+                mode: CutMode::Contour,
+                ..Default::default()
+            }
+        };
+        
+        let outcome = organic_cut(mesh, &options);
+        assert_eq!(outcome.report.engine, "membrane");
+        
+        crate::test_utils::assert_watertight_manifold(&outcome.part_a);
+        crate::test_utils::assert_watertight_manifold(&outcome.part_b);
+    }
+}

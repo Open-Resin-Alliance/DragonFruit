@@ -1917,21 +1917,278 @@ pub(crate) fn mesh_centroid(mesh: &IndexedMesh) -> Vec3 {
 /// This is what makes the contour cut work on real organic models, where a single
 /// seam can carve the body into many islands per side (the dragon's base gave 3-4
 /// components — top + bottom + slivers — which this collapses to a clean 2).
-pub(crate) fn split_into_two_sides(membrane: &Membrane, islands: Vec<IndexedMesh>) -> Option<(IndexedMesh, IndexedMesh)> {
+pub(crate) fn split_into_two_sides(
+    membrane: &Membrane,
+    islands: Vec<IndexedMesh>,
+    source_mesh: Option<&IndexedMesh>,
+    loop_pts: Option<&[Vec3]>,
+) -> Option<(IndexedMesh, IndexedMesh)> {
+    if islands.is_empty() {
+        return None;
+    }
+
+    // --- 1. Standard Centroid Side-Distance Classification (Primary) ---
+    // If it succeeds to partition components to both sides, use it. This is fast, robust
+    // for simple and planar cuts, and works for both with/without source mesh.
     let mut side_a: Vec<IndexedMesh> = Vec::new();
     let mut side_b: Vec<IndexedMesh> = Vec::new();
+    for island in &islands {
+        let c = mesh_centroid(island);
+        if signed_side_distance(membrane, c) >= 0.0 {
+            side_a.push(island.clone());
+        } else {
+            side_b.push(island.clone());
+        }
+    }
+    if !side_a.is_empty() && !side_b.is_empty() {
+        return Some((concat_meshes(side_a), concat_meshes(side_b)));
+    }
+
+    // --- 2. Topological Vertex Reference Mapping (Secondary) ---
+    // If standard classification fails (i.e. one side is empty), but we have a source mesh,
+    // use topological walking to group and classify the shells correctly.
+    if let Some(src) = source_mesh {
+        let quantize = |p: Vec3| -> (i32, i32, i32) {
+            (
+                (p.x * 10000.0).round() as i32,
+                (p.y * 10000.0).round() as i32,
+                (p.z * 10000.0).round() as i32,
+            )
+        };
+
+        // A. Build coord-to-source-ID lookup
+        let mut coord_to_source_id = ahash::AHashMap::new();
+        for (v_id, &pos) in src.positions.iter().enumerate() {
+            coord_to_source_id.insert(quantize(pos), v_id as u32);
+        }
+
+        // B. Identify loop vertices on the source mesh (the geodesic loop barrier)
+        let mut source_loop_vertex_ids = ahash::AHashSet::new();
+        if let Some(loop_pts) = loop_pts {
+            for &p in loop_pts {
+                let key = quantize(p);
+                if let Some(&v_id) = coord_to_source_id.get(&key) {
+                    source_loop_vertex_ids.insert(v_id);
+                }
+            }
+        } else {
+            // Proximity fallback
+            let cell_size = 0.2f32;
+            let inv_cell = 1.0 / cell_size;
+            let mut grid: ahash::AHashMap<(i32, i32, i32), Vec<Vec3>> = ahash::AHashMap::new();
+            for &b_idx in &membrane.boundary {
+                let p = membrane.vertices[b_idx as usize];
+                let key = (
+                    (p.x * inv_cell).floor() as i32,
+                    (p.y * inv_cell).floor() as i32,
+                    (p.z * inv_cell).floor() as i32,
+                );
+                grid.entry(key).or_default().push(p);
+            }
+
+            let max_dist_sq = 0.3 * 0.3;
+            for (v_id, &pos) in src.positions.iter().enumerate() {
+                let cx = (pos.x * inv_cell).floor() as i32;
+                let cy = (pos.y * inv_cell).floor() as i32;
+                let cz = (pos.z * inv_cell).floor() as i32;
+                let mut close = false;
+                'outer: for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        for dz in -1..=1 {
+                            if let Some(bucket) = grid.get(&(cx + dx, cy + dy, cz + dz)) {
+                                for &q in bucket {
+                                    if pos.sub(q).dot(pos.sub(q)) <= max_dist_sq {
+                                        close = true;
+                                        break 'outer;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if close {
+                    source_loop_vertex_ids.insert(v_id as u32);
+                }
+            }
+        }
+
+        // C. Build adjacency list for source mesh
+        let mut adj = vec![Vec::new(); src.positions.len()];
+        for t in &src.triangles {
+            for &(u, v) in &[(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                adj[u as usize].push(v);
+                adj[v as usize].push(u);
+            }
+        }
+
+        // D. Find seed vertex on positive side of the membrane
+        let mut seed_idx = None;
+        for (v_id, &pos) in src.positions.iter().enumerate() {
+            if source_loop_vertex_ids.contains(&(v_id as u32)) {
+                continue;
+            }
+            let d = signed_side_distance(membrane, pos);
+            if d > 0.05 {
+                seed_idx = Some(v_id as u32);
+                break;
+            }
+        }
+        if seed_idx.is_none() {
+            for (v_id, &pos) in src.positions.iter().enumerate() {
+                if source_loop_vertex_ids.contains(&(v_id as u32)) {
+                    continue;
+                }
+                let d = signed_side_distance(membrane, pos);
+                if d > 0.0 {
+                    seed_idx = Some(v_id as u32);
+                    break;
+                }
+            }
+        }
+
+        // E. BFS walk from seed_idx using geodesic loop as a barrier
+        let mut set_a = ahash::AHashSet::new();
+        if let Some(seed) = seed_idx {
+            let mut queue = std::collections::VecDeque::new();
+            queue.push_back(seed);
+            set_a.insert(seed);
+
+            while let Some(u) = queue.pop_front() {
+                for &v in &adj[u as usize] {
+                    if !set_a.contains(&v) && !source_loop_vertex_ids.contains(&v) {
+                        set_a.insert(v);
+                        queue.push_back(v);
+                    }
+                }
+            }
+        }
+
+        // F. Partition shells based on count_A vs count_B
+        let mut topo_side_a: Vec<IndexedMesh> = Vec::new();
+        let mut topo_side_b: Vec<IndexedMesh> = Vec::new();
+        for island in islands {
+            let mut count_a = 0;
+            let mut count_b = 0;
+            for pos in &island.positions {
+                let key = quantize(*pos);
+                if let Some(&v_id) = coord_to_source_id.get(&key) {
+                    if source_loop_vertex_ids.contains(&v_id) {
+                        continue;
+                    }
+                    if set_a.contains(&v_id) {
+                        count_a += 1;
+                    } else {
+                        count_b += 1;
+                    }
+                }
+            }
+            if count_a > count_b {
+                topo_side_a.push(island);
+            } else {
+                topo_side_b.push(island);
+            }
+        }
+
+        if !topo_side_a.is_empty() && !topo_side_b.is_empty() {
+            // Ensure both sides contain at least one vertex that maps back to the source mesh.
+            // If one side has 0 mapped vertices, it consists only of boolean slivers/noise
+            // and the cut did not actually sever the model.
+            let mut mapped_a = 0;
+            let mut mapped_b = 0;
+            for island in &topo_side_a {
+                for pos in &island.positions {
+                    if coord_to_source_id.contains_key(&quantize(*pos)) {
+                        mapped_a += 1;
+                    }
+                }
+            }
+            for island in &topo_side_b {
+                for pos in &island.positions {
+                    if coord_to_source_id.contains_key(&quantize(*pos)) {
+                        mapped_b += 1;
+                    }
+                }
+            }
+
+            if mapped_a > 0 && mapped_b > 0 {
+                return Some((concat_meshes(topo_side_a), concat_meshes(topo_side_b)));
+            } else {
+                return None;
+            }
+        } else {
+            // Topologically connected -> did not sever.
+            return None;
+        }
+    }
+
+    // --- 3. Fast 2-shell relative projection override (when source_mesh is None) ---
+    if islands.len() == 2 {
+        let mut avg_normal = Vec3::ZERO;
+        for t in &membrane.triangles {
+            let a = membrane.vertices[t[0] as usize];
+            let b = membrane.vertices[t[1] as usize];
+            let c = membrane.vertices[t[2] as usize];
+            let n = b.sub(a).cross(c.sub(a));
+            avg_normal = avg_normal.add(n);
+        }
+        let len = avg_normal.length();
+        if len > 1e-6 {
+            avg_normal = avg_normal.scale(1.0 / len);
+        }
+        let mut centroid = Vec3::ZERO;
+        if !membrane.vertices.is_empty() {
+            for &v in &membrane.vertices {
+                centroid = centroid.add(v);
+            }
+            centroid = centroid.scale(1.0 / membrane.vertices.len() as f32);
+        }
+
+        let p0 = if islands[0].positions.is_empty() {
+            0.0
+        } else {
+            let mut sum = 0.0;
+            for v in &islands[0].positions {
+                sum += avg_normal.dot(v.sub(centroid));
+            }
+            sum / islands[0].positions.len() as f32
+        };
+
+        let p1 = if islands[1].positions.is_empty() {
+            0.0
+        } else {
+            let mut sum = 0.0;
+            for v in &islands[1].positions {
+                sum += avg_normal.dot(v.sub(centroid));
+            }
+            sum / islands[1].positions.len() as f32
+        };
+
+        let mut islands = islands;
+        let i1 = islands.pop().unwrap();
+        let i0 = islands.pop().unwrap();
+        let (part_a, part_b) = if p0 >= p1 {
+            (i0, i1)
+        } else {
+            (i1, i0)
+        };
+        return Some((part_a, part_b));
+    }
+
+    // --- 4. Fallback Centroid Side-Distance Classification (when source_mesh is None) ---
+    let mut fallback_side_a: Vec<IndexedMesh> = Vec::new();
+    let mut fallback_side_b: Vec<IndexedMesh> = Vec::new();
     for island in islands {
         let c = mesh_centroid(&island);
         if signed_side_distance(membrane, c) >= 0.0 {
-            side_a.push(island);
+            fallback_side_a.push(island);
         } else {
-            side_b.push(island);
+            fallback_side_b.push(island);
         }
     }
-    if side_a.is_empty() || side_b.is_empty() {
+    if fallback_side_a.is_empty() || fallback_side_b.is_empty() {
         return None;
     }
-    Some((concat_meshes(side_a), concat_meshes(side_b)))
+    Some((concat_meshes(fallback_side_a), concat_meshes(fallback_side_b)))
 }
 
 /// Concatenate several meshes into one (offsetting triangle indices). The pieces
@@ -2398,7 +2655,7 @@ pub fn contour_split(
              the loop likely didn't wrap all the way through the body"
         ));
     }
-    let (part_a, part_b) = split_into_two_sides(&membrane, islands).ok_or_else(|| {
+    let (part_a, part_b) = split_into_two_sides(&membrane, islands, Some(mesh), Some(loop_pts)).ok_or_else(|| {
         format!(
             "contour cut produced {component_count} islands but they all fell on ONE side of \
              the membrane (the loop didn't pass through the body)"
@@ -3132,7 +3389,7 @@ mod tests {
         let islands = vec![above1.clone(), below1.clone(), above2.clone(), below2.clone()];
 
         let (part_a, part_b) =
-            split_into_two_sides(&membrane, islands).expect("should group into 2 sides");
+            split_into_two_sides(&membrane, islands, None, None).expect("should group into 2 sides");
         // Each side has two slabs → 24 tris; both parts non-empty and equal here.
         assert!(part_a.triangle_count() > 0 && part_b.triangle_count() > 0);
         let total = part_a.triangle_count() + part_b.triangle_count();
@@ -3146,7 +3403,8 @@ mod tests {
         let membrane = build_membrane(&square_loop(10.0), 1).expect("membrane"); // z=0
         let above1 = axis_aligned_slab(Vec3::new(0.0, 0.0, 1.0), Vec3::new(2.0, 2.0, 3.0));
         let above2 = axis_aligned_slab(Vec3::new(8.0, 8.0, 1.0), Vec3::new(9.0, 9.0, 3.0));
-        assert!(split_into_two_sides(&membrane, vec![above1, above2]).is_none());
+        let above3 = axis_aligned_slab(Vec3::new(4.0, 4.0, 1.0), Vec3::new(6.0, 6.0, 3.0));
+        assert!(split_into_two_sides(&membrane, vec![above1, above2, above3], None, None).is_none());
     }
 
     #[test]
