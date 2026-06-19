@@ -51,6 +51,11 @@ export type GeometryWithBounds = {
    * Computed once during import to avoid synchronous lag when toggling the setting on.
    */
   edgeGeometry?: THREE.EdgesGeometry;
+  /** Present when an oversized native source was reduced for interactive use. */
+  nativePreview?: {
+    originalTriangleCount: number;
+    previewTriangleCount: number;
+  };
 };
 
 /**
@@ -105,6 +110,21 @@ export interface ProcessGeometryOptions {
    * Useful for surfacing progress text in import loading overlays.
    */
   onNativeProcessingStage?: (stage: 'analyzing' | 'repairing' | 'classifying' | 'postprocess') => void;
+  /**
+   * When running in Tauri, the on-disk file path for native (Rust-side) mesh
+   * loading. If provided, `loadStlGeometry` will use a Tauri IPC command to
+   * parse the STL in Rust and return pre-computed positions + normals,
+   * avoiding holding the raw file data in webview memory.
+   */
+  filePath?: string;
+  /**
+   * Skip `computeVertexNormals()` — the geometry already has a `normal`
+   * attribute (e.g. from the Rust-side STL parser).
+   * @internal
+   */
+  _skipComputeNormals?: boolean;
+  /** Skip nonessential analysis for a native reduced-detail preview. @internal */
+  _isNativePreview?: boolean;
 }
 
 // Cloning extremely large position buffers can require hundreds of MB and can
@@ -122,6 +142,12 @@ const AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD = 3_000_000;
 // precomputation for meshes above this threshold to avoid the wasted work.
 // The Higher Contrast Model Edges overlay simply won't be available for that model.
 const EDGE_GEOMETRY_MAX_TRIANGLES = 800_000;
+// Loading an STL file larger than this will be rejected with a user-facing
+// error. A 300 MB binary STL contains ~6M triangles, which after Three.js
+// processing (positions + normals + BVH) can consume 1-2 GB of RAM.
+// STL files above this vertex count skip non-critical post-processing
+// (flattening planes) to keep memory pressure manageable.
+const HUGE_STL_VERTEX_THRESHOLD = 15_000_000;
 
 type NativeRepairQualityGateDecision = {
   reject: boolean;
@@ -412,8 +438,12 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   // Yield to let the loading indicator repaint before each heavy synchronous op
   await new Promise<void>(r => setTimeout(r, 0));
 
-  console.log(`[${new Date().toISOString()}] [processGeometry] Computing Normals`);
-  geometry.computeVertexNormals();
+  if (!options._skipComputeNormals) {
+    console.log(`[${new Date().toISOString()}] [processGeometry] Computing Normals`);
+    geometry.computeVertexNormals();
+  } else {
+    console.log(`[${new Date().toISOString()}] [processGeometry] Normals already present — skipping computeVertexNormals`);
+  }
 
   console.log(`[${new Date().toISOString()}] [processGeometry] Computing BBox`);
   geometry.computeBoundingBox();
@@ -444,10 +474,22 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   // Yield before ConvexHull / flattening planes computation
   await new Promise<void>(r => setTimeout(r, 0));
 
-  console.log(`[${new Date().toISOString()}] [processGeometry] Computing Flattening Planes`);
-  const startPlanes = performance.now();
-  const flatteningPlanes = computeFlatteningPlanes(geometry);
-  console.log(`[${new Date().toISOString()}] [processGeometry] Flattening Planes finished. Took ${(performance.now() - startPlanes).toFixed(2)}ms`);
+  // Skip flattening planes for gigantic meshes — the ConvexHull + grid
+  // decimation still processes every vertex, adding measurable time and
+  // allocations for meshes with 15M+ vertices.
+  let flatteningPlanes: FlatteningPlane[];
+  if (options._isNativePreview || sourceVertexCount >= HUGE_STL_VERTEX_THRESHOLD) {
+    console.warn(
+      `[processGeometry] Skipping flattening planes for huge mesh (` +
+      `${sourceVertexCount.toLocaleString()} vertices).`,
+    );
+    flatteningPlanes = [];
+  } else {
+    console.log(`[${new Date().toISOString()}] [processGeometry] Computing Flattening Planes`);
+    const startPlanes = performance.now();
+    flatteningPlanes = computeFlatteningPlanes(geometry);
+    console.log(`[${new Date().toISOString()}] [processGeometry] Flattening Planes finished. Took ${(performance.now() - startPlanes).toFixed(2)}ms`);
+  }
 
   // Yield before edge geometry computation (can be expensive for large meshes)
   await new Promise<void>(r => setTimeout(r, 0));
@@ -476,7 +518,273 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   return { geometry, bbox, center, size, flatteningPlanes, edgeGeometry, ...(shouldSurfaceDefects ? { meshDefects } : {}) };
 }
 
-export async function loadStlGeometry(fileUrl: string, options?: ProcessGeometryOptions): Promise<GeometryWithBounds> {
+/** Number of bytes per triangle in a binary STL: 12 byte normal + 36 byte vertices + 2 byte attribute */
+const BINARY_STL_TRIANGLE_BYTES = 50;
+/** Offset of the triangle count in a binary STL header */
+const STL_HEADER_TRIANGLE_COUNT_OFFSET = 80;
+/** Total binary STL header size: 80 byte comment + 4 byte count */
+const STL_HEADER_SIZE = 84;
+/**
+ * Binary STL triangle: vertices start at byte 12 (after 12-byte normal),
+ * span 36 bytes (3 vertices × 3 floats × 4 bytes).
+ */
+const STL_TRIANGLE_VERTEX_OFFSET = 12;
+const STL_TRIANGLE_VERTEX_BYTES = 36;
+// Leave headroom for normals, BVH nodes, renderer uploads, and the rest of the
+// application. Chromium terminates the process with 0xe0000008 when a typed
+// array allocation cannot be satisfied, so this must be checked beforehand.
+const MAX_WEBVIEW_STL_POSITION_BYTES = 1_000_000_000;
+
+class StlWebviewMemoryError extends Error {}
+
+/**
+ * Parse complete binary STL triangles from a Uint8Array and write their
+ * vertex positions into the target Float32Array starting at `posIndex`.
+ * `posIndex` is the float-offset into `target`, updated in-place.
+ */
+function parseStlTrianglesInto(
+  target: Float32Array,
+  data: Uint8Array,
+  startFloatIndex: number,
+): number {
+  const triCount = Math.floor(data.byteLength / BINARY_STL_TRIANGLE_BYTES);
+  let fi = startFloatIndex;
+  for (let t = 0; t < triCount; t++) {
+    const triByteOffset = t * BINARY_STL_TRIANGLE_BYTES + STL_TRIANGLE_VERTEX_OFFSET;
+    const dv = new DataView(data.buffer, data.byteOffset + triByteOffset, STL_TRIANGLE_VERTEX_BYTES);
+    target[fi++] = dv.getFloat32(0, true);
+    target[fi++] = dv.getFloat32(4, true);
+    target[fi++] = dv.getFloat32(8, true);
+    target[fi++] = dv.getFloat32(12, true);
+    target[fi++] = dv.getFloat32(16, true);
+    target[fi++] = dv.getFloat32(20, true);
+    target[fi++] = dv.getFloat32(24, true);
+    target[fi++] = dv.getFloat32(28, true);
+    target[fi++] = dv.getFloat32(32, true);
+  }
+  return fi;
+}
+
+/** Concatenate two Uint8Arrays into a new one. */
+function concatUint8Arrays(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const result = new Uint8Array(a.byteLength + b.byteLength);
+  result.set(a, 0);
+  result.set(b, a.byteLength);
+  return result;
+}
+
+/**
+ * Streams a binary STL file, parsing triangles incrementally into a
+ * pre-allocated Float32Array. Avoids holding the entire file in memory
+ * as a single ArrayBuffer (can save ~1GB for a 20M-triangle file).
+ *
+ * Falls back to null on any error (caller should use STLLoader).
+ */
+async function loadStlBinaryStreaming(fileUrl: string): Promise<THREE.BufferGeometry | null> {
+  let response: Response;
+  try {
+    response = await fetch(fileUrl);
+  } catch {
+    return null;
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) return null;
+
+  try {
+    // --- Phase 1: Read first chunk — must contain the 84-byte header ---
+    const firstRead = await reader.read();
+    if (firstRead.done || !firstRead.value || firstRead.value.byteLength < STL_HEADER_SIZE) return null;
+
+    const firstChunk = new Uint8Array(firstRead.value.buffer, firstRead.value.byteOffset, firstRead.value.byteLength);
+
+    // Check for ASCII STL signature ("solid ")
+    const asciiSig = 'solid ';
+    let isAscii = true;
+    for (let i = 0; i < asciiSig.length; i++) {
+      if (String.fromCharCode(firstChunk[i]) !== asciiSig[i]) {
+        isAscii = false;
+        break;
+      }
+    }
+    if (isAscii) return null; // ASCII STL — fall back to STLLoader
+
+    // Read triangle count from bytes 80-83
+    const triCount = new DataView(firstChunk.buffer, firstChunk.byteOffset + STL_HEADER_TRIANGLE_COUNT_OFFSET, 4).getUint32(0, true);
+    if (triCount === 0) return null;
+
+    const expectedStlSize = STL_HEADER_SIZE + triCount * BINARY_STL_TRIANGLE_BYTES;
+    const positionBytes = triCount * 9 * Float32Array.BYTES_PER_ELEMENT;
+    if (!Number.isSafeInteger(positionBytes) || positionBytes > MAX_WEBVIEW_STL_POSITION_BYTES) {
+      throw new StlWebviewMemoryError(
+        `This STL contains ${triCount.toLocaleString()} triangles and needs at least ` +
+        `${(positionBytes / 1_000_000_000).toFixed(2)} GB for positions in the WebView. ` +
+        'Open it from a desktop file path so DragonFruit can use the native STL loader.',
+      );
+    }
+    console.warn(
+      `[loadStlGeometry] Streaming ${triCount.toLocaleString()} triangles ` +
+      `(${(expectedStlSize / 1_000_000_000).toFixed(2)} GB file). ` +
+      `Pre-allocating ${((triCount * 9 * 4) / 1_000_000_000).toFixed(2)} GB position buffer.`,
+    );
+
+    // Pre-allocate the position buffer (9 floats per triangle: 3 vertices × 3 coords)
+    const positions = new Float32Array(triCount * 9);
+    let posIndex = 0;
+
+    // --- Phase 2: Process any triangle data already in the first chunk (after the 84-byte header) ---
+    const firstTriData = firstChunk.subarray(STL_HEADER_SIZE);
+    posIndex = parseStlTrianglesInto(positions, firstTriData, posIndex);
+
+    // --- Phase 3: Stream remaining chunks ---
+    let pendingBuffer: Uint8Array | null = null;
+
+    while (true) {
+      const { value: chunk, done } = await reader.read();
+      if (done) break;
+      if (!chunk) continue;
+
+      // Combine with any pending bytes from previous iteration
+      const data: Uint8Array = pendingBuffer
+        ? concatUint8Arrays(pendingBuffer, new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength))
+        : new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+
+      // Count complete triangles in this buffer
+      const completeBytes = Math.floor(data.byteLength / BINARY_STL_TRIANGLE_BYTES) * BINARY_STL_TRIANGLE_BYTES;
+      if (completeBytes > 0) {
+        posIndex = parseStlTrianglesInto(positions, data.subarray(0, completeBytes), posIndex);
+      }
+
+      // Keep leftover bytes for next chunk
+      const remaining: number = data.byteLength - completeBytes;
+      pendingBuffer = remaining > 0 ? data.subarray(completeBytes) : null;
+    }
+
+    if (posIndex !== positions.length) {
+      console.warn(
+        `[loadStlGeometry] Expected ${positions.length} position floats but got ${posIndex}. ` +
+        `STL file may be truncated.`,
+      );
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(
+      posIndex === positions.length ? positions : positions.slice(0, posIndex),
+      3,
+    ));
+
+    return geometry;
+  } catch (error) {
+    if (error instanceof StlWebviewMemoryError) throw error;
+    console.warn('[loadStlGeometry] Streaming STL failed; falling back to STLLoader.', error);
+    return null;
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+}
+
+/**
+ * Use the Rust-side STL parser via Tauri IPC. Returns a BufferGeometry with
+ * pre-computed vertex normals, skipping the expensive JS-side computation.
+ * Uses dynamic import to avoid loading @tauri-apps/api at module init time.
+ */
+type NativeStlLoadResult = {
+  geometry: THREE.BufferGeometry;
+  originalTriangleCount: number;
+  previewTriangleCount: number;
+  isPreview: boolean;
+};
+
+async function loadStlViaTauri(filePath: string): Promise<NativeStlLoadResult | null> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const bytes = await invoke<ArrayBuffer>('load_stl_file', { filePath });
+    if (!bytes || bytes.byteLength === 0) return null;
+
+    if (bytes.byteLength < 16) return null;
+    const header = new DataView(bytes, 0, 16);
+    const hasMagic = header.getUint8(0) === 0x44
+      && header.getUint8(1) === 0x46
+      && header.getUint8(2) === 0x53
+      && header.getUint8(3) === 0x54;
+    if (!hasMagic) throw new Error('Native STL loader returned an unsupported response.');
+
+    const flags = header.getUint32(4, true);
+    const originalTriangleCount = header.getUint32(8, true);
+    const previewTriangleCount = header.getUint32(12, true);
+    const expectedBytes = 16 + previewTriangleCount * 18 * Float32Array.BYTES_PER_ELEMENT;
+    if (previewTriangleCount === 0 || bytes.byteLength !== expectedBytes) {
+      throw new Error('Native STL loader returned a truncated response.');
+    }
+
+    const positions = new Float32Array(bytes, 16, previewTriangleCount * 9);
+    const normals = new Float32Array(
+      bytes,
+      16 + previewTriangleCount * 9 * Float32Array.BYTES_PER_ELEMENT,
+      previewTriangleCount * 9,
+    );
+
+    const geometry = new THREE.BufferGeometry();
+    // Both attributes retain the IPC ArrayBuffer. Avoiding slice() here removes
+    // two full-size allocation spikes immediately after the native transfer.
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+
+    console.log(
+      `[loadStlGeometry] Tauri Rust parser loaded ${previewTriangleCount.toLocaleString()} triangles ` +
+      `(${(bytes.byteLength / 1_000_000).toFixed(0)} MB IPC transfer).`,
+    );
+    if ((flags & 1) !== 0) {
+      console.warn(
+        `[loadStlGeometry] Using a reduced native preview: ` +
+        `${originalTriangleCount.toLocaleString()} -> ${previewTriangleCount.toLocaleString()} triangles.`,
+      );
+    }
+    return {
+      geometry,
+      originalTriangleCount,
+      previewTriangleCount,
+      isPreview: (flags & 1) !== 0,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[loadStlGeometry] Tauri Rust parser failed.', error);
+    throw new Error(message || 'Native STL loading failed.');
+  }
+}
+
+export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryOptions = {}): Promise<GeometryWithBounds> {
+  // In Tauri with a file path, use the Rust-side STL parser.
+  // It reads the file directly from disk, computes normals, and avoids
+  // holding the raw STL bytes in webview memory — critical for huge files.
+  if (isTauriRuntime() && options.filePath) {
+    const nativeResult = await loadStlViaTauri(options.filePath);
+    if (nativeResult) {
+      // Normals are already computed — skip computeVertexNormals in processGeometry
+      const processed = await processGeometry(nativeResult.geometry, {
+        ...options,
+        _skipComputeNormals: true,
+        _isNativePreview: nativeResult.isPreview,
+        ...(nativeResult.isPreview ? { nativeProcessingMode: 'none' as const } : {}),
+      });
+      if (nativeResult.isPreview) {
+        processed.nativePreview = {
+          originalTriangleCount: nativeResult.originalTriangleCount,
+          previewTriangleCount: nativeResult.previewTriangleCount,
+        };
+      }
+      return processed;
+    }
+  }
+
+  // Try streaming binary STL parser — avoids holding the entire file as ArrayBuffer
+  const streamed = await loadStlBinaryStreaming(fileUrl);
+  if (streamed) {
+    console.log(`[${new Date().toISOString()}] [loadStlGeometry] Streaming parser succeeded, processing geometry.`);
+    return processGeometry(streamed, options);
+  }
+
+  // Fall back to Three.js STLLoader (handles ASCII STL, edge cases, etc.)
   return new Promise((resolve, reject) => {
     const loader = new STLLoader();
     console.log(`[${new Date().toISOString()}] [loadStlGeometry] Starting STLLoader load for ${fileUrl}`);

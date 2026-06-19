@@ -761,6 +761,8 @@ export interface LoadedModel {
   groupName?: string;
   fileUrl: string;
   fileSizeBytes?: number;
+  /** Original on-disk mesh retained when `geometry` is a reduced native preview. */
+  sourcePath?: string;
   geometry: GeometryWithBounds;
   transform: ModelTransform;
   visible: boolean;
@@ -1952,10 +1954,13 @@ export function useSceneCollectionManager() {
           progress: null,
         });
 
+        console.log(`[SceneCollection] Loading ${file.name}... (${(file.size / 1_000_000).toFixed(0)} MB)`);
+
         try {
           console.log(`[SceneCollection] Loading ${file.name}...`);
           const geom = await loadMeshGeometry(url, file.name, {
             nativeProcessingMode: getSavedImportDefaultsSettings().autoRepair ? 'auto' : 'none',
+            filePath: (file as File & { filePath?: string }).filePath,
             onNativeProcessingStage: (stage) => {
               if (stage === 'repairing') {
                 setImportProgress({
@@ -2071,6 +2076,7 @@ export function useSceneCollectionManager() {
             name: file.name,
             fileUrl: url,
             fileSizeBytes: file.size,
+            sourcePath: (file as File & { filePath?: string }).filePath,
             geometry: geom,
             transform: {
               position: new THREE.Vector3(defaultImportCenterXY.x, defaultImportCenterXY.y, initialZ),
@@ -2079,7 +2085,8 @@ export function useSceneCollectionManager() {
             },
             visible: true,
             color,
-            polygonCount: geom.geometry.getAttribute('position').count / 3
+            polygonCount: geom.nativePreview?.originalTriangleCount
+              ?? geom.geometry.getAttribute('position').count / 3
           };
 
           const assignedCenter = findFreeSpotCentersForModels([...stagedNewModels, model], 5).at(-1);
@@ -4036,6 +4043,11 @@ export function useSceneCollectionManager() {
     if (entry.kind === 'scene') {
       await importSceneFile(file);
       return true;
+    }
+
+    // Pass the on-disk file path through to enable Rust-side STL loading.
+    if (entry.sourcePath) {
+      (file as File & { filePath?: string }).filePath = entry.sourcePath;
     }
 
     await loadFiles([file]);

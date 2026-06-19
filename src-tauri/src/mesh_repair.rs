@@ -14,10 +14,14 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::{
+    collections::{HashMap, HashSet},
+    io::{BufReader, Read, Seek, SeekFrom},
+};
 
 use dragonfruit_mesh_repair::{
     analyze, classify_support_split, hollow_voxel, io, punch_cylinders, repair, HolePunchOptions,
-    HollowOptions, HollowSession, IndexedMesh, RepairOptions,
+    HollowOptions, HollowSession, IndexedMesh, RepairOptions, Vec3,
 };
 use serde::Deserialize;
 use tauri::ipc::Response;
@@ -695,6 +699,364 @@ pub async fn mesh_punch_read_positions() -> Result<Response, String> {
 pub async fn mesh_repair_read_positions() -> Result<Response, String> {
     let bytes = read_staging_bytes()?;
     Ok(Response::new(bytes))
+}
+
+/// Parses a binary or ASCII STL file in Rust and returns the vertex positions
+/// and per-vertex normals as a flat byte buffer.
+///
+/// Byte layout: a 16-byte `DFST` header containing flags and the original/output
+/// triangle counts, followed by little-endian f32 positions and normals.
+///
+/// Processing the file in Rust avoids loading the entire raw STL into the
+/// webview's memory space, which can save ~1 GB for a large binary STL.
+#[tauri::command]
+pub async fn load_stl_file(file_path: String) -> Result<Response, String> {
+    use dragonfruit_mesh_repair::io;
+
+    let path = std::path::Path::new(&file_path);
+
+    log::info!("[load_stl_file] Starting native STL load: {file_path}");
+
+    // The current IPC format expands every triangle to positions plus normals
+    // (72 bytes/triangle), before Three.js builds its BVH and uploads buffers.
+    // Reject inputs that cannot fit that representation before the repair
+    // loader reads and indexes the entire STL in memory.
+    const MAX_NATIVE_STL_TRIANGLES: u64 = 6_000_000;
+    const PREVIEW_TARGET_TRIANGLES: usize = 2_000_000;
+    const MAX_NATIVE_ASCII_STL_BYTES: u64 = 300_000_000;
+    let file_size = std::fs::metadata(path)
+        .map_err(|e| format!("Failed to inspect STL '{}': {e}", file_path))?
+        .len();
+    let mut header = [0u8; 84];
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| format!("Failed to open STL '{}': {e}", file_path))?;
+    let header_len = file
+        .read(&mut header)
+        .map_err(|e| format!("Failed to read STL header '{}': {e}", file_path))?;
+
+    if header_len == header.len() {
+        let triangle_count = u32::from_le_bytes(header[80..84].try_into().unwrap()) as u64;
+        let expected_binary_size = 84u64.saturating_add(triangle_count.saturating_mul(50));
+        if expected_binary_size == file_size && triangle_count > MAX_NATIVE_STL_TRIANGLES {
+            drop(file);
+            let preview =
+                load_binary_stl_preview(path, triangle_count as u32, PREVIEW_TARGET_TRIANGLES)?;
+            log::info!(
+                "[load_stl_file] Streaming preview complete: {} -> {} triangles",
+                triangle_count,
+                preview.triangles.len()
+            );
+            return encode_stl_response(&preview, triangle_count as u32, true).map(Response::new);
+        }
+    }
+    if file_size > MAX_NATIVE_ASCII_STL_BYTES && header.starts_with(b"solid") {
+        return Err(format!(
+            "ASCII STL is too large for the current renderer ({:.2} GB on disk; limit {:.2} GB). Decimate or convert it before importing.",
+            file_size as f64 / 1_000_000_000.0,
+            MAX_NATIVE_ASCII_STL_BYTES as f64 / 1_000_000_000.0,
+        ));
+    }
+    drop(file);
+
+    let mesh =
+        io::stl::load(path).map_err(|e| format!("Failed to load STL '{}': {e}", file_path))?;
+
+    let tri_count = mesh.triangles.len();
+    encode_stl_response(&mesh, tri_count as u32, false).map(Response::new)
+}
+
+const STL_RESPONSE_MAGIC: &[u8; 4] = b"DFST";
+const STL_RESPONSE_HEADER_BYTES: usize = 16;
+const STL_RESPONSE_FLAG_PREVIEW: u32 = 1;
+
+fn encode_stl_response(
+    mesh: &IndexedMesh,
+    original_triangle_count: u32,
+    is_preview: bool,
+) -> Result<Vec<u8>, String> {
+    let tri_count = mesh.triangles.len();
+    let soup = mesh.to_triangle_soup(); // Vec<f32>, 9 floats per triangle
+    let positions_bytes: &[u8] = bytemuck::cast_slice(&soup);
+    let positions_len = positions_bytes.len();
+    let normals_len = tri_count * 9 * std::mem::size_of::<f32>();
+    let response_len = STL_RESPONSE_HEADER_BYTES
+        .checked_add(positions_len)
+        .and_then(|size| size.checked_add(normals_len))
+        .ok_or_else(|| "STL response size overflow".to_string())?;
+    let mut result = Vec::new();
+    result.try_reserve_exact(response_len).map_err(|_| {
+        format!(
+            "Not enough memory for the STL response ({:.2} GB)",
+            response_len as f64 / 1_000_000_000.0
+        )
+    })?;
+    result.extend_from_slice(STL_RESPONSE_MAGIC);
+    result.extend_from_slice(
+        &(if is_preview {
+            STL_RESPONSE_FLAG_PREVIEW
+        } else {
+            0
+        })
+        .to_le_bytes(),
+    );
+    result.extend_from_slice(&original_triangle_count.to_le_bytes());
+    result.extend_from_slice(&(tri_count as u32).to_le_bytes());
+    result.extend_from_slice(positions_bytes);
+
+    // Compute per-vertex normals from the indexed mesh.
+    // For each triangle: face normal = normalize(cross(v1-v0, v2-v0))
+    for tri in &mesh.triangles {
+        let p0 = mesh.positions[tri[0] as usize];
+        let p1 = mesh.positions[tri[1] as usize];
+        let p2 = mesh.positions[tri[2] as usize];
+
+        let e1 = p1.sub(p0);
+        let e2 = p2.sub(p0);
+        let face_normal = e1.cross(e2);
+        let len = face_normal.length();
+        let n = if len > 1e-10 {
+            face_normal.scale(1.0 / len)
+        } else {
+            Vec3::ZERO
+        };
+
+        // Three vertices, same face normal
+        for _ in 0..3 {
+            result.extend_from_slice(&n.x.to_le_bytes());
+            result.extend_from_slice(&n.y.to_le_bytes());
+            result.extend_from_slice(&n.z.to_le_bytes());
+        }
+    }
+
+    log::info!(
+        "[load_stl_file] {} triangles, {} MB positions + {} MB normals",
+        tri_count,
+        positions_len / (1024 * 1024),
+        normals_len / (1024 * 1024),
+    );
+
+    Ok(result)
+}
+
+fn read_binary_stl_vertex(record: &[u8; 50], offset: usize) -> Vec3 {
+    let read_f32 = |at: usize| f32::from_le_bytes(record[at..at + 4].try_into().unwrap());
+    Vec3::new(read_f32(offset), read_f32(offset + 4), read_f32(offset + 8))
+}
+
+fn binary_stl_preview_stats(
+    path: &std::path::Path,
+    triangle_count: u32,
+) -> Result<(Vec3, Vec3, f64), String> {
+    let file =
+        std::fs::File::open(path).map_err(|e| format!("Failed to open STL preview source: {e}"))?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    reader
+        .seek(SeekFrom::Start(84))
+        .map_err(|e| format!("Failed seeking STL: {e}"))?;
+    let mut record = [0u8; 50];
+    let mut min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+    let mut max = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    let mut sampled_edge_sum = 0.0f64;
+    let mut sampled_edge_count = 0u64;
+
+    for triangle_index in 0..triangle_count {
+        reader
+            .read_exact(&mut record)
+            .map_err(|e| format!("Truncated binary STL at triangle {triangle_index}: {e}"))?;
+        let vertices = [
+            read_binary_stl_vertex(&record, 12),
+            read_binary_stl_vertex(&record, 24),
+            read_binary_stl_vertex(&record, 36),
+        ];
+        for vertex in vertices {
+            min = min.min(vertex);
+            max = max.max(vertex);
+        }
+        if triangle_index % 64 == 0 {
+            sampled_edge_sum += vertices[1].sub(vertices[0]).length() as f64;
+            sampled_edge_sum += vertices[2].sub(vertices[1]).length() as f64;
+            sampled_edge_sum += vertices[0].sub(vertices[2]).length() as f64;
+            sampled_edge_count += 3;
+        }
+    }
+
+    let average_edge = if sampled_edge_count > 0 {
+        sampled_edge_sum / sampled_edge_count as f64
+    } else {
+        0.0
+    };
+    Ok((min, max, average_edge))
+}
+
+fn cluster_binary_stl_pass(
+    path: &std::path::Path,
+    triangle_count: u32,
+    bbox_min: Vec3,
+    cell_size: f32,
+    hard_triangle_limit: usize,
+) -> Result<Option<IndexedMesh>, String> {
+    let file =
+        std::fs::File::open(path).map_err(|e| format!("Failed to open STL preview source: {e}"))?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    reader
+        .seek(SeekFrom::Start(84))
+        .map_err(|e| format!("Failed seeking STL: {e}"))?;
+    let mut record = [0u8; 50];
+    let inv_cell = 1.0 / cell_size.max(1e-9);
+    let mut vertex_cells: HashMap<(i32, i32, i32), u32> = HashMap::new();
+    let mut positions: Vec<Vec3> = Vec::new();
+    let mut triangles: Vec<[u32; 3]> = Vec::new();
+    let mut seen_triangles: HashSet<(u32, u32, u32)> = HashSet::new();
+
+    for triangle_index in 0..triangle_count {
+        reader
+            .read_exact(&mut record)
+            .map_err(|e| format!("Truncated binary STL at triangle {triangle_index}: {e}"))?;
+        let vertices = [
+            read_binary_stl_vertex(&record, 12),
+            read_binary_stl_vertex(&record, 24),
+            read_binary_stl_vertex(&record, 36),
+        ];
+        let mut indices = [0u32; 3];
+        for (slot, vertex) in vertices.into_iter().enumerate() {
+            let key = (
+                ((vertex.x - bbox_min.x) * inv_cell).floor() as i32,
+                ((vertex.y - bbox_min.y) * inv_cell).floor() as i32,
+                ((vertex.z - bbox_min.z) * inv_cell).floor() as i32,
+            );
+            indices[slot] = *vertex_cells.entry(key).or_insert_with(|| {
+                let index = positions.len() as u32;
+                positions.push(vertex);
+                index
+            });
+        }
+        if indices[0] == indices[1] || indices[1] == indices[2] || indices[0] == indices[2] {
+            continue;
+        }
+        let mut canonical = indices;
+        canonical.sort_unstable();
+        if seen_triangles.insert((canonical[0], canonical[1], canonical[2])) {
+            triangles.push(indices);
+            if triangles.len() > hard_triangle_limit {
+                return Ok(None);
+            }
+        }
+    }
+
+    Ok(Some(IndexedMesh {
+        positions,
+        triangles,
+    }))
+}
+
+fn load_binary_stl_preview(
+    path: &std::path::Path,
+    triangle_count: u32,
+    target_triangles: usize,
+) -> Result<IndexedMesh, String> {
+    let (bbox_min, bbox_max, average_edge) = binary_stl_preview_stats(path, triangle_count)?;
+    let diagonal = bbox_max.sub(bbox_min).length().max(1e-6);
+    let reduction = (triangle_count as f64 / target_triangles as f64).sqrt() as f32;
+    let mut cell_size = (average_edge as f32 * reduction).clamp(diagonal / 8192.0, diagonal / 16.0);
+    let mut best: Option<IndexedMesh> = None;
+
+    for attempt in 0..6 {
+        log::info!(
+            "[load_stl_file] Preview clustering pass {} with {:.6} mm cells",
+            attempt + 1,
+            cell_size
+        );
+        match cluster_binary_stl_pass(
+            path,
+            triangle_count,
+            bbox_min,
+            cell_size,
+            target_triangles * 5 / 4,
+        )? {
+            None => cell_size *= 1.6,
+            Some(mesh) if mesh.triangles.len() > target_triangles => {
+                let factor = (mesh.triangles.len() as f64 / target_triangles as f64).sqrt() as f32;
+                cell_size *= factor.max(1.1);
+            }
+            Some(mesh) => {
+                let count = mesh.triangles.len();
+                best = Some(mesh);
+                if count >= target_triangles * 2 / 3 || attempt == 5 {
+                    break;
+                }
+                let factor = (count.max(1) as f64 / target_triangles as f64).sqrt() as f32;
+                cell_size *= factor.clamp(0.45, 0.9);
+            }
+        }
+    }
+
+    best.filter(|mesh| !mesh.triangles.is_empty())
+        .ok_or_else(|| "Could not build a bounded preview for this STL".to_string())
+}
+
+#[cfg(test)]
+mod stl_preview_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn streaming_preview_is_nonempty_and_bounded() {
+        let grid_size = 80u32;
+        let triangle_count = grid_size * grid_size * 2;
+        let path = std::env::temp_dir().join(format!(
+            "dragonfruit-stl-preview-{}.stl",
+            std::process::id()
+        ));
+        let mut file = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+        file.write_all(&[0u8; 80]).unwrap();
+        file.write_all(&triangle_count.to_le_bytes()).unwrap();
+        for y in 0..grid_size {
+            for x in 0..grid_size {
+                let x = x as f32;
+                let y = y as f32;
+                for vertices in [
+                    [[x, y, 0.0], [x + 1.0, y, 0.0], [x + 1.0, y + 1.0, 0.0]],
+                    [[x, y, 0.0], [x + 1.0, y + 1.0, 0.0], [x, y + 1.0, 0.0]],
+                ] {
+                    file.write_all(&[0u8; 12]).unwrap();
+                    for vertex in vertices {
+                        for component in vertex {
+                            file.write_all(&component.to_le_bytes()).unwrap();
+                        }
+                    }
+                    file.write_all(&[0u8; 2]).unwrap();
+                }
+            }
+        }
+        file.flush().unwrap();
+        drop(file);
+
+        let preview = load_binary_stl_preview(&path, triangle_count, 500).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert!(!preview.triangles.is_empty());
+        assert!(preview.triangles.len() <= 500);
+    }
+
+    #[test]
+    #[ignore = "requires DRAGONFRUIT_LARGE_STL_TEST_PATH"]
+    fn streaming_preview_external_stl() {
+        let path = std::path::PathBuf::from(
+            std::env::var("DRAGONFRUIT_LARGE_STL_TEST_PATH")
+                .expect("DRAGONFRUIT_LARGE_STL_TEST_PATH must point to a binary STL"),
+        );
+        let mut file = std::fs::File::open(&path).unwrap();
+        let mut header = [0u8; 84];
+        file.read_exact(&mut header).unwrap();
+        let triangle_count = u32::from_le_bytes(header[80..84].try_into().unwrap());
+        let preview = load_binary_stl_preview(&path, triangle_count, 2_000_000).unwrap();
+        eprintln!(
+            "previewed {triangle_count} triangles as {} triangles / {} vertices",
+            preview.triangles.len(),
+            preview.positions.len()
+        );
+        assert!(!preview.triangles.is_empty());
+        assert!(preview.triangles.len() <= 2_000_000);
+    }
 }
 
 // --- internal helpers ----------------------------------------------------
