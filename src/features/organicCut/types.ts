@@ -1,17 +1,12 @@
 /**
  * Organic Cut — shared types.
  *
- * This feature lets the user draw a closed loop on a model's surface, from which
- * the Rust backend builds a consistent-thickness "wafer" cutter and splits the
- * model into two printable parts.
+ * This feature lets the user draw one or more closed loops on a model's surface,
+ * from which the Rust backend builds a contour "wafer" cutter (optionally with a
+ * registration key per loop) and splits the model into its separate parts — two
+ * for a single loop, more when a multi-loop cut frees several pieces at once.
  *
- * MILESTONE M1 (current): the wafer/boolean is a no-op — the backend echoes the
- * source mesh back as both parts. These types already describe the full intended
- * contract so the plumbing doesn't change shape as the geometry is filled in.
- *
- * Everything in src/features/organicCut/ is self-contained. The only edits to
- * existing app files are four small additive seams (TransformMode union, the
- * CUT toolbar button, the page.tsx mount point, and the Rust command registry).
+ * Everything in src/features/organicCut/ is self-contained.
  */
 
 /** A single point on the loop the user draws on the model surface (local space). */
@@ -70,7 +65,7 @@ export interface OrganicCutSpec {
     keyTiltAzimuthRad: number;
     keyRollRad: number;
   }[];
-  /** Wafer thickness in mm ("consistent thickness"). Unused by the M1 no-op. */
+  /** Wafer thickness in mm ("consistent thickness") — the kerf the cut removes. */
   thicknessMm: number;
   /** Seam-line smoothing 0..1 (how much the cut line rounds through waypoints). */
   smoothing: number;

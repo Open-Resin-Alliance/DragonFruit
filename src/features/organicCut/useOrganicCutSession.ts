@@ -229,7 +229,7 @@ export interface OrganicCutSession {
   /** True when there's more than one loop, so removing one is allowed. */
   canRemoveLoop: boolean;
   /** Seam polylines of the INACTIVE loops (flat xyz, model-local) for the tool. */
-  committedPolylines: Float32Array[];
+  inactiveLoopPolylines: Float32Array[];
   // Apply
   apply: () => void;
   isApplying: boolean;
@@ -361,7 +361,7 @@ export function useOrganicCutSession({
   // Seam polylines for the INACTIVE loops, for the tool to render dimmed (the
   // active loop draws its own live seam + markers). Only loops that are real loops
   // (≥3 points) with a cached seam show.
-  const committedPolylines = React.useMemo(
+  const inactiveLoopPolylines = React.useMemo(
     () =>
       loops
         .map((l, i) => (i !== activeLoopIndex && l.polyline && l.points.length >= MIN_CONTOUR_POINTS ? l.polyline : null))
@@ -1041,7 +1041,7 @@ export function useOrganicCutSession({
     canAddLoop,
     removeLoop,
     canRemoveLoop,
-    committedPolylines,
+    inactiveLoopPolylines,
     apply,
     isApplying,
     lastResult,

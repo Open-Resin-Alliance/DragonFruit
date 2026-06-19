@@ -19893,7 +19893,7 @@ export default function Home() {
                 onSelectPoint={organicCut.selectPoint}
                 onMarkerHoverChange={handleOrganicCutMarkerHoverChange}
                 geodesicPolyline={organicCut.geodesicPolyline}
-                committedPolylines={organicCut.committedPolylines}
+                inactiveLoopPolylines={organicCut.inactiveLoopPolylines}
                 cutMode={organicCut.panelState.cutMode}
                 membranePreview={organicCut.membranePreview}
                 keyPreview={organicCut.keyPreview}

@@ -3,11 +3,10 @@
  *
  * Mirrors the proven hole-punch bridge (src/utils/meshPunching.ts): stage the
  * geometry as a binary triangle soup, capture it as a non-mutating source, run a
- * preview/apply, then read raw little-endian f32 positions back. The only shape
- * difference is that an organic cut returns TWO parts (A and B) rather than one
- * modified mesh, so there are two read-positions commands.
- *
- * M1: the backend cut is a no-op, so both parts come back equal to the source.
+ * preview/apply, then read raw little-endian f32 positions back. The shape
+ * difference is that an organic cut returns N parts (≥2 — a multi-loop cut frees
+ * several pieces) rather than one modified mesh: the report carries `partCount` and
+ * each part is read back by index via `mesh_organic_cut_read_part`.
  */
 import * as THREE from 'three';
 import type { KeyPreviewFrame, OrganicCutLoopPoint, OrganicCutOptions, OrganicCutReport, OrganicCutResult } from './types';

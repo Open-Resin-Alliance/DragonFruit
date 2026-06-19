@@ -2578,7 +2578,7 @@ export function useSceneCollectionManager() {
     const source = currentModels.find((m) => m.id === sourceId);
     if (!source || partGeometries.length === 0) return null;
 
-    // KEEP BOTH PARTS EXACTLY WHERE THEY WERE CUT (nothing moves in 3D space).
+    // KEEP EVERY PART EXACTLY WHERE IT WAS CUT (nothing moves in 3D space).
     //
     // The render layer (StlMesh) draws each model's mesh at `-geometryBboxCenter`
     // inside the model's transform group, so a vertex renders at

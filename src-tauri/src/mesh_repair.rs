@@ -853,11 +853,9 @@ pub async fn mesh_punch_read_positions() -> Result<Response, String> {
 
 // --- organic cut ---------------------------------------------------------
 
-/// Applies an organic cut to the current staged mesh, replacing the staged
-/// buffer with part A and stashing both parts for read-back.
-///
-/// M1: the cut is a no-op (both parts equal the source mesh); this proves the
-/// stage → cut → read-two-parts → render round-trip end to end.
+/// Applies an organic cut to the current staged mesh, replacing the staged buffer
+/// with the first part and stashing ALL parts for read-back (via
+/// `mesh_organic_cut_read_part`). A multi-loop cut can produce more than two parts.
 #[tauri::command]
 pub async fn mesh_organic_cut_staged(options_json: String) -> Result<String, String> {
     let options = parse_organic_cut_options(&options_json);
@@ -907,7 +905,8 @@ pub async fn mesh_organic_cut_capture_staged_source() -> Result<(), String> {
 }
 
 /// Runs an organic cut against the captured source mesh without mutating the
-/// regular staged mesh buffer. Stashes both parts for read-back.
+/// regular staged mesh buffer. Stashes ALL parts for read-back (via
+/// `mesh_organic_cut_read_part`, driven by the report's `partCount`).
 #[tauri::command]
 pub async fn mesh_organic_cut_from_captured_source(options_json: String) -> Result<String, String> {
     let options = parse_organic_cut_options(&options_json);
