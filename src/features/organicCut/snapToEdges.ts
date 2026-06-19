@@ -180,6 +180,10 @@ export function snapPointsToFeatureEdges(
   let cornerSnapCount = 0;
 
   const nextPoints = points.map((p) => {
+    // A locked (pinned) point is left exactly where it is — the user marked it
+    // as needed-here, so snap must not drag it onto an edge/corner.
+    if (p.locked) return p;
+
     const px = p.position[0];
     const py = p.position[1];
     const pz = p.position[2];

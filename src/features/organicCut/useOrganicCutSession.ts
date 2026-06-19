@@ -205,6 +205,12 @@ export interface OrganicCutSession {
   canSnapToEdges: boolean;
   /** Remove the waypoint at `index` (Delete key / right-click Delete). */
   removePoint: (index: number) => void;
+  /**
+   * Toggle the "locked" (pinned) flag of the waypoint at `index`. A locked point
+   * is skipped by Snap to Edges — pin one that sits where it's needed so snap
+   * can't drag it onto a nearby edge/corner. Double-click a marker to call this.
+   */
+  toggleLockPoint: (index: number) => void;
   /** The currently selected waypoint index, or null. Click a marker to select. */
   selectedIndex: number | null;
   /** Select a waypoint (or null to clear). Click a marker → select it. */
@@ -745,7 +751,22 @@ export function useOrganicCutSession({
         return prev;
       }
       const next = prev.slice();
-      next[index] = point;
+      // The drag handler builds a bare {position, normal}; carry the pin flag
+      // across so dragging a locked point doesn't silently un-pin it.
+      next[index] = { ...point, locked: prevPoint.locked };
+      return next;
+    });
+  }, [setActiveLoopPoints]);
+
+  // Toggle a waypoint's "locked" (pinned) flag. A locked point is left untouched
+  // by Snap to Edges — for a point sitting exactly where it's needed that snap
+  // would otherwise drag onto a nearby edge/corner. Double-click a marker to flip
+  // it. A no-op if the index is out of range.
+  const toggleLockPoint = React.useCallback((index: number) => {
+    setActiveLoopPoints((prev) => {
+      if (index < 0 || index >= prev.length) return prev;
+      const next = prev.slice();
+      next[index] = { ...next[index], locked: !next[index].locked };
       return next;
     });
   }, [setActiveLoopPoints]);
@@ -1056,6 +1077,7 @@ export function useOrganicCutSession({
     snapActiveLoopToEdges,
     canSnapToEdges,
     removePoint,
+    toggleLockPoint,
     selectedIndex,
     selectPoint,
     undoPoint,

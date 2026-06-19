@@ -714,10 +714,15 @@ export function OrganicCutPanel({
               className="ui-button ui-button-secondary w-full !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
               onClick={onSnapToEdges}
               disabled={disabled || isApplying || !canSnapToEdges}
-              title="Nudge every waypoint onto the model's nearest sharp edge (crease or boundary), preferring a corner where several edges meet — for points placed roughly in a crease or corner. Does nothing on a smooth model with no sharp edges."
+              title="Nudge every waypoint onto the model's nearest sharp edge (crease or boundary), preferring a corner where several edges meet — for points placed roughly in a crease or corner. Does nothing on a smooth model with no sharp edges. Double-click a waypoint to lock it (white cage) so snap leaves it where it is."
             >
               Snap to edges
             </button>
+          )}
+          {state.drawMode === 'waypoint' && (
+            <div className="text-[9px] sm:text-[10px] text-neutral-400 leading-tight text-center -mt-1">
+              Double-click a waypoint to lock it from snapping.
+            </div>
           )}
 
           {/* Actions */}

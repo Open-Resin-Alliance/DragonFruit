@@ -19893,6 +19893,7 @@ export default function Home() {
                 onLineClick={handleOrganicCutLineClick}
                 selectedIndex={organicCut.selectedIndex}
                 onSelectPoint={organicCut.selectPoint}
+                onToggleLockPoint={organicCut.toggleLockPoint}
                 onMarkerHoverChange={handleOrganicCutMarkerHoverChange}
                 geodesicPolyline={organicCut.geodesicPolyline}
                 inactiveLoopPolylines={organicCut.inactiveLoopPolylines}

@@ -15,6 +15,13 @@ export interface OrganicCutLoopPoint {
   position: [number, number, number];
   /** Surface normal at the point (unit length, local space). */
   normal: [number, number, number];
+  /**
+   * When true, "Snap to Edges" leaves this point exactly where it is — the user
+   * pinned it (double-click a marker) because it sits where it's needed and snap
+   * would drag it off. Manual drag still moves it. FRONTEND-ONLY: it's serialized
+   * to Rust but the backend has no such field, so serde silently ignores it.
+   */
+  locked?: boolean;
 }
 
 /**

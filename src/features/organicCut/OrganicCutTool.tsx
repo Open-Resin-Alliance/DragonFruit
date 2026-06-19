@@ -48,6 +48,12 @@ interface OrganicCutToolProps {
   /** Select a waypoint (click a marker), or null to clear (click elsewhere). */
   onSelectPoint?: (index: number | null) => void;
   /**
+   * Toggle a waypoint's locked (pinned) state — double-click a marker. A locked
+   * point is left untouched by Snap to Edges, so a point sitting exactly where
+   * it's needed can't be dragged off onto a nearby edge.
+   */
+  onToggleLockPoint?: (index: number) => void;
+  /**
    * Hover state over a WAYPOINT marker (hover-to-arm for right-click delete).
    * Null when not over a marker; otherwise the hovered waypoint index. The host
    * arms a "Delete waypoint" menu from this on right-click.
@@ -139,6 +145,7 @@ export function OrganicCutTool({
   onLineClick,
   selectedIndex = null,
   onSelectPoint,
+  onToggleLockPoint,
   onMarkerHoverChange,
   geodesicPolyline,
   inactiveLoopPolylines,
@@ -844,11 +851,14 @@ export function OrganicCutTool({
 
         {/* Placed loop points. First point is green (closure target), rest amber.
             Dragging → cyan. SELECTED → blue (the waypoint Delete/right-click will
-            remove). Each marker is draggable: a press that moves repositions it; a
-            press that doesn't is a select. */}
+            remove). A LOCKED (pinned) point wears a white wireframe cage and won't
+            be moved by Snap to Edges. Each marker is draggable: a press that moves
+            repositions it; a press that doesn't is a select; a double-click toggles
+            the lock. */}
         {loop.map((p, idx) => {
           const isDragging = draggingIndex === idx;
           const isSelected = selectedIndex === idx;
+          const isLocked = !!p.locked;
           const color = isSelected
             ? 0x0091ff
             : isDragging
@@ -873,6 +883,7 @@ export function OrganicCutTool({
                 onPointerMove={handleMarkerPointerMove}
                 onPointerUp={endDrag}
                 onPointerCancel={endDrag}
+                onDoubleClick={(e) => { e.stopPropagation(); onToggleLockPoint?.(idx); }}
                 onPointerOver={(e) => { handleMarkerPointerOver(e); onMarkerHoverChange?.(idx); }}
                 onPointerOut={() => { handleMarkerPointerOut(); onMarkerHoverChange?.(null); }}
               >
@@ -884,6 +895,14 @@ export function OrganicCutTool({
                 <sphereGeometry args={[markerRadius, 16, 16]} />
                 <meshBasicMaterial color={color} depthTest={false} transparent opacity={0.95} />
               </mesh>
+              {/* Locked (pinned) cage: a white wireframe sphere — orientation-free,
+                  so it reads as "pinned" from any angle — that Snap to Edges spares. */}
+              {isLocked && (
+                <mesh renderOrder={1003} scale={scale}>
+                  <sphereGeometry args={[markerRadius * 1.9, 10, 8]} />
+                  <meshBasicMaterial color={0xffffff} wireframe depthTest={false} transparent opacity={0.85} />
+                </mesh>
+              )}
             </group>
           );
         })}
