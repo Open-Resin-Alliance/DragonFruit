@@ -87,6 +87,7 @@ interface OrganicCutPanelProps {
   adjustStagedCut?: (id: string) => void;
   removeStagedCut?: (id: string) => void;
   clearQueue?: () => void;
+  reorderLoop?: () => void;
 }
 
 /**
@@ -115,11 +116,13 @@ export function OrganicCutPanel({
   adjustStagedCut = () => {},
   removeStagedCut = () => {},
   clearQueue = () => {},
+  reorderLoop = () => {},
 }: OrganicCutPanelProps) {
   const [expanded, setExpanded] = React.useState(true);
   const [moveExpanded, setMoveExpanded] = React.useState(true);
   const [rotateExpanded, setRotateExpanded] = React.useState(true);
   const [scaleExpanded, setScaleExpanded] = React.useState(true);
+  const [advancedExpanded, setAdvancedExpanded] = React.useState(false);
 
   const compactButtonClass = 'ui-button ui-button-secondary w-full !h-8 px-1.5 text-[10px] sm:text-[11px]';
   const valueInputClass = 'ui-input h-8 w-full px-1.5 text-xs sm:text-sm text-center tabular-nums no-spinners';
@@ -1044,6 +1047,56 @@ export function OrganicCutPanel({
                   }
                 >
                   {keyDetail}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Waypoint Auto-Ordering Settings section */}
+          {!isBounded && (
+            <div className="rounded-md border p-2" style={cardStyle}>
+              <SectionHeader
+                title="Waypoint Auto-Ordering"
+                expanded={advancedExpanded}
+                onToggle={() => setAdvancedExpanded(!advancedExpanded)}
+                accentColor="var(--accent)"
+              />
+              {advancedExpanded && (
+                <div className="pt-1.5 space-y-2">
+                  {/* Auto-Order Waypoints */}
+                  <div className="flex w-full items-center justify-between gap-2 text-left">
+                    <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Auto-Order Waypoints</span>
+                    <button
+                      type="button"
+                      onClick={() => setState({ autoReorderWaypoints: !state.autoReorderWaypoints })}
+                      disabled={disabled || isApplying}
+                      className="h-8 min-w-[72px] rounded-md border px-3 text-[11px] font-semibold uppercase tracking-wide transition-colors"
+                      style={state.autoReorderWaypoints
+                        ? {
+                            borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                            background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                            color: 'var(--accent-contrast)',
+                          }
+                        : {
+                            borderColor: 'var(--border-subtle)',
+                            background: 'var(--surface-1)',
+                            color: 'var(--text-muted)',
+                          }}
+                    >
+                      {state.autoReorderWaypoints ? 'ON' : 'OFF'}
+                    </button>
+                  </div>
+
+                  {/* Reorder Now Button */}
+                  <button
+                    type="button"
+                    className="ui-button ui-button-secondary w-full !h-8 px-1.5 py-1 text-xs font-semibold leading-tight disabled:opacity-60"
+                    onClick={reorderLoop}
+                    disabled={disabled || isApplying || pointCount <= 3}
+                    title="Run the TSP re-ordering solver to optimize the current loop tour."
+                  >
+                    Reorder Now
+                  </button>
                 </div>
               )}
             </div>

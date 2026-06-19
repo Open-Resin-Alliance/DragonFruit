@@ -150,6 +150,7 @@ export interface OrganicCutSession {
    * roll gizmo. Null when no key was placed. Drives where the tip/roll handles sit.
    */
   keyFrame: KeyPreviewFrame | null;
+  reorderLoop: () => void;
 }
 
 const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
@@ -193,10 +194,56 @@ const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
   planePosition: [0, 0, 0],
   planeRotation: [0, 0, 0],
   planeUniformScale: true,
+  autoReorderWaypoints: false,
 };
 
 /** Minimum points before a CONTOUR cut is possible (a real loop needs ≥3). */
 const MIN_CONTOUR_POINTS = 3;
+
+export function reorderWaypointsTSP(points: OrganicCutLoopPoint[]): OrganicCutLoopPoint[] {
+  if (points.length <= 3) return points.slice();
+  
+  // Helper to calculate Euclidean distance
+  const dist = (a: OrganicCutLoopPoint, b: OrganicCutLoopPoint) => 
+    Math.hypot(a.position[0] - b.position[0], a.position[1] - b.position[1], a.position[2] - b.position[2]);
+
+  // 1. Solve greedy nearest neighbor starting at index 0 to preserve starting node
+  const unvisited = points.slice(1);
+  let current = points[0];
+  const tour = [current];
+  while (unvisited.length > 0) {
+    let nearestIdx = 0;
+    let nearestDist = Infinity;
+    for (let i = 0; i < unvisited.length; i++) {
+      const d = dist(current, unvisited[i]);
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearestIdx = i;
+      }
+    }
+    current = unvisited.splice(nearestIdx, 1)[0];
+    tour.push(current);
+  }
+  
+  // 2. Perform 2-opt swaps to eliminate intersections
+  let improved = true;
+  const n = tour.length;
+  while (improved) {
+    improved = false;
+    for (let i = 1; i < n - 1; i++) {
+      for (let k = i + 1; k < n; k++) {
+        const currentCost = dist(tour[i-1], tour[i]) + dist(tour[k], tour[(k+1)%n]);
+        const newCost = dist(tour[i-1], tour[k]) + dist(tour[i], tour[(k+1)%n]);
+        if (newCost < currentCost - 1e-5) {
+          // Reverse segment from tour[i] to tour[k]
+          tour.splice(i, k - i + 1, ...tour.slice(i, k + 1).reverse());
+          improved = true;
+        }
+      }
+    }
+  }
+  return tour;
+}
 
 export function useOrganicCutSession({
   toolActive,
@@ -591,7 +638,10 @@ export function useOrganicCutSession({
   ]);
 
   const addPoint = React.useCallback((point: OrganicCutLoopPoint) => {
-    setLoop((prev) => [...prev, point]);
+    setLoop((prev) => {
+      const next = [...prev, point];
+      return panelStateRef.current.autoReorderWaypoints ? reorderWaypointsTSP(next) : next;
+    });
     setStatus('drawing');
     // A freshly placed point invalidates any redo history.
     setRedoStack([]);
@@ -784,6 +834,10 @@ export function useOrganicCutSession({
   const clearQueue = React.useCallback(() => {
     setStagedCuts([]);
     setEditingCutId(null);
+  }, []);
+
+  const reorderLoop = React.useCallback(() => {
+    setLoop((prev) => reorderWaypointsTSP(prev));
   }, []);
 
   const apply = React.useCallback(() => {
@@ -1218,5 +1272,6 @@ export function useOrganicCutSession({
     adjustStagedCut,
     removeStagedCut,
     clearQueue,
+    reorderLoop,
   };
 }

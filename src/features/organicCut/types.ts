@@ -231,6 +231,7 @@ export interface OrganicCutPanelState {
   planePosition?: [number, number, number];
   planeRotation?: [number, number, number];
   planeUniformScale?: boolean;
+  autoReorderWaypoints: boolean;
 }
 
 export interface StagedCut {

@@ -18284,6 +18284,7 @@ export default function Home() {
                 adjustStagedCut={organicCut.adjustStagedCut}
                 removeStagedCut={organicCut.removeStagedCut}
                 clearQueue={organicCut.clearQueue}
+                reorderLoop={organicCut.reorderLoop}
               />
             )}
 
