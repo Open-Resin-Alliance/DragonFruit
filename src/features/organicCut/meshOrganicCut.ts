@@ -46,8 +46,6 @@ async function loadTauriCore(): Promise<TauriCoreModule | null> {
 }
 
 type OrganicCutReadCommand =
-  | 'mesh_organic_cut_read_part_a'
-  | 'mesh_organic_cut_read_part_b'
   | 'mesh_organic_cut_read_geodesic'
   | 'mesh_organic_cut_read_membrane'
   | 'mesh_organic_cut_read_key';
