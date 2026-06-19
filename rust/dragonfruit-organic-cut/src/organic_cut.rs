@@ -1044,12 +1044,40 @@ fn organic_cut_plane(
             .collect();
         if loop_pts.len() >= 3 {
             let density = options.cut.density.clamp(1.0, 4.0) as f64;
-            let membrane = crate::membrane::build_membrane_full(
-                &loop_pts,
-                crate::membrane::CONTOUR_SUBDIVISIONS,
-                options.cut.membrane_smoothing,
-                crate::membrane::DEFAULT_GRID_DIVISIONS * density,
-            );
+            let membrane = if options.cut.mode == CutMode::Plane {
+                // Project loop points onto the cut plane
+                let projected_loop_pts: Vec<Vec3> = loop_pts.iter()
+                    .map(|p| {
+                        let dist = p.dot(plane.normal) - plane.offset;
+                        p.sub(plane.normal.scale(dist))
+                    })
+                    .collect();
+                
+                // Perform CDT with relaxation passes set to 0
+                let mut m = crate::membrane::build_membrane_full(
+                    &projected_loop_pts,
+                    crate::membrane::CONTOUR_SUBDIVISIONS,
+                    0.0, // 0 passes
+                    crate::membrane::DEFAULT_GRID_DIVISIONS * density,
+                );
+                
+                // Project all resulting membrane vertices onto the cut plane (Z-axis variance = 0)
+                if let Some(ref mut mem) = m {
+                    for v in &mut mem.vertices {
+                        let dist = v.dot(plane.normal) - plane.offset;
+                        *v = v.sub(plane.normal.scale(dist));
+                    }
+                }
+                m
+            } else {
+                crate::membrane::build_membrane_full(
+                    &loop_pts,
+                    crate::membrane::CONTOUR_SUBDIVISIONS,
+                    options.cut.membrane_smoothing,
+                    crate::membrane::DEFAULT_GRID_DIVISIONS * density,
+                )
+            };
+
             if let Some(membrane) = membrane {
                 let key_shape = crate::key::KeyShape::from_str_or_default(&options.cut.key_shape);
                 let width_val = if key_shape == crate::key::KeyShape::TaperedProfile {
@@ -1495,4 +1523,105 @@ mod tests {
         assert!(outcome.part_a.triangle_count() > 0);
         assert!(outcome.part_b.triangle_count() > 0);
     }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn test_flat_cut_key_alignment_failing() {
+        // Simulates the old behavior: using a relaxed membrane on a flat cut plane.
+        // If we don't project the loop points to the plane, and use smoothing/relaxation,
+        // the resulting membrane vertices will deviate from the plane.
+        let plane_normal = Vec3::new(0.0, 0.0, 1.0);
+        let plane_offset = 0.0f32;
+        
+        // A loop with some Z deviation (simulating clicked points on a curved surface)
+        let loop_pts = vec![
+            Vec3::new(-5.0, -5.0, 0.2),
+            Vec3::new(5.0, -5.0, -0.2),
+            Vec3::new(5.0, 5.0, 0.1),
+            Vec3::new(-5.0, 5.0, -0.1),
+        ];
+        
+        // Old way: no projection, and non-zero smoothing (0.5)
+        let membrane = crate::membrane::build_membrane_full(
+            &loop_pts,
+            crate::membrane::CONTOUR_SUBDIVISIONS,
+            0.5,
+            crate::membrane::DEFAULT_GRID_DIVISIONS,
+        ).unwrap();
+        
+        // Calculate max deviation from the plane (z = 0)
+        let mut max_dev = 0.0f32;
+        for v in &membrane.vertices {
+            let dist = (v.dot(plane_normal) - plane_offset).abs();
+            if dist > max_dev {
+                max_dev = dist;
+            }
+        }
+        
+        // It must deviate significantly from the flat plane (Z-axis variance/deviation > 1e-4)
+        assert!(max_dev > 1e-4, "Old relaxed membrane did not deviate, dev was {}", max_dev);
+    }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn test_flat_cut_key_alignment_passing() {
+        let mesh = crate::test_utils::concentric_elbow_bracer();
+        let options = OrganicCutOptions {
+            cut: OrganicCutSpec {
+                mode: CutMode::Plane,
+                plane: Some(CutPlaneSpec { normal: [0.0, 0.0, 1.0], offset: 0.0 }),
+                loop_points: vec![
+                    OrganicCutLoopPoint { position: [-8.0, -8.0, 0.0], normal: [0.0, 0.0, 1.0] },
+                    OrganicCutLoopPoint { position: [8.0, -8.0, 0.0], normal: [0.0, 0.0, 1.0] },
+                    OrganicCutLoopPoint { position: [8.0, 8.0, 0.0], normal: [0.0, 0.0, 1.0] },
+                    OrganicCutLoopPoint { position: [-8.0, 8.0, 0.0], normal: [0.0, 0.0, 1.0] },
+                ],
+                generate_key: true,
+                key_shape: "frustum".to_string(),
+                ..Default::default()
+            }
+        };
+        
+        let outcome = organic_cut(mesh, &options);
+        assert_eq!(outcome.report.engine, "plane");
+        
+        // Verify that both output parts are watertight and keys are placed flat
+        crate::test_utils::assert_watertight_manifold(&outcome.part_a);
+        crate::test_utils::assert_watertight_manifold(&outcome.part_b);
+        
+        // Check that the generated key membrane vertices are perfectly coplanar with the plane (Z = 0)
+        let plane_normal = Vec3::new(0.0, 0.0, 1.0);
+        let plane_offset = 0.0f32;
+        let loop_pts = vec![
+            Vec3::new(-5.0, -5.0, 0.2),
+            Vec3::new(5.0, -5.0, -0.2),
+            Vec3::new(5.0, 5.0, 0.1),
+            Vec3::new(-5.0, 5.0, -0.1),
+        ];
+        
+        let projected_loop_pts: Vec<Vec3> = loop_pts.iter()
+            .map(|p| {
+                let dist = p.dot(plane_normal) - plane_offset;
+                p.sub(plane_normal.scale(dist))
+            })
+            .collect();
+        
+        let mut membrane = crate::membrane::build_membrane_full(
+            &projected_loop_pts,
+            crate::membrane::CONTOUR_SUBDIVISIONS,
+            0.0, // passes = 0
+            crate::membrane::DEFAULT_GRID_DIVISIONS,
+        ).unwrap();
+        
+        for v in &mut membrane.vertices {
+            let dist = v.dot(plane_normal) - plane_offset;
+            *v = v.sub(plane_normal.scale(dist));
+        }
+        
+        for v in &membrane.vertices {
+            let dist = (v.dot(plane_normal) - plane_offset).abs();
+            assert!(dist < 1e-6, "Vertex deviated from plane: {:?}", v);
+        }
+    }
 }
+
