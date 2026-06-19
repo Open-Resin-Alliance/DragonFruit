@@ -19,6 +19,7 @@
  * already used in this feature for the key-preview silhouette.
  */
 import * as THREE from 'three';
+import { MeshBVH } from 'three-mesh-bvh';
 import type { OrganicCutLoopPoint } from './types';
 
 /**
@@ -79,6 +80,39 @@ export function extractFeatureEdges(
   const out = pos ? (pos.array as Float32Array).slice() : new Float32Array(0);
   edges.dispose();
   return out;
+}
+
+/**
+ * Build a three-mesh-bvh over the feature-edge segments so the per-waypoint
+ * nearest-edge search is a log-time query instead of a scan of every segment —
+ * the same library (and the same closestPointToPoint query) the support
+ * collision avoidance uses. Each segment [a,b] (6 floats in `seg`) is encoded as
+ * a degenerate triangle [a,b,b]; its closest point to a query equals the closest
+ * point on the segment (verified identical to a brute-force segment projection,
+ * endpoints and off-edge points included).
+ */
+function buildFeatureEdgeBVH(seg: Float32Array): MeshBVH {
+  const triCount = seg.length / 6;
+  const positions = new Float32Array(triCount * 9);
+  for (let i = 0; i < triCount; i++) {
+    const s = i * 6;
+    const d = i * 9;
+    positions[d] = seg[s]; // a
+    positions[d + 1] = seg[s + 1];
+    positions[d + 2] = seg[s + 2];
+    positions[d + 3] = seg[s + 3]; // b
+    positions[d + 4] = seg[s + 4];
+    positions[d + 5] = seg[s + 5];
+    positions[d + 6] = seg[s + 3]; // b again → zero-area triangle == the segment
+    positions[d + 7] = seg[s + 4];
+    positions[d + 8] = seg[s + 5];
+  }
+  const index = new Uint32Array(triCount * 3);
+  for (let i = 0; i < index.length; i++) index[i] = i;
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geom.setIndex(new THREE.BufferAttribute(index, 1));
+  return new MeshBVH(geom);
 }
 
 /** A corner: a welded edge endpoint, its position, and how many edges meet there. */
@@ -173,6 +207,12 @@ export function snapPointsToFeatureEdges(
 
   const corners = buildCorners(seg, diag);
 
+  // Acceleration structure for the per-waypoint nearest-edge search (reused for
+  // every point). Reusable query scratch so the loop allocates nothing.
+  const edgeBVH = buildFeatureEdgeBVH(seg);
+  const queryPoint = new THREE.Vector3();
+  const closest = { point: new THREE.Vector3(), distance: 0, faceIndex: -1 };
+
   // Treat a sub-epsilon move as "didn't move" so a point already on an edge
   // doesn't count toward movedCount (and the loop isn't churned for nothing).
   const EPS_SQ = (diag * 1e-7) ** 2;
@@ -184,41 +224,13 @@ export function snapPointsToFeatureEdges(
     const py = p.position[1];
     const pz = p.position[2];
 
-    // 1) Nearest point over all segments: project p onto each [a,b], clamp to
-    // the segment, keep the closest. Brute force — fine for the modest
-    // feature-edge count of a typical part and a loop of a few dozen waypoints.
-    let edgeX = px;
-    let edgeY = py;
-    let edgeZ = pz;
-    let bestEdgeD = Infinity;
-    for (let i = 0; i < seg.length; i += 6) {
-      const ax = seg[i];
-      const ay = seg[i + 1];
-      const az = seg[i + 2];
-      const abx = seg[i + 3] - ax;
-      const aby = seg[i + 4] - ay;
-      const abz = seg[i + 5] - az;
-      const lenSq = abx * abx + aby * aby + abz * abz;
-      let t = 0;
-      if (lenSq > 1e-12) {
-        t = ((px - ax) * abx + (py - ay) * aby + (pz - az) * abz) / lenSq;
-        t = t < 0 ? 0 : t > 1 ? 1 : t;
-      }
-      const cx = ax + abx * t;
-      const cy = ay + aby * t;
-      const cz = az + abz * t;
-      const dx = cx - px;
-      const dy = cy - py;
-      const dz = cz - pz;
-      const d = dx * dx + dy * dy + dz * dz;
-      if (d < bestEdgeD) {
-        bestEdgeD = d;
-        edgeX = cx;
-        edgeY = cy;
-        edgeZ = cz;
-      }
-    }
-    const bestEdgeDist = Math.sqrt(bestEdgeD);
+    // 1) Nearest point on the closest feature-edge segment, via the segment BVH.
+    queryPoint.set(px, py, pz);
+    edgeBVH.closestPointToPoint(queryPoint, closest);
+    const edgeX = closest.point.x;
+    const edgeY = closest.point.y;
+    const edgeZ = closest.point.z;
+    const bestEdgeDist = closest.distance;
 
     // 2) Among corners IN RANGE (no farther than CORNER_REL_BIAS× the nearest
     // edge, or within an absolute grab radius), pick by a distance score that
