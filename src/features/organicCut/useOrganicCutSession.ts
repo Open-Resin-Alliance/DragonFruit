@@ -27,6 +27,7 @@ import {
 } from './meshOrganicCut';
 import type { KeyPreviewKind } from './meshOrganicCut';
 import { cutPlaneFromPoints } from './cutPlane';
+import { snapPointsToFeatureEdges } from './snapToEdges';
 import type * as THREE from 'three';
 
 /** Minimum points before a cut is possible. 2 = the simplest flat plane cut. */
@@ -192,6 +193,16 @@ export interface OrganicCutSession {
    * right-click "Add waypoint here". Clamps the index into range.
    */
   insertPoint: (afterIndex: number, point: OrganicCutLoopPoint) => void;
+  /**
+   * Nudge every waypoint of the ACTIVE loop onto the model's nearest sharp
+   * feature edge (crease or boundary), preferring a corner where several edges
+   * meet when the point is near one. For tidying points dropped roughly in a
+   * crease or corner onto it exactly. A no-op when the model has no sharp edges
+   * or the loop is empty.
+   */
+  snapActiveLoopToEdges: () => void;
+  /** True when snapping is possible: a real geometry + at least one waypoint. */
+  canSnapToEdges: boolean;
   /** Remove the waypoint at `index` (Delete key / right-click Delete). */
   removePoint: (index: number) => void;
   /** The currently selected waypoint index, or null. Click a marker to select. */
@@ -739,6 +750,23 @@ export function useOrganicCutSession({
     });
   }, [setActiveLoopPoints]);
 
+  // Snap the active loop's waypoints onto the model's nearest sharp feature edges.
+  // Repositions points in place (like a batch drag) — the geodesic/membrane
+  // effects recompute from the new positions through the same path as a drag.
+  const snapActiveLoopToEdges = React.useCallback(() => {
+    const geometry = activeGeometryRef.current;
+    if (!geometry) return;
+    setActiveLoopPoints((prev) => {
+      if (prev.length === 0) return prev;
+      const { points, movedCount } = snapPointsToFeatureEdges(prev, geometry);
+      // Nothing moved (no feature edges, or all points already on one) → keep the
+      // same array reference so no recompute is triggered.
+      return movedCount > 0 ? points : prev;
+    });
+    // A snap is a fresh edit — it invalidates the redo history (mirrors a drag).
+    setRedoStack([]);
+  }, [setActiveLoopPoints]);
+
   const clearLoop = React.useCallback(() => {
     // Clear truly clears — also drop the persisted copy so it doesn't spring back
     // on deselect/reselect, and discard ALL loops (multi-loop included).
@@ -1015,6 +1043,7 @@ export function useOrganicCutSession({
   const canRemoveLoop = loops.length > 1 && !isApplying;
   const canUndoPoint = pointCount > 0;
   const canRedoPoint = redoStack.length > 0;
+  const canSnapToEdges = !!activeGeometry && pointCount > 0 && !isApplying;
 
   return {
     panelState,
@@ -1024,6 +1053,8 @@ export function useOrganicCutSession({
     addPoint,
     updatePoint,
     insertPoint,
+    snapActiveLoopToEdges,
+    canSnapToEdges,
     removePoint,
     selectedIndex,
     selectPoint,

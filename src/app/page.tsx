@@ -18925,6 +18925,8 @@ export default function Home() {
                 pointCount={organicCut.pointCount}
                 onClearLoop={organicCut.clearLoop}
                 onCloseLoop={organicCut.closeLoop}
+                onSnapToEdges={organicCut.snapActiveLoopToEdges}
+                canSnapToEdges={organicCut.canSnapToEdges}
                 loopCount={organicCut.loopCount}
                 activeLoopIndex={organicCut.activeLoopIndex}
                 loopSummaries={organicCut.loopSummaries}

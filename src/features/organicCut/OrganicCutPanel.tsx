@@ -67,6 +67,13 @@ interface OrganicCutPanelProps {
   pointCount: number;
   onClearLoop: () => void;
   onCloseLoop: () => void;
+  /**
+   * Snap the active loop's waypoints onto the model's nearest sharp edges
+   * (creases/boundaries) — for tidying points dropped roughly in a crease.
+   */
+  onSnapToEdges?: () => void;
+  /** True when snapping is possible (geometry present + at least one waypoint). */
+  canSnapToEdges?: boolean;
   // --- Multi-loop (contour) -------------------------------------------------
   /** Total loops in the current cut. */
   loopCount?: number;
@@ -113,6 +120,8 @@ export function OrganicCutPanel({
   pointCount,
   onClearLoop,
   onCloseLoop,
+  onSnapToEdges,
+  canSnapToEdges = false,
   loopCount = 1,
   activeLoopIndex = 0,
   loopSummaries = [],
@@ -694,6 +703,21 @@ export function OrganicCutPanel({
                 </div>
               )}
             </div>
+          )}
+
+          {/* Snap to edges (waypoint mode): pull every waypoint onto the model's
+              nearest sharp crease/boundary, for tidying points placed roughly in
+              a fold. No-op when the model has no sharp edges. */}
+          {state.drawMode === 'waypoint' && (
+            <button
+              type="button"
+              className="ui-button ui-button-secondary w-full !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
+              onClick={onSnapToEdges}
+              disabled={disabled || isApplying || !canSnapToEdges}
+              title="Nudge every waypoint onto the model's nearest sharp edge (crease or boundary), preferring a corner where several edges meet — for points placed roughly in a crease or corner. Does nothing on a smooth model with no sharp edges."
+            >
+              Snap to edges
+            </button>
           )}
 
           {/* Actions */}
