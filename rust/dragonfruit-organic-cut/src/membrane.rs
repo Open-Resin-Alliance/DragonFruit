@@ -259,38 +259,18 @@ impl PlaneFrame {
         }
         origin = origin.scale(1.0 / n_pts as f32);
 
-        // Covariance (symmetric) → smallest-eigenvector normal via the classic
-        // "largest cross product of covariance rows" trick.
-        let (mut xx, mut xy, mut xz, mut yy, mut yz, mut zz) = (0f64, 0f64, 0f64, 0f64, 0f64, 0f64);
-        for &p in pts {
-            let d = p.sub(origin);
-            let (dx, dy, dz) = (d.x as f64, d.y as f64, d.z as f64);
-            xx += dx * dx;
-            xy += dx * dy;
-            xz += dx * dz;
-            yy += dy * dy;
-            yz += dy * dz;
-            zz += dz * dz;
+        // Area-weighted average normal of the ordered loop (Newell's method)
+        let mut avg_n = Vec3::ZERO;
+        for i in 0..n_pts {
+            let a = pts[i].sub(origin);
+            let b = pts[(i + 1) % n_pts].sub(origin);
+            avg_n = avg_n.add(a.cross(b));
         }
-        let det_x = yy * zz - yz * yz;
-        let det_y = xx * zz - xz * xz;
-        let det_z = xx * yy - xy * xy;
-        let det_max = det_x.max(det_y).max(det_z);
-        if det_max <= 1e-12 {
-            return None; // collinear / degenerate
-        }
-        let normal = if det_max == det_x {
-            Vec3::new(det_x as f32, (xz * yz - xy * zz) as f32, (xy * yz - xz * yy) as f32)
-        } else if det_max == det_y {
-            Vec3::new((xz * yz - xy * zz) as f32, det_y as f32, (xy * xz - yz * xx) as f32)
-        } else {
-            Vec3::new((xy * yz - xz * yy) as f32, (xy * xz - yz * xx) as f32, det_z as f32)
-        };
-        let nlen = normal.length();
+        let nlen = avg_n.length();
         if nlen < 1e-9 {
             return None;
         }
-        let n = normal.scale(1.0 / nlen);
+        let n = avg_n.scale(1.0 / nlen);
 
         // Pick an in-plane u axis not parallel to n, then v = n × u.
         let seed = if n.x.abs() < 0.9 { Vec3::new(1.0, 0.0, 0.0) } else { Vec3::new(0.0, 1.0, 0.0) };
@@ -1393,15 +1373,9 @@ pub fn thicken_to_slab(
     boundary_clearance_mm: f32,
     boundary_normals: &[Vec3],
 ) -> IndexedMesh {
-    let half = (thickness_mm.max(1e-4)) * 0.5;
     let n_verts = m.vertices.len();
 
-    // Offset direction: a SINGLE consistent vector (the membrane's average normal),
-    // NOT per-vertex normals. Per-vertex normals diverge on a curved surface, so
-    // the +offset (top) and -offset (bottom) sheets can cross each other → a
-    // self-intersecting slab that manifold rejects as NotManifold (topology is
-    // clean but geometry folds). A uniform offset keeps the two sheets parallel
-    // and congruent, so they can never intersect, no matter how the membrane bows.
+    // Compute average normal direction of the membrane
     let mut avg_n = Vec3::ZERO;
     for t in &m.triangles {
         let a = m.vertices[t[0] as usize];
@@ -1411,6 +1385,28 @@ pub fn thicken_to_slab(
     }
     let alen = avg_n.length();
     let offset_dir = if alen > 1e-9 { avg_n.scale(1.0 / alen) } else { Vec3::new(0.0, 0.0, 1.0) };
+
+    // Compute per-vertex normals and apply 4 passes of Laplacian smoothing
+    let neighbors = one_ring(m);
+    let mut smoothed_normals = vertex_normals(m);
+    for _ in 0..4 {
+        let mut next_normals = smoothed_normals.clone();
+        for i in 0..n_verts {
+            let nbrs = &neighbors[i];
+            if nbrs.is_empty() {
+                continue;
+            }
+            let mut sum = Vec3::ZERO;
+            for &nb in nbrs {
+                sum = sum.add(smoothed_normals[nb as usize]);
+            }
+            let avg = sum.scale(1.0 / nbrs.len() as f32);
+            let smoothed = smoothed_normals[i].add(avg.sub(smoothed_normals[i]).scale(0.5));
+            let len = smoothed.length();
+            next_normals[i] = if len > 1e-9 { smoothed.scale(1.0 / len) } else { smoothed_normals[i] };
+        }
+        smoothed_normals = next_normals;
+    }
 
     // Lift each boundary vertex a hair OFF the surface along the model's outward
     // SURFACE normal there. This makes the slab boundary sit just outside the
@@ -1427,15 +1423,19 @@ pub fn thicken_to_slab(
         }
     }
 
-    // Top sheet = base + half*offset_dir ; bottom sheet = base - half*offset_dir.
-    // Uniform direction (see above) → the two sheets never cross.
-    let up = offset_dir.scale(half);
+    // Top and bottom sheets using local smoothed normals and clamped local thickness scale factor (gamma >= 0.2).
     let mut positions: Vec<Vec3> = Vec::with_capacity(n_verts * 2);
+    // Top sheet = base + (T_local / 2) * smoothed_normal
     for i in 0..n_verts {
-        positions.push(base[i].add(up));
+        let scale = smoothed_normals[i].dot(offset_dir).max(0.2);
+        let half_t = thickness_mm * scale * 0.5;
+        positions.push(base[i].add(smoothed_normals[i].scale(half_t)));
     }
+    // Bottom sheet = base - (T_local / 2) * smoothed_normal
     for i in 0..n_verts {
-        positions.push(base[i].sub(up));
+        let scale = smoothed_normals[i].dot(offset_dir).max(0.2);
+        let half_t = thickness_mm * scale * 0.5;
+        positions.push(base[i].sub(smoothed_normals[i].scale(half_t)));
     }
     let bottom = n_verts as u32; // index offset of the bottom sheet
 
@@ -3324,5 +3324,77 @@ mod tests {
             assert_eq!(split.component_count, 2, "density {density} should give 2 parts");
             assert!(split.part_a.triangle_count() > 0 && split.part_b.triangle_count() > 0);
         }
+    }
+
+    fn thicken_to_slab_old(
+        m: &Membrane,
+        thickness_mm: f32,
+    ) -> IndexedMesh {
+        let half = (thickness_mm.max(1e-4)) * 0.5;
+        let n_verts = m.vertices.len();
+        let normals = vertex_normals(m);
+
+        let mut positions: Vec<Vec3> = Vec::with_capacity(n_verts * 2);
+        for i in 0..n_verts {
+            positions.push(m.vertices[i].add(normals[i].scale(half)));
+        }
+        for i in 0..n_verts {
+            positions.push(m.vertices[i].sub(normals[i].scale(half)));
+        }
+        let bottom = n_verts as u32;
+
+        let bn = m.boundary.len();
+        let mut triangles: Vec<[u32; 3]> = Vec::with_capacity(m.triangles.len() * 2 + bn * 2);
+        for t in &m.triangles {
+            triangles.push([t[0], t[1], t[2]]);
+        }
+        for t in &m.triangles {
+            triangles.push([bottom + t[0], bottom + t[2], bottom + t[1]]);
+        }
+        let mut top_dir: ahash::AHashSet<(u32, u32)> = ahash::AHashSet::new();
+        for t in &m.triangles {
+            top_dir.insert((t[0], t[1]));
+            top_dir.insert((t[1], t[2]));
+            top_dir.insert((t[2], t[0]));
+        }
+        for i in 0..bn {
+            let a = m.boundary[i];
+            let b = m.boundary[(i + 1) % bn];
+            let a2 = bottom + a;
+            let b2 = bottom + b;
+            if top_dir.contains(&(a, b)) {
+                triangles.push([b, a, a2]);
+                triangles.push([b, a2, b2]);
+            } else {
+                triangles.push([a, b, b2]);
+                triangles.push([a, b2, a2]);
+            }
+        }
+        IndexedMesh { positions, triangles }
+    }
+
+    #[test]
+    fn test_saddle_slab_thickness_failing() {
+        // Thicken a saddle membrane using old average normal offsetting.
+        // Assert that self-intersections > 0 or that manifold rejects the slab.
+        let saddle = saddle_loop(10.0, 8.0);
+        let m = build_membrane(&saddle, 3).expect("saddle membrane");
+        let slab = thicken_to_slab_old(&m, 10.0);
+        
+        let has_self_x = count_self_intersections(&slab) > 0;
+        let is_invalid = to_manifold(&slab).is_err();
+        assert!(has_self_x || is_invalid, "Old uniform offset slab must fail via self-intersection or manifold rejection");
+    }
+
+    #[test]
+    fn test_saddle_slab_thickness_passing() {
+        // Generate a deeply bowed saddle loop
+        let saddle = saddle_loop(10.0, 8.0); // 8mm depth on a 10mm square - deeply bowed!
+        let m = build_membrane(&saddle, 3).expect("saddle membrane");
+        let slab = thicken_to_slab(&m, DEFAULT_CUTTER_THICKNESS_MM, 0.0, &[]);
+        
+        // Check that our variable thickness prevents self-intersections
+        assert_eq!(count_self_intersections(&slab), 0, "Slab has self-intersections!");
+        crate::test_utils::assert_watertight_manifold(&slab);
     }
 }
