@@ -72,8 +72,8 @@ interface OrganicCutPanelProps {
   loopCount?: number;
   /** Index of the loop currently being edited. */
   activeLoopIndex?: number;
-  /** Per-loop summaries (index + waypoint count) for the loop chips. */
-  loopSummaries?: { index: number; pointCount: number }[];
+  /** Per-loop summaries (index + waypoint count + whether it has a key) for chips. */
+  loopSummaries?: { index: number; pointCount: number; hasKey: boolean }[];
   /** Switch which loop is active (editable). */
   onSelectLoop?: (index: number) => void;
   /** Append a new loop and make it active. */
@@ -406,7 +406,9 @@ export function OrganicCutPanel({
                 disabled={disabled || isApplying}
                 title="Add a peg to one half and a matching socket to the other so the parts align when reassembled."
               >
-                <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Generate Key</span>
+                <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>
+                  Generate Key{loopCount > 1 ? ` · Loop ${activeLoopIndex + 1}` : ''}
+                </span>
                 <span
                   className="relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors"
                   style={{
@@ -655,11 +657,22 @@ export function OrganicCutPanel({
                       }
                       title={
                         `Loop ${s.index + 1} — ${s.pointCount} point${s.pointCount === 1 ? '' : 's'}` +
+                        (s.hasKey ? ', keyed' : '') +
                         (incomplete ? ' (needs 3+ to cut)' : '') +
                         (isActive ? ' — editing' : ' — click to edit')
                       }
                     >
-                      {s.index + 1}
+                      <span className="inline-flex items-center gap-0.5">
+                        {s.index + 1}
+                        {s.hasKey && (
+                          <span
+                            aria-hidden
+                            className="inline-block h-1.5 w-1.5 rounded-full"
+                            style={{ background: isActive ? 'currentColor' : 'var(--accent)' }}
+                            title="This loop has a registration key"
+                          />
+                        )}
+                      </span>
                     </button>
                   );
                 })}
@@ -675,7 +688,9 @@ export function OrganicCutPanel({
               </div>
               {loopCount > 1 && (
                 <div className="ui-meta leading-snug" style={{ color: 'var(--text-muted)' }}>
-                  Cut severs all loops at once. Click a number to edit that loop.
+                  Cut severs all loops at once. Click a number to edit that loop —
+                  its key settings (below) and waypoints are its own. A dot marks a
+                  loop that has a key.
                 </div>
               )}
             </div>

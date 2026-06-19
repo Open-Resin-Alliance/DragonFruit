@@ -52,6 +52,24 @@ export interface OrganicCutSpec {
    * field: `extraLoops`.
    */
   extraLoops?: OrganicCutLoopPoint[][];
+  /**
+   * Per-loop registration-key settings, aligned with the cut's loops in order
+   * (`loopPoints` is index 0, then `extraLoops`). When present, each entry
+   * OVERRIDES the spec-level `key*` fields for that loop — so every cut gets its
+   * own peg/socket (shape, size, tilt, swap) or none (`generateKey: false`).
+   * Serde field: `loopKeys`.
+   */
+  loopKeys?: {
+    generateKey: boolean;
+    keyWidthMm: number;
+    keyDepthMm: number;
+    keyShape: 'frustum' | 'dome';
+    keyFilletMm: number;
+    keySwapSides: boolean;
+    keyTiltRad: number;
+    keyTiltAzimuthRad: number;
+    keyRollRad: number;
+  }[];
   /** Wafer thickness in mm ("consistent thickness"). Unused by the M1 no-op. */
   thicknessMm: number;
   /** Seam-line smoothing 0..1 (how much the cut line rounds through waypoints). */

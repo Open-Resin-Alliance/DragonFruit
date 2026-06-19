@@ -49,6 +49,34 @@ pub enum CutMode {
     Contour,
 }
 
+/// Per-loop registration-key settings for a multi-loop cut. Each field mirrors the
+/// spec-level `key_*` fields; an entry in [`OrganicCutSpec::loop_keys`] overrides
+/// them for ONE loop, so every cut can have its own peg/socket (shape, size, tilt,
+/// swap) — or no key at all (`generate_key = false`). Defaults match the spec-level
+/// defaults so a partial JSON object is safe.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoopKeySpec {
+    #[serde(default)]
+    pub generate_key: bool,
+    #[serde(default = "default_key_width")]
+    pub key_width_mm: f32,
+    #[serde(default = "default_key_depth")]
+    pub key_depth_mm: f32,
+    #[serde(default = "default_key_shape")]
+    pub key_shape: String,
+    #[serde(default)]
+    pub key_fillet_mm: f32,
+    #[serde(default)]
+    pub key_swap_sides: bool,
+    #[serde(default)]
+    pub key_tilt_rad: f32,
+    #[serde(default)]
+    pub key_tilt_azimuth_rad: f32,
+    #[serde(default)]
+    pub key_roll_rad: f32,
+}
+
 /// One organic cut: a closed loop plus the wafer parameters.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,6 +93,13 @@ pub struct OrganicCutSpec {
     /// geometry with one big loop). Empty (default) = the classic single-loop cut.
     #[serde(default)]
     pub extra_loops: Vec<Vec<OrganicCutLoopPoint>>,
+    /// Per-loop key settings, aligned with the cut's loops in order (`loop_points`
+    /// is index 0, then `extra_loops` in order). When an entry is present it
+    /// OVERRIDES the spec-level `key_*` fields for that loop — so each cut gets its
+    /// own peg/socket (or none). A missing entry falls back to the spec-level
+    /// `key_*` fields, so a single-loop cut without `loop_keys` is unchanged.
+    #[serde(default)]
+    pub loop_keys: Vec<LoopKeySpec>,
     /// Wafer thickness in mm. Unused by the M2 planar cut.
     #[serde(default)]
     pub thickness_mm: f32,
@@ -390,6 +425,49 @@ pub fn organic_cut(mesh: IndexedMesh, options: &OrganicCutOptions) -> OrganicCut
     }
 }
 
+/// A loop's registration-key settings, resolved from either the per-loop override
+/// ([`OrganicCutSpec::loop_keys`]) or the spec-level `key_*` fallback — already
+/// parsed into the `key` module's types so the cut path can use them directly.
+#[cfg(feature = "manifold")]
+struct ResolvedKey {
+    generate: bool,
+    width: f32,
+    depth: f32,
+    shape: crate::key::KeyShape,
+    fillet: f32,
+    swap: bool,
+    tilt: crate::key::KeyTilt,
+}
+
+/// Resolve loop `i`'s key: prefer its `loop_keys` entry, else the spec-level fields.
+#[cfg(feature = "manifold")]
+fn resolve_loop_key(spec: &OrganicCutSpec, i: usize) -> ResolvedKey {
+    match spec.loop_keys.get(i) {
+        Some(k) => ResolvedKey {
+            generate: k.generate_key,
+            width: k.key_width_mm,
+            depth: k.key_depth_mm,
+            shape: crate::key::KeyShape::from_str_or_default(&k.key_shape),
+            fillet: k.key_fillet_mm,
+            swap: k.key_swap_sides,
+            tilt: crate::key::KeyTilt::new(k.key_tilt_rad, k.key_tilt_azimuth_rad, k.key_roll_rad),
+        },
+        None => ResolvedKey {
+            generate: spec.generate_key,
+            width: spec.key_width_mm,
+            depth: spec.key_depth_mm,
+            shape: crate::key::KeyShape::from_str_or_default(&spec.key_shape),
+            fillet: spec.key_fillet_mm,
+            swap: spec.key_swap_sides,
+            tilt: crate::key::KeyTilt::new(
+                spec.key_tilt_rad,
+                spec.key_tilt_azimuth_rad,
+                spec.key_roll_rad,
+            ),
+        },
+    }
+}
+
 /// Curved "wafer" cut (M4): build a soap-film membrane following the drawn loop,
 /// thicken it into a razor-thin cutter, and split the mesh into two mating parts.
 /// Delegates the geometry to [`crate::membrane::contour_split`]; returns `Err`
@@ -409,16 +487,22 @@ fn organic_cut_contour(
             .map(|p| Vec3::new(p.position[0], p.position[1], p.position[2]))
             .collect()
     };
+    // Each kept loop carries its resolved key, kept aligned: `loop_points` is key
+    // index 0, then `extra_loops` in order. Degenerate loops (<3 points) are dropped
+    // along with their key, so `loops[i]` ↔ `loop_keys[i]` stays 1:1.
     let mut loops: Vec<Vec<Vec3>> = Vec::new();
+    let mut loop_keys: Vec<ResolvedKey> = Vec::new();
     {
         let primary = to_vec3(&options.cut.loop_points);
         if primary.len() >= 3 {
             loops.push(primary);
+            loop_keys.push(resolve_loop_key(&options.cut, 0));
         }
-        for extra in &options.cut.extra_loops {
+        for (j, extra) in options.cut.extra_loops.iter().enumerate() {
             let v = to_vec3(extra);
             if v.len() >= 3 {
                 loops.push(v);
+                loop_keys.push(resolve_loop_key(&options.cut, j + 1));
             }
         }
     }
@@ -437,8 +521,6 @@ fn organic_cut_contour(
     };
 
     // MULTI-LOOP: union a cutter per loop, difference once, group largest-vs-rest.
-    // No single membrane normal exists here, so the registration key (which is
-    // anchored on one membrane) is not produced — report that if it was requested.
     if loops.len() >= 2 {
         let split = crate::membrane::contour_split_multi(
             mesh,
@@ -447,30 +529,83 @@ fn organic_cut_contour(
             options.cut.membrane_smoothing,
             options.cut.density,
         )?;
-        let key_detail = if options.cut.generate_key {
-            "registration key skipped — not supported with multiple loops".to_string()
-        } else {
-            String::new()
-        };
+        let component_count = split.component_count;
+        let membrane_tris = split.membrane_tris;
+        let mut part_a = split.part_a;
+        let mut part_b = split.part_b;
+        let (mut key_kind, mut key_detail) = (crate::key::KeyKind::None, String::new());
+
+        // One registration key PER cut, using each loop's OWN key settings
+        // (`loop_keys[i]`). A loop with `generate = false` gets no key. `apply_key`
+        // wants the seam's +normal side as `part_a`; in a multi-loop cut the
+        // body/tail aren't grouped by side, so classify each membrane and pass the
+        // parts in the right order, then map the result back. A failed/too-thin key
+        // at one seam never affects the others (apply_key returns parts unchanged).
+        let requested = loop_keys.iter().filter(|k| k.generate).count();
+        if requested > 0 {
+            let mut placed = 0usize;
+            let mut skipped: Vec<String> = Vec::new();
+            for (i, membrane) in split.membranes.iter().enumerate() {
+                let rk = &loop_keys[i];
+                if !rk.generate {
+                    continue;
+                }
+                // Whichever part is on this membrane's +normal side is `part_a`.
+                let a_on_plus = crate::membrane::side_of_mesh(membrane, &part_a) >= 0.0;
+                let (pa, pb) = if a_on_plus { (part_a, part_b) } else { (part_b, part_a) };
+                let keyed = crate::key::apply_key(
+                    mesh,
+                    pa,
+                    pb,
+                    membrane,
+                    rk.shape,
+                    rk.swap,
+                    rk.tilt,
+                    rk.width,
+                    rk.depth,
+                    rk.fillet,
+                    crate::key::DEFAULT_KEY_TOLERANCE_MM,
+                );
+                // Map the (+normal, −normal) result back to (body, freed) = (a, b).
+                if a_on_plus {
+                    part_a = keyed.part_a;
+                    part_b = keyed.part_b;
+                } else {
+                    part_a = keyed.part_b;
+                    part_b = keyed.part_a;
+                }
+                if keyed.kind != crate::key::KeyKind::None {
+                    placed += 1;
+                    key_kind = keyed.kind;
+                } else if !keyed.detail.is_empty() {
+                    skipped.push(format!("loop {}: {}", i + 1, keyed.detail));
+                }
+            }
+            key_detail = if placed == requested {
+                String::new()
+            } else if placed == 0 {
+                key_kind = crate::key::KeyKind::None;
+                format!("no keys placed ({})", skipped.join("; "))
+            } else {
+                format!("{placed}/{requested} keys placed ({})", skipped.join("; "))
+            };
+        }
+
         let report = OrganicCutReport {
             source_triangle_count,
-            part_a_triangle_count: split.part_a.triangle_count(),
-            part_b_triangle_count: split.part_b.triangle_count(),
+            part_a_triangle_count: part_a.triangle_count(),
+            part_b_triangle_count: part_b.triangle_count(),
             engine: "membrane".to_string(),
             detail: format!(
                 "multi-loop cut: {} loops, {} components, membrane tris={}",
                 loops.len(),
-                split.component_count,
-                split.membrane_tris
+                component_count,
+                membrane_tris
             ),
-            key_kind: "none".to_string(),
+            key_kind: key_kind.as_str().to_string(),
             key_detail,
         };
-        return Ok(OrganicCutOutcome {
-            part_a: split.part_a,
-            part_b: split.part_b,
-            report,
-        });
+        return Ok(OrganicCutOutcome { part_a, part_b, report });
     }
 
     // SINGLE-LOOP: the classic curved cut, which also supports the registration key
@@ -491,24 +626,22 @@ fn organic_cut_contour(
     let (mut key_kind, mut key_detail) = (crate::key::KeyKind::None, String::new());
 
     // Optional registration key: peg union'd onto part_a, socket carved from
-    // part_b. A failed/skipped key NEVER fails the cut — `apply_key` returns the
-    // parts unchanged with `KeyKind::None` + a reason in that case.
-    if options.cut.generate_key {
+    // part_b. Uses this loop's resolved key (`loop_keys[0]` — the per-loop override
+    // or the spec-level fallback). A failed/skipped key NEVER fails the cut —
+    // `apply_key` returns the parts unchanged with `KeyKind::None` + a reason.
+    let rk = &loop_keys[0];
+    if rk.generate {
         let keyed = crate::key::apply_key(
             mesh,
             part_a,
             part_b,
             &split.membrane,
-            crate::key::KeyShape::from_str_or_default(&options.cut.key_shape),
-            options.cut.key_swap_sides,
-            crate::key::KeyTilt::new(
-                options.cut.key_tilt_rad,
-                options.cut.key_tilt_azimuth_rad,
-                options.cut.key_roll_rad,
-            ),
-            options.cut.key_width_mm,
-            options.cut.key_depth_mm,
-            options.cut.key_fillet_mm,
+            rk.shape,
+            rk.swap,
+            rk.tilt,
+            rk.width,
+            rk.depth,
+            rk.fillet,
             crate::key::DEFAULT_KEY_TOLERANCE_MM,
         );
         part_a = keyed.part_a;
@@ -809,6 +942,108 @@ mod tests {
         assert_eq!(outcome.report.engine, "membrane", "should use the membrane engine");
         assert!(outcome.part_a.triangle_count() > 0, "part A empty");
         assert!(outcome.part_b.triangle_count() > 0, "part B empty");
+    }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn multi_loop_cut_places_a_key_per_seam() {
+        // Two band loops through a tall bar, contour mode, generate_key on. Each
+        // seam should get its own registration key (peg + socket), so the report
+        // records a placed key and both parts gain geometry from the booleans.
+        let size = 30.0_f32;
+        let mesh = IndexedMesh::from_triangle_soup(&cube_soup(size), 1e-6);
+        let band = |z: f32| -> Vec<OrganicCutLoopPoint> {
+            let steps = 8usize;
+            let f = |i: usize| size * i as f32 / steps as f32;
+            let mut pts = Vec::new();
+            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [f(i), 0.0, z], normal: [0.0; 3] }); }
+            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [size, f(i), z], normal: [0.0; 3] }); }
+            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [size - f(i), size, z], normal: [0.0; 3] }); }
+            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [0.0, size - f(i), z], normal: [0.0; 3] }); }
+            pts
+        };
+        let options = OrganicCutOptions {
+            cut: OrganicCutSpec {
+                loop_points: band(10.0),
+                extra_loops: vec![band(20.0)],
+                mode: CutMode::Contour,
+                generate_key: true,
+                key_width_mm: 3.0,
+                key_depth_mm: 3.0,
+                key_shape: "frustum".to_string(),
+                ..Default::default()
+            },
+        };
+        let outcome = organic_cut(mesh, &options);
+        assert_eq!(outcome.report.engine, "membrane", "should use the membrane engine");
+        assert_ne!(
+            outcome.report.key_kind, "none",
+            "expected a key placed per seam, key_detail={}",
+            outcome.report.key_detail
+        );
+        assert!(outcome.part_a.triangle_count() > 0, "part A empty");
+        assert!(outcome.part_b.triangle_count() > 0, "part B empty");
+    }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn per_loop_keys_override_and_respect_generate_flag() {
+        // Per-loop `loop_keys`: prove (a) the override is read and (b) a loop with
+        // generate=false really gets NO key. Keying only loop 0 must add less
+        // geometry than keying BOTH loops (one fewer peg+socket boolean).
+        let size = 30.0_f32;
+        let band = |z: f32| -> Vec<OrganicCutLoopPoint> {
+            let steps = 8usize;
+            let f = |i: usize| size * i as f32 / steps as f32;
+            let mut pts = Vec::new();
+            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [f(i), 0.0, z], normal: [0.0; 3] }); }
+            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [size, f(i), z], normal: [0.0; 3] }); }
+            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [size - f(i), size, z], normal: [0.0; 3] }); }
+            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [0.0, size - f(i), z], normal: [0.0; 3] }); }
+            pts
+        };
+        let mk_key = |generate: bool| LoopKeySpec {
+            generate_key: generate,
+            key_width_mm: 3.0,
+            key_depth_mm: 3.0,
+            key_shape: "frustum".to_string(),
+            key_fillet_mm: 0.0,
+            key_swap_sides: false,
+            key_tilt_rad: 0.0,
+            key_tilt_azimuth_rad: 0.0,
+            key_roll_rad: 0.0,
+        };
+        let run = |loop_keys: Vec<LoopKeySpec>| {
+            let mesh = IndexedMesh::from_triangle_soup(&cube_soup(size), 1e-6);
+            let options = OrganicCutOptions {
+                cut: OrganicCutSpec {
+                    loop_points: band(10.0),
+                    extra_loops: vec![band(20.0)],
+                    loop_keys,
+                    mode: CutMode::Contour,
+                    // Spec-level generate_key stays OFF — only `loop_keys` drive keys
+                    // here, proving the per-loop override is what's read.
+                    ..Default::default()
+                },
+            };
+            organic_cut(mesh, &options)
+        };
+
+        // Only loop 0 keyed; loop 1 explicitly NOT keyed.
+        let one = run(vec![mk_key(true), mk_key(false)]);
+        assert_eq!(one.report.engine, "membrane");
+        assert_ne!(one.report.key_kind, "none", "loop 0 should be keyed: {}", one.report.key_detail);
+        // Both loops keyed.
+        let two = run(vec![mk_key(true), mk_key(true)]);
+        assert_ne!(two.report.key_kind, "none");
+
+        let one_tris = one.part_a.triangle_count() + one.part_b.triangle_count();
+        let two_tris = two.part_a.triangle_count() + two.part_b.triangle_count();
+        assert!(
+            two_tris > one_tris,
+            "keying both loops ({two_tris} tris) should add more geometry than keying one ({one_tris}) \
+             — loop 1's generate=false must be respected"
+        );
     }
 
     #[cfg(feature = "manifold")]

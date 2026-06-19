@@ -2290,8 +2290,8 @@ pub fn contour_split(
 }
 
 /// The result of a MULTI-loop contour split (≥2 loops union'd into one cutter).
-/// Unlike [`ContourSplit`] there is no single membrane (each loop has its own), so
-/// no `membrane` field — the registration key isn't produced for a multi-loop cut.
+/// Unlike [`ContourSplit`] there is no single membrane — each loop has its own,
+/// returned in `membranes` so the caller can place one registration key per seam.
 pub struct ContourSplitMulti {
     /// The largest connected component left after the cut — the main body.
     pub part_a: IndexedMesh,
@@ -2301,6 +2301,17 @@ pub struct ContourSplitMulti {
     pub component_count: usize,
     /// Total membrane triangle count across all loops (for diagnostics).
     pub membrane_tris: usize,
+    /// The per-loop membranes (one per valid loop), in loop order. Kept so the
+    /// caller can place a registration key at EACH seam (one key per cut).
+    pub membranes: Vec<Membrane>,
+}
+
+/// Signed side of a whole mesh relative to the membrane: positive if the mesh's
+/// centroid sits on the membrane's +normal side, negative otherwise. The
+/// multi-loop key code uses this to pass the +normal-side part as `part_a` to
+/// `apply_key` (the side convention the single-loop cut keeps by construction).
+pub fn side_of_mesh(membrane: &Membrane, mesh: &IndexedMesh) -> f32 {
+    signed_side_distance(membrane, mesh_centroid(mesh))
 }
 
 /// Contour cut along SEVERAL loops in ONE operation. Builds a cutter slab per
@@ -2330,6 +2341,7 @@ pub fn contour_split_multi(
     // slabs concatenated too, so the seam-band refinement covers every loop.
     let mut cutter: Option<manifold_csg::Manifold> = None;
     let mut combined_slab = IndexedMesh { positions: Vec::new(), triangles: Vec::new() };
+    let mut membranes: Vec<Membrane> = Vec::new();
     let mut membrane_tris = 0usize;
     let mut built = 0usize;
     for (i, lp) in loops.iter().enumerate() {
@@ -2352,6 +2364,7 @@ pub fn contour_split_multi(
             None => m,
             Some(c) => c.union(&m),
         });
+        membranes.push(membrane);
         built += 1;
     }
     let cutter = cutter.ok_or_else(|| "no valid loops (each needs >=3 points)".to_string())?;
@@ -2379,7 +2392,7 @@ pub fn contour_split_multi(
     let (part_a, part_b) = group_largest_vs_rest(islands)
         .ok_or_else(|| "multi-loop cut produced only one usable component".to_string())?;
 
-    Ok(ContourSplitMulti { part_a, part_b, component_count, membrane_tris })
+    Ok(ContourSplitMulti { part_a, part_b, component_count, membrane_tris, membranes })
 }
 
 /// Group severed islands into two parts: the LARGEST component (the body) as

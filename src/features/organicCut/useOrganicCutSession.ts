@@ -33,20 +33,94 @@ import type * as THREE from 'three';
 const MIN_LOOP_POINTS = 2;
 
 /**
+ * Per-loop registration-key settings — a multi-loop cut keys each loop
+ * independently. Mirrors the key fields of OrganicCutPanelState: the panel's key
+ * controls edit the ACTIVE loop's copy through `panelState`, which is kept in sync
+ * with the active loop (the panel/gizmo stay bound to `panelState` as before).
+ */
+export type LoopKeySettings = Pick<
+  OrganicCutPanelState,
+  | 'generateKey'
+  | 'keyWidthMm'
+  | 'keyDepthMm'
+  | 'keyShape'
+  | 'keyFilletMm'
+  | 'keyUniformScale'
+  | 'keySwapSides'
+  | 'keyTiltRad'
+  | 'keyTiltAzimuthRad'
+  | 'keyRollRad'
+>;
+
+/** Pull the key fields out of the panel state. */
+function extractKey(ps: OrganicCutPanelState): LoopKeySettings {
+  return {
+    generateKey: ps.generateKey,
+    keyWidthMm: ps.keyWidthMm,
+    keyDepthMm: ps.keyDepthMm,
+    keyShape: ps.keyShape,
+    keyFilletMm: ps.keyFilletMm,
+    keyUniformScale: ps.keyUniformScale,
+    keySwapSides: ps.keySwapSides,
+    keyTiltRad: ps.keyTiltRad,
+    keyTiltAzimuthRad: ps.keyTiltAzimuthRad,
+    keyRollRad: ps.keyRollRad,
+  };
+}
+
+/** Overlay a loop's key settings onto the panel state (the editor buffer). */
+function withKey(ps: OrganicCutPanelState, key: LoopKeySettings): OrganicCutPanelState {
+  return { ...ps, ...key };
+}
+
+/** Value-equality of two key settings (to skip no-op state churn). */
+function keysEqual(a: LoopKeySettings, b: LoopKeySettings): boolean {
+  return (
+    a.generateKey === b.generateKey &&
+    a.keyWidthMm === b.keyWidthMm &&
+    a.keyDepthMm === b.keyDepthMm &&
+    a.keyShape === b.keyShape &&
+    a.keyFilletMm === b.keyFilletMm &&
+    a.keyUniformScale === b.keyUniformScale &&
+    a.keySwapSides === b.keySwapSides &&
+    a.keyTiltRad === b.keyTiltRad &&
+    a.keyTiltAzimuthRad === b.keyTiltAzimuthRad &&
+    a.keyRollRad === b.keyRollRad
+  );
+}
+
+/** Wire form of a loop's key for the Rust `loopKeys` array (drops UI-only fields). */
+function keyToSpec(k: LoopKeySettings) {
+  return {
+    generateKey: k.generateKey,
+    keyWidthMm: k.keyWidthMm,
+    keyDepthMm: k.keyDepthMm,
+    keyShape: k.keyShape,
+    keyFilletMm: k.keyFilletMm,
+    keySwapSides: k.keySwapSides,
+    keyTiltRad: k.keyTiltRad,
+    keyTiltAzimuthRad: k.keyTiltAzimuthRad,
+    keyRollRad: k.keyRollRad,
+  };
+}
+
+/**
  * One loop in a (possibly multi-loop) cut. `points` are the editable user
  * waypoints; `polyline` is the cached DENSE on-surface geodesic for that loop —
  * kept so an INACTIVE loop can still render its seam, and so the cut traces the
- * real surface. The active loop's polyline is refreshed live by the geodesic
- * effect; an edit leaves the stale polyline in place until that recompute lands.
+ * real surface. `key` is this loop's own registration-key settings. The active
+ * loop's polyline is refreshed live by the geodesic effect; an edit leaves the
+ * stale polyline in place until that recompute lands.
  */
 interface SessionLoop {
   points: OrganicCutLoopPoint[];
   polyline: Float32Array | null;
+  key: LoopKeySettings;
 }
 
-/** A fresh empty loop slot. */
-function emptyLoop(): SessionLoop {
-  return { points: [], polyline: null };
+/** A fresh empty loop slot carrying the given key settings. */
+function emptyLoop(key: LoopKeySettings): SessionLoop {
+  return { points: [], polyline: null, key };
 }
 
 /**
@@ -139,7 +213,7 @@ export interface OrganicCutSession {
   /** Index of the loop currently being edited (gets markers + membrane preview). */
   activeLoopIndex: number;
   /** Per-loop summaries for the panel's loop chips (index + waypoint count). */
-  loopSummaries: { index: number; pointCount: number }[];
+  loopSummaries: { index: number; pointCount: number; hasKey: boolean }[];
   /** Make loop `index` the active (editable) one. Out-of-range is a no-op. */
   selectLoop: (index: number) => void;
   /**
@@ -233,6 +307,9 @@ const DEFAULT_PANEL_STATE: OrganicCutPanelState = {
 /** Minimum points before a CONTOUR cut is possible (a real loop needs ≥3). */
 const MIN_CONTOUR_POINTS = 3;
 
+/** Default per-loop key settings — the panel defaults, used for fresh loops. */
+const DEFAULT_LOOP_KEY: LoopKeySettings = extractKey(DEFAULT_PANEL_STATE);
+
 export function useOrganicCutSession({
   toolActive,
   activeGeometry,
@@ -244,7 +321,7 @@ export function useOrganicCutSession({
   // All loops of the current cut, plus which one is active (editable). The active
   // loop gets the full waypoint UI + membrane preview; the rest render as dimmed
   // seams the user can switch to and edit. There is always ≥1 loop.
-  const [loops, setLoops] = React.useState<SessionLoop[]>([emptyLoop()]);
+  const [loops, setLoops] = React.useState<SessionLoop[]>([emptyLoop(DEFAULT_LOOP_KEY)]);
   const [activeLoopIndex, setActiveLoopIndex] = React.useState(0);
   const [status, setStatus] = React.useState<OrganicCutSessionStatus>('idle');
   const [isApplying, setIsApplying] = React.useState(false);
@@ -268,7 +345,7 @@ export function useOrganicCutSession({
   // The active loop's points (the "loop" the rest of the tool edits/renders). A
   // stable reference until that slot's points actually change, so it's safe in
   // effect deps (caching a polyline into the slot keeps this reference intact).
-  const loop = (loops[activeLoopIndex] ?? loops[0] ?? emptyLoop()).points;
+  const loop = (loops[activeLoopIndex] ?? loops[0] ?? emptyLoop(DEFAULT_LOOP_KEY)).points;
 
   // Mirror loops + active index in refs so the stable `apply` / callbacks read the
   // CURRENT values regardless of any stale memoized closures (this is the fix for
@@ -347,12 +424,30 @@ export function useOrganicCutSession({
         const nextPoints = updater(cur.points);
         if (nextPoints === cur.points) return prev;
         const next = prev.slice();
-        next[idx] = { points: nextPoints, polyline: cur.polyline };
+        next[idx] = { points: nextPoints, polyline: cur.polyline, key: cur.key };
         return next;
       });
     },
     [],
   );
+
+  // Panel state setter exposed to the UI. Besides updating `panelState`, it mirrors
+  // the panel's key fields into the ACTIVE loop, so each loop keeps its OWN key
+  // settings. The panel + gizmo stay bound to `panelState` (no change there); this
+  // wrapper is what makes those edits land on the active loop. Non-key panel
+  // changes (thickness, smoothing, …) leave the loops untouched (keysEqual guard).
+  const handleSetPanelState = React.useCallback((next: OrganicCutPanelState) => {
+    setPanelState(next);
+    const key = extractKey(next);
+    setLoops((prev) => {
+      const idx = activeLoopIndexRef.current;
+      if (idx < 0 || idx >= prev.length) return prev;
+      if (keysEqual(prev[idx].key, key)) return prev;
+      const nextLoops = prev.slice();
+      nextLoops[idx] = { ...nextLoops[idx], key };
+      return nextLoops;
+    });
+  }, []);
 
   // When the tool is deactivated, stash the current loops under their model so
   // they can be restored on re-entry, then clear the live view. We DON'T drop the
@@ -364,7 +459,9 @@ export function useOrganicCutSession({
       if (key && current.some((l) => l.points.length > 0)) {
         savedLoopsRef.current.set(key, { loops: current, activeIndex: activeLoopIndexRef.current });
       }
-      setLoops([emptyLoop()]);
+      // Reset to one empty loop carrying the current panel key, so panelState and
+      // the (now sole) active loop's key stay consistent.
+      setLoops([emptyLoop(extractKey(panelStateRef.current))]);
       setActiveLoopIndex(0);
       setStatus('idle');
       setLastResult(null);
@@ -388,11 +485,15 @@ export function useOrganicCutSession({
     }
     prevGeometryKeyRef.current = activeGeometryKey;
 
-    // Restore the incoming model's saved loops, or start with one empty loop.
+    // Restore the incoming model's saved loops, or start with one empty loop
+    // carrying the current panel key.
     const restored = activeGeometryKey ? savedLoopsRef.current.get(activeGeometryKey) : undefined;
-    const restoredLoops = restored?.loops ?? [emptyLoop()];
+    const restoredLoops = restored?.loops ?? [emptyLoop(extractKey(panelStateRef.current))];
+    const nextActive = restored ? Math.min(restored.activeIndex, restoredLoops.length - 1) : 0;
     setLoops(restoredLoops);
-    setActiveLoopIndex(restored ? Math.min(restored.activeIndex, restoredLoops.length - 1) : 0);
+    setActiveLoopIndex(nextActive);
+    // Sync the panel's key editor to the now-active loop's key.
+    setPanelState((ps) => withKey(ps, restoredLoops[nextActive]?.key ?? DEFAULT_LOOP_KEY));
     setStatus(restoredLoops.some((l) => l.points.length > 0) ? 'drawing' : 'idle');
     setLastResult(null);
     setGeodesicPolyline(null);
@@ -419,8 +520,10 @@ export function useOrganicCutSession({
       // entry so a later unrelated geometry change doesn't re-trigger it.
       undoRestoreRef.current = null;
       savedLoopsRef.current.set(pending.modelId, { loops: pending.loops, activeIndex: pending.activeIndex });
+      const nextActive = Math.min(pending.activeIndex, pending.loops.length - 1);
       setLoops(pending.loops);
-      setActiveLoopIndex(Math.min(pending.activeIndex, pending.loops.length - 1));
+      setActiveLoopIndex(nextActive);
+      setPanelState((ps) => withKey(ps, pending.loops[nextActive]?.key ?? DEFAULT_LOOP_KEY));
       setStatus('drawing');
       setSelectedIndex(null);
       setRedoStack([]);
@@ -640,7 +743,8 @@ export function useOrganicCutSession({
     // on deselect/reselect, and discard ALL loops (multi-loop included).
     const key = activeGeometryKeyRef.current;
     if (key) savedLoopsRef.current.delete(key);
-    setLoops([emptyLoop()]);
+    // Keep the panel's current key on the fresh loop (don't reset the user's prefs).
+    setLoops([emptyLoop(extractKey(panelStateRef.current))]);
     setActiveLoopIndex(0);
     setStatus('idle');
     setLastResult(null);
@@ -650,7 +754,8 @@ export function useOrganicCutSession({
   }, []);
 
   // Switch the active (editable) loop. The geodesic + membrane effects recompute
-  // for the new active loop; we show its cached seam immediately for snappiness.
+  // for the new active loop; we show its cached seam immediately for snappiness,
+  // and load that loop's key into the panel editor so the key controls follow it.
   const selectLoop = React.useCallback((index: number) => {
     const all = loopsRef.current;
     if (index < 0 || index >= all.length) return;
@@ -658,15 +763,20 @@ export function useOrganicCutSession({
     setSelectedIndex(null);
     setRedoStack([]);
     setGeodesicPolyline(all[index].polyline ?? null);
+    setPanelState((ps) => withKey(ps, all[index].key));
     setStatus(all[index].points.length > 0 ? 'drawing' : 'idle');
   }, []);
 
-  // Append a fresh empty loop and make it active (multi-loop cut). On Apply, every
-  // loop's cutter is union'd and differenced together. Gated by `canAddLoop` so we
-  // don't stack empty loops; a stray empty loop is pruned at cut time regardless.
+  // Append a fresh empty loop and make it active (multi-loop cut). The new loop
+  // inherits the current loop's key as a starting point (the panel already shows
+  // it, so no panel change needed). On Apply, every loop's cutter is union'd
+  // together. Gated by `canAddLoop` so we don't stack empty loops; a stray empty
+  // loop is pruned at cut time regardless.
   const addLoop = React.useCallback(() => {
-    const newIndex = loopsRef.current.length; // index of the appended loop
-    setLoops((prev) => [...prev, emptyLoop()]);
+    const all = loopsRef.current;
+    const newIndex = all.length; // index of the appended loop
+    const inheritKey = all[activeLoopIndexRef.current]?.key ?? extractKey(panelStateRef.current);
+    setLoops((prev) => [...prev, emptyLoop(inheritKey)]);
     setActiveLoopIndex(newIndex);
     setSelectedIndex(null);
     setRedoStack([]);
@@ -691,11 +801,18 @@ export function useOrganicCutSession({
       return next;
     });
     const lastIndexAfter = before.length - 2; // length-1 (removed) - 1
-    setActiveLoopIndex((cur) => {
-      if (index < cur) return cur - 1;
-      if (index === cur) return Math.max(0, Math.min(cur, lastIndexAfter));
-      return cur;
-    });
+    const curActive = activeLoopIndexRef.current;
+    const newActive =
+      index < curActive
+        ? curActive - 1
+        : index === curActive
+          ? Math.max(0, Math.min(curActive, lastIndexAfter))
+          : curActive;
+    setActiveLoopIndex(newActive);
+    // Load the new active loop's key into the panel editor (compute from the
+    // pre-removal snapshot minus the removed loop).
+    const remaining = before.filter((_, i) => i !== index);
+    setPanelState((ps) => withKey(ps, remaining[newActive]?.key ?? DEFAULT_LOOP_KEY));
     setSelectedIndex(null);
     setRedoStack([]);
     setGeodesicPolyline(null);
@@ -726,7 +843,11 @@ export function useOrganicCutSession({
     if (!geom || !geomKey) return;
     const loopSnapshot = currentLoop.slice();
     // Snapshot all loops (for the undo-restore after a successful cut).
-    const loopsSnapshot = allLoopsState.map((l) => ({ points: l.points.slice(), polyline: l.polyline }));
+    const loopsSnapshot: SessionLoop[] = allLoopsState.map((l) => ({
+      points: l.points.slice(),
+      polyline: l.polyline,
+      key: l.key,
+    }));
     const geodesic = geodesicPolylineRef.current;
     let cancelled = false;
     setIsApplying(true);
@@ -746,7 +867,9 @@ export function useOrganicCutSession({
         // Flat: send the waypoints + the exact plane the preview showed.
         let cutSpec;
         if (isContour) {
-          const allLoops: OrganicCutLoopPoint[][] = [];
+          // Each kept loop carries its OWN key, kept aligned with its points so the
+          // backend places per-loop keys (loopKeys[i] ↔ the i-th loop).
+          const kept: { points: OrganicCutLoopPoint[]; key: LoopKeySettings }[] = [];
           allLoopsState.forEach((l, i) => {
             let pts: OrganicCutLoopPoint[] | null = null;
             if (i === activeIdx && geodesic && geodesic.length >= MIN_CONTOUR_POINTS * 3) {
@@ -754,12 +877,16 @@ export function useOrganicCutSession({
             } else {
               pts = loopCutPoints(l);
             }
-            if (pts) allLoops.push(pts);
+            if (pts) kept.push({ points: pts, key: l.key });
           });
-          if (allLoops.length === 0) return; // nothing to cut
+          if (kept.length === 0) return; // nothing to cut
+          const allLoops = kept.map((k) => k.points);
           cutSpec = {
             loopPoints: allLoops[0],
             extraLoops: allLoops.length > 1 ? allLoops.slice(1) : undefined,
+            // Per-loop key settings, aligned with the loops above (loopPoints +
+            // extraLoops). The backend keys each seam with its own peg/socket.
+            loopKeys: kept.map((k) => keyToSpec(k.key)),
             thicknessMm: ps.thicknessMm,
             // `smoothing` = seam-line smoothing (the geodesic was already computed
             // with it, but send it so the cut's loop matches). `membraneSmoothing`
@@ -775,9 +902,11 @@ export function useOrganicCutSession({
             // Cut resolution multiplier — raises the cutter poly count. The live
             // preview reflects this too (so what you see is what gets cut).
             density: ps.density,
-            // When on, the cut also builds the registration key (peg union'd onto
-            // one half, socket carved from the other). The preview already showed
-            // the exact key this produces. (Skipped by Rust for multi-loop cuts.)
+            // When on, the cut builds a registration key (peg union'd onto one
+            // half, socket carved from the other) at EVERY loop's seam — one key
+            // per cut. The preview shows the active loop's key; the others use the
+            // same width/depth/shape/tilt. A key too thin to fit at one seam is
+            // skipped there without affecting the rest.
             generateKey: ps.generateKey,
             keyWidthMm: ps.keyWidthMm,
             keyDepthMm: ps.keyDepthMm,
@@ -845,7 +974,8 @@ export function useOrganicCutSession({
               activeIndex: activeIdx,
             };
           }
-          setLoops([emptyLoop()]);
+          // Reset to one empty loop carrying the current panel key.
+          setLoops([emptyLoop(extractKey(panelStateRef.current))]);
           setActiveLoopIndex(0);
           setStatus('idle');
           setSelectedIndex(null);
@@ -870,7 +1000,7 @@ export function useOrganicCutSession({
   const activeLoopReady = pointCount >= MIN_CONTOUR_POINTS;
   const loopCount = loops.length;
   const loopSummaries = React.useMemo(
-    () => loops.map((l, i) => ({ index: i, pointCount: l.points.length })),
+    () => loops.map((l, i) => ({ index: i, pointCount: l.points.length, hasKey: l.key.generateKey })),
     [loops],
   );
   // How many loops are real loops (would actually cut), for the Cut gate.
@@ -887,7 +1017,7 @@ export function useOrganicCutSession({
 
   return {
     panelState,
-    setPanelState,
+    setPanelState: handleSetPanelState,
     loop,
     status,
     addPoint,
