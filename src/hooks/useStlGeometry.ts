@@ -580,7 +580,7 @@ function concatUint8Arrays(a: Uint8Array, b: Uint8Array): Uint8Array {
  *
  * Falls back to null on any error (caller should use STLLoader).
  */
-async function loadStlBinaryStreaming(fileUrl: string): Promise<THREE.BufferGeometry | null> {
+export async function loadStlBinaryStreaming(fileUrl: string): Promise<THREE.BufferGeometry | null> {
   let response: Response;
   try {
     response = await fetch(fileUrl);
@@ -634,10 +634,21 @@ async function loadStlBinaryStreaming(fileUrl: string): Promise<THREE.BufferGeom
 
     // --- Phase 2: Process any triangle data already in the first chunk (after the 84-byte header) ---
     const firstTriData = firstChunk.subarray(STL_HEADER_SIZE);
-    posIndex = parseStlTrianglesInto(positions, firstTriData, posIndex);
+    const firstCompleteBytes = Math.floor(firstTriData.byteLength / BINARY_STL_TRIANGLE_BYTES)
+      * BINARY_STL_TRIANGLE_BYTES;
+    if (firstCompleteBytes > 0) {
+      posIndex = parseStlTrianglesInto(
+        positions,
+        firstTriData.subarray(0, firstCompleteBytes),
+        posIndex,
+      );
+    }
 
     // --- Phase 3: Stream remaining chunks ---
-    let pendingBuffer: Uint8Array | null = null;
+    const firstRemaining = firstTriData.byteLength - firstCompleteBytes;
+    let pendingBuffer: Uint8Array | null = firstRemaining > 0
+      ? firstTriData.slice(firstCompleteBytes)
+      : null;
 
     while (true) {
       const { value: chunk, done } = await reader.read();
@@ -657,10 +668,10 @@ async function loadStlBinaryStreaming(fileUrl: string): Promise<THREE.BufferGeom
 
       // Keep leftover bytes for next chunk
       const remaining: number = data.byteLength - completeBytes;
-      pendingBuffer = remaining > 0 ? data.subarray(completeBytes) : null;
+      pendingBuffer = remaining > 0 ? data.slice(completeBytes) : null;
     }
 
-    if (posIndex !== positions.length) {
+    if (pendingBuffer?.byteLength || posIndex !== positions.length) {
       console.warn(
         `[loadStlGeometry] Expected ${positions.length} position floats but got ${posIndex}. ` +
         `STL file may be truncated.`,
