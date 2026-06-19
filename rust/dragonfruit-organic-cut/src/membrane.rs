@@ -600,8 +600,17 @@ fn relax(m: &mut Membrane, max_passes: usize, strength: f32) {
     let neighbours = one_ring(m);
     // O(1) "is this vertex pinned?" lookup.
     let mut pinned = vec![false; m.vertices.len()];
-    for &b in &m.boundary {
-        pinned[b as usize] = true;
+    let mut edge_counts = ahash::AHashMap::new();
+    for t in &m.triangles {
+        for &(a, b) in &[(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            *edge_counts.entry(ekey(a, b)).or_insert(0) += 1;
+        }
+    }
+    for (edge, &count) in &edge_counts {
+        if count == 1 {
+            pinned[edge.0 as usize] = true;
+            pinned[edge.1 as usize] = true;
+        }
     }
     let mut prev_area = m.area();
 
@@ -696,11 +705,14 @@ impl Adjacency {
                 edge_faces.entry(ekey(a, b)).or_default().push(fi as u32);
             }
         }
-        let boundary_verts: ahash::AHashSet<u32> = m.boundary.iter().copied().collect();
-        let mut boundary_edges = ahash::AHashSet::with_capacity(m.boundary.len());
-        let bn = m.boundary.len();
-        for i in 0..bn {
-            boundary_edges.insert(ekey(m.boundary[i], m.boundary[(i + 1) % bn]));
+        let mut boundary_verts = ahash::AHashSet::new();
+        let mut boundary_edges = ahash::AHashSet::new();
+        for (&edge, faces) in &edge_faces {
+            if faces.len() == 1 {
+                boundary_edges.insert(edge);
+                boundary_verts.insert(edge.0);
+                boundary_verts.insert(edge.1);
+            }
         }
         Self { edge_faces, boundary_verts, boundary_edges }
     }
@@ -2655,19 +2667,542 @@ pub fn contour_split(
              the loop likely didn't wrap all the way through the body"
         ));
     }
-    let (part_a, part_b) = split_into_two_sides(&membrane, islands, Some(mesh), Some(loop_pts)).ok_or_else(|| {
+    let (mut part_a, mut part_b) = split_into_two_sides(&membrane, islands, Some(mesh), Some(loop_pts)).ok_or_else(|| {
         format!(
             "contour cut produced {component_count} islands but they all fell on ONE side of \
              the membrane (the loop didn't pass through the body)"
         )
     })?;
 
+    remesh_part_caps(&mut part_a, &CutterGeom::Slab(&slab));
+    remesh_part_caps(&mut part_b, &CutterGeom::Slab(&slab));
+
     Ok(ContourSplit { part_a, part_b, component_count, membrane_tris, membrane })
 }
 
-/// Convert a `manifold` solid back to an `IndexedMesh`. Returns `None` only on a
-/// malformed/empty conversion (matches `organic_cut.rs::manifold_to_indexed`).
-/// `pub(crate)` so the key module can convert its boolean results back too.
+pub enum CutterGeom<'a> {
+    Plane { normal: Vec3, offset: f32 },
+    Slab(&'a IndexedMesh),
+}
+
+pub(crate) fn is_island_uncut(island: &IndexedMesh, cutter: &CutterGeom) -> bool {
+    let tolerance = 1e-2f32; // 0.01 mm
+    let mut vert_on_cutter = vec![false; island.positions.len()];
+
+    match cutter {
+        CutterGeom::Plane { normal, offset } => {
+            for (i, &v) in island.positions.iter().enumerate() {
+                if (v.dot(*normal) - offset).abs() <= tolerance {
+                    vert_on_cutter[i] = true;
+                }
+            }
+        }
+        CutterGeom::Slab(slab_mesh) => {
+            if slab_mesh.triangles.is_empty() {
+                return true;
+            }
+            let bvh = Bvh::build(slab_mesh);
+            for (i, &v) in island.positions.iter().enumerate() {
+                let q_min = v.sub(Vec3::new(tolerance, tolerance, tolerance));
+                let q_max = v.add(Vec3::new(tolerance, tolerance, tolerance));
+                let query = Aabb { min: q_min, max: q_max };
+                let mut close = false;
+                bvh.query_aabb(&query, |face_idx| {
+                    if close { return; }
+                    let t = slab_mesh.triangles[face_idx as usize];
+                    let a = slab_mesh.positions[t[0] as usize];
+                    let b = slab_mesh.positions[t[1] as usize];
+                    let c = slab_mesh.positions[t[2] as usize];
+                    let dist_sq = point_triangle_distance_squared(v, a, b, c);
+                    if dist_sq <= tolerance * tolerance {
+                        close = true;
+                    }
+                });
+                if close {
+                    vert_on_cutter[i] = true;
+                }
+            }
+        }
+    }
+
+    for t in &island.triangles {
+        if vert_on_cutter[t[0] as usize] &&
+           vert_on_cutter[t[1] as usize] &&
+           vert_on_cutter[t[2] as usize] {
+            return false;
+        }
+    }
+    true
+}
+
+fn point_triangle_distance_squared(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> f32 {
+    let ab = b.sub(a);
+    let ac = c.sub(a);
+    let ap = p.sub(a);
+    let d1 = ab.dot(ap);
+    let d2 = ac.dot(ap);
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return p.sub(a).dot(p.sub(a));
+    }
+    let bp = p.sub(b);
+    let d3 = ab.dot(bp);
+    let d4 = ac.dot(bp);
+    if d3 >= 0.0 && d4 <= d3 {
+        return p.sub(b).dot(p.sub(b));
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let v = d1 / (d1 - d3);
+        let closest = a.add(ab.scale(v));
+        return p.sub(closest).dot(p.sub(closest));
+    }
+    let cp = p.sub(c);
+    let d5 = ab.dot(cp);
+    let d6 = ac.dot(cp);
+    if d6 >= 0.0 && d5 <= d6 {
+        return p.sub(c).dot(p.sub(c));
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let w = d2 / (d2 - d6);
+        let closest = a.add(ac.scale(w));
+        return p.sub(closest).dot(p.sub(closest));
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        let closest = b.add(c.sub(b).scale(w));
+        return p.sub(closest).dot(p.sub(closest));
+    }
+    let denom = 1.0 / (va + vb + vc);
+    let v = vb * denom;
+    let w = vc * denom;
+    let closest = a.add(ab.scale(v)).add(ac.scale(w));
+    p.sub(closest).dot(p.sub(closest))
+}
+
+fn is_manifold_cap(m: &Membrane) -> bool {
+    let mut counts: ahash::AHashMap<EdgeKey, u32> = ahash::AHashMap::new();
+    for t in &m.triangles {
+        if t[0] == t[1] || t[1] == t[2] || t[2] == t[0] {
+            return false;
+        }
+        for &(a, b) in &[(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            *counts.entry(ekey(a, b)).or_insert(0) += 1;
+        }
+    }
+    for &c in counts.values() {
+        if c > 2 {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_hollow_cap(cap_tris: &[[u32; 3]]) -> bool {
+    let mut edge_counts = ahash::AHashMap::new();
+    for t in cap_tris {
+        for &(a, b) in &[(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            *edge_counts.entry(ekey(a, b)).or_insert(0) += 1;
+        }
+    }
+    let mut adj_bnd: ahash::AHashMap<u32, Vec<u32>> = ahash::AHashMap::new();
+    for (edge, &count) in &edge_counts {
+        if count == 1 {
+            adj_bnd.entry(edge.0).or_default().push(edge.1);
+            adj_bnd.entry(edge.1).or_default().push(edge.0);
+        }
+    }
+    if adj_bnd.is_empty() {
+        return false;
+    }
+    let mut visited = ahash::AHashSet::new();
+    let mut components = 0;
+    for &v in adj_bnd.keys() {
+        if visited.contains(&v) {
+            continue;
+        }
+        components += 1;
+        let mut stack = vec![v];
+        while let Some(curr) = stack.pop() {
+            if visited.insert(curr) {
+                if let Some(neighbors) = adj_bnd.get(&curr) {
+                    for &nb in neighbors {
+                        if !visited.contains(&nb) {
+                            stack.push(nb);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    components > 1
+}
+
+fn cap_target_edge_length(m: &Membrane, adj: &Adjacency) -> f32 {
+    let mut sum = 0.0;
+    let mut count = 0;
+    for &k in adj.boundary_edges.iter() {
+        let p0 = m.vertices[k.0 as usize];
+        let p1 = m.vertices[k.1 as usize];
+        sum += p0.sub(p1).length();
+        count += 1;
+    }
+    if count > 0 {
+        sum / count as f32
+    } else {
+        let mut sum = 0.0;
+        let mut count = 0;
+        for t in &m.triangles {
+            let p0 = m.vertices[t[0] as usize];
+            let p1 = m.vertices[t[1] as usize];
+            let p2 = m.vertices[t[2] as usize];
+            sum += p0.sub(p1).length() + p1.sub(p2).length() + p2.sub(p0).length();
+            count += 3;
+        }
+        if count > 0 {
+            sum / count as f32
+        } else {
+            1.0
+        }
+    }
+}
+
+fn remesh_split_cap(m: &mut Membrane, high: f32) -> usize {
+    let adj = Adjacency::build(m);
+    let mut mid_of: ahash::AHashMap<EdgeKey, u32> = ahash::AHashMap::new();
+    for &k in adj.edge_faces.keys() {
+        if adj.is_boundary_edge(k) {
+            continue;
+        }
+        let len = m.vertices[k.0 as usize].sub(m.vertices[k.1 as usize]).length();
+        if len > high {
+            let mp = m.vertices[k.0 as usize].add(m.vertices[k.1 as usize]).scale(0.5);
+            let idx = m.vertices.len() as u32;
+            m.vertices.push(mp);
+            mid_of.insert(k, idx);
+        }
+    }
+    if mid_of.is_empty() {
+        return 0;
+    }
+
+    let old_tris = std::mem::take(&mut m.triangles);
+    let mut new_tris: Vec<[u32; 3]> = Vec::with_capacity(old_tris.len() * 2);
+    for t in old_tris {
+        let (a, b, c) = (t[0], t[1], t[2]);
+        let mab = mid_of.get(&ekey(a, b)).copied();
+        let mbc = mid_of.get(&ekey(b, c)).copied();
+        let mca = mid_of.get(&ekey(c, a)).copied();
+        emit_split_triangle(&mut new_tris, a, b, c, mab, mbc, mca);
+    }
+    m.triangles = new_tris;
+
+    mid_of.len()
+}
+
+fn targeted_boundary_weld_precise(
+    part: &mut IndexedMesh,
+    num_body_tris: usize,
+    offset: u32,
+    cap_boundary: &[u32],
+) {
+    if part.triangles.is_empty() || part.positions.is_empty() {
+        return;
+    }
+
+    // 1. Mark body boundary vertices
+    let mut body_edge_counts = ahash::AHashMap::new();
+    for i in 0..num_body_tris {
+        let t = part.triangles[i];
+        for &(a, b) in &[(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            let key = if a < b { (a, b) } else { (b, a) };
+            *body_edge_counts.entry(key).or_insert(0) += 1;
+        }
+    }
+
+    let mut body_boundary_verts = vec![false; part.positions.len()];
+    for (edge, &count) in &body_edge_counts {
+        if count == 1 {
+            body_boundary_verts[edge.0 as usize] = true;
+            body_boundary_verts[edge.1 as usize] = true;
+        }
+    }
+
+    // 2. Mark cap boundary vertices
+    let mut cap_boundary_verts = vec![false; part.positions.len()];
+    for &b in cap_boundary {
+        let cap_v_idx = b + offset;
+        if (cap_v_idx as usize) < part.positions.len() {
+            cap_boundary_verts[cap_v_idx as usize] = true;
+        }
+    }
+
+    // If either cap or body boundary is empty, nothing to weld
+    let has_cap_boundary = cap_boundary_verts.iter().any(|&b| b);
+    let has_body_boundary = body_boundary_verts.iter().any(|&b| b);
+    if !has_cap_boundary || !has_body_boundary {
+        return;
+    }
+
+    // 3. Weld matching cap boundary vertices to body boundary vertices using a local spatial grid
+    let tol = 1e-2f32; // 0.01 mm
+    let mut remap: Vec<u32> = (0..part.positions.len() as u32).collect();
+    let mut grid: ahash::AHashMap<(i64, i64, i64), Vec<u32>> = ahash::AHashMap::new();
+
+    // Insert body boundary vertices into the spatial grid
+    for i in 0..part.positions.len() {
+        if body_boundary_verts[i] {
+            let v = part.positions[i];
+            let gx = (v.x as f64 / tol as f64).round() as i64;
+            let gy = (v.y as f64 / tol as f64).round() as i64;
+            let gz = (v.z as f64 / tol as f64).round() as i64;
+            grid.entry((gx, gy, gz)).or_default().push(i as u32);
+        }
+    }
+
+    // Find matches for cap boundary vertices
+    for i in 0..part.positions.len() {
+        if cap_boundary_verts[i] {
+            let v = part.positions[i];
+            let gx = (v.x as f64 / tol as f64).round() as i64;
+            let gy = (v.y as f64 / tol as f64).round() as i64;
+            let gz = (v.z as f64 / tol as f64).round() as i64;
+
+            let mut matched_idx = None;
+            let mut best_dist = f32::INFINITY;
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        let key = (gx + dx, gy + dy, gz + dz);
+                        if let Some(indices) = grid.get(&key) {
+                            for &idx in indices {
+                                let candidate = part.positions[idx as usize];
+                                let dist = v.sub(candidate).length();
+                                if dist < best_dist {
+                                    best_dist = dist;
+                                    matched_idx = Some(idx);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(idx) = matched_idx {
+                if best_dist <= tol {
+                    remap[i] = idx;
+                } else {
+                    println!(
+                        "Cap boundary vert {} at {:?} found NO match within tolerance! Closest candidate is {} at dist {}",
+                        i, v, idx, best_dist
+                    );
+                }
+            }
+        }
+    }
+
+    // Apply remapping to all triangles
+    for t in &mut part.triangles {
+        t[0] = remap[t[0] as usize];
+        t[1] = remap[t[1] as usize];
+        t[2] = remap[t[2] as usize];
+    }
+
+    // Remove degenerate triangles
+    part.triangles.retain(|t| t[0] != t[1] && t[1] != t[2] && t[2] != t[0]);
+
+    // Contraction pass to remove unused vertices
+    let mut unique_positions = Vec::new();
+    let mut new_indices = vec![u32::MAX; part.positions.len()];
+    for t in &mut part.triangles {
+        for idx in t.iter_mut() {
+            let old_idx = *idx as usize;
+            if new_indices[old_idx] == u32::MAX {
+                new_indices[old_idx] = unique_positions.len() as u32;
+                unique_positions.push(part.positions[old_idx]);
+            }
+            *idx = new_indices[old_idx];
+        }
+    }
+    part.positions = unique_positions;
+
+}
+
+pub fn remesh_part_caps(
+    part: &mut IndexedMesh,
+    cutter: &CutterGeom,
+) {
+    if part.triangles.is_empty() {
+        return;
+    }
+    let backup_part = part.clone();
+
+    let tolerance = 1e-2f32; // 0.01 mm
+    let mut vert_on_cutter = vec![false; part.positions.len()];
+
+    match cutter {
+        CutterGeom::Plane { normal, offset } => {
+            for (i, &v) in part.positions.iter().enumerate() {
+                if (v.dot(*normal) - offset).abs() <= tolerance {
+                    vert_on_cutter[i] = true;
+                }
+            }
+        }
+        CutterGeom::Slab(slab_mesh) => {
+            if !slab_mesh.triangles.is_empty() {
+                let bvh = Bvh::build(slab_mesh);
+                for (i, &v) in part.positions.iter().enumerate() {
+                    let q_min = v.sub(Vec3::new(tolerance, tolerance, tolerance));
+                    let q_max = v.add(Vec3::new(tolerance, tolerance, tolerance));
+                    let query = Aabb { min: q_min, max: q_max };
+                    let mut close = false;
+                    bvh.query_aabb(&query, |face_idx| {
+                        if close { return; }
+                        let t = slab_mesh.triangles[face_idx as usize];
+                        let a = slab_mesh.positions[t[0] as usize];
+                        let b = slab_mesh.positions[t[1] as usize];
+                        let c = slab_mesh.positions[t[2] as usize];
+                        let dist_sq = point_triangle_distance_squared(v, a, b, c);
+                        if dist_sq <= tolerance * tolerance {
+                            close = true;
+                        }
+                    });
+                    if close {
+                        vert_on_cutter[i] = true;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut cap_tri_indices = Vec::new();
+    let mut body_triangles = Vec::new();
+    for (i, t) in part.triangles.iter().enumerate() {
+        if vert_on_cutter[t[0] as usize] &&
+           vert_on_cutter[t[1] as usize] &&
+           vert_on_cutter[t[2] as usize] {
+            cap_tri_indices.push(i);
+        } else {
+            body_triangles.push(*t);
+        }
+    }
+
+    if cap_tri_indices.is_empty() {
+        return;
+    }
+
+    let mut cap_verts = Vec::new();
+    let mut map_part_to_cap = ahash::AHashMap::new();
+    let mut cap_tris = Vec::new();
+
+    for &idx in &cap_tri_indices {
+        let t = part.triangles[idx];
+        let mut new_t = [0u32; 3];
+        for j in 0..3 {
+            let old_v = t[j];
+            let new_v = *map_part_to_cap.entry(old_v).or_insert_with(|| {
+                let v_idx = cap_verts.len() as u32;
+                cap_verts.push(part.positions[old_v as usize]);
+                v_idx
+            });
+            new_t[j] = new_v;
+        }
+        cap_tris.push(new_t);
+    }
+
+    println!("remesh_part_caps: cap_tris len = {}, is_hollow = {}", cap_tris.len(), is_hollow_cap(&cap_tris));
+    // Apply remeshing only if hollowing is present (multiple boundary loops).
+    if is_hollow_cap(&cap_tris) {
+        let mut edge_counts = ahash::AHashMap::new();
+        for t in &cap_tris {
+            for &(a, b) in &[(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                *edge_counts.entry(ekey(a, b)).or_insert(0) += 1;
+            }
+        }
+
+        let mut boundary_verts_set = ahash::AHashSet::new();
+        for (edge, &count) in &edge_counts {
+            if count == 1 {
+                boundary_verts_set.insert(edge.0);
+                boundary_verts_set.insert(edge.1);
+            }
+        }
+        let boundary: Vec<u32> = boundary_verts_set.into_iter().collect();
+
+        let mut cap_mem = Membrane {
+            vertices: cap_verts,
+            triangles: cap_tris,
+            boundary,
+        };
+
+        let adj = Adjacency::build(&cap_mem);
+        let l_local = cap_target_edge_length(&cap_mem, &adj);
+        let high = l_local * 4.0 / 3.0;
+        let low = l_local * 4.0 / 5.0;
+
+        for _ in 0..6 {
+            let snapshot = cap_mem.clone();
+            relax(&mut cap_mem, 4, 0.5);
+            remesh_split_cap(&mut cap_mem, high);
+            remesh_collapse(&mut cap_mem, low);
+            remesh_flip(&mut cap_mem);
+            remesh_tangential_smooth(&mut cap_mem, 0.5);
+            if !is_manifold_cap(&cap_mem) {
+                cap_mem = snapshot;
+                break;
+            }
+        }
+
+        let offset = part.positions.len() as u32;
+        for &v in &cap_mem.vertices {
+            part.positions.push(v);
+        }
+
+        part.triangles = body_triangles;
+        let num_body_tris = part.triangles.len();
+        for t in &cap_mem.triangles {
+            part.triangles.push([t[0] + offset, t[1] + offset, t[2] + offset]);
+        }
+
+        // Compute final boundary topologically:
+        let mut final_edge_counts = ahash::AHashMap::new();
+        for t in &cap_mem.triangles {
+            for &(a, b) in &[(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                *final_edge_counts.entry(ekey(a, b)).or_insert(0) += 1;
+            }
+        }
+        let mut final_boundary = Vec::new();
+        for (edge, &count) in &final_edge_counts {
+            if count == 1 {
+                final_boundary.push(edge.0);
+                final_boundary.push(edge.1);
+            }
+        }
+        final_boundary.sort_unstable();
+        final_boundary.dedup();
+
+        // Targeted boundary welding replaces the slow global weld
+        targeted_boundary_weld_precise(part, num_body_tris, offset, &final_boundary);
+
+        // Verification check:
+        // A watertight manifold must have 0 open edges, 0 non-manifold edges, and be accepted by to_manifold.
+        let mut edge_counts = ahash::AHashMap::new();
+        for t in &part.triangles {
+            for &(a, b) in &[(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                let key = if a < b { (a, b) } else { (b, a) };
+                *edge_counts.entry(key).or_insert(0) += 1;
+            }
+        }
+        let open_edges = edge_counts.values().filter(|&&c| c == 1).count();
+        let non_manifold = edge_counts.values().filter(|&&c| c > 2).count();
+        let is_valid = open_edges == 0 && non_manifold == 0 && to_manifold(part).is_ok();
+        if !is_valid {
+            *part = backup_part;
+        }
+    }
+}
+
 pub(crate) fn manifold_to_indexed(model: &manifold_csg::Manifold) -> Option<IndexedMesh> {
     if model.is_empty() || model.num_tri() == 0 {
         return None;

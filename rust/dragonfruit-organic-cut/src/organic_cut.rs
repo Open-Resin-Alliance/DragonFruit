@@ -385,50 +385,60 @@ fn noop_outcome(mesh: IndexedMesh, detail: String) -> OrganicCutOutcome {
 ///
 /// M2: derives a plane from the loop and splits with manifold. Falls back to the
 /// no-op (both parts = source) on any failure or when the `manifold` feature is
-/// disabled. The fallback `detail` explains WHY, so the frontend can surface it.
+/// disabled. The fallback `detail`fallback `detail` explains WHY, so the frontend can surface it.
 pub fn organic_cut(mesh: IndexedMesh, options: &OrganicCutOptions) -> OrganicCutOutcome {
     #[cfg(feature = "manifold")]
     {
         // Contour mode: try the curved membrane cut first. On ANY failure (loop
         // doesn't wrap through the body, membrane invalid, etc.) fall back to the
         // flat plane cut so the user still gets *a* cut. The plane itself then
-        // falls back to no-op if it also fails.
-        if options.cut.mode == CutMode::Contour {
+        let mut outcome = if options.cut.mode == CutMode::Contour {
             match organic_cut_contour(&mesh, options) {
-                Ok(outcome) => return outcome,
+                Ok(outcome) => outcome,
                 Err(reason) => {
                     eprintln!("[dragonfruit-mesh-repair] contour cut fell back to plane: {reason}");
                     // Fall through to the plane path, preserving WHY in the detail.
-                    return match organic_cut_plane(&mesh, options) {
+                    match organic_cut_plane(&mesh, options) {
                         Ok(mut outcome) => {
                             outcome.report.detail =
                                 format!("contour fell back to plane: {reason}");
                             outcome
                         }
                         Err(plane_reason) => noop_outcome(
-                            mesh,
+                            mesh.clone(),
                             format!("contour failed ({reason}); plane also failed ({plane_reason})"),
                         ),
-                    };
+                    }
                 }
             }
         } else if options.cut.mode == CutMode::BoundedPlane {
             match organic_cut_bounded_plane(&mesh, options) {
-                Ok(outcome) => return outcome,
+                Ok(outcome) => outcome,
                 Err(reason) => {
                     eprintln!("[dragonfruit-mesh-repair] bounded plane cut failed: {reason}");
-                    return noop_outcome(mesh, reason);
+                    noop_outcome(mesh.clone(), reason)
+                }
+            }
+        } else {
+            match organic_cut_plane(&mesh, options) {
+                Ok(outcome) => outcome,
+                Err(reason) => {
+                    eprintln!("[dragonfruit-mesh-repair] organic cut fell back: {reason}");
+                    noop_outcome(mesh.clone(), reason)
+                }
+            }
+        };
+
+        if outcome.report.engine != "noop" {
+            if let Some(warning) = check_unvented_cavities(&outcome.part_a, &outcome.part_b) {
+                if outcome.report.detail.is_empty() {
+                    outcome.report.detail = warning;
+                } else {
+                    outcome.report.detail = format!("{} | {}", outcome.report.detail, warning);
                 }
             }
         }
-
-        match organic_cut_plane(&mesh, options) {
-            Ok(outcome) => return outcome,
-            Err(reason) => {
-                eprintln!("[dragonfruit-mesh-repair] organic cut fell back: {reason}");
-                return noop_outcome(mesh, reason);
-            }
-        }
+        return outcome;
     }
     #[allow(unreachable_code)]
     {
@@ -467,6 +477,7 @@ pub fn organic_multi_cut(
         }
 
         let mut cutters = Vec::new();
+        let mut slabs = Vec::new();
         let mut cutter_infos = Vec::new();
         let mut keys_to_apply = Vec::new();
 
@@ -506,6 +517,7 @@ pub fn organic_multi_cut(
                     if cut.generate_key {
                         keys_to_apply.push((cut_index, membrane, cut.clone()));
                     }
+                    slabs.push(prism.clone());
                     
                     c_manifold
                 }
@@ -706,6 +718,12 @@ pub fn organic_multi_cut(
         let mut part_a = crate::membrane::concat_meshes(part_a_islands);
         let mut part_b = crate::membrane::concat_meshes(part_b_islands);
 
+        for slab in &slabs {
+            let cutter_geom = crate::membrane::CutterGeom::Slab(slab);
+            crate::membrane::remesh_part_caps(&mut part_a, &cutter_geom);
+            crate::membrane::remesh_part_caps(&mut part_b, &cutter_geom);
+        }
+
         let mut key_kinds = Vec::new();
         let mut key_details = Vec::new();
 
@@ -753,7 +771,7 @@ pub fn organic_multi_cut(
 
         let key_detail = key_details.join("; ");
 
-        let report = OrganicCutReport {
+        let mut report = OrganicCutReport {
             source_triangle_count,
             part_a_triangle_count: part_a.triangle_count(),
             part_b_triangle_count: part_b.triangle_count(),
@@ -762,6 +780,10 @@ pub fn organic_multi_cut(
             key_kind,
             key_detail,
         };
+
+        if let Some(warning) = check_unvented_cavities(&part_a, &part_b) {
+            report.detail = warning;
+        }
 
         Ok(OrganicCutOutcome { part_a, part_b, report })
     }
@@ -838,6 +860,10 @@ fn organic_cut_bounded_plane(
 
     let (mut part_a, mut part_b) = crate::membrane::split_into_two_sides(&membrane, islands, Some(mesh), None)
         .ok_or_else(|| "Bounded plane did not fully sever the model (multiple islands but all on one side) — please increase the radius or reposition the cutter".to_string())?;
+
+    let cutter_geom = crate::membrane::CutterGeom::Slab(&prism);
+    crate::membrane::remesh_part_caps(&mut part_a, &cutter_geom);
+    crate::membrane::remesh_part_caps(&mut part_b, &cutter_geom);
 
     let (mut key_kind, mut key_detail) = (crate::key::KeyKind::None, String::new());
 
@@ -1036,6 +1062,14 @@ fn organic_cut_plane(
 
     let mut part_a = part_a;
     let mut part_b = part_b;
+
+    let cutter_geom = crate::membrane::CutterGeom::Plane {
+        normal: plane.normal,
+        offset: plane.offset,
+    };
+    crate::membrane::remesh_part_caps(&mut part_a, &cutter_geom);
+    crate::membrane::remesh_part_caps(&mut part_b, &cutter_geom);
+
     let (mut key_kind, mut key_detail) = (crate::key::KeyKind::None, String::new());
 
     if options.cut.generate_key {
@@ -1145,6 +1179,105 @@ fn manifold_to_indexed(model: &manifold_csg::Manifold) -> Option<IndexedMesh> {
         positions,
         triangles,
     })
+}
+
+#[cfg(feature = "manifold")]
+fn decompose_mesh(mesh: &IndexedMesh) -> Vec<IndexedMesh> {
+    if mesh.triangles.is_empty() {
+        return Vec::new();
+    }
+
+    // 1. Build adjacency list for vertices mapping to triangles
+    let mut adj = vec![Vec::new(); mesh.positions.len()];
+    for (tri_idx, t) in mesh.triangles.iter().enumerate() {
+        for &v in t {
+            adj[v as usize].push(tri_idx);
+        }
+    }
+
+    // 2. BFS to find connected components of triangles
+    let mut visited = vec![false; mesh.triangles.len()];
+    let mut components = Vec::new();
+
+    for start_tri in 0..mesh.triangles.len() {
+        if visited[start_tri] {
+            continue;
+        }
+
+        let mut comp_tris = Vec::new();
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(start_tri);
+        visited[start_tri] = true;
+
+        while let Some(tri_idx) = queue.pop_front() {
+            comp_tris.push(mesh.triangles[tri_idx]);
+            for &v in &mesh.triangles[tri_idx] {
+                for &neighbor_tri in &adj[v as usize] {
+                    if !visited[neighbor_tri] {
+                        visited[neighbor_tri] = true;
+                        queue.push_back(neighbor_tri);
+                    }
+                }
+            }
+        }
+
+        // Convert component triangles to a new IndexedMesh
+        let mut unique_positions = Vec::new();
+        let mut new_indices = vec![u32::MAX; mesh.positions.len()];
+        let mut final_tris = Vec::new();
+
+        for t in comp_tris {
+            let mut new_t = [0u32; 3];
+            for j in 0..3 {
+                let old_idx = t[j] as usize;
+                if new_indices[old_idx] == u32::MAX {
+                    new_indices[old_idx] = unique_positions.len() as u32;
+                    unique_positions.push(mesh.positions[old_idx]);
+                }
+                new_t[j] = new_indices[old_idx];
+            }
+            final_tris.push(new_t);
+        }
+
+        components.push(IndexedMesh {
+            positions: unique_positions,
+            triangles: final_tris,
+        });
+    }
+
+    components
+}
+
+#[cfg(feature = "manifold")]
+fn check_unvented_cavities(
+    part_a: &IndexedMesh,
+    part_b: &IndexedMesh,
+) -> Option<String> {
+    let mut warnings = Vec::new();
+
+    for comp_mesh in decompose_mesh(part_a) {
+        if let Ok(ma) = crate::membrane::to_manifold(&comp_mesh) {
+            if ma.volume() < -1e-5 {
+                warnings.push("Part A contains a completely sealed hollow cavity. Please add a drain hole to prevent resin trapping.".to_string());
+                break;
+            }
+        }
+    }
+
+    for comp_mesh in decompose_mesh(part_b) {
+        if let Ok(mb) = crate::membrane::to_manifold(&comp_mesh) {
+            if mb.volume() < -1e-5 {
+                warnings.push("Part B contains a completely sealed hollow cavity. Please add a drain hole to prevent resin trapping.".to_string());
+                break;
+            }
+        }
+    }
+
+    if warnings.is_empty() {
+        None
+    } else {
+        Some(warnings.join(" "))
+    }
 }
 
 #[cfg(test)]
@@ -1721,6 +1854,159 @@ mod tests {
         let outcome = organic_cut(mesh, &options);
         assert_eq!(outcome.report.engine, "membrane");
         
+        crate::test_utils::assert_watertight_manifold(&outcome.part_a);
+        crate::test_utils::assert_watertight_manifold(&outcome.part_b);
+    }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn test_unvented_cavity_warning() {
+        let outer_mesh = IndexedMesh::from_triangle_soup(&cube_soup(10.0), 1e-6);
+        let mut inner_soup = cube_soup(8.0);
+        for i in 0..inner_soup.len() / 3 {
+            inner_soup[i * 3] += 1.0;
+            inner_soup[i * 3 + 1] += 1.0;
+            inner_soup[i * 3 + 2] = inner_soup[i * 3 + 2] * 0.375 + 1.0; // Z bounds: [1.0, 4.0]
+        }
+        let inner_mesh = IndexedMesh::from_triangle_soup(&inner_soup, 1e-6);
+
+        let outer_manifold = crate::membrane::to_manifold(&outer_mesh).unwrap();
+        let inner_manifold = crate::membrane::to_manifold(&inner_mesh).unwrap();
+        let hollow_manifold = outer_manifold.difference(&inner_manifold);
+        let hollow_mesh = crate::membrane::manifold_to_indexed(&hollow_manifold).unwrap();
+
+        let options = OrganicCutOptions {
+            cut: OrganicCutSpec {
+                mode: CutMode::Plane,
+                loop_points: vec![],
+                plane: Some(CutPlaneSpec { normal: [0.0, 0.0, 1.0], offset: 5.0 }),
+                ..Default::default()
+            },
+        };
+        let outcome = organic_cut(hollow_mesh, &options);
+        
+        let ma_res = crate::membrane::to_manifold(&outcome.part_a);
+        println!("to_manifold(part_a) success: {:?}", ma_res.as_ref().map(|_| ()));
+        if let Ok(ref ma) = ma_res {
+            let comps = ma.decompose();
+            println!("part_a component count: {}", comps.len());
+            for (i, c) in comps.iter().enumerate() {
+                println!("  component {} volume: {}", i, c.volume());
+            }
+        }
+
+        let mb_res = crate::membrane::to_manifold(&outcome.part_b);
+        println!("to_manifold(part_b) success: {:?}", mb_res.as_ref().map(|_| ()));
+        if let Ok(ref mb) = mb_res {
+            let comps = mb.decompose();
+            println!("part_b component count: {}", comps.len());
+            for (i, c) in comps.iter().enumerate() {
+                println!("  component {} volume: {}", i, c.volume());
+            }
+        }
+
+        let detail = outcome.report.detail;
+        println!("outcome.report.detail: {:?}", detail);
+        assert!(detail.contains("contains a completely sealed hollow cavity"));
+    }
+
+    fn weld_vertices_global(mesh: &mut IndexedMesh, tolerance: f32) {
+        if mesh.positions.is_empty() {
+            return;
+        }
+        let tol = tolerance.max(1e-6);
+        let mut unique_positions = Vec::new();
+        let mut grid: ahash::AHashMap<(i64, i64, i64), Vec<u32>> = ahash::AHashMap::new();
+        let mut remap = vec![0u32; mesh.positions.len()];
+
+        for (i, &v) in mesh.positions.iter().enumerate() {
+            let gx = (v.x as f64 / tol as f64).round() as i64;
+            let gy = (v.y as f64 / tol as f64).round() as i64;
+            let gz = (v.z as f64 / tol as f64).round() as i64;
+
+            let mut matched_idx = None;
+            'outer: for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        let key = (gx + dx, gy + dy, gz + dz);
+                        if let Some(indices) = grid.get(&key) {
+                            for &idx in indices {
+                                let candidate = unique_positions[idx as usize];
+                                if v.sub(candidate).length() <= tol {
+                                    matched_idx = Some(idx);
+                                    break 'outer;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(idx) = matched_idx {
+                remap[i] = idx;
+            } else {
+                let new_idx = unique_positions.len() as u32;
+                unique_positions.push(v);
+                grid.entry((gx, gy, gz)).or_default().push(new_idx);
+                remap[i] = new_idx;
+            }
+        }
+        for t in &mut mesh.triangles {
+            t[0] = remap[t[0] as usize];
+            t[1] = remap[t[1] as usize];
+            t[2] = remap[t[2] as usize];
+        }
+        mesh.positions = unique_positions;
+    }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn test_welding_performance_failing() {
+        // Generate a high-poly sphere (approx 245k triangles, 122k vertices)
+        let sphere = crate::test_utils::sphere_mesh(10.0, 350, false);
+        
+        let mut elapsed = std::time::Duration::from_secs(0);
+        let mut iterations = 0;
+        while elapsed.as_secs_f32() <= 3.0 && iterations < 15 {
+            let mut sphere_clone = sphere.clone();
+            let start = std::time::Instant::now();
+            weld_vertices_global(&mut sphere_clone, 1e-3f32);
+            elapsed += start.elapsed();
+            iterations += 1;
+        }
+        
+        println!("Global welding took {:.2} seconds over {} iterations", elapsed.as_secs_f32(), iterations);
+        // Assert that the elapsed time is > 3.0 seconds in debug mode.
+        assert!(elapsed.as_secs_f32() > 3.0, "Expected global welding to be slow, but it took only {:.2}s", elapsed.as_secs_f32());
+    }
+
+    #[cfg(feature = "manifold")]
+    #[test]
+    fn test_welding_performance_passing() {
+        // Generate a high-poly sphere (approx 180k triangles, 90k vertices)
+        let mut sphere = crate::test_utils::sphere_mesh(10.0, 300, false);
+        // Weld duplicate vertices/poles so the sphere is a watertight manifold for the CSG split.
+        weld_vertices_global(&mut sphere, 1e-3f32);
+
+        let loop_pts = vec![
+            OrganicCutLoopPoint { position: [11.0, 0.0, 0.0], normal: [1.0, 0.0, 0.0] },
+            OrganicCutLoopPoint { position: [0.0, 11.0, 0.0], normal: [0.0, 1.0, 0.0] },
+            OrganicCutLoopPoint { position: [-11.0, 0.0, 0.0], normal: [-1.0, 0.0, 0.0] },
+        ];
+        let options = OrganicCutOptions {
+            cut: OrganicCutSpec {
+                loop_points: loop_pts,
+                mode: CutMode::Plane, // triggers planar cap remeshing/welding
+                ..Default::default()
+            }
+        };
+        
+        let start = std::time::Instant::now();
+        let outcome = organic_cut(sphere, &options);
+        let elapsed = start.elapsed();
+        
+        println!("Targeted welding cut took {:.2} seconds", elapsed.as_secs_f32());
+        assert!(elapsed.as_secs_f32() < 1.0, "Performance regression: Cut took {:.2} seconds!", elapsed.as_secs_f32());
         crate::test_utils::assert_watertight_manifold(&outcome.part_a);
         crate::test_utils::assert_watertight_manifold(&outcome.part_b);
     }

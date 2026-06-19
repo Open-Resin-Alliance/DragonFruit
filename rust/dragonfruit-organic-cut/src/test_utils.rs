@@ -143,7 +143,7 @@ fn sleeve_mesh(r_in: f32, r_out: f32, h: f32, segments: usize) -> IndexedMesh {
     IndexedMesh { positions, triangles }
 }
 
-fn sphere_mesh(r: f32, steps: usize, invert: bool) -> IndexedMesh {
+pub fn sphere_mesh(r: f32, steps: usize, invert: bool) -> IndexedMesh {
     let mut positions = Vec::new();
     // Latitude / Longitude grid
     for lat in 0..=steps {
