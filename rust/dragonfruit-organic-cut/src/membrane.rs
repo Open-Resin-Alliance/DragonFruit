@@ -2289,6 +2289,115 @@ pub fn contour_split(
     Ok(ContourSplit { part_a, part_b, component_count, membrane_tris, membrane })
 }
 
+/// The result of a MULTI-loop contour split (≥2 loops union'd into one cutter).
+/// Unlike [`ContourSplit`] there is no single membrane (each loop has its own), so
+/// no `membrane` field — the registration key isn't produced for a multi-loop cut.
+pub struct ContourSplitMulti {
+    /// The largest connected component left after the cut — the main body.
+    pub part_a: IndexedMesh,
+    /// Everything else (the freed piece(s)) concatenated into one mesh.
+    pub part_b: IndexedMesh,
+    /// How many connected components `decompose` produced (≥2 on success).
+    pub component_count: usize,
+    /// Total membrane triangle count across all loops (for diagnostics).
+    pub membrane_tris: usize,
+}
+
+/// Contour cut along SEVERAL loops in ONE operation. Builds a cutter slab per
+/// loop, unions them into a single watertight cutter, differences it from the
+/// model once, and decomposes into connected components.
+///
+/// This is what frees a body that connects in several places — e.g. a tail joined
+/// to the body at two posts with an air tunnel between them. With one big loop the
+/// soap-film membrane would have to span the air gap (producing bad geometry that
+/// fails to sever); here each loop wraps only solid, so every membrane is simple
+/// and valid, and the union cuts all the bridges at once.
+///
+/// The components are grouped largest-vs-rest (see [`group_largest_vs_rest`]):
+/// `part_a` is the biggest piece (the body), `part_b` is everything else (the
+/// freed piece(s)). Returns `Err` (caller falls back to the plane) when fewer than
+/// two loops are valid, a cutter is invalid, or the cut leaves a single component.
+pub fn contour_split_multi(
+    mesh: &IndexedMesh,
+    loops: &[Vec<Vec3>],
+    thickness_mm: f32,
+    membrane_smoothing: f32,
+    density: f32,
+) -> Result<ContourSplitMulti, String> {
+    let density = density.clamp(1.0, 4.0) as f64;
+
+    // Build a cutter slab per loop and union them into one manifold. Keep the
+    // slabs concatenated too, so the seam-band refinement covers every loop.
+    let mut cutter: Option<manifold_csg::Manifold> = None;
+    let mut combined_slab = IndexedMesh { positions: Vec::new(), triangles: Vec::new() };
+    let mut membrane_tris = 0usize;
+    let mut built = 0usize;
+    for (i, lp) in loops.iter().enumerate() {
+        if lp.len() < 3 {
+            continue;
+        }
+        let (membrane, slab) =
+            build_contour_cutter(mesh, lp, thickness_mm, membrane_smoothing, density)
+                .map_err(|e| format!("loop {i} cutter failed: {e}"))?;
+        membrane_tris += membrane.triangles.len();
+        let m = to_manifold(&slab).map_err(|e| format!("loop {i} slab invalid: {e}"))?;
+
+        let base = combined_slab.positions.len() as u32;
+        combined_slab.positions.extend_from_slice(&slab.positions);
+        for t in &slab.triangles {
+            combined_slab.triangles.push([t[0] + base, t[1] + base, t[2] + base]);
+        }
+
+        cutter = Some(match cutter {
+            None => m,
+            Some(c) => c.union(&m),
+        });
+        built += 1;
+    }
+    let cutter = cutter.ok_or_else(|| "no valid loops (each needs >=3 points)".to_string())?;
+    if built < 2 {
+        return Err(format!("multi-loop cut needs >=2 valid loops (got {built})"));
+    }
+
+    // Refine the model near the COMBINED slabs before the boolean (smoother cut
+    // edges), exactly as the single-loop path does around its one slab.
+    let diag = mesh.bbox().diag().max(1e-3);
+    let band = diag * DEFAULT_REFINE_BAND_FRACTION;
+    let target = diag * DEFAULT_REFINE_TARGET_FRACTION / density as f32;
+    let max_levels = DEFAULT_REFINE_MAX_LEVELS + (density.round() as u32).saturating_sub(1);
+    let refined = refine_model_near_slab(mesh, &combined_slab, band, target, max_levels);
+    let model = to_manifold(&refined).map_err(|e| format!("model invalid: {e}"))?;
+
+    let islands = split_by_cutter(&model, &cutter);
+    let component_count = islands.len();
+    if component_count < 2 {
+        return Err(format!(
+            "multi-loop cutter did not sever the model (got {component_count} component) — \
+             at least one loop must wrap all the way through the material it encircles"
+        ));
+    }
+    let (part_a, part_b) = group_largest_vs_rest(islands)
+        .ok_or_else(|| "multi-loop cut produced only one usable component".to_string())?;
+
+    Ok(ContourSplitMulti { part_a, part_b, component_count, membrane_tris })
+}
+
+/// Group severed islands into two parts: the LARGEST component (the body) as
+/// `part_a`, and ALL the others concatenated (the freed piece(s)) as `part_b`.
+/// Used by the multi-loop cut, where there's no single membrane normal to classify
+/// sides by. [`split_by_cutter`] already returns islands sorted largest-first, so
+/// `part_a` is the body and `part_b` is the tail (plus any tiny kerf slivers, which
+/// ride along with the freed piece). Returns `None` if fewer than two components.
+fn group_largest_vs_rest(islands: Vec<IndexedMesh>) -> Option<(IndexedMesh, IndexedMesh)> {
+    if islands.len() < 2 {
+        return None;
+    }
+    let mut it = islands.into_iter();
+    let largest = it.next()?; // sorted largest-first by split_by_cutter
+    let rest: Vec<IndexedMesh> = it.collect();
+    Some((largest, concat_meshes(rest)))
+}
+
 /// Convert a `manifold` solid back to an `IndexedMesh`. Returns `None` only on a
 /// malformed/empty conversion (matches `organic_cut.rs::manifold_to_indexed`).
 /// `pub(crate)` so the key module can convert its boolean results back too.
@@ -2989,6 +3098,46 @@ mod tests {
         assert_eq!(split.component_count, 2);
         assert!(split.part_a.triangle_count() > 0, "part A empty");
         assert!(split.part_b.triangle_count() > 0, "part B empty");
+        assert!(split.membrane_tris > 0);
+    }
+
+    #[test]
+    fn multi_loop_cut_severs_a_bar_at_two_bands() {
+        // The multi-loop union cut: a tall bar with a dense ring loop at TWO heights
+        // (z=10 and z=20). Each loop wraps all the way through the bar, so the
+        // union of the two cutters slices the bar into three slabs (top / middle /
+        // bottom) in ONE operation. This is the mechanism that frees a tail joined
+        // to a body in two places: each loop cuts its own bridge, no membrane has to
+        // span the gap between them.
+        let size = 30.0_f32;
+        let model = cube(size);
+        // A dense ring at height `z` (reuses the equator-loop construction).
+        let band = |z: f32| -> Vec<Vec3> {
+            let steps = 8usize;
+            let f = |i: usize| size * i as f32 / steps as f32;
+            let mut pts = Vec::with_capacity(steps * 4);
+            for i in 0..steps { pts.push(Vec3::new(f(i), 0.0, z)); }
+            for i in 0..steps { pts.push(Vec3::new(size, f(i), z)); }
+            for i in 0..steps { pts.push(Vec3::new(size - f(i), size, z)); }
+            for i in 0..steps { pts.push(Vec3::new(0.0, size - f(i), z)); }
+            pts
+        };
+        let loops = vec![band(10.0), band(20.0)];
+        let split = contour_split_multi(
+            &model,
+            &loops,
+            DEFAULT_CUTTER_THICKNESS_MM,
+            DEFAULT_MEMBRANE_SMOOTHING,
+            1.0,
+        )
+        .expect("two band loops should sever the bar");
+        assert!(
+            split.component_count >= 3,
+            "two cuts across the bar make >=3 pieces, got {}",
+            split.component_count
+        );
+        assert!(split.part_a.triangle_count() > 0, "body (part A) empty");
+        assert!(split.part_b.triangle_count() > 0, "freed piece (part B) empty");
         assert!(split.membrane_tris > 0);
     }
 

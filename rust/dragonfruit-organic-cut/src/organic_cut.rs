@@ -56,6 +56,15 @@ pub struct OrganicCutSpec {
     /// Closed loop of surface points (last connects back to first).
     #[serde(default)]
     pub loop_points: Vec<OrganicCutLoopPoint>,
+    /// Additional closed loops cut in the SAME operation (contour mode only). Each
+    /// loop becomes its own membrane+slab; all slabs (plus `loop_points`) are
+    /// union'd into ONE cutter and differenced once, so a body that connects in
+    /// several places — e.g. a tail joined to the body at two posts with an air
+    /// tunnel between them — is freed in a single cut. Each loop wraps only solid,
+    /// so no membrane ever has to span the air gap (which is what produced the bad
+    /// geometry with one big loop). Empty (default) = the classic single-loop cut.
+    #[serde(default)]
+    pub extra_loops: Vec<Vec<OrganicCutLoopPoint>>,
     /// Wafer thickness in mm. Unused by the M2 planar cut.
     #[serde(default)]
     pub thickness_mm: f32,
@@ -391,14 +400,34 @@ fn organic_cut_contour(
     options: &OrganicCutOptions,
 ) -> Result<OrganicCutOutcome, String> {
     let source_triangle_count = mesh.triangle_count();
-    let loop_pts: Vec<Vec3> = options
-        .cut
-        .loop_points
-        .iter()
-        .map(|p| Vec3::new(p.position[0], p.position[1], p.position[2]))
-        .collect();
-    if loop_pts.len() < 3 {
-        return Err(format!("contour cut needs >=3 loop points (got {})", loop_pts.len()));
+
+    // Gather every loop for this cut: the primary `loop_points` plus any
+    // `extra_loops`. A loop needs >=3 distinct points to span a membrane; drop the
+    // degenerate ones rather than failing the whole cut.
+    let to_vec3 = |pts: &[OrganicCutLoopPoint]| -> Vec<Vec3> {
+        pts.iter()
+            .map(|p| Vec3::new(p.position[0], p.position[1], p.position[2]))
+            .collect()
+    };
+    let mut loops: Vec<Vec<Vec3>> = Vec::new();
+    {
+        let primary = to_vec3(&options.cut.loop_points);
+        if primary.len() >= 3 {
+            loops.push(primary);
+        }
+        for extra in &options.cut.extra_loops {
+            let v = to_vec3(extra);
+            if v.len() >= 3 {
+                loops.push(v);
+            }
+        }
+    }
+    if loops.is_empty() {
+        return Err(format!(
+            "contour cut needs >=3 loop points (got {} primary + {} extra loops)",
+            options.cut.loop_points.len(),
+            options.cut.extra_loops.len()
+        ));
     }
 
     let thickness = if options.cut.cutter_thickness_mm > 0.0 {
@@ -407,10 +436,50 @@ fn organic_cut_contour(
         crate::membrane::DEFAULT_CUTTER_THICKNESS_MM
     };
 
+    // MULTI-LOOP: union a cutter per loop, difference once, group largest-vs-rest.
+    // No single membrane normal exists here, so the registration key (which is
+    // anchored on one membrane) is not produced — report that if it was requested.
+    if loops.len() >= 2 {
+        let split = crate::membrane::contour_split_multi(
+            mesh,
+            &loops,
+            thickness,
+            options.cut.membrane_smoothing,
+            options.cut.density,
+        )?;
+        let key_detail = if options.cut.generate_key {
+            "registration key skipped — not supported with multiple loops".to_string()
+        } else {
+            String::new()
+        };
+        let report = OrganicCutReport {
+            source_triangle_count,
+            part_a_triangle_count: split.part_a.triangle_count(),
+            part_b_triangle_count: split.part_b.triangle_count(),
+            engine: "membrane".to_string(),
+            detail: format!(
+                "multi-loop cut: {} loops, {} components, membrane tris={}",
+                loops.len(),
+                split.component_count,
+                split.membrane_tris
+            ),
+            key_kind: "none".to_string(),
+            key_detail,
+        };
+        return Ok(OrganicCutOutcome {
+            part_a: split.part_a,
+            part_b: split.part_b,
+            report,
+        });
+    }
+
+    // SINGLE-LOOP: the classic curved cut, which also supports the registration key
+    // (anchored on the one membrane) and the clean +/- side grouping.
+    let loop_pts = &loops[0];
     let split =
         crate::membrane::contour_split(
             mesh,
-            &loop_pts,
+            loop_pts,
             thickness,
             options.cut.membrane_smoothing,
             options.cut.density,

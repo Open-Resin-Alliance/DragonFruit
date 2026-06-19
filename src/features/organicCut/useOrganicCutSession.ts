@@ -7,10 +7,12 @@
  * organic-cut logic lives here inside the feature directory, keeping the feature
  * self-contained and the seam into page.tsx as small as possible.
  *
- * M1: the backend cut is a no-op, so "applying" round-trips the mesh and logs
- * the two returned parts. Wiring the parts into the scene as real split models
- * is deferred to a later milestone (it needs scene-collection plumbing we are
- * intentionally not touching yet).
+ * MULTI-LOOP: a cut can carry several loops at once (contour mode). They live in
+ * one ordered `loops` list with one ACTIVE loop (`activeLoopIndex`); the active
+ * loop gets the full waypoint-editing UI, the others render as dimmed seams. The
+ * user switches the active loop freely (panel chips) to go back and adjust any of
+ * them. On Apply, every loop's cutter is union'd and differenced in one shot — the
+ * way to free a part attached in several places (e.g. a tail joined at two posts).
  */
 import React from 'react';
 import type { KeyPreviewFrame, OrganicCutLoopPoint, OrganicCutResult, OrganicCutSessionStatus } from './types';
@@ -31,6 +33,23 @@ import type * as THREE from 'three';
 const MIN_LOOP_POINTS = 2;
 
 /**
+ * One loop in a (possibly multi-loop) cut. `points` are the editable user
+ * waypoints; `polyline` is the cached DENSE on-surface geodesic for that loop —
+ * kept so an INACTIVE loop can still render its seam, and so the cut traces the
+ * real surface. The active loop's polyline is refreshed live by the geodesic
+ * effect; an edit leaves the stale polyline in place until that recompute lands.
+ */
+interface SessionLoop {
+  points: OrganicCutLoopPoint[];
+  polyline: Float32Array | null;
+}
+
+/** A fresh empty loop slot. */
+function emptyLoop(): SessionLoop {
+  return { points: [], polyline: null };
+}
+
+/**
  * Convert a flat on-surface geodesic polyline (xyz triples, model-local) into
  * loop points for the contour cut. Normals are left zero — the membrane builder
  * computes its own surface normals, so only positions matter here. Rust dedupes
@@ -42,6 +61,17 @@ function geodesicPolylineToLoopPoints(poly: Float32Array): OrganicCutLoopPoint[]
     out.push({ position: [poly[i], poly[i + 1], poly[i + 2]], normal: [0, 0, 0] });
   }
   return out;
+}
+
+/** The cut loop a given session loop contributes, or null if it's not a real loop. */
+function loopCutPoints(l: SessionLoop): OrganicCutLoopPoint[] | null {
+  if (l.polyline && l.polyline.length >= MIN_CONTOUR_POINTS * 3) {
+    return geodesicPolylineToLoopPoints(l.polyline);
+  }
+  if (l.points.length >= MIN_CONTOUR_POINTS) {
+    return l.points.slice();
+  }
+  return null;
 }
 
 export interface UseOrganicCutSessionArgs {
@@ -103,6 +133,28 @@ export interface OrganicCutSession {
   canRedoPoint: boolean;
   clearLoop: () => void;
   closeLoop: () => void;
+  // --- Multi-loop -----------------------------------------------------------
+  /** Total loops in this cut (contour). 1 = the classic single-loop cut. */
+  loopCount: number;
+  /** Index of the loop currently being edited (gets markers + membrane preview). */
+  activeLoopIndex: number;
+  /** Per-loop summaries for the panel's loop chips (index + waypoint count). */
+  loopSummaries: { index: number; pointCount: number }[];
+  /** Make loop `index` the active (editable) one. Out-of-range is a no-op. */
+  selectLoop: (index: number) => void;
+  /**
+   * Append a fresh empty loop and make it active (multi-loop cut). On Apply, every
+   * loop's cutter is union'd — used to free a part attached in several places.
+   */
+  addLoop: () => void;
+  /** True when a new loop can be added (contour mode, active loop already a loop). */
+  canAddLoop: boolean;
+  /** Remove loop `index`. Never removes the last remaining loop (use Clear). */
+  removeLoop: (index: number) => void;
+  /** True when there's more than one loop, so removing one is allowed. */
+  canRemoveLoop: boolean;
+  /** Seam polylines of the INACTIVE loops (flat xyz, model-local) for the tool. */
+  committedPolylines: Float32Array[];
   // Apply
   apply: () => void;
   isApplying: boolean;
@@ -189,7 +241,11 @@ export function useOrganicCutSession({
   commitParts,
 }: UseOrganicCutSessionArgs): OrganicCutSession {
   const [panelState, setPanelState] = React.useState<OrganicCutPanelState>(DEFAULT_PANEL_STATE);
-  const [loop, setLoop] = React.useState<OrganicCutLoopPoint[]>([]);
+  // All loops of the current cut, plus which one is active (editable). The active
+  // loop gets the full waypoint UI + membrane preview; the rest render as dimmed
+  // seams the user can switch to and edit. There is always ≥1 loop.
+  const [loops, setLoops] = React.useState<SessionLoop[]>([emptyLoop()]);
+  const [activeLoopIndex, setActiveLoopIndex] = React.useState(0);
   const [status, setStatus] = React.useState<OrganicCutSessionStatus>('idle');
   const [isApplying, setIsApplying] = React.useState(false);
   const [lastResult, setLastResult] = React.useState<OrganicCutResult | null>(null);
@@ -209,13 +265,31 @@ export function useOrganicCutSession({
   // Selected waypoint index (click a marker to select; Delete removes it).
   const [selectedIndex, setSelectedIndex] = React.useState<number | null>(null);
 
-  // Mirror loop in a ref so `apply` always reads the CURRENT points regardless of
-  // whether the panel is holding a stale memoized `apply` closure. This is the
-  // fix for "0 points reached the backend" — a stale closure captured loop=[].
+  // The active loop's points (the "loop" the rest of the tool edits/renders). A
+  // stable reference until that slot's points actually change, so it's safe in
+  // effect deps (caching a polyline into the slot keeps this reference intact).
+  const loop = (loops[activeLoopIndex] ?? loops[0] ?? emptyLoop()).points;
+
+  // Mirror loops + active index in refs so the stable `apply` / callbacks read the
+  // CURRENT values regardless of any stale memoized closures (this is the fix for
+  // "0 points reached the backend" — a stale closure captured an empty loop).
+  const loopsRef = React.useRef(loops);
+  React.useEffect(() => { loopsRef.current = loops; }, [loops]);
+  const activeLoopIndexRef = React.useRef(activeLoopIndex);
+  React.useEffect(() => { activeLoopIndexRef.current = activeLoopIndex; }, [activeLoopIndex]);
   const loopRef = React.useRef(loop);
-  React.useEffect(() => {
-    loopRef.current = loop;
-  }, [loop]);
+  React.useEffect(() => { loopRef.current = loop; }, [loop]);
+
+  // Seam polylines for the INACTIVE loops, for the tool to render dimmed (the
+  // active loop draws its own live seam + markers). Only loops that are real loops
+  // (≥3 points) with a cached seam show.
+  const committedPolylines = React.useMemo(
+    () =>
+      loops
+        .map((l, i) => (i !== activeLoopIndex && l.polyline && l.points.length >= MIN_CONTOUR_POINTS ? l.polyline : null))
+        .filter((p): p is Float32Array => !!p),
+    [loops, activeLoopIndex],
+  );
 
   // Keep the latest commit callback in a ref so `apply` doesn't churn its deps.
   const commitPartsRef = React.useRef(commitParts);
@@ -232,72 +306,94 @@ export function useOrganicCutSession({
   const activeGeometryKeyRef = React.useRef(activeGeometryKey);
   React.useEffect(() => { activeGeometryKeyRef.current = activeGeometryKey; }, [activeGeometryKey]);
 
-  // Per-model loop persistence. The cut path is retained for the model it was
-  // drawn on, so deselecting (clicking away) and reselecting that model — or
-  // leaving and returning to the Cut tool — restores the in-progress loop instead
-  // of losing it. Keyed by the model's geometry key (its id).
-  const savedLoopsRef = React.useRef<Map<string, OrganicCutLoopPoint[]>>(new Map());
+  // Per-model loop persistence. The cut path (all loops + which is active) is
+  // retained for the model it was drawn on, so deselecting (clicking away) and
+  // reselecting that model — or leaving and returning to the Cut tool — restores
+  // the in-progress loops instead of losing them. Keyed by the model id.
+  const savedLoopsRef = React.useRef<Map<string, { loops: SessionLoop[]; activeIndex: number }>>(new Map());
 
-  // Undo-restore: when a cut commits we remember the model id, the loop, and the
-  // PRE-CUT geometry object reference. If the user undoes the cut, scene history
-  // restores that exact geometry reference (cloneLoadedModel keeps geometry by
-  // reference), so when we see the active model's geometry revert to it we
-  // restore the loop — letting the user tweak a waypoint and re-cut instead of
+  // Undo-restore: when a cut commits we remember the model id, ALL the loops, and
+  // the PRE-CUT geometry object reference. If the user undoes the cut, scene
+  // history restores that exact geometry reference (cloneLoadedModel keeps
+  // geometry by reference), so when we see the active model's geometry revert to
+  // it we restore the loops — letting the user tweak and re-cut instead of
   // starting over. Cleared once consumed or superseded.
   const undoRestoreRef = React.useRef<{
     modelId: string;
     geometry: THREE.BufferGeometry;
-    loop: OrganicCutLoopPoint[];
+    loops: SessionLoop[];
+    activeIndex: number;
   } | null>(null);
 
   // Redo stack for waypoint undo (Ctrl+Z / Ctrl+Shift+Z). Holds points popped by
   // undo so they can be re-added; cleared whenever a NEW point is placed (standard
   // undo/redo semantics). State (not a ref) so the panel/hotkey gates re-render.
+  // Per the ACTIVE loop — switching loops clears it (a switch is not an edit).
   const [redoStack, setRedoStack] = React.useState<OrganicCutLoopPoint[]>([]);
   // The latest on-surface geodesic polyline, so a contour cut sends the DENSE
   // surface-following loop (not just the sparse waypoints) to the membrane.
   const geodesicPolylineRef = React.useRef(geodesicPolyline);
   React.useEffect(() => { geodesicPolylineRef.current = geodesicPolyline; }, [geodesicPolyline]);
 
-  // When the tool is deactivated, stash the current loop under its model so it can
-  // be restored on re-entry, then clear the live view. We DON'T drop the saved
-  // copy — re-entering the tool (or reselecting the model) brings the path back.
+  // Mutate the ACTIVE loop's points. `updater` gets the current active points and
+  // returns the next set; returning the same reference is a no-op. The slot's
+  // cached polyline is preserved (the geodesic effect refreshes it).
+  const setActiveLoopPoints = React.useCallback(
+    (updater: (prev: OrganicCutLoopPoint[]) => OrganicCutLoopPoint[]) => {
+      setLoops((prev) => {
+        const idx = activeLoopIndexRef.current;
+        if (idx < 0 || idx >= prev.length) return prev;
+        const cur = prev[idx];
+        const nextPoints = updater(cur.points);
+        if (nextPoints === cur.points) return prev;
+        const next = prev.slice();
+        next[idx] = { points: nextPoints, polyline: cur.polyline };
+        return next;
+      });
+    },
+    [],
+  );
+
+  // When the tool is deactivated, stash the current loops under their model so
+  // they can be restored on re-entry, then clear the live view. We DON'T drop the
+  // saved copy — re-entering the tool (or reselecting the model) brings it back.
   React.useEffect(() => {
     if (!toolActive) {
       const key = activeGeometryKeyRef.current;
-      const current = loopRef.current;
-      if (key && current.length > 0) {
-        savedLoopsRef.current.set(key, current);
+      const current = loopsRef.current;
+      if (key && current.some((l) => l.points.length > 0)) {
+        savedLoopsRef.current.set(key, { loops: current, activeIndex: activeLoopIndexRef.current });
       }
-      setLoop([]);
+      setLoops([emptyLoop()]);
+      setActiveLoopIndex(0);
       setStatus('idle');
       setLastResult(null);
       setSelectedIndex(null);
     }
   }, [toolActive]);
 
-  // On model change: stash the OUTGOING model's loop, then restore the INCOMING
-  // model's saved loop (if any). Clicking away sets the key to null and stashes;
+  // On model change: stash the OUTGOING model's loops, then restore the INCOMING
+  // model's saved loops (if any). Clicking away sets the key to null and stashes;
   // reselecting restores. Switching to a different model loads ITS path, not a
   // bleed-over from the previous one.
   const prevGeometryKeyRef = React.useRef<string | null>(activeGeometryKey);
   React.useEffect(() => {
     const prevKey = prevGeometryKeyRef.current;
-    // Stash the loop we're leaving (read the live value via ref).
+    // Stash the loops we're leaving (read the live value via ref).
     if (prevKey && prevKey !== activeGeometryKey) {
-      const leaving = loopRef.current;
-      if (leaving.length > 0) {
-        savedLoopsRef.current.set(prevKey, leaving);
+      const leaving = loopsRef.current;
+      if (leaving.some((l) => l.points.length > 0)) {
+        savedLoopsRef.current.set(prevKey, { loops: leaving, activeIndex: activeLoopIndexRef.current });
       }
     }
     prevGeometryKeyRef.current = activeGeometryKey;
 
-    // Restore the incoming model's saved loop, or start empty.
-    const restored = activeGeometryKey
-      ? savedLoopsRef.current.get(activeGeometryKey) ?? []
-      : [];
-    setLoop(restored);
-    setStatus(restored.length > 0 ? 'drawing' : 'idle');
+    // Restore the incoming model's saved loops, or start with one empty loop.
+    const restored = activeGeometryKey ? savedLoopsRef.current.get(activeGeometryKey) : undefined;
+    const restoredLoops = restored?.loops ?? [emptyLoop()];
+    setLoops(restoredLoops);
+    setActiveLoopIndex(restored ? Math.min(restored.activeIndex, restoredLoops.length - 1) : 0);
+    setStatus(restoredLoops.some((l) => l.points.length > 0) ? 'drawing' : 'idle');
     setLastResult(null);
     setGeodesicPolyline(null);
     // Redo history + selection don't carry across models.
@@ -307,7 +403,7 @@ export function useOrganicCutSession({
 
   // Undo-restore: when the active model's geometry REVERTS to the exact pre-cut
   // reference we stashed at cut time (scene-history undo restores geometry by
-  // reference), bring the loop/membrane back so the user can tweak and re-cut.
+  // reference), bring the loops/membrane back so the user can tweak and re-cut.
   // Keyed on the geometry REFERENCE (not the id) because a cut+undo keeps the
   // same model id — only the geometry object changes.
   React.useEffect(() => {
@@ -317,22 +413,24 @@ export function useOrganicCutSession({
     if (
       activeGeometryKey === pending.modelId &&
       activeGeometry === pending.geometry &&
-      pending.loop.length > 0
+      pending.loops.some((l) => l.points.length > 0)
     ) {
-      // Geometry reverted to the pre-cut state → restore the loop. Consume the
+      // Geometry reverted to the pre-cut state → restore the loops. Consume the
       // entry so a later unrelated geometry change doesn't re-trigger it.
       undoRestoreRef.current = null;
-      savedLoopsRef.current.set(pending.modelId, pending.loop);
-      setLoop(pending.loop);
+      savedLoopsRef.current.set(pending.modelId, { loops: pending.loops, activeIndex: pending.activeIndex });
+      setLoops(pending.loops);
+      setActiveLoopIndex(Math.min(pending.activeIndex, pending.loops.length - 1));
       setStatus('drawing');
       setSelectedIndex(null);
       setRedoStack([]);
     }
   }, [toolActive, activeGeometry, activeGeometryKey]);
 
-  // Recompute the surface-following loop whenever the points change. Stages the
-  // source mesh (cheap no-op if already staged for this geometry) then asks Rust
-  // for the on-surface polyline. Cancelled if points change again mid-flight.
+  // Recompute the surface-following loop whenever the active loop's points change.
+  // Stages the source mesh (cheap no-op if already staged for this geometry) then
+  // asks Rust for the on-surface polyline, caching it into the active loop slot.
+  // Cancelled if points change again mid-flight.
   //
   // No debounce: with the Rust solver cached, each query is cheap, so the seam
   // recomputes on every point change for maximum responsiveness. In-flight calls
@@ -356,18 +454,32 @@ export function useOrganicCutSession({
       // Close the loop only once there are enough points to form one.
       const close = loop.length >= 3;
       const poly = await computeGeodesicLoop(loop, close, panelState.smoothing);
-      if (!cancelled) setGeodesicPolyline(poly);
+      if (cancelled) return;
+      setGeodesicPolyline(poly);
+      // Cache the dense seam into the active loop slot — for rendering this loop
+      // once it's inactive, and for the cut. Keeps the active points reference
+      // intact (spread copy), so this doesn't re-fire the effect.
+      if (poly) {
+        const idx = activeLoopIndexRef.current;
+        setLoops((prev) => {
+          if (idx < 0 || idx >= prev.length) return prev;
+          const next = prev.slice();
+          next[idx] = { ...next[idx], polyline: poly };
+          return next;
+        });
+      }
     })();
     return () => {
       cancelled = true;
     };
   }, [toolActive, loop, activeGeometry, activeGeometryKey, panelState.smoothing]);
 
-  // Membrane preview (contour mode). The membrane build is the heavy Rust
-  // round-trip, so it is SUPPRESSED while a waypoint is being dragged and rebuilt
-  // once the user drops it (isDraggingPoint flips false) — the drop then costs a
-  // single build, not a backlog. It reads the already-computed geodesic from
-  // state (the same dense loop the cut uses) and renders translucent in the tool.
+  // Membrane preview (contour mode) for the ACTIVE loop. The membrane build is the
+  // heavy Rust round-trip, so it is SUPPRESSED while a waypoint is being dragged
+  // and rebuilt once the user drops it (isDraggingPoint flips false) — the drop
+  // then costs a single build, not a backlog. It reads the already-computed
+  // geodesic from state (the same dense loop the cut uses) and renders translucent
+  // in the tool.
   //
   // A small settle timer (80ms) lets the just-finished drag's debounced geodesic
   // land first, so the membrane is built from the final seam rather than a stale
@@ -438,14 +550,14 @@ export function useOrganicCutSession({
   }, [toolActive, loop, activeGeometry, activeGeometryKey, cutMode, geodesicPolyline, isDraggingPoint, panelState.membraneSmoothing, panelState.density, panelState.thicknessMm, panelState.generateKey, panelState.keyWidthMm, panelState.keyDepthMm, panelState.keyShape, panelState.keyFilletMm, panelState.keySwapSides]);
 
   const addPoint = React.useCallback((point: OrganicCutLoopPoint) => {
-    setLoop((prev) => [...prev, point]);
+    setActiveLoopPoints((prev) => [...prev, point]);
     setStatus('drawing');
     // A freshly placed point invalidates any redo history.
     setRedoStack([]);
-  }, []);
+  }, [setActiveLoopPoints]);
 
   const insertPoint = React.useCallback((afterIndex: number, point: OrganicCutLoopPoint) => {
-    setLoop((prev) => {
+    setActiveLoopPoints((prev) => {
       // Insert AFTER afterIndex → at array position afterIndex+1. Clamp so a bad
       // index can't throw; a negative index prepends, an over-large one appends.
       const at = Math.max(0, Math.min(prev.length, afterIndex + 1));
@@ -455,14 +567,14 @@ export function useOrganicCutSession({
     });
     setStatus('drawing');
     setRedoStack([]);
-  }, []);
+  }, [setActiveLoopPoints]);
 
   const selectPoint = React.useCallback((index: number | null) => {
     setSelectedIndex(index);
   }, []);
 
   const removePoint = React.useCallback((index: number) => {
-    setLoop((prev) => {
+    setActiveLoopPoints((prev) => {
       if (index < 0 || index >= prev.length) return prev;
       const next = prev.slice();
       next.splice(index, 1);
@@ -478,12 +590,14 @@ export function useOrganicCutSession({
     });
     // A delete is a fresh edit — it invalidates the redo history.
     setRedoStack([]);
-  }, []);
+  }, [setActiveLoopPoints]);
 
   const undoPoint = React.useCallback(() => {
-    setLoop((prev) => {
+    setActiveLoopPoints((prev) => {
       if (prev.length === 0) return prev;
       const removed = prev[prev.length - 1];
+      // Push to the redo stack from inside the updater (it runs at commit time, not
+      // synchronously) so the popped point is captured reliably.
       setRedoStack((r) => [...r, removed]);
       const next = prev.slice(0, -1);
       setStatus(next.length > 0 ? 'drawing' : 'idle');
@@ -491,20 +605,20 @@ export function useOrganicCutSession({
       setSelectedIndex((sel) => (sel !== null && sel >= next.length ? null : sel));
       return next;
     });
-  }, []);
+  }, [setActiveLoopPoints]);
 
   const redoPoint = React.useCallback(() => {
     setRedoStack((r) => {
       if (r.length === 0) return r;
       const restored = r[r.length - 1];
-      setLoop((prev) => [...prev, restored]);
+      setActiveLoopPoints((prev) => [...prev, restored]);
       setStatus('drawing');
       return r.slice(0, -1);
     });
-  }, []);
+  }, [setActiveLoopPoints]);
 
   const updatePoint = React.useCallback((index: number, point: OrganicCutLoopPoint) => {
-    setLoop((prev) => {
+    setActiveLoopPoints((prev) => {
       if (index < 0 || index >= prev.length) return prev;
       const prevPoint = prev[index];
       // Skip a state churn if the point didn't actually move (drag with no delta).
@@ -519,39 +633,100 @@ export function useOrganicCutSession({
       next[index] = point;
       return next;
     });
-  }, []);
+  }, [setActiveLoopPoints]);
 
   const clearLoop = React.useCallback(() => {
     // Clear truly clears — also drop the persisted copy so it doesn't spring back
-    // on deselect/reselect.
+    // on deselect/reselect, and discard ALL loops (multi-loop included).
     const key = activeGeometryKeyRef.current;
     if (key) savedLoopsRef.current.delete(key);
-    setLoop([]);
+    setLoops([emptyLoop()]);
+    setActiveLoopIndex(0);
     setStatus('idle');
     setLastResult(null);
     setRedoStack([]);
     setSelectedIndex(null);
+    setGeodesicPolyline(null);
+  }, []);
+
+  // Switch the active (editable) loop. The geodesic + membrane effects recompute
+  // for the new active loop; we show its cached seam immediately for snappiness.
+  const selectLoop = React.useCallback((index: number) => {
+    const all = loopsRef.current;
+    if (index < 0 || index >= all.length) return;
+    setActiveLoopIndex(index);
+    setSelectedIndex(null);
+    setRedoStack([]);
+    setGeodesicPolyline(all[index].polyline ?? null);
+    setStatus(all[index].points.length > 0 ? 'drawing' : 'idle');
+  }, []);
+
+  // Append a fresh empty loop and make it active (multi-loop cut). On Apply, every
+  // loop's cutter is union'd and differenced together. Gated by `canAddLoop` so we
+  // don't stack empty loops; a stray empty loop is pruned at cut time regardless.
+  const addLoop = React.useCallback(() => {
+    const newIndex = loopsRef.current.length; // index of the appended loop
+    setLoops((prev) => [...prev, emptyLoop()]);
+    setActiveLoopIndex(newIndex);
+    setSelectedIndex(null);
+    setRedoStack([]);
+    setGeodesicPolyline(null);
+    setMembranePreview(null);
+    setKeyPreview(null);
+    setKeyKind('none');
+    setKeyDetail('');
+    setKeyFrame(null);
+    setStatus('drawing');
+  }, []);
+
+  // Remove a loop. Never removes the last remaining one (Clear does that). The
+  // active index is fixed up so it keeps pointing at a valid loop.
+  const removeLoop = React.useCallback((index: number) => {
+    const before = loopsRef.current;
+    if (before.length <= 1 || index < 0 || index >= before.length) return;
+    setLoops((prev) => {
+      if (prev.length <= 1 || index < 0 || index >= prev.length) return prev;
+      const next = prev.slice();
+      next.splice(index, 1);
+      return next;
+    });
+    const lastIndexAfter = before.length - 2; // length-1 (removed) - 1
+    setActiveLoopIndex((cur) => {
+      if (index < cur) return cur - 1;
+      if (index === cur) return Math.max(0, Math.min(cur, lastIndexAfter));
+      return cur;
+    });
+    setSelectedIndex(null);
+    setRedoStack([]);
+    setGeodesicPolyline(null);
   }, []);
 
   const closeLoop = React.useCallback(() => {
-    setLoop((prev) => {
+    setActiveLoopPoints((prev) => {
       if (prev.length < MIN_LOOP_POINTS) return prev;
       setStatus('closed');
       return prev;
     });
-  }, []);
+  }, [setActiveLoopPoints]);
 
   const apply = React.useCallback(() => {
     // Read everything from refs so this callback is STABLE and never stale.
+    const allLoopsState = loopsRef.current;
+    const activeIdx = activeLoopIndexRef.current;
     const currentLoop = loopRef.current;
     const geom = activeGeometryRef.current;
     const geomKey = activeGeometryKeyRef.current;
     const ps = panelStateRef.current;
     const isContour = ps.cutMode === 'contour';
     const minPoints = isContour ? MIN_CONTOUR_POINTS : MIN_LOOP_POINTS;
-    if (currentLoop.length < minPoints) return;
+    // Contour cuts every loop with enough points; flat is always single-loop (the
+    // active one). Bail if there's nothing real to cut.
+    const contourReady = isContour ? allLoopsState.filter((l) => loopCutPoints(l) !== null).length : 0;
+    if (isContour ? contourReady === 0 : currentLoop.length < minPoints) return;
     if (!geom || !geomKey) return;
     const loopSnapshot = currentLoop.slice();
+    // Snapshot all loops (for the undo-restore after a successful cut).
+    const loopsSnapshot = allLoopsState.map((l) => ({ points: l.points.slice(), polyline: l.polyline }));
     const geodesic = geodesicPolylineRef.current;
     let cancelled = false;
     setIsApplying(true);
@@ -563,19 +738,28 @@ export function useOrganicCutSession({
           return;
         }
 
-        // Contour: send the DENSE on-surface geodesic polyline as the loop so the
-        // membrane traces the real surface crossing (the sparse waypoints alone
-        // wouldn't sever the body). Falls back to the waypoints if the geodesic
-        // hasn't computed yet. No explicit plane — contour ignores it.
+        // Contour: send each loop's DENSE on-surface geodesic so the membrane
+        // traces the real surface crossing (sparse waypoints alone wouldn't sever
+        // the body). The ACTIVE loop prefers the freshest live geodesic; the others
+        // use their cached seam (falling back to waypoints). The first loop becomes
+        // `loopPoints`; the rest go in `extraLoops` (Rust union's a cutter each).
         // Flat: send the waypoints + the exact plane the preview showed.
         let cutSpec;
         if (isContour) {
-          const contourLoop =
-            geodesic && geodesic.length >= MIN_CONTOUR_POINTS * 3
-              ? geodesicPolylineToLoopPoints(geodesic)
-              : loopSnapshot;
+          const allLoops: OrganicCutLoopPoint[][] = [];
+          allLoopsState.forEach((l, i) => {
+            let pts: OrganicCutLoopPoint[] | null = null;
+            if (i === activeIdx && geodesic && geodesic.length >= MIN_CONTOUR_POINTS * 3) {
+              pts = geodesicPolylineToLoopPoints(geodesic);
+            } else {
+              pts = loopCutPoints(l);
+            }
+            if (pts) allLoops.push(pts);
+          });
+          if (allLoops.length === 0) return; // nothing to cut
           cutSpec = {
-            loopPoints: contourLoop,
+            loopPoints: allLoops[0],
+            extraLoops: allLoops.length > 1 ? allLoops.slice(1) : undefined,
             thicknessMm: ps.thicknessMm,
             // `smoothing` = seam-line smoothing (the geodesic was already computed
             // with it, but send it so the cut's loop matches). `membraneSmoothing`
@@ -593,7 +777,7 @@ export function useOrganicCutSession({
             density: ps.density,
             // When on, the cut also builds the registration key (peg union'd onto
             // one half, socket carved from the other). The preview already showed
-            // the exact key this produces.
+            // the exact key this produces. (Skipped by Rust for multi-loop cuts.)
             generateKey: ps.generateKey,
             keyWidthMm: ps.keyWidthMm,
             keyDepthMm: ps.keyDepthMm,
@@ -649,18 +833,20 @@ export function useOrganicCutSession({
         );
 
         if (committed && !cancelled) {
-          // Clear the loop after a successful cut so the tool is ready for the
+          // Clear the loops after a successful cut so the tool is ready for the
           // next one and stale points don't linger on the (now replaced) model.
-          // Remember the loop + the PRE-CUT geometry reference so that an UNDO
-          // (which restores that exact geometry) brings the membrane/loop back.
+          // Remember the loops + the PRE-CUT geometry reference so that an UNDO
+          // (which restores that exact geometry) brings the membrane/loops back.
           if (geomKey && geom) {
             undoRestoreRef.current = {
               modelId: geomKey,
               geometry: geom,
-              loop: loopSnapshot,
+              loops: loopsSnapshot,
+              activeIndex: activeIdx,
             };
           }
-          setLoop([]);
+          setLoops([emptyLoop()]);
+          setActiveLoopIndex(0);
           setStatus('idle');
           setSelectedIndex(null);
         }
@@ -680,7 +866,22 @@ export function useOrganicCutSession({
   // Contour needs a real loop (≥3 points); flat works with 2.
   const minPointsForMode = panelState.cutMode === 'contour' ? MIN_CONTOUR_POINTS : MIN_LOOP_POINTS;
   const canCloseLoop = status === 'drawing' && pointCount >= MIN_LOOP_POINTS;
-  const canApply = pointCount >= minPointsForMode && !isApplying;
+  const isContourMode = panelState.cutMode === 'contour';
+  const activeLoopReady = pointCount >= MIN_CONTOUR_POINTS;
+  const loopCount = loops.length;
+  const loopSummaries = React.useMemo(
+    () => loops.map((l, i) => ({ index: i, pointCount: l.points.length })),
+    [loops],
+  );
+  // How many loops are real loops (would actually cut), for the Cut gate.
+  const readyContourLoops = loops.filter((l) => l.points.length >= MIN_CONTOUR_POINTS).length;
+  // Can cut: contour needs ≥1 real loop; flat needs 2 points.
+  const canApply =
+    !isApplying &&
+    (isContourMode ? readyContourLoops >= 1 : pointCount >= minPointsForMode);
+  // Can add a loop: contour mode with the active loop already a real loop.
+  const canAddLoop = isContourMode && activeLoopReady && !isApplying;
+  const canRemoveLoop = loops.length > 1 && !isApplying;
   const canUndoPoint = pointCount > 0;
   const canRedoPoint = redoStack.length > 0;
 
@@ -701,6 +902,15 @@ export function useOrganicCutSession({
     canRedoPoint,
     clearLoop,
     closeLoop,
+    loopCount,
+    activeLoopIndex,
+    loopSummaries,
+    selectLoop,
+    addLoop,
+    canAddLoop,
+    removeLoop,
+    canRemoveLoop,
+    committedPolylines,
     apply,
     isApplying,
     lastResult,

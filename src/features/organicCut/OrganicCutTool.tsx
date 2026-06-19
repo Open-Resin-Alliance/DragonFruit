@@ -60,6 +60,12 @@ interface OrganicCutToolProps {
    */
   geodesicPolyline?: Float32Array | null;
   /**
+   * Seam polylines (flat xyz, model-local) of loops already QUEUED for a multi-loop
+   * cut. Drawn dimmed so the user sees every loop that the next Cut will sever,
+   * alongside the active loop being drawn. Empty/undefined when none are queued.
+   */
+  committedPolylines?: Float32Array[];
+  /**
    * Flat vs contour cut. In `contour` mode the flat-plane preview is hidden (the
    * cut follows the curved seam, so a flat quad would be misleading) and only the
    * on-surface geodesic loop is shown.
@@ -135,6 +141,7 @@ export function OrganicCutTool({
   onSelectPoint,
   onMarkerHoverChange,
   geodesicPolyline,
+  committedPolylines,
   cutMode = 'plane',
   membranePreview,
   keyPreview,
@@ -220,6 +227,39 @@ export function OrganicCutTool({
     line.renderOrder = 999;
     return line;
   }, [loopPositions]);
+
+  // Dimmed seam lines for loops already QUEUED for a multi-loop cut. Each is drawn
+  // closed (the geodesic omits the repeated final point) in a muted green so it
+  // reads as "queued" next to the bright active loop.
+  const committedLines = useMemo(() => {
+    if (!committedPolylines || committedPolylines.length === 0) return [];
+    return committedPolylines
+      .map((poly) => {
+        if (!poly || poly.length < 6) return null;
+        const positions = Array.from(poly);
+        // Close the loop: append the first vertex if the end isn't already on it.
+        if (poly.length >= 9) {
+          const dx = positions[positions.length - 3] - positions[0];
+          const dy = positions[positions.length - 2] - positions[1];
+          const dz = positions[positions.length - 1] - positions[2];
+          if (dx * dx + dy * dy + dz * dz > 1e-10) {
+            positions.push(positions[0], positions[1], positions[2]);
+          }
+        }
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        const material = new THREE.LineBasicMaterial({
+          color: 0x1f9e54,
+          depthTest: false,
+          transparent: true,
+          opacity: 0.7,
+        });
+        const line = new THREE.Line(geom, material);
+        line.renderOrder = 994;
+        return line;
+      })
+      .filter((l): l is THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial> => l !== null);
+  }, [committedPolylines]);
 
   // Two tubes along the seam from a shared curve: a THIN visible `glow` tube (the
   // hover highlight) and a WIDER invisible `hit` tube (the pointer/right-click
@@ -847,6 +887,11 @@ export function OrganicCutTool({
             </group>
           );
         })}
+
+        {/* Queued multi-loop seams (dimmed), drawn behind the active loop. */}
+        {committedLines.map((line, i) => (
+          <primitive key={`committed-seam-${i}`} object={line} />
+        ))}
 
         {/* Connecting polyline through the points (and closing segment). */}
         {loopLine && <primitive object={loopLine} />}

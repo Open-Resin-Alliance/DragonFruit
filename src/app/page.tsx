@@ -18925,6 +18925,14 @@ export default function Home() {
                 pointCount={organicCut.pointCount}
                 onClearLoop={organicCut.clearLoop}
                 onCloseLoop={organicCut.closeLoop}
+                loopCount={organicCut.loopCount}
+                activeLoopIndex={organicCut.activeLoopIndex}
+                loopSummaries={organicCut.loopSummaries}
+                onSelectLoop={organicCut.selectLoop}
+                onAddLoop={organicCut.addLoop}
+                canAddLoop={organicCut.canAddLoop}
+                onRemoveLoop={organicCut.removeLoop}
+                canRemoveLoop={organicCut.canRemoveLoop}
                 onApply={organicCut.apply}
                 isApplying={organicCut.isApplying}
                 canApply={organicCut.canApply}
@@ -19885,6 +19893,7 @@ export default function Home() {
                 onSelectPoint={organicCut.selectPoint}
                 onMarkerHoverChange={handleOrganicCutMarkerHoverChange}
                 geodesicPolyline={organicCut.geodesicPolyline}
+                committedPolylines={organicCut.committedPolylines}
                 cutMode={organicCut.panelState.cutMode}
                 membranePreview={organicCut.membranePreview}
                 keyPreview={organicCut.keyPreview}

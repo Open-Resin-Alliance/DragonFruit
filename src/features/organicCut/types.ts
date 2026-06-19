@@ -43,6 +43,15 @@ export interface OrganicCutSpec {
    * `loopPoints`). A mismatched name silently drops every point via serde default.
    */
   loopPoints: OrganicCutLoopPoint[];
+  /**
+   * Additional closed loops cut in the SAME operation (contour mode only). Each
+   * loop becomes its own membrane+slab; all slabs (plus `loopPoints`) are union'd
+   * into ONE cutter and differenced once, so a body joined in several places —
+   * e.g. a tail attached to the body at two posts with an air tunnel between — is
+   * freed in a single cut. Omitted/empty → the classic single-loop cut. Serde
+   * field: `extraLoops`.
+   */
+  extraLoops?: OrganicCutLoopPoint[][];
   /** Wafer thickness in mm ("consistent thickness"). Unused by the M1 no-op. */
   thicknessMm: number;
   /** Seam-line smoothing 0..1 (how much the cut line rounds through waypoints). */
