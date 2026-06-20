@@ -11,14 +11,27 @@ const OPTIONS = SUPPORTED_LOCALES.map((locale) => ({
   label: LOCALE_LABELS[locale],
 }));
 
-export function LanguageSwitcher({ className = "" }: { className?: string }) {
+export function LanguageSwitcher({
+  className = "",
+  value,
+  onChange,
+}: {
+  className?: string;
+  // Controlled mode (e.g. the Settings modal's draft state): when provided, the
+  // switcher reports changes via onChange instead of switching the locale live.
+  // Falls back to the active locale / live switch when omitted.
+  value?: Locale;
+  onChange?: (locale: Locale) => void;
+}) {
   const { locale, setLocale } = useLocale();
+  const currentValue = value ?? locale;
+  const handleChange = onChange ?? setLocale;
 
   return (
     <SelectDropdown<Locale>
-      value={locale}
+      value={currentValue}
       options={OPTIONS}
-      onChange={setLocale}
+      onChange={handleChange}
       ariaLabel="Language"
       title="Language"
       // Fixed width so the trigger and the (width-matched) menu are the same

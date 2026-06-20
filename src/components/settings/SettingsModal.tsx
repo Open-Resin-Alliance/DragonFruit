@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { GeneralSettingsTab } from '@/components/settings/GeneralSettingsTab';
+import { useLocale } from '@/components/I18nClientProvider';
 import { CameraSettingsTab } from '@/components/settings/CameraSettingsTab';
 import { HotkeysSettingsTab } from '@/components/settings/HotkeysSettingsTab';
 import { MeshSettingsTab } from '@/components/settings/MeshSettingsTab';
@@ -237,6 +238,11 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTabKey>(initialTab ?? 'general');
 
+  // Language is a draft like every other setting: changing the switcher only
+  // updates draftLocale; the actual loadLocale happens in handleApply.
+  const { locale: activeLocale, setLocale: applyLocale } = useLocale();
+  const [draftLocale, setDraftLocale] = useState(activeLocale);
+
   const [draftMeshColor, setDraftMeshColor] = useState(meshColor);
   const [draftShaderType, setDraftShaderType] = useState(shaderType);
   const [draftMatcapVariant, setDraftMatcapVariant] = useState(matcapVariant);
@@ -376,7 +382,9 @@ export function SettingsModal({
     setDraftSlicingThumbnailRenderSettings(slicingThumbnailRenderSettings ?? DEFAULT_SLICING_THUMBNAIL_RENDER_SETTINGS);
     setDraftUvToolsSettings(getSavedUvToolsSettings());
     setDraftLogLevel(getSavedLogLevel());
+    setDraftLocale(activeLocale);
   }, [
+    activeLocale,
     ambientIntensity,
     directionalIntensity,
     flatUseVertexColors,
@@ -753,6 +761,7 @@ export function SettingsModal({
   }, []);
 
   const handleApply = React.useCallback(() => {
+    applyLocale(draftLocale);
     onMeshColorChange(draftMeshColor);
     onShaderTypeChange(draftShaderType);
     onMatcapVariantChange(draftMatcapVariant);
@@ -811,6 +820,8 @@ export function SettingsModal({
     didCommitThemeDraftRef.current = true;
     onClose();
   }, [
+    applyLocale,
+    draftLocale,
     draftAmbientIntensity,
     draftDirectionalIntensity,
     draftFlatUseVertexColors,
@@ -1330,6 +1341,8 @@ export function SettingsModal({
                   onDebugPrimitivesPanelVisibleChange={setDraftDebugPrimitivesPanelVisible}
                   importDefaults={draftImportDefaults}
                   onImportDefaultsChange={setDraftImportDefaults}
+                  language={draftLocale}
+                  onLanguageChange={setDraftLocale}
                 />
               )}
               {activeTab === 'camera' && (
