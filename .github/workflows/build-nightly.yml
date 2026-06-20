@@ -367,6 +367,12 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Enable Windows long paths
+        if: runner.os == 'Windows'
+        run: |
+          git config --system core.longpaths true
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
+
       - name: Build Tauri bundle (Windows)
         if: matrix.build_kind == 'tauri'
         uses: tauri-apps/tauri-action@v0
