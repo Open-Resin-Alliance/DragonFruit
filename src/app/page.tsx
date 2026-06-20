@@ -10612,7 +10612,7 @@ export default function Home() {
     }, 3800);
   }, []);
 
-  const handleExportError = React.useCallback((message: string) => {
+  const showOperationError = React.useCallback((message: string) => {
     setExportErrorToast({ id: Date.now(), text: message });
     setIsExportErrorToastVisible(true);
     if (exportErrorToastFadeTimeoutRef.current !== null) {
@@ -15319,8 +15319,7 @@ export default function Home() {
       if (!shouldApply) return;
 
       if (hollowingState.mode === 'shell_open_face' && !isShellOpenFaceSelected) {
-        setExportErrorToast({ id: Date.now(), text: 'Pick the face to open before applying Shell mode.' });
-        setIsExportErrorToastVisible(true);
+        showOperationError('Pick the face to open before applying Shell mode.');
         return;
       }
 
@@ -15387,8 +15386,7 @@ export default function Home() {
           ? await hollowApplyFromCapturedSource(options)
           : await hollowFromGeometry(sourceGeometry, options);
         if (!result) {
-          setExportErrorToast({ id: Date.now(), text: 'Hollowing is available in DragonFruit Desktop only.' });
-          setIsExportErrorToastVisible(true);
+          showOperationError('Hollowing is available in DragonFruit Desktop only.');
           return;
         }
 
@@ -15529,8 +15527,7 @@ export default function Home() {
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        setExportErrorToast({ id: Date.now(), text: `Hollowing failed: ${message}` });
-        setIsExportErrorToastVisible(true);
+        showOperationError(`Hollowing failed: ${message}`);
       } finally {
         setIsApplyingHollowing(false);
         setIsApplyingBlockersHollowing(false);
@@ -16979,11 +16976,7 @@ export default function Home() {
           });
 
           if (!restoredFromSnapshot) {
-            setExportErrorToast({
-              id: Date.now(),
-              text: 'Hole punch source snapshot is missing or invalid. Re-apply cannot continue.',
-            });
-            setIsExportErrorToastVisible(true);
+            showOperationError('Hole punch source snapshot is missing or invalid. Re-apply cannot continue.');
             return;
           }
 
@@ -17084,8 +17077,7 @@ export default function Home() {
           if (ownsSourceGeometry) {
             sourceGeometry.dispose();
           }
-          setExportErrorToast({ id: Date.now(), text: 'Hole punching is available in DragonFruit Desktop only.' });
-          setIsExportErrorToastVisible(true);
+          showOperationError('Hole punching is available in DragonFruit Desktop only.');
           return;
         }
 
@@ -17094,8 +17086,7 @@ export default function Home() {
           if (ownsSourceGeometry) {
             sourceGeometry.dispose();
           }
-          setExportErrorToast({ id: Date.now(), text: 'Hole punching is available in DragonFruit Desktop only.' });
-          setIsExportErrorToastVisible(true);
+          showOperationError('Hole punching is available in DragonFruit Desktop only.');
           return;
         }
 
@@ -17152,8 +17143,7 @@ export default function Home() {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        setExportErrorToast({ id: Date.now(), text: `Hole punching failed: ${message}` });
-        setIsExportErrorToastVisible(true);
+        showOperationError(`Hole punching failed: ${message}`);
       } finally {
         setIsApplyingHolePunch(false);
       }
@@ -17515,8 +17505,7 @@ export default function Home() {
       );
       if (!staged) {
         if (notifyUnavailable) {
-          setExportErrorToast({ id: Date.now(), text: 'Hollowing preview is available in DragonFruit Desktop only.' });
-          setIsExportErrorToastVisible(true);
+          showOperationError('Hollowing preview is available in DragonFruit Desktop only.');
         }
         return;
       }
@@ -17524,8 +17513,7 @@ export default function Home() {
       const result = await hollowPreviewFromCapturedSource(options);
       if (!result) {
         if (notifyUnavailable) {
-          setExportErrorToast({ id: Date.now(), text: 'Hollowing preview is available in DragonFruit Desktop only.' });
-          setIsExportErrorToastVisible(true);
+          showOperationError('Hollowing preview is available in DragonFruit Desktop only.');
         }
         return;
       }
@@ -17575,8 +17563,7 @@ export default function Home() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (notifyUnavailable) {
-        setExportErrorToast({ id: Date.now(), text: `Hollowing preview failed: ${message}` });
-        setIsExportErrorToastVisible(true);
+        showOperationError(`Hollowing preview failed: ${message}`);
       } else {
         console.warn('[Hollowing] Debounced preview failed:', message);
       }
@@ -18856,7 +18843,7 @@ export default function Home() {
               supportsRef={supportsRef}
               captureSceneThumbnailPng={captureExportThumbnailPng}
               onExportSuccess={handleExportSuccess}
-              onExportError={handleExportError}
+              onExportError={showOperationError}
             />
 
             <SlicingPanel
