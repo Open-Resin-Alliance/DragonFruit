@@ -3324,6 +3324,7 @@ fn main() {
             mesh_repair::mesh_punch_from_captured_source,
             mesh_repair::mesh_punch_read_positions,
             mesh_repair::mesh_repair_read_positions,
+            mesh_repair::load_stl_file,
             sdf::compute_sdf_from_staged,
             sdf::compute_heightmap_from_staged,
             sdf::invalidate_sdf_cache,

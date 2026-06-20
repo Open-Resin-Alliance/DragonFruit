@@ -8429,6 +8429,15 @@ export default function Home() {
     setTimeout(resolve, 0);
   }), []);
 
+  const createPathBackedStlFile = React.useCallback((sourcePath: string, name: string): File => {
+    const file = new File([], name, {
+      type: getDroppedFileMimeType(name),
+      lastModified: Date.now(),
+    });
+    (file as File & { filePath?: string }).filePath = sourcePath;
+    return file;
+  }, []);
+
   const pickFilesWithNativeDialog = React.useCallback(async (category: 'mesh' | 'scene', multiple: boolean): Promise<File[] | null> => {
     if (!isDesktopRuntime()) return null;
 
@@ -8470,13 +8479,16 @@ export default function Home() {
             progress: null,
           });
 
-          const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
           const name = resolvedName;
-
-          files.push(new File([new Uint8Array(bytes)], name, {
-            type: getDroppedFileMimeType(name),
-            lastModified: Date.now(),
-          }));
+          if (getFileExtensionLower(name) === '.stl') {
+            files.push(createPathBackedStlFile(sourcePath, name));
+          } else {
+            const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
+            files.push(new File([new Uint8Array(bytes)], name, {
+              type: getDroppedFileMimeType(name),
+              lastModified: Date.now(),
+            }));
+          }
         } catch (error) {
           console.warn(`[Picker] Failed reading picked file path: ${entry.path}`, error);
         }
@@ -8498,7 +8510,7 @@ export default function Home() {
       console.warn(`[Picker] Native ${category} picker failed, falling back to web input.`, error);
       return null;
     }
-  }, [isDesktopRuntime, waitForUiTick]);
+  }, [createPathBackedStlFile, isDesktopRuntime, waitForUiTick]);
 
   const pickFilesWithWebInput = React.useCallback((accept: string, multiple: boolean): Promise<File[]> => {
     return new Promise((resolve) => {
@@ -8596,7 +8608,7 @@ export default function Home() {
       if (nativeFiles.length === 0) return;
       const expanded = await expandPickedFilesWithZip(nativeFiles, 'mesh');
       if (expanded.meshFiles.length > 0) {
-        scene.onFileChange(buildSyntheticFileChangeEvent(expanded.meshFiles));
+        void scene.loadFiles(expanded.meshFiles);
       }
       if (expanded.sceneFiles.length > 0) {
         await importSceneFilesWithPluginWarning(expanded.sceneFiles, { resultingScenePath: null });
@@ -9899,12 +9911,16 @@ export default function Home() {
 
       for (const sourcePath of normalizedSupportedPaths) {
         try {
-          const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
           const name = getFileNameFromPath(sourcePath);
-          files.push(new File([new Uint8Array(bytes)], name, {
-            type: getDroppedFileMimeType(name),
-            lastModified: Date.now(),
-          }));
+          if (getFileExtensionLower(name) === '.stl') {
+            files.push(createPathBackedStlFile(sourcePath, name));
+          } else {
+            const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
+            files.push(new File([new Uint8Array(bytes)], name, {
+              type: getDroppedFileMimeType(name),
+              lastModified: Date.now(),
+            }));
+          }
         } catch (error) {
           console.warn(`[DragDrop] Failed reading dropped file path: ${sourcePath}`, error);
         }
@@ -9914,7 +9930,7 @@ export default function Home() {
     } catch {
       return [] as File[];
     }
-  }, []);
+  }, [createPathBackedStlFile]);
 
   const sceneModeRef = React.useRef(scene.mode);
   const createFilesFromTauriDroppedPathsRef = React.useRef(createFilesFromTauriDroppedPaths);
@@ -10210,6 +10226,10 @@ export default function Home() {
 
   const handleUngroupFolder = React.useCallback((groupId: string) => {
     scene.ungroupGroup(groupId);
+  }, [scene]);
+
+  const handleSplitImportGroup = React.useCallback((modelId: string) => {
+    scene.splitImportGroup(modelId);
   }, [scene]);
 
   const handleRenameFolder = React.useCallback((groupId: string, nextName: string) => {
@@ -18530,6 +18550,7 @@ export default function Home() {
               onGroupModels={handleGroupSelectedModels}
               onUngroupModels={handleUngroupSelectedModels}
               onUngroupGroup={handleUngroupFolder}
+              onSplitImportGroup={handleSplitImportGroup}
               onRenameGroup={handleRenameFolder}
               onRenameModel={handleRenameModel}
               onModelContextMenu={handleModelListContextMenu}

@@ -60,6 +60,7 @@
     "clipper-lib": "^6.4.2",
     "express": "^5.2.1",
     "express-ws": "^5.0.2",
+    "fast-3mf-loader": "^0.0.7",
     "fflate": "^0.8.2",
     "ffmpeg-static": "^5.3.0",
     "highlight.js": "^11.11.1",

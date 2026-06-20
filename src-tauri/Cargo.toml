@@ -42,6 +42,7 @@ dragonfruit-sdf = { path = "../rust/dragonfruit-sdf" }
 dragonfruit-astar = { path = "../rust/dragonfruit-astar" }
 flate2 = "1.1.9"
 bytemuck = "1"
+meshopt = "0.6.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-plugin-macos-fps = "0.1.0"

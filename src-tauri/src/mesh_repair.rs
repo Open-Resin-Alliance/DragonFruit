@@ -12,13 +12,15 @@
 //! - `mesh_repair_read_positions` — raw-binary response of the current staged
 //!   positions (little-endian f32, 9 per triangle), for frontend hydration.
 
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use dragonfruit_mesh_repair::{
     analyze, classify_support_split, hollow_voxel, io, punch_cylinders, repair, HolePunchOptions,
-    HollowOptions, HollowSession, IndexedMesh, RepairOptions,
+    HollowOptions, HollowSession, IndexedMesh, RepairOptions, Vec3,
 };
+use rayon::prelude::*;
 use serde::Deserialize;
 use tauri::ipc::Response;
 
@@ -695,6 +697,442 @@ pub async fn mesh_punch_read_positions() -> Result<Response, String> {
 pub async fn mesh_repair_read_positions() -> Result<Response, String> {
     let bytes = read_staging_bytes()?;
     Ok(Response::new(bytes))
+}
+
+/// Parses a binary or ASCII STL file in Rust and returns the vertex positions
+/// and per-vertex normals as a flat byte buffer.
+///
+/// Byte layout: a 16-byte `DFST` header containing flags and the original/output
+/// triangle counts, followed by little-endian f32 positions and normals.
+///
+/// Processing the file in Rust avoids loading the entire raw STL into the
+/// webview's memory space, which can save ~1 GB for a large binary STL.
+#[tauri::command]
+pub async fn load_stl_file(file_path: String) -> Result<Response, String> {
+    use dragonfruit_mesh_repair::io;
+
+    let path = std::path::Path::new(&file_path);
+
+    log::info!("[load_stl_file] Starting native STL load: {file_path}");
+
+    // The current IPC format expands every triangle to positions plus normals
+    // (72 bytes/triangle), before Three.js builds its BVH and uploads buffers.
+    // Reject inputs that cannot fit that representation before the repair
+    // loader reads and indexes the entire STL in memory.
+    const MAX_NATIVE_STL_TRIANGLES: u64 = 6_000_000;
+    const PREVIEW_TARGET_TRIANGLES: usize = 2_000_000;
+    const MAX_NATIVE_ASCII_STL_BYTES: u64 = 300_000_000;
+    let file_size = std::fs::metadata(path)
+        .map_err(|e| format!("Failed to inspect STL '{}': {e}", file_path))?
+        .len();
+    let mut header = [0u8; 84];
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| format!("Failed to open STL '{}': {e}", file_path))?;
+    let header_len = file
+        .read(&mut header)
+        .map_err(|e| format!("Failed to read STL header '{}': {e}", file_path))?;
+
+    if header_len == header.len() {
+        let triangle_count = u32::from_le_bytes(header[80..84].try_into().unwrap()) as u64;
+        let expected_binary_size = 84u64.saturating_add(triangle_count.saturating_mul(50));
+        if expected_binary_size == file_size && triangle_count > MAX_NATIVE_STL_TRIANGLES {
+            drop(file);
+            let preview =
+                load_binary_stl_preview(path, triangle_count as u32, PREVIEW_TARGET_TRIANGLES)?;
+            log::info!(
+                "[load_stl_file] Streaming preview complete: {} -> {} triangles",
+                triangle_count,
+                preview.triangles.len()
+            );
+            return encode_stl_response(&preview, triangle_count as u32, true).map(Response::new);
+        }
+    }
+    if file_size > MAX_NATIVE_ASCII_STL_BYTES && header.starts_with(b"solid") {
+        return Err(format!(
+            "ASCII STL is too large for the current renderer ({:.2} GB on disk; limit {:.2} GB). Decimate or convert it before importing.",
+            file_size as f64 / 1_000_000_000.0,
+            MAX_NATIVE_ASCII_STL_BYTES as f64 / 1_000_000_000.0,
+        ));
+    }
+    drop(file);
+
+    let mesh =
+        io::stl::load(path).map_err(|e| format!("Failed to load STL '{}': {e}", file_path))?;
+
+    let tri_count = mesh.triangles.len();
+    encode_stl_response(&mesh, tri_count as u32, false).map(Response::new)
+}
+
+const STL_RESPONSE_MAGIC: &[u8; 4] = b"DFST";
+const STL_RESPONSE_HEADER_BYTES: usize = 16;
+const STL_RESPONSE_FLAG_PREVIEW: u32 = 1;
+
+fn encode_stl_response(
+    mesh: &IndexedMesh,
+    original_triangle_count: u32,
+    is_preview: bool,
+) -> Result<Vec<u8>, String> {
+    let tri_count = mesh.triangles.len();
+    let positions_len = tri_count * 9 * std::mem::size_of::<f32>();
+    let normals_len = tri_count * 9 * std::mem::size_of::<f32>();
+    let response_len = STL_RESPONSE_HEADER_BYTES
+        .checked_add(positions_len)
+        .and_then(|size| size.checked_add(normals_len))
+        .ok_or_else(|| "STL response size overflow".to_string())?;
+    let mut result = Vec::new();
+    result.try_reserve_exact(response_len).map_err(|_| {
+        format!(
+            "Not enough memory for the STL response ({:.2} GB)",
+            response_len as f64 / 1_000_000_000.0
+        )
+    })?;
+    result.extend_from_slice(STL_RESPONSE_MAGIC);
+    result.extend_from_slice(
+        &(if is_preview {
+            STL_RESPONSE_FLAG_PREVIEW
+        } else {
+            0
+        })
+        .to_le_bytes(),
+    );
+    result.extend_from_slice(&original_triangle_count.to_le_bytes());
+    result.extend_from_slice(&(tri_count as u32).to_le_bytes());
+    result.resize(response_len, 0);
+    let (position_output, normal_output) =
+        result[STL_RESPONSE_HEADER_BYTES..].split_at_mut(positions_len);
+    position_output
+        .par_chunks_mut(9 * std::mem::size_of::<f32>())
+        .zip(mesh.triangles.par_iter())
+        .for_each(|(output, triangle)| {
+            let vertices = [
+                mesh.positions[triangle[0] as usize],
+                mesh.positions[triangle[1] as usize],
+                mesh.positions[triangle[2] as usize],
+            ];
+            for (vertex_output, vertex) in output.chunks_exact_mut(12).zip(vertices) {
+                vertex_output[0..4].copy_from_slice(&vertex.x.to_le_bytes());
+                vertex_output[4..8].copy_from_slice(&vertex.y.to_le_bytes());
+                vertex_output[8..12].copy_from_slice(&vertex.z.to_le_bytes());
+            }
+        });
+    normal_output
+        .par_chunks_mut(9 * std::mem::size_of::<f32>())
+        .zip(mesh.triangles.par_iter())
+        .for_each(|(output, triangle)| {
+            let p0 = mesh.positions[triangle[0] as usize];
+            let p1 = mesh.positions[triangle[1] as usize];
+            let p2 = mesh.positions[triangle[2] as usize];
+            let face_normal = p1.sub(p0).cross(p2.sub(p0));
+            let len = face_normal.length();
+            let normal = if len > 1e-10 {
+                face_normal.scale(1.0 / len)
+            } else {
+                Vec3::ZERO
+            };
+            for normal_output in output.chunks_exact_mut(12) {
+                normal_output[0..4].copy_from_slice(&normal.x.to_le_bytes());
+                normal_output[4..8].copy_from_slice(&normal.y.to_le_bytes());
+                normal_output[8..12].copy_from_slice(&normal.z.to_le_bytes());
+            }
+        });
+
+    log::info!(
+        "[load_stl_file] {} triangles, {} MB positions + {} MB normals",
+        tri_count,
+        positions_len / (1024 * 1024),
+        normals_len / (1024 * 1024),
+    );
+
+    Ok(result)
+}
+
+fn read_binary_stl_vertex(record: &[u8; 50], offset: usize) -> Vec3 {
+    let read_f32 = |at: usize| f32::from_le_bytes(record[at..at + 4].try_into().unwrap());
+    Vec3::new(read_f32(offset), read_f32(offset + 4), read_f32(offset + 8))
+}
+
+struct PreviewTempDir(PathBuf);
+
+impl Drop for PreviewTempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn binary_stl_bounds(path: &std::path::Path, triangle_count: u32) -> Result<(Vec3, Vec3), String> {
+    let file =
+        std::fs::File::open(path).map_err(|e| format!("Failed to open STL preview source: {e}"))?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    reader
+        .seek(SeekFrom::Start(84))
+        .map_err(|e| format!("Failed seeking STL: {e}"))?;
+    let mut record = [0u8; 50];
+    let mut min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+    let mut max = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for triangle_index in 0..triangle_count {
+        reader
+            .read_exact(&mut record)
+            .map_err(|e| format!("Truncated binary STL at triangle {triangle_index}: {e}"))?;
+        for offset in [12, 24, 36] {
+            let vertex = read_binary_stl_vertex(&record, offset);
+            min = min.min(vertex);
+            max = max.max(vertex);
+        }
+    }
+    Ok((min, max))
+}
+
+fn simplify_preview_region(
+    path: &std::path::Path,
+    triangle_count: usize,
+    target_ratio: f64,
+) -> Result<IndexedMesh, String> {
+    let bucket_file =
+        std::fs::File::open(path).map_err(|e| format!("Failed opening STL preview bucket: {e}"))?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, bucket_file);
+    let mut record = [0u8; 50];
+    let mut soup = Vec::with_capacity(triangle_count * 9);
+    for _ in 0..triangle_count {
+        reader
+            .read_exact(&mut record)
+            .map_err(|e| format!("Failed reading STL preview bucket: {e}"))?;
+        for offset in [12, 24, 36] {
+            let vertex = read_binary_stl_vertex(&record, offset);
+            soup.extend_from_slice(&[vertex.x, vertex.y, vertex.z]);
+        }
+    }
+
+    let chunk = IndexedMesh::from_triangle_soup(&soup, 1e-8);
+    let indices: Vec<u32> = chunk
+        .triangles
+        .iter()
+        .flat_map(|triangle| triangle.iter().copied())
+        .collect();
+    let target_index_count =
+        ((indices.len() as f64 * target_ratio).floor() as usize).max(3) / 3 * 3;
+    let vertex_bytes: &[u8] = bytemuck::cast_slice(&chunk.positions);
+    let vertices = meshopt::VertexDataAdapter::new(vertex_bytes, std::mem::size_of::<Vec3>(), 0)
+        .map_err(|e| format!("Failed preparing preview simplifier: {e}"))?;
+    let simplified = meshopt::simplify(
+        &indices,
+        &vertices,
+        target_index_count,
+        1.0,
+        meshopt::SimplifyOptions::LockBorder | meshopt::SimplifyOptions::Regularize,
+        None,
+    );
+    let selected = if simplified.is_empty() {
+        &indices
+    } else {
+        &simplified
+    };
+    let mut output = IndexedMesh {
+        positions: Vec::with_capacity(selected.len()),
+        triangles: Vec::with_capacity(selected.len() / 3),
+    };
+    for triangle in selected.chunks_exact(3) {
+        let base = output.positions.len() as u32;
+        output.positions.push(chunk.positions[triangle[0] as usize]);
+        output.positions.push(chunk.positions[triangle[1] as usize]);
+        output.positions.push(chunk.positions[triangle[2] as usize]);
+        output.triangles.push([base, base + 1, base + 2]);
+    }
+    Ok(output)
+}
+
+fn load_binary_stl_preview(
+    path: &std::path::Path,
+    triangle_count: u32,
+    target_triangles: usize,
+) -> Result<IndexedMesh, String> {
+    let bucket_divisions = if triangle_count < 1_000_000 { 1 } else { 4 };
+    let bucket_count = bucket_divisions * bucket_divisions * bucket_divisions;
+    let (bbox_min, bbox_max) = binary_stl_bounds(path, triangle_count)?;
+    let extent = bbox_max.sub(bbox_min);
+    let temp_path = std::env::temp_dir().join(format!(
+        "dragonfruit-stl-preview-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&temp_path)
+        .map_err(|e| format!("Failed creating STL preview workspace: {e}"))?;
+    let temp_dir = PreviewTempDir(temp_path);
+    let mut writers: Vec<Option<BufWriter<std::fs::File>>> =
+        (0..bucket_count).map(|_| None).collect();
+    let mut bucket_counts = vec![0usize; bucket_count];
+    let file =
+        std::fs::File::open(path).map_err(|e| format!("Failed to open STL preview source: {e}"))?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    reader
+        .seek(SeekFrom::Start(84))
+        .map_err(|e| format!("Failed seeking STL: {e}"))?;
+    let mut record = [0u8; 50];
+    let total = triangle_count as usize;
+    for triangle_index in 0..total {
+        reader
+            .read_exact(&mut record)
+            .map_err(|e| format!("Truncated binary STL at triangle {triangle_index}: {e}"))?;
+        let a = read_binary_stl_vertex(&record, 12);
+        let b = read_binary_stl_vertex(&record, 24);
+        let c = read_binary_stl_vertex(&record, 36);
+        let centroid = a.add(b).add(c).scale(1.0 / 3.0);
+        let axis_bucket = |value: f32, min: f32, span: f32| -> usize {
+            if span <= 1e-9 {
+                0
+            } else {
+                (((value - min) / span) * bucket_divisions as f32)
+                    .floor()
+                    .clamp(0.0, (bucket_divisions - 1) as f32) as usize
+            }
+        };
+        let x = axis_bucket(centroid.x, bbox_min.x, extent.x);
+        let y = axis_bucket(centroid.y, bbox_min.y, extent.y);
+        let z = axis_bucket(centroid.z, bbox_min.z, extent.z);
+        let bucket = x + bucket_divisions * (y + bucket_divisions * z);
+        if writers[bucket].is_none() {
+            let bucket_file = std::fs::File::create(temp_dir.0.join(format!("{bucket}.bin")))
+                .map_err(|e| format!("Failed creating STL preview bucket: {e}"))?;
+            writers[bucket] = Some(BufWriter::with_capacity(64 * 1024, bucket_file));
+        }
+        writers[bucket]
+            .as_mut()
+            .unwrap()
+            .write_all(&record)
+            .map_err(|e| format!("Failed writing STL preview bucket: {e}"))?;
+        bucket_counts[bucket] += 1;
+    }
+    for writer in writers.iter_mut().flatten() {
+        writer
+            .flush()
+            .map_err(|e| format!("Failed flushing STL preview bucket: {e}"))?;
+    }
+    drop(writers);
+
+    let target_ratio = (target_triangles as f64 / triangle_count as f64).min(1.0);
+    let mut output = IndexedMesh {
+        positions: Vec::with_capacity(target_triangles.saturating_mul(3)),
+        triangles: Vec::with_capacity(target_triangles),
+    };
+    let regions: Vec<(usize, usize)> = bucket_counts
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, count)| *count > 0)
+        .collect();
+    let worker_count = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(2)
+        .min(4);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(worker_count)
+        .thread_name(|index| format!("stl-preview-{index}"))
+        .build()
+        .map_err(|e| format!("Failed creating STL preview worker pool: {e}"))?;
+    let simplified_regions: Vec<Result<(usize, usize, IndexedMesh), String>> = pool.install(|| {
+        regions
+            .par_iter()
+            .map(|&(bucket, count)| {
+                simplify_preview_region(
+                    &temp_dir.0.join(format!("{bucket}.bin")),
+                    count,
+                    target_ratio,
+                )
+                .map(|mesh| (bucket, count, mesh))
+            })
+            .collect()
+    });
+    for region in simplified_regions {
+        let (bucket, bucket_triangle_count, region) = region?;
+        let vertex_base = output.positions.len() as u32;
+        output.positions.extend(region.positions);
+        output.triangles.extend(
+            region
+                .triangles
+                .into_iter()
+                .map(|[a, b, c]| [a + vertex_base, b + vertex_base, c + vertex_base]),
+        );
+        log::info!(
+            "[load_stl_file] Topology-safe preview region {}/{}: {} source triangles, {} total output triangles",
+            bucket + 1,
+            bucket_count,
+            bucket_triangle_count,
+            output.triangles.len()
+        );
+    }
+
+    if output.triangles.is_empty() {
+        Err("Could not build a bounded preview for this STL".to_string())
+    } else {
+        Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod stl_preview_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn streaming_preview_is_nonempty_and_bounded() {
+        let grid_size = 80u32;
+        let triangle_count = grid_size * grid_size * 2;
+        let path = std::env::temp_dir().join(format!(
+            "dragonfruit-stl-preview-{}.stl",
+            std::process::id()
+        ));
+        let mut file = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+        file.write_all(&[0u8; 80]).unwrap();
+        file.write_all(&triangle_count.to_le_bytes()).unwrap();
+        for y in 0..grid_size {
+            for x in 0..grid_size {
+                let x = x as f32;
+                let y = y as f32;
+                for vertices in [
+                    [[x, y, 0.0], [x + 1.0, y, 0.0], [x + 1.0, y + 1.0, 0.0]],
+                    [[x, y, 0.0], [x + 1.0, y + 1.0, 0.0], [x, y + 1.0, 0.0]],
+                ] {
+                    file.write_all(&[0u8; 12]).unwrap();
+                    for vertex in vertices {
+                        for component in vertex {
+                            file.write_all(&component.to_le_bytes()).unwrap();
+                        }
+                    }
+                    file.write_all(&[0u8; 2]).unwrap();
+                }
+            }
+        }
+        file.flush().unwrap();
+        drop(file);
+
+        let preview = load_binary_stl_preview(&path, triangle_count, 500).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert!(!preview.triangles.is_empty());
+        assert!(preview.triangles.len() <= 500);
+    }
+
+    #[test]
+    #[ignore = "requires DRAGONFRUIT_LARGE_STL_TEST_PATH"]
+    fn streaming_preview_external_stl() {
+        let path = std::path::PathBuf::from(
+            std::env::var("DRAGONFRUIT_LARGE_STL_TEST_PATH")
+                .expect("DRAGONFRUIT_LARGE_STL_TEST_PATH must point to a binary STL"),
+        );
+        let mut file = std::fs::File::open(&path).unwrap();
+        let mut header = [0u8; 84];
+        file.read_exact(&mut header).unwrap();
+        let triangle_count = u32::from_le_bytes(header[80..84].try_into().unwrap());
+        let preview = load_binary_stl_preview(&path, triangle_count, 2_000_000).unwrap();
+        eprintln!(
+            "previewed {triangle_count} triangles as {} triangles / {} vertices",
+            preview.triangles.len(),
+            preview.positions.len()
+        );
+        assert!(!preview.triangles.is_empty());
+        assert!(preview.triangles.len() <= 2_000_000);
+    }
 }
 
 // --- internal helpers ----------------------------------------------------

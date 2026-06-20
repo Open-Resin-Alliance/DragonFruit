@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { loadMeshGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { loadMeshGeometry, load3mfGeometryMergedWithSplitData, processGeometry, type GeometryWithBounds, type ProcessGeometryOptions } from '@/hooks/useStlGeometry';
 import type { MeshHealthReport, MeshAnalysisJson } from '@/utils/meshRepair';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { isVoxlBinaryV2, parseVoxlBinaryV2, parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
@@ -761,11 +761,17 @@ export interface LoadedModel {
   groupName?: string;
   fileUrl: string;
   fileSizeBytes?: number;
+  /** Original on-disk mesh retained when `geometry` is a reduced native preview. */
+  sourcePath?: string;
   geometry: GeometryWithBounds;
   transform: ModelTransform;
   visible: boolean;
   color: string;
   polygonCount: number;
+  /** Pre-processed individual body geometries for multi-body 3MF imports.
+   *  When set, "Split to Bodies" replaces this single model with separate
+   *  models for each entry — instant, no reprocessing needed. */
+  splitBodies?: GeometryWithBounds[];
   meshModifiers?: ModelMeshModifiers;
   ignoreAutoLift?: boolean;
   manualZMoveOverride?: boolean;
@@ -1952,11 +1958,16 @@ export function useSceneCollectionManager() {
           progress: null,
         });
 
+        console.log(`[SceneCollection] Loading ${file.name}... (${(file.size / 1_000_000).toFixed(0)} MB)`);
+
         try {
           console.log(`[SceneCollection] Loading ${file.name}...`);
-          const geom = await loadMeshGeometry(url, file.name, {
+
+          // Shared loading options for all mesh types
+          const loadOptions = {
             nativeProcessingMode: getSavedImportDefaultsSettings().autoRepair ? 'auto' : 'none',
-            onNativeProcessingStage: (stage) => {
+            filePath: (file as File & { filePath?: string }).filePath,
+            onNativeProcessingStage: (stage: string) => {
               if (stage === 'repairing') {
                 setImportProgress({
                   active: true,
@@ -1995,7 +2006,7 @@ export function useSceneCollectionManager() {
                 });
               }
             },
-            onConfirmHeavyRepair: async (analysis) => {
+            onConfirmHeavyRepair: async (analysis: MeshAnalysisJson) => {
               const choice = await requestMeshRepairConfirmation({ fileName: file.name, analysis });
               if (choice === 'cancel_import') {
                 throw new Error('MESH_IMPORT_CANCELLED_BY_USER');
@@ -2013,93 +2024,100 @@ export function useSceneCollectionManager() {
               }
               return choice === 'repair';
             },
-          });
+          } satisfies ProcessGeometryOptions;
 
-          // Keep mesh color metadata only; avoid eager vertex color buffer allocation.
+          // Determine if this is a 3MF file for multi-body import
+          const is3mf = file.name.toLowerCase().endsWith('.3mf');
+
           const color = preferredMeshColor;
 
-          // Calculate initial transform with auto-lift
-          // By default, loaded geometry is centered at 0,0,0 but bottom might be < 0 or > 0 depending on normalization.
-          // loadStlGeometry normalizes: center X/Z at 0, set bottom Y (mapped to Z here?) to 0?
-          // Wait, loadStlGeometry: geometry.translate(-preCenter.x, -preBBox.min.y, -preCenter.z);
-          // This puts the bottom at Y=0.
-          // When rendered, we use Y-up or Z-up? SceneCanvas uses Z-up logic in some places, but Three.js is Y-up.
-          // StlMesh rotates geometry? No.
-          // Let's assume standard orientation: we want bottom at Z=0 (platform) or Z=liftDistance.
-          // Since loadStlGeometry normalizes bottom to Y=0, and we usually rotate meshes -90X or similar...
-          // Actually, `loadStlGeometry` normalizes it such that "bottom" is at Y=0.
-          // In `SceneCanvas` / `StlMesh`, we render it directly.
-          // If the model is oriented Z-up (common for 3D printing), `loadStlGeometry` might have put it on its side if it used Y for height.
-          // Let's check `loadStlGeometry` normalization: `geometry.translate(-preCenter.x, -preBBox.min.y, -preCenter.z);`
-          // This zeroes the Y minimum.
+          if (is3mf) {
+            // Use the merged+split loader: returns a single merged geometry
+            // (preserving body positions) and pre-processed individual bodies
+            // for instant "Split to Bodies".
+            const { merged, splitBodies } = await load3mfGeometryMergedWithSplitData(url, loadOptions);
 
-          // The `computeLowestZ` util takes a matrix.
-          // Default transform is identity.
-          // If we assume the model is upright after load (or we don't rotate it yet), the lowest point is 0.
+            const bbox = merged.bbox;
+            const center = merged.center;
+            const heightOffset = center.z - bbox.min.z;
+            const initialZ = autoLift ? heightOffset + liftDistance : heightOffset;
 
-          // However, `useTransformManager` uses `computeLowestZ` to find the world Z bottom.
-          // If we want to lift it, we set Z position.
+            const model: LoadedModel = {
+              id: generateId(),
+              name: file.name,
+              fileUrl: url,
+              fileSizeBytes: file.size,
+              sourcePath: (file as File & { filePath?: string }).filePath,
+              geometry: merged,
+              splitBodies: splitBodies.length > 1 ? splitBodies : undefined,
+              transform: {
+                position: new THREE.Vector3(defaultImportCenterXY.x, defaultImportCenterXY.y, initialZ),
+                rotation: new THREE.Euler(0, 0, 0),
+                scale: new THREE.Vector3(1, 1, 1),
+              },
+              visible: true,
+              color,
+              polygonCount: merged.nativePreview?.originalTriangleCount
+                ?? merged.geometry.getAttribute('position').count / 3,
+            };
 
-          // Let's calculate the default Z position.
-          // If the geometry is already normalized to sit at 0, then:
-          // platformZ = 0.
-          // liftZ = liftDistance.
+            const assignedCenter = findFreeSpotCentersForModels([...stagedNewModels, model], 5).at(-1);
+            if (assignedCenter) {
+              model.transform.position.set(assignedCenter.x, assignedCenter.y, model.transform.position.z);
+            }
 
-          // But wait, `StlMesh` applies `centerOffset` to the geometry: 
-          // `position={new THREE.Vector3(-centerOffset.x, -centerOffset.y, -centerOffset.z)}`
-          // `centerOffset` is `bbox.getCenter()`.
-          // So the mesh is centered at (0,0,0) inside the group.
-          // The group is at `transform.position`.
-          // So if we want the bottom of the mesh to be at `targetZ`, we need to know the distance from center to bottom.
-          // halfHeight = (max.z - min.z) / 2.
-          // targetGroupZ = targetZ + halfHeight.
+            stagedNewModels.push(model);
+            if (!firstLoadedModelId) firstLoadedModelId = model.id;
+            setModels((prev) => [...prev, model]);
 
-          // Wait, `useTransformManager` uses `computeLowestZ`.
-          // Let's stick to the logic that `useTransformManager` uses, but applied initially.
-          // Actually, `useTransformManager` logic:
-          // `const heightOffset = center.z - bbox.min.z;`
-          // `const finalZ = autoLift ? heightOffset + liftDistance : heightOffset;`
+            if (merged.meshDefects?.nativeRepairReport) {
+              repairReports.push({
+                id: model.id,
+                modelName: file.name,
+                report: merged.meshDefects.nativeRepairReport,
+              });
+            }
+          } else {
+            const geom = await loadMeshGeometry(url, file.name, loadOptions);
+            const bbox = geom.bbox;
+            const center = geom.center;
+            const heightOffset = center.z - bbox.min.z;
+            const initialZ = autoLift ? heightOffset + liftDistance : heightOffset;
 
-          // So we replicate that logic.
-          const bbox = geom.bbox;
-          const center = geom.center;
-          const heightOffset = center.z - bbox.min.z;
-          const initialZ = autoLift ? heightOffset + liftDistance : heightOffset;
+            const model: LoadedModel = {
+              id: generateId(),
+              name: file.name,
+              fileUrl: url,
+              fileSizeBytes: file.size,
+              sourcePath: (file as File & { filePath?: string }).filePath,
+              geometry: geom,
+              transform: {
+                position: new THREE.Vector3(defaultImportCenterXY.x, defaultImportCenterXY.y, initialZ),
+                rotation: new THREE.Euler(0, 0, 0),
+                scale: new THREE.Vector3(1, 1, 1),
+              },
+              visible: true,
+              color,
+              polygonCount: geom.nativePreview?.originalTriangleCount
+                ?? geom.geometry.getAttribute('position').count / 3,
+            };
 
-          const model: LoadedModel = {
-            id: generateId(),
-            name: file.name,
-            fileUrl: url,
-            fileSizeBytes: file.size,
-            geometry: geom,
-            transform: {
-              position: new THREE.Vector3(defaultImportCenterXY.x, defaultImportCenterXY.y, initialZ),
-              rotation: new THREE.Euler(0, 0, 0),
-              scale: new THREE.Vector3(1, 1, 1)
-            },
-            visible: true,
-            color,
-            polygonCount: geom.geometry.getAttribute('position').count / 3
-          };
+            const assignedCenter = findFreeSpotCentersForModels([...stagedNewModels, model], 5).at(-1);
+            if (assignedCenter) {
+              model.transform.position.set(assignedCenter.x, assignedCenter.y, model.transform.position.z);
+            }
 
-          const assignedCenter = findFreeSpotCentersForModels([...stagedNewModels, model], 5).at(-1);
-          if (assignedCenter) {
-            model.transform.position.set(assignedCenter.x, assignedCenter.y, model.transform.position.z);
-          }
+            stagedNewModels.push(model);
+            if (!firstLoadedModelId) firstLoadedModelId = model.id;
+            setModels((prev) => [...prev, model]);
 
-          stagedNewModels.push(model);
-          if (!firstLoadedModelId) {
-            firstLoadedModelId = model.id;
-          }
-
-          setModels((prev) => [...prev, model]);
-
-          if (geom.meshDefects?.nativeRepairReport) {
-            repairReports.push({
-              id: model.id,
-              modelName: file.name,
-              report: geom.meshDefects.nativeRepairReport,
-            });
+            if (geom.meshDefects?.nativeRepairReport) {
+              repairReports.push({
+                id: model.id,
+                modelName: file.name,
+                report: geom.meshDefects.nativeRepairReport,
+              });
+            }
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -2376,10 +2394,29 @@ export function useSceneCollectionManager() {
     // the geometry has changed (e.g. after hole punch / hollowing).  Compute it
     // only if the old geometry had one (i.e. the user has edge lines enabled),
     // and skip during deferred post-processing to avoid blocking the UI.
+    // Skip for very large meshes — EdgesGeometry uses `for...in` over a hash map
+    // of unique edges and V8 throws "Too many properties to enumerate" beyond ~2M entries.
     const hadEdgeGeometry = !!target.geometry.edgeGeometry;
-    const nextEdgeGeometry = hadEdgeGeometry && !options?.deferPostProcessing
-      ? new THREE.EdgesGeometry(nextBufferGeometry, 30)
-      : target.geometry.edgeGeometry;
+    let nextEdgeGeometry: THREE.EdgesGeometry | undefined;
+    if (hadEdgeGeometry && !options?.deferPostProcessing) {
+      const triCount = (nextBufferGeometry.getIndex()?.count ?? nextBufferGeometry.getAttribute('position')?.count ?? 0) / 3;
+      if (triCount < 800_000) {
+        try {
+          nextEdgeGeometry = new THREE.EdgesGeometry(nextBufferGeometry, 30);
+        } catch (edgeError) {
+          console.warn(
+            '[SceneCollection] Edge geometry recompute failed for large mesh',
+            edgeError,
+          );
+        }
+      } else {
+        console.warn(
+          `[SceneCollection] Skipping edge geometry recompute for large mesh (${Math.round(triCount).toLocaleString()} triangles).`,
+        );
+      }
+    } else {
+      nextEdgeGeometry = target.geometry.edgeGeometry;
+    }
 
     const nextGeometry: GeometryWithBounds = {
       geometry: nextBufferGeometry,
@@ -2555,6 +2592,42 @@ export function useSceneCollectionManager() {
         ? { ...model, groupId: undefined, groupName: undefined }
         : model
     )));
+  }, []);
+
+  /** Splits a multi-body 3MF model into independent models using the
+   *  pre-processed `splitBodies` geometries. Instant — no reprocessing. */
+  const splitImportGroup = useCallback((modelId: string) => {
+    const source = modelsRef.current.find((m) => m.id === modelId);
+    if (!source?.splitBodies || source.splitBodies.length < 2) return;
+
+    const newModels: LoadedModel[] = source.splitBodies.map((bodyGeom, i) => ({
+      id: generateId(),
+      name: `${source.name.replace(/\.3mf$/i, '')} (${i + 1})`,
+      fileUrl: source.fileUrl,
+      fileSizeBytes: source.fileSizeBytes,
+      sourcePath: source.sourcePath,
+      geometry: bodyGeom,
+      transform: {
+        position: source.transform.position.clone(),
+        rotation: source.transform.rotation.clone(),
+        scale: source.transform.scale.clone(),
+      },
+      visible: source.visible,
+      color: source.color,
+      polygonCount: bodyGeom.nativePreview?.originalTriangleCount
+        ?? bodyGeom.geometry.getAttribute('position').count / 3,
+    }));
+
+    // Remove the merged source, add individual models
+    setModels((prev) => [
+      ...prev.filter((m) => m.id !== modelId),
+      ...newModels,
+    ]);
+
+    // Select all new bodies
+    const newIds = newModels.map((m) => m.id);
+    setActiveModelId(newIds[0]);
+    setSelectedModelIds(newIds);
   }, []);
 
   const renameGroup = useCallback((groupId: string, nextName: string) => {
@@ -4019,6 +4092,11 @@ export function useSceneCollectionManager() {
       return true;
     }
 
+    // Pass the on-disk file path through to enable Rust-side STL loading.
+    if (entry.sourcePath) {
+      (file as File & { filePath?: string }).filePath = entry.sourcePath;
+    }
+
     await loadFiles([file]);
     return true;
   }, [importSceneFile, loadFiles, recentOpenedFiles]);
@@ -4347,6 +4425,7 @@ export function useSceneCollectionManager() {
     groupModels,
     ungroupModels,
     ungroupGroup,
+    splitImportGroup,
     renameGroup,
     selectGroup,
     deleteModels,

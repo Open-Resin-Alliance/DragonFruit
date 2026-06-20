@@ -16,6 +16,7 @@ import {
   Info,
   Crosshair,
   Wrench,
+  Scissors,
 } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
@@ -37,6 +38,8 @@ interface ModelManagerPanelProps {
   onGroupModels?: (modelIds: string[]) => void;
   onUngroupModels?: (modelIds: string[]) => void;
   onUngroupGroup?: (groupId: string) => void;
+  /** Splits a multi-body 3MF model into independent models (pre-computed split bodies). */
+  onSplitImportGroup?: (modelId: string) => void;
   onRenameGroup?: (groupId: string, nextName: string) => void;
   onRenameModel?: (id: string, nextName: string) => void;
   onModelContextMenu?: (id: string, position: { x: number; y: number }) => void;
@@ -93,6 +96,7 @@ export function ModelManagerPanel({
   onGroupModels,
   onUngroupModels,
   onUngroupGroup,
+  onSplitImportGroup,
   onRenameGroup,
   onRenameModel,
   onModelContextMenu,
@@ -393,6 +397,7 @@ export function ModelManagerPanel({
                 const isGroupFullySelected = selectedCount > 0 && selectedCount === group.models.length;
                 const isGroupPartiallySelected = selectedCount > 0 && !isGroupFullySelected;
                 const showHeader = group.isGrouped;
+                const showChildren = !showHeader || !isCollapsed;
 
                 return (
                   <div
@@ -405,36 +410,36 @@ export function ModelManagerPanel({
                         }
                       : undefined}
                   >
-                        {showHeader && (
-                          <div
-                            className="px-1.5 py-1 rounded border flex items-center gap-1.5 cursor-pointer transition-colors"
-                            style={isGroupFullySelected
-                              ? {
-                                  background: 'color-mix(in srgb, var(--accent), var(--surface-2) 90%)',
-                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                                }
-                              : isGroupPartiallySelected
-                                ? {
-                                    background: 'color-mix(in srgb, var(--accent), var(--surface-2) 94%)',
-                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-                                  }
-                                : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
-                            onClick={(e) => {
-                              const mode: GroupSelectMode = (e.ctrlKey || e.metaKey || e.shiftKey) ? 'add' : 'single';
-                              selectFolder(group, mode);
-                            }}
-                            onContextMenu={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setContextMenu({
-                                x: e.clientX,
-                                y: e.clientY,
-                                groupId: group.id,
-                                groupName: group.name,
-                                isSystemGroup: group.isSystemGroup,
-                              });
-                            }}
-                          >
+                    {showHeader && (
+                      <div
+                        className="px-1.5 py-1 rounded border flex items-center gap-1.5 cursor-pointer transition-colors"
+                        style={isGroupFullySelected
+                          ? {
+                              background: 'color-mix(in srgb, var(--accent), var(--surface-2) 90%)',
+                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                            }
+                          : isGroupPartiallySelected
+                            ? {
+                                background: 'color-mix(in srgb, var(--accent), var(--surface-2) 94%)',
+                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+                              }
+                            : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
+                        onClick={(e) => {
+                          const mode: GroupSelectMode = (e.ctrlKey || e.metaKey || e.shiftKey) ? 'add' : 'single';
+                          selectFolder(group, mode);
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setContextMenu({
+                            x: e.clientX,
+                            y: e.clientY,
+                            groupId: group.id,
+                            groupName: group.name,
+                            isSystemGroup: group.isSystemGroup,
+                          });
+                        }}
+                      >
                         <button
                           type="button"
                           className="inline-flex items-center justify-center rounded p-0.5 hover:bg-black/20"
@@ -492,7 +497,7 @@ export function ModelManagerPanel({
                       </div>
                     )}
 
-                    {(!showHeader || !isCollapsed) && (
+                    {showChildren && (
                       <div
                         className={showHeader ? 'ml-1.5 space-y-1 pl-1' : 'space-y-1'}
                       >
@@ -784,6 +789,24 @@ export function ModelManagerPanel({
                     <Wrench className="h-3.5 w-3.5" />
                     <span>Repair Mesh…</span>
                   </button>
+                )}
+
+                {contextModel.splitBodies && onSplitImportGroup && (
+                  <>
+                    <div className="my-1 h-px" style={{ background: 'var(--border-subtle)' }} />
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+                      style={{ color: 'var(--text-strong)' }}
+                      onClick={() => {
+                        onSplitImportGroup(contextModel.id);
+                        closeContextMenu();
+                      }}
+                    >
+                      <Scissors className="h-3.5 w-3.5" />
+                      <span>Split to Bodies</span>
+                    </button>
+                  </>
                 )}
 
                 {onModelContextMenu && (
