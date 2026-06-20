@@ -1,17 +1,12 @@
 /**
  * Organic Cut — shared types.
  *
- * This feature lets the user draw a closed loop on a model's surface, from which
- * the Rust backend builds a consistent-thickness "wafer" cutter and splits the
- * model into two printable parts.
+ * This feature lets the user draw one or more closed loops on a model's surface,
+ * from which the Rust backend builds a contour "wafer" cutter (optionally with a
+ * registration key per loop) and splits the model into its separate parts — two
+ * for a single loop, more when a multi-loop cut frees several pieces at once.
  *
- * MILESTONE M1 (current): the wafer/boolean is a no-op — the backend echoes the
- * source mesh back as both parts. These types already describe the full intended
- * contract so the plumbing doesn't change shape as the geometry is filled in.
- *
- * Everything in src/features/organicCut/ is self-contained. The only edits to
- * existing app files are four small additive seams (TransformMode union, the
- * CUT toolbar button, the page.tsx mount point, and the Rust command registry).
+ * Everything in src/features/organicCut/ is self-contained.
  */
 
 /** A single point on the loop the user draws on the model surface (local space). */
@@ -20,6 +15,13 @@ export interface OrganicCutLoopPoint {
   position: [number, number, number];
   /** Surface normal at the point (unit length, local space). */
   normal: [number, number, number];
+  /**
+   * When true, "Snap to Edges" leaves this point exactly where it is — the user
+   * pinned it (double-click a marker) because it sits where it's needed and snap
+   * would drag it off. Manual drag still moves it. FRONTEND-ONLY: it's serialized
+   * to Rust but the backend has no such field, so serde silently ignores it.
+   */
+  locked?: boolean;
 }
 
 /**
@@ -43,7 +45,34 @@ export interface OrganicCutSpec {
    * `loopPoints`). A mismatched name silently drops every point via serde default.
    */
   loopPoints: OrganicCutLoopPoint[];
-  /** Wafer thickness in mm ("consistent thickness"). Unused by the M1 no-op. */
+  /**
+   * Additional closed loops cut in the SAME operation (contour mode only). Each
+   * loop becomes its own membrane+slab; all slabs (plus `loopPoints`) are union'd
+   * into ONE cutter and differenced once, so a body joined in several places —
+   * e.g. a tail attached to the body at two posts with an air tunnel between — is
+   * freed in a single cut. Omitted/empty → the classic single-loop cut. Serde
+   * field: `extraLoops`.
+   */
+  extraLoops?: OrganicCutLoopPoint[][];
+  /**
+   * Per-loop registration-key settings, aligned with the cut's loops in order
+   * (`loopPoints` is index 0, then `extraLoops`). When present, each entry
+   * OVERRIDES the spec-level `key*` fields for that loop — so every cut gets its
+   * own peg/socket (shape, size, tilt, swap) or none (`generateKey: false`).
+   * Serde field: `loopKeys`.
+   */
+  loopKeys?: {
+    generateKey: boolean;
+    keyWidthMm: number;
+    keyDepthMm: number;
+    keyShape: 'frustum' | 'dome';
+    keyFilletMm: number;
+    keySwapSides: boolean;
+    keyTiltRad: number;
+    keyTiltAzimuthRad: number;
+    keyRollRad: number;
+  }[];
+  /** Wafer thickness in mm ("consistent thickness") — the kerf the cut removes. */
   thicknessMm: number;
   /** Seam-line smoothing 0..1 (how much the cut line rounds through waypoints). */
   smoothing: number;
@@ -139,14 +168,22 @@ export interface OrganicCutReport {
   keyKind?: 'frustum' | 'dome' | 'none';
   /** Reason the key shrank / fell back / was skipped (for an after-cut alert). */
   keyDetail?: string;
+  /**
+   * How many separate parts the cut produced. 2 for a plane/single-loop cut; more
+   * when a multi-loop cut frees several pieces (e.g. both of Squirtle's arms); 0 on
+   * a no-op. The frontend reads exactly this many parts back.
+   */
+  partCount?: number;
 }
 
 export interface OrganicCutResult {
   report: OrganicCutReport;
-  /** Part A positions as a flat triangle soup (9 floats per triangle). */
-  partA: Float32Array;
-  /** Part B positions as a flat triangle soup (9 floats per triangle). */
-  partB: Float32Array;
+  /**
+   * Every part the cut produced, in order (largest first) — each a flat triangle
+   * soup (9 floats per triangle), model-local. 2 for a normal cut; more when a
+   * multi-loop cut frees several pieces. Each is committed as its own model.
+   */
+  parts: Float32Array[];
 }
 
 /** Which drawing mode the Cutting Mode tool session is in. */

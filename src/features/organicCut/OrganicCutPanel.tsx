@@ -50,6 +50,12 @@ export interface OrganicCutPanelState {
   keyTiltAzimuthRad: number;
   /** Key roll (radians): spin about the key's own axis. Driven by the roll gizmo. */
   keyRollRad: number;
+  /**
+   * Render the translucent cut-plan preview (flat plane quad / contour membrane +
+   * registration key) in the 3D view. When off, only the seam line + loop markers
+   * draw, so the model is unobscured while drawing. On by default.
+   */
+  showPreview: boolean;
 }
 
 interface OrganicCutPanelProps {
@@ -61,6 +67,30 @@ interface OrganicCutPanelProps {
   pointCount: number;
   onClearLoop: () => void;
   onCloseLoop: () => void;
+  /**
+   * Snap the active loop's waypoints onto the model's nearest sharp edges
+   * (creases/boundaries) — for tidying points dropped roughly in a crease.
+   */
+  onSnapToEdges?: () => void;
+  /** True when snapping is possible (geometry present + at least one waypoint). */
+  canSnapToEdges?: boolean;
+  // --- Multi-loop (contour) -------------------------------------------------
+  /** Total loops in the current cut. */
+  loopCount?: number;
+  /** Index of the loop currently being edited. */
+  activeLoopIndex?: number;
+  /** Per-loop summaries (index + waypoint count + whether it has a key) for chips. */
+  loopSummaries?: { index: number; pointCount: number; hasKey: boolean }[];
+  /** Switch which loop is active (editable). */
+  onSelectLoop?: (index: number) => void;
+  /** Append a new loop and make it active. */
+  onAddLoop?: () => void;
+  /** True when a new loop can be added (active loop is already a real loop). */
+  canAddLoop?: boolean;
+  /** Remove a loop (never the last one). */
+  onRemoveLoop?: (index: number) => void;
+  /** True when there's more than one loop, so removing is allowed. */
+  canRemoveLoop?: boolean;
   onApply: () => void;
   isApplying?: boolean;
   canApply?: boolean;
@@ -90,6 +120,16 @@ export function OrganicCutPanel({
   pointCount,
   onClearLoop,
   onCloseLoop,
+  onSnapToEdges,
+  canSnapToEdges = false,
+  loopCount = 1,
+  activeLoopIndex = 0,
+  loopSummaries = [],
+  onSelectLoop,
+  onAddLoop,
+  canAddLoop = false,
+  onRemoveLoop,
+  canRemoveLoop = false,
   onApply,
   isApplying = false,
   canApply = false,
@@ -266,6 +306,34 @@ export function OrganicCutPanel({
             </div>
           </div>
 
+          {/* Show Preview: render the translucent cut-plan surfaces (plane quad /
+              membrane + key) on or off. Off → only the seam line + markers draw,
+              so the model is unobscured while drawing. */}
+          <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
+            <button
+              type="button"
+              className="flex w-full items-center justify-between gap-2 text-left"
+              onClick={() => setState({ showPreview: !state.showPreview })}
+              disabled={disabled || isApplying}
+              title="Show or hide the translucent cut preview in the 3D view. The drawn seam and points stay visible either way."
+            >
+              <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Show Preview</span>
+              <span
+                className="relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors"
+                style={{
+                  background: state.showPreview
+                    ? 'var(--accent)'
+                    : 'color-mix(in srgb, var(--text-muted), transparent 60%)',
+                }}
+              >
+                <span
+                  className="inline-block h-3 w-3 transform rounded-full bg-white transition-transform"
+                  style={{ transform: state.showPreview ? 'translateX(14px)' : 'translateX(2px)' }}
+                />
+              </span>
+            </button>
+          </div>
+
           {/* Seam-line smoothing (how much the cut line rounds through waypoints) */}
           <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
             <label className="ui-meta block" style={{ color: 'var(--text-muted)' }}>Seam Smoothing</label>
@@ -347,7 +415,9 @@ export function OrganicCutPanel({
                 disabled={disabled || isApplying}
                 title="Add a peg to one half and a matching socket to the other so the parts align when reassembled."
               >
-                <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Generate Key</span>
+                <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>
+                  Generate Key{loopCount > 1 ? ` · Loop ${activeLoopIndex + 1}` : ''}
+                </span>
                 <span
                   className="relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors"
                   style={{
@@ -553,13 +623,115 @@ export function OrganicCutPanel({
             </div>
           )}
 
+          {/* Multi-loop cut (contour only): a list of loops, each editable. Switch
+              between them to adjust any one; Cut severs them all at once. This is
+              how you free a part connected in several places — e.g. a tail joined
+              to the body at two posts with an air gap between — where a single
+              loop can't span the gap cleanly. */}
+          {isContour && (
+            <div className="rounded-md border p-2 space-y-1.5" style={cardStyle}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>
+                  Loops{loopCount > 1 ? ` (${loopCount})` : ''}
+                </span>
+                {canRemoveLoop && (
+                  <button
+                    type="button"
+                    className="ui-button ui-button-secondary !h-6 whitespace-nowrap px-1.5 text-[10px] disabled:opacity-60"
+                    onClick={() => onRemoveLoop?.(activeLoopIndex)}
+                    disabled={disabled || isApplying}
+                    title="Remove the loop you're editing."
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-1">
+                {loopSummaries.map((s) => {
+                  const isActive = s.index === activeLoopIndex;
+                  const incomplete = s.pointCount < 3;
+                  return (
+                    <button
+                      key={s.index}
+                      type="button"
+                      className="ui-button ui-button-secondary !h-7 !min-w-7 whitespace-nowrap px-1.5 text-[10px] disabled:opacity-60"
+                      onClick={() => onSelectLoop?.(s.index)}
+                      disabled={disabled || isApplying}
+                      style={
+                        isActive
+                          ? activeModeStyle
+                          : incomplete
+                            ? { borderStyle: 'dashed', color: 'var(--text-muted)' }
+                            : undefined
+                      }
+                      title={
+                        `Loop ${s.index + 1} — ${s.pointCount} point${s.pointCount === 1 ? '' : 's'}` +
+                        (s.hasKey ? ', keyed' : '') +
+                        (incomplete ? ' (needs 3+ to cut)' : '') +
+                        (isActive ? ' — editing' : ' — click to edit')
+                      }
+                    >
+                      <span className="inline-flex items-center gap-0.5">
+                        {s.index + 1}
+                        {s.hasKey && (
+                          <span
+                            aria-hidden
+                            className="inline-block h-1.5 w-1.5 rounded-full"
+                            style={{ background: isActive ? 'currentColor' : 'var(--accent)' }}
+                            title="This loop has a registration key"
+                          />
+                        )}
+                      </span>
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-7 !min-w-7 whitespace-nowrap px-1.5 text-[11px] disabled:opacity-60"
+                  onClick={onAddLoop}
+                  disabled={disabled || isApplying || !canAddLoop}
+                  title="Add another loop and start drawing it. On Cut, every loop is cut together — use it to free a part attached in several places (e.g. a tail joined at two posts)."
+                >
+                  +
+                </button>
+              </div>
+              {loopCount > 1 && (
+                <div className="ui-meta leading-snug" style={{ color: 'var(--text-muted)' }}>
+                  Cut severs all loops at once. Click a number to edit that loop —
+                  its key settings (below) and waypoints are its own. A dot marks a
+                  loop that has a key.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Snap to edges (waypoint mode): pull every waypoint onto the model's
+              nearest sharp crease/boundary, for tidying points placed roughly in
+              a fold. No-op when the model has no sharp edges. */}
+          {state.drawMode === 'waypoint' && (
+            <button
+              type="button"
+              className="ui-button ui-button-secondary w-full !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
+              onClick={onSnapToEdges}
+              disabled={disabled || isApplying || !canSnapToEdges}
+              title="Nudge every waypoint onto the model's nearest sharp edge (crease or boundary), preferring a corner where several edges meet — for points placed roughly in a crease or corner. Does nothing on a smooth model with no sharp edges. Double-click a waypoint to lock it (white cage) so snap leaves it where it is."
+            >
+              Snap to edges
+            </button>
+          )}
+          {state.drawMode === 'waypoint' && (
+            <div className="text-[9px] sm:text-[10px] text-neutral-400 leading-tight text-center -mt-1">
+              Double-click a waypoint to lock it from snapping.
+            </div>
+          )}
+
           {/* Actions */}
           <div className="flex gap-2">
             <button
               type="button"
               className="ui-button ui-button-secondary flex-1 !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight disabled:opacity-60"
               onClick={onClearLoop}
-              disabled={disabled || isApplying || pointCount === 0}
+              disabled={disabled || isApplying || !loopSummaries.some((s) => s.pointCount > 0)}
             >
               Clear
             </button>

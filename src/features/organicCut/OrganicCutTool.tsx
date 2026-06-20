@@ -48,6 +48,12 @@ interface OrganicCutToolProps {
   /** Select a waypoint (click a marker), or null to clear (click elsewhere). */
   onSelectPoint?: (index: number | null) => void;
   /**
+   * Toggle a waypoint's locked (pinned) state — double-click a marker. A locked
+   * point is left untouched by Snap to Edges, so a point sitting exactly where
+   * it's needed can't be dragged off onto a nearby edge.
+   */
+  onToggleLockPoint?: (index: number) => void;
+  /**
    * Hover state over a WAYPOINT marker (hover-to-arm for right-click delete).
    * Null when not over a marker; otherwise the hovered waypoint index. The host
    * arms a "Delete waypoint" menu from this on right-click.
@@ -59,6 +65,12 @@ interface OrganicCutToolProps {
    * the surface. Null until ≥2 points / outside Tauri.
    */
   geodesicPolyline?: Float32Array | null;
+  /**
+   * Seam polylines (flat xyz, model-local) of the INACTIVE loops in a multi-loop
+   * cut. Drawn dimmed so the user sees every loop the Cut will sever, alongside the
+   * active loop being drawn/edited. Empty/undefined when there's only one loop.
+   */
+  inactiveLoopPolylines?: Float32Array[];
   /**
    * Flat vs contour cut. In `contour` mode the flat-plane preview is hidden (the
    * cut follows the curved seam, so a flat quad would be misleading) and only the
@@ -88,6 +100,13 @@ interface OrganicCutToolProps {
   keyTiltRad?: number;
   keyTiltAzimuthRad?: number;
   keyRollRad?: number;
+  /**
+   * Show the translucent cut-plan preview surfaces (the flat plane quad, the
+   * contour membrane + its wireframe, and the registration key). When false,
+   * only the seam line + loop markers (the editable handles) draw, so the model
+   * is unobscured. Default true.
+   */
+  showPreview?: boolean;
 }
 
 /** Max key tilt (radians) — mirrors the Rust `KEY_MAX_TILT_RAD` (~60°). */
@@ -126,8 +145,10 @@ export function OrganicCutTool({
   onLineClick,
   selectedIndex = null,
   onSelectPoint,
+  onToggleLockPoint,
   onMarkerHoverChange,
   geodesicPolyline,
+  inactiveLoopPolylines,
   cutMode = 'plane',
   membranePreview,
   keyPreview,
@@ -135,6 +156,7 @@ export function OrganicCutTool({
   keyTiltRad = 0,
   keyTiltAzimuthRad = 0,
   keyRollRad = 0,
+  showPreview = true,
 }: OrganicCutToolProps) {
   const activeModel = useMemo(() => models.find((m) => m.id === activeModelId), [models, activeModelId]);
   const transform = activeTransform || activeModel?.transform;
@@ -212,6 +234,39 @@ export function OrganicCutTool({
     line.renderOrder = 999;
     return line;
   }, [loopPositions]);
+
+  // Dimmed seam lines for the INACTIVE loops of a multi-loop cut. Each is drawn
+  // closed (the geodesic omits the repeated final point) in a muted green so it
+  // reads as an inactive loop next to the bright active one.
+  const inactiveSeamLines = useMemo(() => {
+    if (!inactiveLoopPolylines || inactiveLoopPolylines.length === 0) return [];
+    return inactiveLoopPolylines
+      .map((poly) => {
+        if (!poly || poly.length < 6) return null;
+        const positions = Array.from(poly);
+        // Close the loop: append the first vertex if the end isn't already on it.
+        if (poly.length >= 9) {
+          const dx = positions[positions.length - 3] - positions[0];
+          const dy = positions[positions.length - 2] - positions[1];
+          const dz = positions[positions.length - 1] - positions[2];
+          if (dx * dx + dy * dy + dz * dz > 1e-10) {
+            positions.push(positions[0], positions[1], positions[2]);
+          }
+        }
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        const material = new THREE.LineBasicMaterial({
+          color: 0x1f9e54,
+          depthTest: false,
+          transparent: true,
+          opacity: 0.7,
+        });
+        const line = new THREE.Line(geom, material);
+        line.renderOrder = 994;
+        return line;
+      })
+      .filter((l): l is THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial> => l !== null);
+  }, [inactiveLoopPolylines]);
 
   // Two tubes along the seam from a shared curve: a THIN visible `glow` tube (the
   // hover highlight) and a WIDER invisible `hit` tube (the pointer/right-click
@@ -704,7 +759,7 @@ export function OrganicCutTool({
         )}
 
         {/* Contour membrane preview: the exact curved cutter surface. */}
-        {membraneGeometry && (
+        {showPreview && membraneGeometry && (
           <mesh geometry={membraneGeometry} renderOrder={997} frustumCulled={false}>
             <meshBasicMaterial
               color={0x37ff7a}
@@ -717,7 +772,7 @@ export function OrganicCutTool({
         )}
 
         {/* Wireframe overlay so the triangulation (grid remesh) is visible. */}
-        {membraneWireframe && (
+        {showPreview && membraneWireframe && (
           <lineSegments geometry={membraneWireframe} renderOrder={998} frustumCulled={false}>
             <lineBasicMaterial
               color={0xcccccc}
@@ -739,7 +794,7 @@ export function OrganicCutTool({
             key instantly with no Rust round-trip. Wrapped in a group carrying that
             matrix (identity when un-tilted). It's CLIPPED at the wafer so only the
             portion going into the body (part_b side) shows — not the overhang above. */}
-        {keyGeometry && (
+        {showPreview && keyGeometry && (
           <group
             matrixAutoUpdate={false}
             ref={(g) => {
@@ -777,7 +832,7 @@ export function OrganicCutTool({
         )}
 
         {/* Live translucent cut-plane preview (what the slice will look like). */}
-        {planePreview && (
+        {showPreview && planePreview && (
           <mesh
             position={planePreview.position}
             quaternion={planePreview.quat}
@@ -796,11 +851,14 @@ export function OrganicCutTool({
 
         {/* Placed loop points. First point is green (closure target), rest amber.
             Dragging → cyan. SELECTED → blue (the waypoint Delete/right-click will
-            remove). Each marker is draggable: a press that moves repositions it; a
-            press that doesn't is a select. */}
+            remove). A LOCKED (pinned) point wears a white wireframe cage and won't
+            be moved by Snap to Edges. Each marker is draggable: a press that moves
+            repositions it; a press that doesn't is a select; a double-click toggles
+            the lock. */}
         {loop.map((p, idx) => {
           const isDragging = draggingIndex === idx;
           const isSelected = selectedIndex === idx;
+          const isLocked = !!p.locked;
           const color = isSelected
             ? 0x0091ff
             : isDragging
@@ -825,6 +883,7 @@ export function OrganicCutTool({
                 onPointerMove={handleMarkerPointerMove}
                 onPointerUp={endDrag}
                 onPointerCancel={endDrag}
+                onDoubleClick={(e) => { e.stopPropagation(); onToggleLockPoint?.(idx); }}
                 onPointerOver={(e) => { handleMarkerPointerOver(e); onMarkerHoverChange?.(idx); }}
                 onPointerOut={() => { handleMarkerPointerOut(); onMarkerHoverChange?.(null); }}
               >
@@ -836,9 +895,22 @@ export function OrganicCutTool({
                 <sphereGeometry args={[markerRadius, 16, 16]} />
                 <meshBasicMaterial color={color} depthTest={false} transparent opacity={0.95} />
               </mesh>
+              {/* Locked (pinned) cage: a white wireframe sphere — orientation-free,
+                  so it reads as "pinned" from any angle — that Snap to Edges spares. */}
+              {isLocked && (
+                <mesh renderOrder={1003} scale={scale}>
+                  <sphereGeometry args={[markerRadius * 1.9, 10, 8]} />
+                  <meshBasicMaterial color={0xffffff} wireframe depthTest={false} transparent opacity={0.85} />
+                </mesh>
+              )}
             </group>
           );
         })}
+
+        {/* Inactive multi-loop seams (dimmed), drawn behind the active loop. */}
+        {inactiveSeamLines.map((line, i) => (
+          <primitive key={`inactive-seam-${i}`} object={line} />
+        ))}
 
         {/* Connecting polyline through the points (and closing segment). */}
         {loopLine && <primitive object={loopLine} />}

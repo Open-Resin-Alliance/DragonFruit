@@ -18149,19 +18149,19 @@ export default function Home() {
     activeGeometry: scene.activeModel?.geometry.geometry ?? null,
     activeGeometryKey: scene.activeModel?.id ?? null,
     isDraggingPoint: organicCutDragging,
-    commitParts: React.useCallback((partA: THREE.BufferGeometry, partB: THREE.BufferGeometry) => {
+    commitParts: React.useCallback((parts: THREE.BufferGeometry[]) => {
       const target = scene.activeModel;
       if (!target) {
         // eslint-disable-next-line no-console
         console.warn('[organicCut] commitParts: no active model');
         return false;
       }
-      // ONE atomic split — replacing + adding as two separate calls races on
-      // stale state and deletes a piece.
-      const newId = scene.splitModelInTwo(target.id, partA, partB, 'Organic Cut');
+      // ONE atomic split — replacing + adding as separate calls races on stale
+      // state and deletes a piece. A multi-loop cut may hand us >2 parts.
+      const newIds = scene.splitModelIntoParts(target.id, parts, 'Organic Cut');
       // eslint-disable-next-line no-console
-      console.info(`[organicCut] commitParts OK | partB newModelId=${newId ?? 'null'}`);
-      return newId != null;
+      console.info(`[organicCut] commitParts OK | parts=${parts.length} newModelIds=${newIds?.join(',') ?? 'null'}`);
+      return newIds != null;
     }, [scene]),
   });
 
@@ -18925,6 +18925,16 @@ export default function Home() {
                 pointCount={organicCut.pointCount}
                 onClearLoop={organicCut.clearLoop}
                 onCloseLoop={organicCut.closeLoop}
+                onSnapToEdges={organicCut.snapActiveLoopToEdges}
+                canSnapToEdges={organicCut.canSnapToEdges}
+                loopCount={organicCut.loopCount}
+                activeLoopIndex={organicCut.activeLoopIndex}
+                loopSummaries={organicCut.loopSummaries}
+                onSelectLoop={organicCut.selectLoop}
+                onAddLoop={organicCut.addLoop}
+                canAddLoop={organicCut.canAddLoop}
+                onRemoveLoop={organicCut.removeLoop}
+                canRemoveLoop={organicCut.canRemoveLoop}
                 onApply={organicCut.apply}
                 isApplying={organicCut.isApplying}
                 canApply={organicCut.canApply}
@@ -19562,7 +19572,7 @@ export default function Home() {
             onOrganicCutClick={organicCutToolActive ? handleOrganicCutClick : undefined}
             organicCutDragging={organicCutDragging}
             organicCutKeyGizmo={
-              organicCutToolActive && organicCut.panelState.cutMode === 'contour' ? (
+              organicCutToolActive && organicCut.panelState.cutMode === 'contour' && organicCut.panelState.showPreview ? (
                 <OrganicCutKeyGizmo
                   models={scene.models}
                   activeModelId={displayActiveModelId}
@@ -19883,8 +19893,10 @@ export default function Home() {
                 onLineClick={handleOrganicCutLineClick}
                 selectedIndex={organicCut.selectedIndex}
                 onSelectPoint={organicCut.selectPoint}
+                onToggleLockPoint={organicCut.toggleLockPoint}
                 onMarkerHoverChange={handleOrganicCutMarkerHoverChange}
                 geodesicPolyline={organicCut.geodesicPolyline}
+                inactiveLoopPolylines={organicCut.inactiveLoopPolylines}
                 cutMode={organicCut.panelState.cutMode}
                 membranePreview={organicCut.membranePreview}
                 keyPreview={organicCut.keyPreview}
@@ -19892,6 +19904,7 @@ export default function Home() {
                 keyTiltRad={organicCut.panelState.keyTiltRad}
                 keyTiltAzimuthRad={organicCut.panelState.keyTiltAzimuthRad}
                 keyRollRad={organicCut.panelState.keyRollRad}
+                showPreview={organicCut.panelState.showPreview}
               />
             )}
             {scene.mode === 'prepare' && transformMgr.transformMode === 'mirror' && (

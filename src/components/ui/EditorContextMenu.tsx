@@ -16,21 +16,21 @@ import {
 /** Menu item shape, re-exported so feature callers can build custom item lists. */
 export type EditorMenuItemDef = {
   id: EditorMenuAction;
-  label: string;
+  label: ReturnType<typeof msg>;
   icon: LucideIcon;
 };
 
 /** Convenience: the "Add waypoint here" item for the Organic Cut tool. */
 export const ORGANIC_CUT_ADD_WAYPOINT_ITEM: EditorMenuItemDef = {
   id: 'organic-cut-add-waypoint',
-  label: 'Add waypoint here',
+  label: msg`Add waypoint here`,
   icon: Plus,
 };
 
 /** Convenience: the "Delete waypoint" item for the Organic Cut tool. */
 export const ORGANIC_CUT_DELETE_WAYPOINT_ITEM: EditorMenuItemDef = {
   id: 'organic-cut-delete-waypoint',
-  label: 'Delete waypoint',
+  label: msg`Delete waypoint`,
   icon: Trash2,
 };
 
