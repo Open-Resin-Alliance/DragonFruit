@@ -5,7 +5,7 @@ import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { subscribe, getSnapshot, addKnot, addLeaf } from '../../state';
 import { pushHistory } from '@/history/historyStore';
 import type { SnapTarget } from '../../interaction/SnappingManager';
-import type { Vec3, Knot } from '../../types';
+import type { Vec3, Knot, Joint, Segment } from '../../types';
 import { leafPlacementStore, useLeafPlacementState } from './leafPlacementState';
 import { LEAF_HOTKEY_REARM_EVENT } from './useLeafPlacement';
 import { buildLeafData } from './leafBuilder';
@@ -45,7 +45,7 @@ const _upVec = new THREE.Vector3();
 const _planeHit = new THREE.Vector3();
 
 export function LeafPlacementController() {
-    const { isActive, stage, tipPosition, surfaceNormal, modelId, placementSurface } = useLeafPlacementState();
+    const { isActive, stage, tipPosition, surfaceNormal, modelId, placementSurface, sproutParentingLockHeld } = useLeafPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const kickstandState = useKickstandStoreState();
     const { getHotkey } = useHotkeyConfig();
@@ -75,7 +75,7 @@ export function LeafPlacementController() {
     }, [scene, modelId]);
 
     const allTargets = useMemo(() => {
-        if (stage !== 'awaitingBase') return [];
+        if (stage !== 'awaitingBase' && !(stage === 'idle' && sproutParentingLockHeld)) return [];
 
         return [
             ...buildSupportPathSnapTargets(supportState, {
@@ -90,6 +90,7 @@ export function LeafPlacementController() {
         ];
     }, [
         stage,
+        sproutParentingLockHeld,
         placementSurface,
         supportState.trunks,
         supportState.branches,
@@ -196,13 +197,13 @@ export function LeafPlacementController() {
         const liveActive = snap.hotkeyActive || snap.stage === 'awaitingBase' || snap.stage === 'awaitingSproutTip';
         const liveStage = snap.stage;
 
-        if (liveActive && liveStage === 'idle') {
+        if (liveActive && liveStage === 'idle' && !snap.sproutParentingLockHeld) {
             // Hover dot is updated immediately by useLeafPlacement.onModelHover.
             // Skip redundant per-frame mesh raycasts to reduce cursor trailing.
             return;
         }
 
-        if (!liveActive || (liveStage !== 'awaitingBase' && liveStage !== 'awaitingSproutTip')) {
+        if (!liveActive || (liveStage !== 'awaitingBase' && liveStage !== 'awaitingSproutTip' && !(liveStage === 'idle' && snap.sproutParentingLockHeld))) {
             lastPreviewSignatureRef.current = null;
             return;
         }
@@ -243,13 +244,8 @@ export function LeafPlacementController() {
             }
         }
 
-        if (!currentTipPos || !currentNormal) {
-            lastPreviewSignatureRef.current = null;
-            return;
-        }
-
-        const finalTipPos = currentTipPos as Vec3;
-        const finalNormal = currentNormal as Vec3;
+        const finalTipPos = currentTipPos as Vec3 | null;
+        const finalNormal = currentNormal as Vec3 | null;
 
         let knotPos: Vec3 | null = null;
         let segmentId = 'free';
@@ -411,7 +407,7 @@ export function LeafPlacementController() {
                         }
                     }
 
-                    if (!knotPos) {
+                    if (!knotPos && finalTipPos) {
                         _buildPlate.set(_upVec.set(0, 0, 1), 0);
                         if (raycaster.ray.intersectPlane(_buildPlate, _planeHit)) {
                             const dx = _planeHit.x - finalTipPos.x;
@@ -426,6 +422,11 @@ export function LeafPlacementController() {
                     leafPlacementStore.setSnapTarget(null);
                 }
             }
+        }
+
+        if (!finalTipPos || !finalNormal) {
+            lastPreviewSignatureRef.current = null;
+            return;
         }
 
         if (knotPos) {
@@ -511,7 +512,7 @@ export function LeafPlacementController() {
     });
 
     useEffect(() => {
-        if (!isActive || (stage !== 'awaitingBase' && stage !== 'awaitingSproutTip')) return;
+        if (!isActive) return;
 
         const handleClick = (e: MouseEvent) => {
             if (shouldSuppressContactDiskHudPlacementCommit()) {
@@ -520,19 +521,195 @@ export function LeafPlacementController() {
                 return;
             }
             const snap = leafPlacementStore.getSnapshot();
-            let parentKnot: Knot | null = null;
-            let hostDiameterMm: number | undefined = undefined;
 
+            // Click 1 (Anchor Lock)
+            if (stage === 'idle' && snap.sproutParentingLockHeld) {
+                const snapTarget = leafPlacementStore.getSnapTarget();
+                if (!snapTarget) return;
+
+                const clickPos = snapTarget.snappedPos;
+
+                const getDistance = (a: Vec3, b: Vec3) => {
+                    const dx = a.x - b.x;
+                    const dy = a.y - b.y;
+                    const dz = a.z - b.z;
+                    return Math.sqrt(dx * dx + dy * dy + dz * dz);
+                };
+
+                // Search knots
+                let closestKnot: Knot | null = null;
+                let minKnotDist = Infinity;
+                for (const knot of Object.values(supportState.knots)) {
+                    const dist = getDistance(clickPos, knot.pos);
+                    if (dist < minKnotDist) {
+                        minKnotDist = dist;
+                        closestKnot = knot;
+                    }
+                }
+
+                if (closestKnot && minKnotDist < 3.0) {
+                    leafPlacementStore.setJunctionHub(closestKnot.id, false);
+                    leafPlacementStore.setStage('awaitingSproutTip');
+                } else {
+                    // Search joints
+                    let closestJoint: Joint | null = null;
+                    let closestJointSeg: Segment | null = null;
+                    let minJointDist = Infinity;
+                    let isBottom = false;
+
+                    for (const trunk of Object.values(supportState.trunks)) {
+                        for (const seg of trunk.segments) {
+                            if (seg.bottomJoint) {
+                                const dist = getDistance(clickPos, seg.bottomJoint.pos);
+                                if (dist < minJointDist) {
+                                    minJointDist = dist;
+                                    closestJoint = seg.bottomJoint;
+                                    closestJointSeg = seg;
+                                    isBottom = true;
+                                }
+                            }
+                            if (seg.topJoint) {
+                                const dist = getDistance(clickPos, seg.topJoint.pos);
+                                if (dist < minJointDist) {
+                                    minJointDist = dist;
+                                    closestJoint = seg.topJoint;
+                                    closestJointSeg = seg;
+                                    isBottom = false;
+                                }
+                            }
+                        }
+                    }
+                    for (const branch of Object.values(supportState.branches)) {
+                        for (const seg of branch.segments) {
+                            if (seg.bottomJoint) {
+                                const dist = getDistance(clickPos, seg.bottomJoint.pos);
+                                if (dist < minJointDist) {
+                                    minJointDist = dist;
+                                    closestJoint = seg.bottomJoint;
+                                    closestJointSeg = seg;
+                                    isBottom = true;
+                                }
+                            }
+                            if (seg.topJoint) {
+                                const dist = getDistance(clickPos, seg.topJoint.pos);
+                                if (dist < minJointDist) {
+                                    minJointDist = dist;
+                                    closestJoint = seg.topJoint;
+                                    closestJointSeg = seg;
+                                    isBottom = false;
+                                }
+                            }
+                        }
+                    }
+
+                    if (closestJoint && minJointDist < 3.0) {
+                        const newKnotId = generateUuid();
+                        const newKnot: Knot = {
+                            id: newKnotId,
+                            parentShaftId: closestJointSeg!.id,
+                            t: isBottom ? 0.0 : 1.0,
+                            pos: closestJoint.pos,
+                            diameter: closestJoint.diameter,
+                        };
+                        addKnot(newKnot);
+                        leafPlacementStore.setJunctionHub(newKnotId, true);
+                        leafPlacementStore.setStage('awaitingSproutTip');
+                    } else {
+                        // Create knot on the segment at snappedPos
+                        const newKnotId = generateUuid();
+                        const segmentId = snapTarget.targetId;
+                        const committedKnotIsOnTwig = !!twigBySegmentId.get(segmentId);
+                        const hostDiameterMm = snapTarget.hostDiameterMm ?? getSettings().shaft.diameterMm;
+                        const committedKnotDiameter = committedKnotIsOnTwig
+                            ? twigJointDiameterForLocalDiameter(hostDiameterMm)
+                            : hostDiameterMm + 0.1;
+
+                        const newKnot: Knot = {
+                            id: newKnotId,
+                            parentShaftId: segmentId,
+                            t: snapTarget.t,
+                            pos: snapTarget.snappedPos,
+                            diameter: committedKnotDiameter,
+                        };
+                        addKnot(newKnot);
+                        leafPlacementStore.setJunctionHub(newKnotId, true);
+                        leafPlacementStore.setStage('awaitingSproutTip');
+                    }
+                }
+
+                e.stopPropagation();
+                e.preventDefault();
+                return;
+            }
+
+            // Click 2+ (Sprout Leaf)
             if (stage === 'awaitingSproutTip') {
-                if (!snap.junctionHubId) return;
-                parentKnot = supportState.knots[snap.junctionHubId] ?? null;
-                hostDiameterMm = parentKnot?.diameter;
-            } else {
+                if (!snap.junctionHubId || !tipPosition || !surfaceNormal) return;
+                const parentKnot = supportState.knots[snap.junctionHubId];
+                if (!parentKnot) return;
+                const hostDiameterMm = parentKnot.diameter;
+                if (!hostDiameterMm) return;
+
+                const settings = getSettings();
+                const maxAngleDeg = settings.shaft.maxAngleDeg ?? 80;
+                const v = new THREE.Vector3(
+                    tipPosition.x - parentKnot.pos.x,
+                    tipPosition.y - parentKnot.pos.y,
+                    tipPosition.z - parentKnot.pos.z
+                );
+                const angleFromUpDeg = v.lengthSq() < 0.000001 ? 0 : THREE.MathUtils.radToDeg(v.angleTo(new THREE.Vector3(0, 0, 1)));
+
+                const epsilonZ = 0.0001;
+                if (parentKnot.pos.z > tipPosition.z + epsilonZ) return;
+                if (angleFromUpDeg > maxAngleDeg) return;
+
+                const { leaf } = buildLeafData({
+                    tipPos: tipPosition,
+                    surfaceNormal,
+                    modelId,
+                    parentKnot,
+                    hostDiameterMm,
+                    mesh: resolveTipMesh(tipPosition),
+                });
+                const markedLeaf = placementSurface
+                    ? {
+                        ...leaf,
+                        contactCone: markContactPlacementSurface(leaf.contactCone, placementSurface),
+                    }
+                    : leaf;
+
+                addLeaf(markedLeaf);
+
+                // Reload pattern: create new knot at the same position and lock junctionHubId to it
+                const newParentKnotId = generateUuid();
+                const newParentKnot: Knot = {
+                    ...parentKnot,
+                    id: newParentKnotId,
+                };
+                addKnot(newParentKnot);
+                leafPlacementStore.setJunctionHub(newParentKnotId, true);
+
+                pushHistory({
+                    type: SUPPORT_ADD_LEAF,
+                    payload: {
+                        leaf: markedLeaf,
+                        knot: snap.junctionHubIsNew ? parentKnot : undefined,
+                    },
+                });
+
+                clearSupportSelection();
+                e.stopPropagation();
+                e.preventDefault();
+                return;
+            }
+
+            // Standard placement (Click 2 of normal mode)
+            if (stage === 'awaitingBase') {
                 const snapTarget = leafPlacementStore.getSnapTarget();
                 if (!snapTarget || !tipPosition || !surfaceNormal) return;
                 if (snapTarget.t === undefined) return;
 
-                hostDiameterMm = snapTarget.hostDiameterMm;
+                const hostDiameterMm = snapTarget.hostDiameterMm;
                 if (!hostDiameterMm) return;
 
                 const segmentId = snapTarget.targetId;
@@ -541,93 +718,106 @@ export function LeafPlacementController() {
                     ? twigJointDiameterForLocalDiameter(hostDiameterMm)
                     : hostDiameterMm + 0.1;
 
-                parentKnot = {
+                const parentKnot: Knot = {
                     id: generateUuid(),
                     parentShaftId: segmentId,
                     t: snapTarget.t,
                     pos: snapTarget.snappedPos,
                     diameter: committedKnotDiameter,
                 };
-            }
 
-            if (!parentKnot || !tipPosition || !surfaceNormal || !hostDiameterMm) return;
+                const settings = getSettings();
+                const maxAngleDeg = settings.shaft.maxAngleDeg ?? 80;
+                const v = new THREE.Vector3(
+                    tipPosition.x - parentKnot.pos.x,
+                    tipPosition.y - parentKnot.pos.y,
+                    tipPosition.z - parentKnot.pos.z
+                );
+                const angleFromUpDeg = v.lengthSq() < 0.000001 ? 0 : THREE.MathUtils.radToDeg(v.angleTo(new THREE.Vector3(0, 0, 1)));
 
-            const settings = getSettings();
-            const maxAngleDeg = settings.shaft.maxAngleDeg ?? 80;
-            const v = new THREE.Vector3(
-                tipPosition.x - parentKnot.pos.x,
-                tipPosition.y - parentKnot.pos.y,
-                tipPosition.z - parentKnot.pos.z
-            );
-            const angleFromUpDeg = v.lengthSq() < 0.000001 ? 0 : THREE.MathUtils.radToDeg(v.angleTo(new THREE.Vector3(0, 0, 1)));
+                const epsilonZ = 0.0001;
+                if (parentKnot.pos.z > tipPosition.z + epsilonZ) return;
+                if (angleFromUpDeg > maxAngleDeg) return;
 
-            const epsilonZ = 0.0001;
-            if (parentKnot.pos.z > tipPosition.z + epsilonZ) return;
-            if (angleFromUpDeg > maxAngleDeg) return;
-
-            const { leaf } = buildLeafData({
-                tipPos: tipPosition,
-                surfaceNormal,
-                modelId,
-                parentKnot,
-                hostDiameterMm,
-                mesh: resolveTipMesh(tipPosition),
-            });
-            const markedLeaf = placementSurface
-                ? {
-                    ...leaf,
-                    contactCone: markContactPlacementSurface(leaf.contactCone, placementSurface),
-                }
-                : leaf;
-
-            if (stage === 'awaitingBase') {
-                addKnot(parentKnot);
-            }
-            addLeaf(markedLeaf);
-
-            pushHistory({
-                type: SUPPORT_ADD_LEAF,
-                payload: {
-                    leaf: markedLeaf,
-                    knot: stage === 'awaitingBase' ? parentKnot : undefined,
-                },
-            });
-
-            if (stage === 'awaitingBase' && snap.sproutParentingLockHeld) {
-                leafPlacementStore.setJunctionHub(parentKnot.id, true);
-                leafPlacementStore.setStage('awaitingSproutTip');
-                leafPlacementStore.updateFanningTip(null as any, null as any);
-                leafPlacementStore.finalize();
-            } else if (stage === 'awaitingSproutTip') {
-                leafPlacementStore.updateFanningTip(null as any, null as any);
-                leafPlacementStore.finalize();
-            } else {
-                leafPlacementStore.finalize();
-                leafPlacementStore.reset();
-            }
-
-            if (
-                canResolveSupportPlacementBindingFromModifierState(leafBinding)
-                && isSupportPlacementBindingSatisfiedByModifierState(leafBinding, getSupportPlacementModifierState(e))
-            ) {
-                leafPlacementStore.setHotkeyActive(false);
-                if (rearmFrameRef.current !== null) {
-                    cancelAnimationFrame(rearmFrameRef.current);
-                }
-                rearmFrameRef.current = requestAnimationFrame(() => {
-                    rearmFrameRef.current = null;
-                    window.dispatchEvent(new Event(LEAF_HOTKEY_REARM_EVENT));
+                const { leaf } = buildLeafData({
+                    tipPos: tipPosition,
+                    surfaceNormal,
+                    modelId,
+                    parentKnot,
+                    hostDiameterMm,
+                    mesh: resolveTipMesh(tipPosition),
                 });
-            }
-            clearSupportSelection();
+                const markedLeaf = placementSurface
+                    ? {
+                        ...leaf,
+                        contactCone: markContactPlacementSurface(leaf.contactCone, placementSurface),
+                    }
+                    : leaf;
 
-            e.stopPropagation();
-            e.preventDefault();
+                addKnot(parentKnot);
+                addLeaf(markedLeaf);
+
+                pushHistory({
+                    type: SUPPORT_ADD_LEAF,
+                    payload: {
+                        leaf: markedLeaf,
+                        knot: parentKnot,
+                    },
+                });
+
+                if (snap.sproutParentingLockHeld) {
+                    const reloadKnotId = generateUuid();
+                    const reloadKnot: Knot = {
+                        ...parentKnot,
+                        id: reloadKnotId,
+                    };
+                    addKnot(reloadKnot);
+                    leafPlacementStore.setJunctionHub(reloadKnotId, true);
+                    leafPlacementStore.setStage('awaitingSproutTip');
+                    leafPlacementStore.updateFanningTip(null as any, null as any);
+                    leafPlacementStore.finalize();
+                } else {
+                    leafPlacementStore.finalize();
+                    leafPlacementStore.reset();
+                }
+
+                if (
+                    canResolveSupportPlacementBindingFromModifierState(leafBinding)
+                    && isSupportPlacementBindingSatisfiedByModifierState(leafBinding, getSupportPlacementModifierState(e))
+                ) {
+                    leafPlacementStore.setHotkeyActive(false);
+                    if (rearmFrameRef.current !== null) {
+                        cancelAnimationFrame(rearmFrameRef.current);
+                    }
+                    rearmFrameRef.current = requestAnimationFrame(() => {
+                        rearmFrameRef.current = null;
+                        window.dispatchEvent(new Event(LEAF_HOTKEY_REARM_EVENT));
+                    });
+                }
+                clearSupportSelection();
+
+                e.stopPropagation();
+                e.preventDefault();
+            }
         };
 
         window.addEventListener('click', handleClick, true);
         return () => window.removeEventListener('click', handleClick, true);
-    }, [isActive, stage, tipPosition, surfaceNormal, modelId, placementSurface, leafBinding, resolveTipMesh, supportState.knots, twigBySegmentId]);
+    }, [
+        isActive,
+        stage,
+        tipPosition,
+        surfaceNormal,
+        modelId,
+        placementSurface,
+        leafBinding,
+        resolveTipMesh,
+        supportState.knots,
+        supportState.trunks,
+        supportState.branches,
+        twigBySegmentId,
+        sproutParentingLockHeld,
+    ]);
 
     useEffect(() => {
         if (!isActive) {
