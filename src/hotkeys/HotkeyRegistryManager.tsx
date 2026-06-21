@@ -5,6 +5,19 @@ import { hotkeyStore, isActionActiveSync } from './hotkeyStore';
 import { useHotkeyConfig } from './HotkeyContext';
 
 // Monkey-patch EventTarget.prototype.addEventListener to block/warn keydown/keyup listeners from forbidden paths
+let selfChunkName = '';
+try {
+    const stack = new Error().stack || '';
+    const lines = stack.split('\n');
+    for (const line of lines) {
+        const match = line.match(/([^/\\]+\.(?:_\.)?js|HotkeyRegistryManager\.tsx)/);
+        if (match && !match[0].includes('node_modules') && !match[0].includes('next-devtools')) {
+            selfChunkName = match[1];
+            break;
+        }
+    }
+} catch (e) {}
+
 if (typeof EventTarget !== 'undefined') {
     const originalAddEventListener = EventTarget.prototype.addEventListener;
     EventTarget.prototype.addEventListener = function (
@@ -42,7 +55,8 @@ if (typeof EventTarget !== 'undefined') {
                     frame.includes('HotkeyRegistryManager.tsx') ||
                     frame.includes('hotkeyStore.ts') ||
                     frame.includes('addEventListener') ||
-                    (hijackChunk && frame.includes(hijackChunk))
+                    (hijackChunk && frame.includes(hijackChunk)) ||
+                    (selfChunkName && frame.includes(selfChunkName))
                 ) {
                     continue;
                 }
@@ -54,6 +68,7 @@ if (typeof EventTarget !== 'undefined') {
                 return (
                     normalized.includes('hotkeyStore.ts') ||
                     normalized.includes('HotkeyRegistryManager.tsx') ||
+                    (selfChunkName && normalized.includes(selfChunkName)) ||
                     normalized.includes('/__tests__/') ||
                     normalized.includes('.test.ts') ||
                     normalized.includes('.test.tsx') ||
@@ -64,7 +79,10 @@ if (typeof EventTarget !== 'undefined') {
                     normalized.includes('async_hooks') ||
                     normalized.includes('chrome-extension://') ||
                     normalized.includes('moz-extension://') ||
-                    normalized.includes('safari-extension://')
+                    normalized.includes('safari-extension://') ||
+                    normalized.includes('next-devtools') ||
+                    normalized.includes('webpack') ||
+                    normalized.includes('hot-dev-client')
                 );
             };
 

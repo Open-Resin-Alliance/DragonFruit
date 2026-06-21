@@ -721,6 +721,7 @@ export function SupportPlacementPreviewLayer({
     kickstandPlacementPreview = null,
 }: SupportPlacementPreviewLayerProps) {
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
+    const { sproutParentingLockHeld, stage: leafStage } = useLeafPlacementState();
 
     const placementPreviewBatches = useMemo(() => {
         if (mode !== 'support') return [] as PlacementPreviewBatch[];
@@ -839,11 +840,27 @@ export function SupportPlacementPreviewLayer({
                     {batch.joints.length > 0 && (
                         <InstancedJointGroup
                             joints={batch.joints}
-                            color={batch.color}
-                            emissive={batch.color}
-                            emissiveIntensity={0.08}
+                            color={
+                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                    ? '#00ff00'
+                                    : batch.color
+                            }
+                            emissive={
+                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                    ? '#00ff00'
+                                    : batch.color
+                            }
+                            emissiveIntensity={
+                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                    ? 0.5
+                                    : 0.08
+                            }
                             transparent
-                            opacity={batch.opacity}
+                            opacity={
+                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                    ? 0.70
+                                    : batch.opacity
+                            }
                             widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
                             heightSegments={BATCHED_JOINT_HEIGHT_SEGMENTS}
                         />
@@ -4440,11 +4457,27 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     {batch.joints.length > 0 && (
                         <InstancedJointGroup
                             joints={batch.joints}
-                            color={batch.color}
-                            emissive={batch.color}
-                            emissiveIntensity={0.08}
+                            color={
+                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                    ? '#00ff00'
+                                    : batch.color
+                            }
+                            emissive={
+                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                    ? '#00ff00'
+                                    : batch.color
+                            }
+                            emissiveIntensity={
+                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                    ? 0.5
+                                    : 0.08
+                            }
                             transparent
-                            opacity={batch.opacity}
+                            opacity={
+                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                    ? 0.70
+                                    : batch.opacity
+                            }
                             widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
                             heightSegments={BATCHED_JOINT_HEIGHT_SEGMENTS}
                         />
