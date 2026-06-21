@@ -2,16 +2,21 @@ msgid ""
 msgstr ""
 "POT-Creation-Date: 2026-06-12 14:32-0700\n"
 "MIME-Version: 1.0\n"
-"Content-Type: text/plain; charset=utf-8\n"
+"Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "X-Generator: @lingui/cli\n"
 "Language: de\n"
-"Project-Id-Version: \n"
+"Project-Id-Version: dragonfruit\n"
 "Report-Msgid-Bugs-To: \n"
-"PO-Revision-Date: \n"
+"PO-Revision-Date: 2026-06-21 01:45\n"
 "Last-Translator: \n"
-"Language-Team: \n"
-"Plural-Forms: \n"
+"Language-Team: German\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"X-Crowdin-Project: dragonfruit\n"
+"X-Crowdin-Project-ID: 905733\n"
+"X-Crowdin-Language: de\n"
+"X-Crowdin-File: /dev/src/locales/en.po\n"
+"X-Crowdin-File-ID: 22\n"
 
 #: src/components/layout/EmptySceneState.tsx:52
 msgid "{deltaDays}d"
@@ -19,7 +24,7 @@ msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:45
 #~ msgid "{deltaDays}d ago"
-#~ msgstr ""
+#~ msgstr "{deltaDays}d ago"
 
 #: src/components/layout/EmptySceneState.tsx:48
 msgid "{deltaHours}h"
@@ -27,7 +32,7 @@ msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:42
 #~ msgid "{deltaHours}h ago"
-#~ msgstr ""
+#~ msgstr "{deltaHours}h ago"
 
 #: src/components/layout/EmptySceneState.tsx:44
 msgid "{deltaMin}m"
@@ -35,11 +40,11 @@ msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:39
 #~ msgid "{deltaMin}m ago"
-#~ msgstr ""
+#~ msgstr "{deltaMin}m ago"
 
 #: src/app/page.tsx:3529
 msgid "Add Joint"
-msgstr "Verbindung hinzufügen"
+msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:522
 msgid "Add or switch printer anytime from the top bar."
@@ -55,7 +60,7 @@ msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:27
 msgid "Arrange"
-msgstr "Anordnen"
+msgstr ""
 
 #: src/components/layout/TopBar.tsx:610
 msgid "Arrange model and transforms"
@@ -63,7 +68,7 @@ msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:27
 msgid "Auto-arrange models on plate"
-msgstr "Modelle automatisch auf der Platte anordnen"
+msgstr ""
 
 #. Badge shown in the top of the empty workspace when the app is a beta build. Uppercase label.
 #: src/components/layout/EmptySceneState.tsx:432
@@ -85,7 +90,7 @@ msgstr ""
 
 #: src/components/ui/EditorContextMenu.tsx:48
 msgid "Copy"
-msgstr "Kopieren"
+msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:381
 #: src/components/layout/EmptySceneState.tsx:384
@@ -94,7 +99,7 @@ msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:25
 msgid "Create cavity or open-face shell"
-msgstr "Hohlraum oder offene Schale erstellen"
+msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:71
 msgid "Currently displaying nothing at maximum fidelity."
@@ -102,11 +107,11 @@ msgstr ""
 
 #: src/components/ui/EditorContextMenu.tsx:47
 msgid "Cut"
-msgstr "Ausschneiden"
+msgstr ""
 
 #: src/components/ui/EditorContextMenu.tsx:46
 msgid "Delete"
-msgstr "Löschen"
+msgstr ""
 
 #. Paraphrase of Yoda's line from Star Wars: The Empire Strikes Back (1980): "Do or do not. There is no try."
 #: src/components/layout/EmptySceneState.tsx:76
@@ -124,11 +129,11 @@ msgstr ""
 #: src/app/page.tsx:3535
 #: src/components/ui/EditorContextMenu.tsx:85
 msgid "Editor"
-msgstr "Editor"
+msgstr ""
 
 #: src/components/ui/EditorContextMenu.tsx:82
 msgid "Editor context menu"
-msgstr "Editor-Kontextmenü"
+msgstr ""
 
 #. Paraphrase of "Elementary, my dear Watson", the line associated with Sherlock Holmes (Arthur Conan Doyle stories; multiple film and TV adaptations).
 #: src/components/layout/EmptySceneState.tsx:87
@@ -157,7 +162,7 @@ msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:25
 msgid "Hollow"
-msgstr "Aushöhlen"
+msgstr ""
 
 #. Paraphrase of Walter White's line from Breaking Bad, S04E06 "Cornered": "I am the one who knocks."
 #: src/components/layout/EmptySceneState.tsx:79
@@ -208,7 +213,7 @@ msgstr ""
 #: src/components/layout/EmptySceneState.tsx:33
 #: src/components/layout/EmptySceneState.tsx:36
 #~ msgid "just now"
-#~ msgstr ""
+#~ msgstr "just now"
 
 #: src/components/layout/EmptySceneState.tsx:516
 msgid "Keep going without a printer. You can add one later."
@@ -217,24 +222,25 @@ msgstr ""
 #. Prefix before a relative time string, e.g. "last opened 5m ago". The time part is a separate translated string.
 #: src/components/layout/EmptySceneState.tsx:643
 #~ msgid "last opened"
-#~ msgstr ""
+#~ msgstr "last opened"
 
 #. Shows when a recent file was last accessed. {0} is a translated relative time (e.g. "just now", "5m ago"). Place {0} wherever the time fits in your language.
 #: src/components/layout/EmptySceneState.tsx:644
 #~ msgid "last opened {0}"
-#~ msgstr ""
+#~ msgstr "last opened {0}"
 
 #: src/components/layout/EmptySceneState.tsx:653
 msgid "last opened {period} ago"
 msgstr ""
 
+# Shows when a recent file was last accessed. {relativeOpenedAt} is a translated relative time (e.g. "just now", "5m ago"). Place {relativeOpenedAt} wherever the time fits in your language.
 #: src/components/layout/EmptySceneState.tsx:644
 #~ msgid "last opened {relativeOpenedAt}"
-#~ msgstr ""
+#~ msgstr "last opened {relativeOpenedAt}"
 
 #: src/components/layout/EmptySceneState.tsx:644
 #~ msgid "last opened {timeAgo}"
-#~ msgstr ""
+#~ msgstr "last opened {timeAgo}"
 
 #: src/components/layout/EmptySceneState.tsx:652
 msgid "last opened just now"
@@ -264,19 +270,19 @@ msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:24
 msgid "Mirror"
-msgstr "Spiegeln"
+msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:24
 msgid "Mirror across X, Y, or Z"
-msgstr "An X, Y oder Z spiegeln"
+msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:22
 msgid "Modify"
-msgstr "Ändern"
+msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:22
 msgid "Move, rotate, and scale"
-msgstr "Verschieben, drehen und skalieren"
+msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:606
 msgid "No recent files yet."
@@ -298,7 +304,7 @@ msgstr ""
 #. Toolbar button label. Short for "lay the model flat on a selected face"; keep it terse so the toolbar pill stays narrow.
 #: src/components/controls/TransformToolbar.tsx:23
 msgid "On-Face"
-msgstr "Auf Fläche"
+msgstr ""
 
 #. Paraphrase of Boromir's line from The Lord of the Rings: The Fellowship of the Ring (2001): "One does not simply walk into Mordor."
 #: src/components/layout/EmptySceneState.tsx:83
@@ -311,11 +317,11 @@ msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:23
 msgid "Orient flat against plate"
-msgstr "Flach auf der Platte ausrichten"
+msgstr ""
 
 #: src/components/ui/EditorContextMenu.tsx:49
 msgid "Paste"
-msgstr "Einfügen"
+msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:457
 msgid "Please hang tight while we prepare your scene."
@@ -344,7 +350,7 @@ msgstr ""
 
 #: src/components/ui/EditorContextMenu.tsx:50
 msgid "Repair"
-msgstr "Reparieren"
+msgstr ""
 
 #. Paraphrase of Doc Brown's line from Back to the Future (1985): "Roads? Where we're going, we don't need roads."
 #: src/components/layout/EmptySceneState.tsx:88
@@ -362,19 +368,19 @@ msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:26
 msgid "Sculpt and smooth surface"
-msgstr "Oberfläche modellieren und glätten"
+msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:21
 msgid "Select"
-msgstr "Auswählen"
+msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:21
 msgid "Select and inspect model"
-msgstr "Modell auswählen und untersuchen"
+msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:26
 msgid "Smooth"
-msgstr "Glätten"
+msgstr ""
 
 #: src/components/layout/TopBar.tsx:615
 msgid "Support"
@@ -382,7 +388,7 @@ msgstr ""
 
 #: src/app/page.tsx:3535
 msgid "Supports"
-msgstr "Stützen"
+msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:67
 msgid "Suspiciously empty in here."
@@ -420,7 +426,7 @@ msgstr ""
 
 #: src/app/page.tsx:3524
 msgid "Toggle Curve"
-msgstr "Kurve umschalten"
+msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:695
 msgid "Unsupported File Type"
@@ -469,3 +475,4 @@ msgstr ""
 #: src/components/layout/EmptySceneState.tsx:69
 msgid "Zero polygons. Infinite potential."
 msgstr ""
+
