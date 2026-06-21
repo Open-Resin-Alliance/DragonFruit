@@ -58,7 +58,7 @@ export function persistLocale(locale: Locale): void {
 
 // Dynamically load and activate a compiled locale catalog.
 export async function loadLocale(locale: Locale): Promise<void> {
-  const { messages } = await import(`./locales/${locale}/messages`);
+  const { messages } = await import(`./locales/${locale}.js`);
   i18n.load(locale, messages);
   i18n.activate(locale);
 }

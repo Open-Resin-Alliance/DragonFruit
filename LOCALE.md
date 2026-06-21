@@ -9,12 +9,12 @@ plugin transforms them at build time.
 
 ## Catalogs
 
-Each locale lives in `src/locales/<locale>/`:
+Each locale is a pair of files directly under `src/locales/`:
 
-- `messages.po` — the editable catalog (one per locale). This is the source of
+- `<locale>.po` — the editable catalog (one per locale). This is the source of
   truth that translators edit. There is **no `.pot` template**: with Lingui's PO
   format the per-locale `.po` files are written directly.
-- `messages.js` — the **compiled** catalog, generated from the `.po` and imported
+- `<locale>.js` — the **compiled** catalog, generated from the `.po` and imported
   by the runtime (`loadLocale()`). It is a build artifact derived from the `.po`.
 
 ## Local workflow
@@ -44,10 +44,9 @@ everything automatically — no local tokens or CLI needed.
 
 ### How it works
 
-When `en/messages.po` changes on `dev`, Crowdin picks up the new source
-strings. When translators finish, Crowdin opens a PR with the updated `.po`
-files into `dev`. Merge it, run `npm run i18n:compile`, and the new
-translations are live.
+When `en.po` changes on `dev`, Crowdin picks up the new source strings. When
+translators finish, Crowdin opens a PR with the updated `.po` files into `dev`.
+Merge it, run `npm run i18n:compile`, and the new translations are live.
 
 **Local devs never need a token.** The only local step:
 
@@ -63,6 +62,25 @@ git push               # Crowdin picks up the source changes
 Head to **[translate.dragonfruit-slicer.com](https://translate.dragonfruit-slicer.com/)**
 to contribute translations for Spanish, German, French, or request a new
 locale.
+
+### Promoting a language to the app
+
+Crowdin can host many target languages for translators, but a language only
+ships in the app once it is deliberately promoted. Two independent gates keep
+half-finished locales out of both the repo and the UI:
+
+1. **Crowdin to repo.** Configure the Crowdin project to export only languages
+   above a completeness threshold (for example 90%). Translators can still work
+   on any language, but only sufficiently complete ones land in the repo as
+   `.po` files, instead of dozens of near-empty catalogs.
+2. **Repo to app.** A language is only usable once its code is added to
+   `locales` in `lingui.config.ts` and to `SUPPORTED_LOCALES` / `LOCALE_LABELS`
+   in `src/i18n.ts`. A `.po` file for a locale that is not listed there is
+   harmless dead weight: it is never compiled and never appears in the switcher.
+
+To promote a language: confirm its `.po` is reasonably complete and merged, add
+its code to the three places above, run `npm run i18n:compile` (Node 22+), and
+commit the regenerated `<locale>.js` catalog.
 
 ## Choosing the language at runtime
 
