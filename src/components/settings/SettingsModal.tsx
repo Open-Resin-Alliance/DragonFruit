@@ -950,8 +950,8 @@ export function SettingsModal({
   useEffect(() => {
     if (!isOpen) return;
 
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+    const onKeyDown = (e: CustomEvent) => {
+      if (e.detail.key !== 'Escape') return;
       if (showThemeDeleteConfirm) {
         handleCancelThemeDeleteConfirm();
         return;
@@ -971,8 +971,8 @@ export function SettingsModal({
       handleCancel();
     };
 
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('app-hotkey-keydown', onKeyDown as EventListener);
+    return () => window.removeEventListener('app-hotkey-keydown', onKeyDown as EventListener);
   }, [
     isOpen,
     handleCancel,

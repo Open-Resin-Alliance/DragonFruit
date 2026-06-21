@@ -358,17 +358,17 @@ export function TopBar({
       closeAppMenu();
     };
 
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+    const handleEscape = (event: CustomEvent) => {
+      if (event.detail.key === 'Escape') {
         closeAppMenu();
       }
     };
 
     window.addEventListener('mousedown', handlePointerDown);
-    window.addEventListener('keydown', handleEscape);
+    window.addEventListener('app-hotkey-keydown', handleEscape as EventListener);
     return () => {
       window.removeEventListener('mousedown', handlePointerDown);
-      window.removeEventListener('keydown', handleEscape);
+      window.removeEventListener('app-hotkey-keydown', handleEscape as EventListener);
     };
   }, [closeAppMenu, isAppMenuOpen]);
 
@@ -387,17 +387,17 @@ export function TopBar({
       closePrinterQuickMenu();
     };
 
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+    const handleEscape = (event: CustomEvent) => {
+      if (event.detail.key === 'Escape') {
         closePrinterQuickMenu();
       }
     };
 
     window.addEventListener('mousedown', handlePointerDown);
-    window.addEventListener('keydown', handleEscape);
+    window.addEventListener('app-hotkey-keydown', handleEscape as EventListener);
     return () => {
       window.removeEventListener('mousedown', handlePointerDown);
-      window.removeEventListener('keydown', handleEscape);
+      window.removeEventListener('app-hotkey-keydown', handleEscape as EventListener);
     };
   }, [closePrinterQuickMenu, isPrinterQuickMenuOpen]);
 

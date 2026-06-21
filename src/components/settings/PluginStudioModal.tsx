@@ -3468,8 +3468,8 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
   React.useEffect(() => {
     if (!isOpen) return;
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+    const onKeyDown = (event: CustomEvent) => {
+      if (event.detail.key !== 'Escape') return;
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation?.();
@@ -3480,8 +3480,8 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
       setShowExitConfirm(true);
     };
 
-    window.addEventListener('keydown', onKeyDown, true);
-    return () => window.removeEventListener('keydown', onKeyDown, true);
+    window.addEventListener('app-hotkey-keydown', onKeyDown as EventListener, true);
+    return () => window.removeEventListener('app-hotkey-keydown', onKeyDown as EventListener, true);
   }, [isOpen, showExitConfirm]);
 
   React.useEffect(() => {

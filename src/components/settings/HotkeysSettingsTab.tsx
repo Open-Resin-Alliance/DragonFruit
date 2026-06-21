@@ -127,6 +127,7 @@ export function HotkeysSettingsTab() {
       setRecordingKey(null);
     };
 
+    (handleKeyDown as any).__isHotkeySystemInternal = true;
     window.addEventListener('keydown', handleKeyDown, true); // Capture phase to prevent other app hotkeys
     return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [recordingKey, config, updateHotkey]);

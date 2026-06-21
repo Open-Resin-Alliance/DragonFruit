@@ -46,7 +46,7 @@ if (typeof EventTarget !== 'undefined') {
                     normalized.includes('.test.tsx') ||
                     normalized.includes('.spec.ts') ||
                     normalized.includes('.spec.tsx') ||
-                    normalized.includes('/node_modules/') ||
+                    normalized.includes('node_modules') ||
                     normalized.includes('node:internal') ||
                     normalized.includes('async_hooks') ||
                     normalized.includes('chrome-extension://') ||

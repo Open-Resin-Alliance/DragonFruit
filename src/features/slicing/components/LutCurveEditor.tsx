@@ -932,12 +932,13 @@ export function LutCurveEditorModal({
 
   useEffect(() => {
     if (!isOpen) return;
-    const handler = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      const tagName = target?.tagName;
-      const isTypingTarget = tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT' || !!target?.isContentEditable;
+    const handler = (e: CustomEvent) => {
+      const detail = e.detail;
+      const key = detail.key;
+      const code = detail.code;
+      const shiftKey = detail.shiftKey;
 
-      if (e.key === 'Escape') {
+      if (key === 'Escape') {
         e.preventDefault();
         if (showRenameDialog) {
           handleCancelRename();
@@ -959,11 +960,9 @@ export function LutCurveEditorModal({
         return;
       }
 
-      if (showCreateDialog || showRenameDialog || showDeleteConfirm || showDiscardConfirm || isTypingTarget || selectedIdx === null) return;
+      if (showCreateDialog || showRenameDialog || showDeleteConfirm || showDiscardConfirm || selectedIdx === null) return;
 
-      const step = e.shiftKey ? 0.05 : 0.01;
-      const key = e.key;
-      const code = e.code;
+      const step = shiftKey ? 0.05 : 0.01;
       switch (key) {
         case 'ArrowLeft':
         case 'Left':
@@ -1009,8 +1008,8 @@ export function LutCurveEditorModal({
           break;
       }
     };
-    window.addEventListener('keydown', handler, true);
-    return () => window.removeEventListener('keydown', handler, true);
+    window.addEventListener('app-hotkey-keydown', handler as EventListener, true);
+    return () => window.removeEventListener('app-hotkey-keydown', handler as EventListener, true);
   }, [
     handleCancelDelete,
     handleCancelDiscardClose,

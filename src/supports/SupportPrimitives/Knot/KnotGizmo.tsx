@@ -2,7 +2,7 @@ import React, { useSyncExternalStore, useCallback, useRef, useEffect } from 'rea
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { ScreenSpaceGizmo } from '@/components/gizmo/ScreenSpaceGizmo';
-import { isKeyPressed } from '../../../hotkeys/globalKeys';
+import { isKeyPressedSync } from '@/hotkeys/hotkeyStore';
 import {
     subscribe,
     getSnapshot,
@@ -452,7 +452,7 @@ export function KnotGizmo() {
         const projectedAtStart = projectOntoSegment(raycaster.ray, result.start, result.end);
         dragProjectionOffsetTRef.current = currentT - projectedAtStart.t;
 
-        const shiftHeld = isKeyPressed('shift');
+        const shiftHeld = isKeyPressedSync('shift');
         const isGroup = !shiftHeld;
 
         const w = getKnotGizmoWindowState() as any;

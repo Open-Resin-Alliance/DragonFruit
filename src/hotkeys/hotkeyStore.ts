@@ -137,3 +137,12 @@ export function useActionActive(category: string, action: string): boolean {
     );
 }
 
+export function useKeyPressed(key: string): boolean {
+    return useSyncExternalStore(
+        hotkeyStore.subscribe,
+        () => isKeyPressedSync(key),
+        () => false
+    );
+}
+
+
