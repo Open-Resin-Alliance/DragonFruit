@@ -490,28 +490,19 @@ export function KickstandPlacementController() {
     useEffect(() => {
         const handleShaftClick = (event: Event) => {
             const detail = (event as CustomEvent<ShaftClickDetail>).detail;
-            console.log('[Kickstand Click] handleShaftClick triggered', { segmentId: detail?.segmentId, hasPoint: !!detail?.point });
             if (!detail?.segmentId) return;
 
             const modifierState = getSupportPlacementModifierState(detail.intersection);
             const intent = resolveSupportPlacementHotkeyIntent(placementBindings, modifierState);
-            console.log('[Kickstand Click] modifierState & intent', { modifierState, intent });
 
             const leafActive = leafPlacementStore.isActive() || intent.family === 'leaf';
-            console.log('[Kickstand Click] leafActive check', {
-                leafActive,
-                storeActive: leafPlacementStore.isActive(),
-                snapshot: leafPlacementStore.getSnapshot()
-            });
             if (leafActive) return;
 
             const kickstandIntentActive = kickstandPlacementStore.getSnapshot().hotkeyActive || intent.family === 'kickstand';
-            console.log('[Kickstand Click] kickstandIntentActive check', { kickstandIntentActive, storeActive: kickstandPlacementStore.getSnapshot().hotkeyActive });
             if (!kickstandIntentActive) return;
 
             const meta = targetMetaById.get(detail.segmentId);
             const path = meta?.target.pathSegment;
-            console.log('[Kickstand Click] meta check', { hasMeta: !!meta, hasPath: !!path });
             if (!meta || !path) return;
 
             let projectedT: number;
@@ -548,13 +539,11 @@ export function KickstandPlacementController() {
             const rootPos = snapDecision.rootPos;
 
             const isOccupied = isGridRootOccupied(rootPos, meta.modelId);
-            console.log('[Kickstand Click] occupancy check', { rootPos, isOccupied });
             if (isOccupied) {
                 return;
             }
 
             const { build } = buildPlacementFromSnap(meta, clampedT, projectedPos, rootPos);
-            console.log('[Kickstand Click] committing build', build);
 
             addKickstand(build);
             addRoot(build.root);

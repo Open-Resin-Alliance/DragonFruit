@@ -4,9 +4,9 @@ import { resolveSupportPlacementRouting } from '../interaction/shared/placement/
 import type { SupportPlacementHotkeyBindings, SupportPlacementModifierState, SupportPlacementRoutingState } from '../interaction/shared/placement/hotkeys/supportPlacementHotkeyTypes';
 
 const defaultBindings: SupportPlacementHotkeyBindings = {
-    branchFamily: { key: 'Alt' },
-    leaf: { key: 'Alt', modifier: 'ctrl' },
-    kickstand: { key: 'Control' }
+    branchFamily: { key: 'Alt', description: '' },
+    leaf: { key: 'Alt', modifier: 'ctrl', description: '' },
+    kickstand: { key: 'Control', description: '' }
 };
 
 const defaultModifierState: SupportPlacementModifierState = {
