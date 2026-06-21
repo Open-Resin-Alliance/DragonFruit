@@ -5,23 +5,23 @@
   "private": true,
   "scripts": {
     "sync:version": "node scripts/sync-app-version.mjs",
-    "postversion": "npm run sync:version",
+    "postversion": "pnpm run sync:version",
     "generate:builtin-simple-plugins": "node scripts/generate-builtin-simple-plugins.mjs",
     "generate:plugin-registry": "node scripts/generate-plugin-registry.mjs",
     "check:plugin-allowlist": "node scripts/check-complex-plugin-allowlist.mjs",
     "check:generated-plugin-registry": "node scripts/verify-generated-plugin-registry.mjs",
     "predev:once": "node scripts/build-thumbnail-providers.mjs",
-    "predev": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins",
-    "prebuild": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins",
-    "prebuild:tauri": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins",
-    "pretauri:dev": "npm run sync:version",
-    "pretauri:build": "npm run sync:version",
-    "pretauri:bundle": "npm run sync:version",
-    "pretauri:bundle:windows": "npm run sync:version",
-    "pretauri:bundle:linux": "npm run sync:version",
-    "pretauri:bundle:macos": "npm run sync:version",
-    "pretauri:bundle:macos:arm64": "npm run sync:version",
-    "pretauri:bundle:macos:universal": "npm run sync:version",
+    "predev": "pnpm run generate:plugin-registry && pnpm run generate:builtin-simple-plugins",
+    "prebuild": "pnpm run generate:plugin-registry && pnpm run generate:builtin-simple-plugins",
+    "prebuild:tauri": "pnpm run generate:plugin-registry && pnpm run generate:builtin-simple-plugins",
+    "pretauri:dev": "pnpm run sync:version",
+    "pretauri:build": "pnpm run sync:version",
+    "pretauri:bundle": "pnpm run sync:version",
+    "pretauri:bundle:windows": "pnpm run sync:version",
+    "pretauri:bundle:linux": "pnpm run sync:version",
+    "pretauri:bundle:macos": "pnpm run sync:version",
+    "pretauri:bundle:macos:arm64": "pnpm run sync:version",
+    "pretauri:bundle:macos:universal": "pnpm run sync:version",
     "dev": "next dev -p 3005",
     "nas": "next dev -p 3005 --webpack",
     "build": "next build",
@@ -73,8 +73,10 @@
     "react-dom": "19.2.0",
     "react-markdown": "^10.1.0",
     "three": "^0.181.0",
+    "three-mesh-bvh": "^0.8.3",
     "three-stdlib": "^2.36.1",
-    "uuid": "^13.0.0"
+    "uuid": "^13.0.0",
+    "zustand": "^5.0.8"
   },
   "devDependencies": {
     "@lingui/cli": "^6.3.0",
@@ -86,6 +88,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/three": "^0.181.0",
     "babel-plugin-react-compiler": "1.0.0",
     "baseline-browser-mapping": "^2.9.4",
     "eslint": "^9.39.3",
@@ -96,5 +99,6 @@
   },
   "overrides": {
     "minimatch": "^10.2.2"
-  }
+  },
+  "packageManager": "pnpm@11.8.0+sha512.c1f5e7c4cb241c8f174b743851d82f42b802324afc8b0f116b96adb15aa06664948dde36960a3ba1079ba5b4b29dd0140135b94b5b5f5263592249d68e555f26"
 }

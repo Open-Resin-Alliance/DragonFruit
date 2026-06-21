@@ -80,6 +80,57 @@ import {
 } from '@/utils/modelBounds';
 import { computeProjectedFootprintHull, computeProjectedFootprintSize } from '@/utils/modelFootprint';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { bytesToBase64, base64ToBytes } from '@/utils/base64';
+import { snapshotGeometryPositions, geometryFromSnapshot } from '@/utils/geometrySnapshot';
+import {
+  getDirectionScaleFactor,
+  getRadialScaleFactor,
+  getUniformScaleFactorForThickness,
+  worldMmToLocalMm,
+  computeVoxelResolution,
+} from '@/utils/geometryScaling';
+import { serializeHollowingModifier } from '@/features/hollowing/hollowingSerialize';
+import type {
+  HollowPreviewState,
+  HollowPreviewCacheEntry,
+  HollowingSourceEntry,
+  CavityGeometryEntry,
+} from '@/features/hollowing/hollowingPreviewTypes';
+import {
+  createHolePunchWorldFrame,
+  cloneHolePunchWorldFrame,
+  inferOpenFaceFromHit,
+  type HolePunchWorldFrame,
+  type HolePunchPlacementState,
+} from '@/features/hole-punching/holePunchGeometry';
+import {
+  toPersistedHolePunchPlacements,
+  fromPersistedHolePunchPlacements,
+  serializeHolePunchPlacements,
+  serializeSingleHolePunchPlacement,
+} from '@/features/hole-punching/holePunchPersistence';
+import {
+  buildGeometryVersionKey,
+  createGeometryFromPreviewPositions,
+  disposeHollowPreviewCacheEntry,
+  disposeHollowPreviewGeometryIfUncached,
+} from '@/features/hollowing/hollowingPreviewCache';
+import {
+  formatPrintingMonitorEstimatedTime,
+  formatPrintingMonitorUsedMaterial,
+  formatPrintingMonitorAreaMm2,
+  parsePrintingMonitorSeconds,
+  parsePrintingMonitorMaterialMl,
+  parsePrintingMonitorAreaMm2,
+  normalizePrintingMonitorWebcamAspectRatio,
+  resolvePrintingMonitorAbsoluteUrl,
+} from '@/features/printing/printingMonitorFormat';
+import {
+  readJsonObject,
+  readBooleanField,
+  readStringField,
+  readNumberField,
+} from '@/utils/jsonFields';
 import { getPluginSceneOverlayLoader } from '@/features/plugins/pluginRegistry';
 import {
   type HullCacheEntry,
@@ -416,250 +467,6 @@ type HomeKickstandCollectionsSnapshot = Pick<
   'kickstands' | 'roots' | 'knots'
 >;
 
-type HollowPreviewState = {
-  modelId: string;
-  geometry: THREE.BufferGeometry;
-  infillGeometry: THREE.BufferGeometry | null;
-  removedVoxelCenters: Float32Array;
-  removedVoxelIndices: Uint32Array;
-  blockedVoxelCenters?: Float32Array;
-  report: HollowReport;
-  previewKey: string;
-  /** When true, the geometry is the original source mesh and the cavity
-   *  should be visualized as spheres at removedVoxelCenters instead. */
-  previewVoxelSpheres?: boolean;
-};
-
-type HollowPreviewCacheEntry = {
-  modelId: string;
-  report: HollowReport;
-  positions: Float32Array;
-  infillPositions?: Float32Array;
-  removedVoxelCenters?: Float32Array;
-  removedVoxelIndices?: Uint32Array;
-  blockedVoxelCenters?: Float32Array;
-  previewGeometry?: THREE.BufferGeometry | null;
-  infillGeometry?: THREE.BufferGeometry | null;
-};
-
-type HollowingSourceEntry = {
-  geometry: THREE.BufferGeometry;
-};
-
-/** Stores the per-model interior cavity surface mesh for Interior View Mode. */
-type CavityGeometryEntry = {
-  geometry: THREE.BufferGeometry;
-};
-
-type HolePunchPlacementState = {
-  id: string;
-  modelId: string;
-  worldPoint: THREE.Vector3;
-  worldNormal: THREE.Vector3;
-  worldFrame?: HolePunchWorldFrame;
-  localPoint: THREE.Vector3;
-  localNormal: THREE.Vector3;
-  radiusMm: number;
-  radiusYMm?: number;
-  depthMm: number;
-  depthMode: 'manual' | 'auto';
-};
-
-type HolePunchWorldFrame = {
-  xAxis: THREE.Vector3;
-  yAxis: THREE.Vector3;
-  zAxis: THREE.Vector3;
-};
-
-const HOLE_PUNCH_FRAME_REFERENCE_X = new THREE.Vector3(1, 0, 0);
-const HOLE_PUNCH_FRAME_REFERENCE_Z = new THREE.Vector3(0, 0, 1);
-
-function createHolePunchWorldFrame(worldNormal: THREE.Vector3): HolePunchWorldFrame {
-  const yAxis = worldNormal.clone();
-  if (yAxis.lengthSq() <= 1e-12) {
-    yAxis.set(0, 0, -1);
-  } else {
-    yAxis.normalize();
-  }
-  const displayY = yAxis.clone().negate();
-  const upReference = Math.abs(displayY.dot(HOLE_PUNCH_FRAME_REFERENCE_Z)) < 0.92
-    ? HOLE_PUNCH_FRAME_REFERENCE_Z.clone()
-    : HOLE_PUNCH_FRAME_REFERENCE_X.clone();
-  const displayZ = upReference
-    .sub(displayY.clone().multiplyScalar(upReference.dot(displayY)))
-    .normalize();
-  const xAxis = displayY.clone().cross(displayZ).normalize();
-  const zAxis = displayZ.negate();
-  return { xAxis, yAxis, zAxis };
-}
-
-function cloneHolePunchWorldFrame(frame: HolePunchWorldFrame): HolePunchWorldFrame {
-  return {
-    xAxis: frame.xAxis.clone(),
-    yAxis: frame.yAxis.clone(),
-    zAxis: frame.zAxis.clone(),
-  };
-}
-
-function normalizeDirectionTuple(x: number, y: number, z: number): [number, number, number] {
-  const dir = new THREE.Vector3(x, y, z);
-  if (dir.lengthSq() <= 1e-12) {
-    return [0, 0, -1];
-  }
-  dir.normalize();
-  return [dir.x, dir.y, dir.z];
-}
-
-function toPersistedHolePunchPlacements(
-  model: { geometry: GeometryWithBounds; transform?: ModelTransform },
-  placements: HolePunchPlacementState[],
-): ModelHolePunchPlacement[] {
-  const geometry = model.geometry.geometry;
-  const bbox = geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
-    geometry.getAttribute('position') as THREE.BufferAttribute,
-  );
-  const size = bbox.getSize(new THREE.Vector3());
-  const toNorm = (value: number, min: number, span: number) => (span <= 1e-9 ? 0.5 : (value - min) / span);
-
-  // When a model transform is available, derive localPoint/localNormal from
-  // worldPoint/worldNormal at serialization time so they always stay consistent
-  // with the model's current transform — even if the draft state has drifted
-  // (e.g. after gizmo manipulation). When transform is unavailable (legacy
-  // callers like hollow-apply that only pass a bare geometry), fall back to
-  // the stored localPoint/localNormal in the draft state.
-  let inverseModelMatrix: THREE.Matrix4 | null = null;
-  let inverseNormalMatrix: THREE.Matrix3 | null = null;
-  if (model.transform) {
-    const meshMatrix = new THREE.Matrix4()
-      .compose(
-        model.transform.position.clone(),
-        quaternionFromGlobalEuler(model.transform.rotation),
-        model.transform.scale.clone(),
-      )
-      .multiply(new THREE.Matrix4().makeTranslation(
-        -model.geometry.center.x,
-        -model.geometry.center.y,
-        -model.geometry.center.z,
-      ));
-    inverseModelMatrix = meshMatrix.clone().invert();
-
-    const normalMatrix = new THREE.Matrix3().getNormalMatrix(meshMatrix);
-    inverseNormalMatrix = normalMatrix.clone().invert();
-  }
-
-  return placements.map((placement) => {
-    let localPoint: THREE.Vector3;
-    let localNormal: THREE.Vector3;
-    if (inverseModelMatrix && inverseNormalMatrix) {
-      // Derive from world-space values — always consistent with current transform.
-      localPoint = placement.worldPoint.clone().applyMatrix4(inverseModelMatrix);
-      localNormal = placement.worldNormal
-        .clone()
-        .applyMatrix3(inverseNormalMatrix)
-        .normalize();
-    } else {
-      // Fallback: use stored values (legacy path).
-      localPoint = placement.localPoint;
-      localNormal = placement.localNormal;
-    }
-
-    const direction = normalizeDirectionTuple(localNormal.x, localNormal.y, localNormal.z);
-    return {
-      id: placement.id,
-      centerNorm: [
-        toNorm(localPoint.x, bbox.min.x, size.x),
-        toNorm(localPoint.y, bbox.min.y, size.y),
-        toNorm(localPoint.z, bbox.min.z, size.z),
-      ],
-      radiusMm: placement.radiusMm,
-      radiusYMm: placement.radiusYMm,
-      depthMm: placement.depthMm,
-      direction,
-      depthMode: placement.depthMode,
-    };
-  });
-}
-
-function fromPersistedHolePunchPlacements(
-  model: { id: string; geometry: GeometryWithBounds; transform: ModelTransform },
-  persisted: ModelHolePunchPlacement[],
-): HolePunchPlacementState[] {
-  if (persisted.length === 0) return [];
-
-  const bbox = model.geometry.bbox;
-  const size = model.geometry.size;
-  const toMm = (norm: number, min: number, span: number) => min + (norm * (span <= 1e-9 ? 0 : span));
-
-  const meshMatrix = new THREE.Matrix4()
-    .compose(
-      model.transform.position.clone(),
-      quaternionFromGlobalEuler(model.transform.rotation),
-      model.transform.scale.clone(),
-    )
-    .multiply(new THREE.Matrix4().makeTranslation(
-      -model.geometry.center.x,
-      -model.geometry.center.y,
-      -model.geometry.center.z,
-    ));
-
-  const normalMatrix = new THREE.Matrix3().getNormalMatrix(meshMatrix);
-
-  return persisted.map((placement) => {
-    const localPoint = new THREE.Vector3(
-      toMm(placement.centerNorm[0], bbox.min.x, size.x),
-      toMm(placement.centerNorm[1], bbox.min.y, size.y),
-      toMm(placement.centerNorm[2], bbox.min.z, size.z),
-    );
-
-    const localNormal = new THREE.Vector3(
-      placement.direction[0],
-      placement.direction[1],
-      placement.direction[2],
-    );
-    if (localNormal.lengthSq() <= 1e-12) {
-      localNormal.set(0, 0, -1);
-    } else {
-      localNormal.normalize();
-    }
-
-    const worldPoint = localPoint.clone().applyMatrix4(meshMatrix);
-    const worldNormal = localNormal.clone().applyNormalMatrix(normalMatrix).normalize();
-    const worldFrame = createHolePunchWorldFrame(worldNormal);
-
-    return {
-      id: placement.id,
-      modelId: model.id,
-      worldPoint,
-      worldNormal,
-      worldFrame,
-      localPoint,
-      localNormal,
-      radiusMm: placement.radiusMm,
-      radiusYMm: placement.radiusYMm,
-      depthMm: placement.depthMm,
-      depthMode: placement.depthMode ?? 'manual',
-    };
-  });
-}
-
-function serializeHollowingModifier(modifier: ModelHollowingModifier | null | undefined): string {
-  if (!modifier?.enabled) return 'disabled';
-  return JSON.stringify({
-    enabled: true,
-    blockedVoxelIndices: [...(modifier.blockedVoxelIndices ?? [])].sort((a, b) => a - b),
-    mode: modifier.mode,
-    voxelSizeMm: Number(modifier.voxelSizeMm.toFixed(4)),
-    shellThicknessMm: Number(modifier.shellThicknessMm.toFixed(4)),
-    infillMode: modifier.infillMode ?? 'lattice',
-    infillCellMm: Number((modifier.infillCellMm ?? 4.2426).toFixed(4)),
-    infillBeamRadiusMm: Number((modifier.infillBeamRadiusMm ?? 0.25).toFixed(4)),
-    openFace: modifier.openFace,
-    openFaceSelected: modifier.mode === 'shell_open_face'
-      ? (modifier.openFaceSelected ?? true)
-      : true,
-  });
-}
-
 function areSortedNumberArraysEqual(a: readonly number[], b: readonly number[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
@@ -677,281 +484,6 @@ function isKeyboardTargetEditable(target: EventTarget | null): boolean {
   if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
   if (target.isContentEditable) return true;
   return Boolean(target.closest('[contenteditable="true"]'));
-}
-
-function inferOpenFaceFromHit(
-  hit: THREE.Intersection,
-  fallback: MeshModifierOpenFace,
-): MeshModifierOpenFace {
-  const normal = hit.face?.normal;
-  if (!normal) return fallback;
-
-  const absX = Math.abs(normal.x);
-  const absY = Math.abs(normal.y);
-  const absZ = Math.abs(normal.z);
-
-  if (absX >= absY && absX >= absZ) {
-    return normal.x >= 0 ? 'x_max' : 'x_min';
-  }
-  if (absY >= absX && absY >= absZ) {
-    return normal.y >= 0 ? 'y_max' : 'y_min';
-  }
-  return normal.z >= 0 ? 'z_max' : 'z_min';
-}
-
-function serializeHolePunchPlacements(placements: ModelHolePunchPlacement[]): string {
-  const normalizePlacement = (placement: ModelHolePunchPlacement) => ({
-    id: placement.id,
-    centerNorm: placement.centerNorm.map((value) => Number(value.toFixed(6))),
-    radiusMm: Number(placement.radiusMm.toFixed(4)),
-    radiusYMm: placement.radiusYMm != null ? Number(placement.radiusYMm.toFixed(4)) : undefined,
-    depthMm: Number(placement.depthMm.toFixed(4)),
-    direction: placement.direction.map((value) => Number(value.toFixed(6))),
-    depthMode: placement.depthMode ?? 'manual',
-  });
-
-  const sorted = [...placements]
-    .map(normalizePlacement)
-    .sort((a, b) => a.id.localeCompare(b.id));
-
-  return JSON.stringify(sorted);
-}
-
-function serializeSingleHolePunchPlacement(placement: ModelHolePunchPlacement): string {
-  return JSON.stringify({
-    id: placement.id,
-    centerNorm: placement.centerNorm.map((value) => Number(value.toFixed(6))),
-    radiusMm: Number(placement.radiusMm.toFixed(4)),
-    radiusYMm: placement.radiusYMm != null ? Number(placement.radiusYMm.toFixed(4)) : undefined,
-    depthMm: Number(placement.depthMm.toFixed(4)),
-    direction: placement.direction.map((value) => Number(value.toFixed(6))),
-    depthMode: placement.depthMode ?? 'manual',
-  });
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  if (typeof btoa === 'function') {
-    const CHUNK_SIZE = 0x8000;
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-      const chunk = bytes.subarray(i, i + CHUNK_SIZE);
-      binary += String.fromCharCode(...chunk);
-    }
-    return btoa(binary);
-  }
-
-  if (typeof Buffer !== 'undefined') {
-    return Buffer.from(bytes).toString('base64');
-  }
-
-  throw new Error('Base64 encoding is unavailable in this environment.');
-}
-
-function base64ToBytes(base64: string): Uint8Array {
-  const normalized = base64.replace(/\s+/g, '');
-
-  if (typeof atob === 'function') {
-    const binary = atob(normalized);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes;
-  }
-
-  if (typeof Buffer !== 'undefined') {
-    return new Uint8Array(Buffer.from(normalized, 'base64'));
-  }
-
-  throw new Error('Base64 decoding is unavailable in this environment.');
-}
-
-function snapshotGeometryPositions(geometry: THREE.BufferGeometry): {
-  sourcePositionsBase64: string;
-  sourcePositionCount: number;
-} {
-  const position = geometry.getAttribute('position');
-  if (!(position instanceof THREE.BufferAttribute)) {
-    throw new Error('Geometry has no position attribute.');
-  }
-
-  const floatArray = position.array instanceof Float32Array
-    ? position.array
-    : new Float32Array(position.array);
-  const bytes = new Uint8Array(
-    floatArray.buffer,
-    floatArray.byteOffset,
-    floatArray.byteLength,
-  );
-
-  return {
-    sourcePositionsBase64: bytesToBase64(bytes),
-    sourcePositionCount: position.count,
-  };
-}
-
-function geometryFromSnapshot(snapshot: {
-  sourcePositionsBase64?: string;
-  sourcePositionCount?: number;
-}): THREE.BufferGeometry | null {
-  const base64 = snapshot.sourcePositionsBase64;
-  const count = snapshot.sourcePositionCount;
-  if (!base64 || !Number.isFinite(count) || (count as number) <= 0) {
-    return null;
-  }
-
-  const bytes = base64ToBytes(base64);
-  if (bytes.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
-    return null;
-  }
-
-  const view = new Float32Array(
-    bytes.buffer,
-    bytes.byteOffset,
-    bytes.byteLength / Float32Array.BYTES_PER_ELEMENT,
-  );
-  const positions = new Float32Array(view.length);
-  positions.set(view);
-
-  if (positions.length !== (count as number) * 3) {
-    return null;
-  }
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geometry.computeVertexNormals();
-  geometry.computeBoundingBox();
-  geometry.computeBoundingSphere();
-  return geometry;
-}
-
-function getAbsSafeScaleComponents(scale: THREE.Vector3): THREE.Vector3 {
-  return new THREE.Vector3(
-    Math.max(1e-6, Math.abs(scale.x)),
-    Math.max(1e-6, Math.abs(scale.y)),
-    Math.max(1e-6, Math.abs(scale.z)),
-  );
-}
-
-function getDirectionScaleFactor(direction: THREE.Vector3, scale: THREE.Vector3): number {
-  const dir = direction.clone();
-  if (dir.lengthSq() <= 1e-12) {
-    dir.set(0, 0, -1);
-  } else {
-    dir.normalize();
-  }
-
-  const absScale = getAbsSafeScaleComponents(scale);
-  const scaledDir = new THREE.Vector3(
-    dir.x * absScale.x,
-    dir.y * absScale.y,
-    dir.z * absScale.z,
-  );
-  return Math.max(1e-6, scaledDir.length());
-}
-
-function getRadialScaleFactor(direction: THREE.Vector3, scale: THREE.Vector3): number {
-  const dir = direction.clone();
-  if (dir.lengthSq() <= 1e-12) {
-    dir.set(0, 0, -1);
-  } else {
-    dir.normalize();
-  }
-
-  const helper = Math.abs(dir.z) < 0.9
-    ? new THREE.Vector3(0, 0, 1)
-    : new THREE.Vector3(0, 1, 0);
-
-  const tangentA = helper.clone().cross(dir);
-  if (tangentA.lengthSq() <= 1e-12) {
-    tangentA.set(1, 0, 0);
-  } else {
-    tangentA.normalize();
-  }
-  const tangentB = dir.clone().cross(tangentA).normalize();
-
-  const absScale = getAbsSafeScaleComponents(scale);
-  const scaleAlong = (v: THREE.Vector3) => new THREE.Vector3(
-    v.x * absScale.x,
-    v.y * absScale.y,
-    v.z * absScale.z,
-  ).length();
-
-  const sA = scaleAlong(tangentA);
-  const sB = scaleAlong(tangentB);
-  return Math.max(1e-6, (sA + sB) * 0.5);
-}
-
-function getUniformScaleFactorForThickness(scale: THREE.Vector3): number {
-  const absScale = getAbsSafeScaleComponents(scale);
-  return Math.max(1e-6, (absScale.x + absScale.y + absScale.z) / 3);
-}
-
-function worldMmToLocalMm(worldMm: number, scaleFactor: number): number {
-  return Math.max(1e-4, worldMm / Math.max(1e-6, scaleFactor));
-}
-
-/** Convert a desired voxel size (mm in local space) to a voxel resolution
- *  count, given the model's largest bounding-box extent in local space.
- *  Clamped to [24, 192].
- *
- *  Callers MUST convert world-space voxel size to local space via
- *  `worldMmToLocalMm(voxelSizeMm, scaleFactor)` before calling this. */
-function computeVoxelResolution(voxelSizeMm: number, maxExtent: number): number {
-  const raw = Math.round(maxExtent / Math.max(0.05, voxelSizeMm));
-  return Math.min(192, Math.max(24, raw));
-}
-
-function buildGeometryVersionKey(geometry: THREE.BufferGeometry): string {
-  const position = geometry.getAttribute('position') as THREE.BufferAttribute | null;
-  const index = geometry.getIndex();
-
-  return [
-    geometry.uuid,
-    position?.count ?? 0,
-    position?.version ?? 0,
-    index?.count ?? 0,
-    index?.version ?? 0,
-  ].join(':');
-}
-
-function createGeometryFromPreviewPositions(positions: Float32Array): THREE.BufferGeometry {
-  const copied = new Float32Array(positions.length);
-  copied.set(positions);
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(copied, 3));
-  geometry.computeVertexNormals();
-  geometry.computeBoundingBox();
-  geometry.computeBoundingSphere();
-  return geometry;
-}
-
-function disposeHollowPreviewCacheEntry(entry: HollowPreviewCacheEntry): void {
-  entry.previewGeometry?.dispose();
-  entry.infillGeometry?.dispose();
-}
-
-function isHollowPreviewGeometryCacheOwned(
-  geometry: THREE.BufferGeometry | null,
-  entries: Iterable<HollowPreviewCacheEntry>,
-): boolean {
-  if (!geometry) return false;
-  for (const entry of entries) {
-    if (entry.previewGeometry === geometry || entry.infillGeometry === geometry) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function disposeHollowPreviewGeometryIfUncached(
-  geometry: THREE.BufferGeometry | null,
-  entries: Iterable<HollowPreviewCacheEntry>,
-): void {
-  if (!geometry) return;
-  if (isHollowPreviewGeometryCacheOwned(geometry, entries)) return;
-  geometry.dispose();
 }
 
 const EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT: HomeSupportCollectionsSnapshot = {
@@ -1361,167 +893,6 @@ function resolveInitialExportThumbnailRenderOptions(): ExportThumbnailRenderOpti
   } catch {
     return DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS;
   }
-}
-
-function formatPrintingMonitorEstimatedTime(seconds: number | null): string {
-  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return '—';
-
-  const rounded = Math.max(1, Math.round(seconds));
-  const hours = Math.floor(rounded / 3600);
-  const minutes = Math.floor((rounded % 3600) / 60);
-
-  if (hours > 0) {
-    return `${hours}h ${minutes.toString().padStart(2, '0')}m`;
-  }
-
-  if (minutes > 0) {
-    return `${minutes}m`;
-  }
-
-  return '<1m';
-}
-
-function formatPrintingMonitorUsedMaterial(ml: number | null): string {
-  if (ml == null || !Number.isFinite(ml) || ml <= 0) return '—';
-  return `${ml.toFixed(2)} mL`;
-}
-
-function formatPrintingMonitorAreaMm2(areaMm2: number | null): string {
-  if (areaMm2 == null || !Number.isFinite(areaMm2) || areaMm2 <= 0) return '—';
-  if (areaMm2 >= 1000) return `${areaMm2.toFixed(0)} mm²`;
-  if (areaMm2 >= 100) return `${areaMm2.toFixed(1)} mm²`;
-  return `${areaMm2.toFixed(2)} mm²`;
-}
-
-function parsePrintingMonitorSeconds(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-    return Math.round(value);
-  }
-
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  const numeric = Number(trimmed);
-  if (Number.isFinite(numeric) && numeric > 0) {
-    return Math.round(numeric);
-  }
-
-  const hms = trimmed.match(/^(\d{1,3}):(\d{1,2})(?::(\d{1,2}))?$/);
-  if (hms) {
-    const h = Number(hms[1]);
-    const m = Number(hms[2]);
-    const s = Number(hms[3] ?? '0');
-    if ([h, m, s].every((n) => Number.isFinite(n) && n >= 0)) {
-      const total = (hms[3] == null)
-        ? (h * 60 + m)
-        : (h * 3600 + m * 60 + s);
-      return total > 0 ? total : null;
-    }
-  }
-
-  const units = trimmed.match(/(?:(\d+(?:\.\d+)?)\s*h)?\s*(?:(\d+(?:\.\d+)?)\s*m)?\s*(?:(\d+(?:\.\d+)?)\s*s)?/i);
-  if (units) {
-    const h = Number(units[1] ?? 0);
-    const m = Number(units[2] ?? 0);
-    const s = Number(units[3] ?? 0);
-    if ([h, m, s].every((n) => Number.isFinite(n) && n >= 0)) {
-      const total = Math.round(h * 3600 + m * 60 + s);
-      return total > 0 ? total : null;
-    }
-  }
-
-  return null;
-}
-
-function parsePrintingMonitorMaterialMl(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-    return value;
-  }
-  if (typeof value !== 'string') return null;
-
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  const numeric = Number(trimmed);
-  if (Number.isFinite(numeric) && numeric > 0) {
-    return numeric;
-  }
-
-  const extracted = trimmed.match(/(\d+(?:\.\d+)?)/);
-  if (!extracted) return null;
-  const parsed = Number(extracted[1]);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-function parsePrintingMonitorAreaMm2(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-    return value;
-  }
-  if (typeof value !== 'string') return null;
-
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  const numeric = Number(trimmed);
-  if (Number.isFinite(numeric) && numeric > 0) {
-    return numeric;
-  }
-
-  const extracted = trimmed.match(/(\d+(?:\.\d+)?)/);
-  if (!extracted) return null;
-  const parsed = Number(extracted[1]);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-function normalizePrintingMonitorWebcamAspectRatio(value: number | null | undefined): number | null {
-  if (value == null || !Number.isFinite(value) || value <= 0) return null;
-  // Keep practical camera bounds and reject pathological stream metadata.
-  if (value < 0.45 || value > 2.4) return null;
-  return value;
-}
-
-function resolvePrintingMonitorAbsoluteUrl(candidate: string, host: string, port: number): string | null {
-  const trimmed = candidate.trim();
-  if (!trimmed) return null;
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
-  if (trimmed.startsWith('//')) return `http:${trimmed}`;
-  const base = `http://${host}${port === 80 ? '' : `:${port}`}`;
-  if (trimmed.startsWith('/')) return `${base}${trimmed}`;
-  return `${base}/${trimmed.replace(/^\/+/, '')}`;
-}
-
-type JsonObject = Record<string, unknown>;
-
-function asJsonObject(value: unknown): JsonObject {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return value as JsonObject;
-  }
-  return {};
-}
-
-async function readJsonObject(response: { json: () => Promise<unknown> }): Promise<JsonObject> {
-  try {
-    const payload = await response.json();
-    return asJsonObject(payload);
-  } catch {
-    return {};
-  }
-}
-
-function readBooleanField(payload: JsonObject, key: string): boolean | null {
-  const value = payload[key];
-  return typeof value === 'boolean' ? value : null;
-}
-
-function readStringField(payload: JsonObject, key: string): string | null {
-  const value = payload[key];
-  return typeof value === 'string' ? value : null;
-}
-
-function readNumberField(payload: JsonObject, key: string): number | null {
-  const value = payload[key];
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 export default function Home() {
