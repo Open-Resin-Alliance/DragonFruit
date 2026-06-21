@@ -131,6 +131,24 @@ import {
   readStringField,
   readNumberField,
 } from '@/utils/jsonFields';
+import {
+  PRINTING_MONITOR_DEBUG_CHANNELS,
+  type FleetUploadMaterialOption,
+  type PrintingMonitorRecentPlate,
+  type PrintingMonitorPendingConfirmation,
+  type PrintingMonitorDebugChannelState,
+  type PrintingMonitorDebugState,
+  type PrintingMonitorFeatureToggleResponse,
+  type PrintingMonitorDebugChannel,
+} from '@/features/printing/printingMonitorTypes';
+import {
+  EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT,
+  EMPTY_HOME_KICKSTAND_COLLECTIONS_SNAPSHOT,
+  getHomeSupportCollectionsSnapshot,
+  getHomeKickstandCollectionsSnapshot,
+  type HomeSupportCollectionsSnapshot,
+  type HomeKickstandCollectionsSnapshot,
+} from '@/features/supports/supportSnapshotHelpers';
 import { getPluginSceneOverlayLoader } from '@/features/plugins/pluginRegistry';
 import {
   type HullCacheEntry,
@@ -282,76 +300,9 @@ interface ShaftHoverDebugDetail {
   point: { x: number; y: number; z: number } | null;
 }
 
-type FleetUploadMaterialOption = {
-  id: string;
-  name: string;
-  layerHeightMm: number | null;
-};
-
-type PrintingMonitorRecentPlate = {
-  plateId: number;
-  name: string;
-  materialProfileName: string | null;
-  lastModifiedEpochSec: number | null;
-  layerCount: number | null;
-  printTimeSec: number | null;
-  usedMaterialMl: number | null;
-  totalSolidAreaMm2: number | null;
-  smallestAreaMm2: number | null;
-  largestAreaMm2: number | null;
-};
-
-type PrintingMonitorPendingConfirmation =
-  | {
-      kind: 'control';
-      action: 'cancel' | 'emergency-stop';
-    }
-  | {
-      kind: 'plate';
-      action: 'start' | 'delete';
-      plateId: number;
-      plateName: string;
-    };
-
-type PrintingMonitorDebugChannelState = {
-  requestedAtEpochMs: number | null;
-  request: Record<string, unknown> | null;
-  httpStatus: number | null;
-  rawPayload: unknown;
-  parsedPayload: unknown;
-  error: string | null;
-};
-
-type PrintingMonitorDebugState = {
-  status: PrintingMonitorDebugChannelState;
-  webcam: PrintingMonitorDebugChannelState;
-  plates: PrintingMonitorDebugChannelState;
-  taskHistory: PrintingMonitorDebugChannelState;
-  taskDetails: PrintingMonitorDebugChannelState;
-};
-
-type PrintingMonitorFeatureToggleResponse = {
-  operation: string;
-  httpStatus: number | null;
-  httpOk: boolean | null;
-  commandOk: boolean | null;
-  payload: unknown;
-  error: string | null;
-  requestedAtEpochMs: number;
-};
-
-const PRINTING_MONITOR_DEBUG_CHANNELS = ['status', 'webcam', 'plates', 'taskHistory', 'taskDetails'] as const;
-type PrintingMonitorDebugChannel = (typeof PRINTING_MONITOR_DEBUG_CHANNELS)[number];
-
 type PendingModifierResetAction = 'hollowing' | 'hole_punch' | 'clear_hollowing';
 
 const EMPTY_SUPPORT_BOUNDS_BY_MODEL_ID = new Map<string, THREE.Box3>();
-
-type HomeSupportSnapshot = ReturnType<typeof getSupportSnapshot>;
-type HomeSupportCollectionsSnapshot = Pick<
-  HomeSupportSnapshot,
-  'trunks' | 'branches' | 'leaves' | 'twigs' | 'sticks' | 'braces' | 'roots' | 'knots'
->;
 
 /**
  * Transforms Float32Array voxel centers from model-local to world space
@@ -461,12 +412,6 @@ function countRecordEntries(record: Record<string, unknown>): number {
   return count;
 }
 
-type HomeKickstandSnapshot = ReturnType<typeof getKickstandSnapshot>;
-type HomeKickstandCollectionsSnapshot = Pick<
-  HomeKickstandSnapshot,
-  'kickstands' | 'roots' | 'knots'
->;
-
 function areSortedNumberArraysEqual(a: readonly number[], b: readonly number[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
@@ -486,23 +431,6 @@ function isKeyboardTargetEditable(target: EventTarget | null): boolean {
   return Boolean(target.closest('[contenteditable="true"]'));
 }
 
-const EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT: HomeSupportCollectionsSnapshot = {
-  trunks: {},
-  branches: {},
-  leaves: {},
-  twigs: {},
-  sticks: {},
-  braces: {},
-  roots: {},
-  knots: {},
-};
-
-const EMPTY_HOME_KICKSTAND_COLLECTIONS_SNAPSHOT: HomeKickstandCollectionsSnapshot = {
-  kickstands: {},
-  roots: {},
-  knots: {},
-};
-
 const HOLE_PUNCH_OUTSIDE_PROTRUSION_MM = 3;
 const HOLE_PUNCH_DEPTH_OFFSET_FROM_SHELL_MM = 1;
 const HOLE_PUNCH_AUTO_DEPTH_RAY_START_OFFSET_MM = 0.3;
@@ -519,65 +447,6 @@ function getDefaultHolePunchDepthMm(shellThicknessMm: number): number {
   return Number(
     Math.min(120, Math.max(1, shellThicknessMm + HOLE_PUNCH_DEPTH_OFFSET_FROM_SHELL_MM)).toFixed(1),
   );
-}
-
-let cachedHomeSupportCollectionsSnapshot: HomeSupportCollectionsSnapshot | null = null;
-let cachedHomeKickstandCollectionsSnapshot: HomeKickstandCollectionsSnapshot | null = null;
-
-function getHomeSupportCollectionsSnapshot(): HomeSupportCollectionsSnapshot {
-  const snapshot = getSupportSnapshot();
-  const cached = cachedHomeSupportCollectionsSnapshot;
-
-  if (
-    cached
-    && cached.trunks === snapshot.trunks
-    && cached.branches === snapshot.branches
-    && cached.leaves === snapshot.leaves
-    && cached.twigs === snapshot.twigs
-    && cached.sticks === snapshot.sticks
-    && cached.braces === snapshot.braces
-    && cached.roots === snapshot.roots
-    && cached.knots === snapshot.knots
-  ) {
-    return cached;
-  }
-
-  const next: HomeSupportCollectionsSnapshot = {
-    trunks: snapshot.trunks,
-    branches: snapshot.branches,
-    leaves: snapshot.leaves,
-    twigs: snapshot.twigs,
-    sticks: snapshot.sticks,
-    braces: snapshot.braces,
-    roots: snapshot.roots,
-    knots: snapshot.knots,
-  };
-
-  cachedHomeSupportCollectionsSnapshot = next;
-  return next;
-}
-
-function getHomeKickstandCollectionsSnapshot(): HomeKickstandCollectionsSnapshot {
-  const snapshot = getKickstandSnapshot();
-  const cached = cachedHomeKickstandCollectionsSnapshot;
-
-  if (
-    cached
-    && cached.kickstands === snapshot.kickstands
-    && cached.roots === snapshot.roots
-    && cached.knots === snapshot.knots
-  ) {
-    return cached;
-  }
-
-  const next: HomeKickstandCollectionsSnapshot = {
-    kickstands: snapshot.kickstands,
-    roots: snapshot.roots,
-    knots: snapshot.knots,
-  };
-
-  cachedHomeKickstandCollectionsSnapshot = next;
-  return next;
 }
 
 function installReactDevtoolsSemverGuard() {
