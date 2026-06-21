@@ -44,7 +44,11 @@ const _buildPlate = new THREE.Plane();
 const _upVec = new THREE.Vector3();
 const _planeHit = new THREE.Vector3();
 
-export function LeafPlacementController() {
+interface LeafPlacementControllerProps {
+    activeModelId?: string | null;
+}
+
+export function LeafPlacementController({ activeModelId }: LeafPlacementControllerProps = {}) {
     const { isActive, stage, tipPosition, surfaceNormal, modelId, placementSurface, sproutParentingLockHeld } = useLeafPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const kickstandState = useKickstandStoreState();
@@ -238,7 +242,8 @@ export function LeafPlacementController() {
                         const nextNormal = calculateSmoothedNormal(hit);
                         currentTipPos = nextTip;
                         currentNormal = nextNormal;
-                        leafPlacementStore.updateFanningTip(nextTip, nextNormal);
+                        const hitModelId = hit.object.userData?.modelId;
+                        leafPlacementStore.updateFanningTip(nextTip, nextNormal, typeof hitModelId === 'string' ? hitModelId : undefined);
                     }
                 }
             }
@@ -527,6 +532,8 @@ export function LeafPlacementController() {
                 const snapTarget = leafPlacementStore.getSnapTarget();
                 if (!snapTarget) return;
 
+                leafPlacementStore.updateFanningTip(null, null, activeModelId ?? undefined);
+
                 const clickPos = snapTarget.snappedPos;
 
                 const getDistance = (a: Vec3, b: Vec3) => {
@@ -645,7 +652,7 @@ export function LeafPlacementController() {
             // Click 2+ (Sprout Leaf)
             if (stage === 'awaitingSproutTip') {
                 if (!snap.junctionHubId || !tipPosition || !surfaceNormal) return;
-                const parentKnot = supportState.knots[snap.junctionHubId];
+                const parentKnot = getSnapshot().knots[snap.junctionHubId];
                 if (!parentKnot) return;
                 const hostDiameterMm = parentKnot.diameter;
                 if (!hostDiameterMm) return;
@@ -817,6 +824,7 @@ export function LeafPlacementController() {
         supportState.branches,
         twigBySegmentId,
         sproutParentingLockHeld,
+        activeModelId,
     ]);
 
     useEffect(() => {

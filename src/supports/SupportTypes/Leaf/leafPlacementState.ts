@@ -121,8 +121,18 @@ export const leafPlacementStore = {
         }
     },
 
-    updateFanningTip(tipPosition: Vec3, surfaceNormal: Vec3) {
-        state = { ...state, tipPosition, surfaceNormal };
+    updateFanningTip(tipPosition: Vec3 | null, surfaceNormal: Vec3 | null, modelId?: string) {
+        const nextState = { ...state };
+        if (tipPosition !== null) {
+            nextState.tipPosition = tipPosition;
+        }
+        if (surfaceNormal !== null) {
+            nextState.surfaceNormal = surfaceNormal;
+        }
+        if (modelId !== undefined && modelId !== null) {
+            nextState.modelId = modelId;
+        }
+        state = nextState;
         notify();
     },
 

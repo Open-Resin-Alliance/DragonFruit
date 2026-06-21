@@ -34,6 +34,7 @@ import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { LayerSlider } from '@/components/controls/LayerSlider';
 import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
 import { SupportSidebar } from '@/supports/Settings';
+import { useLeafPlacementState } from '@/supports/SupportTypes/Leaf/leafPlacementState';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { ExportManager } from '@/features/export/logic/ExportManager';
 import { resolveEntirePlateExportBaseName } from '@/features/export/logic/exportFileNaming';
@@ -1525,6 +1526,7 @@ function readNumberField(payload: JsonObject, key: string): number | null {
 
 export default function Home() {
   const { _ } = useLingui();
+  const { stage, sproutParentingLockHeld } = useLeafPlacementState();
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
   const importSceneFile = scene.importSceneFile;
@@ -23133,6 +23135,16 @@ export default function Home() {
           <Toast tone="error" animated visible={isExportErrorToastVisible} className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
             {exportErrorToast.text}
+          </Toast>
+        </ToastViewport>
+      )}
+
+      {sproutParentingLockHeld && (
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast tone="info" shape="rounded" visible={true} className="flex items-center gap-2">
+            {stage === 'awaitingSproutTip'
+              ? "Leaf Fanning Active: Click model to sprout leaf"
+              : "Leaf Fanning: Click a support shaft to lock anchor knot"}
           </Toast>
         </ToastViewport>
       )}

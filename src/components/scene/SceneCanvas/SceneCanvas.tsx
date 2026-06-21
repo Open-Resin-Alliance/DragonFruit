@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import React, { useEffect } from 'react';
 import dynamic from 'next/dynamic';
@@ -6531,7 +6531,7 @@ export function SceneCanvas({
               {mode === 'support' && <BranchPlacementController />}
 
               {/* Leaf Placement Controller - handles snapping logic */}
-              {mode === 'support' && <LeafPlacementController />}
+              {mode === 'support' && <LeafPlacementController activeModelId={activeModelId} />}
 
               {/* Brace Placement Controller - handles snapping logic */}
               {mode === 'support' && <BracePlacementController />}
