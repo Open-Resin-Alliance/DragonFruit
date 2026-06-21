@@ -498,60 +498,26 @@ export function KickstandPlacementController() {
             const leafActive = leafPlacementStore.isActive() || intent.family === 'leaf';
             if (leafActive) return;
 
-            const kickstandIntentActive = kickstandPlacementStore.getSnapshot().hotkeyActive || intent.family === 'kickstand';
+            const snapshot = kickstandPlacementStore.getSnapshot();
+            const kickstandIntentActive = snapshot.hotkeyActive || intent.family === 'kickstand';
             if (!kickstandIntentActive) return;
 
-            const meta = targetMetaById.get(detail.segmentId);
-            const path = meta?.target.pathSegment;
-            if (!meta || !path) return;
+            const { snapTarget, previewBuild, previewData } = snapshot;
+            if (!snapTarget || snapTarget.segmentId !== detail.segmentId) return;
 
-            let projectedT: number;
-            let projectedPos: Vec3;
-
-            if (detail.point) {
-                const projected = projectPointToSnapPath(detail.point, path);
-                projectedT = projected.t;
-                projectedPos = projected.pos;
-            } else {
-                const snapshotTarget = kickstandPlacementStore.getSnapshot().snapTarget;
-                if (!snapshotTarget || snapshotTarget.segmentId !== detail.segmentId) return;
-                projectedT = snapshotTarget.t;
-                projectedPos = snapshotTarget.pos;
-            }
-
-            const clampedT = clampKickstandHostT(projectedT, meta.minT);
-            if (clampedT !== projectedT) {
-                projectedPos = getSnapPathPointAtT(path, clampedT);
-            }
-
-            const preferredPoint = detail.point
-                ?? getPreferredPointFromPointerRay(projectedPos, camera, pointer, raycaster);
-            const rawRootPos = computeRootPos(path, projectedPos, camera.position, preferredPoint);
-            const snapDecision = snapRootPosToGrid(
-                rawRootPos,
-                projectedPos,
-                camera,
-                pointer,
-                desiredBandRef.current,
-                meta.diameterMm,
-            );
-            desiredBandRef.current = snapDecision.band;
-            const rootPos = snapDecision.rootPos;
-
-            const isOccupied = isGridRootOccupied(rootPos, meta.modelId);
-            if (isOccupied) {
+            if (previewData?.error === 'TOO_CLOSE_TO_EXISTING') {
                 return;
             }
 
-            const { build } = buildPlacementFromSnap(meta, clampedT, projectedPos, rootPos);
+            if (!previewBuild) return;
 
-            addKickstand(build);
-            addRoot(build.root);
-            addKnot(build.hostKnot);
+            addKickstand(previewBuild);
+            addRoot(previewBuild.root);
+            addKnot(previewBuild.hostKnot);
 
             pushHistory({
                 type: SUPPORT_ADD_KICKSTAND,
-                payload: { build },
+                payload: { build: previewBuild },
             });
 
             clearSupportSelection();
@@ -566,7 +532,7 @@ export function KickstandPlacementController() {
         return () => {
             window.removeEventListener('shaft-click', handleShaftClick);
         };
-    }, [buildPlacementFromSnap, hotkeyActive, placementBindings, resetSnapping, camera, pointer, raycaster, targetMetaById]);
+    }, [placementBindings, resetSnapping]);
 
     return null;
 }
