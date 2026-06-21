@@ -17,6 +17,9 @@ if (typeof EventTarget !== 'undefined') {
             (typeof document !== 'undefined' && this === document);
 
         if ((type === 'keydown' || type === 'keyup') && isWindowOrDocument) {
+            if (listener && (listener as any).__isHotkeySystemInternal) {
+                return originalAddEventListener.apply(this, [type, listener, options]);
+            }
             const stack = new Error().stack || '';
             const frames = stack.split('\n').map(f => f.trim()).filter(Boolean);
             const startIdx = frames[0]?.startsWith('Error') ? 1 : 0;
@@ -152,6 +155,11 @@ export function setupHotkeyListeners() {
             e.stopPropagation();
         }
     };
+
+    (handleKeyDown as any).__isHotkeySystemInternal = true;
+    (handleKeyUp as any).__isHotkeySystemInternal = true;
+    (handleBlur as any).__isHotkeySystemInternal = true;
+    (handlePointerOrMouseDown as any).__isHotkeySystemInternal = true;
 
     if (typeof window !== 'undefined') {
         window.addEventListener('keydown', handleKeyDown, { capture: true });

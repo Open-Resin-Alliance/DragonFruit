@@ -17,8 +17,7 @@ import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacemen
 import { perfMark, perfMeasureWithSpike, perfEndFrame } from '../../PlacementLogic/Pathfinding/pathfindingPerf';
 import { buildStick } from '../Stick/stickBuilder';
 import { buildTwig } from '../Twig/twigBuilder';
-import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
-import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
+import { useActionActive } from '@/hotkeys/hotkeyStore';
 import { getSupportPathfindingDebugEnabled, setSupportPathfindingDebugSnapshot } from '../../PlacementLogic/Pathfinding/pathfindingDebugState';
 
 // ---------------------------------------------------------------------------
@@ -217,8 +216,7 @@ export function useTrunkPlacementV2() {
     const HOVER_MIN_INTERVAL_MS = 12;
     const HOVER_POS_EPSILON_MM = 0.5;
     const HOVER_NORMAL_DOT_MIN = 0.995;
-    const { getHotkey } = useHotkeyConfig();
-    const forcePlaceBinding = getHotkey('SUPPORTS', 'FORCE_PLACE_SUPPORT');
+    const forcePlaceActive = useActionActive('SUPPORTS', 'FORCE_PLACE_SUPPORT');
 
     const [previewData, setPreviewData] = useState<SupportData | null>(null);
     const [previewError, setPreviewError] = useState<LimitationCode | null>(null);
@@ -534,37 +532,14 @@ export function useTrunkPlacementV2() {
     }, [HOVER_MIN_INTERVAL_MS, HOVER_NORMAL_DOT_MIN, HOVER_POS_EPSILON_MM, clearPreview, isPlacementHardDisabled, resolveCavityStickPreview]);
 
     useEffect(() => {
-        const refreshCurrentHover = () => {
-            if (hoverFrameRef.current !== null) return;
+        forcePlaceOverrideRef.current = forcePlaceActive;
+        if (hoverFrameRef.current === null) {
             hoverFrameRef.current = requestAnimationFrame(() => {
                 hoverFrameRef.current = null;
                 processSupportHover(latestHoverRef.current);
             });
-        };
-
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (!matchesConfiguredHotkeyDown(event, forcePlaceBinding) || forcePlaceOverrideRef.current) return;
-            event.preventDefault();
-            forcePlaceOverrideRef.current = true;
-            refreshCurrentHover();
-        };
-
-        const handleKeyUp = (event: KeyboardEvent) => {
-            if (!matchesConfiguredHotkeyUp(event, forcePlaceBinding) || !forcePlaceOverrideRef.current) return;
-            event.preventDefault();
-            forcePlaceOverrideRef.current = false;
-            refreshCurrentHover();
-        };
-
-        window.addEventListener('keydown', handleKeyDown, true);
-        window.addEventListener('keyup', handleKeyUp, true);
-        document.addEventListener('keyup', handleKeyUp, true);
-        return () => {
-            window.removeEventListener('keydown', handleKeyDown, true);
-            window.removeEventListener('keyup', handleKeyUp, true);
-            document.removeEventListener('keyup', handleKeyUp, true);
-        };
-    }, [forcePlaceBinding, processSupportHover]);
+        }
+    }, [forcePlaceActive, processSupportHover]);
 
     const onSupportHover = useCallback((hit: THREE.Intersection | null) => {
         latestHoverRef.current = hit;

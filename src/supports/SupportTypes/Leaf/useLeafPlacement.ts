@@ -8,19 +8,6 @@ import { getSnapshot, removeKnotById } from '../../state';
 
 export const LEAF_HOTKEY_REARM_EVENT = 'support-leaf-hotkey-rearm';
 
-function isEditableTarget(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable) return true;
-
-  const tagName = target.tagName.toLowerCase();
-  if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') return true;
-
-  const role = target.getAttribute('role');
-  if (role === 'textbox' || role === 'combobox' || role === 'searchbox' || role === 'spinbutton') return true;
-
-  return false;
-}
-
 export function useLeafPlacement() {
     const { isPlacementDisabled } = useInteractionStatus();
     const state = useLeafPlacementState();
@@ -31,50 +18,31 @@ export function useLeafPlacement() {
         leafPlacementStore.setHotkeyActive(hotkeyActive);
     }, [hotkeyActive]);
 
-    // Sprouted parenting lock key tracking ('w')
+    const sproutedLockActive = useActionActive('SUPPORTS', 'SPROUTED_PARENTING_LOCK');
+
+    // Sync sprouted parenting lock key state to store
     useEffect(() => {
-        const handleKeyDownW = (e: KeyboardEvent) => {
-            if (e.repeat) return;
-            if (isEditableTarget(e.target)) return;
-
-            if (e.key.toLowerCase() === 'w') {
-                leafPlacementStore.setSproutParentingLockHeld(true);
-            }
-        };
-
-        const handleKeyUpW = (e: KeyboardEvent) => {
-            if (isEditableTarget(e.target)) return;
-
-            if (e.key.toLowerCase() === 'w') {
-                leafPlacementStore.setSproutParentingLockHeld(false);
-
-                // Clean up orphan knots on keyup of 'w'
-                const snap = leafPlacementStore.getSnapshot();
-                if (snap.junctionHubId) {
-                    if (snap.junctionHubIsNew) {
-                        const leaves = Object.values(getSnapshot().leaves);
-                        const hasLeaves = leaves.some(leaf => leaf.parentKnotId === snap.junctionHubId);
-                        if (!hasLeaves) {
-                            removeKnotById(snap.junctionHubId);
-                        }
+        leafPlacementStore.setSproutParentingLockHeld(sproutedLockActive);
+        if (!sproutedLockActive) {
+            const snap = leafPlacementStore.getSnapshot();
+            if (snap.junctionHubId) {
+                if (snap.junctionHubIsNew) {
+                    const leaves = Object.values(getSnapshot().leaves);
+                    const hasLeaves = leaves.some(leaf => leaf.parentKnotId === snap.junctionHubId);
+                    if (!hasLeaves) {
+                        removeKnotById(snap.junctionHubId);
                     }
-                    leafPlacementStore.setJunctionHub(null, null);
-                    leafPlacementStore.reset();
                 }
+                leafPlacementStore.setJunctionHub(null, null);
+                leafPlacementStore.reset();
             }
-        };
+        }
+    }, [sproutedLockActive]);
 
-        window.addEventListener('keydown', handleKeyDownW);
-        window.addEventListener('keyup', handleKeyUpW);
-        return () => {
-            window.removeEventListener('keydown', handleKeyDownW);
-            window.removeEventListener('keyup', handleKeyUpW);
-        };
-    }, []);
-
+    // Escape to cancel
     useEffect(() => {
-        const handleEscape = (e: KeyboardEvent) => {
-            if (e.key === 'Escape' && (state.stage === 'awaitingBase' || state.stage === 'awaitingSproutTip')) {
+        const handleEscape = (e: CustomEvent) => {
+            if (e.detail.key === 'Escape' && (state.stage === 'awaitingBase' || state.stage === 'awaitingSproutTip')) {
                 const snap = leafPlacementStore.getSnapshot();
                 if (snap.junctionHubId) {
                     if (snap.junctionHubIsNew) {
@@ -89,8 +57,8 @@ export function useLeafPlacement() {
                 leafPlacementStore.reset();
             }
         };
-        window.addEventListener('keydown', handleEscape);
-        return () => window.removeEventListener('keydown', handleEscape);
+        window.addEventListener('app-hotkey-keydown', handleEscape as EventListener);
+        return () => window.removeEventListener('app-hotkey-keydown', handleEscape as EventListener);
     }, [state.stage]);
 
     const onModelHover = useCallback((hit: THREE.Intersection | null) => {

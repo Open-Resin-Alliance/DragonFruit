@@ -163,6 +163,11 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             modifier: 'ctrl+shift',
             description: 'Toggle diagnostics modal'
         },
+        FORCE_UPDATE: {
+            key: 'u',
+            modifier: 'ctrl+shift',
+            description: 'Force mock update notification'
+        },
         HISTORY: {
             key: 'c',
             modifier: 'ctrl+shift',

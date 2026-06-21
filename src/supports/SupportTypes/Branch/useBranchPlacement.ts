@@ -30,14 +30,14 @@ export function useBranchPlacement() {
 
     // Escape to cancel
     useEffect(() => {
-        const handleEscape = (e: KeyboardEvent) => {
-            if (e.key === 'Escape' && state.stage === 'awaitingBase') {
+        const handleEscape = (e: CustomEvent) => {
+            if (e.detail.key === 'Escape' && state.stage === 'awaitingBase') {
                 console.log('[BranchPlacement] Cancelled via Escape');
                 branchPlacementStore.reset();
             }
         };
-        window.addEventListener('keydown', handleEscape);
-        return () => window.removeEventListener('keydown', handleEscape);
+        window.addEventListener('app-hotkey-keydown', handleEscape as EventListener);
+        return () => window.removeEventListener('app-hotkey-keydown', handleEscape as EventListener);
     }, [state.stage]);
 
     // Hover over model - track position for preview dot when Alt is held
