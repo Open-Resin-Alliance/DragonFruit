@@ -41,8 +41,9 @@ import { SUPPORT_REMOVE_ANCHOR, SUPPORT_REMOVE_BRANCH, SUPPORT_REMOVE_BRACE, SUP
 import { clearSupportSelection, getResolvedPrimarySelection, selectSupportIds } from '@/supports/interaction/shared/selection/selectionController';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
-import { getSupportPlacementModifierState, resolveSupportPlacementHotkeyBindings } from '@/supports/interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
+import { resolveSupportPlacementHotkeyBindings } from '@/supports/interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { resolveSupportPlacementRouting } from '@/supports/interaction/shared/placement/hotkeys/supportPlacementRouting';
+import { isKeyPressedSync } from '@/hotkeys/hotkeyStore';
 
 interface SupportInteractionOptions {
   mode: SupportMode;
@@ -184,18 +185,23 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     const bindings = resolveSupportPlacementHotkeyBindings(getHotkey);
     return resolveSupportPlacementRouting({
       bindings,
-      modifierState: getSupportPlacementModifierState(source),
+      modifierState: {
+        ctrlKey: isKeyPressedSync('ctrl'),
+        altKey: isKeyPressedSync('alt'),
+        shiftKey: isKeyPressedSync('shift'),
+        metaKey: isKeyPressedSync('meta'),
+      },
       state: {
-        branchHotkeyActive: branchPlacement.altActive,
+        branchHotkeyActive: branchPlacement.branchHotkeyActive,
         branchAwaitingBase: branchPlacement.stage === 'awaitingBase',
         leafHotkeyActive: leafPlacement.hotkeyActive,
         leafAwaitingBase: leafPlacement.stage === 'awaitingBase',
-        braceHotkeyActive: bracePlacement.altActive,
+        braceHotkeyActive: branchPlacement.braceHotkeyActive,
         braceAwaitingEnd: bracePlacement.stage === 'awaitingEnd',
         kickstandHotkeyActive: kickstandPlacement.hotkeyActive,
       },
     });
-  }, [getHotkey, branchPlacement.altActive, branchPlacement.stage, leafPlacement.hotkeyActive, leafPlacement.stage, bracePlacement.altActive, bracePlacement.stage, kickstandPlacement.hotkeyActive]);
+  }, [getHotkey, branchPlacement.branchHotkeyActive, branchPlacement.stage, leafPlacement.hotkeyActive, leafPlacement.stage, branchPlacement.braceHotkeyActive, bracePlacement.stage, kickstandPlacement.hotkeyActive]);
 
   // Handler for MODEL hover (used for trunk placement preview, or branch tip preview)
   const onModelHover = useCallback((hit: THREE.Intersection | null) => {
