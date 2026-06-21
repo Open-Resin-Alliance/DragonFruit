@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect } from 'react';
+import { hotkeyStore, useActionActive } from '@/hotkeys/hotkeyStore';
 import dynamic from 'next/dynamic';
 import * as THREE from 'three';
 import { AlertTriangle } from 'lucide-react';
@@ -3876,32 +3877,30 @@ export function SceneCanvas({
   }, []);
 
   React.useEffect(() => {
-    const handleEscapeDeselect = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      if (event.defaultPrevented) return;
-      if (mode !== 'prepare') return;
-      if (!onActiveModelChange) return;
+    if (mode !== 'prepare') return;
+    if (!onActiveModelChange) return;
 
-      const target = event.target as HTMLElement | null;
-      const tag = target?.tagName;
-      const isTypingContext = !!target && (
-        target.isContentEditable
-        || tag === 'INPUT'
-        || tag === 'TEXTAREA'
-        || tag === 'SELECT'
-      );
-      if (isTypingContext) return;
+    let wasEscapePressed = false;
 
-      if (!activeModelId && (!selectedModelIds || selectedModelIds.length === 0)) return;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      const isEscapeJustPressed = isEscapePressed && !wasEscapePressed;
 
-      onActiveModelChange(null);
-      window.dispatchEvent(new CustomEvent('model-deselected'));
-    };
+      if (isEscapeJustPressed) {
+        if (!activeModelId && (!selectedModelIds || selectedModelIds.length === 0)) {
+          wasEscapePressed = isEscapePressed;
+          return;
+        }
 
-    window.addEventListener('keydown', handleEscapeDeselect);
-    return () => {
-      window.removeEventListener('keydown', handleEscapeDeselect);
-    };
+        onActiveModelChange(null);
+        window.dispatchEvent(new CustomEvent('model-deselected'));
+      }
+
+      wasEscapePressed = isEscapePressed;
+    });
+
+    return unsubscribe;
   }, [activeModelId, mode, onActiveModelChange, selectedModelIds]);
 
   React.useEffect(() => {
@@ -3911,49 +3910,38 @@ export function SceneCanvas({
       return;
     }
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (event.repeat) return;
-      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+    let wasJPressed = false;
+    let wasMPressed = false;
 
-      const target = event.target as HTMLElement | null;
-      const tag = target?.tagName;
-      const isTypingContext = !!target && (
-        target.isContentEditable
-        || tag === 'INPUT'
-        || tag === 'TEXTAREA'
-        || tag === 'SELECT'
-      );
-      if (isTypingContext) return;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isJPressed = active.has('j');
+      const isMPressed = active.has('m');
 
-      const isMHotkey = event.code === 'KeyM' || event.key.toLowerCase() === 'm';
-      if (isMHotkey && supportPathfindingDebugState.enabled) {
-        event.preventDefault();
-        event.stopPropagation();
+      const isJJustPressed = isJPressed && !wasJPressed;
+      const isMJustPressed = isMPressed && !wasMPressed;
+
+      if (isMJustPressed && supportPathfindingDebugState.enabled) {
         toggleSupportPathfindingDebugTuningEnabled();
         setShowSupportPathfindingTuningSuggestions((prev) => !prev);
-        return;
       }
 
-      const isJHotkey = event.code === 'KeyJ' || event.key.toLowerCase() === 'j';
-      if (!isJHotkey) return;
+      if (isJJustPressed) {
+        const nowMs = performance.now();
+        const elapsedMs = nowMs - supportPathfindingDebugLastTapMsRef.current;
+        supportPathfindingDebugLastTapMsRef.current = nowMs;
 
-      const nowMs = performance.now();
-      const elapsedMs = nowMs - supportPathfindingDebugLastTapMsRef.current;
-      supportPathfindingDebugLastTapMsRef.current = nowMs;
+        if (elapsedMs <= SUPPORT_PATHFINDING_DEBUG_DOUBLE_TAP_WINDOW_MS) {
+          toggleSupportPathfindingDebugEnabled();
+          supportPathfindingDebugLastTapMsRef.current = 0;
+        }
+      }
 
-      if (elapsedMs > SUPPORT_PATHFINDING_DEBUG_DOUBLE_TAP_WINDOW_MS) return;
+      wasJPressed = isJPressed;
+      wasMPressed = isMPressed;
+    });
 
-      event.preventDefault();
-      event.stopPropagation();
-      toggleSupportPathfindingDebugEnabled();
-      supportPathfindingDebugLastTapMsRef.current = 0;
-    };
-
-    window.addEventListener('keydown', onKeyDown, true);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown, true);
-    };
+    return unsubscribe;
   }, [mode, supportPathfindingDebugState.enabled]);
 
   React.useEffect(() => {
@@ -5221,24 +5209,16 @@ export function SceneCanvas({
     }
   }, [crossSectionCapDebugState]);
 
+  const isCapsDebugActive = useActionActive('DEBUG', 'TOGGLE_CAPS');
+  const wasCapsDebugActive = React.useRef(false);
+
   React.useEffect(() => {
     if (!CROSS_SECTION_CAP_DEBUG_HOTKEY_ENABLED) return;
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      const isToggle = event.ctrlKey
-        && event.shiftKey
-        && (event.code === 'KeyK' || event.key.toLowerCase() === 'k');
-      if (!isToggle) return;
-      event.preventDefault();
-      event.stopPropagation();
+    if (isCapsDebugActive && !wasCapsDebugActive.current) {
       setShowCrossSectionCapDebugPanel((prev) => !prev);
-    };
-
-    window.addEventListener('keydown', onKeyDown, true);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown, true);
-    };
-  }, []);
+    }
+    wasCapsDebugActive.current = isCapsDebugActive;
+  }, [isCapsDebugActive]);
 
   const topCapDebugOverrides = crossSectionCapDebugState.enabled
     ? crossSectionCapDebugState.top

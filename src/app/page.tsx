@@ -97,6 +97,7 @@ import { useTransformManager } from '@/features/transform/useTransformManager';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 import { useSupportInteractionManager } from '@/features/supports/useSupportInteractionManager';
 import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
+import { hotkeyStore, useActionActive, isActionActiveSync } from '@/hotkeys/hotkeyStore';
 import { useDeleteHotkey } from '@/features/delete/useDeleteHotkey';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { useCameraProjectionHotkey } from '@/hotkeys/useCameraProjectionHotkey';
@@ -1831,7 +1832,7 @@ export default function Home() {
     : (sessionShaderOverride ?? scene.shaderType);
   const [isPrepareDragActive, setIsPrepareDragActive] = React.useState(false);
   const [isPrepareDragUnsupported, setIsPrepareDragUnsupported] = React.useState(false);
-  const [isSupportSpotlightHoldActive, setIsSupportSpotlightHoldActive] = React.useState(false);
+  const isSupportSpotlightHoldActive = useActionActive('SUPPORTS', 'TEMP_SPOTLIGHT_HOLD');
   const [allowPrepareWithoutPrinter, setAllowPrepareWithoutPrinter] = React.useState(false);
   const [prepareSmoothingSettingsExpanded, setPrepareSmoothingSettingsExpanded] = React.useState(true);
   const [hollowingState, setHollowingState] = React.useState<HollowingPanelState>({
@@ -2292,16 +2293,18 @@ export default function Home() {
   React.useEffect(() => {
     if (!scene.sceneImportPlacementPrompt) return;
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+    let wasEscapePressed = false;
+
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
         scene.resolveSceneImportPlacementPrompt('load_as_is');
       }
-    };
+      wasEscapePressed = isEscapePressed;
+    });
 
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-    };
+    return unsubscribe;
   }, [scene.sceneImportPlacementPrompt, scene.resolveSceneImportPlacementPrompt]);
 
   const hasPluginSceneFile = React.useCallback((filesInput: FileList | File[]) => {
@@ -2381,16 +2384,18 @@ export default function Home() {
   React.useEffect(() => {
     if (!showSceneSaveChoiceModal) return;
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+    let wasEscapePressed = false;
+
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
         resolveSceneSaveChoice('cancel');
       }
-    };
+      wasEscapePressed = isEscapePressed;
+    });
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
+    return unsubscribe;
   }, [resolveSceneSaveChoice, showSceneSaveChoiceModal]);
 
   React.useEffect(() => {
@@ -7803,17 +7808,21 @@ export default function Home() {
       setIsPrintingMonitorPrinterMenuOpen(false);
     };
 
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+    window.addEventListener('mousedown', handlePointerDown);
+
+    let wasEscapePressed = false;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
         setIsPrintingMonitorPrinterMenuOpen(false);
       }
-    };
+      wasEscapePressed = isEscapePressed;
+    });
 
-    window.addEventListener('mousedown', handlePointerDown);
-    window.addEventListener('keydown', handleEscape);
     return () => {
       window.removeEventListener('mousedown', handlePointerDown);
-      window.removeEventListener('keydown', handleEscape);
+      unsubscribe();
     };
   }, [isPrintingMonitorPrinterMenuOpen]);
 
@@ -9648,16 +9657,17 @@ export default function Home() {
   React.useEffect(() => {
     if (!printingMonitorPendingConfirmation) return;
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+    let wasEscapePressed = false;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
         setPrintingMonitorPendingConfirmation(null);
       }
-    };
+      wasEscapePressed = isEscapePressed;
+    });
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
+    return unsubscribe;
   }, [printingMonitorPendingConfirmation]);
 
   const handlePrintingLayerChange = React.useCallback((nextLayer: number) => {
@@ -10269,28 +10279,19 @@ export default function Home() {
       return;
     }
 
-    const handleEscToDeselectHolePunch = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-
-      const target = event.target;
-      if (
-        target instanceof HTMLElement
-        && target.closest('input, textarea, select, [contenteditable="true"]')
-      ) {
-        return;
+    let wasEscapePressed = false;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
+        setSelectedHolePunchPlacementIds([]);
+        setHoveredHolePunchPlacementId(null);
+        setHolePunchHoverPlacement(null);
       }
+      wasEscapePressed = isEscapePressed;
+    });
 
-      event.preventDefault();
-      event.stopPropagation();
-      setSelectedHolePunchPlacementIds([]);
-      setHoveredHolePunchPlacementId(null);
-      setHolePunchHoverPlacement(null);
-    };
-
-    window.addEventListener('keydown', handleEscToDeselectHolePunch, true);
-    return () => {
-      window.removeEventListener('keydown', handleEscToDeselectHolePunch, true);
-    };
+    return unsubscribe;
   }, [scene.mode, selectedHolePunchPlacementIds.length, transformMgr.transformMode]);
 
   const handleSceneMarqueeSelection = React.useCallback((ids: string[]) => {
@@ -11047,88 +11048,55 @@ export default function Home() {
   }, [jumpHistoryToCounts]);
 
   React.useEffect(() => {
-    const handleDiagnosticsHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftD = event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'd';
-      if (!isCtrlShiftD) return;
+    let wasDiagnostics = false;
+    let wasHistory = false;
+    let wasTransform = false;
+    let wasSliceMetrics = false;
+    let wasPrintMonitor = false;
+    let wasPrintRtsp = false;
 
-      // Important: block browser default (e.g. "Bookmark all tabs").
-      event.preventDefault();
-      event.stopPropagation();
-      setIsDiagnosticsOpen((prev) => !prev);
-    };
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const isDiagnosticsActive = isActionActiveSync('DEBUG', 'DIAGNOSTICS');
+      const isHistoryActive = isActionActiveSync('DEBUG', 'HISTORY');
+      const isTransformActive = isActionActiveSync('DEBUG', 'TRANSFORM');
+      const isSliceMetricsActive = isActionActiveSync('DEBUG', 'SLICE_METRICS');
+      const isPrintMonitorActive = isActionActiveSync('DEBUG', 'PRINT_MONITOR');
+      const isPrintRtspActive = isActionActiveSync('DEBUG', 'PRINT_RTSP');
 
-    const handleHistoryDebugHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftC = event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'c';
-      if (!isCtrlShiftC) return;
+      if (isDiagnosticsActive && !wasDiagnostics) {
+        setIsDiagnosticsOpen((prev) => !prev);
+      }
+      if (isHistoryActive && !wasHistory) {
+        setIsHistoryDebugOpen((prev) => !prev);
+      }
+      if (isTransformActive && !wasTransform) {
+        setIsTransformDebugOverlayOpen((prev) => !prev);
+      }
+      if (isSliceMetricsActive && !wasSliceMetrics) {
+        if (printingSlicingBenchmark) {
+          setIsSliceMetricsDebugOpen((prev) => !prev);
+        }
+      }
+      if (isPrintMonitorActive && !wasPrintMonitor) {
+        if (printingMonitorModalOpen) {
+          setIsPrintingMonitorDebugOpen((prev) => !prev);
+        }
+      }
+      if (isPrintRtspActive && !wasPrintRtsp) {
+        if (printingMonitorModalOpen) {
+          setIsPrintingMonitorRtspDebugOpen((prev) => !prev);
+        }
+      }
 
-      event.preventDefault();
-      event.stopPropagation();
-      setIsHistoryDebugOpen((prev) => !prev);
-    };
+      wasDiagnostics = isDiagnosticsActive;
+      wasHistory = isHistoryActive;
+      wasTransform = isTransformActive;
+      wasSliceMetrics = isSliceMetricsActive;
+      wasPrintMonitor = isPrintMonitorActive;
+      wasPrintRtsp = isPrintRtspActive;
+    });
 
-    const handleTransformDebugOverlayHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftX = event.ctrlKey
-        && event.shiftKey
-        && (event.code === 'KeyX' || event.key.toLowerCase() === 'x');
-      if (!isCtrlShiftX) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      setIsTransformDebugOverlayOpen((prev) => !prev);
-    };
-
-    const handleSliceMetricsDebugHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftA = event.ctrlKey
-        && event.shiftKey
-        && (event.code === 'KeyA' || event.key.toLowerCase() === 'a');
-      if (!isCtrlShiftA) return;
-
-      // Only toggle when we actually have slicing metrics from a completed run.
-      if (!printingSlicingBenchmark) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      setIsSliceMetricsDebugOpen((prev) => !prev);
-    };
-
-    const handlePrintingMonitorDebugHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftN = event.ctrlKey
-        && event.shiftKey
-        && (event.code === 'KeyN' || event.key.toLowerCase() === 'n');
-      if (!isCtrlShiftN) return;
-      if (!printingMonitorModalOpen) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      setIsPrintingMonitorDebugOpen((prev) => !prev);
-    };
-
-    const handlePrintingMonitorRtspDebugHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftM = event.ctrlKey
-        && event.shiftKey
-        && (event.code === 'KeyM' || event.key.toLowerCase() === 'm');
-      if (!isCtrlShiftM) return;
-      if (!printingMonitorModalOpen) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      setIsPrintingMonitorRtspDebugOpen((prev) => !prev);
-    };
-
-    window.addEventListener('keydown', handleDiagnosticsHotkey, true);
-    window.addEventListener('keydown', handleHistoryDebugHotkey, true);
-    window.addEventListener('keydown', handleTransformDebugOverlayHotkey, true);
-    window.addEventListener('keydown', handleSliceMetricsDebugHotkey, true);
-    window.addEventListener('keydown', handlePrintingMonitorDebugHotkey, true);
-    window.addEventListener('keydown', handlePrintingMonitorRtspDebugHotkey, true);
-    return () => {
-      window.removeEventListener('keydown', handleDiagnosticsHotkey, true);
-      window.removeEventListener('keydown', handleHistoryDebugHotkey, true);
-      window.removeEventListener('keydown', handleTransformDebugOverlayHotkey, true);
-      window.removeEventListener('keydown', handleSliceMetricsDebugHotkey, true);
-      window.removeEventListener('keydown', handlePrintingMonitorDebugHotkey, true);
-      window.removeEventListener('keydown', handlePrintingMonitorRtspDebugHotkey, true);
-    };
+    return unsubscribe;
   }, [printingMonitorModalOpen, printingSlicingBenchmark]);
 
   const printingMonitorDebugBundle = React.useMemo(() => {
@@ -11294,21 +11262,27 @@ export default function Home() {
     if (!editorContextMenuPos) return;
 
     const handlePointerDown = () => closeEditorContextMenu();
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeEditorContextMenu();
-    };
     const handleScrollOrResize = () => closeEditorContextMenu();
 
     window.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('keydown', handleEscape);
     window.addEventListener('resize', handleScrollOrResize);
     window.addEventListener('scroll', handleScrollOrResize, true);
 
+    let wasEscapePressed = false;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
+        closeEditorContextMenu();
+      }
+      wasEscapePressed = isEscapePressed;
+    });
+
     return () => {
       window.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('keydown', handleEscape);
       window.removeEventListener('resize', handleScrollOrResize);
       window.removeEventListener('scroll', handleScrollOrResize, true);
+      unsubscribe();
     };
   }, [editorContextMenuPos, closeEditorContextMenu]);
 
@@ -11805,24 +11779,14 @@ export default function Home() {
   }, [crossSectionLayerHeightMm, printingPreviewTotalLayers, printingSelectedLayer, scene.mode, slicing.heightMm]);
 
   React.useEffect(() => {
-    const isTypingTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
+    const handleLayerHotkeys = (event: CustomEvent) => {
+      const { key, altKey, ctrlKey, metaKey } = event.detail;
+      if (altKey || ctrlKey || metaKey) return;
 
-    const handleLayerHotkeys = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (event.altKey || event.ctrlKey || event.metaKey) return;
-      if (isTypingTarget(event.target)) return;
-
-      const key = event.key;
       const isPrinting = scene.mode === 'printing';
       const isUp = key === 'ArrowUp' || (isPrinting && (key === 'w' || key === 'W'));
       const isDown = key === 'ArrowDown' || (isPrinting && (key === 's' || key === 'S'));
       if (!isUp && !isDown) return;
-
-      event.preventDefault();
-      event.stopPropagation();
 
       const delta = isUp ? 1 : -1;
 
@@ -11837,9 +11801,9 @@ export default function Home() {
       slicing.setLayerIndex((previous) => previous + delta);
     };
 
-    window.addEventListener('keydown', handleLayerHotkeys, true);
+    window.addEventListener('app-hotkey-keydown', handleLayerHotkeys as EventListener);
     return () => {
-      window.removeEventListener('keydown', handleLayerHotkeys, true);
+      window.removeEventListener('app-hotkey-keydown', handleLayerHotkeys as EventListener);
     };
   }, [handlePrintingLayerChange, printingPreviewTotalLayers, scene.mode, slicing.layerIndex, slicing.numLayers, slicing.setLayerIndex]);
 
@@ -13699,7 +13663,7 @@ export default function Home() {
     transformMgr.setTransformMode(nextMode);
   }, [suppressTransformPersistenceCycles, transformMgr.transformMode, transformMgr.setTransformMode]);
 
-  useUndoRedoHotkeys();
+  useUndoRedoHotkeys({ disabled: hollowingEditMode });
   useDeleteHotkey();
   useCameraProjectionHotkey();
   const hasCavityGeometry = scene.activeModel
@@ -13801,39 +13765,7 @@ export default function Home() {
     // }
   }, [scene.mode, scene.selectionHighlightMode, scene.setSelectionHighlightMode]);
 
-  React.useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
 
-    const binding = { key: supportSpotlightHoldHotkey.key, modifier: supportSpotlightHoldHotkey.modifier };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (isEditableTarget(event.target)) return;
-      if (!matchesConfiguredHotkeyDown(event, binding)) return;
-      setIsSupportSpotlightHoldActive(true);
-    };
-
-    const handleKeyUp = (event: KeyboardEvent) => {
-      if (!matchesConfiguredHotkeyUp(event, binding)) return;
-      setIsSupportSpotlightHoldActive(false);
-    };
-
-    const handleBlur = () => {
-      setIsSupportSpotlightHoldActive(false);
-    };
-
-    window.addEventListener('keydown', handleKeyDown, true);
-    window.addEventListener('keyup', handleKeyUp, true);
-    window.addEventListener('blur', handleBlur);
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown, true);
-      window.removeEventListener('keyup', handleKeyUp, true);
-      window.removeEventListener('blur', handleBlur);
-    };
-  }, [scene.mode, supportSpotlightHoldHotkey.key, supportSpotlightHoldHotkey.modifier]);
 
   const effectiveSelectionHighlightMode = React.useMemo(() => {
     if (scene.mode === 'printing') return 'none';
@@ -14637,101 +14569,7 @@ export default function Home() {
     };
   }, [isSelectAllModelsActive]);
 
-  React.useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
 
-    const handleGlobalSelectAll = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey)) return;
-      if (event.key.toLowerCase() !== 'a') return;
-      if (isEditableTarget(event.target)) return;
-      if (scene.models.length === 0) return;
-
-      // Prevent browser-level "select all text in the app" behavior and arm model select-all.
-      event.preventDefault();
-      event.stopPropagation();
-      const visibleIds = scene.models.filter((model) => model.visible).map((model) => model.id);
-      if (visibleIds.length > 0) {
-        scene.setSelectedModelIds(visibleIds);
-        scene.setActiveModelId(visibleIds[0]);
-      }
-      setIsSelectAllModelsActive(true);
-    };
-
-    window.addEventListener('keydown', handleGlobalSelectAll, true);
-    return () => {
-      window.removeEventListener('keydown', handleGlobalSelectAll, true);
-    };
-  }, [scene]);
-
-  React.useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
-
-    const handleClipboardHotkeys = (event: KeyboardEvent) => {
-      if (event.repeat) return;
-      if (!(event.ctrlKey || event.metaKey)) return;
-      if (event.altKey) return;
-      if (isEditableTarget(event.target)) return;
-      if (scene.mode !== 'prepare') return;
-
-      const key = event.key.toLowerCase();
-      if (key === 'c') {
-        if (scene.selectedModelIds.length === 0 && !scene.activeModelId) return;
-        event.preventDefault();
-        event.stopPropagation();
-
-        if (scene.selectedModelIds.length > 0) {
-          scene.copySelectedModels();
-        } else if (scene.activeModelId) {
-          scene.copyModel(scene.activeModelId);
-        }
-        return;
-      }
-
-      if (key === 'v') {
-        if (!scene.canPasteModel) return;
-        event.preventDefault();
-        event.stopPropagation();
-        scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
-      }
-    };
-
-    window.addEventListener('keydown', handleClipboardHotkeys, true);
-    return () => {
-      window.removeEventListener('keydown', handleClipboardHotkeys, true);
-    };
-  }, [arrangeSpacingMm, scene]);
-
-  React.useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
-
-    const handleSceneSaveHotkey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (event.repeat || event.isComposing) return;
-      if (event.altKey || event.shiftKey) return;
-      if (!(event.ctrlKey || event.metaKey)) return;
-      if (event.key.toLowerCase() !== 's') return;
-      if (isEditableTarget(event.target)) return;
-      if (scene.models.length === 0) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      void handleTopBarSaveScene();
-    };
-
-    window.addEventListener('keydown', handleSceneSaveHotkey, true);
-    return () => {
-      window.removeEventListener('keydown', handleSceneSaveHotkey, true);
-    };
-  }, [handleTopBarSaveScene, scene.models.length]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -15773,37 +15611,83 @@ export default function Home() {
   }, [holePunchPlacements, scene.activeModel?.id]);
 
   React.useEffect(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'hollowing') {
-      return;
-    }
+    let wasAPressed = false;
+    let wasCPressed = false;
+    let wasVPressed = false;
+    let wasSPressed = false;
 
-    const handleSelectAllHolePunches = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'a') return;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isCtrlOrMeta = active.has('ctrl') || active.has('meta') || active.has('control');
+      const isAPressed = active.has('a') && isCtrlOrMeta;
+      const isCPressed = active.has('c') && isCtrlOrMeta;
+      const isVPressed = active.has('v') && isCtrlOrMeta;
+      const isSPressed = active.has('s') && isCtrlOrMeta;
 
-      const target = event.target;
-      if (
-        target instanceof HTMLElement
-        && target.closest('input, textarea, select, [contenteditable="true"]')
-      ) {
-        return;
+      const isAJustPressed = isAPressed && !wasAPressed;
+      const isCJustPressed = isCPressed && !wasCPressed;
+      const isVJustPressed = isVPressed && !wasVPressed;
+      const isSJustPressed = isSPressed && !wasSPressed;
+
+      if (isAJustPressed) {
+        if (scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing') {
+          if (activeHolePunchPlacements.length > 0) {
+            const nextIds = activeHolePunchPlacements.map((placement) => placement.id);
+            setSelectedHolePunchPlacementIds(nextIds);
+            syncHolePunchPanelFromSelection(nextIds, activeHolePunchPlacements, nextIds[nextIds.length - 1] ?? null);
+            setHoveredHolePunchPlacementId(null);
+            setHolePunchHoverPlacement(null);
+          }
+        } else {
+          if (scene.models.length > 0) {
+            const visibleIds = scene.models.filter((model) => model.visible).map((model) => model.id);
+            if (visibleIds.length > 0) {
+              scene.setSelectedModelIds(visibleIds);
+              scene.setActiveModelId(visibleIds[0]);
+            }
+            setIsSelectAllModelsActive(true);
+          }
+        }
       }
 
-      if (activeHolePunchPlacements.length === 0) return;
+      if (isCJustPressed && !active.has('alt')) {
+        if (scene.mode === 'prepare') {
+          if (scene.selectedModelIds.length === 0 && !scene.activeModelId) return;
+          if (scene.selectedModelIds.length > 0) {
+            scene.copySelectedModels();
+          } else if (scene.activeModelId) {
+            scene.copyModel(scene.activeModelId);
+          }
+        }
+      }
 
-      event.preventDefault();
-      event.stopPropagation();
-      const nextIds = activeHolePunchPlacements.map((placement) => placement.id);
-      setSelectedHolePunchPlacementIds(nextIds);
-      syncHolePunchPanelFromSelection(nextIds, activeHolePunchPlacements, nextIds[nextIds.length - 1] ?? null);
-      setHoveredHolePunchPlacementId(null);
-      setHolePunchHoverPlacement(null);
-    };
+      if (isVJustPressed && !active.has('alt')) {
+        if (scene.mode === 'prepare' && scene.canPasteModel) {
+          scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
+        }
+      }
 
-    window.addEventListener('keydown', handleSelectAllHolePunches, true);
-    return () => {
-      window.removeEventListener('keydown', handleSelectAllHolePunches, true);
-    };
-  }, [activeHolePunchPlacements, scene.mode, syncHolePunchPanelFromSelection, transformMgr.transformMode]);
+      if (isSJustPressed && !active.has('alt') && !active.has('shift')) {
+        if (scene.models.length > 0) {
+          void handleTopBarSaveScene();
+        }
+      }
+
+      wasAPressed = isAPressed;
+      wasCPressed = isCPressed;
+      wasVPressed = isVPressed;
+      wasSPressed = isSPressed;
+    });
+
+    return unsubscribe;
+  }, [
+    scene,
+    transformMgr.transformMode,
+    activeHolePunchPlacements,
+    syncHolePunchPanelFromSelection,
+    arrangeSpacingMm,
+    handleTopBarSaveScene
+  ]);
 
   const previousRecommendedHolePunchDepthRef = React.useRef<number>(recommendedHolePunchDepthMm);
 
@@ -16031,28 +15915,33 @@ export default function Home() {
       return;
     }
 
-    const handleHollowVoxelEditHistoryHotkey = (event: KeyboardEvent) => {
-      if (isKeyboardTargetEditable(event.target)) return;
-      if (!(event.ctrlKey || event.metaKey)) return;
+    let wasZPressed = false;
+    let wasYPressed = false;
 
-      const key = event.key.toLowerCase();
-      const handled = key === 'y'
-        ? redoHollowVoxelEdit()
-        : key === 'z'
-          ? (event.shiftKey ? redoHollowVoxelEdit() : undoHollowVoxelEdit())
-          : false;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isCtrlOrMeta = active.has('ctrl') || active.has('meta') || active.has('control');
+      const isZPressed = active.has('z') && isCtrlOrMeta;
+      const isYPressed = active.has('y') && isCtrlOrMeta;
 
-      if (!handled) return;
+      const isZJustPressed = isZPressed && !wasZPressed;
+      const isYJustPressed = isYPressed && !wasYPressed;
 
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation?.();
-    };
+      if (isZJustPressed) {
+        if (active.has('shift')) {
+          redoHollowVoxelEdit();
+        } else {
+          undoHollowVoxelEdit();
+        }
+      } else if (isYJustPressed) {
+        redoHollowVoxelEdit();
+      }
 
-    window.addEventListener('keydown', handleHollowVoxelEditHistoryHotkey, true);
-    return () => {
-      window.removeEventListener('keydown', handleHollowVoxelEditHistoryHotkey, true);
-    };
+      wasZPressed = isZPressed;
+      wasYPressed = isYPressed;
+    });
+
+    return unsubscribe;
   }, [hollowingEditMode, redoHollowVoxelEdit, scene.mode, transformMgr.transformMode, undoHollowVoxelEdit]);
 
   const blockedPreviewVoxelInstanceIdSet = React.useMemo(() => {

@@ -90,11 +90,51 @@ function isCanvasElement(element: EventTarget | null): boolean {
 export function setupHotkeyListeners() {
     const handleKeyDown = (e: KeyboardEvent) => {
         if (isTextInput(e.target)) return;
+
+        const isCtrlOrMeta = e.ctrlKey || e.metaKey;
+        const key = e.key.toLowerCase();
+        
+        // Prevent browser default behaviors
+        if (
+            (isCtrlOrMeta && ['s', 'a', 'c', 'v', 'z', 'y'].includes(key)) ||
+            ['delete', 'backspace', 'arrowup', 'arrowdown'].includes(key) ||
+            (e.shiftKey && isCtrlOrMeta && ['d', 'c', 'x', 'a', 'n', 'm', 'k'].includes(key))
+        ) {
+            e.preventDefault();
+        }
+
         hotkeyStore.getState().pressKey(e.key);
+
+        if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+            window.dispatchEvent(new CustomEvent('app-hotkey-keydown', {
+                detail: {
+                    key: e.key,
+                    code: e.code,
+                    repeat: e.repeat,
+                    ctrlKey: e.ctrlKey,
+                    metaKey: e.metaKey,
+                    shiftKey: e.shiftKey,
+                    altKey: e.altKey
+                }
+            }));
+        }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
         hotkeyStore.getState().releaseKey(e.key);
+
+        if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+            window.dispatchEvent(new CustomEvent('app-hotkey-keyup', {
+                detail: {
+                    key: e.key,
+                    code: e.code,
+                    ctrlKey: e.ctrlKey,
+                    metaKey: e.metaKey,
+                    shiftKey: e.shiftKey,
+                    altKey: e.altKey
+                }
+            }));
+        }
     };
 
     const handleBlur = () => {

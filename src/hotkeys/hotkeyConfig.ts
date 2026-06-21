@@ -149,6 +149,74 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             modifier: 'meta+shift',
             description: 'Snap rotation to 15° increments (Cmd/Ctrl + Shift + drag)'
         }
+    },
+    GLOBAL: {
+        SAVE: {
+            key: 's',
+            modifier: 'ctrl',
+            description: 'Save active scene'
+        }
+    },
+    DEBUG: {
+        DIAGNOSTICS: {
+            key: 'd',
+            modifier: 'ctrl+shift',
+            description: 'Toggle diagnostics modal'
+        },
+        HISTORY: {
+            key: 'c',
+            modifier: 'ctrl+shift',
+            description: 'Toggle history debug'
+        },
+        TRANSFORM: {
+            key: 'x',
+            modifier: 'ctrl+shift',
+            description: 'Toggle transform debug overlay'
+        },
+        SLICE_METRICS: {
+            key: 'a',
+            modifier: 'ctrl+shift',
+            description: 'Toggle slice metrics debug'
+        },
+        PRINT_MONITOR: {
+            key: 'n',
+            modifier: 'ctrl+shift',
+            description: 'Toggle printing monitor debug'
+        },
+        PRINT_RTSP: {
+            key: 'm',
+            modifier: 'ctrl+shift',
+            description: 'Toggle printing monitor RTSP debug'
+        },
+        TOGGLE_CAPS: {
+            key: 'k',
+            modifier: 'ctrl+shift',
+            description: 'Toggle cross section caps debug panel'
+        }
+    },
+    MESH: {
+        INVERT_NORMALS: {
+            key: 'n',
+            modifier: 'alt',
+            description: 'Invert selected model normals'
+        }
+    },
+    NAVIGATION: {
+        LAYER_UP: {
+            key: 'arrowup',
+            description: 'Navigate layer up'
+        },
+        LAYER_DOWN: {
+            key: 'arrowdown',
+            description: 'Navigate layer down'
+        }
+    },
+    HOLE_PUNCH: {
+        SELECT_ALL: {
+            key: 'a',
+            modifier: 'ctrl',
+            description: 'Select all hole punches / items'
+        }
     }
 } as const;
 

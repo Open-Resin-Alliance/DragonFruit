@@ -15,6 +15,20 @@ if (typeof global.window === 'undefined') {
         },
         removeEventListener(event: string, callback: Function) {
             listeners.get(event)?.delete(callback);
+        },
+        dispatchEvent(event: any) {
+            const type = event.type || event;
+            const detail = event.detail || {};
+            listeners.get(type)?.forEach(cb => cb({ type, detail }));
+            return true;
+        }
+    };
+    (global as any).CustomEvent = class {
+        type: string;
+        detail: any;
+        constructor(type: string, options?: any) {
+            this.type = type;
+            this.detail = options?.detail;
         }
     };
     (global as any).HTMLElement = class {
@@ -177,5 +191,77 @@ test('Pointer/mouse events interception in placement modes on canvas', () => {
 
     cleanup();
 });
+
+test('Newly migrated configurations: GLOBAL, DEBUG, MESH, NAVIGATION, PRESETS, HOLE_PUNCH', () => {
+    hotkeyStore.getState().clearKeys();
+
+    // 1. GLOBAL.SAVE (Ctrl+S)
+    hotkeyStore.getState().pressKey('Control');
+    hotkeyStore.getState().pressKey('s');
+    assert.equal(isActionActiveSync('GLOBAL', 'SAVE'), true);
+    hotkeyStore.getState().clearKeys();
+
+    // 2. DEBUG hotkeys (Ctrl+Shift+D/C/X/A/N/M/K)
+    hotkeyStore.getState().pressKey('Control');
+    hotkeyStore.getState().pressKey('Shift');
+    hotkeyStore.getState().pressKey('d');
+    assert.equal(isActionActiveSync('DEBUG', 'DIAGNOSTICS'), true);
+    hotkeyStore.getState().releaseKey('d');
+
+    hotkeyStore.getState().pressKey('c');
+    assert.equal(isActionActiveSync('DEBUG', 'HISTORY'), true);
+    hotkeyStore.getState().releaseKey('c');
+
+    hotkeyStore.getState().pressKey('x');
+    assert.equal(isActionActiveSync('DEBUG', 'TRANSFORM'), true);
+    hotkeyStore.getState().releaseKey('x');
+
+    hotkeyStore.getState().pressKey('a');
+    assert.equal(isActionActiveSync('DEBUG', 'SLICE_METRICS'), true);
+    hotkeyStore.getState().releaseKey('a');
+
+    hotkeyStore.getState().pressKey('n');
+    assert.equal(isActionActiveSync('DEBUG', 'PRINT_MONITOR'), true);
+    hotkeyStore.getState().releaseKey('n');
+
+    hotkeyStore.getState().pressKey('m');
+    assert.equal(isActionActiveSync('DEBUG', 'PRINT_RTSP'), true);
+    hotkeyStore.getState().releaseKey('m');
+
+    hotkeyStore.getState().pressKey('k');
+    assert.equal(isActionActiveSync('DEBUG', 'TOGGLE_CAPS'), true);
+    hotkeyStore.getState().clearKeys();
+
+    // 3. MESH.INVERT_NORMALS (Alt+N)
+    hotkeyStore.getState().pressKey('Alt');
+    hotkeyStore.getState().pressKey('n');
+    assert.equal(isActionActiveSync('MESH', 'INVERT_NORMALS'), true);
+    hotkeyStore.getState().clearKeys();
+
+    // 4. NAVIGATION.LAYER_UP/DOWN (ArrowUp/Down)
+    hotkeyStore.getState().pressKey('ArrowUp');
+    assert.equal(isActionActiveSync('NAVIGATION', 'LAYER_UP'), true);
+    hotkeyStore.getState().clearKeys();
+
+    hotkeyStore.getState().pressKey('ArrowDown');
+    assert.equal(isActionActiveSync('NAVIGATION', 'LAYER_DOWN'), true);
+    hotkeyStore.getState().clearKeys();
+
+    // 5. HOLE_PUNCH.SELECT_ALL (Ctrl+A)
+    hotkeyStore.getState().pressKey('Control');
+    hotkeyStore.getState().pressKey('a');
+    assert.equal(isActionActiveSync('HOLE_PUNCH', 'SELECT_ALL'), true);
+    hotkeyStore.getState().clearKeys();
+
+    // 6. PRESETS.SLOT_1 to SLOT_6 (1 to 6)
+    hotkeyStore.getState().pressKey('1');
+    assert.equal(isActionActiveSync('PRESETS', 'SLOT_1'), true);
+    hotkeyStore.getState().clearKeys();
+
+    hotkeyStore.getState().pressKey('6');
+    assert.equal(isActionActiveSync('PRESETS', 'SLOT_6'), true);
+    hotkeyStore.getState().clearKeys();
+});
+
 
 

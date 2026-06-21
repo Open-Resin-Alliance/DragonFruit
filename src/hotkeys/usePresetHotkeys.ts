@@ -1,52 +1,43 @@
-import { useEffect, useSyncExternalStore } from 'react';
-import { useHotkeyConfig } from './HotkeyContext';
-import { matchesConfiguredHotkeyDown } from './hotkeyConfig';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { useActionActive } from './hotkeyStore';
 import { setActivePreset, getPresetForPinnedSlot, subscribeToPresets } from '@/supports/Settings/presets';
 
 export function usePresetHotkeys() {
-    const { getHotkey } = useHotkeyConfig();
-
     // Subscribe to preset changes so pinned slots are always current
     useSyncExternalStore(subscribeToPresets, () => null, () => null);
 
-    // Retrieve current bindings for 6 pinned slots
-    const slot1Key = getHotkey('PRESETS', 'SLOT_1');
-    const slot2Key = getHotkey('PRESETS', 'SLOT_2');
-    const slot3Key = getHotkey('PRESETS', 'SLOT_3');
-    const slot4Key = getHotkey('PRESETS', 'SLOT_4');
-    const slot5Key = getHotkey('PRESETS', 'SLOT_5');
-    const slot6Key = getHotkey('PRESETS', 'SLOT_6');
+    const active1 = useActionActive('PRESETS', 'SLOT_1');
+    const active2 = useActionActive('PRESETS', 'SLOT_2');
+    const active3 = useActionActive('PRESETS', 'SLOT_3');
+    const active4 = useActionActive('PRESETS', 'SLOT_4');
+    const active5 = useActionActive('PRESETS', 'SLOT_5');
+    const active6 = useActionActive('PRESETS', 'SLOT_6');
+
+    const wasActive1 = useRef(false);
+    const wasActive2 = useRef(false);
+    const wasActive3 = useRef(false);
+    const wasActive4 = useRef(false);
+    const wasActive5 = useRef(false);
+    const wasActive6 = useRef(false);
 
     useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            // Ignore if typing in an input
-            const target = e.target as HTMLElement;
-            if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA') return;
+        const slots = [
+            { active: active1, wasActive: wasActive1, slot: 1 },
+            { active: active2, wasActive: wasActive2, slot: 2 },
+            { active: active3, wasActive: wasActive3, slot: 3 },
+            { active: active4, wasActive: wasActive4, slot: 4 },
+            { active: active5, wasActive: wasActive5, slot: 5 },
+            { active: active6, wasActive: wasActive6, slot: 6 },
+        ];
 
-            if (e.repeat) return;
-
-            const slots = [
-                { key: slot1Key, slot: 1 },
-                { key: slot2Key, slot: 2 },
-                { key: slot3Key, slot: 3 },
-                { key: slot4Key, slot: 4 },
-                { key: slot5Key, slot: 5 },
-                { key: slot6Key, slot: 6 },
-            ];
-
-            for (const { key, slot } of slots) {
-                if (matchesConfiguredHotkeyDown(e, { key: key.key, modifier: key.modifier })) {
-                    e.preventDefault();
-                    const preset = getPresetForPinnedSlot(slot);
-                    if (preset) {
-                        setActivePreset(preset.id);
-                    }
-                    break;
+        for (const { active, wasActive, slot } of slots) {
+            if (active && !wasActive.current) {
+                const preset = getPresetForPinnedSlot(slot);
+                if (preset) {
+                    setActivePreset(preset.id);
                 }
             }
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [slot1Key, slot2Key, slot3Key, slot4Key, slot5Key, slot6Key]);
+            wasActive.current = active;
+        }
+    }, [active1, active2, active3, active4, active5, active6]);
 }
