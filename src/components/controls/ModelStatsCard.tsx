@@ -468,14 +468,14 @@ export function ModelStatsCard({
           aria-label="Flip model stats card"
           onClick={handleToggleFlip}
           onKeyDown={handleCardKeyDown}
-          className="grid w-full min-w-0 transition-transform duration-500 ease-out [transform-style:preserve-3d] focus:outline-none"
-          style={{ transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)' }}
+          className="grid w-full min-w-0 focus:outline-none"
         >
           <div
-            className="[grid-area:1/1] w-full min-w-0 ui-panel rounded-md px-3 py-2.5 shadow-md space-y-1.5 flex flex-col"
+            className="[grid-area:1/1] w-full min-w-0 ui-panel rounded-md px-3 py-2.5 shadow-md space-y-1.5 flex flex-col transition-opacity duration-300 ease-out"
             style={{
               background: 'color-mix(in srgb, var(--surface-0), transparent 8%)',
-              backfaceVisibility: 'hidden',
+              opacity: isFlipped ? 0 : 1,
+              pointerEvents: isFlipped ? 'none' : 'auto',
             }}
           >
             <div className="font-semibold text-[12px] truncate" style={{ color: frontHeaderColor }}>
@@ -550,11 +550,11 @@ export function ModelStatsCard({
           </div>
 
           <div
-            className="[grid-area:1/1] w-full min-w-0 ui-panel rounded-md px-3 py-2.5 shadow-md space-y-1.5 flex flex-col"
+            className="[grid-area:1/1] w-full min-w-0 ui-panel rounded-md px-3 py-2.5 shadow-md space-y-1.5 flex flex-col transition-opacity duration-300 ease-out"
             style={{
               background: 'color-mix(in srgb, var(--surface-0), transparent 8%)',
-              backfaceVisibility: 'hidden',
-              transform: 'rotateY(180deg)',
+              opacity: isFlipped ? 1 : 0,
+              pointerEvents: isFlipped ? 'auto' : 'none',
             }}
           >
             <div className="w-full min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-[12px]" style={{ color: 'var(--text-strong)' }} title={model ? model.name : 'No model selected'}>
