@@ -10,6 +10,7 @@ import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Loader2
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
+import { NotificationStack } from '@/components/organisms/NotificationStack';
 import { GlobalUpdateIndicator } from '@/features/updater/GlobalUpdateIndicator';
 import { EmptySceneState } from '@/components/layout/EmptySceneState';
 import { IslandScanCard } from '@/components/controls/IslandScanCard';
@@ -22065,113 +22066,22 @@ export default function Home() {
         </div>
       )}
 
-      {isSaveToastVisible && (
-        <ToastViewport zIndex={126} offset="1.25rem">
-          <Toast tone="info" animated visible={isSaveToastAnimatedVisible} className="flex items-center gap-2">
-            <RefreshCw className="h-4 w-4 animate-spin" />
-            {saveToastLabel}
-          </Toast>
-        </ToastViewport>
-      )}
-
-      {historyActionToast && (
-        <ToastViewport zIndex={125} offset="1.25rem">
-          <Toast
-            tone={historyActionToast.direction === 'undo' ? 'warning' : 'info'}
-            animated
-            visible={isHistoryActionToastVisible}
-            className="flex items-center gap-2"
-          >
-            {historyActionToast.direction === 'undo' ? (
-              <Undo2 className="h-4 w-4 motion-safe:animate-pulse" />
-            ) : (
-              <Redo2 className="h-4 w-4 motion-safe:animate-pulse" />
-            )}
-            {historyActionToast.text}
-          </Toast>
-        </ToastViewport>
-      )}
-
-      {printingMonitorErrorToast && (
-        <ToastViewport
-          zIndex={126}
-          offset={(historyActionToast || scene.sceneImportReport) ? '4.5rem' : '1.25rem'}
-        >
-          <Toast
-            tone="error"
-            animated
-            visible={isPrintingMonitorErrorToastVisible}
-            className="flex items-center gap-2"
-          >
-            <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
-            {printingMonitorErrorToast.text}
-          </Toast>
-        </ToastViewport>
-      )}
-
-      {scene.sceneImportReport && (
-        <ToastViewport zIndex={125} offset="1.25rem">
-          <Toast
-            tone={
-              scene.sceneImportReport.tone === 'error'
-                ? 'error'
-                : scene.sceneImportReport.tone === 'warning'
-                  ? 'warning'
-                  : 'success'
-            }
-            animated
-            visible={isSceneImportToastVisible}
-            className={`flex items-center gap-2 ${
-              scene.sceneImportReport.clickAction === 'openMeshRepairReport'
-                ? 'pointer-events-auto cursor-pointer select-none'
-                : ''
-            }`}
-            role={scene.sceneImportReport.clickAction === 'openMeshRepairReport' ? 'button' : undefined}
-            tabIndex={scene.sceneImportReport.clickAction === 'openMeshRepairReport' ? 0 : undefined}
-            onClick={() => {
-              if (scene.sceneImportReport?.clickAction === 'openMeshRepairReport') {
-                scene.openPendingMeshRepairReports();
-              }
-            }}
-            onKeyDown={(event) => {
-              if (scene.sceneImportReport?.clickAction !== 'openMeshRepairReport') {
-                return;
-              }
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                scene.openPendingMeshRepairReports();
-              }
-            }}
-          >
-            {scene.sceneImportReport.tone === 'error' ? (
-              <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
-            ) : scene.sceneImportReport.tone === 'warning' ? (
-              <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
-            ) : (
-              <CheckCircle2 className="h-4 w-4" />
-            )}
-            {scene.sceneImportReport.text}
-          </Toast>
-        </ToastViewport>
-      )}
-
-      {exportSuccessToast && (
-        <ToastViewport zIndex={125} offset="1.25rem">
-          <Toast tone="success" animated visible={isExportSuccessToastVisible} className="flex items-center gap-2">
-            <CheckCircle2 className="h-4 w-4" />
-            Saved to: {exportSuccessToast.path}
-          </Toast>
-        </ToastViewport>
-      )}
-
-      {exportErrorToast && (
-        <ToastViewport zIndex={125} offset="1.25rem">
-          <Toast tone="error" animated visible={isExportErrorToastVisible} className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
-            {exportErrorToast.text}
-          </Toast>
-        </ToastViewport>
-      )}
+      <NotificationStack
+        isSaveToastVisible={isSaveToastVisible}
+        isSaveToastAnimatedVisible={isSaveToastAnimatedVisible}
+        saveToastLabel={saveToastLabel}
+        historyActionToast={historyActionToast}
+        isHistoryActionToastVisible={isHistoryActionToastVisible}
+        printingMonitorErrorToast={printingMonitorErrorToast}
+        isPrintingMonitorErrorToastVisible={isPrintingMonitorErrorToastVisible}
+        sceneImportReport={scene.sceneImportReport}
+        isSceneImportToastVisible={isSceneImportToastVisible}
+        onOpenMeshRepairReport={scene.openPendingMeshRepairReports}
+        exportSuccessToast={exportSuccessToast}
+        isExportSuccessToastVisible={isExportSuccessToastVisible}
+        exportErrorToast={exportErrorToast}
+        isExportErrorToastVisible={isExportErrorToastVisible}
+      />
 
     </div>
   );
