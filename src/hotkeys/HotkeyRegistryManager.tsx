@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { hotkeyStore, isActionActiveSync } from './hotkeyStore';
+import { useHotkeyConfig } from './HotkeyContext';
 
 // Monkey-patch EventTarget.prototype.addEventListener to block/warn keydown/keyup listeners from forbidden paths
 if (typeof EventTarget !== 'undefined') {
@@ -181,6 +182,12 @@ export function setupHotkeyListeners() {
 }
 
 export function HotkeyRegistryManager() {
+    const { config } = useHotkeyConfig();
+
+    useEffect(() => {
+        hotkeyStore.setState({ config });
+    }, [config]);
+
     useEffect(() => {
         return setupHotkeyListeners();
     }, []);
