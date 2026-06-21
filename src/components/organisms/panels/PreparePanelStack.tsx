@@ -88,6 +88,8 @@ export function PreparePanelStack({
   arrangeSpacingMm,
   setArrangeSpacingMm,
 }: PreparePanelStackProps) {
+  // Invoked inline by Home (not as <JSX/>) so FloatingPanelStack can flatten these keyed panels as direct children for its layout-profile positioning. 'use no memo' keeps React Compiler from injecting a useMemoCache hook (the conditional inline call must stay hook-free).
+  'use no memo';
   const {
     hollowingState,
     handleHollowingStateChange,

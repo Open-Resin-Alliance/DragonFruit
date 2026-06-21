@@ -8930,77 +8930,77 @@ export default function Home() {
       <FloatingPanelStack>
         {scene.mode === 'prepare' ? (
           <>
-            <PreparePanelStack
-              scene={scene}
-              transformMgr={transformMgr}
-              hollowing={hollowing}
-              holePunch={holePunch}
-              arrange={arrange}
-              outsidePlateModelIds={outsidePlateModelIds}
-              handleModelSelection={handleModelSelection}
-              handleModelRangeSelection={handleModelRangeSelection}
-              handleGroupSelection={handleGroupSelection}
-              handleGroupSelectedModels={handleGroupSelectedModels}
-              handleUngroupSelectedModels={handleUngroupSelectedModels}
-              handleUngroupFolder={handleUngroupFolder}
-              handleSplitImportGroup={handleSplitImportGroup}
-              handleRenameFolder={handleRenameFolder}
-              handleRenameModel={handleRenameModel}
-              handleModelListContextMenu={handleModelListContextMenu}
-              handleRepairModel={handleRepairModel}
-              handleOpenModelSupportsInfo={handleOpenModelSupportsInfo}
-              showEmptySceneDialog={showEmptySceneDialog}
-              importOverlayState={importOverlayState}
-              modelStatsBottomClearancePx={modelStatsBottomClearancePx}
-              debugPrimitivesPanelVisible={debugPrimitivesPanelVisible}
-              ensurePendingTransformHistoryForActiveModel={ensurePendingTransformHistoryForActiveModel}
-              requestDestructiveTransformSupportDeletion={requestDestructiveTransformSupportDeletion}
-              handleRotationComplete={handleRotationComplete}
-              handleAutoLiftChange={handleAutoLiftChange}
-              scheduleCommitPendingTransformHistory={scheduleCommitPendingTransformHistory}
-              isApplyingHolePunch={isApplyingHolePunch}
-              interiorView={interiorView}
-              hasCavityGeometry={hasCavityGeometry}
-              arrangeSpacingMm={arrangeSpacingMm}
-              setArrangeSpacingMm={setArrangeSpacingMm}
-            />
+            {PreparePanelStack({
+              scene: scene,
+              transformMgr: transformMgr,
+              hollowing: hollowing,
+              holePunch: holePunch,
+              arrange: arrange,
+              outsidePlateModelIds: outsidePlateModelIds,
+              handleModelSelection: handleModelSelection,
+              handleModelRangeSelection: handleModelRangeSelection,
+              handleGroupSelection: handleGroupSelection,
+              handleGroupSelectedModels: handleGroupSelectedModels,
+              handleUngroupSelectedModels: handleUngroupSelectedModels,
+              handleUngroupFolder: handleUngroupFolder,
+              handleSplitImportGroup: handleSplitImportGroup,
+              handleRenameFolder: handleRenameFolder,
+              handleRenameModel: handleRenameModel,
+              handleModelListContextMenu: handleModelListContextMenu,
+              handleRepairModel: handleRepairModel,
+              handleOpenModelSupportsInfo: handleOpenModelSupportsInfo,
+              showEmptySceneDialog: showEmptySceneDialog,
+              importOverlayState: importOverlayState,
+              modelStatsBottomClearancePx: modelStatsBottomClearancePx,
+              debugPrimitivesPanelVisible: debugPrimitivesPanelVisible,
+              ensurePendingTransformHistoryForActiveModel: ensurePendingTransformHistoryForActiveModel,
+              requestDestructiveTransformSupportDeletion: requestDestructiveTransformSupportDeletion,
+              handleRotationComplete: handleRotationComplete,
+              handleAutoLiftChange: handleAutoLiftChange,
+              scheduleCommitPendingTransformHistory: scheduleCommitPendingTransformHistory,
+              isApplyingHolePunch: isApplyingHolePunch,
+              interiorView: interiorView,
+              hasCavityGeometry: hasCavityGeometry,
+              arrangeSpacingMm: arrangeSpacingMm,
+              setArrangeSpacingMm: setArrangeSpacingMm,
+            })}
           </>
         ) : scene.mode === 'analysis' ? (
           <>
-            <AnalysisPanelStack
-              scene={scene}
-              slicing={slicing}
-              islands={islands}
-            />
+            {AnalysisPanelStack({
+              scene: scene,
+              slicing: slicing,
+              islands: islands,
+            })}
           </>
         ) : scene.mode === 'export' ? (
           <>
-            <ExportPanelStack
-              scene={scene}
-              slicing={slicing}
-              supportsRef={supportsRef}
-              captureExportThumbnailPng={captureExportThumbnailPng}
-              handleExportSuccess={handleExportSuccess}
-              showOperationError={showOperationError}
-              estimatedSlicerLayerCount={estimatedSlicerLayerCount}
-              crossSectionLayerHeightMm={crossSectionLayerHeightMm}
-              estimatedVolumeMlLabel={estimatedVolumeMlLabel}
-              handleSliceRunStartedForPrinting={handleSliceRunStartedForPrinting}
-              handlePrintingLayerPreviewGenerated={handlePrintingLayerPreviewGenerated}
-              handleSlicingFinishedForPrinting={handleSlicingFinishedForPrinting}
-              handleSliceArtifactReady={handleSliceArtifactReady}
-              handleSlicingBenchmarkComplete={handleSlicingBenchmarkComplete}
-              triggerSliceExportRef={triggerSliceExportRef}
-              shouldAutoSliceOnExportEntry={shouldAutoSliceOnExportEntry}
-              shouldReturnToPrintingAfterSliceRef={shouldReturnToPrintingAfterSliceRef}
-              setIsSlicingBusy={setIsSlicingBusy}
-              canSliceAndUpload={canSliceAndUpload}
-              canSliceAndPrint={canSliceAndPrint}
-              sliceIntentRef={sliceIntentRef}
-              handleBeforeSliceStart={handleBeforeSliceStart}
-              handlePreSliceSceneSave={handlePreSliceSceneSave}
-              preSliceFileDestinationPathRef={preSliceFileDestinationPathRef}
-            />
+            {ExportPanelStack({
+              scene: scene,
+              slicing: slicing,
+              supportsRef: supportsRef,
+              captureExportThumbnailPng: captureExportThumbnailPng,
+              handleExportSuccess: handleExportSuccess,
+              showOperationError: showOperationError,
+              estimatedSlicerLayerCount: estimatedSlicerLayerCount,
+              crossSectionLayerHeightMm: crossSectionLayerHeightMm,
+              estimatedVolumeMlLabel: estimatedVolumeMlLabel,
+              handleSliceRunStartedForPrinting: handleSliceRunStartedForPrinting,
+              handlePrintingLayerPreviewGenerated: handlePrintingLayerPreviewGenerated,
+              handleSlicingFinishedForPrinting: handleSlicingFinishedForPrinting,
+              handleSliceArtifactReady: handleSliceArtifactReady,
+              handleSlicingBenchmarkComplete: handleSlicingBenchmarkComplete,
+              triggerSliceExportRef: triggerSliceExportRef,
+              shouldAutoSliceOnExportEntry: shouldAutoSliceOnExportEntry,
+              shouldReturnToPrintingAfterSliceRef: shouldReturnToPrintingAfterSliceRef,
+              setIsSlicingBusy: setIsSlicingBusy,
+              canSliceAndUpload: canSliceAndUpload,
+              canSliceAndPrint: canSliceAndPrint,
+              sliceIntentRef: sliceIntentRef,
+              handleBeforeSliceStart: handleBeforeSliceStart,
+              handlePreSliceSceneSave: handlePreSliceSceneSave,
+              preSliceFileDestinationPathRef: preSliceFileDestinationPathRef,
+            })}
           </>
 
         ) : scene.mode === 'support' ? (
@@ -9009,70 +9009,70 @@ export default function Home() {
           </>
         ) : scene.mode === 'printing' ? (
           <>
-            <PrintingPanelStack
-              printingArtifact={printingArtifact}
-              printingOutputSizeLabel={printingOutputSizeLabel}
-              activePrinterProfile={activePrinterProfile}
-              printingResinName={printingResinName}
-              estimatedPrintTimeLabel={estimatedPrintTimeLabel}
-              estimatedVolumeMlLabel={estimatedVolumeMlLabel}
-              canDownloadPrintArtifact={canDownloadPrintArtifact}
-              canSendToPrinter={canSendToPrinter}
-              printingSendBusy={printingSendBusy}
-              printingSendStatusText={printingSendStatusText}
-              sendToPrinterButtonLabel={sendToPrinterButtonLabel}
-              printableConnectedPrinterFleet={printableConnectedPrinterFleet}
-              setPrintingTargetPickerMode={setPrintingTargetPickerMode}
-              setPrintingTargetPickerOpen={setPrintingTargetPickerOpen}
-              handleDownloadPrintArtifact={handleDownloadPrintArtifact}
-              handleSendToPrinter={handleSendToPrinter}
-              handleCancelSendToPrinter={handleCancelSendToPrinter}
-              completedSliceIntent={completedSliceIntent}
-              completedSaveDestinationPath={completedSaveDestinationPath}
-            />
+            {PrintingPanelStack({
+              printingArtifact: printingArtifact,
+              printingOutputSizeLabel: printingOutputSizeLabel,
+              activePrinterProfile: activePrinterProfile,
+              printingResinName: printingResinName,
+              estimatedPrintTimeLabel: estimatedPrintTimeLabel,
+              estimatedVolumeMlLabel: estimatedVolumeMlLabel,
+              canDownloadPrintArtifact: canDownloadPrintArtifact,
+              canSendToPrinter: canSendToPrinter,
+              printingSendBusy: printingSendBusy,
+              printingSendStatusText: printingSendStatusText,
+              sendToPrinterButtonLabel: sendToPrinterButtonLabel,
+              printableConnectedPrinterFleet: printableConnectedPrinterFleet,
+              setPrintingTargetPickerMode: setPrintingTargetPickerMode,
+              setPrintingTargetPickerOpen: setPrintingTargetPickerOpen,
+              handleDownloadPrintArtifact: handleDownloadPrintArtifact,
+              handleSendToPrinter: handleSendToPrinter,
+              handleCancelSendToPrinter: handleCancelSendToPrinter,
+              completedSliceIntent: completedSliceIntent,
+              completedSaveDestinationPath: completedSaveDestinationPath,
+            })}
           </>
         ) : (
           <>
           </>
         )}
 
-        <SharedPanelStack
-          scene={scene}
-          slicing={slicing}
-          transformMgr={transformMgr}
-          handleSceneLayerScrubStart={handleSceneLayerScrubStart}
-          handleSceneLayerScrubEnd={handleSceneLayerScrubEnd}
-          isCrossSectionEnabled={isCrossSectionEnabled}
-          handleToggleCrossSection={handleToggleCrossSection}
-          isTransformDebugOverlayOpen={isTransformDebugOverlayOpen}
-          setIsTransformDebugOverlayOpen={setIsTransformDebugOverlayOpen}
-          displayActiveModelId={displayActiveModelId}
-          transformDebugStats={transformDebugStats}
-          supportDebugStats={supportDebugStats}
-          activeSupportEntityCounts={activeSupportEntityCounts}
-          formatDebugVec3={formatDebugVec3}
-          formatDebugVec3Like={formatDebugVec3Like}
-          formatDebugNumber={formatDebugNumber}
-          formatDebugTime={formatDebugTime}
-          formatDebugLatencyMs={formatDebugLatencyMs}
-          printingPreviewTotalLayers={printingPreviewTotalLayers}
-          printingSelectedLayer={printingSelectedLayer}
-          printingDisplayedLayer={printingDisplayedLayer}
-          isPrintingLayerScrubbing={isPrintingLayerScrubbing}
-          shouldShowScrubPreview={shouldShowScrubPreview}
-          printingSendProgress={printingSendProgress}
-          printingSendBusy={printingSendBusy}
-          printingSendStageText={printingSendStageText}
-          printingLayerPreviewUrls={printingLayerPreviewUrls}
-          printingArtifact={printingArtifact}
-          printingUploadDialogOpen={printingUploadDialogOpen}
-          printingUploadDialogStage={printingUploadDialogStage}
-          printingUploadDisplayProgress={printingUploadDisplayProgress}
-          printingReadyPlateId={printingReadyPlateId}
-          printingPrintNowBusy={printingPrintNowBusy}
-          printingSendStatusText={printingSendStatusText}
-          printingSlicingBenchmark={printingSlicingBenchmark}
-        />
+        {SharedPanelStack({
+          scene: scene,
+          slicing: slicing,
+          transformMgr: transformMgr,
+          handleSceneLayerScrubStart: handleSceneLayerScrubStart,
+          handleSceneLayerScrubEnd: handleSceneLayerScrubEnd,
+          isCrossSectionEnabled: isCrossSectionEnabled,
+          handleToggleCrossSection: handleToggleCrossSection,
+          isTransformDebugOverlayOpen: isTransformDebugOverlayOpen,
+          setIsTransformDebugOverlayOpen: setIsTransformDebugOverlayOpen,
+          displayActiveModelId: displayActiveModelId,
+          transformDebugStats: transformDebugStats,
+          supportDebugStats: supportDebugStats,
+          activeSupportEntityCounts: activeSupportEntityCounts,
+          formatDebugVec3: formatDebugVec3,
+          formatDebugVec3Like: formatDebugVec3Like,
+          formatDebugNumber: formatDebugNumber,
+          formatDebugTime: formatDebugTime,
+          formatDebugLatencyMs: formatDebugLatencyMs,
+          printingPreviewTotalLayers: printingPreviewTotalLayers,
+          printingSelectedLayer: printingSelectedLayer,
+          printingDisplayedLayer: printingDisplayedLayer,
+          isPrintingLayerScrubbing: isPrintingLayerScrubbing,
+          shouldShowScrubPreview: shouldShowScrubPreview,
+          printingSendProgress: printingSendProgress,
+          printingSendBusy: printingSendBusy,
+          printingSendStageText: printingSendStageText,
+          printingLayerPreviewUrls: printingLayerPreviewUrls,
+          printingArtifact: printingArtifact,
+          printingUploadDialogOpen: printingUploadDialogOpen,
+          printingUploadDialogStage: printingUploadDialogStage,
+          printingUploadDisplayProgress: printingUploadDisplayProgress,
+          printingReadyPlateId: printingReadyPlateId,
+          printingPrintNowBusy: printingPrintNowBusy,
+          printingSendStatusText: printingSendStatusText,
+          printingSlicingBenchmark: printingSlicingBenchmark,
+        })}
       </FloatingPanelStack>
 
       <div className="absolute inset-0 top-14 z-0 flex">
