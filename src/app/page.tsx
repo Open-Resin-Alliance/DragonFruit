@@ -9,6 +9,11 @@ import type { ThreeEvent } from '@react-three/fiber';
 import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Plus, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
+import { PreparePanelStack } from '@/components/organisms/panels/PreparePanelStack';
+import { AnalysisPanelStack } from '@/components/organisms/panels/AnalysisPanelStack';
+import { ExportPanelStack } from '@/components/organisms/panels/ExportPanelStack';
+import { PrintingPanelStack } from '@/components/organisms/panels/PrintingPanelStack';
+import { SharedPanelStack } from '@/components/organisms/panels/SharedPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
 import { NotificationStack } from '@/components/organisms/NotificationStack';
 import { PrintingPreviewPane } from '@/components/organisms/PrintingPreviewPane';
@@ -11764,350 +11769,76 @@ export default function Home() {
       <FloatingPanelStack>
         {scene.mode === 'prepare' ? (
           <>
-            <ModelManagerPanel
-              key="prepare-models"
-              models={scene.models}
+            <PreparePanelStack
+              scene={scene}
+              transformMgr={transformMgr}
+              hollowing={hollowing}
+              holePunch={holePunch}
+              arrange={arrange}
               outsidePlateModelIds={outsidePlateModelIds}
-              activeModelId={scene.activeModelId}
-              selectedModelIds={scene.selectedModelIds}
-              onSelect={handleModelSelection}
-              onSelectRange={handleModelRangeSelection}
-              onSelectGroup={handleGroupSelection}
-              onGroupModels={handleGroupSelectedModels}
-              onUngroupModels={handleUngroupSelectedModels}
-              onUngroupGroup={handleUngroupFolder}
-              onSplitImportGroup={handleSplitImportGroup}
-              onRenameGroup={handleRenameFolder}
-              onRenameModel={handleRenameModel}
-              onModelContextMenu={handleModelListContextMenu}
-              onRepairModel={handleRepairModel}
-              onOpenSupportsInfo={handleOpenModelSupportsInfo}
-              onDelete={scene.deleteModel}
-              onVisibilityChange={scene.setModelVisibility}
-              dimmed={showEmptySceneDialog || importOverlayState.active}
-              bottomClearancePx={modelStatsBottomClearancePx}
+              handleModelSelection={handleModelSelection}
+              handleModelRangeSelection={handleModelRangeSelection}
+              handleGroupSelection={handleGroupSelection}
+              handleGroupSelectedModels={handleGroupSelectedModels}
+              handleUngroupSelectedModels={handleUngroupSelectedModels}
+              handleUngroupFolder={handleUngroupFolder}
+              handleSplitImportGroup={handleSplitImportGroup}
+              handleRenameFolder={handleRenameFolder}
+              handleRenameModel={handleRenameModel}
+              handleModelListContextMenu={handleModelListContextMenu}
+              handleRepairModel={handleRepairModel}
+              handleOpenModelSupportsInfo={handleOpenModelSupportsInfo}
+              showEmptySceneDialog={showEmptySceneDialog}
+              importOverlayState={importOverlayState}
+              modelStatsBottomClearancePx={modelStatsBottomClearancePx}
+              debugPrimitivesPanelVisible={debugPrimitivesPanelVisible}
+              ensurePendingTransformHistoryForActiveModel={ensurePendingTransformHistoryForActiveModel}
+              requestDestructiveTransformSupportDeletion={requestDestructiveTransformSupportDeletion}
+              handleRotationComplete={handleRotationComplete}
+              handleAutoLiftChange={handleAutoLiftChange}
+              scheduleCommitPendingTransformHistory={scheduleCommitPendingTransformHistory}
+              isApplyingHolePunch={isApplyingHolePunch}
+              interiorView={interiorView}
+              hasCavityGeometry={hasCavityGeometry}
+              arrangeSpacingMm={arrangeSpacingMm}
+              setArrangeSpacingMm={setArrangeSpacingMm}
             />
-
-            {debugPrimitivesPanelVisible && (
-              <DebugPrimitivesPanel
-                key="prepare-debug-primitives"
-                onAdd={scene.addDebugPrimitive}
-                onClear={scene.clearDebugModels}
-              />
-            )}
-
-            {scene.geom && transformMgr.transformMode === 'transform' && (
-              <TransformControls
-                key="prepare-transform-controls"
-                position={transformMgr.transform.position}
-                onPositionChange={transformMgr.transformHook.setPosition}
-                onCenter={transformMgr.transformHook.centerXY}
-                onPlatform={transformMgr.transformHook.setPlatformZ}
-                rotation={transformMgr.transform.rotation}
-                onRotationChange={(x, y, z) => {
-                  const current = transformMgr.transform.rotation;
-                  const EPS = 1e-6;
-                  const hasDestructiveRotate = Math.abs(x - current.x) > EPS
-                    || Math.abs(y - current.y) > EPS;
-
-                  const hasAnyRotateDelta = hasDestructiveRotate || Math.abs(z - current.z) > EPS;
-                  if (hasAnyRotateDelta) {
-                    ensurePendingTransformHistoryForActiveModel('rotate');
-                  }
-
-                  if (hasDestructiveRotate) {
-                    const proceed = requestDestructiveTransformSupportDeletion('Rotate X/Y');
-                    if (!proceed) return;
-                  }
-
-                  transformMgr.transformHook.setRotation(x, y, z);
-                }}
-                onResetRotation={transformMgr.transformHook.resetRotation}
-                onRotationComplete={handleRotationComplete}
-                scale={transformMgr.transform.scale}
-                onScaleChange={(x, y, z) => {
-                  const current = transformMgr.transform.scale;
-                  const EPS = 1e-6;
-                  const hasDestructiveScale = Math.abs(x - current.x) > EPS
-                    || Math.abs(y - current.y) > EPS
-                    || Math.abs(z - current.z) > EPS;
-
-                  if (hasDestructiveScale) {
-                    ensurePendingTransformHistoryForActiveModel('scale');
-                  }
-
-                  if (hasDestructiveScale) {
-                    const proceed = requestDestructiveTransformSupportDeletion('Scale XYZ');
-                    if (!proceed) return;
-                  }
-
-                  transformMgr.transformHook.setScale(x, y, z);
-                }}
-                onResetScale={transformMgr.transformHook.resetScale}
-                modelBBox={scene.geom.bbox}
-                autoLift={transformMgr.autoLift}
-                onAutoLiftChange={handleAutoLiftChange}
-                liftDistance={transformMgr.liftDistance}
-                onLiftDistanceChange={transformMgr.setLiftDistance}
-                onLift={() => {
-                  const lowestWorldZ = transformMgr.getLowestWorldZ();
-                  if (lowestWorldZ !== null) transformMgr.transformHook.snapToLift(lowestWorldZ, transformMgr.liftDistance);
-                }}
-                onDrop={() => {
-                  const lowestWorldZ = transformMgr.getLowestWorldZ();
-                  if (lowestWorldZ !== null) transformMgr.transformHook.snapToPlatform(lowestWorldZ);
-                }}
-                onTransformCommit={scheduleCommitPendingTransformHistory}
-              />
-            )}
-
-            {scene.geom && transformMgr.transformMode === 'smoothing' && (
-              <MeshSmoothingSettingsPanel key="prepare-smoothing-settings" />
-            )}
-
-            {scene.geom && transformMgr.transformMode === 'hollowing' && (
-              <>
-                <HollowingPanel
-                  key="prepare-hollowing-panel"
-                  state={hollowingState}
-                  onStateChange={handleHollowingStateChange}
-                  onReset={requestClearAppliedHollowing}
-                  onResetSettings={handleResetHollowingSettings}
-                  onStartEdit={handleStartHollowVoxelEditing}
-                  onDoneEdit={handleDoneHollowVoxelEditing}
-                  onClearEdit={handleClearHollowVoxelEditing}
-                  onApply={() => { void handleApplyHollowing(); }}
-                  isApplying={isApplyingHollowing}
-                  isPreviewing={isPreviewingHollowing}
-                  isApplyingBlockers={isApplyingBlockersHollowing || isPreviewingHollowing}
-                  canApply={!isShellFaceSelectionPending && (isHollowingDirty || !isHollowingApplied)}
-                  canReset={canResetHollowing}
-                  canEdit={!isShellFaceSelectionPending && Boolean(scene.activeModel)}
-                  isEditMode={hollowingEditMode}
-                  isHollowingApplied={isHollowingApplied}
-                  shellFaceSelectionPending={isShellFaceSelectionPending}
-                />
-
-                <HolePunchPanel
-                  key="prepare-hole-punch-panel"
-                  state={holePunchState}
-                  onStateChange={handleHolePunchStateChange}
-                  onReset={requestResetHolePunch}
-                  onApply={() => { void handleApplyHolePunch(); }}
-                  canUseAutoDepth={canUseAutoHolePunchDepth}
-                  isApplying={isApplyingHolePunch}
-                  canApply={!isShellFaceSelectionPending && (isHolePunchDirty || holePunchNeedsBake)}
-                  canReset={!isShellFaceSelectionPending && canResetHolePunch}
-                  disabled={hollowingEditMode}
-                  interiorView={interiorView}
-                  interiorViewAvailable={hasCavityGeometry}
-                />
-              </>
-            )}
-
-            {scene.models.length > 0 && transformMgr.transformMode === 'arrange' && (
-              <>
-                <ArrangePanel
-                  key="prepare-arrange-panel"
-                  precisionMode={arrangePrecisionMode}
-                  onPrecisionModeChange={setArrangePrecisionMode}
-                  layoutMode={arrangeLayoutMode}
-                  onLayoutModeChange={setArrangeLayoutMode}
-                  spacingMm={arrangeSpacingMm}
-                  onSpacingMmChange={setArrangeSpacingMm}
-                  allowRotateOnZ={arrangeAllowRotateOnZ}
-                  onAllowRotateOnZChange={setArrangeAllowRotateOnZ}
-                  arrayCountX={arrangeArrayCountX}
-                  arrayCountY={arrangeArrayCountY}
-                  arrayCountZ={arrangeArrayCountZ}
-                  onArrayCountXChange={setArrangeArrayCountX}
-                  onArrayCountYChange={setArrangeArrayCountY}
-                  onArrayCountZChange={setArrangeArrayCountZ}
-                  arrayGapX={arrangeArrayGapX}
-                  arrayGapY={arrangeArrayGapY}
-                  arrayGapZ={arrangeArrayGapZ}
-                  onArrayGapXChange={setArrangeArrayGapX}
-                  onArrayGapYChange={setArrangeArrayGapY}
-                  onArrayGapZChange={setArrangeArrayGapZ}
-                  anchorMode={arrangeAnchorMode}
-                  onAnchorModeChange={setArrangeAnchorMode}
-                  onApplyAll={() => {
-                    void (arrangeLayoutMode === 'array'
-                      ? handleManualArrayArrangeModels('all')
-                      : (arrangePrecisionMode === 'high_precision'
-                        ? handleHighPrecisionArrangeModels('all')
-                        : handleAutoArrangeModels('all')));
-                  }}
-                  onApplySelected={() => {
-                    void (arrangeLayoutMode === 'array'
-                      ? handleManualArrayArrangeModels('selected')
-                      : (arrangePrecisionMode === 'high_precision'
-                        ? handleHighPrecisionArrangeModels('selected')
-                        : handleAutoArrangeModels('selected')));
-                  }}
-                  modelCount={scene.models.filter((m) => m.visible).length}
-                  selectedModelCount={scene.models.filter((m) => m.visible && scene.selectedModelIds.includes(m.id)).length}
-                  isApplying={isAutoArranging}
-                  disableArrangeActions={isDuplicateSetupBlockingArrange}
-                />
-
-                <DuplicatePanel
-                  key="prepare-duplicate-panel"
-                  activeModelName={scene.activeModel?.name ?? null}
-                  layoutMode={duplicateLayoutMode}
-                  onLayoutModeChange={setDuplicateLayoutMode}
-                  precisionMode={duplicatePrecisionMode}
-                  onPrecisionModeChange={setDuplicatePrecisionMode}
-                  totalCopies={duplicateTotalCopies}
-                  onTotalCopiesChange={setDuplicateTotalCopies}
-                  spacingMm={duplicateSpacingMm}
-                  onSpacingMmChange={setDuplicateSpacingMm}
-                  arrayCountX={duplicateArrayCountX}
-                  arrayCountY={duplicateArrayCountY}
-                  arrayCountZ={duplicateArrayCountZ}
-                  onArrayCountXChange={setDuplicateArrayCountX}
-                  onArrayCountYChange={setDuplicateArrayCountY}
-                  onArrayCountZChange={setDuplicateArrayCountZ}
-                  arrayGapX={duplicateArrayGapX}
-                  arrayGapY={duplicateArrayGapY}
-                  arrayGapZ={duplicateArrayGapZ}
-                  onArrayGapXChange={setDuplicateArrayGapX}
-                  onArrayGapYChange={setDuplicateArrayGapY}
-                  onArrayGapZChange={setDuplicateArrayGapZ}
-                  onConfirm={handleConfirmDuplicate}
-                  onFillPlate={handleFillPlateDuplicate}
-                  previewCount={duplicatePreviewTransforms.length}
-                  isApplying={isDuplicating || (isAutoArranging && activeArrangeOperation === 'high_precision_fill')}
-                />
-              </>
-            )}
           </>
         ) : scene.mode === 'analysis' ? (
           <>
-            <IslandScanCard
-              key="analysis-scan-card"
+            <AnalysisPanelStack
+              scene={scene}
+              slicing={slicing}
               islands={islands}
-              hasGeometry={!!scene.geom}
-              onLoadSupportJson={scene.handleLoadSupportJson}
-              onImportSupportFile={scene.importSupportDataFile}
-              pluginImportPhase={scene.pluginImportPhase}
-              pluginImportError={scene.pluginImportError}
-              onPluginJsonFile={scene.handlePluginJsonFile}
-              onPluginStlFile={scene.handlePluginStlFile}
-              onCancelPluginImport={scene.cancelPluginImport}
-            />
-
-            <IslandScanWorkflowCard key="analysis-workflow" islands={islands} hasGeometry={!!scene.geom} />
-
-            <IslandVolumesHierarchyCard key="analysis-volumes" islands={islands} layerHeightMm={slicing.layerHeightMm} />
-
-            <IslandListCard
-              key="analysis-island-list"
-              islands={islands.scanData?.islands ?? []}
-              selectedIslandId={islands.selectedIslandId}
-              onSelectIsland={islands.setSelectedIslandId}
-              showMerged={islands.showMerged}
-              onShowMergedChange={islands.setShowMerged}
-              layerHeightMm={slicing.layerHeightMm}
-              zOffsetMm={0}
-            />
-
-            <IslandOverlayControls
-              key="analysis-overlay-controls"
-              enabled={islands.overlayEnabled}
-              onEnabledChange={islands.setOverlayEnabled}
-              brushRadiusMm={islands.overlayBrushRadius}
-              onBrushRadiusChange={islands.setOverlayBrushRadius}
-              color={islands.overlayColor}
-              onColorChange={islands.setOverlayColor}
-              opacity={islands.overlayOpacity}
-              onOpacityChange={islands.setOverlayOpacity}
-              taper={islands.overlayTaper}
-              onTaperChange={islands.setOverlayTaper}
-              islandCount={islands.scanData?.islands.length ?? 0}
-            />
-
-            <IslandVoxelControls
-              key="analysis-island-voxel"
-              enabled={islands.voxelEnabled && !islands.voxelShowTerritory}
-              onEnabledChange={(e) => {
-                if (e) {
-                  islands.setVoxelEnabled(true);
-                  islands.setVoxelShowTerritory(false);
-                } else {
-                  islands.setVoxelEnabled(false);
-                }
-              }}
-              opacity={islands.voxelOpacity}
-              onOpacityChange={islands.setVoxelOpacity}
-              colorScheme={islands.voxelColorScheme}
-              onColorSchemeChange={islands.setVoxelColorScheme}
-              showMerged={islands.voxelShowMerged}
-              onShowMergedChange={islands.setVoxelShowMerged}
-              islandCount={islands.scanData?.islands.length ?? 0}
-            />
-
-            <TerritoryVoxelControls
-              key="analysis-territory-voxel"
-              enabled={islands.voxelEnabled && islands.voxelShowTerritory}
-              onEnabledChange={(e) => {
-                if (e) {
-                  islands.setVoxelEnabled(true);
-                  islands.setVoxelShowTerritory(true);
-                } else {
-                  islands.setVoxelEnabled(false);
-                }
-              }}
-              opacity={islands.voxelOpacity}
-              onOpacityChange={islands.setVoxelOpacity}
-              islandCount={islands.voxelEnabled ? (islands.scanData?.islands.length ?? 0) : (islands.scanData?.islands.length ?? 0)}
-              useSurfaceContiguity={islands.useSurfaceContiguity}
-              onUseSurfaceContiguityChange={islands.setUseSurfaceContiguity}
-              onRescan={islands.onRunScanlineScan}
             />
           </>
         ) : scene.mode === 'export' ? (
           <>
-            <ExportPanel
-              key="export-main"
-              models={scene.models}
-              activeModel={scene.activeModel}
-              activeModelId={scene.activeModelId}
-              selectedModelIds={scene.selectedModelIds}
-              onActiveModelChange={scene.setActiveModelId}
+            <ExportPanelStack
+              scene={scene}
+              slicing={slicing}
               supportsRef={supportsRef}
-              captureSceneThumbnailPng={captureExportThumbnailPng}
-              onExportSuccess={handleExportSuccess}
-              onExportError={showOperationError}
-            />
-
-            <SlicingPanel
-              key="export-slicing"
-              models={scene.models}
-              activeModel={scene.activeModel}
-              estimatedLayerCountOverride={estimatedSlicerLayerCount}
-              estimatedLayerHeightMmOverride={crossSectionLayerHeightMm}
-              estimatedVolumeLabelOverride={estimatedVolumeMlLabel}
-              captureSceneThumbnailPng={captureExportThumbnailPng}
-              onSliceRunStarted={handleSliceRunStartedForPrinting}
-              onLayerPreviewGenerated={handlePrintingLayerPreviewGenerated}
-              onSlicingFinished={handleSlicingFinishedForPrinting}
-              onSliceArtifactReady={handleSliceArtifactReady}
-              onBenchmarkComplete={handleSlicingBenchmarkComplete}
-              onSliceTriggerRef={triggerSliceExportRef}
-              shouldAutoSlice={shouldAutoSliceOnExportEntry}
-              skipThumbnailCapture={shouldReturnToPrintingAfterSliceRef.current}
-              onSlicingBusyChange={setIsSlicingBusy}
-              canUpload={canSliceAndUpload}
-              canPrint={canSliceAndPrint}
-              onSliceIntentChanged={(intent) => { sliceIntentRef.current = intent; }}
-              onBeforeSliceStart={handleBeforeSliceStart}
-              onBeforeSlicingRun={handlePreSliceSceneSave}
-              resolveOutputPathForIntent={(intent) => (
-                intent === 'file' || intent === 'uvtools'
-                  ? (preSliceFileDestinationPathRef.current?.trim() || null)
-                  : null
-              )}
+              captureExportThumbnailPng={captureExportThumbnailPng}
+              handleExportSuccess={handleExportSuccess}
+              showOperationError={showOperationError}
+              estimatedSlicerLayerCount={estimatedSlicerLayerCount}
+              crossSectionLayerHeightMm={crossSectionLayerHeightMm}
+              estimatedVolumeMlLabel={estimatedVolumeMlLabel}
+              handleSliceRunStartedForPrinting={handleSliceRunStartedForPrinting}
+              handlePrintingLayerPreviewGenerated={handlePrintingLayerPreviewGenerated}
+              handleSlicingFinishedForPrinting={handleSlicingFinishedForPrinting}
+              handleSliceArtifactReady={handleSliceArtifactReady}
+              handleSlicingBenchmarkComplete={handleSlicingBenchmarkComplete}
+              triggerSliceExportRef={triggerSliceExportRef}
+              shouldAutoSliceOnExportEntry={shouldAutoSliceOnExportEntry}
+              shouldReturnToPrintingAfterSliceRef={shouldReturnToPrintingAfterSliceRef}
+              setIsSlicingBusy={setIsSlicingBusy}
+              canSliceAndUpload={canSliceAndUpload}
+              canSliceAndPrint={canSliceAndPrint}
+              sliceIntentRef={sliceIntentRef}
+              handleBeforeSliceStart={handleBeforeSliceStart}
+              handlePreSliceSceneSave={handlePreSliceSceneSave}
+              preSliceFileDestinationPathRef={preSliceFileDestinationPathRef}
             />
           </>
 
@@ -12117,38 +11848,26 @@ export default function Home() {
           </>
         ) : scene.mode === 'printing' ? (
           <>
-            <PrintingPanel
-              outputName={printingArtifact?.outputName ?? null}
-              outputFormat={printingArtifact?.outputName?.split('.').pop() ? `.${printingArtifact.outputName.split('.').pop()}` : null}
-              outputSizeLabel={printingOutputSizeLabel}
-              printerName={activePrinterProfile?.name ?? 'No printer selected'}
-              resinName={printingResinName}
+            <PrintingPanelStack
+              printingArtifact={printingArtifact}
+              printingOutputSizeLabel={printingOutputSizeLabel}
+              activePrinterProfile={activePrinterProfile}
+              printingResinName={printingResinName}
               estimatedPrintTimeLabel={estimatedPrintTimeLabel}
-              estimatedVolumeLabel={estimatedVolumeMlLabel}
-              canDownload={canDownloadPrintArtifact}
+              estimatedVolumeMlLabel={estimatedVolumeMlLabel}
+              canDownloadPrintArtifact={canDownloadPrintArtifact}
               canSendToPrinter={canSendToPrinter}
-              sendBusy={printingSendBusy}
-              sendStatusText={printingSendStatusText}
-              sendButtonLabel={sendToPrinterButtonLabel}
-              showSendTargetPicker={printableConnectedPrinterFleet.length > 1}
-              onOpenSendTargetPicker={() => {
-                setPrintingTargetPickerMode('post-slice');
-                setPrintingTargetPickerOpen(true);
-              }}
-              onDownload={handleDownloadPrintArtifact}
-              onSendToPrinter={handleSendToPrinter}
-              onCancelSendToPrinter={handleCancelSendToPrinter}
-              canSendToUvTools={getSavedUvToolsSettings().enabled}
-              onSendToUvTools={() => {
-                const fp = completedSaveDestinationPath;
-                if (!fp) return;
-                const s = getSavedUvToolsSettings();
-                launchExternalProcess(resolveUvToolsExecutablePath(s), fp).catch((err) =>
-                  console.warn('[UVTools] Failed to launch from printing panel:', err),
-                );
-              }}
-              sliceIntent={completedSliceIntent}
-              savedFilePath={completedSaveDestinationPath}
+              printingSendBusy={printingSendBusy}
+              printingSendStatusText={printingSendStatusText}
+              sendToPrinterButtonLabel={sendToPrinterButtonLabel}
+              printableConnectedPrinterFleet={printableConnectedPrinterFleet}
+              setPrintingTargetPickerMode={setPrintingTargetPickerMode}
+              setPrintingTargetPickerOpen={setPrintingTargetPickerOpen}
+              handleDownloadPrintArtifact={handleDownloadPrintArtifact}
+              handleSendToPrinter={handleSendToPrinter}
+              handleCancelSendToPrinter={handleCancelSendToPrinter}
+              completedSliceIntent={completedSliceIntent}
+              completedSaveDestinationPath={completedSaveDestinationPath}
             />
           </>
         ) : (
@@ -12156,258 +11875,43 @@ export default function Home() {
           </>
         )}
 
-        {scene.models.length > 0 && scene.mode !== 'printing' && (
-          <VisualSettingsPanel
-            key="visual-settings"
-            layerIndex={slicing.layerIndex}
-            maxLayers={slicing.numLayers}
-            onLayerIndexChange={slicing.setLayerIndex}
-            onScrubStart={handleSceneLayerScrubStart}
-            onScrubEnd={handleSceneLayerScrubEnd}
-            onCrossSectionModeChange={slicing.setCrossSectionMode}
-            currentHeightMm={slicing.currentHeightMm}
-            maxHeightMm={slicing.heightMm}
-            crossSectionMode={slicing.crossSectionMode}
-            lowerLayerIndex={slicing.lowerLayerIndex}
-            onLowerLayerIndexChange={slicing.setLowerLayerIndex}
-            lowerCurrentHeightMm={slicing.lowerCurrentHeightMm}
-            crossSectionEnabled={isCrossSectionEnabled}
-            onToggleCrossSection={handleToggleCrossSection}
-            layerHeightMm={slicing.layerHeightMm}
-          />
-        )}
-
-        {isTransformDebugOverlayOpen && (
-          <div
-            key="transform-debug-overlay"
-            className="rounded-lg border p-2.5 font-mono text-[10px] leading-tight shadow-xl"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              color: 'var(--text-strong)',
-              background: 'color-mix(in srgb, var(--surface-0), black 14%)',
-              fontSize: '10px',
-            }}
-          >
-            <div className="mb-2 flex items-center justify-between">
-              <div className="text-xs font-semibold" style={{ fontFamily: 'var(--font-geist-mono)' }}>
-                {scene.mode === 'printing' ? 'Printing Debug Overlay' : scene.mode === 'support' ? 'Support Debug Overlay' : 'Transform Debug Overlay'}
-              </div>
-              <button
-                type="button"
-                className="rounded border px-2 py-0.5 text-[10px]"
-                style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-                onClick={() => setIsTransformDebugOverlayOpen(false)}
-              >
-                Close
-              </button>
-            </div>
-
-            {scene.mode === 'printing' ? (
-              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                <div style={{ color: 'var(--text-muted)' }}>Mode</div><div>{scene.mode}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Total layers</div><div>{printingPreviewTotalLayers}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Selected layer</div><div>{printingSelectedLayer}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Displayed layer</div><div>{printingDisplayedLayer}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Is scrubbing</div><div>{isPrintingLayerScrubbing ? 'true' : 'false'}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Show scrub preview</div><div>{shouldShowScrubPreview ? 'true' : 'false'}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Send progress</div><div>{(printingSendProgress * 100).toFixed(1)}%</div>
-                <div style={{ color: 'var(--text-muted)' }}>Send busy</div><div>{printingSendBusy ? 'true' : 'false'}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Stage text</div><div className="truncate" title={printingSendStageText ?? 'none'}>{printingSendStageText ?? 'none'}</div>
-              </div>
-            ) : scene.mode === 'support' ? (
-              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                <div style={{ color: 'var(--text-muted)' }}>Mode</div><div>{scene.mode}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Active model</div><div>{scene.activeModelId ?? 'none'}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Hovered category</div><div>{supportDebugStats.hoveredCategory}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Hovered id</div><div>{supportDebugStats.hoveredId ?? 'none'}</div>
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                <div style={{ color: 'var(--text-muted)' }}>Mode</div><div>{scene.mode}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Transform mode</div><div>{transformMgr.transformMode}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Active model</div><div>{scene.activeModelId ?? 'none'}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Display model</div><div>{displayActiveModelId ?? 'none'}</div>
-                <div style={{ color: 'var(--text-muted)' }}>isTransforming</div><div>{transformMgr.isTransforming ? 'true' : 'false'}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Drag group auto</div><div>{String(transformDebugStats.dragGroupAutoUpdate)}</div>
-              </div>
-            )}
-
-            {scene.mode === 'printing' && (
-              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Preview State
-                </div>
-                <div>Preview URLs loaded: {printingLayerPreviewUrls.filter(u => u !== null).length} / {printingPreviewTotalLayers}</div>
-                <div>Selected URL exists: {(printingLayerPreviewUrls[printingSelectedLayer - 1] ?? null) ? 'true' : 'false'}</div>
-                <div>Displayed URL exists: {(printingLayerPreviewUrls[printingDisplayedLayer - 1] ?? null) ? 'true' : 'false'}</div>
-                <div>Artifact ready: {printingArtifact ? 'true' : 'false'}</div>
-                <div>Artifact name: {printingArtifact?.outputName ?? 'none'}</div>
-                <div>Upload dialog open: {printingUploadDialogOpen ? 'true' : 'false'}</div>
-                <div>Upload stage: {printingUploadDialogStage}</div>
-                <div>Display progress: {(printingUploadDisplayProgress * 100).toFixed(1)}%</div>
-                <div>Ready plate ID: {printingReadyPlateId ?? 'none'}</div>
-                <div>Print now busy: {printingPrintNowBusy ? 'true' : 'false'}</div>
-                <div>Status text: {printingSendStatusText ?? 'none'}</div>
-
-                {printingSlicingBenchmark && (
-                  <>
-                    <div className="mt-2 mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                      Slicing Metrics
-                    </div>
-                    <div>Total time: {printingSlicingBenchmark.totalElapsedMs.toFixed(0)} ms</div>
-                    {printingSlicingBenchmark.meshPrepMs !== null && (
-                      <div>Mesh prep: {printingSlicingBenchmark.meshPrepMs.toFixed(0)} ms</div>
-                    )}
-                    {printingSlicingBenchmark.coreSlicingMs !== null && (
-                      <div>Core slicing: {printingSlicingBenchmark.coreSlicingMs.toFixed(0)} ms</div>
-                    )}
-                    {printingSlicingBenchmark.totalLayers !== null && (
-                      <div>Total layers: {printingSlicingBenchmark.totalLayers}</div>
-                    )}
-                    {printingSlicingBenchmark.layersPerSecond !== null && (
-                      <div>Layers/sec: {printingSlicingBenchmark.layersPerSecond.toFixed(1)}</div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-
-            {scene.mode === 'support' && (
-              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Placement Lock Debug
-                </div>
-                <div>Hovered category/id: {supportDebugStats.hoveredCategory} / {supportDebugStats.hoveredId ?? 'none'}</div>
-                <div>Shaft hovered segment: {supportDebugStats.shaftHoveredSegmentId ?? 'none'}</div>
-                <div>Shaft hover point: {formatDebugVec3Like(supportDebugStats.shaftHoverPoint)}</div>
-                <div>Brace Alt active: {supportDebugStats.braceAltActive ? 'true' : 'false'}</div>
-                <div>Brace stage: {supportDebugStats.braceStage}</div>
-                <div>Brace start: {supportDebugStats.braceStartKind ?? 'none'} / {supportDebugStats.braceStartSegmentId ?? 'n/a'}</div>
-                <div>Brace snap: {supportDebugStats.braceSnapKind ?? 'none'} / {supportDebugStats.braceSnapSegmentId ?? supportDebugStats.braceSnapLeafId ?? 'n/a'}</div>
-                <div>Preview start: {formatDebugVec3Like(supportDebugStats.previewStart)}</div>
-                <div>Preview end: {formatDebugVec3Like(supportDebugStats.previewEnd)}</div>
-                <div>Suppressed: {supportDebugStats.supportInteractionSuppressed ? 'true' : 'false'}</div>
-                <div>disableSelectionAndHover: {supportDebugStats.disableSelectionAndHover ? 'true' : 'false'}</div>
-                <div>Gizmo lock active: {supportDebugStats.gizmoInteractionLockActive ? 'true' : 'false'}</div>
-                <div>Knot dragging: {supportDebugStats.knotGizmoDragging ? 'true' : 'false'}</div>
-                <div>Joint dragging: {supportDebugStats.jointGizmoDragging ? 'true' : 'false'}</div>
-                <div>Knot guard remaining: {supportDebugStats.knotGuardRemainingMs} ms</div>
-                <div>Knot-only guard: {supportDebugStats.knotOnlyGuardRemainingMs} ms</div>
-                <div>Joint-only guard: {supportDebugStats.jointOnlyGuardRemainingMs} ms</div>
-                <div>Immediate hover model: {supportDebugStats.immediateModelHoverId ?? 'none'}</div>
-                <div>External hover model: {supportDebugStats.externalHoverModelId ?? 'none'}</div>
-                <div>Effective hover model: {supportDebugStats.effectiveHoverModelId ?? 'none'}</div>
-                <div>Scene hovered support: {supportDebugStats.sceneHoveredSupportId ?? 'none'}</div>
-                <div>Marquee hovered support: {supportDebugStats.marqueeHoveredSupportId ?? 'none'}</div>
-                <div>Raw hovered category/id: {supportDebugStats.rawHoveredCategory ?? 'none'} / {supportDebugStats.rawHoveredId ?? 'none'}</div>
-                <div>Visual hovered category/id: {supportDebugStats.hoveredCategoryForVisual ?? 'none'} / {supportDebugStats.hoveredIdForVisual ?? 'none'}</div>
-                <div>
-                  Hover vs snap segment mismatch:{' '}
-                  <span style={{ color: supportDebugStats.hoveredVsSnapMismatch ? '#ff8a8a' : 'var(--text-strong)' }}>
-                    {supportDebugStats.hoveredVsSnapMismatch ? 'YES' : 'no'}
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {scene.mode !== 'support' && scene.mode !== 'printing' && (
-              <>
-                <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                  <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                    Transform Delta (live vs store)
-                  </div>
-                  <div>Δpos: {formatDebugNumber(transformDebugStats.posDelta)} mm</div>
-                  <div>Δrot max: {formatDebugNumber(transformDebugStats.rotDelta)} rad</div>
-                  <div>Δscale: {formatDebugNumber(transformDebugStats.scaleDelta)}</div>
-                </div>
-
-                <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                  <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                    Active Model Transform
-                  </div>
-                  <div>Store pos: {formatDebugVec3(transformDebugStats.storeTransform?.position)}</div>
-                  <div>Live pos: {formatDebugVec3(transformDebugStats.liveTransform.position)}</div>
-                  <div>Drag Δ pos: {formatDebugVec3(transformDebugStats.dragGroupPos)}</div>
-                  <div>Drag Δ scale: {formatDebugVec3(transformDebugStats.dragGroupScale)}</div>
-                </div>
-              </>
-            )}
-
-            <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                Support Counts (all / active model)
-              </div>
-              <div>Trunks: {transformDebugStats.supportCounts.trunks} / {activeSupportEntityCounts.trunks}</div>
-              <div>Branches: {transformDebugStats.supportCounts.branches} / {activeSupportEntityCounts.branches}</div>
-              <div>Leaves: {transformDebugStats.supportCounts.leaves} / {activeSupportEntityCounts.leaves}</div>
-              <div>Twigs: {transformDebugStats.supportCounts.twigs} / {activeSupportEntityCounts.twigs}</div>
-              <div>Sticks: {transformDebugStats.supportCounts.sticks} / {activeSupportEntityCounts.sticks}</div>
-              <div>Braces: {transformDebugStats.supportCounts.braces} / {activeSupportEntityCounts.braces}</div>
-              <div>Roots: {transformDebugStats.supportCounts.roots} / {activeSupportEntityCounts.roots}</div>
-              <div>Knots: {transformDebugStats.supportCounts.knots} / {activeSupportEntityCounts.knots}</div>
-              <div>Kickstands: {transformDebugStats.supportCounts.kickstands} / {activeSupportEntityCounts.kickstands}</div>
-            </div>
-
-            {scene.mode !== 'support' && scene.mode !== 'printing' && (
-              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Transform Timeline
-                </div>
-                <div>Last op: {transformDebugStats.timeline.lastOperation ?? 'n/a'}</div>
-                <div>Drag released: {formatDebugTime(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-                <div>Live calculated: {formatDebugTime(transformDebugStats.timeline.liveCalculatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-                <div>Store update start: {formatDebugTime(transformDebugStats.timeline.storeUpdateStartedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-                <div>Store updated: {formatDebugTime(transformDebugStats.timeline.storeUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-                <div>Support store updated: {formatDebugTime(transformDebugStats.timeline.supportStoreUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-                <div>Kickstand store updated: {formatDebugTime(transformDebugStats.timeline.kickstandStoreUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-                <div>Active model store observed: {formatDebugTime(transformDebugStats.timeline.activeModelStoreObservedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-                <div>Release → Live: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.liveCalculatedAt)}</div>
-                <div>Live → Store start: {formatDebugLatencyMs(transformDebugStats.timeline.liveCalculatedAt, transformDebugStats.timeline.storeUpdateStartedAt)}</div>
-                <div>Store start → Store updated: {formatDebugLatencyMs(transformDebugStats.timeline.storeUpdateStartedAt, transformDebugStats.timeline.storeUpdatedAt)}</div>
-                <div>Release → Store updated: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.storeUpdatedAt)}</div>
-                <div>Release → Support store: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.supportStoreUpdatedAt)}</div>
-                <div>Release → Kickstand store: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.kickstandStoreUpdatedAt)}</div>
-                <div>Release → Active model observed: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.activeModelStoreObservedAt)}</div>
-              </div>
-            )}
-
-            {scene.mode !== 'support' && scene.mode !== 'printing' && (
-              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Transform History Commit
-                </div>
-                <div>Pending model: {transformDebugStats.historyCommit.pendingModelId ?? 'none'}</div>
-                <div>Pending description: {transformDebugStats.historyCommit.pendingDescription ?? 'none'}</div>
-                <div>Pending has after: {transformDebugStats.historyCommit.pendingHasAfter ? 'true' : 'false'}</div>
-                <div>Pending before rot: {formatDebugVec3Like(transformDebugStats.historyCommit.pendingBeforeRotation)}</div>
-                <div>Pending after rot: {formatDebugVec3Like(transformDebugStats.historyCommit.pendingAfterRotation)}</div>
-                <div>Commit requested: {transformDebugStats.historyCommit.commitRequested ? 'true' : 'false'}</div>
-                <div>Commit nonce: {transformDebugStats.historyCommit.commitNonce}</div>
-                <div>Pending resync: {transformDebugStats.historyCommit.pendingResync ? 'true' : 'false'}</div>
-                <div>Suppress next persistence: {transformDebugStats.historyCommit.suppressNextPersistence ? 'true' : 'false'}</div>
-                <div>
-                  Skip token: {transformDebugStats.historyCommit.skipToken
-                    ? `${transformDebugStats.historyCommit.skipToken.operation}:${transformDebugStats.historyCommit.skipToken.modelId}`
-                    : 'none'}
-                </div>
-                <div>Pending rotate-gizmo model: {transformDebugStats.historyCommit.pendingRotateGizmoModelId ?? 'none'}</div>
-                <div>Last result: {transformDebugStats.historyCommit.lastResult}</div>
-                <div>Last reason: {transformDebugStats.historyCommit.lastReason}</div>
-                <div>Last model: {transformDebugStats.historyCommit.lastModelId ?? 'none'}</div>
-                <div>Last description: {transformDebugStats.historyCommit.lastDescription ?? 'none'}</div>
-                <div>Last expected nonce: {transformDebugStats.historyCommit.lastExpectedNonce ?? 'n/a'}</div>
-                <div>Last scheduled nonce: {transformDebugStats.historyCommit.lastScheduledNonce ?? 'n/a'}</div>
-                <div>Last push applied: {transformDebugStats.historyCommit.lastPushApplied === null ? 'n/a' : (transformDebugStats.historyCommit.lastPushApplied ? 'true' : 'false')}</div>
-                <div>Undo before → after: {transformDebugStats.historyCommit.lastUndoCountBefore ?? 'n/a'} → {transformDebugStats.historyCommit.lastUndoCountAfter ?? 'n/a'}</div>
-                <div>Last attempt: {formatDebugTime(transformDebugStats.historyCommit.lastAt, transformDebugStats.timeline.nowPerfMs)}</div>
-              </div>
-            )}
-
-            <div className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-              Toggle: Ctrl+Shift+X
-            </div>
-          </div>
-        )}
+        <SharedPanelStack
+          scene={scene}
+          slicing={slicing}
+          transformMgr={transformMgr}
+          handleSceneLayerScrubStart={handleSceneLayerScrubStart}
+          handleSceneLayerScrubEnd={handleSceneLayerScrubEnd}
+          isCrossSectionEnabled={isCrossSectionEnabled}
+          handleToggleCrossSection={handleToggleCrossSection}
+          isTransformDebugOverlayOpen={isTransformDebugOverlayOpen}
+          setIsTransformDebugOverlayOpen={setIsTransformDebugOverlayOpen}
+          displayActiveModelId={displayActiveModelId}
+          transformDebugStats={transformDebugStats}
+          supportDebugStats={supportDebugStats}
+          activeSupportEntityCounts={activeSupportEntityCounts}
+          formatDebugVec3={formatDebugVec3}
+          formatDebugVec3Like={formatDebugVec3Like}
+          formatDebugNumber={formatDebugNumber}
+          formatDebugTime={formatDebugTime}
+          formatDebugLatencyMs={formatDebugLatencyMs}
+          printingPreviewTotalLayers={printingPreviewTotalLayers}
+          printingSelectedLayer={printingSelectedLayer}
+          printingDisplayedLayer={printingDisplayedLayer}
+          isPrintingLayerScrubbing={isPrintingLayerScrubbing}
+          shouldShowScrubPreview={shouldShowScrubPreview}
+          printingSendProgress={printingSendProgress}
+          printingSendBusy={printingSendBusy}
+          printingSendStageText={printingSendStageText}
+          printingLayerPreviewUrls={printingLayerPreviewUrls}
+          printingArtifact={printingArtifact}
+          printingUploadDialogOpen={printingUploadDialogOpen}
+          printingUploadDialogStage={printingUploadDialogStage}
+          printingUploadDisplayProgress={printingUploadDisplayProgress}
+          printingReadyPlateId={printingReadyPlateId}
+          printingPrintNowBusy={printingPrintNowBusy}
+          printingSendStatusText={printingSendStatusText}
+          printingSlicingBenchmark={printingSlicingBenchmark}
+        />
       </FloatingPanelStack>
 
       <div className="absolute inset-0 top-14 z-0 flex">
