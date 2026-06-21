@@ -15638,7 +15638,7 @@ export default function Home() {
             setHoveredHolePunchPlacementId(null);
             setHolePunchHoverPlacement(null);
           }
-        } else {
+        } else if (scene.mode === 'prepare') {
           if (scene.models.length > 0) {
             const visibleIds = scene.models.filter((model) => model.visible).map((model) => model.id);
             if (visibleIds.length > 0) {

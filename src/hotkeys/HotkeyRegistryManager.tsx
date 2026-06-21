@@ -23,6 +23,17 @@ if (typeof EventTarget !== 'undefined') {
             }
             const stack = new Error().stack || '';
             const frames = stack.split('\n').map(f => f.trim()).filter(Boolean);
+            
+            // Extract the chunk filename from the addEventListener frame to prevent self-warnings
+            let hijackChunk = '';
+            const hijackFrame = frames.find(f => f.includes('addEventListener'));
+            if (hijackFrame) {
+                const match = hijackFrame.match(/([^/\\]+\._\.js|HotkeyRegistryManager\.tsx)/);
+                if (match) {
+                    hijackChunk = match[0];
+                }
+            }
+
             const startIdx = frames[0]?.startsWith('Error') ? 1 : 0;
             let callerFrame = '';
             for (let i = startIdx; i < frames.length; i++) {
@@ -30,7 +41,8 @@ if (typeof EventTarget !== 'undefined') {
                 if (
                     frame.includes('HotkeyRegistryManager.tsx') ||
                     frame.includes('hotkeyStore.ts') ||
-                    frame.includes('addEventListener')
+                    frame.includes('addEventListener') ||
+                    (hijackChunk && frame.includes(hijackChunk))
                 ) {
                     continue;
                 }
