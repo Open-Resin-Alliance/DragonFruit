@@ -117,4 +117,65 @@ test('Hotkey Registry: clears all active keys on window blur', () => {
     cleanup();
 });
 
+test('Pointer/mouse events interception in placement modes on canvas', () => {
+    hotkeyStore.getState().clearKeys();
+    const cleanup = setupHotkeyListeners();
+
+    const canvasTarget = new (global as any).HTMLElement('CANVAS');
+    const buttonTarget = new (global as any).HTMLElement('BUTTON');
+
+    // 1. When no placement mode is active, canvas click should not be swallowed
+    let pointerEvent = { target: canvasTarget, stopPropagationCalled: false, stopPropagation() { this.stopPropagationCalled = true; } };
+    dispatchWindowEvent('pointerdown', pointerEvent);
+    assert.equal(pointerEvent.stopPropagationCalled, false, 'Should not swallow canvas pointerdown if no placement mode active');
+
+    // 2. Activate LEAF_PLACEMENT (requires Ctrl+Alt)
+    hotkeyStore.getState().pressKey('Control');
+    hotkeyStore.getState().pressKey('Alt');
+    assert.equal(isActionActiveSync('SUPPORTS', 'LEAF_PLACEMENT'), true);
+
+    // Canvas click should be swallowed
+    pointerEvent = { target: canvasTarget, stopPropagationCalled: false, stopPropagation() { this.stopPropagationCalled = true; } };
+    dispatchWindowEvent('pointerdown', pointerEvent);
+    assert.equal(pointerEvent.stopPropagationCalled, true, 'Should swallow canvas pointerdown in LEAF_PLACEMENT');
+
+    let mouseEvent = { target: canvasTarget, stopPropagationCalled: false, stopPropagation() { this.stopPropagationCalled = true; } };
+    dispatchWindowEvent('mousedown', mouseEvent);
+    assert.equal(mouseEvent.stopPropagationCalled, true, 'Should swallow canvas mousedown in LEAF_PLACEMENT');
+
+    // Button click should NOT be swallowed
+    let buttonPointerEvent = { target: buttonTarget, stopPropagationCalled: false, stopPropagation() { this.stopPropagationCalled = true; } };
+    dispatchWindowEvent('pointerdown', buttonPointerEvent);
+    assert.equal(buttonPointerEvent.stopPropagationCalled, false, 'Should not swallow button pointerdown in LEAF_PLACEMENT');
+
+    // 3. Clear keys and activate BRANCH_PLACEMENT (requires Alt only)
+    hotkeyStore.getState().clearKeys();
+    hotkeyStore.getState().pressKey('Alt');
+    assert.equal(isActionActiveSync('SUPPORTS', 'BRANCH_PLACEMENT'), true);
+
+    pointerEvent = { target: canvasTarget, stopPropagationCalled: false, stopPropagation() { this.stopPropagationCalled = true; } };
+    dispatchWindowEvent('pointerdown', pointerEvent);
+    assert.equal(pointerEvent.stopPropagationCalled, true, 'Should swallow canvas pointerdown in BRANCH_PLACEMENT');
+
+    // 4. Clear keys and activate KICKSTAND_PLACEMENT (requires Control only)
+    hotkeyStore.getState().clearKeys();
+    hotkeyStore.getState().pressKey('Control');
+    assert.equal(isActionActiveSync('SUPPORTS', 'KICKSTAND_PLACEMENT'), true);
+
+    pointerEvent = { target: canvasTarget, stopPropagationCalled: false, stopPropagation() { this.stopPropagationCalled = true; } };
+    dispatchWindowEvent('pointerdown', pointerEvent);
+    assert.equal(pointerEvent.stopPropagationCalled, true, 'Should swallow canvas pointerdown in KICKSTAND_PLACEMENT');
+
+    // 5. Clear keys and activate SPROUTED_PARENTING_LOCK (requires w only)
+    hotkeyStore.getState().clearKeys();
+    hotkeyStore.getState().pressKey('w');
+    assert.equal(isActionActiveSync('SUPPORTS', 'SPROUTED_PARENTING_LOCK'), true);
+
+    pointerEvent = { target: canvasTarget, stopPropagationCalled: false, stopPropagation() { this.stopPropagationCalled = true; } };
+    dispatchWindowEvent('pointerdown', pointerEvent);
+    assert.equal(pointerEvent.stopPropagationCalled, true, 'Should swallow canvas pointerdown in SPROUTED_PARENTING_LOCK');
+
+    cleanup();
+});
+
 
