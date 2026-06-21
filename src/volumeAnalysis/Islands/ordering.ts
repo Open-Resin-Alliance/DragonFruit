@@ -1,4 +1,5 @@
 import type { DetectedIsland } from './types';
+import { SpatialHashGrid2D } from './spatialHashGrid2D';
 
 /**
  * Cluster-walk ordering for the island list and ←/→ step-through.
@@ -69,9 +70,18 @@ export function clusterWalkOrder(
     parent[find(a)] = find(b);
   };
 
+  const cellSize = opts.epsilonMm <= 0 ? 1.0 : opts.epsilonMm;
+  const grid = new SpatialHashGrid2D<number>(cellSize);
   for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      if (near(islands[i], islands[j])) union(i, j);
+    grid.insert(islands[i].contact.x, islands[i].contact.y, i);
+  }
+
+  for (let i = 0; i < n; i++) {
+    const neighbors = grid.query(islands[i].contact.x, islands[i].contact.y, opts.epsilonMm);
+    for (const j of neighbors) {
+      if (j > i && near(islands[i], islands[j])) {
+        union(i, j);
+      }
     }
   }
 
