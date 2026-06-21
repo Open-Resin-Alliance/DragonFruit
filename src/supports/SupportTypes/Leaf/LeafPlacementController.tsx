@@ -194,7 +194,7 @@ export function LeafPlacementController() {
 
         // Read directly from the store to avoid stale closure during rearm.
         const snap = leafPlacementStore.getSnapshot();
-        const liveActive = snap.hotkeyActive || snap.stage === 'awaitingBase' || snap.stage === 'awaitingSproutTip';
+        const liveActive = snap.hotkeyActive || snap.stage === 'awaitingBase' || snap.stage === 'awaitingSproutTip' || snap.sproutParentingLockHeld;
         const liveStage = snap.stage;
 
         if (liveActive && liveStage === 'idle' && !snap.sproutParentingLockHeld) {

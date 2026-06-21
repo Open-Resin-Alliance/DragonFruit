@@ -203,7 +203,7 @@ export const leafPlacementStore = {
     },
 
     isActive(): boolean {
-        return state.hotkeyActive || state.stage === 'awaitingBase' || state.stage === 'awaitingSproutTip';
+        return state.hotkeyActive || state.stage === 'awaitingBase' || state.stage === 'awaitingSproutTip' || state.sproutParentingLockHeld;
     },
 };
 
@@ -216,6 +216,6 @@ export function useLeafPlacementState() {
 
     return {
         ...snapshot,
-        isActive: snapshot.hotkeyActive || snapshot.stage === 'awaitingBase' || snapshot.stage === 'awaitingSproutTip',
+        isActive: snapshot.hotkeyActive || snapshot.stage === 'awaitingBase' || snapshot.stage === 'awaitingSproutTip' || snapshot.sproutParentingLockHeld,
     };
 }
