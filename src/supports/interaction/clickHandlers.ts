@@ -1,5 +1,6 @@
 import { applySupportSelectionClick, selectJointById, selectPrimitiveById } from './shared/selection/selectionController';
 import { isContactDiskHudInteractionActive } from '../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
+import { getSnapshot } from '../state';
 
 let hoverGuardInitialized = false;
 let orbitInteractionActive = false;
@@ -172,6 +173,29 @@ export function handleKnotClick(
     if (e.nativeEvent) {
         e.nativeEvent.stopPropagation();
         e.nativeEvent.stopImmediatePropagation();
+    }
+
+    const state = getSnapshot();
+    const clickedKnot = state.knots[id];
+    if (clickedKnot) {
+        const allKnots = Object.values(state.knots);
+        const coincident = allKnots.filter(
+            k => k.parentShaftId === clickedKnot.parentShaftId &&
+                 k.t !== undefined && clickedKnot.t !== undefined &&
+                 Math.abs(k.t - clickedKnot.t) < 0.0001
+        );
+
+        if (isKnotSelected && coincident.length > 1) {
+            coincident.sort((a, b) => a.id.localeCompare(b.id));
+            const currentIndex = coincident.findIndex(k => k.id === id);
+            if (currentIndex !== -1) {
+                const nextIndex = (currentIndex + 1) % coincident.length;
+                const nextKnotId = coincident[nextIndex].id;
+                selectPrimitiveById(nextKnotId);
+                if (onSelect) onSelect(nextKnotId);
+                return;
+            }
+        }
     }
 
     selectPrimitiveById(id);

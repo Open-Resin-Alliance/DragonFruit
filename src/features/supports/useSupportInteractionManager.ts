@@ -710,6 +710,39 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     const onKeyDown = (e: KeyboardEvent) => {
       if (isEditableTarget(e.target)) return;
 
+      if (e.key.toLowerCase() === 'e') {
+        const category = getSelectedCategory();
+        const id = getSelectedId();
+        if (id) {
+          if (category === 'leaf' || category === 'branch') {
+            const snapshot = getSnapshot();
+            const parentKnotId = category === 'leaf'
+              ? snapshot.leaves[id]?.parentKnotId
+              : snapshot.branches[id]?.parentKnotId;
+            if (parentKnotId && snapshot.knots[parentKnotId]) {
+              e.preventDefault();
+              e.stopPropagation();
+              setSelectedId(parentKnotId);
+            }
+          } else if (category === 'knot') {
+            const snapshot = getSnapshot();
+            const childLeaves = Object.values(snapshot.leaves).filter(l => l.parentKnotId === id);
+            const childBranches = Object.values(snapshot.branches).filter(b => b.parentKnotId === id);
+            const children = [
+              ...childLeaves.map(l => ({ id: l.id, category: 'leaf' })),
+              ...childBranches.map(b => ({ id: b.id, category: 'branch' })),
+            ];
+            if (children.length > 0) {
+              children.sort((a, b) => a.id.localeCompare(b.id));
+              e.preventDefault();
+              e.stopPropagation();
+              selectSupportIds([children[0].id]);
+            }
+          }
+        }
+        return;
+      }
+
       if (!e.metaKey && !e.ctrlKey && (e.key === 'Delete' || e.key === 'Backspace')) {
         if (!canDeleteSelection()) return;
         e.preventDefault();

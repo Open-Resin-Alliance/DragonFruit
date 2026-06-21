@@ -2133,6 +2133,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             for (const id in twigKnots) merged[id] = twigKnots[id];
         }
         if (knotPreview) merged[knotPreview.id] = knotPreview;
+        if (activeKnotDragPreview?.coincidentKnots) {
+            for (const coincKnot of activeKnotDragPreview.coincidentKnots) {
+                merged[coincKnot.id] = coincKnot;
+            }
+        }
         return merged;
     }, [basePreviewKnotOverrides, activeKnotDragPreview, activeTwigDragPreview]);
 
