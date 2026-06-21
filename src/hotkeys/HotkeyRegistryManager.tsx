@@ -3,6 +3,68 @@
 import { useEffect } from 'react';
 import { hotkeyStore, isActionActiveSync } from './hotkeyStore';
 
+// Monkey-patch EventTarget.prototype.addEventListener to block/warn keydown/keyup listeners from forbidden paths
+if (typeof EventTarget !== 'undefined') {
+    const originalAddEventListener = EventTarget.prototype.addEventListener;
+    EventTarget.prototype.addEventListener = function (
+        this: EventTarget,
+        type: string,
+        listener: any,
+        options?: any
+    ) {
+        const isWindowOrDocument =
+            (typeof window !== 'undefined' && this === window) ||
+            (typeof document !== 'undefined' && this === document);
+
+        if ((type === 'keydown' || type === 'keyup') && isWindowOrDocument) {
+            const stack = new Error().stack || '';
+            const frames = stack.split('\n').map(f => f.trim()).filter(Boolean);
+            const startIdx = frames[0]?.startsWith('Error') ? 1 : 0;
+            let callerFrame = '';
+            for (let i = startIdx; i < frames.length; i++) {
+                const frame = frames[i];
+                if (
+                    frame.includes('HotkeyRegistryManager.tsx') ||
+                    frame.includes('hotkeyStore.ts') ||
+                    frame.includes('addEventListener')
+                ) {
+                    continue;
+                }
+                callerFrame = frame;
+                break;
+            }
+            const isAllowedFrame = (frame: string) => {
+                const normalized = frame.replace(/\\/g, '/');
+                return (
+                    normalized.includes('hotkeyStore.ts') ||
+                    normalized.includes('HotkeyRegistryManager.tsx') ||
+                    normalized.includes('/__tests__/') ||
+                    normalized.includes('.test.ts') ||
+                    normalized.includes('.test.tsx') ||
+                    normalized.includes('.spec.ts') ||
+                    normalized.includes('.spec.tsx') ||
+                    normalized.includes('/node_modules/') ||
+                    normalized.includes('node:internal') ||
+                    normalized.includes('async_hooks') ||
+                    normalized.includes('chrome-extension://') ||
+                    normalized.includes('moz-extension://') ||
+                    normalized.includes('safari-extension://')
+                );
+            };
+
+            if (callerFrame && !isAllowedFrame(callerFrame)) {
+                console.error(
+                    `Forbidden keydown/keyup event listener registered on ${
+                        (typeof window !== 'undefined' && this === window) ? 'window' : 'document'
+                    } from "${callerFrame}". Please use HotkeyRegistryManager or hotkeyStore. See /DragonFruit/docs/hotkeys/README.md`
+                );
+            }
+        }
+        return originalAddEventListener.apply(this, [type, listener, options]);
+    };
+}
+
+
 function isTextInput(element: EventTarget | null): boolean {
     if (!element) return false;
     if (typeof HTMLElement !== 'undefined' && !(element instanceof HTMLElement)) return false;
