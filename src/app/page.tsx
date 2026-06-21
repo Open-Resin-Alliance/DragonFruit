@@ -50,6 +50,7 @@ import { resolveEntirePlateExportBaseName } from '@/features/export/logic/export
 import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/SlicingPanel';
 import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
 import { usePrintingPreviewManager, type PrintingPreviewManagerDeps } from '@/features/printing/usePrintingPreviewManager';
+import { useEditorToasts } from '@/features/notifications/useEditorToasts';
 import { SliceMetricsDebugModal } from '@/features/slicing/components/SliceMetricsDebugModal';
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
@@ -800,18 +801,8 @@ export default function Home() {
     lastPushApplied: null,
     lastAt: null,
   });
-  const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; text: string; direction: 'undo' | 'redo' } | null>(null);
-  const [isHistoryActionToastVisible, setIsHistoryActionToastVisible] = React.useState(false);
-  const [isSceneImportToastVisible, setIsSceneImportToastVisible] = React.useState(false);
-  const [exportSuccessToast, setExportSuccessToast] = React.useState<{ id: number; path: string } | null>(null);
-  const [isExportSuccessToastVisible, setIsExportSuccessToastVisible] = React.useState(false);
-  const [exportErrorToast, setExportErrorToast] = React.useState<{ id: number; text: string } | null>(null);
-  const [isExportErrorToastVisible, setIsExportErrorToastVisible] = React.useState(false);
   const [isSceneSaveInProgress, setIsSceneSaveInProgress] = React.useState(false);
   const [isPreSliceSceneSaveInProgress, setIsPreSliceSceneSaveInProgress] = React.useState(false);
-  const [isSaveToastVisible, setIsSaveToastVisible] = React.useState(false);
-  const [isSaveToastAnimatedVisible, setIsSaveToastAnimatedVisible] = React.useState(false);
-  const [saveToastLabel, setSaveToastLabel] = React.useState<'Saving…' | 'Autosaving…'>('Autosaving…');
   const [showPluginImportWarningModal, setShowPluginImportWarningModal] = React.useState(false);
   const [suppressPluginImportWarning, setSuppressPluginImportWarning] = React.useState(false);
   const [pluginImportWarningSkipFuture, setPluginImportWarningSkipFuture] = React.useState(false);
@@ -845,17 +836,6 @@ export default function Home() {
   const historyTransformResyncRafRef = React.useRef<number | null>(null);
   const historyTransformResyncSecondRafRef = React.useRef<number | null>(null);
   const historyTransformResyncTimeoutRef = React.useRef<number | null>(null);
-  const historyActionToastFadeTimeoutRef = React.useRef<number | null>(null);
-  const historyActionToastClearTimeoutRef = React.useRef<number | null>(null);
-  const printingMonitorErrorToastFadeTimeoutRef = React.useRef<number | null>(null);
-  const printingMonitorErrorToastClearTimeoutRef = React.useRef<number | null>(null);
-  const sceneImportToastFadeTimeoutRef = React.useRef<number | null>(null);
-  const exportSuccessToastFadeTimeoutRef = React.useRef<number | null>(null);
-  const exportErrorToastFadeTimeoutRef = React.useRef<number | null>(null);
-  const saveToastHideTimeoutRef = React.useRef<number | null>(null);
-  const saveToastClearTimeoutRef = React.useRef<number | null>(null);
-  const saveToastEnterRafRef = React.useRef<number | null>(null);
-  const saveToastShownAtRef = React.useRef<number | null>(null);
   const sceneSaveKickoffTimerRef = React.useRef<number | null>(null);
   const sceneSaveInFlightRef = React.useRef(false);
   const sceneSaveQueuedRef = React.useRef(false);
@@ -881,83 +861,57 @@ export default function Home() {
     preferredSavePath: preferredOverwriteScenePathRef.current,
   });
 
-  React.useEffect(() => {
-    const MIN_SAVE_TOAST_VISIBLE_MS = 2000;
-    const TOAST_ANIMATION_MS = 220;
-    const hasActiveSaveWork = isSceneSaveInProgress || (isAutosaving && !isPreSliceSceneSaveInProgress);
-
-    if (hasActiveSaveWork) {
-      if (saveToastHideTimeoutRef.current !== null) {
-        window.clearTimeout(saveToastHideTimeoutRef.current);
-        saveToastHideTimeoutRef.current = null;
-      }
-      if (saveToastClearTimeoutRef.current !== null) {
-        window.clearTimeout(saveToastClearTimeoutRef.current);
-        saveToastClearTimeoutRef.current = null;
-      }
-      if (saveToastEnterRafRef.current !== null) {
-        window.cancelAnimationFrame(saveToastEnterRafRef.current);
-        saveToastEnterRafRef.current = null;
-      }
-
-      setSaveToastLabel(isSceneSaveInProgress ? 'Saving…' : 'Autosaving…');
-
-      if (!isSaveToastVisible) {
-        saveToastShownAtRef.current = Date.now();
-        setIsSaveToastVisible(true);
-        setIsSaveToastAnimatedVisible(false);
-        saveToastEnterRafRef.current = window.requestAnimationFrame(() => {
-          saveToastEnterRafRef.current = null;
-          setIsSaveToastAnimatedVisible(true);
-        });
-      } else if (!isSaveToastAnimatedVisible) {
-        setIsSaveToastAnimatedVisible(true);
-      }
-      return;
-    }
-
-    if (!isSaveToastVisible) {
-      saveToastShownAtRef.current = null;
-      return;
-    }
-
-    const shownAt = saveToastShownAtRef.current ?? Date.now();
-    const elapsed = Date.now() - shownAt;
-    const remaining = Math.max(0, MIN_SAVE_TOAST_VISIBLE_MS - elapsed);
-
-    if (saveToastHideTimeoutRef.current !== null) {
-      window.clearTimeout(saveToastHideTimeoutRef.current);
-    }
-    saveToastHideTimeoutRef.current = window.setTimeout(() => {
-      saveToastHideTimeoutRef.current = null;
-      setIsSaveToastAnimatedVisible(false);
-      if (saveToastClearTimeoutRef.current !== null) {
-        window.clearTimeout(saveToastClearTimeoutRef.current);
-      }
-      saveToastClearTimeoutRef.current = window.setTimeout(() => {
-        saveToastClearTimeoutRef.current = null;
-        saveToastShownAtRef.current = null;
-        setIsSaveToastVisible(false);
-      }, TOAST_ANIMATION_MS);
-    }, remaining);
-  }, [isAutosaving, isPreSliceSceneSaveInProgress, isSaveToastAnimatedVisible, isSaveToastVisible, isSceneSaveInProgress]);
-
-  React.useEffect(() => {
-    return () => {
-      if (saveToastHideTimeoutRef.current !== null) {
-        window.clearTimeout(saveToastHideTimeoutRef.current);
-        saveToastHideTimeoutRef.current = null;
-      }
-      if (saveToastClearTimeoutRef.current !== null) {
-        window.clearTimeout(saveToastClearTimeoutRef.current);
-        saveToastClearTimeoutRef.current = null;
-      }
-      if (saveToastEnterRafRef.current !== null) {
-        window.cancelAnimationFrame(saveToastEnterRafRef.current);
-        saveToastEnterRafRef.current = null;
-      }
-    };
-  }, []);
+  // Editor toast/notification subsystem (state, refs, fade/show effects,
+  // helpers). Triggers stay in Home and call these returned setters; the
+  // save-toast machinery effect reads save-progress externals injected here.
+  const {
+    historyActionToast,
+    setHistoryActionToast,
+    isHistoryActionToastVisible,
+    setIsHistoryActionToastVisible,
+    isSceneImportToastVisible,
+    setIsSceneImportToastVisible,
+    exportSuccessToast,
+    setExportSuccessToast,
+    isExportSuccessToastVisible,
+    setIsExportSuccessToastVisible,
+    exportErrorToast,
+    setExportErrorToast,
+    isExportErrorToastVisible,
+    setIsExportErrorToastVisible,
+    isSaveToastVisible,
+    setIsSaveToastVisible,
+    isSaveToastAnimatedVisible,
+    setIsSaveToastAnimatedVisible,
+    saveToastLabel,
+    setSaveToastLabel,
+    historyActionToastFadeTimeoutRef,
+    historyActionToastClearTimeoutRef,
+    printingMonitorErrorToastFadeTimeoutRef,
+    printingMonitorErrorToastClearTimeoutRef,
+    sceneImportToastFadeTimeoutRef,
+    exportSuccessToastFadeTimeoutRef,
+    exportErrorToastFadeTimeoutRef,
+    saveToastHideTimeoutRef,
+    saveToastClearTimeoutRef,
+    saveToastEnterRafRef,
+    saveToastShownAtRef,
+    printingMonitorErrorToast,
+    setPrintingMonitorErrorToast,
+    isPrintingMonitorErrorToastVisible,
+    setIsPrintingMonitorErrorToastVisible,
+    lastPrintingMonitorErrorToastRef,
+    clearPrintingMonitorErrorToastTimeouts,
+    normalizePrintingMonitorErrorMessage,
+    setPrintingMonitorError,
+    handleExportSuccess,
+    showOperationError,
+  } = useEditorToasts({
+    isSceneSaveInProgress,
+    isPreSliceSceneSaveInProgress,
+    isAutosaving,
+    sceneImportReport: scene.sceneImportReport,
+  });
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const [interiorView, setInteriorView] = React.useState(false);
@@ -1173,8 +1127,6 @@ export default function Home() {
   const [isPrintingMonitorStatusRequestInFlight, setIsPrintingMonitorStatusRequestInFlight] = React.useState(false);
   const [printingMonitorLastStatusSuccessAtMs, setPrintingMonitorLastStatusSuccessAtMs] = React.useState<number | null>(null);
   const [printingMonitorNowEpochMs, setPrintingMonitorNowEpochMs] = React.useState(() => Date.now());
-  const [printingMonitorErrorToast, setPrintingMonitorErrorToast] = React.useState<{ id: number; text: string } | null>(null);
-  const [isPrintingMonitorErrorToastVisible, setIsPrintingMonitorErrorToastVisible] = React.useState(false);
   const [printingMonitorActionBusy, setPrintingMonitorActionBusy] = React.useState<null | 'start' | 'delete' | 'pause' | 'resume' | 'cancel' | 'emergency-stop' | 'webcam-enable' | 'webcam-disable' | 'timelapse-enable' | 'timelapse-disable'>(null);
   const [printingMonitorControlPendingAction, setPrintingMonitorControlPendingAction] = React.useState<null | 'pause' | 'resume' | 'cancel' | 'emergency-stop'>(null);
   const [printingMonitorActionStatus, setPrintingMonitorActionStatus] = React.useState<string | null>(null);
@@ -1232,75 +1184,6 @@ export default function Home() {
       error: null,
     },
   });
-  const lastPrintingMonitorErrorToastRef = React.useRef<{ message: string; atEpochMs: number } | null>(null);
-  const clearPrintingMonitorErrorToastTimeouts = React.useCallback(() => {
-    if (printingMonitorErrorToastFadeTimeoutRef.current !== null) {
-      window.clearTimeout(printingMonitorErrorToastFadeTimeoutRef.current);
-      printingMonitorErrorToastFadeTimeoutRef.current = null;
-    }
-    if (printingMonitorErrorToastClearTimeoutRef.current !== null) {
-      window.clearTimeout(printingMonitorErrorToastClearTimeoutRef.current);
-      printingMonitorErrorToastClearTimeoutRef.current = null;
-    }
-  }, []);
-
-  const normalizePrintingMonitorErrorMessage = React.useCallback((message: string) => {
-    const normalized = message.trim();
-    if (!normalized) return '';
-
-    const lower = normalized.toLowerCase();
-    if (lower.includes('tainted canvases may not be exported')) {
-      return 'Unable to export this webcam frame directly. Retrying through the secure snapshot proxy.';
-    }
-
-    return normalized;
-  }, []);
-
-  const setPrintingMonitorError = React.useCallback((nextError: string | null) => {
-    const normalized = typeof nextError === 'string' ? normalizePrintingMonitorErrorMessage(nextError) : '';
-
-    if (!normalized) {
-      clearPrintingMonitorErrorToastTimeouts();
-      setIsPrintingMonitorErrorToastVisible(false);
-      setPrintingMonitorErrorToast(null);
-      return;
-    }
-
-    const now = Date.now();
-    const previous = lastPrintingMonitorErrorToastRef.current;
-    if (
-      previous
-      && previous.message === normalized
-      && (now - previous.atEpochMs) < 1500
-    ) {
-      return;
-    }
-
-    lastPrintingMonitorErrorToastRef.current = {
-      message: normalized,
-      atEpochMs: now,
-    };
-
-    setPrintingMonitorErrorToast({ id: now, text: normalized });
-    setIsPrintingMonitorErrorToastVisible(true);
-
-    clearPrintingMonitorErrorToastTimeouts();
-    printingMonitorErrorToastFadeTimeoutRef.current = window.setTimeout(() => {
-      setIsPrintingMonitorErrorToastVisible(false);
-      printingMonitorErrorToastFadeTimeoutRef.current = null;
-    }, 2200);
-
-    printingMonitorErrorToastClearTimeoutRef.current = window.setTimeout(() => {
-      setPrintingMonitorErrorToast(null);
-      printingMonitorErrorToastClearTimeoutRef.current = null;
-    }, 2600);
-  }, [clearPrintingMonitorErrorToastTimeouts, normalizePrintingMonitorErrorMessage]);
-
-  React.useEffect(() => {
-    return () => {
-      clearPrintingMonitorErrorToastTimeouts();
-    };
-  }, [clearPrintingMonitorErrorToastTimeouts]);
 
   const printingMonitorPrinterMenuRef = React.useRef<HTMLDivElement | null>(null);
   const printingMonitorWebcamViewportRef = React.useRef<HTMLDivElement | null>(null);
@@ -8007,61 +7890,8 @@ export default function Home() {
     };
   }, [invalidatePendingTransformHistory]);
 
-  React.useEffect(() => {
-    if (!scene.sceneImportReport) {
-      setIsSceneImportToastVisible(false);
-      if (sceneImportToastFadeTimeoutRef.current !== null) {
-        window.clearTimeout(sceneImportToastFadeTimeoutRef.current);
-        sceneImportToastFadeTimeoutRef.current = null;
-      }
-      return;
-    }
 
-    setIsSceneImportToastVisible(true);
 
-    if (sceneImportToastFadeTimeoutRef.current !== null) {
-      window.clearTimeout(sceneImportToastFadeTimeoutRef.current);
-    }
-
-    const sceneImportToastDurationMs = scene.sceneImportReport.durationMs ?? 4200;
-    const sceneImportToastFadeMs = Math.max(0, sceneImportToastDurationMs - 400);
-
-    sceneImportToastFadeTimeoutRef.current = window.setTimeout(() => {
-      setIsSceneImportToastVisible(false);
-      sceneImportToastFadeTimeoutRef.current = null;
-    }, sceneImportToastFadeMs);
-
-    return () => {
-      if (sceneImportToastFadeTimeoutRef.current !== null) {
-        window.clearTimeout(sceneImportToastFadeTimeoutRef.current);
-        sceneImportToastFadeTimeoutRef.current = null;
-      }
-    };
-  }, [scene.sceneImportReport]);
-
-  const handleExportSuccess = React.useCallback((savedPath: string) => {
-    setExportSuccessToast({ id: Date.now(), path: savedPath });
-    setIsExportSuccessToastVisible(true);
-    if (exportSuccessToastFadeTimeoutRef.current !== null) {
-      window.clearTimeout(exportSuccessToastFadeTimeoutRef.current);
-    }
-    exportSuccessToastFadeTimeoutRef.current = window.setTimeout(() => {
-      setIsExportSuccessToastVisible(false);
-      exportSuccessToastFadeTimeoutRef.current = null;
-    }, 3800);
-  }, []);
-
-  const showOperationError = React.useCallback((message: string) => {
-    setExportErrorToast({ id: Date.now(), text: message });
-    setIsExportErrorToastVisible(true);
-    if (exportErrorToastFadeTimeoutRef.current !== null) {
-      window.clearTimeout(exportErrorToastFadeTimeoutRef.current);
-    }
-    exportErrorToastFadeTimeoutRef.current = window.setTimeout(() => {
-      setIsExportErrorToastVisible(false);
-      exportErrorToastFadeTimeoutRef.current = null;
-    }, 4500);
-  }, []);
 
   const cancelPendingHistoryTransformResyncFrames = React.useCallback(() => {
     if (historyTransformResyncRafRef.current !== null) {
