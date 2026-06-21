@@ -17,6 +17,7 @@ import { PrintingPanelStack } from '@/components/organisms/panels/PrintingPanelS
 import { SharedPanelStack } from '@/components/organisms/panels/SharedPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
 import { NotificationStack } from '@/components/organisms/NotificationStack';
+import { EditorLayout } from '@/components/templates/EditorLayout';
 import { PrintingPreviewPane } from '@/components/organisms/PrintingPreviewPane';
 import { DiagnosticsModals } from '@/components/organisms/modals/DiagnosticsModals';
 import { PrintingModals } from '@/components/organisms/modals/PrintingModals';
@@ -11589,7 +11590,7 @@ export default function Home() {
   }, [mirror.flushPendingBake]);
 
   return (
-    <div className="ui-shell relative h-screen w-screen overflow-hidden" data-no-window-drag="true">
+    <EditorLayout>
       <TopBar
         meshColor={scene.meshColor}
         onMeshColorChange={scene.setMeshColor}
@@ -12426,6 +12427,6 @@ export default function Home() {
         isExportErrorToastVisible={isExportErrorToastVisible}
       />
 
-    </div>
+    </EditorLayout>
   );
 }
