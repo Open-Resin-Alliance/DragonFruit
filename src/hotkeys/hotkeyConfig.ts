@@ -66,6 +66,14 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
         FORCE_PLACE_SUPPORT: {
             key: 'q',
             description: 'Hold to force placing support'
+        },
+        SPROUTED_PARENTING_LOCK: {
+            key: 'w',
+            description: 'Hold to enter Sprouted Leaf Fanning Mode'
+        },
+        TOGGLE_CONE_KNOT_SELECTION: {
+            key: 'e',
+            description: 'Press to toggle selection between support cone and parent base knot'
         }
     },
     CAMERA: {

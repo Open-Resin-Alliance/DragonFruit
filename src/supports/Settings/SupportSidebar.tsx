@@ -38,6 +38,7 @@ import {
     RaftSettingsCard,
     GridSettingsCard,
     SupportKindTabs,
+    QuickReferenceCard,
 } from './components';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { NumberInput } from '@/components/ui/NumberInput';
@@ -1313,6 +1314,7 @@ export function SupportSidebar() {
                                     )}
                                 </>
                             )}
+                            <QuickReferenceCard />
                         </div>
                     </div>
 
