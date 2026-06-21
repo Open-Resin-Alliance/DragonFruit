@@ -1,6 +1,38 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { hotkeyStore, isKeyPressedSync, isActionActiveSync } from '../hotkeyStore';
+import { setupHotkeyListeners } from '../HotkeyRegistryManager';
+
+// Mock global window and HTMLElement if running in Node.js without DOM
+const listeners = new Map<string, Set<Function>>();
+if (typeof global.window === 'undefined') {
+    (global as any).window = {
+        addEventListener(event: string, callback: Function) {
+            if (!listeners.has(event)) {
+                listeners.set(event, new Set());
+            }
+            listeners.get(event)!.add(callback);
+        },
+        removeEventListener(event: string, callback: Function) {
+            listeners.get(event)?.delete(callback);
+        }
+    };
+    (global as any).HTMLElement = class {
+        tagName: string;
+        isContentEditable: boolean;
+        constructor(tagName: string, isContentEditable: boolean = false) {
+            this.tagName = tagName;
+            this.isContentEditable = isContentEditable;
+        }
+        closest() {
+            return null;
+        }
+    };
+}
+
+function dispatchWindowEvent(event: string, detail: any) {
+    listeners.get(event)?.forEach(cb => cb(detail));
+}
 
 test('Store key tracking failing test', () => {
     hotkeyStore.getState().clearKeys();
@@ -38,4 +70,51 @@ test('Overlap resolution: Ctrl+Alt leaf activates and Alt branch suppresses', ()
     assert.equal(isActionActiveSync('SUPPORTS', 'LEAF_PLACEMENT'), true, 'Ctrl+Alt press should activate LEAF_PLACEMENT');
     assert.equal(isActionActiveSync('SUPPORTS', 'BRANCH_PLACEMENT'), false, 'Ctrl+Alt press should suppress BRANCH_PLACEMENT');
 });
+
+test('Hotkey Registry: ignores keys when typing in input or textarea', () => {
+    hotkeyStore.getState().clearKeys();
+    const cleanup = setupHotkeyListeners();
+    
+    // Create targets
+    const inputTarget = new (global as any).HTMLElement('INPUT');
+    const textareaTarget = new (global as any).HTMLElement('TEXTAREA');
+    const divTarget = new (global as any).HTMLElement('DIV');
+
+    // Keydown on input target
+    dispatchWindowEvent('keydown', { key: 'a', target: inputTarget });
+    assert.equal(isKeyPressedSync('a'), false, 'Keypress on input should be ignored');
+
+    // Keydown on textarea target
+    dispatchWindowEvent('keydown', { key: 'b', target: textareaTarget });
+    assert.equal(isKeyPressedSync('b'), false, 'Keypress on textarea should be ignored');
+
+    // Keydown on regular div target
+    dispatchWindowEvent('keydown', { key: 'c', target: divTarget });
+    assert.equal(isKeyPressedSync('c'), true, 'Keypress on div should not be ignored');
+
+    cleanup();
+});
+
+test('Hotkey Registry: clears all active keys on window blur', () => {
+    hotkeyStore.getState().clearKeys();
+    const cleanup = setupHotkeyListeners();
+
+    const divTarget = new (global as any).HTMLElement('DIV');
+
+    // Press keys
+    dispatchWindowEvent('keydown', { key: 'w', target: divTarget });
+    dispatchWindowEvent('keydown', { key: 'Shift', target: divTarget });
+    assert.equal(isKeyPressedSync('w'), true);
+    assert.equal(isKeyPressedSync('Shift'), true);
+
+    // Trigger blur
+    dispatchWindowEvent('blur', {});
+    
+    // Expect store to be cleared
+    assert.equal(isKeyPressedSync('w'), false, 'Keys should be cleared on blur');
+    assert.equal(isKeyPressedSync('Shift'), false, 'Keys should be cleared on blur');
+
+    cleanup();
+});
+
 
