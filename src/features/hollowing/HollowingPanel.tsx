@@ -1,7 +1,7 @@
 import React from 'react';
 import { Droplets } from 'lucide-react';
 import type { HollowMode, InfillMode, OpenFace } from '@/utils/meshHollowing';
-import { Card, CardHeader, IconButton, Select } from '@/components/ui/primitives';
+import { Card, CardHeader, IconButton, Select } from '@/components/atoms';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 
 export interface HollowingPanelState {

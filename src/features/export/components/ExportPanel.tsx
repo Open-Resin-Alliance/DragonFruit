@@ -4,7 +4,7 @@ import { Download, Files } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { ExportManager, ExportOptions } from '../logic/ExportManager';
 import { normalizeExportBaseName, resolveEntirePlateExportBaseName } from '../logic/exportFileNaming';
-import { Button, Card, CardHeader, IconButton, Input, Select } from '@/components/ui/primitives';
+import { Button, Card, CardHeader, IconButton, Input, Select } from '@/components/atoms';
 import { pickDirectoryWithNativeDialog } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 

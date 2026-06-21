@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import * as THREE from 'three';
 import { NumberInput } from '@/components/ui/NumberInput';
-import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { Card, CardHeader, IconButton } from '@/components/atoms';
 import { SNAP_STORAGE_KEY } from '@/components/gizmo/rotate/snapRotation';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 

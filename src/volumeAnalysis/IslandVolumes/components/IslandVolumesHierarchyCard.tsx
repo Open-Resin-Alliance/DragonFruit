@@ -6,7 +6,7 @@ import { rleIntersectDilated, type RleLabels, type RleMask } from '@/volumeAnaly
 import type { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 import { buildVolumeHierarchy } from '../buildVolumeHierarchy';
 import type { BuildVolumeHierarchyResult } from '../types';
-import { Button, Card, CardHeader } from '@/components/ui/primitives';
+import { Button, Card, CardHeader } from '@/components/atoms';
 
 interface Props {
   islands: ReturnType<typeof useIslandManager>;

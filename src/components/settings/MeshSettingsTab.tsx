@@ -7,7 +7,7 @@ import { MeshShaderPreviewSlot } from '@/components/settings/meshSettings/MeshSh
 import { MeshShaderPreviewCanvas } from '@/components/settings/meshSettings/MeshShaderPreviewCanvas';
 import { SelectionHighlightDropdown } from '@/components/controls/SelectionHighlightDropdown';
 import type { SelectionHighlightMode } from '@/components/selection';
-import { Input, Select } from '@/components/ui/primitives';
+import { Input, Select } from '@/components/atoms';
 import { Layers, MousePointer2, SlidersHorizontal } from 'lucide-react';
 
 type PreviewModelConfig = {

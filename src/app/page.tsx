@@ -74,7 +74,7 @@ import { buildMirrorSupportTransforms, reflectTransformAcrossWorldAxis } from '@
 import type { MirrorAxis } from '@/features/mirror/types';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
-import { IconButton, Toast, ToastViewport } from '@/components/ui/primitives';
+import { IconButton, Toast, ToastViewport } from '@/components/atoms';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';

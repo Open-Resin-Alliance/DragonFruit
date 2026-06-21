@@ -1,6 +1,6 @@
 import React from 'react';
 import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Maximize2, Minimize2, Play, Printer, RefreshCw, Trash2, X } from 'lucide-react';
-import { IconButton } from '@/components/ui/primitives';
+import { IconButton } from '@/components/atoms';
 import { SliceCompletedModal } from '@/components/modals/SliceCompletedModal';
 import { UvToolsLaunchingModal } from '@/components/modals/UvToolsLaunchingModal';
 import { PrintingResliceModal } from '@/components/modals/PrintingResliceModal';

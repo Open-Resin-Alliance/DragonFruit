@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle2, RefreshCw, Redo2, Undo2 } from 'lucide-react';
-import { Toast, ToastViewport } from '@/components/ui/primitives';
+import { Toast, ToastViewport } from '@/components/atoms';
 import type { SceneImportReport } from '@/features/scene/useSceneCollectionManager';
 
 type IdText = { id: number; text: string };

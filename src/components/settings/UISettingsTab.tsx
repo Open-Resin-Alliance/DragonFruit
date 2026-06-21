@@ -1,7 +1,7 @@
 import React from 'react';
 import { Palette } from 'lucide-react';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
-import { Select } from '@/components/ui/primitives';
+import { Select } from '@/components/atoms';
 import type { ThemeCustomColors, ThemePreference, ThemePreset, ThemeProfile } from '@/components/settings/themeCustomizations';
 
 type ThemeColorField = {
