@@ -25,7 +25,7 @@ import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearest
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 import { previewVecKey, previewNormalKey, quantizePreviewValue } from '../shared/previewSignature';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
-import { findClosestMeshToPoint } from '../../PlacementLogic/PlacementUtils';
+import { findClosestMeshToPoint, calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
@@ -123,9 +123,10 @@ export function LeafPlacementController() {
 
     const { updateAndGetResolvedSnap, resetSnapping } = usePlacementSnappingSession(getTarget, getPotentialTargets);
 
-    const resolveTipMesh = useCallback(() => {
-        if (!tipPosition) return undefined;
-        return findClosestMeshToPoint(tipPosition, modelMeshesRef.current);
+    const resolveTipMesh = useCallback((pos?: Vec3) => {
+        const targetPos = pos ?? tipPosition;
+        if (!targetPos) return undefined;
+        return findClosestMeshToPoint(targetPos, modelMeshesRef.current);
     }, [tipPosition]);
 
     useEffect(() => {
@@ -192,7 +193,7 @@ export function LeafPlacementController() {
 
         // Read directly from the store to avoid stale closure during rearm.
         const snap = leafPlacementStore.getSnapshot();
-        const liveActive = snap.hotkeyActive || snap.stage === 'awaitingBase';
+        const liveActive = snap.hotkeyActive || snap.stage === 'awaitingBase' || snap.stage === 'awaitingSproutTip';
         const liveStage = snap.stage;
 
         if (liveActive && liveStage === 'idle') {
@@ -201,175 +202,229 @@ export function LeafPlacementController() {
             return;
         }
 
-        if (!liveActive || liveStage !== 'awaitingBase' || !tipPosition || !surfaceNormal) {
+        if (!liveActive || (liveStage !== 'awaitingBase' && liveStage !== 'awaitingSproutTip')) {
             lastPreviewSignatureRef.current = null;
             return;
         }
 
         raycaster.setFromCamera(pointer, camera);
 
-        // Fast path: when shaft-hover already provides segment+point, skip
-        // the heavier global snapping pass for this frame.
-        const hasHoveredShaftFastPath = !!(hoveredShaftRef.current?.segmentId && hoveredShaftRef.current?.point);
-        const resolvedSnap = hasHoveredShaftFastPath
-            ? { state: 'none' as const, targetId: null, snappedPos: null, t: null, metadata: null }
-            : updateAndGetResolvedSnap();
+        let currentTipPos = tipPosition;
+        let currentNormal = surfaceNormal;
+
+        if (liveStage === 'awaitingSproutTip') {
+            const modelMeshes = modelMeshesRef.current;
+            if (modelMeshes.length > 0) {
+                const intersects = raycaster.intersectObjects(modelMeshes, false);
+                if (intersects.length > 0) {
+                    let hit = intersects[0];
+                    const { clipLower: cl, clipUpper: cu } = getClipBounds();
+                    const isClipped = (cu != null && hit.point.z > cu) || (cl != null && hit.point.z < cl);
+                    if (isClipped) {
+                        let fallback: THREE.Intersection | null = null;
+                        for (let i = 1; i < intersects.length; i++) {
+                            const h = intersects[i];
+                            if (cu != null && h.point.z > cu) continue;
+                            if (cl != null && h.point.z < cl) continue;
+                            fallback = h;
+                            break;
+                        }
+                        if (fallback) hit = fallback;
+                        else hit = null as any;
+                    }
+                    if (hit) {
+                        const nextTip = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
+                        const nextNormal = calculateSmoothedNormal(hit);
+                        currentTipPos = nextTip;
+                        currentNormal = nextNormal;
+                        leafPlacementStore.updateFanningTip(nextTip, nextNormal);
+                    }
+                }
+            }
+        }
+
+        if (!currentTipPos || !currentNormal) {
+            lastPreviewSignatureRef.current = null;
+            return;
+        }
+
+        const finalTipPos = currentTipPos as Vec3;
+        const finalNormal = currentNormal as Vec3;
 
         let knotPos: Vec3 | null = null;
         let segmentId = 'free';
         let hostDiameterMm: number | undefined = undefined;
         let t: number | undefined = undefined;
 
-        if (resolvedSnap.state === 'locked' && resolvedSnap.targetId && resolvedSnap.snappedPos && resolvedSnap.t !== null) {
-            knotPos = resolvedSnap.snappedPos;
-            t = resolvedSnap.t;
-
-            segmentId = resolvedSnap.targetId;
-
-            const target = getTarget(resolvedSnap.targetId);
-            if (target?.pathSegment?.radius !== undefined) {
-                hostDiameterMm = target.pathSegment.radius * 2;
-            }
-
-            // If snapped to a brace, compute local tapered host diameter.
-            if (resolvedSnap.targetId.startsWith('braceSegment:')) {
-                const braceId = resolvedSnap.targetId.slice('braceSegment:'.length);
-                const brace = supportState.braces[braceId];
-                const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
-                const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
-
-                if (brace && startKnot && endKnot) {
-                    const startDia = Math.max(
-                        0.001,
-                        (startKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
-                    );
-                    const endDia = Math.max(
-                        0.001,
-                        (endKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
-                    );
-                    hostDiameterMm = THREE.MathUtils.lerp(startDia, endDia, resolvedSnap.t);
+        if (liveStage === 'awaitingSproutTip') {
+            if (snap.junctionHubId) {
+                const hubKnot = supportState.knots[snap.junctionHubId];
+                if (hubKnot) {
+                    knotPos = hubKnot.pos;
+                    segmentId = hubKnot.parentShaftId;
+                    t = hubKnot.t;
+                    hostDiameterMm = hubKnot.diameter;
                 }
             }
-
-            // If snapped to a twig segment, resolve the twig's continuous
-            // disk-A→disk-B taper at this exact slide position.
-            const snappedTwig = twigBySegmentId.get(resolvedSnap.targetId);
-            if (snappedTwig) {
-                const twigDia = resolveTwigDiameterAtSegmentT(snappedTwig, resolvedSnap.targetId, resolvedSnap.t);
-                if (twigDia !== null) hostDiameterMm = twigDia;
-            }
-
-            leafPlacementStore.setSnapTarget({
-                targetId: resolvedSnap.targetId,
-                snappedPos: resolvedSnap.snappedPos,
-                t,
-                hostDiameterMm,
-                hostSegmentId: segmentId,
-            });
         } else {
-            let hoveredSnapResolved = false;
-            const hoveredShaft = hoveredShaftRef.current;
+            // Fast path: when shaft-hover already provides segment+point, skip
+            // the heavier global snapping pass for this frame.
+            const hasHoveredShaftFastPath = !!(hoveredShaftRef.current?.segmentId && hoveredShaftRef.current?.point);
+            const resolvedSnap = hasHoveredShaftFastPath
+                ? { state: 'none' as const, targetId: null, snappedPos: null, t: null, metadata: null }
+                : updateAndGetResolvedSnap();
 
-            if (hoveredShaft?.segmentId) {
-                const pathCandidates = allTargets.filter((target) => target.id === hoveredShaft.segmentId && !!target.pathSegment);
-                const hoveredTarget = (hoveredShaft.point && pathCandidates.length > 1)
-                    ? selectNearestPathTarget(hoveredShaft.point, pathCandidates) ?? pathCandidates[0]
-                    : pathCandidates[0] ?? getTarget(hoveredShaft.segmentId);
+            if (resolvedSnap.state === 'locked' && resolvedSnap.targetId && resolvedSnap.snappedPos && resolvedSnap.t !== null) {
+                knotPos = resolvedSnap.snappedPos;
+                t = resolvedSnap.t;
 
-                const projected = hoveredTarget
-                    ? (hoveredShaft.point
-                        ? projectPointToSnapTargetPath(hoveredTarget, hoveredShaft.point)
-                        : projectRayToSnapTargetPath(raycaster.ray, hoveredTarget))
-                    : null;
+                segmentId = resolvedSnap.targetId;
 
-                if (hoveredTarget?.pathSegment && projected) {
-                    hoveredSnapResolved = true;
-                    segmentId = hoveredShaft.segmentId;
-                    knotPos = projected.pos;
-                    t = projected.t;
-                    hostDiameterMm = hoveredTarget.pathSegment.radius * 2;
-
-                    if (segmentId.startsWith('braceSegment:')) {
-                        const braceId = segmentId.slice('braceSegment:'.length);
-                        const brace = supportState.braces[braceId];
-                        const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
-                        const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
-
-                        if (brace && startKnot && endKnot) {
-                            const startDia = Math.max(
-                                0.001,
-                                (startKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
-                            );
-                            const endDia = Math.max(
-                                0.001,
-                                (endKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
-                            );
-                            hostDiameterMm = THREE.MathUtils.lerp(startDia, endDia, projected.t);
-                        }
-                    }
-
-                    const hoveredTwig = twigBySegmentId.get(segmentId);
-                    if (hoveredTwig) {
-                        const twigDia = resolveTwigDiameterAtSegmentT(hoveredTwig, segmentId, projected.t);
-                        if (twigDia !== null) hostDiameterMm = twigDia;
-                    }
-
-                    leafPlacementStore.setSnapTarget({
-                        targetId: segmentId,
-                        snappedPos: knotPos,
-                        t,
-                        hostDiameterMm,
-                        hostSegmentId: segmentId,
-                    });
+                const target = getTarget(resolvedSnap.targetId);
+                if (target?.pathSegment?.radius !== undefined) {
+                    hostDiameterMm = target.pathSegment.radius * 2;
                 }
-            }
 
-            if (!hoveredSnapResolved) {
-                const modelMeshes = modelMeshesRef.current;
+                // If snapped to a brace, compute local tapered host diameter.
+                if (resolvedSnap.targetId.startsWith('braceSegment:')) {
+                    const braceId = resolvedSnap.targetId.slice('braceSegment:'.length);
+                    const brace = supportState.braces[braceId];
+                    const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
+                    const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
 
-                if (modelMeshes.length > 0) {
-                    const intersects = raycaster.intersectObjects(modelMeshes, false);
-                    if (intersects.length > 0) {
-                        let hit = intersects[0];
+                    if (brace && startKnot && endKnot) {
+                        const startDia = Math.max(
+                            0.001,
+                            (startKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
+                        );
+                        const endDia = Math.max(
+                            0.001,
+                            (endKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
+                        );
+                        hostDiameterMm = THREE.MathUtils.lerp(startDia, endDia, resolvedSnap.t);
+                    }
+                }
 
-                        // Skip hits in the clipped (hidden) zone to find the
-                        // visible inner wall in cross-section view.
-                        const { clipLower: cl, clipUpper: cu } = getClipBounds();
-                        const isClipped =
-                          (cu != null && hit.point.z > cu) ||
-                          (cl != null && hit.point.z < cl);
-                        if (isClipped) {
-                            let fallback: THREE.Intersection | null = null;
-                            for (let i = 1; i < intersects.length; i++) {
-                                const h = intersects[i];
-                                if (cu != null && h.point.z > cu) continue;
-                                if (cl != null && h.point.z < cl) continue;
-                                fallback = h;
-                                break;
+                // If snapped to a twig segment, resolve the twig's continuous
+                // disk-A→disk-B taper at this exact slide position.
+                const snappedTwig = twigBySegmentId.get(resolvedSnap.targetId);
+                if (snappedTwig) {
+                    const twigDia = resolveTwigDiameterAtSegmentT(snappedTwig, resolvedSnap.targetId, resolvedSnap.t);
+                    if (twigDia !== null) hostDiameterMm = twigDia;
+                }
+
+                leafPlacementStore.setSnapTarget({
+                    targetId: resolvedSnap.targetId,
+                    snappedPos: resolvedSnap.snappedPos,
+                    t,
+                    hostDiameterMm,
+                    hostSegmentId: segmentId,
+                });
+            } else {
+                let hoveredSnapResolved = false;
+                const hoveredShaft = hoveredShaftRef.current;
+
+                if (hoveredShaft?.segmentId) {
+                    const pathCandidates = allTargets.filter((target) => target.id === hoveredShaft.segmentId && !!target.pathSegment);
+                    const hoveredTarget = (hoveredShaft.point && pathCandidates.length > 1)
+                        ? selectNearestPathTarget(hoveredShaft.point, pathCandidates) ?? pathCandidates[0]
+                        : pathCandidates[0] ?? getTarget(hoveredShaft.segmentId);
+
+                    const projected = hoveredTarget
+                        ? (hoveredShaft.point
+                            ? projectPointToSnapTargetPath(hoveredTarget, hoveredShaft.point)
+                            : projectRayToSnapTargetPath(raycaster.ray, hoveredTarget))
+                        : null;
+
+                    if (hoveredTarget?.pathSegment && projected) {
+                        hoveredSnapResolved = true;
+                        segmentId = hoveredShaft.segmentId;
+                        knotPos = projected.pos;
+                        t = projected.t;
+                        hostDiameterMm = hoveredTarget.pathSegment.radius * 2;
+
+                        if (segmentId.startsWith('braceSegment:')) {
+                            const braceId = segmentId.slice('braceSegment:'.length);
+                            const brace = supportState.braces[braceId];
+                            const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
+                            const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
+
+                            if (brace && startKnot && endKnot) {
+                                const startDia = Math.max(
+                                    0.001,
+                                    (startKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
+                                );
+                                const endDia = Math.max(
+                                    0.001,
+                                    (endKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
+                                );
+                                hostDiameterMm = THREE.MathUtils.lerp(startDia, endDia, projected.t);
                             }
-                            if (fallback) hit = fallback;
-                            else hit = null as any;
                         }
 
-                        if (hit) {
-                            knotPos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
+                        const hoveredTwig = twigBySegmentId.get(segmentId);
+                        if (hoveredTwig) {
+                            const twigDia = resolveTwigDiameterAtSegmentT(hoveredTwig, segmentId, projected.t);
+                            if (twigDia !== null) hostDiameterMm = twigDia;
                         }
+
+                        leafPlacementStore.setSnapTarget({
+                            targetId: segmentId,
+                            snappedPos: knotPos,
+                            t,
+                            hostDiameterMm,
+                            hostSegmentId: segmentId,
+                        });
                     }
                 }
 
-                if (!knotPos) {
-                    _buildPlate.set(_upVec.set(0, 0, 1), 0);
-                    if (raycaster.ray.intersectPlane(_buildPlate, _planeHit)) {
-                        const dx = _planeHit.x - tipPosition.x;
-                        const dy = _planeHit.y - tipPosition.y;
-                        const dist = Math.sqrt(dx * dx + dy * dy);
-                        if (dist < 100) {
-                            knotPos = { x: _planeHit.x, y: _planeHit.y, z: 0 };
+                if (!hoveredSnapResolved) {
+                    const modelMeshes = modelMeshesRef.current;
+
+                    if (modelMeshes.length > 0) {
+                        const intersects = raycaster.intersectObjects(modelMeshes, false);
+                        if (intersects.length > 0) {
+                            let hit = intersects[0];
+
+                            // Skip hits in the clipped (hidden) zone to find the
+                            // visible inner wall in cross-section view.
+                            const { clipLower: cl, clipUpper: cu } = getClipBounds();
+                            const isClipped =
+                              (cu != null && hit.point.z > cu) ||
+                              (cl != null && hit.point.z < cl);
+                            if (isClipped) {
+                                let fallback: THREE.Intersection | null = null;
+                                for (let i = 1; i < intersects.length; i++) {
+                                    const h = intersects[i];
+                                    if (cu != null && h.point.z > cu) continue;
+                                    if (cl != null && h.point.z < cl) continue;
+                                    fallback = h;
+                                    break;
+                                }
+                                if (fallback) hit = fallback;
+                                else hit = null as any;
+                            }
+
+                            if (hit) {
+                                knotPos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
+                            }
                         }
                     }
-                }
 
-                leafPlacementStore.setSnapTarget(null);
+                    if (!knotPos) {
+                        _buildPlate.set(_upVec.set(0, 0, 1), 0);
+                        if (raycaster.ray.intersectPlane(_buildPlate, _planeHit)) {
+                            const dx = _planeHit.x - finalTipPos.x;
+                            const dy = _planeHit.y - finalTipPos.y;
+                            const dist = Math.sqrt(dx * dx + dy * dy);
+                            if (dist < 100) {
+                                knotPos = { x: _planeHit.x, y: _planeHit.y, z: 0 };
+                            }
+                        }
+                    }
+
+                    leafPlacementStore.setSnapTarget(null);
+                }
             }
         }
 
@@ -385,8 +440,8 @@ export function LeafPlacementController() {
                 previewVecKey(knotPos),
                 quantizePreviewValue(t ?? 0),
                 quantizePreviewValue(resolvedHostDiameter),
-                previewVecKey(tipPosition),
-                previewNormalKey(surfaceNormal),
+                previewVecKey(finalTipPos),
+                previewNormalKey(finalNormal),
             ].join('|');
 
             if (lastPreviewSignatureRef.current !== previewSignature) {
@@ -415,25 +470,25 @@ export function LeafPlacementController() {
                 };
 
                 const buildResult = buildLeafData({
-                    tipPos: tipPosition,
-                    surfaceNormal,
+                    tipPos: finalTipPos,
+                    surfaceNormal: finalNormal,
                     modelId,
                     parentKnot,
                     hostDiameterMm: resolvedHostDiameter,
-                    mesh: resolveTipMesh(),
+                    mesh: resolveTipMesh(finalTipPos),
                 });
 
                 const maxAngleDeg = settings.shaft.maxAngleDeg ?? 80;
-                const vx = tipPosition.x - knotPos.x;
-                const vy = tipPosition.y - knotPos.y;
-                const vz = tipPosition.z - knotPos.z;
+                const vx = finalTipPos.x - knotPos.x;
+                const vy = finalTipPos.y - knotPos.y;
+                const vz = finalTipPos.z - knotPos.z;
                 const lenSq = vx * vx + vy * vy + vz * vz;
                 const angleFromUpDeg = lenSq < 0.000001
                     ? 0
                     : THREE.MathUtils.radToDeg(Math.acos(Math.min(1, Math.max(-1, vz / Math.sqrt(lenSq)))));
 
                 const epsilonZ = 0.0001;
-                const knotAboveTip = knotPos.z > tipPosition.z + epsilonZ;
+                const knotAboveTip = knotPos.z > finalTipPos.z + epsilonZ;
                 const tooFlat = angleFromUpDeg > maxAngleDeg;
 
                 // Don't pass `angle` here: it triggers the orange→yellow→green
@@ -456,7 +511,7 @@ export function LeafPlacementController() {
     });
 
     useEffect(() => {
-        if (!isActive || stage !== 'awaitingBase') return;
+        if (!isActive || (stage !== 'awaitingBase' && stage !== 'awaitingSproutTip')) return;
 
         const handleClick = (e: MouseEvent) => {
             if (shouldSuppressContactDiskHudPlacementCommit()) {
@@ -464,29 +519,38 @@ export function LeafPlacementController() {
                 e.preventDefault();
                 return;
             }
-            const snapTarget = leafPlacementStore.getSnapTarget();
-            if (!snapTarget || !tipPosition || !surfaceNormal) return;
+            const snap = leafPlacementStore.getSnapshot();
+            let parentKnot: Knot | null = null;
+            let hostDiameterMm: number | undefined = undefined;
 
-            if (snapTarget.t === undefined) return;
+            if (stage === 'awaitingSproutTip') {
+                if (!snap.junctionHubId) return;
+                parentKnot = supportState.knots[snap.junctionHubId] ?? null;
+                hostDiameterMm = parentKnot?.diameter;
+            } else {
+                const snapTarget = leafPlacementStore.getSnapTarget();
+                if (!snapTarget || !tipPosition || !surfaceNormal) return;
+                if (snapTarget.t === undefined) return;
 
-            const knotId = generateUuid();
-            const segmentId = snapTarget.targetId;
-            const hostDiameterMm = snapTarget.hostDiameterMm;
+                hostDiameterMm = snapTarget.hostDiameterMm;
+                if (!hostDiameterMm) return;
 
-            if (!hostDiameterMm) return;
+                const segmentId = snapTarget.targetId;
+                const committedKnotIsOnTwig = !!twigBySegmentId.get(segmentId);
+                const committedKnotDiameter = committedKnotIsOnTwig
+                    ? twigJointDiameterForLocalDiameter(hostDiameterMm)
+                    : hostDiameterMm + 0.1;
 
-            const committedKnotIsOnTwig = !!twigBySegmentId.get(segmentId);
-            const committedKnotDiameter = committedKnotIsOnTwig
-                ? twigJointDiameterForLocalDiameter(hostDiameterMm)
-                : hostDiameterMm + 0.1;
+                parentKnot = {
+                    id: generateUuid(),
+                    parentShaftId: segmentId,
+                    t: snapTarget.t,
+                    pos: snapTarget.snappedPos,
+                    diameter: committedKnotDiameter,
+                };
+            }
 
-            const parentKnot: Knot = {
-                id: knotId,
-                parentShaftId: segmentId,
-                t: snapTarget.t,
-                pos: snapTarget.snappedPos,
-                diameter: committedKnotDiameter,
-            };
+            if (!parentKnot || !tipPosition || !surfaceNormal || !hostDiameterMm) return;
 
             const settings = getSettings();
             const maxAngleDeg = settings.shaft.maxAngleDeg ?? 80;
@@ -507,7 +571,7 @@ export function LeafPlacementController() {
                 modelId,
                 parentKnot,
                 hostDiameterMm,
-                mesh: resolveTipMesh(),
+                mesh: resolveTipMesh(tipPosition),
             });
             const markedLeaf = placementSurface
                 ? {
@@ -516,19 +580,32 @@ export function LeafPlacementController() {
                 }
                 : leaf;
 
-            addKnot(parentKnot);
+            if (stage === 'awaitingBase') {
+                addKnot(parentKnot);
+            }
             addLeaf(markedLeaf);
 
             pushHistory({
                 type: SUPPORT_ADD_LEAF,
                 payload: {
                     leaf: markedLeaf,
-                    knot: parentKnot,
+                    knot: stage === 'awaitingBase' ? parentKnot : undefined,
                 },
             });
 
-            leafPlacementStore.finalize();
-            leafPlacementStore.reset();
+            if (stage === 'awaitingBase' && snap.sproutParentingLockHeld) {
+                leafPlacementStore.setJunctionHub(parentKnot.id, true);
+                leafPlacementStore.setStage('awaitingSproutTip');
+                leafPlacementStore.updateFanningTip(null as any, null as any);
+                leafPlacementStore.finalize();
+            } else if (stage === 'awaitingSproutTip') {
+                leafPlacementStore.updateFanningTip(null as any, null as any);
+                leafPlacementStore.finalize();
+            } else {
+                leafPlacementStore.finalize();
+                leafPlacementStore.reset();
+            }
+
             if (
                 canResolveSupportPlacementBindingFromModifierState(leafBinding)
                 && isSupportPlacementBindingSatisfiedByModifierState(leafBinding, getSupportPlacementModifierState(e))
@@ -550,7 +627,7 @@ export function LeafPlacementController() {
 
         window.addEventListener('click', handleClick, true);
         return () => window.removeEventListener('click', handleClick, true);
-    }, [isActive, stage, tipPosition, surfaceNormal, modelId, placementSurface, leafBinding, resolveTipMesh]);
+    }, [isActive, stage, tipPosition, surfaceNormal, modelId, placementSurface, leafBinding, resolveTipMesh, supportState.knots, twigBySegmentId]);
 
     useEffect(() => {
         if (!isActive) {

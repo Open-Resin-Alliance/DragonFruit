@@ -229,6 +229,14 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       return;
     }
 
+    const fanningActive = leafPlacement.sproutParentingLockHeld || leafPlacement.stage === 'awaitingSproutTip';
+    if (fanningActive) {
+      trunkPlacementV2.onSupportHover(null);
+      branchPlacement.onModelHover(null);
+      leafPlacement.onModelHover(hit);
+      return;
+    }
+
     const routing = resolvePlacementRouting(nativeEvent ?? hit);
 
     if (routing.modelHoverOwner === 'leaf') {
@@ -267,6 +275,12 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       return;
     }
 
+    const fanningActive = leafPlacement.sproutParentingLockHeld || leafPlacement.stage === 'awaitingSproutTip';
+    if (fanningActive) {
+      leafPlacement.onModelClick(hit);
+      return;
+    }
+
     const routing = resolvePlacementRouting(nativeEvent ?? hit);
 
     if (routing.modelClickOwner === 'leaf') {
@@ -299,6 +313,13 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       return;
     }
 
+    const fanningActive = leafPlacement.sproutParentingLockHeld || leafPlacement.stage === 'awaitingSproutTip';
+    if (fanningActive) {
+      branchPlacement.onSupportHover(null);
+      leafPlacement.onSupportHover(hit);
+      return;
+    }
+
     const nativeEvent = getNativeEventSource(hit);
     const routing = resolvePlacementRouting(nativeEvent ?? hit);
 
@@ -314,6 +335,12 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     if (mode !== 'support') return;
 
     if (isSupportEditInteractionActive()) {
+      return;
+    }
+
+    const fanningActive = leafPlacement.sproutParentingLockHeld || leafPlacement.stage === 'awaitingSproutTip';
+    if (fanningActive) {
+      leafPlacement.onSupportClick(hit);
       return;
     }
 

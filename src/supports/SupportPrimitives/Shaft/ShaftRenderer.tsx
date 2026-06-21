@@ -65,8 +65,8 @@ export function ShaftRenderer({
 
     const { altActive: braceAltActive } = useBracePlacementState();
     const { hotkeyActive: kickstandHotkeyActive } = useKickstandPlacementState();
-    const { hotkeyActive: leafHotkeyActive, stage: leafStage } = useLeafPlacementState();
-    const leafPlacementActive = leafHotkeyActive || leafStage === 'awaitingBase';
+    const { hotkeyActive: leafHotkeyActive, stage: leafStage, sproutParentingLockHeld } = useLeafPlacementState();
+    const leafPlacementActive = leafHotkeyActive || leafStage === 'awaitingBase' || leafStage === 'awaitingSproutTip' || sproutParentingLockHeld;
     const placementInteractionActive = !suppressPlacementInteraction && (braceAltActive || kickstandHotkeyActive || leafPlacementActive);
     const enableSegmentInteraction = (isParentSelected || placementInteractionActive) && (isInteractable || placementInteractionActive);
 
@@ -218,8 +218,6 @@ export function ShaftRenderer({
     const handlePointerLeave = () => {
         setPointerHoverActive((prev) => (prev ? false : prev));
         emitImmediateModelHover(null);
-
-        if (!enableSegmentInteraction) return;
 
         window.dispatchEvent(new CustomEvent('shaft-leave', {
             detail: { segmentId: id }

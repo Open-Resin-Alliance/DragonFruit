@@ -6,8 +6,22 @@ import { leafPlacementStore, useLeafPlacementState } from './leafPlacementState'
 import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
+import { getSnapshot, removeKnotById } from '../../state';
 
 export const LEAF_HOTKEY_REARM_EVENT = 'support-leaf-hotkey-rearm';
+
+function isEditableTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+
+  const tagName = target.tagName.toLowerCase();
+  if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') return true;
+
+  const role = target.getAttribute('role');
+  if (role === 'textbox' || role === 'combobox' || role === 'searchbox' || role === 'spinbutton') return true;
+
+  return false;
+}
 
 export function useLeafPlacement() {
     const { getHotkey } = useHotkeyConfig();
@@ -129,9 +143,61 @@ export function useLeafPlacement() {
         };
     }, [binding, LEAF_KEY, LEAF_MODIFIER]);
 
+    // Sprouted parenting lock key tracking ('w')
+    useEffect(() => {
+        const handleKeyDownW = (e: KeyboardEvent) => {
+            if (e.repeat) return;
+            if (isEditableTarget(e.target)) return;
+
+            if (e.key.toLowerCase() === 'w') {
+                leafPlacementStore.setSproutParentingLockHeld(true);
+            }
+        };
+
+        const handleKeyUpW = (e: KeyboardEvent) => {
+            if (isEditableTarget(e.target)) return;
+
+            if (e.key.toLowerCase() === 'w') {
+                leafPlacementStore.setSproutParentingLockHeld(false);
+
+                // Clean up orphan knots on keyup of 'w'
+                const snap = leafPlacementStore.getSnapshot();
+                if (snap.junctionHubId) {
+                    if (snap.junctionHubIsNew) {
+                        const leaves = Object.values(getSnapshot().leaves);
+                        const hasLeaves = leaves.some(leaf => leaf.parentKnotId === snap.junctionHubId);
+                        if (!hasLeaves) {
+                            removeKnotById(snap.junctionHubId);
+                        }
+                    }
+                    leafPlacementStore.setJunctionHub(null, null);
+                    leafPlacementStore.reset();
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDownW);
+        window.addEventListener('keyup', handleKeyUpW);
+        return () => {
+            window.removeEventListener('keydown', handleKeyDownW);
+            window.removeEventListener('keyup', handleKeyUpW);
+        };
+    }, []);
+
     useEffect(() => {
         const handleEscape = (e: KeyboardEvent) => {
-            if (e.key === 'Escape' && state.stage === 'awaitingBase') {
+            if (e.key === 'Escape' && (state.stage === 'awaitingBase' || state.stage === 'awaitingSproutTip')) {
+                const snap = leafPlacementStore.getSnapshot();
+                if (snap.junctionHubId) {
+                    if (snap.junctionHubIsNew) {
+                        const leaves = Object.values(getSnapshot().leaves);
+                        const hasLeaves = leaves.some(leaf => leaf.parentKnotId === snap.junctionHubId);
+                        if (!hasLeaves) {
+                            removeKnotById(snap.junctionHubId);
+                        }
+                    }
+                    leafPlacementStore.setJunctionHub(null, null);
+                }
                 leafPlacementStore.reset();
             }
         };
@@ -183,6 +249,7 @@ export function useLeafPlacement() {
         tipPosition: state.tipPosition,
         surfaceNormal: state.surfaceNormal,
         hoverPosition: state.hoverPosition,
+        sproutParentingLockHeld: state.sproutParentingLockHeld,
         onModelHover,
         onModelClick,
         onSupportHover,

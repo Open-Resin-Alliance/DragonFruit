@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import React, { useSyncExternalStore, forwardRef, useImperativeHandle, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
@@ -16,6 +16,7 @@ import { InstancedJointGroup, type InstancedJoint } from './SupportPrimitives/Jo
 import { InstancedRootsGroup, type InstancedRoot } from './SupportPrimitives/Roots/InstancedRootsGroup';
 import { InstancedContactConeGroup, type InstancedContactCone } from './SupportPrimitives/ContactCone/InstancedContactConeGroup';
 import { useBracePlacementState } from './SupportTypes/Brace/bracePlacementState';
+import { useLeafPlacementState } from './SupportTypes/Leaf/leafPlacementState';
 import { useKickstandStoreState } from './SupportTypes/Kickstand/kickstandStore';
 import { useKickstandPlacementState } from './SupportTypes/Kickstand/kickstandPlacementState';
 import { useJointInteraction } from './SupportPrimitives/Joint/useJointInteraction';
@@ -883,6 +884,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const { isActive: isJointCreationActive } = useJointCreationState();
     const { altActive: braceAltActive } = useBracePlacementState();
     const { hotkeyActive: kickstandHotkeyActive } = useKickstandPlacementState();
+    const { hotkeyActive: leafHotkeyActive, stage: leafStage, sproutParentingLockHeld } = useLeafPlacementState();
     useEffect(() => {
         const active = interiorView && mode === 'support' && !passive;
         if (!active) return;
@@ -3885,7 +3887,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             return;
         }
 
-        if (supportSelectionAndHoverSuppressed || braceAltActive || kickstandHotkeyActive) {
+        if (supportSelectionAndHoverSuppressed || braceAltActive || kickstandHotkeyActive || leafHotkeyActive || leafStage === 'awaitingBase' || sproutParentingLockHeld) {
             const e = event as unknown as { point?: THREE.Vector3 | { x: number; y: number; z: number } };
             const point = e.point
                 ? { x: (e.point as any).x, y: (e.point as any).y, z: (e.point as any).z }
@@ -3903,14 +3905,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         if (!shaft.supportId) return;
         handleSupportClick(event, shaft.supportId, isInteractable);
-    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed, braceAltActive, kickstandHotkeyActive]);
+    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed, braceAltActive, kickstandHotkeyActive, leafHotkeyActive, leafStage, sproutParentingLockHeld]);
 
     const handleSceneBatchedShaftPointerMove = React.useCallback((shaft: InstancedShaft, event: { point?: { x: number; y: number; z: number } | THREE.Vector3 } | null) => {
         if (!isPointerInteractable) return;
         if (orbitInteractionActiveRef.current) return;
 
         const jointDragInteractionActive = typeof window !== 'undefined' && !!(window as any).__jointGizmoDragging;
-        const allowSuppressedShaftHoverForPlacementPreview = (braceAltActive || kickstandHotkeyActive) && mode === 'support' && !jointDragInteractionActive;
+        const allowSuppressedShaftHoverForPlacementPreview = (braceAltActive || kickstandHotkeyActive || leafHotkeyActive || leafStage === 'awaitingBase' || sproutParentingLockHeld) && mode === 'support' && !jointDragInteractionActive;
 
         const sceneHoverWriteDecision = resolveSceneBatchedShaftHoverWriteDecision({
             supportId: shaft.supportId,
@@ -3987,7 +3989,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             setSceneHoveredSupportId,
             emitSupportModelPointerHover,
         );
-    }, [isPointerInteractable, mode, braceAltActive, kickstandHotkeyActive, primitiveHoverOnSelectedSupport, primitiveHoverSuppressesSceneShaftHover, selectedCategory, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
+    }, [isPointerInteractable, mode, braceAltActive, kickstandHotkeyActive, leafHotkeyActive, leafStage, sproutParentingLockHeld, primitiveHoverOnSelectedSupport, primitiveHoverSuppressesSceneShaftHover, selectedCategory, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
 
     const handleSceneBatchedShaftPointerOut = React.useCallback((entity: { id: string } | null) => {
         if (!isPointerInteractable) return;
