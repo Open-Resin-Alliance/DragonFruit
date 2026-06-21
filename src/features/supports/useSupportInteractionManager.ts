@@ -325,8 +325,13 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
 
     if (routing.supportHoverOwner === 'leaf') {
       leafPlacement.onSupportHover(hit);
+      branchPlacement.onSupportHover(null);
     } else if (routing.supportHoverOwner === 'branch') {
       branchPlacement.onSupportHover(hit);
+      leafPlacement.onSupportHover(null);
+    } else {
+      leafPlacement.onSupportHover(null);
+      branchPlacement.onSupportHover(null);
     }
   }, [mode, branchPlacement, leafPlacement, resolvePlacementRouting]);
 
@@ -346,6 +351,10 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
 
     const nativeEvent = getNativeEventSource(hit);
     const routing = resolvePlacementRouting(nativeEvent ?? hit);
+
+    if (routing.blocksDefaultSupportPlacement) {
+      return;
+    }
 
     if (routing.supportClickOwner === 'leaf') {
       leafPlacement.onSupportClick(hit);

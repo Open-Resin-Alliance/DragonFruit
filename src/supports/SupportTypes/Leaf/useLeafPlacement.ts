@@ -7,6 +7,7 @@ import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkey
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { getSnapshot, removeKnotById } from '../../state';
+import { isKeyPressed } from '@/hotkeys/globalKeys';
 
 export const LEAF_HOTKEY_REARM_EVENT = 'support-leaf-hotkey-rearm';
 
@@ -115,8 +116,12 @@ export function useLeafPlacement() {
         };
 
         const rearm = () => {
-            bindingHeldRef.current = true;
-            leafPlacementStore.setHotkeyActive(true);
+            const allModifiersPressed = requiredModifiers.every(mod => isKeyPressed(mod));
+            const mainKeyPressed = isKeyPressed(LEAF_KEY);
+            if (allModifiersPressed && mainKeyPressed) {
+                bindingHeldRef.current = true;
+                leafPlacementStore.setHotkeyActive(true);
+            }
         };
 
         const pointerMove = (e: PointerEvent) => {
