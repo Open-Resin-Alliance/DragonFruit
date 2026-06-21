@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
 import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Plus, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
+import { SceneOverlays } from '@/components/organisms/scene/SceneOverlays';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { PreparePanelStack } from '@/components/organisms/panels/PreparePanelStack';
 import { AnalysisPanelStack } from '@/components/organisms/panels/AnalysisPanelStack';
@@ -66,8 +67,6 @@ import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmooth
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
 import { HollowingPanel, type HollowingPanelState } from '../features/hollowing';
 import { HolePunchPanel, type HolePunchPanelState } from '../features/hole-punching/HolePunchPanel';
-import { HolePunchPreviewCylinder } from '@/features/hole-punching/HolePunchPreviewCylinder';
-import { HolePunchGizmo } from '@/features/hole-punching/HolePunchGizmo';
 import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
 import { MirrorTool } from '@/features/mirror/MirrorTool';
 import { bakeWithFlips } from '@/features/mirror/logic/bakeWithFlips';
@@ -100,7 +99,6 @@ import {
   shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
 import { computeProjectedFootprintHull, computeProjectedFootprintSize } from '@/utils/modelFootprint';
-import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { bytesToBase64, base64ToBytes } from '@/utils/base64';
 import { snapshotGeometryPositions, geometryFromSnapshot } from '@/utils/geometrySnapshot';
 import {
@@ -310,8 +308,6 @@ import { useSceneAutosave, suppressSceneAutosave } from '@/hooks/useSceneAutosav
 import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
 import { MeshRepairReportModal } from '@/components/scene/MeshRepairReportModal';
 import { MeshRepairConfirmModal } from '@/components/scene/MeshRepairConfirmModal';
-import { HollowVoxelEditOverlay } from '@/components/scene/HollowVoxelEditOverlay';
-import { HollowVoxelPreview } from '@/components/scene/HollowVoxelPreview';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
@@ -346,106 +342,6 @@ interface ShaftHoverDebugDetail {
 type PendingModifierResetAction = 'hollowing' | 'hole_punch' | 'clear_hollowing';
 
 const EMPTY_SUPPORT_BOUNDS_BY_MODEL_ID = new Map<string, THREE.Box3>();
-
-/**
- * Transforms Float32Array voxel centers from model-local to world space
- * by applying `(center - geometryCenter) * scale * quaternion + position`.
- * Used to render voxel cubes outside the model's rotated group.
- */
-function transformVoxelCentersToWorld(
-  voxelCenters: Float32Array,
-  geometryCenter: THREE.Vector3,
-  scale: THREE.Vector3,
-  quaternion: THREE.Quaternion,
-  position: THREE.Vector3,
-): Float32Array {
-  const count = Math.floor(voxelCenters.length / 3);
-  const out = new Float32Array(voxelCenters.length);
-  const tmp = new THREE.Vector3();
-  for (let i = 0; i < count; i += 1) {
-    const base = i * 3;
-    tmp.set(voxelCenters[base], voxelCenters[base + 1], voxelCenters[base + 2]);
-    tmp.sub(geometryCenter);
-    tmp.multiply(scale);
-    tmp.applyQuaternion(quaternion);
-    tmp.add(position);
-    out[base] = tmp.x;
-    out[base + 1] = tmp.y;
-    out[base + 2] = tmp.z;
-  }
-  return out;
-}
-
-/**
- * Renders HollowVoxelPreview in world space by pre-transforming the voxel
- * centers using the model's position/rotation/scale, then passing meshOffset
- * as zero since positions are already in world coordinates.
- */
-function WorldSpaceVoxelPreview({
-  voxelCenters,
-  voxelSizeMm,
-  modelTransform: { position, quaternion, scale },
-  geometryCenter,
-}: {
-  voxelCenters: Float32Array;
-  voxelSizeMm: number;
-  modelTransform: { position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 };
-  geometryCenter: THREE.Vector3;
-}) {
-  const worldCenters = React.useMemo(
-    () => transformVoxelCentersToWorld(voxelCenters, geometryCenter, scale, quaternion, position),
-    [voxelCenters, geometryCenter, scale, quaternion, position],
-  );
-  return (
-    <HollowVoxelPreview
-      voxelCenters={worldCenters}
-      voxelSizeMm={voxelSizeMm}
-      meshOffset={new THREE.Vector3(0, 0, 0)}
-    />
-  );
-}
-
-/**
- * Renders HollowVoxelEditOverlay in world space (same transform logic).
- */
-function WorldSpaceVoxelEditOverlay({
-  voxelCenters,
-  blockedVoxelCenters,
-  voxelRadiusMm,
-  blockedVoxelIndexSet,
-  modelTransform: { position, quaternion, scale },
-  geometryCenter,
-  onToggleVoxel,
-}: {
-  voxelCenters: Float32Array;
-  blockedVoxelCenters?: Float32Array;
-  voxelRadiusMm: number;
-  blockedVoxelIndexSet: Set<number>;
-  modelTransform: { position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 };
-  geometryCenter: THREE.Vector3;
-  onToggleVoxel?: (voxelIndex: number) => void;
-}) {
-  const worldCenters = React.useMemo(
-    () => transformVoxelCentersToWorld(voxelCenters, geometryCenter, scale, quaternion, position),
-    [voxelCenters, geometryCenter, scale, quaternion, position],
-  );
-  const worldBlockedCenters = React.useMemo(
-    () => blockedVoxelCenters
-      ? transformVoxelCentersToWorld(blockedVoxelCenters, geometryCenter, scale, quaternion, position)
-      : undefined,
-    [blockedVoxelCenters, geometryCenter, scale, quaternion, position],
-  );
-  return (
-    <HollowVoxelEditOverlay
-      voxelCenters={worldCenters}
-      blockedVoxelCenters={worldBlockedCenters}
-      voxelRadiusMm={voxelRadiusMm}
-      blockedVoxelIndexSet={blockedVoxelIndexSet}
-      meshOffset={new THREE.Vector3(0, 0, 0)}
-      onToggleVoxel={onToggleVoxel}
-    />
-  );
-}
 
 function countRecordEntries(record: Record<string, unknown>): number {
   let count = 0;
@@ -12076,210 +11972,43 @@ export default function Home() {
               resolveSelection: resolveBlockedHollowVoxelMarqueeSelection,
               onSelectionChange: handleBlockedHollowVoxelMarqueeSelection,
             }}
-            renderSceneOverlays={({ raycastActiveModelFromRay }) => {
-              const previewModel = hollowPreview
-                ? scene.models.find((model) => model.id === hollowPreview.modelId) ?? null
-                : null;
-              const activeModelId = scene.activeModel?.id ?? null;
-              const isInHollowingTool = scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing';
-              const showDraftHolePunchMarkers = (
-                interiorView
-                || (
-                  isInHollowingTool
-                  && !isShellFaceSelectionPending
-                  && !hollowingEditMode
-                )
-              );
-              const holePunchCavityBoundaryDepthMm = (hollowingDraftEnabled || isHollowingApplied)
-                ? Math.max(0, hollowingState.shellThicknessMm)
-                : null;
-              const placedPunches = activeModelId
-                ? holePunchPlacements.filter((placement) => placement.modelId === activeModelId)
-                : [];
-              const hoverPunchPreview = (
-                !hoveredHolePunchPlacementId
-                && holePunchHoverPlacement
-                && holePunchHoverPlacement.modelId === activeModelId
-              )
-                ? holePunchHoverPlacement
-                : null;
-
-              return (
-                <>
-                  {ghostData && LysGhostOverlay ? <LysGhostOverlay data={ghostData} visible /> : null}
-
-                  {placedPunches.map((placement) => {
-                    const isApplied = appliedHolePunchPlacementIds.has(placement.id);
-                    // Draft markers (blue, unapplied) always show so the user
-                    // can see what needs applying. Applied markers (orange/grey)
-                    // only show in prepare/hollowing mode.
-                    if (isApplied && !showDraftHolePunchMarkers) return null;
-                    return (
-                      <HolePunchPreviewCylinder
-                        key={`hole-punch-placement-${placement.id}`}
-                        position={placement.worldPoint}
-                        normal={placement.worldNormal}
-                        frame={placement.worldFrame}
-                        radiusMm={placement.radiusMm}
-                        radiusYMm={placement.radiusYMm}
-                        lengthMm={placement.depthMm}
-                        cavityBoundaryDepthMm={holePunchCavityBoundaryDepthMm}
-                        applied={isApplied}
-                        variant={isInHollowingTool && selectedHolePunchPlacementIdSet.has(placement.id)
-                          ? 'selected'
-                          : isInHollowingTool && placement.id === hoveredHolePunchPlacementId
-                            ? 'hover'
-                            : 'placed'}
-                        /* Only interactive when inside the hollowing tool */
-                        {...(isInHollowingTool ? {
-                          onHoverStart: () => {
-                            setHoveredHolePunchPlacementId(placement.id);
-                            setHolePunchHoverPlacement(null);
-                          },
-                          onHoverEnd: () => {
-                            setHoveredHolePunchPlacementId((previous) => (previous === placement.id ? null : previous));
-                          },
-                          onPointerDown: (event: any) => handleHolePunchPlacementDragStart(placement.id, event),
-                          onPointerMove: (event: any) => handleHolePunchPlacementDragMove(
-                            placement.id,
-                            event,
-                            raycastActiveModelFromRay,
-                          ),
-                          onPointerUp: (event: any) => handleHolePunchPlacementDragEnd(placement.id, event),
-                          onPointerCancel: (event: any) => handleHolePunchPlacementDragEnd(placement.id, event),
-                          onClick: () => {},
-                        } : {})}
-                      />
-                    );
-                  })}
-
-                  {showDraftHolePunchMarkers && hoverPunchPreview && (
-                    <HolePunchPreviewCylinder
-                      key="hole-punch-hover-preview"
-                      position={hoverPunchPreview.worldPoint}
-                      normal={hoverPunchPreview.worldNormal}
-                      radiusMm={holePunchState.radiusMm}
-                      radiusYMm={holePunchState.radiusYMm}
-                      lengthMm={holePunchState.depthMm}
-                      cavityBoundaryDepthMm={holePunchCavityBoundaryDepthMm}
-                      variant="hover"
-                    />
-                  )}
-
-                  {isInHollowingTool && selectedHolePunchPlacementIds.length === 1 && (() => {
-                    const selectedPlacement = placedPunches.find(
-                      (p) => selectedHolePunchPlacementIdSet.has(p.id),
-                    );
-                    if (!selectedPlacement) return null;
-                    return (
-                      <HolePunchGizmo
-                        key={`hole-punch-gizmo-${selectedPlacement.id}`}
-                        placement={selectedPlacement}
-                        onMoveStart={() => handleHolePunchGizmoMoveStart(selectedPlacement.id)}
-                        onMove={(delta) => handleHolePunchGizmoMove(selectedPlacement.id, delta)}
-                        onMoveEnd={() => handleHolePunchGizmoMoveEnd(selectedPlacement.id)}
-                        onRotateStart={() => handleHolePunchGizmoRotateStart(selectedPlacement.id)}
-                        onRotate={(newNormal, worldFrame) => handleHolePunchGizmoRotate(
-                          selectedPlacement.id,
-                          newNormal,
-                          worldFrame,
-                        )}
-                        onRotateEnd={() => handleHolePunchGizmoRotateEnd(selectedPlacement.id)}
-                      />
-                    );
-                  })()}
-
-                  {hollowPreview && previewModel && hollowingEditMode && !(isHollowingApplied && !isHollowingDirty) && (
-                    <WorldSpaceVoxelEditOverlay
-                      voxelCenters={hollowPreview.removedVoxelCenters}
-                      blockedVoxelCenters={hollowPreview.blockedVoxelCenters}
-                      voxelRadiusMm={Math.max(hollowPreview.report.voxelSizeMm, 0.2)}
-                      blockedVoxelIndexSet={blockedPreviewVoxelInstanceIdSet}
-                      modelTransform={{
-                        position: previewModel.transform.position,
-                        quaternion: quaternionFromGlobalEuler(previewModel.transform.rotation),
-                        scale: previewModel.transform.scale,
-                      }}
-                      geometryCenter={previewModel.geometry.center}
-                      onToggleVoxel={toggleBlockedHollowVoxelIndex}
-                    />
-                  )}
-
-                  {hollowPreview && previewModel && !hollowingEditMode && !(isHollowingApplied && !isHollowingDirty) && (
-                    <>
-                      {hollowPreview.previewVoxelSpheres && (
-                        <WorldSpaceVoxelPreview
-                          voxelCenters={hollowPreview.removedVoxelCenters}
-                          voxelSizeMm={hollowPreview.report.voxelSizeMm}
-                          modelTransform={{
-                            position: previewModel.transform.position,
-                            quaternion: quaternionFromGlobalEuler(previewModel.transform.rotation),
-                            scale: previewModel.transform.scale,
-                          }}
-                          geometryCenter={previewModel.geometry.center}
-                        />
-                      )}
-                      <group
-                        position={previewModel.transform.position}
-                        quaternion={quaternionFromGlobalEuler(previewModel.transform.rotation)}
-                        scale={previewModel.transform.scale}
-                      >
-                        {!hollowPreview.previewVoxelSpheres && (
-                          <mesh
-                            geometry={hollowPreview.geometry}
-                            position={new THREE.Vector3(
-                              -previewModel.geometry.center.x,
-                              -previewModel.geometry.center.y,
-                              -previewModel.geometry.center.z,
-                            )}
-                            raycast={() => null}
-                            renderOrder={6}
-                          >
-                            <meshStandardMaterial
-                              color={'#66ecff'}
-                              emissive={'#3be6f2'}
-                              emissiveIntensity={0.18}
-                              transparent
-                              opacity={0.62}
-                              depthTest
-                              depthWrite={false}
-                              side={THREE.DoubleSide}
-                              roughness={0.65}
-                              metalness={0.0}
-                            />
-                          </mesh>
-                        )}
-                        {hollowPreview.infillGeometry && (
-                          <mesh
-                            geometry={hollowPreview.infillGeometry}
-                            position={new THREE.Vector3(
-                              -previewModel.geometry.center.x,
-                            -previewModel.geometry.center.y,
-                            -previewModel.geometry.center.z,
-                          )}
-                          raycast={() => null}
-                          renderOrder={7}
-                        >
-                          <meshStandardMaterial
-                            color={'#43215f'}
-                            emissive={'#5a2f82'}
-                            emissiveIntensity={0.24}
-                            transparent
-                            opacity={0.9}
-                            depthTest
-                            depthWrite={false}
-                            side={THREE.DoubleSide}
-                            roughness={0.55}
-                            metalness={0.0}
-                          />
-                        </mesh>
-                      )}
-                    </group>
-                  </>
-                )}
-                </>
-              );
-            }}
+            renderSceneOverlays={({ raycastActiveModelFromRay }) => (
+              <SceneOverlays
+                raycastActiveModelFromRay={raycastActiveModelFromRay}
+                scene={scene}
+                transformMgr={transformMgr}
+                ghostData={ghostData}
+                LysGhostOverlay={LysGhostOverlay}
+                hollowPreview={hollowPreview}
+                hollowingEditMode={hollowingEditMode}
+                hollowingDraftEnabled={hollowingDraftEnabled}
+                isHollowingApplied={isHollowingApplied}
+                isHollowingDirty={isHollowingDirty}
+                isShellFaceSelectionPending={isShellFaceSelectionPending}
+                hollowingState={hollowingState}
+                blockedPreviewVoxelInstanceIdSet={blockedPreviewVoxelInstanceIdSet}
+                toggleBlockedHollowVoxelIndex={toggleBlockedHollowVoxelIndex}
+                interiorView={interiorView}
+                holePunchPlacements={holePunchPlacements}
+                appliedHolePunchPlacementIds={appliedHolePunchPlacementIds}
+                selectedHolePunchPlacementIds={selectedHolePunchPlacementIds}
+                selectedHolePunchPlacementIdSet={selectedHolePunchPlacementIdSet}
+                hoveredHolePunchPlacementId={hoveredHolePunchPlacementId}
+                holePunchHoverPlacement={holePunchHoverPlacement}
+                holePunchState={holePunchState}
+                setHoveredHolePunchPlacementId={setHoveredHolePunchPlacementId}
+                setHolePunchHoverPlacement={setHolePunchHoverPlacement}
+                handleHolePunchPlacementDragStart={handleHolePunchPlacementDragStart}
+                handleHolePunchPlacementDragMove={handleHolePunchPlacementDragMove}
+                handleHolePunchPlacementDragEnd={handleHolePunchPlacementDragEnd}
+                handleHolePunchGizmoMoveStart={handleHolePunchGizmoMoveStart}
+                handleHolePunchGizmoMove={handleHolePunchGizmoMove}
+                handleHolePunchGizmoMoveEnd={handleHolePunchGizmoMoveEnd}
+                handleHolePunchGizmoRotateStart={handleHolePunchGizmoRotateStart}
+                handleHolePunchGizmoRotate={handleHolePunchGizmoRotate}
+                handleHolePunchGizmoRotateEnd={handleHolePunchGizmoRotateEnd}
+              />
+            )}
             duplicatePreviewModel={
               isDuplicating
                 ? duplicateApplySourceModel
