@@ -38,6 +38,7 @@ import {
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
+import { splitClassifiedSupportGeometry } from '@/features/scene/splitClassifiedSupports';
 
 type PersistedMeshAppearance = {
   v: 1;
@@ -2648,80 +2649,17 @@ export function useSceneCollectionManager() {
     const source = modelsRef.current.find((m) => m.id === modelId);
     if (!source) return;
 
-    const report = source.geometry.meshDefects?.nativeRepairReport;
-    const modelTriCount = report?.model_triangle_count;
-    if (!modelTriCount || modelTriCount <= 0) return;
-
-    const geometry = source.geometry.geometry;
-    const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
-    const allPos = posAttr.array as Float32Array;
-    const modelFloatEnd = modelTriCount * 9; // 3 vertices × 3 floats per tri
-
-    if (modelFloatEnd >= allPos.length) return;
-
-    const totalTris = allPos.length / 9;
-    const supportTriCount = totalTris - modelTriCount;
-    if (modelTriCount <= 0 || supportTriCount <= 0) return;
-
-    // Split the position buffer into model and support sections.
-    // The native repair engine has already reordered triangles:
-    // model triangles first, then support triangles.
-    const modelPositions = allPos.slice(0, modelFloatEnd);
-    const supportPositions = allPos.slice(modelFloatEnd);
-
-    // StlMesh translates every mesh by -boundingBoxCenter.  Since each split
-    // piece has a different center than the original composite, we compensate
-    // by nudging the model's world-space transform so the vertices land at the
-    // same world positions they occupied inside the composite.
-    const origCenter = source.geometry.center.clone();
-
-    const buildGeometryWithBounds = (positions: Float32Array, triCount: number): GeometryWithBounds => {
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      geo.computeVertexNormals();
-      geo.computeBoundingBox();
-      const bbox = geo.boundingBox ? geo.boundingBox.clone() : new THREE.Box3();
-      const center = bbox.getCenter(new THREE.Vector3());
-      const size = bbox.getSize(new THREE.Vector3());
-
-      accelerateGeometry(geo);
-
-      let flatteningPlanes: FlatteningPlane[] = [];
-      const vertexCount = triCount * 3;
-      if (vertexCount < 15_000_000) {
-        flatteningPlanes = computeFlatteningPlanes(geo);
-      }
-
-      let edgeGeometry: THREE.EdgesGeometry | undefined;
-      if (triCount < 2_000_000) {
-        try {
-          edgeGeometry = new THREE.EdgesGeometry(geo, 30);
-        } catch { /* skip if OOM */ }
-      }
-
-      return { geometry: geo, bbox, center, size, flatteningPlanes, edgeGeometry };
-    };
-
-    // Process model geometry first, yield, then support geometry.
-    setImportProgress((p) => ({ ...p, detail: 'Processing model geometry…' }));
-    await waitForUiYield();
-    const modelGeom = buildGeometryWithBounds(modelPositions, modelTriCount);
-
-    setImportProgress((p) => ({ ...p, detail: 'Processing support geometry…' }));
-    await waitForUiYield();
-    const supportGeom = buildGeometryWithBounds(supportPositions, supportTriCount);
-
-    // Compute the world-space position adjustment needed to compensate for
-    // StlMesh's -boundingBoxCenter offset differing between pieces.
-    const modelPosAdjust = modelGeom.center.clone().sub(origCenter);
-    const supportPosAdjust = supportGeom.center.clone().sub(origCenter);
-    // Apply rotation & scale so the local-space delta is correct in world space
-    const sourceRot = new THREE.Quaternion().setFromEuler(source.transform.rotation);
-    modelPosAdjust.applyQuaternion(sourceRot).multiply(source.transform.scale);
-    supportPosAdjust.applyQuaternion(sourceRot).multiply(source.transform.scale);
-
-    const modelPosition = source.transform.position.clone().add(modelPosAdjust);
-    const supportPosition = source.transform.position.clone().add(supportPosAdjust);
+    const split = splitClassifiedSupportGeometry(source, { interactive: true });
+    if (!split) return;
+    const {
+      modelGeometry: modelGeom,
+      supportGeometry: supportGeom,
+      modelPosition,
+      supportPosition,
+      modelTriangleCount: modelTriCount,
+      supportTriangleCount: supportTriCount,
+      totalTriangleCount: totalTris,
+    } = split;
 
     setImportProgress((p) => ({ ...p, detail: 'Finalizing…' }));
     await waitForUiYield();

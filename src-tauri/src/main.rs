@@ -1400,6 +1400,49 @@ async fn slice_solid_native_to_temp_path(
             metadata_json: meta.metadata_json,
         };
 
+        eprintln!(
+            "[SupportAA] native job decoded: model_triangles={} support_triangles={} total_triangles={} aa_on_supports={} mode={} level={} mesh_encoding={}",
+            job.model_triangle_count,
+            (job.triangles_xyz.len() / 9).saturating_sub(job.model_triangle_count as usize),
+            job.triangles_xyz.len() / 9,
+            job.aa_on_supports,
+            job.anti_aliasing_mode,
+            job.anti_aliasing_level,
+            meta.mesh_encoding.as_deref().unwrap_or("raw_f32"),
+        );
+        let fingerprint = |start: usize, end: usize| {
+            let mut hash = 0x811c9dc5u32;
+            for value in &job.triangles_xyz[start.min(job.triangles_xyz.len())
+                ..end.min(job.triangles_xyz.len())]
+            {
+                hash ^= value.to_bits();
+                hash = hash.wrapping_mul(0x01000193);
+            }
+            format!("{hash:08x}")
+        };
+        let multiset_fingerprint = |start: usize, end: usize| {
+            let mut xor = 0u32;
+            let mut sum = 0u32;
+            for value in &job.triangles_xyz[start.min(job.triangles_xyz.len())
+                ..end.min(job.triangles_xyz.len())]
+            {
+                let bits = value.to_bits();
+                xor ^= bits;
+                sum = sum.wrapping_add(bits);
+            }
+            format!("{xor:08x}:{sum:08x}")
+        };
+        let model_float_end = (job.model_triangle_count as usize)
+            .saturating_mul(9)
+            .min(job.triangles_xyz.len());
+        eprintln!(
+            "[SupportAA] native geometry fingerprints: model={} support={} model_multiset={} support_multiset={}",
+            fingerprint(0, model_float_end),
+            fingerprint(model_float_end, job.triangles_xyz.len()),
+            multiset_fingerprint(0, model_float_end),
+            multiset_fingerprint(model_float_end, job.triangles_xyz.len()),
+        );
+
         let progress_cb = make_throttled_progress_cb(win);
         let requested_output_path = requested_output_path.clone();
 
