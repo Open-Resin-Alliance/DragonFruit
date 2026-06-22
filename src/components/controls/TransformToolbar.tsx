@@ -17,6 +17,16 @@ export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformT
   const modKey = usePlatformModifier();
   const { _ } = useLingui();
 
+  const toolbarInnerRef = React.useRef<HTMLDivElement>(null);
+  const [collapseToolLabels, setCollapseToolLabels] = React.useState(() => {
+    if (typeof window === 'undefined') return false;
+    const fullLeft = window.innerWidth / 2 - 296;
+    return fullLeft < 340;
+  });
+  const buttonsRef = React.useRef<(HTMLButtonElement | null)[]>([]);
+  const lastCollapseRef = React.useRef(false);
+  const [indicatorStyle, setIndicatorStyle] = React.useState<{ width: number; left: number }>({ width: 0, left: 0 });
+
   const buttons: Array<{ mode: TransformMode; label: string; icon: React.ReactNode; hint: string }> = [
     { mode: 'select', label: _(msg`Select`), icon: <Hand className="w-4 h-4" />, hint: _(msg`Select and inspect model`) },
     { mode: 'transform', label: _(msg`Modify`), icon: <Move3D className="w-4 h-4" />, hint: _(msg`Move, rotate, and scale`) },
@@ -28,6 +38,35 @@ export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformT
   ];
 
   const activeIndex = Math.max(0, buttons.findIndex((btn) => btn.mode === mode));
+
+  React.useEffect(() => {
+    const update = () => {
+      // Toolbar full width with all labels: 7 buttons × ~82px + 6 gaps × 3px + 8px padding ≈ 592px
+      // Centered at innerWidth/2, so left edge = innerWidth/2 - 296
+      // Collapse when left edge is too close to the 320px panel
+      const fullLeft = window.innerWidth / 2 - 296;
+      const tooClose = fullLeft < 340;
+      if (tooClose !== lastCollapseRef.current) {
+        lastCollapseRef.current = tooClose;
+        setCollapseToolLabels(tooClose);
+      }
+    };
+
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
+
+  React.useEffect(() => {
+    const targetBtn = buttonsRef.current[activeIndex];
+    if (targetBtn && targetBtn.parentElement) {
+      const parent = targetBtn.parentElement;
+      setIndicatorStyle({
+        width: targetBtn.offsetWidth,
+        left: targetBtn.offsetLeft - parent.offsetLeft,
+      });
+    }
+  }, [activeIndex, collapseToolLabels, hoveredMode]);
 
   const handleModeClick = React.useCallback((next: TransformMode) => {
     React.startTransition(() => {
@@ -62,43 +101,40 @@ export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformT
       }}
     >
       <div
-        className={`relative grid items-center rounded-full px-1 py-1 ${
-          buttons.length === 7
-            ? 'grid-cols-7'
-            : buttons.length === 6
-              ? 'grid-cols-6'
-              : buttons.length === 5
-                ? 'grid-cols-5'
-                : 'grid-cols-4'
-        }`}
+        ref={toolbarInnerRef}
+        className="relative grid items-center rounded-full px-1 py-1 gap-[3px]"
+        onMouseLeave={() => {
+          setHoveredMode(null);
+          onModeHover?.(null);
+        }}
         style={{
+          gridTemplateColumns: `repeat(${buttons.length}, auto)`,
           background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 50%)',
           backdropFilter: 'blur(12px)',
         }}
       >
         <div
-          className="pointer-events-none absolute left-1 top-1 bottom-1 rounded-full transition-transform duration-300 ease-out"
+          className="pointer-events-none absolute top-1 bottom-1 rounded-full transition-all duration-300 ease-out"
           style={{
-            width: `calc((100% - 8px) / ${buttons.length})`,
-            transform: `translateX(${activeIndex * 100}%)`,
+            width: indicatorStyle.width || `${(100 - 8 / (buttons.length || 1)) / (buttons.length || 1)}%`,
+            left: indicatorStyle.left,
             background: 'var(--accent-secondary)',
             boxShadow: '0 2px 12px color-mix(in srgb, var(--accent-secondary), transparent 50%)',
           }}
         />
 
-        {buttons.map((btn) => {
+        {buttons.map((btn, index) => {
           const active = mode === btn.mode;
           const hovered = hoveredMode === btn.mode;
 
           return (
             <button
               key={btn.mode}
+              ref={(el) => { buttonsRef.current[index] = el; }}
               onClick={() => handleModeClick(btn.mode)}
               onMouseEnter={() => handleModeHoverChange(btn.mode)}
-              onMouseLeave={() => handleModeLeave(btn.mode)}
               onFocus={() => handleModeHoverChange(btn.mode)}
-              onBlur={() => handleModeLeave(btn.mode)}
-              className={`relative z-[1] flex w-[112px] items-center justify-center gap-1.5 rounded-full px-3.5 py-2 text-[11px] font-semibold uppercase tracking-wider transition-all duration-200 active:scale-[0.98] ${
+              className={`relative z-[1] flex items-center justify-center gap-1.5 rounded-full px-2.5 py-2 text-[11px] font-semibold uppercase tracking-wider transition-all duration-200 active:scale-[0.98] h-[34px] ${
                 active
                   ? 'scale-[1.01]'
                   : 'hover:-translate-y-[1px] hover:shadow-[0_4px_14px_rgba(0,0,0,0.22)]'
@@ -114,7 +150,9 @@ export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformT
               title={`${btn.label} • ${btn.hint}`}
             >
               <span className="shrink-0">{btn.icon}</span>
-              <span className="whitespace-nowrap">{btn.label}</span>
+              {collapseToolLabels && (hoveredMode ? hoveredMode !== btn.mode : !active) ? null : (
+                <span className="whitespace-nowrap overflow-hidden">{btn.label}</span>
+              )}
             </button>
           );
         })}
