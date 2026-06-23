@@ -11,6 +11,7 @@ pub mod hollowing;
 pub mod io;
 pub mod repair;
 pub mod report;
+pub mod support_reconstruction;
 
 pub use crate::analysis::{analyze, minimal_analysis, MeshAnalysis};
 pub use crate::core::mesh::{IndexedMesh, Vec3};
@@ -21,6 +22,11 @@ pub use crate::hollowing::{
 };
 pub use crate::repair::{classify_support_split, repair, RepairOptions, RepairOutcome};
 pub use crate::report::MeshHealthReport;
+pub use crate::support_reconstruction::{
+    reconstruct_supports, InferredSupportGraph, SupportReconstructionError,
+    SupportReconstructionOptions, SupportReconstructionRequest, SupportReconstructionResult,
+    SUPPORT_RECONSTRUCTION_ANALYZER_VERSION, SUPPORT_RECONSTRUCTION_SCHEMA_VERSION,
+};
 
 use std::path::Path;
 
@@ -40,6 +46,24 @@ pub fn repair_path<P: AsRef<Path>>(
 ) -> Result<RepairOutcome, MeshRepairError> {
     let mesh = crate::io::load_mesh_from_path(path.as_ref())?;
     Ok(repair(mesh, options))
+}
+
+/// Load separate model/support meshes and run the experimental reconstruction
+/// research harness. Inputs are interpreted in the same coordinate system.
+pub fn reconstruct_supports_path<P: AsRef<Path>, Q: AsRef<Path>>(
+    model_path: P,
+    support_path: Q,
+    plate_z_mm: f32,
+    options: &SupportReconstructionOptions,
+) -> Result<SupportReconstructionResult, Box<dyn std::error::Error>> {
+    let model = crate::io::load_mesh_from_path(model_path.as_ref())?;
+    let support = crate::io::load_mesh_from_path(support_path.as_ref())?;
+    Ok(reconstruct_supports(SupportReconstructionRequest {
+        model,
+        support,
+        plate_z_mm,
+        options: options.clone(),
+    })?)
 }
 
 #[derive(Debug, thiserror::Error)]

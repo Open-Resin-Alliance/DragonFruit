@@ -16,6 +16,14 @@ pub struct Bvh {
     root: u32,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct ClosestPointHit {
+    pub face: u32,
+    pub point: Vec3,
+    pub normal: Vec3,
+    pub distance: f32,
+}
+
 impl Bvh {
     pub fn build(mesh: &IndexedMesh) -> Self {
         let mut nodes = Vec::with_capacity(mesh.triangles.len() * 2);
@@ -102,6 +110,74 @@ impl Bvh {
                 }
                 self.query_rec(left, query, visit);
                 self.query_rec(right, query, visit);
+            }
+        }
+    }
+
+    /// Find the closest point on the mesh within `max_distance`.
+    ///
+    /// Traversal prunes nodes whose AABB cannot improve the current result.
+    /// Equal-distance hits resolve to the lower face index for deterministic
+    /// diagnostics.
+    pub fn closest_point(
+        &self,
+        mesh: &IndexedMesh,
+        point: Vec3,
+        max_distance: f32,
+    ) -> Option<ClosestPointHit> {
+        if !max_distance.is_finite() || max_distance < 0.0 {
+            return None;
+        }
+        let mut best: Option<(u32, Vec3, f32)> = None;
+        let mut best_distance_sq = max_distance * max_distance;
+        self.closest_point_rec(mesh, self.root, point, &mut best_distance_sq, &mut best);
+        best.map(|(face, closest, distance_sq)| ClosestPointHit {
+            face,
+            point: closest,
+            normal: mesh.tri_normal(face),
+            distance: distance_sq.sqrt(),
+        })
+    }
+
+    fn closest_point_rec(
+        &self,
+        mesh: &IndexedMesh,
+        node: u32,
+        point: Vec3,
+        best_distance_sq: &mut f32,
+        best: &mut Option<(u32, Vec3, f32)>,
+    ) {
+        match self.nodes[node as usize] {
+            Node::Leaf { face, ref bbox } => {
+                if point_aabb_distance_sq(point, bbox) > *best_distance_sq {
+                    return;
+                }
+                let [a, b, c] = mesh.tri_positions(face);
+                let closest = closest_point_on_triangle(point, a, b, c);
+                let distance_sq = closest.sub(point).dot(closest.sub(point));
+                let improves = distance_sq < *best_distance_sq
+                    || (distance_sq == *best_distance_sq
+                        && best.map(|current| face < current.0).unwrap_or(true));
+                if improves {
+                    *best_distance_sq = distance_sq;
+                    *best = Some((face, closest, distance_sq));
+                }
+            }
+            Node::Internal { left, right, .. } => {
+                let left_distance = point_aabb_distance_sq(point, &node_bbox(&self.nodes, left));
+                let right_distance = point_aabb_distance_sq(point, &node_bbox(&self.nodes, right));
+                let (first, first_distance, second, second_distance) =
+                    if left_distance <= right_distance {
+                        (left, left_distance, right, right_distance)
+                    } else {
+                        (right, right_distance, left, left_distance)
+                    };
+                if first_distance <= *best_distance_sq {
+                    self.closest_point_rec(mesh, first, point, best_distance_sq, best);
+                }
+                if second_distance <= *best_distance_sq {
+                    self.closest_point_rec(mesh, second, point, best_distance_sq, best);
+                }
             }
         }
     }
@@ -316,6 +392,69 @@ impl Bvh {
             }
         }
     }
+}
+
+fn point_aabb_distance_sq(point: Vec3, bbox: &Aabb) -> f32 {
+    let axis_distance = |value: f32, min: f32, max: f32| {
+        if value < min {
+            min - value
+        } else if value > max {
+            value - max
+        } else {
+            0.0
+        }
+    };
+    let dx = axis_distance(point.x, bbox.min.x, bbox.max.x);
+    let dy = axis_distance(point.y, bbox.min.y, bbox.max.y);
+    let dz = axis_distance(point.z, bbox.min.z, bbox.max.z);
+    dx * dx + dy * dy + dz * dz
+}
+
+fn closest_point_on_triangle(point: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
+    // Real-Time Collision Detection, Christer Ericson, section 5.1.5.
+    let ab = b.sub(a);
+    let ac = c.sub(a);
+    let ap = point.sub(a);
+    let d1 = ab.dot(ap);
+    let d2 = ac.dot(ap);
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return a;
+    }
+
+    let bp = point.sub(b);
+    let d3 = ab.dot(bp);
+    let d4 = ac.dot(bp);
+    if d3 >= 0.0 && d4 <= d3 {
+        return b;
+    }
+
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        return a.add(ab.scale(d1 / (d1 - d3)));
+    }
+
+    let cp = point.sub(c);
+    let d5 = ab.dot(cp);
+    let d6 = ac.dot(cp);
+    if d6 >= 0.0 && d5 <= d6 {
+        return c;
+    }
+
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        return a.add(ac.scale(d2 / (d2 - d6)));
+    }
+
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let edge = c.sub(b);
+        return b.add(edge.scale((d4 - d3) / ((d4 - d3) + (d5 - d6))));
+    }
+
+    let denominator = 1.0 / (va + vb + vc);
+    let v = vb * denominator;
+    let w = vc * denominator;
+    a.add(ab.scale(v)).add(ac.scale(w))
 }
 
 fn node_bbox(nodes: &[Node], idx: u32) -> Aabb {

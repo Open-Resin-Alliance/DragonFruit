@@ -57,6 +57,16 @@ import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPl
 import { IconButton, Toast, ToastViewport } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { SupportReconstructionDiagnosticsModal } from '@/features/support-reconstruction/SupportReconstructionDiagnosticsModal';
+import {
+  canReconstructClassifiedSupports,
+  reconstructClassifiedSupports,
+  type SupportReconstructionResult,
+} from '@/features/support-reconstruction/nativeSupportReconstruction';
+import {
+  buildNativeSupportPreview,
+  type NativeSupportPreview,
+} from '@/features/support-reconstruction/nativeSupportAdapter';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
@@ -1888,6 +1898,12 @@ export default function Home() {
   const [manualRepairModelId, setManualRepairModelId] = React.useState<string | null>(null);
   const [isManualRepairing, setIsManualRepairing] = React.useState(false);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
+  const [supportReconstructionDiagnostics, setSupportReconstructionDiagnostics] = React.useState<{
+    modelName: string;
+    result: SupportReconstructionResult | null;
+    nativePreview: NativeSupportPreview | null;
+    error: string | null;
+  } | null>(null);
   const [isSliceMetricsDebugOpen, setIsSliceMetricsDebugOpen] = React.useState(false);
     const handleRegisterExportThumbnailCapture = React.useCallback((capture: (() => Promise<Uint8Array | null>) | null) => {
       exportThumbnailCaptureRef.current = capture;
@@ -3547,11 +3563,13 @@ export default function Home() {
       ? scene.models.find((m) => m.id === scene.activeModelId)
       : undefined;
     const canSplitSupports = !!activeModel?.geometry.meshDefects?.nativeRepairReport?.model_triangle_count;
+    const canReconstructSupports = canReconstructClassifiedSupports(activeModel);
 
     return [
       ...(!scene.activeModelId ? (['delete', 'cut', 'copy', 'repair'] as const) : []),
       ...(!scene.canPasteModel ? (['paste'] as const) : []),
       ...(!canSplitSupports ? (['split-supports'] as const) : []),
+      ...(!canReconstructSupports ? (['reconstruct-supports'] as const) : []),
     ];
   }, [scene.activeModelId, scene.canPasteModel, scene.mode, scene.models, supportsCanAddJoint, supportsCanToggleCurve]);
 
@@ -10765,7 +10783,7 @@ export default function Home() {
     };
   }, []);
 
-  const handleEditorMenuAction = React.useCallback((action: EditorMenuAction) => {
+  const handleEditorMenuAction = React.useCallback(async (action: EditorMenuAction) => {
     const projectSplitPoint = (
       start: { x: number; y: number; z: number },
       end: { x: number; y: number; z: number },
@@ -10951,6 +10969,41 @@ export default function Home() {
         if (targetId) {
           closeEditorContextMenu();
           scene.splitSupports(targetId);
+          return;
+        }
+        break;
+      }
+      case 'reconstruct-supports': {
+        const target = scene.activeModelId
+          ? scene.models.find((model) => model.id === scene.activeModelId)
+          : undefined;
+        if (target) {
+          closeEditorContextMenu();
+          setSupportReconstructionDiagnostics({
+            modelName: target.name,
+            result: null,
+            nativePreview: null,
+            error: null,
+          });
+          try {
+            const result = await reconstructClassifiedSupports(target);
+            setSupportReconstructionDiagnostics({
+              modelName: target.name,
+              result,
+              nativePreview: buildNativeSupportPreview(result, {
+                modelId: target.id,
+                objectCenter: target.geometry.center,
+              }),
+              error: null,
+            });
+          } catch (error) {
+            setSupportReconstructionDiagnostics({
+              modelName: target.name,
+              result: null,
+              nativePreview: null,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
           return;
         }
         break;
@@ -19859,6 +19912,15 @@ export default function Home() {
         selectedModelCount={scene.selectedModelIds.length}
         totalPolygons={totalPolygons}
         selectedPolygons={selectedPolygons}
+      />
+
+      <SupportReconstructionDiagnosticsModal
+        open={supportReconstructionDiagnostics !== null}
+        modelName={supportReconstructionDiagnostics?.modelName ?? ''}
+        result={supportReconstructionDiagnostics?.result ?? null}
+        nativePreview={supportReconstructionDiagnostics?.nativePreview ?? null}
+        error={supportReconstructionDiagnostics?.error ?? null}
+        onClose={() => setSupportReconstructionDiagnostics(null)}
       />
 
       <HistoryDebugModal

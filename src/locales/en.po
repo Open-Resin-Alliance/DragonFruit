@@ -37,7 +37,7 @@ msgstr "{deltaMin}m"
 #~ msgid "{deltaMin}m ago"
 #~ msgstr "{deltaMin}m ago"
 
-#: src/app/page.tsx:3529
+#: src/app/page.tsx:3541
 msgid "Add Joint"
 msgstr "Add Joint"
 
@@ -53,15 +53,15 @@ msgstr "Add Printer"
 msgid "Anti-aliasing: nothing to anti-alias."
 msgstr "Anti-aliasing: nothing to anti-alias."
 
-#: src/components/controls/TransformToolbar.tsx:27
+#: src/components/controls/TransformToolbar.tsx:37
 msgid "Arrange"
 msgstr "Arrange"
 
-#: src/components/layout/TopBar.tsx:610
+#: src/components/layout/TopBar.tsx:630
 msgid "Arrange model and transforms"
 msgstr "Arrange model and transforms"
 
-#: src/components/controls/TransformToolbar.tsx:27
+#: src/components/controls/TransformToolbar.tsx:37
 msgid "Auto-arrange models on plate"
 msgstr "Auto-arrange models on plate"
 
@@ -74,7 +74,7 @@ msgstr "BETA VERSION"
 msgid "Bring in a mesh or scene to start preparing, analyzing, supporting, and exporting your print."
 msgstr "Bring in a mesh or scene to start preparing, analyzing, supporting, and exporting your print."
 
-#: src/components/layout/TopBar.tsx:617
+#: src/components/layout/TopBar.tsx:638
 msgid "Build and tune supports"
 msgstr "Build and tune supports"
 
@@ -83,7 +83,7 @@ msgstr "Build and tune supports"
 msgid "cached"
 msgstr "cached"
 
-#: src/components/ui/EditorContextMenu.tsx:48
+#: src/components/ui/EditorContextMenu.tsx:52
 msgid "Copy"
 msgstr "Copy"
 
@@ -92,7 +92,7 @@ msgstr "Copy"
 msgid "Could not reopen this file from cache."
 msgstr "Could not reopen this file from cache."
 
-#: src/components/controls/TransformToolbar.tsx:25
+#: src/components/controls/TransformToolbar.tsx:35
 msgid "Create cavity or open-face shell"
 msgstr "Create cavity or open-face shell"
 
@@ -100,11 +100,11 @@ msgstr "Create cavity or open-face shell"
 msgid "Currently displaying nothing at maximum fidelity."
 msgstr "Currently displaying nothing at maximum fidelity."
 
-#: src/components/ui/EditorContextMenu.tsx:47
+#: src/components/ui/EditorContextMenu.tsx:51
 msgid "Cut"
 msgstr "Cut"
 
-#: src/components/ui/EditorContextMenu.tsx:46
+#: src/components/ui/EditorContextMenu.tsx:50
 msgid "Delete"
 msgstr "Delete"
 
@@ -121,12 +121,12 @@ msgstr "Drag a file in. The platform is judging you."
 msgid "Drop supported files"
 msgstr "Drop supported files"
 
-#: src/app/page.tsx:3535
-#: src/components/ui/EditorContextMenu.tsx:85
+#: src/app/page.tsx:3547
+#: src/components/ui/EditorContextMenu.tsx:91
 msgid "Editor"
 msgstr "Editor"
 
-#: src/components/ui/EditorContextMenu.tsx:82
+#: src/components/ui/EditorContextMenu.tsx:88
 msgid "Editor context menu"
 msgstr "Editor context menu"
 
@@ -143,11 +143,11 @@ msgstr "Empty workspace"
 msgid "Every great print starts with an empty scene."
 msgstr "Every great print starts with an empty scene."
 
-#: src/components/layout/TopBar.tsx:622
+#: src/components/layout/TopBar.tsx:643
 msgid "Export"
 msgstr "Export"
 
-#: src/components/layout/TopBar.tsx:624
+#: src/components/layout/TopBar.tsx:646
 msgid "Finalize and export output"
 msgstr "Finalize and export output"
 
@@ -155,7 +155,7 @@ msgstr "Finalize and export output"
 msgid "Get started"
 msgstr "Get started"
 
-#: src/components/controls/TransformToolbar.tsx:25
+#: src/components/controls/TransformToolbar.tsx:35
 msgid "Hollow"
 msgstr "Hollow"
 
@@ -192,7 +192,7 @@ msgstr "Importing your file…"
 msgid "In space, no one can hear you slice."
 msgstr "In space, no one can hear you slice."
 
-#: src/components/layout/TopBar.tsx:631
+#: src/components/layout/TopBar.tsx:654
 msgid "Inspect sliced layers before printing"
 msgstr "Inspect sliced layers before printing"
 
@@ -263,19 +263,19 @@ msgstr "Mesh"
 msgid "Mesh Files (.stl, .obj, .3mf)"
 msgstr "Mesh Files (.stl, .obj, .3mf)"
 
-#: src/components/controls/TransformToolbar.tsx:24
+#: src/components/controls/TransformToolbar.tsx:34
 msgid "Mirror"
 msgstr "Mirror"
 
-#: src/components/controls/TransformToolbar.tsx:24
+#: src/components/controls/TransformToolbar.tsx:34
 msgid "Mirror across X, Y, or Z"
 msgstr "Mirror across X, Y, or Z"
 
-#: src/components/controls/TransformToolbar.tsx:22
+#: src/components/controls/TransformToolbar.tsx:32
 msgid "Modify"
 msgstr "Modify"
 
-#: src/components/controls/TransformToolbar.tsx:22
+#: src/components/controls/TransformToolbar.tsx:32
 msgid "Move, rotate, and scale"
 msgstr "Move, rotate, and scale"
 
@@ -297,7 +297,7 @@ msgid "Nothing to see here. Yet."
 msgstr "Nothing to see here. Yet."
 
 #. Toolbar button label. Short for "lay the model flat on a selected face"; keep it terse so the toolbar pill stays narrow.
-#: src/components/controls/TransformToolbar.tsx:23
+#: src/components/controls/TransformToolbar.tsx:33
 msgid "On-Face"
 msgstr "On-Face"
 
@@ -310,11 +310,11 @@ msgstr "One does not simply import a mesh... or actually, you just click a butto
 msgid "Open printer library and add one now."
 msgstr "Open printer library and add one now."
 
-#: src/components/controls/TransformToolbar.tsx:23
+#: src/components/controls/TransformToolbar.tsx:33
 msgid "Orient flat against plate"
 msgstr "Orient flat against plate"
 
-#: src/components/ui/EditorContextMenu.tsx:49
+#: src/components/ui/EditorContextMenu.tsx:53
 msgid "Paste"
 msgstr "Paste"
 
@@ -322,11 +322,11 @@ msgstr "Paste"
 msgid "Please hang tight while we prepare your scene."
 msgstr "Please hang tight while we prepare your scene."
 
-#: src/components/layout/TopBar.tsx:608
+#: src/components/layout/TopBar.tsx:627
 msgid "Prepare"
 msgstr "Prepare"
 
-#: src/components/layout/TopBar.tsx:629
+#: src/components/layout/TopBar.tsx:651
 msgid "Printing"
 msgstr "Printing"
 
@@ -338,12 +338,20 @@ msgstr "Ready for your next adventure?"
 msgid "Recent files"
 msgstr "Recent files"
 
+#: src/components/ui/EditorContextMenu.tsx:56
+msgid "Reconstruct Supports"
+msgstr "Reconstruct Supports"
+
+#: src/components/ui/EditorContextMenu.tsx:56
+#~ msgid "Reconstruct Supports (Experimental)"
+#~ msgstr "Reconstruct Supports (Experimental)"
+
 #. placeholder {0}: entry.name
 #: src/components/layout/EmptySceneState.tsx:631
 msgid "Reopen {0}"
 msgstr "Reopen {0}"
 
-#: src/components/ui/EditorContextMenu.tsx:50
+#: src/components/ui/EditorContextMenu.tsx:54
 msgid "Repair"
 msgstr "Repair"
 
@@ -361,27 +369,31 @@ msgstr "Scene"
 msgid "Scene Files (.voxl, .lys)"
 msgstr "Scene Files (.voxl, .lys)"
 
-#: src/components/controls/TransformToolbar.tsx:26
+#: src/components/controls/TransformToolbar.tsx:36
 msgid "Sculpt and smooth surface"
 msgstr "Sculpt and smooth surface"
 
-#: src/components/controls/TransformToolbar.tsx:21
+#: src/components/controls/TransformToolbar.tsx:31
 msgid "Select"
 msgstr "Select"
 
-#: src/components/controls/TransformToolbar.tsx:21
+#: src/components/controls/TransformToolbar.tsx:31
 msgid "Select and inspect model"
 msgstr "Select and inspect model"
 
-#: src/components/controls/TransformToolbar.tsx:26
+#: src/components/controls/TransformToolbar.tsx:36
 msgid "Smooth"
 msgstr "Smooth"
 
-#: src/components/layout/TopBar.tsx:615
+#: src/components/ui/EditorContextMenu.tsx:55
+msgid "Split Supports"
+msgstr "Split Supports"
+
+#: src/components/layout/TopBar.tsx:635
 msgid "Support"
 msgstr "Support"
 
-#: src/app/page.tsx:3535
+#: src/app/page.tsx:3547
 msgid "Supports"
 msgstr "Supports"
 
@@ -419,7 +431,7 @@ msgstr "Time to make something real."
 msgid "Tip: Start with <0>Load Mesh</0> for clean prints, or <1>Import Scene</1> to continue an existing setup."
 msgstr "Tip: Start with <0>Load Mesh</0> for clean prints, or <1>Import Scene</1> to continue an existing setup."
 
-#: src/app/page.tsx:3524
+#: src/app/page.tsx:3536
 msgid "Toggle Curve"
 msgstr "Toggle Curve"
 

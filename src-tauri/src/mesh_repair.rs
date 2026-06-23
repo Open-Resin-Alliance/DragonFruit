@@ -17,8 +17,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use dragonfruit_mesh_repair::{
-    analyze, classify_support_split, hollow_voxel, io, punch_cylinders, repair, HolePunchOptions,
-    HollowOptions, HollowSession, IndexedMesh, RepairOptions, Vec3,
+    analyze, classify_support_split, hollow_voxel, io, punch_cylinders, reconstruct_supports,
+    repair, HolePunchOptions, HollowOptions, HollowSession, IndexedMesh, RepairOptions,
+    SupportReconstructionOptions, SupportReconstructionRequest, Vec3,
 };
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -231,6 +232,54 @@ pub async fn mesh_classify_staged() -> Result<String, String> {
 
     replace_staging_with_mesh(&mesh)?;
     serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
+}
+
+/// Runs experimental baked-support reconstruction over a staged buffer that
+/// contains model triangle soup followed by support triangle soup. The command
+/// is diagnostic-only and leaves the staging buffer unchanged.
+#[tauri::command]
+pub async fn mesh_reconstruct_supports_staged(
+    model_float_count: usize,
+    plate_z_mm: f32,
+    options_json: String,
+) -> Result<String, String> {
+    if model_float_count == 0 || model_float_count % 9 != 0 {
+        return Err("modelFloatCount must be a positive multiple of 9".into());
+    }
+    let options = if options_json.trim().is_empty() {
+        SupportReconstructionOptions::default()
+    } else {
+        serde_json::from_str::<SupportReconstructionOptions>(&options_json)
+            .map_err(|error| format!("parse reconstruction options: {error}"))?
+    };
+    let bytes = read_staging_bytes()?;
+    let model_byte_count = model_float_count
+        .checked_mul(std::mem::size_of::<f32>())
+        .ok_or("modelFloatCount exceeds addressable memory")?;
+    if model_byte_count >= bytes.len() || (bytes.len() - model_byte_count) % (9 * 4) != 0 {
+        return Err(
+            "staged reconstruction buffer does not contain valid model/support soups".into(),
+        );
+    }
+
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let model = io::staged::load_positions_le(&bytes[..model_byte_count])
+            .map_err(|error| error.to_string())?;
+        let support = io::staged::load_positions_le(&bytes[model_byte_count..])
+            .map_err(|error| error.to_string())?;
+        reconstruct_supports(SupportReconstructionRequest {
+            model,
+            support,
+            plate_z_mm,
+            options,
+        })
+        .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("support reconstruction task panicked: {error}"))??;
+
+    serde_json::to_string(&result)
+        .map_err(|error| format!("serialize support reconstruction result: {error}"))
 }
 
 /// Analyses the current staged positions buffer without modifying it.

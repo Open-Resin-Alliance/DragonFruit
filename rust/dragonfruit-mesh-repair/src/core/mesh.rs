@@ -92,7 +92,7 @@ impl Vec3 {
 }
 
 /// Axis-aligned bounding box.
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Aabb {
     pub min: Vec3,
     pub max: Vec3,

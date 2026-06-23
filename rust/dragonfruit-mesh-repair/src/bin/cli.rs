@@ -5,7 +5,10 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use dragonfruit_mesh_repair::{analyze_path, io::write_positions_file, repair_path, RepairOptions};
+use dragonfruit_mesh_repair::{
+    analyze_path, io::write_positions_file, reconstruct_supports_path, repair_path, RepairOptions,
+    SupportReconstructionOptions,
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -55,6 +58,37 @@ enum Command {
         solidify_component_threshold: usize,
         #[arg(long, default_value_t = 128)]
         solidify_self_intersection_threshold: usize,
+    },
+    /// Analyze separate model/support meshes and emit reconstruction diagnostics.
+    ReconstructSupports {
+        /// Model mesh used for future contact projection.
+        model: PathBuf,
+        /// Baked support-only mesh to analyze.
+        support: PathBuf,
+        /// Build-plane Z in the input meshes' coordinate system.
+        #[arg(long, default_value_t = 0.0)]
+        plate_z: f32,
+        /// Output JSON path. If omitted, diagnostics are printed to stdout.
+        #[arg(long)]
+        out_report: Option<PathBuf>,
+        #[arg(long)]
+        pretty: bool,
+        #[arg(long, default_value_t = 1e-5)]
+        weld_epsilon_relative: f32,
+        #[arg(long, default_value_t = 0.25)]
+        plate_tolerance_mm: f32,
+        #[arg(long, default_value_t = 8)]
+        min_component_triangles: usize,
+        #[arg(long, default_value_t = 0.55)]
+        min_axial_confidence: f32,
+        #[arg(long, default_value_t = 0.75)]
+        model_contact_tolerance_mm: f32,
+        #[arg(long, default_value_t = 0.5)]
+        min_endpoint_confidence: f32,
+        #[arg(long, default_value_t = 0.6)]
+        support_attachment_tolerance_mm: f32,
+        #[arg(long, default_value_t = 0.55)]
+        min_attachment_confidence: f32,
     },
 }
 
@@ -110,6 +144,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match out_report {
                 Some(p) => std::fs::write(p, s)?,
                 None => println!("{s}"),
+            }
+        }
+        Command::ReconstructSupports {
+            model,
+            support,
+            plate_z,
+            out_report,
+            pretty,
+            weld_epsilon_relative,
+            plate_tolerance_mm,
+            min_component_triangles,
+            min_axial_confidence,
+            model_contact_tolerance_mm,
+            min_endpoint_confidence,
+            support_attachment_tolerance_mm,
+            min_attachment_confidence,
+        } => {
+            let options = SupportReconstructionOptions {
+                weld_epsilon_relative,
+                plate_tolerance_mm,
+                min_component_triangles,
+                min_axial_confidence,
+                model_contact_tolerance_mm,
+                min_endpoint_confidence,
+                support_attachment_tolerance_mm,
+                min_attachment_confidence,
+                ..SupportReconstructionOptions::default()
+            };
+            let result = reconstruct_supports_path(model, support, plate_z, &options)?;
+            let serialized = if pretty {
+                serde_json::to_string_pretty(&result)?
+            } else {
+                serde_json::to_string(&result)?
+            };
+            match out_report {
+                Some(path) => std::fs::write(path, serialized)?,
+                None => println!("{serialized}"),
             }
         }
     }
