@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildNativeSupportPreview } from '../nativeSupportAdapter';
+import { buildNativeSupportPreview, validateNativeSupportPayload } from '../nativeSupportAdapter';
 import type {
   ReconstructionAxialCandidate,
   ReconstructionConfidence,
@@ -94,6 +94,7 @@ test('converts a profiled trunk into native root, segment, joint, and contact co
   }), { modelId: 'model-1', objectCenter: { x: 0, y: 0, z: 0 }, idFactory: ids() });
 
   assert.equal(preview.rejected.length, 0);
+  assert.deepEqual(preview.validationErrors, []);
   assert.equal(preview.payload.roots.length, 1);
   assert.equal(preview.payload.trunks.length, 1);
   assert.equal(preview.payload.trunks[0].segments[0].topJoint?.pos.z, 9);
@@ -135,6 +136,7 @@ test('converts branches and braces through preserved host knots', () => {
   }), { modelId: 'model-1', objectCenter: { x: 0, y: 0, z: 0 }, idFactory: ids() });
 
   assert.equal(preview.rejected.length, 0);
+  assert.deepEqual(preview.validationErrors, []);
   assert.equal(preview.payload.trunks.length, 2);
   assert.equal(preview.payload.branches.length, 1);
   assert.equal(preview.payload.braces.length, 1);
@@ -156,4 +158,27 @@ test('rejects topology with missing contact transition', () => {
 
   assert.equal(preview.payload.trunks.length, 0);
   assert.equal(preview.rejected[0].code, 'missing_contact_transition');
+  assert.deepEqual(preview.validationErrors, []);
+});
+
+test('native payload validator reports dangling references before import merge', () => {
+  const preview = buildNativeSupportPreview(result({
+    axialCandidates: [axial('axial-a')],
+    endpoints: [endpoint('ep-root', 'axial-a', 'start', 'plate')],
+    roots: [{ id: 'root-a', axialCandidateId: 'axial-a', endpointId: 'ep-root', sourceComponentId: 0, position: { x: 0, y: 0, z: 0 }, diameterMm: 3, confidence }],
+    topologyCandidates: [{ id: 'topology-a', kind: 'trunk', axialCandidateId: 'axial-a', rootIds: ['root-a'], contactIds: [], attachmentIds: [], confidence, rejectionCodes: [] }],
+  }), { modelId: 'model-1', objectCenter: { x: 0, y: 0, z: 0 }, idFactory: ids() });
+
+  const broken = {
+    ...preview.payload,
+    branches: [{
+      id: 'branch-broken',
+      modelId: 'model-1',
+      parentKnotId: 'missing-knot',
+      segments: [{ id: 'dangling-segment', diameter: 0.5 }],
+    }],
+  };
+  const errors = validateNativeSupportPayload(broken, 'model-1');
+
+  assert.ok(errors.some((message) => message.includes('missing knot missing-knot')));
 });

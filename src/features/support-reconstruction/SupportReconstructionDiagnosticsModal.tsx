@@ -123,6 +123,7 @@ export function SupportReconstructionDiagnosticsModal({
                 ? nativePreview.payload.trunks.length + nativePreview.payload.branches.length + nativePreview.payload.braces.length
                 : 0],
               ['Native rejected', nativePreview?.rejected.length ?? 0],
+              ['Native errors', nativePreview?.validationErrors.length ?? 0],
               ['Support endpoints', endpointCounts.support],
               ['Open endpoints', endpointCounts.open],
               ['Confidence', metric(averageConfidence, 3)],
@@ -162,6 +163,15 @@ export function SupportReconstructionDiagnosticsModal({
                   {nativePreview.payload.roots.length} roots, {nativePreview.payload.trunks.length} trunks,{' '}
                   {nativePreview.payload.branches.length} branches, {nativePreview.payload.braces.length} braces, and{' '}
                   {nativePreview.payload.knots.length} knots are ready in a validated import payload.
+                  {nativePreview.validationErrors.length > 0 ? (
+                    <div className="mt-2 space-y-1">
+                      {nativePreview.validationErrors.map((message) => (
+                        <div key={message} style={{ color: 'var(--danger)' }}>
+                          {message}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                   {nativePreview.rejected.length > 0 ? (
                     <div className="mt-2 space-y-1">
                       {nativePreview.rejected.map((entry) => (

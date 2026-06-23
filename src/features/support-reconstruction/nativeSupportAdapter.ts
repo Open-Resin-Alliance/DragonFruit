@@ -30,6 +30,7 @@ export type NativeTopologyRejection = {
 export type NativeSupportPreview = {
   payload: DragonfruitImportFormat;
   rejected: NativeTopologyRejection[];
+  validationErrors: string[];
 };
 
 type IdFactory = (prefix: string) => string;
@@ -120,6 +121,98 @@ function buildContactCone(
     },
     socketJointId: joint.id,
   };
+}
+
+function isFiniteVec3(vector: Vec3): boolean {
+  return Number.isFinite(vector.x) && Number.isFinite(vector.y) && Number.isFinite(vector.z);
+}
+
+function validatePositive(value: number | undefined, path: string, errors: string[]): void {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    errors.push(`${path} must be a positive finite number.`);
+  }
+}
+
+export function validateNativeSupportPayload(payload: DragonfruitImportFormat, modelId: string): string[] {
+  const errors: string[] = [];
+  const rootIds = new Set(payload.roots.map((root) => root.id));
+  const knotIds = new Set(payload.knots.map((knot) => knot.id));
+  const segmentIds = new Set<string>();
+  const jointIds = new Set<string>();
+
+  const addSegments = (owner: string, segments: Segment[]) => {
+    if (segments.length === 0) errors.push(`${owner} must contain at least one segment.`);
+    for (const segment of segments) {
+      if (segmentIds.has(segment.id)) errors.push(`Segment ${segment.id} is duplicated.`);
+      segmentIds.add(segment.id);
+      validatePositive(segment.diameter, `Segment ${segment.id} diameter`, errors);
+      if (segment.topJoint) {
+        if (jointIds.has(segment.topJoint.id)) errors.push(`Joint ${segment.topJoint.id} is duplicated.`);
+        jointIds.add(segment.topJoint.id);
+        validatePositive(segment.topJoint.diameter, `Joint ${segment.topJoint.id} diameter`, errors);
+        if (!isFiniteVec3(segment.topJoint.pos)) errors.push(`Joint ${segment.topJoint.id} position is non-finite.`);
+      }
+      if (segment.bottomJoint) {
+        if (jointIds.has(segment.bottomJoint.id)) errors.push(`Joint ${segment.bottomJoint.id} is duplicated.`);
+        jointIds.add(segment.bottomJoint.id);
+        validatePositive(segment.bottomJoint.diameter, `Joint ${segment.bottomJoint.id} diameter`, errors);
+        if (!isFiniteVec3(segment.bottomJoint.pos)) errors.push(`Joint ${segment.bottomJoint.id} position is non-finite.`);
+      }
+    }
+  };
+
+  const validateContactCone = (owner: string, cone: ContactCone | undefined) => {
+    if (!cone) return;
+    if (!isFiniteVec3(cone.pos) || !isFiniteVec3(cone.normal)) {
+      errors.push(`${owner} contact cone ${cone.id} contains non-finite geometry.`);
+    }
+    validatePositive(cone.profile.contactDiameterMm, `${owner} contact cone ${cone.id} contact diameter`, errors);
+    validatePositive(cone.profile.bodyDiameterMm, `${owner} contact cone ${cone.id} body diameter`, errors);
+    validatePositive(cone.profile.lengthMm, `${owner} contact cone ${cone.id} length`, errors);
+    if (!cone.socketJointId || !jointIds.has(cone.socketJointId)) {
+      errors.push(`${owner} contact cone ${cone.id} references missing socket joint ${String(cone.socketJointId)}.`);
+    }
+  };
+
+  for (const root of payload.roots) {
+    if (root.modelId !== modelId) errors.push(`Root ${root.id} has inconsistent modelId.`);
+    if (!isFiniteVec3(root.transform.pos)) errors.push(`Root ${root.id} position is non-finite.`);
+    validatePositive(root.diameter, `Root ${root.id} diameter`, errors);
+    validatePositive(root.diskHeight, `Root ${root.id} disk height`, errors);
+    validatePositive(root.coneHeight, `Root ${root.id} cone height`, errors);
+  }
+
+  for (const trunk of payload.trunks) {
+    if (trunk.modelId !== modelId) errors.push(`Trunk ${trunk.id} has inconsistent modelId.`);
+    if (!rootIds.has(trunk.rootId)) errors.push(`Trunk ${trunk.id} references missing root ${trunk.rootId}.`);
+    addSegments(`Trunk ${trunk.id}`, trunk.segments);
+  }
+
+  for (const branch of payload.branches) {
+    if (branch.modelId !== modelId) errors.push(`Branch ${branch.id} has inconsistent modelId.`);
+    if (!knotIds.has(branch.parentKnotId)) errors.push(`Branch ${branch.id} references missing knot ${branch.parentKnotId}.`);
+    addSegments(`Branch ${branch.id}`, branch.segments);
+  }
+
+  for (const brace of payload.braces) {
+    if (brace.modelId !== modelId) errors.push(`Brace ${brace.id} has inconsistent modelId.`);
+    if (!knotIds.has(brace.startKnotId)) errors.push(`Brace ${brace.id} references missing start knot ${brace.startKnotId}.`);
+    if (!knotIds.has(brace.endKnotId)) errors.push(`Brace ${brace.id} references missing end knot ${brace.endKnotId}.`);
+    validatePositive(brace.profile.diameter, `Brace ${brace.id} diameter`, errors);
+  }
+
+  for (const knot of payload.knots) {
+    if (!segmentIds.has(knot.parentShaftId)) errors.push(`Knot ${knot.id} references missing host segment ${knot.parentShaftId}.`);
+    if (!isFiniteVec3(knot.pos)) errors.push(`Knot ${knot.id} position is non-finite.`);
+    validatePositive(knot.diameter, `Knot ${knot.id} diameter`, errors);
+    if (!Number.isFinite(knot.t) || knot.t < 0 || knot.t > 1) errors.push(`Knot ${knot.id} t must be within 0..1.`);
+  }
+
+  for (const trunk of payload.trunks) validateContactCone(`Trunk ${trunk.id}`, trunk.contactCone);
+  for (const branch of payload.branches) validateContactCone(`Branch ${branch.id}`, branch.contactCone);
+  for (const leaf of payload.leaves) validateContactCone(`Leaf ${leaf.id}`, leaf.contactCone);
+
+  return errors;
 }
 
 export function buildNativeSupportPreview(
@@ -351,5 +444,5 @@ export function buildNativeSupportPreview(
     }
   }
 
-  return { payload, rejected };
+  return { payload, rejected, validationErrors: validateNativeSupportPayload(payload, options.modelId) };
 }
