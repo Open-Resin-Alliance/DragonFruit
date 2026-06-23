@@ -18,6 +18,7 @@ interface GizmoScaleProps {
   suppressHover?: boolean;
   opacityScale?: number;
   interactionsEnabled?: boolean;
+  isUniform?: boolean;
   gizmoPosition: THREE.Vector3;
   onDragStart: (isUniform: boolean) => boolean | void;
   onDrag: (factor: number, isUniform: boolean) => void;
@@ -38,6 +39,7 @@ export function GizmoScale({
   suppressHover = false,
   opacityScale = 1,
   interactionsEnabled = true,
+  isUniform: isUniformProp = true,
   gizmoPosition,
   onDragStart,
   onDrag,
@@ -144,8 +146,7 @@ export function GizmoScale({
     e.stopPropagation();
     (e as any).stopped = true; // Mark event as handled for OrbitControls
     
-    // Only left-click (uniform) scaling is now allowed
-    const isUniform = true;
+    const isUniform = isUniformProp;
     setIsUniformScale(isUniform);
     
     // Store initial distance from gizmo center

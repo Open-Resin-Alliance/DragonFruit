@@ -1549,6 +1549,7 @@ export default function Home() {
 
   // 2. Transform Management (needs geom for bounds)
   const transformMgr = useTransformManager({ geom: scene.geom });
+  const [uniformScaling, setUniformScaling] = React.useState(true);
 
   // Ref for supports group (used for export)
   const supportsRef = React.useRef<THREE.Group | null>(null);
@@ -18624,6 +18625,8 @@ export default function Home() {
                   transformMgr.transformHook.setScale(x, y, z);
                 }}
                 onResetScale={transformMgr.transformHook.resetScale}
+                uniformScaling={uniformScaling}
+                onUniformScalingChange={setUniformScaling}
                 modelBBox={scene.geom.bbox}
                 autoLift={transformMgr.autoLift}
                 onAutoLiftChange={handleAutoLiftChange}
@@ -19298,6 +19301,7 @@ export default function Home() {
             voxelOpacity={islands.voxelOpacity}
             transformMode={transformMgr.transformMode}
             transform={transformMgr.transform}
+            uniformScaling={uniformScaling}
             autoLift={transformMgr.autoLift}
             liftDistance={transformMgr.liftDistance}
             autoSnapEnabled={transformMgr.autoSnapEnabled}
