@@ -12,6 +12,7 @@ type SupportReconstructionDiagnosticsModalProps = {
   result: SupportReconstructionResult | null;
   nativePreview: NativeSupportPreview | null;
   error: string | null;
+  onAccept?: () => void;
   onClose: () => void;
 };
 
@@ -25,6 +26,7 @@ export function SupportReconstructionDiagnosticsModal({
   result,
   nativePreview,
   error,
+  onAccept,
   onClose,
 }: SupportReconstructionDiagnosticsModalProps) {
   const exportDiagnostics = React.useCallback(() => {
@@ -55,13 +57,23 @@ export function SupportReconstructionDiagnosticsModal({
   const averageConfidence = acceptedAxials.length > 0
     ? acceptedAxials.reduce((sum, candidate) => sum + candidate.confidence.finalConfidence, 0) / acceptedAxials.length
     : 0;
+  const nativeEntityCount = nativePreview
+    ? nativePreview.payload.trunks.length + nativePreview.payload.branches.length + nativePreview.payload.braces.length
+    : 0;
+  const canAccept = Boolean(
+    result
+    && nativePreview
+    && nativeEntityCount > 0
+    && nativePreview.validationErrors.length === 0
+    && onAccept,
+  );
 
   return (
     <StructuredDialogModal
       open={open}
       ariaLabel="Support reconstruction diagnostics"
       title="Support Reconstruction"
-      subtitle={`${modelName} - experimental diagnostics only`}
+      subtitle={`${modelName} - experimental native conversion`}
       icon={<Microscope className="h-4 w-4" />}
       iconTone="accent"
       zIndexClassName="z-[130]"
@@ -78,7 +90,20 @@ export function SupportReconstructionDiagnosticsModal({
             onClick={onClose}
             disabled={!result && !error}
           >
-            Close
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="ui-button ui-button-primary !h-9 w-full px-3 text-xs"
+            onClick={onAccept}
+            disabled={!canAccept}
+            title={nativePreview?.validationErrors.length
+              ? 'Resolve native payload validation errors before accepting.'
+              : nativeEntityCount === 0
+                ? 'No native supports were reconstructed.'
+                : undefined}
+          >
+            Accept Native Supports
           </button>
           <button
             type="button"
@@ -97,7 +122,7 @@ export function SupportReconstructionDiagnosticsModal({
           <Loader2 className="h-5 w-5 animate-spin" style={{ color: 'var(--accent-secondary)' }} />
           <div>
             <div className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>Analyzing baked supports</div>
-            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>The scene and native support store will not be changed.</div>
+            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>No supports are changed until you accept the native payload.</div>
           </div>
         </div>
       ) : null}
@@ -119,9 +144,7 @@ export function SupportReconstructionDiagnosticsModal({
               ['Trunks', topologyCounts.trunk],
               ['Branches', topologyCounts.branch],
               ['Braces', topologyCounts.brace],
-              ['Native entities', nativePreview
-                ? nativePreview.payload.trunks.length + nativePreview.payload.branches.length + nativePreview.payload.braces.length
-                : 0],
+              ['Native entities', nativeEntityCount],
               ['Native rejected', nativePreview?.rejected.length ?? 0],
               ['Native errors', nativePreview?.validationErrors.length ?? 0],
               ['Support endpoints', endpointCounts.support],
@@ -150,7 +173,7 @@ export function SupportReconstructionDiagnosticsModal({
               <p className="mt-2 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
                 {metric(result.coverage.surfaceCoverage * 100, 1)}% matched;{' '}
                 {result.coverage.unmatchedTriangleCount.toLocaleString()} triangles unmatched.
-                Coverage remains zero until native topology generation is implemented.
+                Coverage remains zero until source-surface matching lands.
               </p>
             </section>
           </div>

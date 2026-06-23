@@ -182,7 +182,7 @@ import {
   getSavedUvToolsSettings,
   resolveUvToolsExecutablePath,
 } from '@/components/settings/uvToolsPreferences';
-import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, toggleSegmentCurve, transformSupportsForModel, updateTrunk, updateBranch, updateTwig, updateStick } from '@/supports/state';
+import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, mergeFromImportFormat, toggleSegmentCurve, transformSupportsForModel, updateTrunk, updateBranch, updateTwig, updateStick } from '@/supports/state';
 import {
   getKickstandSnapshot,
   subscribeToKickstandStore,
@@ -1899,11 +1899,47 @@ export default function Home() {
   const [isManualRepairing, setIsManualRepairing] = React.useState(false);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
   const [supportReconstructionDiagnostics, setSupportReconstructionDiagnostics] = React.useState<{
+    modelId: string;
     modelName: string;
     result: SupportReconstructionResult | null;
     nativePreview: NativeSupportPreview | null;
     error: string | null;
   } | null>(null);
+  const handleAcceptSupportReconstruction = React.useCallback(() => {
+    const diagnostics = supportReconstructionDiagnostics;
+    const nativePreview = diagnostics?.nativePreview;
+    if (!diagnostics || !nativePreview) return;
+    const nativeEntityCount = nativePreview.payload.trunks.length
+      + nativePreview.payload.branches.length
+      + nativePreview.payload.braces.length;
+    if (nativeEntityCount === 0) {
+      setSupportReconstructionDiagnostics((current) => current ? {
+        ...current,
+        error: 'No native supports were reconstructed from this mesh.',
+      } : current);
+      return;
+    }
+    if (nativePreview.validationErrors.length > 0) {
+      setSupportReconstructionDiagnostics((current) => current ? {
+        ...current,
+        error: `Cannot accept reconstructed supports: ${nativePreview.validationErrors[0]}`,
+      } : current);
+      return;
+    }
+
+    try {
+      const before = captureSupportEditSnapshot();
+      mergeFromImportFormat(nativePreview.payload);
+      pushSupportEditHistory('Reconstruct native supports', before, captureSupportEditSnapshot());
+      scene.selectModel(diagnostics.modelId);
+      setSupportReconstructionDiagnostics(null);
+    } catch (error) {
+      setSupportReconstructionDiagnostics((current) => current ? {
+        ...current,
+        error: error instanceof Error ? error.message : String(error),
+      } : current);
+    }
+  }, [scene, supportReconstructionDiagnostics]);
   const [isSliceMetricsDebugOpen, setIsSliceMetricsDebugOpen] = React.useState(false);
     const handleRegisterExportThumbnailCapture = React.useCallback((capture: (() => Promise<Uint8Array | null>) | null) => {
       exportThumbnailCaptureRef.current = capture;
@@ -10980,6 +11016,7 @@ export default function Home() {
         if (target) {
           closeEditorContextMenu();
           setSupportReconstructionDiagnostics({
+            modelId: target.id,
             modelName: target.name,
             result: null,
             nativePreview: null,
@@ -10988,6 +11025,7 @@ export default function Home() {
           try {
             const result = await reconstructClassifiedSupports(target);
             setSupportReconstructionDiagnostics({
+              modelId: target.id,
               modelName: target.name,
               result,
               nativePreview: buildNativeSupportPreview(result, {
@@ -10998,6 +11036,7 @@ export default function Home() {
             });
           } catch (error) {
             setSupportReconstructionDiagnostics({
+              modelId: target.id,
               modelName: target.name,
               result: null,
               nativePreview: null,
@@ -19920,6 +19959,7 @@ export default function Home() {
         result={supportReconstructionDiagnostics?.result ?? null}
         nativePreview={supportReconstructionDiagnostics?.nativePreview ?? null}
         error={supportReconstructionDiagnostics?.error ?? null}
+        onAccept={handleAcceptSupportReconstruction}
         onClose={() => setSupportReconstructionDiagnostics(null)}
       />
 

@@ -5,7 +5,7 @@
 //! component provenance, and coarse axial primitive candidates for the research
 //! harness. Graph construction is added incrementally as inference matures.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
@@ -14,7 +14,7 @@ use crate::core::halfedge::Topology;
 use crate::core::mesh::{Aabb, IndexedMesh, Vec3};
 
 pub const SUPPORT_RECONSTRUCTION_SCHEMA_VERSION: u32 = 1;
-pub const SUPPORT_RECONSTRUCTION_ANALYZER_VERSION: &str = "0.4.0-profile";
+pub const SUPPORT_RECONSTRUCTION_ANALYZER_VERSION: &str = "0.6.0-floor-fastpath";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
@@ -29,6 +29,7 @@ pub struct SupportReconstructionOptions {
     pub min_endpoint_confidence: f32,
     pub support_attachment_tolerance_mm: f32,
     pub min_attachment_confidence: f32,
+    pub inferred_floor_tolerance_mm: f32,
 }
 
 impl Default for SupportReconstructionOptions {
@@ -43,6 +44,7 @@ impl Default for SupportReconstructionOptions {
             min_endpoint_confidence: 0.5,
             support_attachment_tolerance_mm: 0.6,
             min_attachment_confidence: 0.55,
+            inferred_floor_tolerance_mm: 0.5,
         }
     }
 }
@@ -307,6 +309,13 @@ pub fn reconstruct_supports(
     let analysis_started = std::time::Instant::now();
     let component_faces = connected_components(&support);
     let model_bvh = Bvh::build(&model);
+    let model_bounds = model.bbox();
+    let inferred_floor_z = infer_support_floor_z(
+        &support,
+        request.plate_z_mm,
+        request.options.plate_tolerance_mm,
+        request.options.inferred_floor_tolerance_mm,
+    );
     let mut components = Vec::with_capacity(component_faces.len());
     let mut axial_candidates = Vec::new();
     let mut endpoints = Vec::new();
@@ -315,6 +324,7 @@ pub fn reconstruct_supports(
     let mut edges = Vec::new();
     let mut warnings = Vec::new();
 
+    let mut next_axial_id = 0u32;
     for (component_index, faces) in component_faces.iter().enumerate() {
         let component_id = component_index as u32;
         let diagnostic = component_diagnostic(
@@ -334,56 +344,78 @@ pub fn reconstruct_supports(
                 ),
                 source_component_id: Some(component_id),
             });
-        } else if let Some(mut candidate) = fit_axial_candidate(
-            &support,
-            component_id,
-            faces,
-            request.options.min_axial_confidence,
-        ) {
-            if candidate.accepted {
-                for side in [AxialEndpointSide::Start, AxialEndpointSide::End] {
-                    let classified = classify_endpoint(
-                        &candidate,
-                        side,
-                        &model,
-                        &model_bvh,
-                        request.plate_z_mm,
-                        &request.options,
-                    );
-                    candidate.confidence.endpoint_classification = candidate
-                        .confidence
-                        .endpoint_classification
-                        .max(classified.endpoint.confidence);
-                    if let Some(root) = classified.root {
-                        edges.push(InferredGraphEdge {
-                            from: root.id.clone(),
-                            to: candidate.id.clone(),
-                            kind: "root_axis".to_string(),
-                        });
-                        roots.push(root);
-                    }
-                    if let Some(contact) = classified.contact {
-                        edges.push(InferredGraphEdge {
-                            from: candidate.id.clone(),
-                            to: contact.id.clone(),
-                            kind: "axis_contact".to_string(),
-                        });
-                        contacts.push(contact);
-                    }
-                    endpoints.push(classified.endpoint);
-                }
-                candidate.confidence.final_confidence = candidate.confidence.primitive_fit * 0.6
-                    + candidate.confidence.endpoint_classification * 0.4;
-            } else {
+        } else {
+            let axial_segments =
+                segment_component_faces(&support, faces, request.options.min_component_triangles);
+            if axial_segments.len() > 1 {
                 warnings.push(ReconstructionWarning {
-                    code: "low_axial_confidence".to_string(),
+                    code: "component_axis_segmented".to_string(),
                     message: format!(
-                        "Component {component_id} produced an axial fit below the acceptance threshold"
+                        "Component {component_id} was split into {} axial face groups",
+                        axial_segments.len()
                     ),
                     source_component_id: Some(component_id),
                 });
             }
-            axial_candidates.push(candidate);
+            for segment_faces in axial_segments {
+                let axial_id = next_axial_id;
+                next_axial_id += 1;
+                if let Some(mut candidate) = fit_axial_candidate(
+                    &support,
+                    axial_id,
+                    component_id,
+                    &segment_faces,
+                    request.options.min_axial_confidence,
+                ) {
+                    if candidate.accepted {
+                        for side in [AxialEndpointSide::Start, AxialEndpointSide::End] {
+                            let classified = classify_endpoint(
+                                &candidate,
+                                side,
+                                &model,
+                                &model_bvh,
+                                model_bounds,
+                                request.plate_z_mm,
+                                inferred_floor_z,
+                                &request.options,
+                            );
+                            candidate.confidence.endpoint_classification = candidate
+                                .confidence
+                                .endpoint_classification
+                                .max(classified.endpoint.confidence);
+                            if let Some(root) = classified.root {
+                                edges.push(InferredGraphEdge {
+                                    from: root.id.clone(),
+                                    to: candidate.id.clone(),
+                                    kind: "root_axis".to_string(),
+                                });
+                                roots.push(root);
+                            }
+                            if let Some(contact) = classified.contact {
+                                edges.push(InferredGraphEdge {
+                                    from: candidate.id.clone(),
+                                    to: contact.id.clone(),
+                                    kind: "axis_contact".to_string(),
+                                });
+                                contacts.push(contact);
+                            }
+                            endpoints.push(classified.endpoint);
+                        }
+                        candidate.confidence.final_confidence = candidate.confidence.primitive_fit
+                            * 0.6
+                            + candidate.confidence.endpoint_classification * 0.4;
+                    } else {
+                        warnings.push(ReconstructionWarning {
+                            code: "low_axial_confidence".to_string(),
+                            message: format!(
+                                "Axial segment {axial_id} from component {component_id} produced a fit below the acceptance threshold"
+                            ),
+                            source_component_id: Some(component_id),
+                        });
+                    }
+                    axial_candidates.push(candidate);
+                }
+            }
         }
         components.push(diagnostic);
     }
@@ -394,8 +426,8 @@ pub fn reconstruct_supports(
     let topology_candidates =
         infer_topology_candidates(&axial_candidates, &roots, &contacts, &attachments);
     warnings.push(ReconstructionWarning {
-        code: "native_conversion_pending".to_string(),
-        message: "Simple topology labels are diagnostic; native support conversion is not implemented yet"
+        code: "coverage_pending".to_string(),
+        message: "Native topology conversion is available for accepted simple graphs; source-surface coverage is still diagnostic-only"
             .to_string(),
         source_component_id: None,
     });
@@ -495,6 +527,13 @@ fn validate_request(
             "minAttachmentConfidence must be between zero and one",
         ));
     }
+    if !request.options.inferred_floor_tolerance_mm.is_finite()
+        || request.options.inferred_floor_tolerance_mm < 0.0
+    {
+        return Err(SupportReconstructionError::InvalidOption(
+            "inferredFloorToleranceMm must be finite and non-negative",
+        ));
+    }
 
     validate_mesh("model", &request.model)?;
     validate_mesh("support", &request.support)?;
@@ -567,6 +606,203 @@ fn connected_components(mesh: &IndexedMesh) -> Vec<Vec<u32>> {
     components
 }
 
+fn face_adjacency(mesh: &IndexedMesh) -> Vec<Vec<u32>> {
+    let topology = Topology::build(mesh);
+    let mut adjacency = vec![Vec::<u32>::new(); mesh.triangle_count()];
+    for edge in topology.edges.values() {
+        for &left in &edge.faces {
+            for &right in &edge.faces {
+                if left != right {
+                    adjacency[left as usize].push(right);
+                }
+            }
+        }
+    }
+    for neighbours in &mut adjacency {
+        neighbours.sort_unstable();
+        neighbours.dedup();
+    }
+    adjacency
+}
+
+#[derive(Debug, Clone)]
+struct AxisFaceGroup {
+    axis: Vec3,
+    faces: Vec<u32>,
+}
+
+fn segment_component_faces(
+    mesh: &IndexedMesh,
+    faces: &[u32],
+    min_segment_triangles: usize,
+) -> Vec<Vec<u32>> {
+    if faces.len() < min_segment_triangles * 2 {
+        return vec![faces.to_vec()];
+    }
+
+    let mut bounds = Aabb::empty();
+    for &vertex in &component_vertex_indices(mesh, faces) {
+        bounds.expand(mesh.positions[vertex as usize]);
+    }
+    let min_long_edge = bounds.diag() * 0.18;
+    let mut groups: Vec<AxisFaceGroup> = Vec::new();
+    const AXIS_CLUSTER_DOT: f32 = 0.85;
+
+    for &face in faces {
+        let Some(axis) = face_long_axis(mesh, face, min_long_edge) else {
+            continue;
+        };
+        let mut matched = None;
+        for (index, group) in groups.iter().enumerate() {
+            if group.axis.dot(axis).abs() >= AXIS_CLUSTER_DOT {
+                matched = Some(index);
+                break;
+            }
+        }
+        if let Some(index) = matched {
+            let group = &mut groups[index];
+            let aligned = if group.axis.dot(axis) < 0.0 {
+                axis.scale(-1.0)
+            } else {
+                axis
+            };
+            let next_axis = group.axis.add(aligned);
+            if next_axis.length() > 1e-6 {
+                group.axis = canonical_axis(next_axis.scale(1.0 / next_axis.length()));
+            }
+            group.faces.push(face);
+        } else {
+            groups.push(AxisFaceGroup {
+                axis,
+                faces: vec![face],
+            });
+        }
+    }
+
+    let valid_axes = groups
+        .iter()
+        .filter(|group| group.faces.len() >= min_segment_triangles / 2)
+        .map(|group| group.axis)
+        .collect::<Vec<_>>();
+    if valid_axes.len() < 2 {
+        return vec![faces.to_vec()];
+    }
+    let has_distinct_axes = valid_axes.iter().enumerate().any(|(left_index, left)| {
+        valid_axes
+            .iter()
+            .skip(left_index + 1)
+            .any(|right| left.dot(*right).abs() < 0.7)
+    });
+    if !has_distinct_axes {
+        return vec![faces.to_vec()];
+    }
+
+    let mut labels: HashMap<u32, usize> = HashMap::new();
+    for &face in faces {
+        if let Some(axis) = face_long_axis(mesh, face, min_long_edge) {
+            let best = valid_axes
+                .iter()
+                .enumerate()
+                .map(|(index, group_axis)| (index, group_axis.dot(axis).abs()))
+                .max_by(|left, right| left.1.total_cmp(&right.1));
+            if let Some((index, _score)) = best.filter(|(_, score)| *score >= AXIS_CLUSTER_DOT) {
+                labels.insert(face, index);
+                continue;
+            }
+        }
+    }
+
+    let adjacency = face_adjacency(mesh);
+    let face_set: std::collections::HashSet<u32> = faces.iter().copied().collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &face in faces {
+            if labels.contains_key(&face) {
+                continue;
+            }
+            let mut votes: HashMap<usize, usize> = HashMap::new();
+            for &neighbour in &adjacency[face as usize] {
+                if !face_set.contains(&neighbour) {
+                    continue;
+                }
+                if let Some(&label) = labels.get(&neighbour) {
+                    *votes.entry(label).or_default() += 1;
+                }
+            }
+            if let Some((&label, _)) = votes
+                .iter()
+                .max_by(|left, right| left.1.cmp(right.1).then_with(|| right.0.cmp(left.0)))
+            {
+                labels.insert(face, label);
+                changed = true;
+            }
+        }
+    }
+
+    let mut output = Vec::new();
+    let mut visited = HashMap::<u32, bool>::new();
+    for &seed in faces {
+        if visited.get(&seed).copied().unwrap_or(false) {
+            continue;
+        }
+        let Some(&label) = labels.get(&seed) else {
+            continue;
+        };
+        visited.insert(seed, true);
+        let mut queue = VecDeque::from([seed]);
+        let mut segment = Vec::new();
+        while let Some(face) = queue.pop_front() {
+            segment.push(face);
+            for &neighbour in &adjacency[face as usize] {
+                if !face_set.contains(&neighbour)
+                    || visited.get(&neighbour).copied().unwrap_or(false)
+                    || labels.get(&neighbour).copied() != Some(label)
+                {
+                    continue;
+                }
+                visited.insert(neighbour, true);
+                queue.push_back(neighbour);
+            }
+        }
+        if segment.len() >= min_segment_triangles {
+            segment.sort_unstable();
+            output.push(segment);
+        }
+    }
+
+    output.sort_by_key(|segment| segment[0]);
+    if output.len() < 2 {
+        vec![faces.to_vec()]
+    } else {
+        output
+    }
+}
+
+fn face_long_axis(mesh: &IndexedMesh, face: u32, min_length: f32) -> Option<Vec3> {
+    let [a, b, c] = mesh.tri_positions(face);
+    let edges = [b.sub(a), c.sub(b), a.sub(c)];
+    let longest = edges
+        .into_iter()
+        .max_by(|left, right| left.length().total_cmp(&right.length()))?;
+    let length = longest.length();
+    if length < min_length.max(1e-6) {
+        return None;
+    }
+    Some(canonical_axis(longest.scale(1.0 / length)))
+}
+
+fn canonical_axis(axis: Vec3) -> Vec3 {
+    if axis.z < -1e-6
+        || (axis.z.abs() <= 1e-6 && axis.y < -1e-6)
+        || (axis.z.abs() <= 1e-6 && axis.y.abs() <= 1e-6 && axis.x < 0.0)
+    {
+        axis.scale(-1.0)
+    } else {
+        axis
+    }
+}
+
 fn component_vertex_indices(mesh: &IndexedMesh, faces: &[u32]) -> Vec<u32> {
     let mut vertices = Vec::with_capacity(faces.len() * 2);
     for &face in faces {
@@ -608,6 +844,50 @@ fn component_diagnostic(
     }
 }
 
+fn infer_support_floor_z(
+    support: &IndexedMesh,
+    plate_z_mm: f32,
+    plate_tolerance_mm: f32,
+    inferred_floor_tolerance_mm: f32,
+) -> Option<f32> {
+    if inferred_floor_tolerance_mm <= 0.0 {
+        return None;
+    }
+    let bounds = support.bbox();
+    if bounds.min.z <= plate_z_mm + plate_tolerance_mm {
+        None
+    } else if bounds.min.z.is_finite() {
+        Some(bounds.min.z)
+    } else {
+        None
+    }
+}
+
+fn point_aabb_distance(point: Vec3, bounds: &Aabb) -> f32 {
+    let dx = if point.x < bounds.min.x {
+        bounds.min.x - point.x
+    } else if point.x > bounds.max.x {
+        point.x - bounds.max.x
+    } else {
+        0.0
+    };
+    let dy = if point.y < bounds.min.y {
+        bounds.min.y - point.y
+    } else if point.y > bounds.max.y {
+        point.y - bounds.max.y
+    } else {
+        0.0
+    };
+    let dz = if point.z < bounds.min.z {
+        bounds.min.z - point.z
+    } else if point.z > bounds.max.z {
+        point.z - bounds.max.z
+    } else {
+        0.0
+    };
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
 struct ClassifiedEndpoint {
     endpoint: EndpointCandidate,
     root: Option<RootCandidate>,
@@ -619,7 +899,9 @@ fn classify_endpoint(
     side: AxialEndpointSide,
     model: &IndexedMesh,
     model_bvh: &Bvh,
+    model_bounds: Aabb,
     plate_z_mm: f32,
+    inferred_floor_z: Option<f32>,
     options: &SupportReconstructionOptions,
 ) -> ClassifiedEndpoint {
     let source_position = match side {
@@ -634,30 +916,31 @@ fn classify_endpoint(
         AxialEndpointSide::Start => "start",
         AxialEndpointSide::End => "end",
     };
-    let endpoint_id = format!("endpoint-{:06}-{side_name}", candidate.source_component_id);
+    let endpoint_id = format!("endpoint-{}-{side_name}", candidate.id);
 
-    let plate_distance = (source_position.z - plate_z_mm).abs();
-    let plate_score = if options.plate_tolerance_mm <= f32::EPSILON {
-        if plate_distance <= f32::EPSILON {
+    let floor_z = inferred_floor_z.unwrap_or(plate_z_mm);
+    let floor_distance = (source_position.z - floor_z).abs();
+    let floor_tolerance = if inferred_floor_z.is_some() {
+        options
+            .inferred_floor_tolerance_mm
+            .max(options.plate_tolerance_mm)
+    } else {
+        options.plate_tolerance_mm
+    };
+    let plate_score = if floor_tolerance <= f32::EPSILON {
+        if floor_distance <= f32::EPSILON {
             1.0
         } else {
             0.0
         }
     } else {
-        (1.0 - plate_distance / options.plate_tolerance_mm).clamp(0.0, 1.0)
+        (1.0 - floor_distance / floor_tolerance).clamp(0.0, 1.0)
     };
 
-    let model_hit =
-        model_bvh.closest_point(model, source_position, options.model_contact_tolerance_mm);
-    let model_score = model_hit
-        .as_ref()
-        .map(|hit| model_endpoint_confidence(source_position, outward_axis, hit, options))
-        .unwrap_or(0.0);
-
-    if plate_score >= options.min_endpoint_confidence && plate_score >= model_score {
-        let resolved_position = Vec3::new(source_position.x, source_position.y, plate_z_mm);
+    if plate_score >= options.min_endpoint_confidence {
+        let resolved_position = Vec3::new(source_position.x, source_position.y, floor_z);
         let confidence = endpoint_confidence(candidate.confidence.primitive_fit, plate_score);
-        let root_id = format!("root-{:06}-{side_name}", candidate.source_component_id);
+        let root_id = format!("root-{}-{side_name}", candidate.id);
         return ClassifiedEndpoint {
             endpoint: EndpointCandidate {
                 id: endpoint_id.clone(),
@@ -667,7 +950,7 @@ fn classify_endpoint(
                 kind: EndpointKind::Plate,
                 source_position,
                 resolved_position,
-                distance_mm: Some(plate_distance),
+                distance_mm: Some(floor_distance),
                 surface_normal: Some(Vec3::new(0.0, 0.0, 1.0)),
                 model_face_index: None,
                 confidence: plate_score,
@@ -685,9 +968,21 @@ fn classify_endpoint(
         };
     }
 
+    let model_hit = if point_aabb_distance(source_position, &model_bounds)
+        <= options.model_contact_tolerance_mm
+    {
+        model_bvh.closest_point(model, source_position, options.model_contact_tolerance_mm)
+    } else {
+        None
+    };
+    let model_score = model_hit
+        .as_ref()
+        .map(|hit| model_endpoint_confidence(source_position, outward_axis, hit, options))
+        .unwrap_or(0.0);
+
     if let Some(hit) = model_hit.filter(|_| model_score >= options.min_endpoint_confidence) {
         let confidence = endpoint_confidence(candidate.confidence.primitive_fit, model_score);
-        let contact_id = format!("contact-{:06}-{side_name}", candidate.source_component_id);
+        let contact_id = format!("contact-{}-{side_name}", candidate.id);
         return ClassifiedEndpoint {
             endpoint: EndpointCandidate {
                 id: endpoint_id.clone(),
@@ -942,7 +1237,7 @@ fn infer_topology_candidates(
                 + topology_score * 0.2;
 
             TopologyCandidate {
-                id: format!("topology-{:06}", candidate.source_component_id),
+                id: format!("topology-{}", candidate.id),
                 kind,
                 axial_candidate_id: candidate.id.clone(),
                 root_ids: matching_roots.iter().map(|root| root.id.clone()).collect(),
@@ -976,7 +1271,8 @@ fn infer_topology_candidates(
 
 fn fit_axial_candidate(
     mesh: &IndexedMesh,
-    component_id: u32,
+    axial_id: u32,
+    source_component_id: u32,
     faces: &[u32],
     min_confidence: f32,
 ) -> Option<AxialCandidate> {
@@ -1086,8 +1382,8 @@ fn fit_axial_candidate(
     let accepted = primitive_fit >= min_confidence;
 
     Some(AxialCandidate {
-        id: format!("axial-{component_id:06}"),
-        source_component_id: component_id,
+        id: format!("axial-{axial_id:06}"),
+        source_component_id,
         axis,
         start: centroid.add(axis.scale(min_t)),
         end: centroid.add(axis.scale(max_t)),
@@ -1451,6 +1747,26 @@ mod tests {
     }
 
     #[test]
+    fn support_floor_above_plate_can_seed_roots() {
+        let model = box_mesh(Vec3::new(-2.0, -2.0, 12.0), Vec3::new(2.0, 2.0, 16.0));
+        let support = cylinder_mesh(0.8, 2.0, 12.0, 24);
+        let result = reconstruct_supports(SupportReconstructionRequest {
+            model,
+            support,
+            plate_z_mm: 0.0,
+            options: SupportReconstructionOptions::default(),
+        })
+        .unwrap();
+
+        assert_eq!(result.graph.roots.len(), 1);
+        assert!((result.graph.roots[0].position.z - 2.0).abs() < 1e-5);
+        assert_eq!(
+            result.graph.topology_candidates[0].kind,
+            SupportTopologyKind::Trunk
+        );
+    }
+
+    #[test]
     fn floating_cylinder_keeps_unresolved_endpoints_open() {
         let model = box_mesh(Vec3::new(-2.0, -2.0, 10.0), Vec3::new(2.0, 2.0, 14.0));
         let support = cylinder_mesh(0.8, 2.0, 8.0, 24);
@@ -1458,7 +1774,10 @@ mod tests {
             model,
             support,
             plate_z_mm: 0.0,
-            options: SupportReconstructionOptions::default(),
+            options: SupportReconstructionOptions {
+                inferred_floor_tolerance_mm: 0.0,
+                ..SupportReconstructionOptions::default()
+            },
         })
         .unwrap();
 
@@ -1471,6 +1790,23 @@ mod tests {
         assert!(result.graph.roots.is_empty());
         assert!(result.graph.contacts.is_empty());
         assert!(result.graph.edges.is_empty());
+    }
+
+    #[test]
+    fn mixed_axis_component_faces_split_into_axial_segments() {
+        let support = merge_meshes(&[
+            cylinder_mesh(0.8, 0.0, 10.0, 24),
+            horizontal_cylinder(0.5, 0.0, 5.0, 5.0, 24),
+        ]);
+        let faces = (0..support.triangle_count() as u32).collect::<Vec<_>>();
+        let segments = segment_component_faces(&support, &faces, 8);
+
+        assert_eq!(segments.len(), 2);
+        assert!(segments.iter().all(|segment| segment.len() >= 8));
+        assert_eq!(
+            segments.iter().map(|segment| segment.len()).sum::<usize>(),
+            faces.len()
+        );
     }
 
     #[test]
