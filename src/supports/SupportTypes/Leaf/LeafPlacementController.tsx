@@ -55,7 +55,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
     const { getHotkey } = useHotkeyConfig();
     const leafBinding = getHotkey('SUPPORTS', 'LEAF_PLACEMENT');
 
-    const { raycaster, camera, pointer, scene } = useThree();
+    const { raycaster, camera, pointer, scene, gl } = useThree();
     const modelMeshesRef = useRef<THREE.Object3D[]>([]);
     const hoveredShaftRef = useRef<ShaftHoverDetail | null>(null);
     const rearmFrameRef = useRef<number | null>(null);
@@ -520,6 +520,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
         if (!isActive) return;
 
         const handleClick = (e: MouseEvent) => {
+            if (e.target !== gl.domElement) return;
             if (shouldSuppressContactDiskHudPlacementCommit()) {
                 e.stopPropagation();
                 e.preventDefault();
@@ -825,6 +826,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
         twigBySegmentId,
         sproutParentingLockHeld,
         activeModelId,
+        gl,
     ]);
 
     useEffect(() => {

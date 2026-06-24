@@ -707,6 +707,7 @@ export function BranchPlacementController() {
         if (!isActive || stage !== 'awaitingBase') return;
 
         const handleClick = (e: MouseEvent) => {
+            if (e.target !== gl.domElement) return;
             if (shouldSuppressContactDiskHudPlacementCommit()) {
                 e.stopPropagation();
                 e.preventDefault();
@@ -831,7 +832,7 @@ export function BranchPlacementController() {
 
         window.addEventListener('click', handleClick, true);
         return () => window.removeEventListener('click', handleClick, true);
-    }, [isActive, stage, tipPosition, tipNormal, modelId, placementSurface, resetSnapping, resolveTipMesh]);
+    }, [isActive, stage, tipPosition, tipNormal, modelId, placementSurface, resetSnapping, resolveTipMesh, gl]);
 
     // Reset snapping when deactivated
     useEffect(() => {

@@ -148,14 +148,14 @@ test('Pointer/mouse events interception in placement modes on canvas', () => {
     hotkeyStore.getState().pressKey('Alt');
     assert.equal(isActionActiveSync('SUPPORTS', 'LEAF_PLACEMENT'), true);
 
-    // Canvas click should be swallowed
+    // Canvas click should NOT be swallowed
     pointerEvent = { target: canvasTarget, stopPropagationCalled: false, stopPropagation() { this.stopPropagationCalled = true; } };
     dispatchWindowEvent('pointerdown', pointerEvent);
-    assert.equal(pointerEvent.stopPropagationCalled, true, 'Should swallow canvas pointerdown in LEAF_PLACEMENT');
+    assert.equal(pointerEvent.stopPropagationCalled, false, 'Should not swallow canvas pointerdown in LEAF_PLACEMENT');
 
     let mouseEvent = { target: canvasTarget, stopPropagationCalled: false, stopPropagation() { this.stopPropagationCalled = true; } };
     dispatchWindowEvent('mousedown', mouseEvent);
-    assert.equal(mouseEvent.stopPropagationCalled, true, 'Should swallow canvas mousedown in LEAF_PLACEMENT');
+    assert.equal(mouseEvent.stopPropagationCalled, false, 'Should not swallow canvas mousedown in LEAF_PLACEMENT');
 
     // Button click should NOT be swallowed
     let buttonPointerEvent = { target: buttonTarget, stopPropagationCalled: false, stopPropagation() { this.stopPropagationCalled = true; } };
@@ -169,7 +169,7 @@ test('Pointer/mouse events interception in placement modes on canvas', () => {
 
     pointerEvent = { target: canvasTarget, stopPropagationCalled: false, stopPropagation() { this.stopPropagationCalled = true; } };
     dispatchWindowEvent('pointerdown', pointerEvent);
-    assert.equal(pointerEvent.stopPropagationCalled, true, 'Should swallow canvas pointerdown in BRANCH_PLACEMENT');
+    assert.equal(pointerEvent.stopPropagationCalled, false, 'Should not swallow canvas pointerdown in BRANCH_PLACEMENT');
 
     // 4. Clear keys and activate KICKSTAND_PLACEMENT (requires Control only)
     hotkeyStore.getState().clearKeys();
@@ -178,7 +178,7 @@ test('Pointer/mouse events interception in placement modes on canvas', () => {
 
     pointerEvent = { target: canvasTarget, stopPropagationCalled: false, stopPropagation() { this.stopPropagationCalled = true; } };
     dispatchWindowEvent('pointerdown', pointerEvent);
-    assert.equal(pointerEvent.stopPropagationCalled, true, 'Should swallow canvas pointerdown in KICKSTAND_PLACEMENT');
+    assert.equal(pointerEvent.stopPropagationCalled, false, 'Should not swallow canvas pointerdown in KICKSTAND_PLACEMENT');
 
     // 5. Clear keys and activate SPROUTED_PARENTING_LOCK (requires w only)
     hotkeyStore.getState().clearKeys();
@@ -187,7 +187,7 @@ test('Pointer/mouse events interception in placement modes on canvas', () => {
 
     pointerEvent = { target: canvasTarget, stopPropagationCalled: false, stopPropagation() { this.stopPropagationCalled = true; } };
     dispatchWindowEvent('pointerdown', pointerEvent);
-    assert.equal(pointerEvent.stopPropagationCalled, true, 'Should swallow canvas pointerdown in SPROUTED_PARENTING_LOCK');
+    assert.equal(pointerEvent.stopPropagationCalled, false, 'Should not swallow canvas pointerdown in SPROUTED_PARENTING_LOCK');
 
     cleanup();
 });

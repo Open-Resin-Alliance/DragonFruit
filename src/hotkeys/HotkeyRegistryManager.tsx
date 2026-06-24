@@ -175,29 +175,14 @@ export function setupHotkeyListeners() {
         hotkeyStore.getState().clearKeys();
     };
 
-    const handlePointerOrMouseDown = (e: MouseEvent | PointerEvent) => {
-        const isPlacementModeActive =
-            isActionActiveSync('SUPPORTS', 'LEAF_PLACEMENT') ||
-            isActionActiveSync('SUPPORTS', 'BRANCH_PLACEMENT') ||
-            isActionActiveSync('SUPPORTS', 'KICKSTAND_PLACEMENT') ||
-            isActionActiveSync('SUPPORTS', 'SPROUTED_PARENTING_LOCK');
-
-        if (isPlacementModeActive && isCanvasElement(e.target)) {
-            e.stopPropagation();
-        }
-    };
-
     (handleKeyDown as any).__isHotkeySystemInternal = true;
     (handleKeyUp as any).__isHotkeySystemInternal = true;
     (handleBlur as any).__isHotkeySystemInternal = true;
-    (handlePointerOrMouseDown as any).__isHotkeySystemInternal = true;
 
     if (typeof window !== 'undefined') {
         window.addEventListener('keydown', handleKeyDown, { capture: true });
         window.addEventListener('keyup', handleKeyUp, { capture: true });
         window.addEventListener('blur', handleBlur);
-        window.addEventListener('pointerdown', handlePointerOrMouseDown, { capture: true });
-        window.addEventListener('mousedown', handlePointerOrMouseDown, { capture: true });
     }
 
     return () => {
@@ -205,8 +190,6 @@ export function setupHotkeyListeners() {
             window.removeEventListener('keydown', handleKeyDown, { capture: true });
             window.removeEventListener('keyup', handleKeyUp, { capture: true });
             window.removeEventListener('blur', handleBlur);
-            window.removeEventListener('pointerdown', handlePointerOrMouseDown, { capture: true });
-            window.removeEventListener('mousedown', handlePointerOrMouseDown, { capture: true });
         }
     };
 }

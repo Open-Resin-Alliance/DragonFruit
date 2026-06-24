@@ -42,6 +42,7 @@ import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFo
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 import { JointPlacementPreview } from '@/supports/SupportPrimitives/Joint/JointPlacementPreview';
+import { useJointCreationState } from '@/supports/SupportPrimitives/Joint/jointCreationState';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
 import { isContactDiskHudInteractionActive } from '@/supports/SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { BranchPlacementController } from '@/supports/SupportTypes/Branch/BranchPlacementController';
@@ -693,6 +694,22 @@ export function SceneCanvas({
   );
 
   const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const { isActive: isJointCreationActive } = useJointCreationState();
+  const isPlacementActive = React.useMemo(() => {
+    return !!(
+      isBranchPlacementActive ||
+      isLeafPlacementActive ||
+      isBracePlacementActive ||
+      isKickstandPlacementActive ||
+      isJointCreationActive
+    );
+  }, [
+    isBranchPlacementActive,
+    isLeafPlacementActive,
+    isBracePlacementActive,
+    isKickstandPlacementActive,
+    isJointCreationActive
+  ]);
   const [viewportSizeForUiAnchors, setViewportSizeForUiAnchors] = React.useState({ width: 0, height: 0 });
 
   React.useEffect(() => {
@@ -3987,6 +4004,7 @@ export function SceneCanvas({
   const handleScenePointerMissed = React.useCallback(() => {
     if (!cameraInteractionCycleEnabled) return;
     if (isMarqueeSelecting) return;
+    if (isPlacementActive) return;
     if (window.__modelClickedThisFrame) return;
     if (orbitInteractionActiveRef.current || spaceMouseNavigationActive) return;
 
@@ -4008,7 +4026,7 @@ export function SceneCanvas({
       if (supportStateForBounds.hoveredCategory === 'contactDisk') return;
       clearSupportSelection();
     }
-  }, [cameraInteractionCycleEnabled, isMarqueeSelecting, mode, onActiveModelChange, spaceMouseNavigationActive, supportStateForBounds.hoveredCategory]);
+  }, [cameraInteractionCycleEnabled, isMarqueeSelecting, mode, onActiveModelChange, spaceMouseNavigationActive, supportStateForBounds.hoveredCategory, isPlacementActive]);
 
   React.useEffect(() => {
     updateCameraBelowBuildPlate();
@@ -5065,7 +5083,8 @@ export function SceneCanvas({
     };
 
     const suppressContextMenuDuringOrbit = (event: Event) => {
-      if (orbitInteractionActiveRef.current) {
+      const container = containerRef.current;
+      if (orbitInteractionActiveRef.current && container && container.contains(event.target as Node)) {
         event.preventDefault();
       }
       forceOrbitEndIfActive();
@@ -6562,7 +6581,7 @@ export function SceneCanvas({
             && !(mode === 'prepare' && transformMode === 'smoothing' && smoothingBrushState.isStrokeActive)
             && !isGizmoDragging
             && !isMarqueeSelecting
-            && !customPrepareMarqueeSelection?.enabled
+            && !isPlacementActive
           }
           onStart={handleOrbitStart}
           onChange={handleOrbitChange}
