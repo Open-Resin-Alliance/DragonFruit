@@ -118,10 +118,23 @@ export function ShaftRenderer({
     };
     
     const handleClick = (e: any) => {
-        if (rayIntersectsJointOrKnot(e)) return;
-
         const altDown = !!(e?.nativeEvent?.altKey || e?.altKey);
         const ctrlDown = !!(e?.nativeEvent?.ctrlKey || e?.ctrlKey);
+        const shiftDown = !!(e?.nativeEvent?.shiftKey || e?.shiftKey);
+
+        console.log('[DEBUG ShaftRenderer handleClick]', {
+            segmentId: id,
+            rayIntersectsJointOrKnot: rayIntersectsJointOrKnot(e),
+            altDown,
+            ctrlDown,
+            shiftDown,
+            isParentSelected,
+            isTopPickedSegment,
+            point: e?.point ? { x: e.point.x, y: e.point.y, z: e.point.z } : null,
+            intersectionsCount: e?.intersections?.length,
+        });
+
+        if (rayIntersectsJointOrKnot(e)) return;
 
         // If Alt is held, this click is intended for placement tools (Brace/Branch/etc.).
         // Stop propagation so it does not fall through to the canvas/model click handlers.
@@ -134,6 +147,10 @@ export function ShaftRenderer({
         }
 
         if ((altDown || ctrlDown || isParentSelected) && isTopPickedSegment) {
+            console.log('[DEBUG ShaftRenderer handleClick] Dispatching shaft-click CustomEvent:', {
+                segmentId: id,
+                point: e.point ? { x: e.point.x, y: e.point.y, z: e.point.z } : null,
+            });
             // Emit global event for branch placement and editable-segment clicks only.
             window.dispatchEvent(new CustomEvent('shaft-click', {
                 detail: {

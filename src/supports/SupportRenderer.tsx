@@ -3903,6 +3903,27 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     ]);
 
     const handleSceneBatchedShaftClick = React.useCallback((shaft: InstancedShaft, event: { nativeEvent?: Event }) => {
+        const e = event as any;
+        const altDown = !!(e?.nativeEvent?.altKey || e?.altKey);
+        const ctrlDown = !!(e?.nativeEvent?.ctrlKey || e?.ctrlKey);
+        const shiftDown = !!(e?.nativeEvent?.shiftKey || e?.shiftKey);
+
+        console.log('[DEBUG SupportRenderer handleSceneBatchedShaftClick]', {
+            shaft,
+            isPointerInteractable,
+            isPreparePointerInteractable,
+            supportSelectionAndHoverSuppressed,
+            braceAltActive,
+            kickstandHotkeyActive,
+            leafHotkeyActive,
+            leafStage,
+            sproutParentingLockHeld,
+            altDown,
+            ctrlDown,
+            shiftDown,
+            event,
+        });
+
         if (!isPointerInteractable) return;
         if (isPreparePointerInteractable) {
             emitSupportModelPointerSelect(shaft.modelId ?? null);
@@ -3910,10 +3931,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         if (supportSelectionAndHoverSuppressed || braceAltActive || kickstandHotkeyActive || leafHotkeyActive || leafStage === 'awaitingBase' || sproutParentingLockHeld) {
-            const e = event as unknown as { point?: THREE.Vector3 | { x: number; y: number; z: number } };
-            const point = e.point
-                ? { x: (e.point as any).x, y: (e.point as any).y, z: (e.point as any).z }
+            if (typeof e?.stopPropagation === 'function') {
+                e.stopPropagation();
+            }
+            if (typeof e?.nativeEvent?.stopPropagation === 'function') {
+                e.nativeEvent.stopPropagation();
+            }
+
+            const point = e?.point
+                ? { x: e.point.x, y: e.point.y, z: e.point.z }
                 : null;
+
+            console.log('[DEBUG SupportRenderer handleSceneBatchedShaftClick] Emitting shaft-click event:', {
+                segmentId: shaft.id,
+                point,
+            });
 
             window.dispatchEvent(new CustomEvent('shaft-click', {
                 detail: {

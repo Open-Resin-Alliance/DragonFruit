@@ -239,7 +239,14 @@ function snapRootPosToGrid(
     };
 }
 
-function isGridRootOccupied(rootPos: Vec3, modelId: string): boolean {
+function isCanvasElement(element: EventTarget | null): boolean {
+    if (!element) return false;
+    const htmlEl = element as any;
+    const tag = (htmlEl.tagName || '').toLowerCase();
+    return tag === 'canvas';
+}
+
+function isGridRootOccupied(rootPos: Vec3, modelId: string, hostRootId?: string | null): boolean {
     const grid = getGridSettings();
     if (!grid.enabled || grid.spacingMm <= 0) return false;
 
@@ -249,20 +256,86 @@ function isGridRootOccupied(rootPos: Vec3, modelId: string): boolean {
     const supportSnapshot = getSnapshot();
     for (const root of Object.values(supportSnapshot.roots)) {
         if (root.modelId !== modelId) continue;
+        if (hostRootId && root.id === hostRootId) continue;
         const rootGx = snapToGridIndex(root.transform.pos.x, grid.spacingMm);
         const rootGy = snapToGridIndex(root.transform.pos.y, grid.spacingMm);
-        if (rootGx === gx && rootGy === gy) return true;
+        if (rootGx === gx && rootGy === gy) {
+            console.log('[DEBUG isGridRootOccupied] Occupied by supportRoot:', { rootId: root.id, rootGx, rootGy, gx, gy });
+            return true;
+        }
     }
 
     const kickstandSnapshot = getKickstandSnapshot();
     for (const root of Object.values(kickstandSnapshot.roots)) {
         if (root.modelId !== modelId) continue;
+        if (hostRootId && root.id === hostRootId) continue;
         const rootGx = snapToGridIndex(root.transform.pos.x, grid.spacingMm);
         const rootGy = snapToGridIndex(root.transform.pos.y, grid.spacingMm);
-        if (rootGx === gx && rootGy === gy) return true;
+        if (rootGx === gx && rootGy === gy) {
+            console.log('[DEBUG isGridRootOccupied] Occupied by kickstandRoot:', { rootId: root.id, rootGx, rootGy, gx, gy });
+            return true;
+        }
     }
 
     return false;
+}
+
+function findNearestUnoccupiedGridRoot(
+    startRootPos: Vec3,
+    modelId: string,
+    hostRootId?: string | null,
+    maxRadius = 10
+): Vec3 {
+    const grid = getGridSettings();
+    if (!grid.enabled || grid.spacingMm <= 0) return startRootPos;
+
+    console.log('[DEBUG findNearestUnoccupiedGridRoot] Solving for nearest unoccupied grid root:', { startRootPos, modelId, hostRootId });
+
+    if (!isGridRootOccupied(startRootPos, modelId, hostRootId)) {
+        console.log('[DEBUG findNearestUnoccupiedGridRoot] Start position is unoccupied:', startRootPos);
+        return startRootPos;
+    }
+
+    const startGx = snapToGridIndex(startRootPos.x, grid.spacingMm);
+    const startGy = snapToGridIndex(startRootPos.y, grid.spacingMm);
+
+    for (let r = 1; r <= maxRadius; r++) {
+        const candidates: { gx: number; gy: number; distSq: number }[] = [];
+
+        for (let x = startGx - r; x <= startGx + r; x++) {
+            candidates.push({ gx: x, gy: startGy - r, distSq: 0 });
+            candidates.push({ gx: x, gy: startGy + r, distSq: 0 });
+        }
+        for (let y = startGy - r + 1; y < startGy + r; y++) {
+            candidates.push({ gx: startGx - r, gy: y, distSq: 0 });
+            candidates.push({ gx: startGx + r, gy: y, distSq: 0 });
+        }
+
+        for (const c of candidates) {
+            const worldX = c.gx * grid.spacingMm;
+            const worldY = c.gy * grid.spacingMm;
+            const dx = worldX - startRootPos.x;
+            const dy = worldY - startRootPos.y;
+            c.distSq = dx * dx + dy * dy;
+        }
+
+        candidates.sort((a, b) => a.distSq - b.distSq);
+
+        for (const c of candidates) {
+            const worldPos = {
+                x: c.gx * grid.spacingMm,
+                y: c.gy * grid.spacingMm,
+                z: 0,
+            };
+            if (!isGridRootOccupied(worldPos, modelId, hostRootId)) {
+                console.log('[DEBUG findNearestUnoccupiedGridRoot] Found unoccupied candidate:', { worldPos, gx: c.gx, gy: c.gy, r });
+                return worldPos;
+            }
+        }
+    }
+
+    console.log('[DEBUG findNearestUnoccupiedGridRoot] No unoccupied grid root found within radius. Falling back to start:', startRootPos);
+    return startRootPos;
 }
 
 export function KickstandPlacementController() {
@@ -347,12 +420,10 @@ export function KickstandPlacementController() {
 
         el.addEventListener('pointermove', cancelIfBindingReleased, true);
         el.addEventListener('pointerdown', cancelIfBindingReleased, true);
-        el.addEventListener('pointerup', cancelIfBindingReleased, true);
 
         return () => {
             el.removeEventListener('pointermove', cancelIfBindingReleased, true);
             el.removeEventListener('pointerdown', cancelIfBindingReleased, true);
-            el.removeEventListener('pointerup', cancelIfBindingReleased, true);
         };
     }, [gl, placementBindings, resetSnapping]);
 
@@ -393,6 +464,7 @@ export function KickstandPlacementController() {
     useFrame(() => {
         if (isSupportEditInteractionActive()) {
             if (!supportEditSuppressedRef.current) {
+                console.log('[DEBUG Kickstand placement useFrame] Support edit interaction active, clearing preview');
                 supportEditSuppressedRef.current = true;
                 kickstandPlacementStore.clearPreview();
                 desiredBandRef.current = 'front';
@@ -420,21 +492,34 @@ export function KickstandPlacementController() {
         let snapT = resolvedSnap.t ?? null;
         let snapPos = resolvedSnap.snappedPos ?? null;
 
+        console.log('[DEBUG Kickstand placement useFrame] Snapping update:', {
+            resolvedSnapState: resolvedSnap.state,
+            resolvedSnapTargetId: resolvedSnap.targetId,
+            metaFromGpu: !!meta,
+            snapT,
+            snapPos
+        });
+
         if (!meta || snapT === null || !snapPos) {
             // GPU pick did not lock — try the most recently hovered segment from Three.js raycasting.
             const hoveredSegId = hoveredSegmentIdRef.current;
             const hoveredPoint = hoveredSegId ? hoverPointBySegmentRef.current.get(hoveredSegId) : null;
             const hoveredMeta = hoveredSegId ? targetMetaById.get(hoveredSegId) ?? null : null;
+            console.log('[DEBUG Kickstand placement useFrame] Falling back to hovered segment:', {
+                hoveredSegId,
+                hoveredPoint,
+                hoveredMeta: !!hoveredMeta
+            });
             if (hoveredMeta && hoveredMeta.target.pathSegment && hoveredPoint) {
                 const projected = projectPointToSnapPath(hoveredPoint, hoveredMeta.target.pathSegment);
                 meta = hoveredMeta;
                 snapT = projected.t;
                 snapPos = projected.pos;
             }
-
         }
 
         if (!meta || snapT === null || !snapPos) {
+            console.log('[DEBUG Kickstand placement useFrame] No meta or snap, clearing preview');
             kickstandPlacementStore.clearPreview();
             desiredBandRef.current = 'front';
             lastPreviewSegmentIdRef.current = null;
@@ -443,6 +528,7 @@ export function KickstandPlacementController() {
 
         const path = meta.target.pathSegment;
         if (!path) {
+            console.log('[DEBUG Kickstand placement useFrame] No pathSegment in targetMeta, clearing preview');
             kickstandPlacementStore.clearPreview();
             desiredBandRef.current = 'front';
             lastPreviewSegmentIdRef.current = null;
@@ -470,11 +556,21 @@ export function KickstandPlacementController() {
         );
         desiredBandRef.current = snapDecision.band;
         const rootPos = snapDecision.rootPos;
-        const nodeOccupied = isGridRootOccupied(rootPos, meta.modelId);
+        const nodeOccupied = isGridRootOccupied(rootPos, meta.modelId, meta.hostRootId);
 
         const { target, build } = buildPlacementFromSnap(meta, clampedT, snappedPos, rootPos);
         const previewData = toKickstandPreviewData(build);
         previewData.error = nodeOccupied ? 'TOO_CLOSE_TO_EXISTING' : undefined;
+
+        console.log('[DEBUG Kickstand placement useFrame] Setting preview:', {
+            segmentId: meta.segmentId,
+            clampedT,
+            snappedPos,
+            rootPos,
+            nodeOccupied,
+            previewError: previewData.error
+        });
+
         kickstandPlacementStore.setPreview(target, build, previewData);
     });
 
@@ -487,37 +583,85 @@ export function KickstandPlacementController() {
         }
     }, [hotkeyActive, resetSnapping]);
 
+    const isCanvasElement = (target: EventTarget | null): target is HTMLCanvasElement => {
+        return target === gl.domElement;
+    };
+
     useEffect(() => {
-        const handleShaftClick = (event: Event) => {
-            const detail = (event as CustomEvent<ShaftClickDetail>).detail;
-            if (!detail?.segmentId) return;
-
-            const modifierState = getSupportPlacementModifierState(detail.intersection);
-            const intent = resolveSupportPlacementHotkeyIntent(placementBindings, modifierState);
-
-            const leafActive = leafPlacementStore.isActive() || intent.family === 'leaf';
-            if (leafActive) return;
+        const handleClick = (e: MouseEvent) => {
+            if (!isCanvasElement(e.target)) return;
 
             const snapshot = kickstandPlacementStore.getSnapshot();
-            const kickstandIntentActive = snapshot.hotkeyActive || intent.family === 'kickstand';
-            if (!kickstandIntentActive) return;
+            const { snapTarget, previewBuild, previewData, hotkeyActive } = snapshot;
 
-            const { snapTarget, previewBuild, previewData } = snapshot;
-            if (!snapTarget || snapTarget.segmentId !== detail.segmentId) return;
+            console.log('[DEBUG Kickstand placement handleClick] Click triggered:', {
+                hotkeyActive,
+                hasSnapTarget: !!snapTarget,
+                hasPreviewBuild: !!previewBuild,
+                previewData
+            });
 
-            if (previewData?.error === 'TOO_CLOSE_TO_EXISTING') {
+            if (!hotkeyActive) return;
+
+            if (!snapTarget) {
+                console.log('[DEBUG Kickstand placement handleClick] Rejected: no snapTarget in store snapshot');
                 return;
             }
 
-            if (!previewBuild) return;
+            e.stopPropagation();
+            e.preventDefault();
 
-            addKickstand(previewBuild);
-            addRoot(previewBuild.root);
-            addKnot(previewBuild.hostKnot);
+            let finalBuild = previewBuild;
+
+            const meta = targetMetaById.get(snapTarget.segmentId);
+            const hostRootId = meta?.hostRootId;
+            const occupied = isGridRootOccupied(snapTarget.rootPos, snapTarget.modelId, hostRootId);
+
+            console.log('[DEBUG Kickstand placement handleClick] Checking occupancy:', {
+                rootPos: snapTarget.rootPos,
+                modelId: snapTarget.modelId,
+                hostRootId,
+                previewDataError: previewData?.error,
+                occupied
+            });
+
+            if (previewData?.error === 'TOO_CLOSE_TO_EXISTING' || occupied) {
+                if (meta) {
+                    console.log('[DEBUG Kickstand placement handleClick] Target is occupied, attempting solver for nearest unoccupied root');
+                    const resolvedRootPos = findNearestUnoccupiedGridRoot(snapTarget.rootPos, snapTarget.modelId, hostRootId);
+                    const stillOccupied = isGridRootOccupied(resolvedRootPos, snapTarget.modelId, hostRootId);
+                    console.log('[DEBUG Kickstand placement handleClick] Solver result:', {
+                        resolvedRootPos,
+                        stillOccupied
+                    });
+                    if (stillOccupied) {
+                        console.log('[DEBUG Kickstand placement handleClick] Solver failed: resolved root is still occupied');
+                        finalBuild = null;
+                    } else {
+                        const { build } = buildPlacementFromSnap(meta, snapTarget.t, snapTarget.pos, resolvedRootPos);
+                        finalBuild = build;
+                        console.log('[DEBUG Kickstand placement handleClick] Solver succeeded, rebuilt with root:', resolvedRootPos);
+                    }
+                } else {
+                    console.log('[DEBUG Kickstand placement handleClick] Occupied and no meta found to resolve');
+                    finalBuild = null;
+                }
+            }
+
+            if (!finalBuild) {
+                console.log('[DEBUG Kickstand placement handleClick] Rejected: finalBuild is null or invalid');
+                return;
+            }
+
+            console.log('[DEBUG Kickstand placement handleClick] Placement succeeded! Adding kickstand:', finalBuild);
+
+            addKickstand(finalBuild);
+            addRoot(finalBuild.root);
+            addKnot(finalBuild.hostKnot);
 
             pushHistory({
                 type: SUPPORT_ADD_KICKSTAND,
-                payload: { build: previewBuild },
+                payload: { build: finalBuild },
             });
 
             clearSupportSelection();
@@ -527,12 +671,12 @@ export function KickstandPlacementController() {
             resetSnapping();
         };
 
-        window.addEventListener('shaft-click', handleShaftClick);
+        window.addEventListener('click', handleClick, { capture: true });
 
         return () => {
-            window.removeEventListener('shaft-click', handleShaftClick);
+            window.removeEventListener('click', handleClick, { capture: true });
         };
-    }, [placementBindings, resetSnapping]);
+    }, [resetSnapping, targetMetaById, buildPlacementFromSnap]);
 
     return null;
 }
