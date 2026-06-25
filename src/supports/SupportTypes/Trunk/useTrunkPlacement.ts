@@ -409,7 +409,7 @@ export function useTrunkPlacementV2() {
         // to a stick or twig for this error.
         const cavityStickEligible = result.stagnated || result.exhaustedBudget
             || (result.error && result.error !== 'ANGLE_TOO_STEEP');
-        if (!isGridMode && cavityStickEligible) {
+        if (cavityStickEligible) {
             if (mesh) {
                 perfMark('hover:cavity-stick');
                 const cavityStick = resolveCavityStickPreview(hit, tipPos, tipNormal, modelId, mesh);
@@ -510,6 +510,19 @@ export function useTrunkPlacementV2() {
         }
 
         // reject
+        if (decision.kind === 'reject' && decision.reason === 'COLLISION_WITH_MODEL' && mesh) {
+            perfMark('hover:cavity-stick');
+            const cavityStick = resolveCavityStickPreview(hit, tipPos, tipNormal, modelId, mesh);
+            perfMeasureWithSpike('hover:cavity-stick', 'branch:cavity-stick');
+            if (cavityStick) {
+                setPreviewData(cavityStick.supportData);
+                setPreviewError(null);
+                setPreviewWarning(null);
+                perfEndFrame();
+                return;
+            }
+        }
+
         if (decision.trunkBuild) {
             setPreviewData(decision.trunkBuild.supportData);
             setPreviewError(forcePlaceOverrideRef.current ? null : (decision.trunkBuild.error || null));
@@ -582,7 +595,7 @@ export function useTrunkPlacementV2() {
         // to a stick or twig for this error.
         const cavityStickEligible = result.stagnated || result.exhaustedBudget
             || (result.error && result.error !== 'ANGLE_TOO_STEEP');
-        if (!isGridMode && cavityStickEligible) {
+        if (cavityStickEligible) {
             if (mesh) {
                 const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
                 if (cavityStick) {
@@ -746,6 +759,28 @@ export function useTrunkPlacementV2() {
         }
 
         if (decision.kind === 'reject') {
+            if (decision.reason === 'COLLISION_WITH_MODEL' && mesh) {
+                const cavityStick = buildCavityStick(tipPos, tipNormal, modelId, mesh);
+                if (cavityStick) {
+                    if (cavityStick.kind === 'twig') {
+                        const twig = markTwigPlacementSurface(cavityStick.twig, placementSurface);
+                        addTwig(twig);
+                        pushHistory({
+                            type: SUPPORT_ADD_TWIG,
+                            payload: { twig },
+                        });
+                    } else {
+                        const stick = markStickPlacementSurface(cavityStick.stick, placementSurface);
+                        addStick(stick);
+                        pushHistory({
+                            type: SUPPORT_ADD_STICK,
+                            payload: { stick },
+                        });
+                    }
+                    clearSupportSelection();
+                    return;
+                }
+            }
             if (forcePlaceOverrideRef.current && decision.trunkBuild) {
                 commitTrunkBuild(decision.trunkBuild, placementSurface);
             }
