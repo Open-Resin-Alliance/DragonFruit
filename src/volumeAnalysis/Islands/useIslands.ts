@@ -87,7 +87,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   const [consolidationDistance, setConsolidationDistance] = useState<number>(0.2);
   const [reduceIntersection, setReduceIntersection] = useState<boolean>(false);
   const [intersectionThreshold, setIntersectionThreshold] = useState<number>(0.5);
-  const [enableVolumeGlow, setEnableVolumeGlow] = useState<boolean>(true);
+  const [enableVolumeGlow, setEnableVolumeGlow] = useState<boolean>(false);
   const [scaleMarkersWithArea, setScaleMarkersWithArea] = useState<boolean>(true);
   const [enableContourRegions, setEnableContourRegions] = useState<boolean>(true);
   const [maxContourRegions, setMaxContourRegions] = useState<number>(20);
