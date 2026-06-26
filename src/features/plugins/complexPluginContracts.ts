@@ -190,7 +190,7 @@ export type PluginSlicingFormatDefinitionContract = {
     notes?: string;
 };
 
-export type LocalMaterialFieldKind = 'number' | 'integer' | 'text' | 'boolean' | 'select';
+export type LocalMaterialFieldKind = 'number' | 'integer' | 'text' | 'boolean' | 'select' | 'spacer';
 
 export type LocalMaterialFieldOption = {
     value: string;
@@ -320,7 +320,7 @@ export type DifferentialMaterialSettings = {
     /**
      * Items to UPSERT (update-or-insert) in the inherited result.
      * Arrays are matched by identity key (tabs/sections/cards by `id`, fields by `key`):
-     * - If an item with the same key already exists, it is replaced.
+     * - If an item with the same key already exists, it is updated.
      * - If no item with that key exists, it is appended.
      */
     tabs?: LocalMaterialTabSchema[];

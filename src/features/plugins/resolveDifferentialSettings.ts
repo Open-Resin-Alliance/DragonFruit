@@ -58,7 +58,31 @@ export function resolveDifferentialMaterialSettings(
     // --- Deep clone the base so we don't mutate shared state ---
     const resolved: Omit<PluginLocalMaterialSettingsAdapterContract, 'outputFormat'> = JSON.parse(JSON.stringify(base));
 
-    // --- UPSERT top-level arrays (replace by id/key if exists, otherwise append) ---
+    // --- FIRST: Apply $remove (delete by id/key) ---
+    if (diff.$remove) {
+        if (diff.$remove.tabs?.length) {
+            resolved.tabs = resolved.tabs?.filter(
+                (t) => !diff.$remove!.tabs!.includes(t.id),
+            );
+        }
+        if (diff.$remove.sections?.length) {
+            resolved.sections = resolved.sections?.filter(
+                (s) => !diff.$remove!.sections!.includes(s.id),
+            );
+        }
+        if (diff.$remove.cards?.length) {
+            resolved.cards = resolved.cards?.filter(
+                (c) => !diff.$remove!.cards!.includes(c.id),
+            );
+        }
+        if (diff.$remove.fields?.length) {
+            resolved.fields = resolved.fields?.filter(
+                (f) => !diff.$remove!.fields!.includes(f.key),
+            );
+        }
+    }
+
+    // --- SECOND: UPSERT top-level arrays (deep merge if key exists, else append) ---
     if (diff.tabs) {
         resolved.tabs = mergeByIdentity(
             resolved.tabs ?? [],
@@ -88,30 +112,6 @@ export function resolveDifferentialMaterialSettings(
         );
     }
 
-    // --- Apply $remove (delete by id/key) ---
-    if (diff.$remove) {
-        if (diff.$remove.tabs?.length) {
-            resolved.tabs = resolved.tabs?.filter(
-                (t) => !diff.$remove!.tabs!.includes(t.id),
-            );
-        }
-        if (diff.$remove.sections?.length) {
-            resolved.sections = resolved.sections?.filter(
-                (s) => !diff.$remove!.sections!.includes(s.id),
-            );
-        }
-        if (diff.$remove.cards?.length) {
-            resolved.cards = resolved.cards?.filter(
-                (c) => !diff.$remove!.cards!.includes(c.id),
-            );
-        }
-        if (diff.$remove.fields?.length) {
-            resolved.fields = resolved.fields?.filter(
-                (f) => !diff.$remove!.fields!.includes(f.key),
-            );
-        }
-    }
-
     // Ensure fields is never undefined (it's required on the contract)
     if (!resolved.fields) {
         resolved.fields = [];
@@ -135,7 +135,39 @@ function mergeByIdentity<T>(
         keyed.set(getKey(item), item);
     }
     for (const item of updates) {
-        keyed.set(getKey(item), item);
+        const key = getKey(item);
+        const existingItem = keyed.get(key);
+        if (existingItem) {
+            // Deep merge — only specified properties override the inherited item
+            keyed.set(key, deepMerge(existingItem, item));
+        } else {
+            keyed.set(key, item);
+        }
     }
     return Array.from(keyed.values());
+}
+
+/**
+ * Recursively merge `source` properties into `target`.
+ * Arrays are replaced, not merged. Plain objects are deep-merged.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function deepMerge(target: any, source: any): any {
+    if (source === null || typeof source !== 'object' || Array.isArray(source)) {
+        return source;
+    }
+    const result = { ...target };
+    for (const key of Object.keys(source)) {
+        const srcVal = source[key];
+        const tgtVal = result[key];
+        if (
+            srcVal !== null && typeof srcVal === 'object' && !Array.isArray(srcVal) &&
+            tgtVal !== null && typeof tgtVal === 'object' && !Array.isArray(tgtVal)
+        ) {
+            result[key] = deepMerge(tgtVal, srcVal);
+        } else {
+            result[key] = srcVal;
+        }
+    }
+    return result;
 }
