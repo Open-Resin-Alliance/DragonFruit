@@ -1554,6 +1554,7 @@ export default function Home() {
 
   // 2. Transform Management (needs geom for bounds)
   const transformMgr = useTransformManager({ geom: scene.geom });
+  const [uniformScaling, setUniformScaling] = React.useState(true);
 
   // Ref for supports group (used for export)
   const supportsRef = React.useRef<THREE.Group | null>(null);
@@ -3548,11 +3549,17 @@ export default function Home() {
       ];
     }
 
+    const activeModel = scene.activeModelId
+      ? scene.models.find((m) => m.id === scene.activeModelId)
+      : undefined;
+    const canSplitSupports = !!activeModel?.geometry.meshDefects?.nativeRepairReport?.model_triangle_count;
+
     return [
       ...(!scene.activeModelId ? (['delete', 'cut', 'copy', 'repair'] as const) : []),
       ...(!scene.canPasteModel ? (['paste'] as const) : []),
+      ...(!canSplitSupports ? (['split-supports'] as const) : []),
     ];
-  }, [scene.activeModelId, scene.canPasteModel, scene.mode, supportsCanAddJoint, supportsCanToggleCurve]);
+  }, [scene.activeModelId, scene.canPasteModel, scene.mode, scene.models, supportsCanAddJoint, supportsCanToggleCurve]);
 
   const clearPrintingLayerPreviewUrls = React.useCallback(() => {
     printingLayerPreviewLoadInFlightRef.current.clear();
@@ -10942,6 +10949,15 @@ export default function Home() {
               pushSupportEditHistory('Create stick joint', beforeSnapshot, captureSupportEditSnapshot());
             }
           }
+        }
+        break;
+      }
+      case 'split-supports': {
+        const targetId = scene.activeModelId;
+        if (targetId) {
+          closeEditorContextMenu();
+          scene.splitSupports(targetId);
+          return;
         }
         break;
       }
@@ -18680,6 +18696,8 @@ export default function Home() {
                   transformMgr.transformHook.setScale(x, y, z);
                 }}
                 onResetScale={transformMgr.transformHook.resetScale}
+                uniformScaling={uniformScaling}
+                onUniformScalingChange={setUniformScaling}
                 modelBBox={scene.geom.bbox}
                 autoLift={transformMgr.autoLift}
                 onAutoLiftChange={handleAutoLiftChange}
@@ -19365,6 +19383,7 @@ export default function Home() {
             voxelOpacity={islands.voxelOpacity}
             transformMode={transformMgr.transformMode}
             transform={transformMgr.transform}
+            uniformScaling={uniformScaling}
             autoLift={transformMgr.autoLift}
             liftDistance={transformMgr.liftDistance}
             autoSnapEnabled={transformMgr.autoSnapEnabled}

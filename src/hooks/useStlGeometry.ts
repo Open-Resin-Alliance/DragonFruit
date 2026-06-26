@@ -272,20 +272,23 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   // unless the user explicitly requests manual repair.
   // In the browser we fall back to the legacy Manifold WASM path (which only
   // activates when NaN defects were detected).
+  let nativeModifiedGeometry = false;
   if (isTauriRuntime()) {
     const nativeMode = options.nativeProcessingMode ?? 'auto';
     const skipAutoNativeProcessingForSize = nativeMode === 'auto'
       && sourceTriangleEstimate >= AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD;
 
     if (nativeMode === 'none') {
-      console.log('[processGeometry] Native processing skipped (mode=none)');
-    } else if (skipAutoNativeProcessingForSize) {
+      console.log('[processGeometry] Native repair skipped (mode=none) — running classification for support geometry detection');
+    }
+
+    if (skipAutoNativeProcessingForSize) {
       console.warn(
         `[processGeometry] Skipping native auto repair/classification for gigantic mesh (` +
         `${sourceTriangleEstimate.toLocaleString()} triangles). Use manual Repair to force.`
       );
     } else try {
-      let classifyOnly = nativeMode === 'classify-only';
+      let classifyOnly = nativeMode === 'classify-only' || nativeMode === 'none';
       const forceRepair = nativeMode === 'repair';
 
       // If a confirmation callback is wired up, run a quick pre-repair analysis
@@ -371,6 +374,7 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
 
         if (shouldApplyPositions) {
           applyRepairedPositions(geometry, effectiveResult.positions);
+          nativeModifiedGeometry = true;
         }
 
         const { report } = effectiveResult;
@@ -438,8 +442,8 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   // Yield to let the loading indicator repaint before each heavy synchronous op
   await new Promise<void>(r => setTimeout(r, 0));
 
-  if (!options._skipComputeNormals) {
-    console.log(`[${new Date().toISOString()}] [processGeometry] Computing Normals`);
+  if (!options._skipComputeNormals || nativeModifiedGeometry) {
+    console.log(`[${new Date().toISOString()}] [processGeometry] Computing Normals${nativeModifiedGeometry ? ' (geometry modified by native processing)' : ''}`);
     geometry.computeVertexNormals();
   } else {
     console.log(`[${new Date().toISOString()}] [processGeometry] Normals already present — skipping computeVertexNormals`);

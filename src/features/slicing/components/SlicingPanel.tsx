@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, CircleHelp, Cpu, Download, Edit3, ExternalLink, Layers3, Loader2, Play, Printer, Timer, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, CircleHelp, Cpu, Download, Edit3, ExternalLink, Layers3, Loader2, Play, Printer, Timer, X } from 'lucide-react';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
@@ -43,6 +43,7 @@ import {
 } from '@/components/settings/uvToolsPreferences';
 import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, getSlicerEngineVersion } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { computePhysicalAaConfig, type AaPreset as AaAutoPreset } from '@/features/slicing/autoAaPhysics';
+import { AaSupportWarningModal } from '@/components/modals/AaSupportWarningModal';
 import {
   LutCurveSelector,
   LutCurveEditorModal,
@@ -807,6 +808,9 @@ export function SlicingPanel({
   const [slicingModalStage, setSlicingModalStage] = useState<'running' | 'finished' | 'failed' | 'cancelled'>('running');
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
   const [aaMode, setAaMode] = useState<'Off' | 'Blur' | '3DAA'>(resolveInitialAaMode);
+  const [showAaWarningModal, setShowAaWarningModal] = useState(false);
+  const [pendingAaTarget, setPendingAaTarget] = useState<'Off' | 'Blur' | '3DAA' | null>(null);
+  const [aaWarningModelName, setAaWarningModelName] = useState('');
   const [aaLevel, setAaLevel] = useState<AaStrengthLevel>(resolveInitialAaLevel);
   const [useCustomAaLevel, setUseCustomAaLevel] = useState<boolean>(() => {
     const initialSteps = parseAaLevelSteps(resolveInitialAaLevel()) ?? 4;
@@ -1203,6 +1207,48 @@ export function SlicingPanel({
     && (phaseKind === 'preparing' || phaseKind === 'staging' || phaseKind === 'slicing');
 
   const slicingElapsedLabel = useMemo(() => formatElapsedClock(currentElapsedMs), [currentElapsedMs]);
+
+  // When the user enables AA on an STL whose support geometry analysis didn't
+  // produce a model/support split, warn that we can't disable AA for possible
+  // support geometry.
+  const handleAaModeChange = useCallback((mode: 'Off' | 'Blur' | '3DAA') => {
+    if (mode === 'Off') {
+      setAaMode('Off');
+      return;
+    }
+
+    // Check visible models for STL files with unclassified support geometry.
+    const stlWithoutSupportSplit = models.filter((m) => {
+      if (!m.visible) return false;
+      if (!m.name.toLowerCase().endsWith('.stl')) return false;
+      const report = m.geometry.meshDefects?.nativeRepairReport;
+      if (!report) return true; // No analysis report at all
+      const hasSplit = report.model_triangle_count != null && report.model_triangle_count > 0;
+      const isSupportGeometry = report.likely_support_geometry === true;
+      return !hasSplit && !isSupportGeometry;
+    });
+
+    if (stlWithoutSupportSplit.length > 0) {
+      setAaWarningModelName(stlWithoutSupportSplit[0].name);
+      setPendingAaTarget(mode);
+      setShowAaWarningModal(true);
+    } else {
+      setAaMode(mode);
+    }
+  }, [models]);
+
+  const handleAaWarningProceed = useCallback(() => {
+    if (pendingAaTarget) {
+      setAaMode(pendingAaTarget);
+    }
+    setShowAaWarningModal(false);
+    setPendingAaTarget(null);
+  }, [pendingAaTarget]);
+
+  const handleAaWarningCancel = useCallback(() => {
+    setShowAaWarningModal(false);
+    setPendingAaTarget(null);
+  }, []);
 
   const visibleModels = useMemo(() => models.filter((model) => model.visible), [models]);
   const activePrinterProfileId = (activePrinterProfile?.id ?? '').trim();
@@ -2883,7 +2929,7 @@ export function SlicingPanel({
                                 background: 'var(--surface-0)',
                                 color: 'var(--text-muted)',
                               }}
-                          onClick={() => setAaMode(mode)}
+                          onClick={() => handleAaModeChange(mode)}
                         >
                           {mode}
                         </button>
@@ -4078,6 +4124,13 @@ export function SlicingPanel({
         </div>,
         document.body,
       )}
+
+      <AaSupportWarningModal
+        isOpen={showAaWarningModal}
+        modelName={aaWarningModelName}
+        onCancel={handleAaWarningCancel}
+        onProceed={handleAaWarningProceed}
+      />
     </Card>
   );
 }

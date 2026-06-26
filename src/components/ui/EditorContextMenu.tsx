@@ -9,6 +9,7 @@ import {
   Scissors,
   ClipboardPaste,
   Trash2,
+  Split,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -18,6 +19,7 @@ export type EditorMenuAction =
   | 'copy'
   | 'paste'
   | 'repair'
+  | 'split-supports'
   | 'supports-toggle-curve'
   | 'supports-add-joint';
 
@@ -48,6 +50,7 @@ const MENU_ITEMS: MenuItemDef[] = [
   { id: 'copy',   label: msg`Copy`,   icon: Copy },
   { id: 'paste',  label: msg`Paste`,  icon: ClipboardPaste },
   { id: 'repair', label: msg`Repair`, icon: Wrench },
+  { id: 'split-supports', label: msg`Split Supports`, icon: Split },
 ];
 
 const MENU_WIDTH = 176;

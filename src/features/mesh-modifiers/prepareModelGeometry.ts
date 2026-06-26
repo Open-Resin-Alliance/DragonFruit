@@ -3,6 +3,7 @@ import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { ModelHolePunchPlacement } from './types';
 import { hollowFromGeometry, type HollowOptions } from '@/utils/meshHollowing';
 import { punchFromGeometry, type PunchOptions } from '@/utils/meshPunching';
+import { splitClassifiedSupportGeometry } from '@/features/scene/splitClassifiedSupports';
 
 export type PreparedModelGeometry = {
   model: LoadedModel;
@@ -94,6 +95,71 @@ function createGeometryFromPositions(positions: Float32Array): THREE.BufferGeome
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   return geometry;
+}
+
+function splitClassifiedModelForOutput(model: LoadedModel): {
+  models: LoadedModel[];
+  geometries: THREE.BufferGeometry[];
+} | null {
+  const report = model.geometry.meshDefects?.nativeRepairReport;
+  const modelTriangleCount = Math.floor(report?.model_triangle_count ?? 0);
+
+  const geometry = model.geometry.geometry;
+  const position = geometry.getAttribute('position');
+  if (!position) return null;
+  const totalTriangleCount = Math.floor((geometry.getIndex()?.count ?? position.count) / 3);
+  if (modelTriangleCount <= 0 || modelTriangleCount >= totalTriangleCount) return null;
+
+  const split = splitClassifiedSupportGeometry(model);
+  if (!split) return null;
+
+  const sourceDefects = model.geometry.meshDefects;
+  const modelDefects = sourceDefects ? {
+    ...sourceDefects,
+    nativeRepairReport: undefined,
+    supportSectionGeometry: undefined,
+  } : undefined;
+  const supportDefects = sourceDefects ? {
+    ...sourceDefects,
+    supportSectionGeometry: undefined,
+    nativeRepairReport: report ? {
+      ...report,
+      model_triangle_count: null,
+      likely_support_geometry: true,
+    } : undefined,
+  } : undefined;
+
+  const modelBounds = { ...split.modelGeometry, meshDefects: modelDefects };
+  const supportBounds = { ...split.supportGeometry, meshDefects: supportDefects };
+
+  const modelPart: LoadedModel = {
+    ...model,
+    geometry: modelBounds,
+    polygonCount: split.modelTriangleCount,
+    transform: {
+      position: split.modelPosition,
+      rotation: model.transform.rotation.clone(),
+      scale: model.transform.scale.clone(),
+    },
+  };
+  const supportPart: LoadedModel = {
+    ...model,
+    id: `${model.id}:slice-supports`,
+    name: `${model.name} (Supports)`,
+    geometry: supportBounds,
+    polygonCount: split.supportTriangleCount,
+    meshModifiers: undefined,
+    transform: {
+      position: split.supportPosition,
+      rotation: model.transform.rotation.clone(),
+      scale: model.transform.scale.clone(),
+    },
+  };
+
+  return {
+    models: [modelPart, supportPart],
+    geometries: [modelBounds.geometry, supportBounds.geometry],
+  };
 }
 
 function buildPunchOptionsFromPlacements(
@@ -227,7 +293,18 @@ export async function prepareLoadedModelsForOutput(models: LoadedModel[]): Promi
   let modifiedModelCount = 0;
 
   try {
+    const slicingModels: LoadedModel[] = [];
     for (const model of models) {
+      const split = splitClassifiedModelForOutput(model);
+      if (split) {
+        slicingModels.push(...split.models);
+        temporaryGeometries.push(...split.geometries);
+      } else {
+        slicingModels.push(model);
+      }
+    }
+
+    for (const model of slicingModels) {
       const prepared = await prepareModelGeometryForOutput(model);
       const geometryChanged = prepared.geometry !== model.geometry.geometry;
 

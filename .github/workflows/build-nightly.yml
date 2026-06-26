@@ -478,6 +478,12 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
+      - name: Install Apple Certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASS }}
+
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
@@ -491,6 +497,9 @@ jobs:
         env:
           CMAKE_OSX_ARCHITECTURES: "arm64;x86_64"
           DF_BUILD_TARGET_TRIPLE: universal-apple-darwin
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tauriScript: npx tauri
           args: --target universal-apple-darwin --bundles app,dmg

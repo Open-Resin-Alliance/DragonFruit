@@ -260,8 +260,19 @@ fn rasterize_layer_rle_with_support_split(
         rasterize_layer_rle(job, triangles, &model_layer_indices, layer, false).0
     };
 
+    // Support geometry must be binary before it is held aside from the model
+    // AA post-process. This matters for perturbation 3DAA, whose rasterizer
+    // itself emits grayscale coverage before the later XY/Z blur stages.
+    let mut support_job = job.clone();
+    support_job.anti_aliasing_level = "Off".to_string();
+    support_job.anti_aliasing_mode = "Coverage".to_string();
+    support_job.blur_brush_radius_px = 0;
+    support_job.minimum_aa_alpha_percent = 100.0;
+    support_job.aa_on_supports = true;
+    support_job.model_triangle_count = 0;
+
     let (support_runs, support_stats) = rasterize_layer_rle(
-        job,
+        &support_job,
         triangles,
         &support_layer_indices,
         layer,

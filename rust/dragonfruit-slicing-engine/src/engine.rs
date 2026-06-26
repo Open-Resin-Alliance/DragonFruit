@@ -533,16 +533,32 @@ struct SupportMaskLayer {
 }
 
 impl SupportMaskContext {
-    fn from_job(job: &SliceJobV3) -> Option<Self> {
+    fn from_job(job: &SliceJobV3, triangles_xyz: &[f32]) -> Option<Self> {
         if job.aa_on_supports {
+            eprintln!(
+                "[SupportAA] full-mask support context disabled: aa_on_supports=true"
+            );
             return None;
         }
 
-        let total_triangles = job.triangles_xyz.len() / 9;
+        let total_triangles = triangles_xyz.len() / 9;
         let model_triangle_count = (job.model_triangle_count as usize).min(total_triangles);
         if model_triangle_count == 0 || model_triangle_count >= total_triangles {
+            eprintln!(
+                "[SupportAA] full-mask support context disabled: model_triangles={} total_triangles={}",
+                model_triangle_count, total_triangles
+            );
             return None;
         }
+
+        eprintln!(
+            "[SupportAA] full-mask support context enabled: model_triangles={} support_triangles={} total_triangles={} mode={} level={}",
+            model_triangle_count,
+            total_triangles - model_triangle_count,
+            total_triangles,
+            job.anti_aliasing_mode,
+            job.anti_aliasing_level,
+        );
 
         let mut support_job = job.clone();
         support_job.anti_aliasing_level = "Off".to_string();
@@ -552,7 +568,7 @@ impl SupportMaskContext {
         support_job.aa_on_supports = true;
         support_job.model_triangle_count = 0;
 
-        let mut triangles = parse_triangles(&support_job.triangles_xyz);
+        let mut triangles = parse_triangles(triangles_xyz);
         project_triangles_inplace(&mut triangles, &support_job);
         let layer_index = build_layer_index(
             &triangles,
@@ -1975,7 +1991,11 @@ fn rasterize_vertical_aa_streaming_v3(
     // They are recovered at the end via `encode_handle_guard.finish()`.
     // ──────────────────────────────────────────────────────────────────────────
 
-    let mut support_mask_context = SupportMaskContext::from_job(raster_job);
+    // `raster_job.triangles_xyz` is intentionally cleared above to avoid a
+    // multi-GB duplicate. Build support masking from the real external mesh
+    // buffer or classified model/support boundaries silently disappear.
+    let mut support_mask_context =
+        SupportMaskContext::from_job(raster_job, &raster_triangles_xyz);
     let model_active_layer_window = resolve_model_active_layer_window(raster_job);
 
     // Pending queue for symmetric forward-compensation blending.
@@ -3396,6 +3416,18 @@ pub fn slice_and_rasterize_rle_v3(
         } else {
             None
         };
+    eprintln!(
+        "[SupportAA] RLE raster partition: enabled={} model_triangles={} support_triangles={} total_triangles={} aa_on_supports={} mode={} level={}",
+        support_split_model_triangle_count.is_some(),
+        support_split_model_triangle_count.unwrap_or(triangles.len()),
+        support_split_model_triangle_count
+            .map(|count| triangles.len().saturating_sub(count))
+            .unwrap_or(0),
+        triangles.len(),
+        job.aa_on_supports,
+        job.anti_aliasing_mode,
+        job.anti_aliasing_level,
+    );
     let index_start = std::time::Instant::now();
     let layer_index = build_layer_index(
         &triangles,
@@ -3516,6 +3548,16 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     } else {
         None
     };
+    eprintln!(
+        "[SupportAA] perturb-3DAA RLE partition: enabled={} model_triangles={} support_triangles={} total_triangles={} aa_on_supports={}",
+        support_split_model_triangle_count.is_some(),
+        support_split_model_triangle_count.unwrap_or(triangles.len()),
+        support_split_model_triangle_count
+            .map(|count| triangles.len().saturating_sub(count))
+            .unwrap_or(0),
+        triangles.len(),
+        job.aa_on_supports,
+    );
 
     let index_start = std::time::Instant::now();
     let layer_index = build_layer_index(
@@ -3906,6 +3948,20 @@ pub fn slice_and_rasterize_rle_encoded_v3(
         } else {
             None
         };
+    eprintln!(
+        "[SupportAA] encoded-RLE raster partition: enabled={} model_triangles={} support_triangles={} total_triangles={} aa_on_supports={} mode={} level={} blur_radius={} ssaa_factor={}",
+        support_split_model_triangle_count.is_some(),
+        support_split_model_triangle_count.unwrap_or(triangles.len()),
+        support_split_model_triangle_count
+            .map(|count| triangles.len().saturating_sub(count))
+            .unwrap_or(0),
+        triangles.len(),
+        job.aa_on_supports,
+        job.anti_aliasing_mode,
+        job.anti_aliasing_level,
+        blur_radius,
+        ssaa_factor,
+    );
     let index_start = std::time::Instant::now();
     let layer_index = build_layer_index(
         &triangles,
@@ -4660,6 +4716,23 @@ mod tests {
     }
 
     #[test]
+    fn perturb_3daa_rle_keeps_classified_support_geometry_binary() {
+        let mut job = base_perturb_3daa_rle_test_job();
+        job.model_triangle_count = 12;
+
+        // Keep model geometry above layer 0 so that layer contains only the
+        // classified support half of the combined triangle stream.
+        push_box_triangles(&mut job.triangles_xyz, 0.0, 0.0, 2.0, 3.0, 20.0, 20.0);
+        push_box_triangles(&mut job.triangles_xyz, 0.0, 0.0, 0.0, 0.8, 20.0, 20.0);
+
+        let support_layer = render_perturb_3daa_rle_test_layer(&job, 0);
+        assert!(
+            support_layer.iter().all(|&px| px == 0 || px == 255),
+            "classified support geometry must bypass perturbation and post-process AA"
+        );
+    }
+
+    #[test]
     fn perturb_3daa_rle_path_applies_xy_blur_without_full_mask_pump() {
         let mut unblurred = base_perturb_3daa_rle_test_job();
         unblurred.blur_brush_radius_px = 0;
@@ -4818,7 +4891,9 @@ mod tests {
         push_box_triangles(&mut flat, 0.0, 0.0, 0.0, 0.8, 20.0, 20.0);
 
         job.triangles_xyz = flat;
-        let mut ctx = super::SupportMaskContext::from_job(&job).expect(
+        let mut context_job = job.clone();
+        context_job.triangles_xyz.clear();
+        let mut ctx = super::SupportMaskContext::from_job(&context_job, &job.triangles_xyz).expect(
             "split support metadata should enable support masking when support AA is disabled",
         );
         let support_layer = ctx

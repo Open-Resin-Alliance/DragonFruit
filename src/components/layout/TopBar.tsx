@@ -10,7 +10,7 @@ import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { Button } from '@/components/ui/primitives';
-import { Activity, AlertTriangle, ChevronDown, FolderInput, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, Square, Upload, X } from 'lucide-react';
+import { Activity, AlertTriangle, Anchor, ChevronDown, FolderInput, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, Square, Upload, X } from 'lucide-react';
 import {
   applyThemeCustomColors,
   getSavedThemeCustomColors,
@@ -596,10 +596,29 @@ export function TopBar({
     closePrinterQuickMenu();
   }, [activePrinterProfile?.id, closePrinterQuickMenu]);
 
+  const stepsContainerRef = React.useRef<HTMLDivElement>(null);
+  const [hideBadges, setHideBadges] = React.useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.innerWidth < 800;
+  });
+
+  React.useEffect(() => {
+    const el = stepsContainerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      const gapPx = 4;
+      const perButton = (entry.contentRect.width - 3 * gapPx) / 4;
+      setHideBadges(perButton < 120);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const steps: Array<{
     mode: SupportMode;
     label: string;
     step: number;
+    icon: React.ReactNode;
     hint: string;
     locked: boolean;
   }> = [
@@ -607,6 +626,7 @@ export function TopBar({
       mode: 'prepare',
       label: _(msg`Prepare`),
       step: 1,
+      icon: <FolderOpen className="h-3 w-3" strokeWidth={2.5} />,
       hint: _(msg`Arrange model and transforms`),
       locked: false,
     },
@@ -614,6 +634,7 @@ export function TopBar({
       mode: 'support',
       label: _(msg`Support`),
       step: 2,
+      icon: <Anchor className="h-3 w-3" strokeWidth={2.5} />,
       hint: _(msg`Build and tune supports`),
       locked: !hasModels,
     },
@@ -621,6 +642,7 @@ export function TopBar({
       mode: 'export',
       label: _(msg`Export`),
       step: 3,
+      icon: <Upload className="h-3 w-3" strokeWidth={2.5} />,
       hint: _(msg`Finalize and export output`),
       locked: !hasModels,
     },
@@ -628,6 +650,7 @@ export function TopBar({
       mode: 'printing',
       label: _(msg`Printing`),
       step: 4,
+      icon: <Printer className="h-3 w-3" strokeWidth={2.5} />,
       hint: _(msg`Inspect sliced layers before printing`),
       locked: !hasModels || !hasPrintingData,
     },
@@ -639,7 +662,7 @@ export function TopBar({
       onMouseDownCapture={handleTopBarPointerDown}
     >
       <div
-        className={`flex w-[430px] items-center gap-2.5 pl-0 pr-4 py-1.5 transition-opacity ${topbarActionsDisabled ? 'opacity-45 pointer-events-none' : ''}`}
+        className={`flex flex-1 max-w-[430px] items-center gap-2.5 pl-0 pr-4 py-1.5 transition-opacity ${topbarActionsDisabled ? 'opacity-45 pointer-events-none' : ''}`}
         data-no-window-drag="false"
         aria-disabled={topbarActionsDisabled}
       >
@@ -702,7 +725,7 @@ export function TopBar({
           aria-label={topbarPrinterButtonAriaLabel}
           data-no-window-drag="true"
         >
-          <div className="inline-flex h-8 w-8 items-center justify-center overflow-hidden rounded-sm shrink-0" style={{ background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
+          <div className="inline-flex h-8 w-8 items-center justify-center overflow-hidden rounded-sm shrink-0" style={{ background: 'color-mix(in srgb, var(--surface-1), transparent 6%)', ...(hideBadges ? { display: 'none' } : {}) }}>
             {activePrinterThumbnailSrc ? (
               <img
                 src={activePrinterThumbnailSrc}
@@ -992,17 +1015,12 @@ export function TopBar({
         </div>
       )}
 
-      <div className="pointer-events-none absolute inset-x-0 flex justify-center px-2">
+      <div className="flex min-w-0 flex-1 justify-center px-2">
         <div
-          className={`relative w-full max-w-[760px] transition-opacity ${topbarActionsDisabled ? 'opacity-45' : ''}`}
+          className={`relative w-full transition-opacity ${topbarActionsDisabled ? 'opacity-45' : ''}`}
           aria-disabled={topbarActionsDisabled}
         >
-          <div
-            className="absolute left-6 right-6 top-1/2 -translate-y-1/2 h-px"
-            style={{ background: 'color-mix(in srgb, var(--border-subtle), transparent 10%)' }}
-          />
-
-          <div className={`relative grid grid-cols-4 gap-2 ${topbarActionsDisabled ? 'pointer-events-none' : 'pointer-events-auto'}`}>
+          <div ref={stepsContainerRef} className="flex items-center justify-center gap-1">
             {steps.map((item) => {
               const active = mode === item.mode;
               const locked = item.locked;
@@ -1021,7 +1039,7 @@ export function TopBar({
                   }}
                   disabled={nativeDisabled}
                   aria-disabled={disabled}
-                  className={`group relative flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 transition-all duration-180 ${
+                  className={`group relative flex cursor-pointer items-center gap-1.5 rounded-lg border px-1.5 py-2 transition-all duration-200 flex-1 min-w-[90px] max-w-[190px] h-[36px] ${
                     active
                       ? 'shadow-[0_6px_16px_rgba(0,0,0,0.25)]'
                       : 'hover:-translate-y-[1px] hover:shadow-[0_6px_14px_rgba(0,0,0,0.18)]'
@@ -1050,29 +1068,31 @@ export function TopBar({
                 >
                   <span
                     className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold"
-                    style={active
-                      ? {
-                        color: 'var(--text-strong)',
-                        background: 'color-mix(in srgb, var(--accent), white 10%)',
-                      }
-                      : {
-                        color: 'var(--text-muted)',
-                        background: 'var(--surface-2)',
-                      }
-                    }
+                    style={{
+                      ...(active
+                        ? {
+                          color: 'var(--accent)',
+                          background: 'transparent',
+                        }
+                        : {
+                          color: 'var(--text-muted)',
+                          background: 'var(--surface-2)',
+                        }),
+                      ...(hideBadges ? { display: 'none' } : {}),
+                    }}
                   >
-                    {item.step}
+                    {item.icon}
                   </span>
 
                   <span
-                    className="text-xs font-bold leading-none tracking-[0.01em]"
+                    className="absolute left-1/2 -translate-x-1/2 whitespace-nowrap text-center text-xs font-bold leading-none tracking-[0.01em]"
                     style={{ color: active ? 'var(--text-strong)' : 'var(--text-strong)' }}
                   >
                     {item.label}
                   </span>
 
-                  {printingLocked && (
-                    <Lock className="h-3 w-3 ml-auto" style={{ color: 'var(--text-muted)' }} />
+                  {printingLocked && !hideBadges && (
+                    <Lock className="h-3 w-3 ml-auto flex-shrink-0" style={{ color: 'var(--text-muted)' }} />
                   )}
 
 
@@ -1083,7 +1103,7 @@ export function TopBar({
         </div>
       </div>
 
-      <div className="ml-auto flex w-[320px] items-center justify-end gap-2 pr-2">
+      <div className="flex flex-1 max-w-[430px] items-center justify-end gap-2 pr-2">
         <div className={`flex items-center gap-2 transition-opacity ${topbarActionsDisabled ? 'opacity-45 pointer-events-none' : ''}`}>
           <ViewTypeDropdown
             value={viewTypeOverride}
