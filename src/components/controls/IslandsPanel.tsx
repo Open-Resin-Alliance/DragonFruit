@@ -8,7 +8,7 @@ import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import type { UseIslandsReturn } from '@/volumeAnalysis/Islands/useIslands';
-import { ISLAND_LAYER_COLORS } from '@/volumeAnalysis/Islands/islandPuckMarkers';
+import { ISLAND_LAYER_COLORS, markerIdFor } from '@/volumeAnalysis/Islands/islandPuckMarkers';
 
 const SECTION_CARD: React.CSSProperties = {
   borderColor: 'var(--border-subtle)',
@@ -110,15 +110,12 @@ export function IslandsPanel({ islands, hasGeometry }: IslandsPanelProps) {
   } = islands;
 
   const totalDetected = (stats?.voxelTotal ?? 0) + (stats?.minimaTotal ?? 0) - (stats?.matched ?? 0);
-  const selectedIndex = orderedIslands.findIndex((i) => {
-    if (selectedMarkerId === null) return false;
-    const markerId = i.source === 'voxel'
-      ? `v-${i.contact.x.toFixed(2)}-${i.contact.y.toFixed(2)}`
-      : `m-${i.contact.x.toFixed(2)}-${i.contact.y.toFixed(2)}`;
-    return markerId === selectedMarkerId;
-  });
+  const selectedIndex = React.useMemo(() => {
+    if (selectedMarkerId === null) return -1;
+    return orderedIslands.findIndex((i) => markerIdFor(i) === selectedMarkerId);
+  }, [orderedIslands, selectedMarkerId]);
   const currentIslandLabel = selectedIndex >= 0
-    ? `#${orderedIslands[selectedIndex].id}`
+    ? orderedIslands[selectedIndex].id.replace(/^\D+/, '')
     : null;
 
   const hasData = totalDetected > 0;

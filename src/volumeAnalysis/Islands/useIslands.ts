@@ -428,12 +428,14 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     });
   }, [filteredIslands, showVoxelOnly, showMinimaOnly, showIntersection]);
 
-  // Cluster-walk ordering for the list / ←/→ navigation (Euclidean only).
+  // Sort by numeric ID for predictable prev/next navigation.
   const baseOrderedIslands = useMemo(() => {
-    return clusterWalkOrder(allIslands.map((i) => ({ ...i })), {
-      epsilonMm: Math.max(8, pxMm * 40),
+    return [...allIslands].sort((a, b) => {
+      const aNum = parseInt(a.id.replace(/^\D+/, ''), 10) || 0;
+      const bNum = parseInt(b.id.replace(/^\D+/, ''), 10) || 0;
+      return aNum - bNum;
     });
-  }, [allIslands, pxMm]);
+  }, [allIslands]);
 
   const orderedIslands = useMemo(() => {
     const displayedSet = new Set(displayedIslands.map((i) => i.id));
