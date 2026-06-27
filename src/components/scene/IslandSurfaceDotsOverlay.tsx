@@ -377,8 +377,10 @@ export default function IslandSurfaceDotsOverlay({
     uniforms.current.uOpacity.value = opacity;
   }, [markerTexture, markerMetaTexture, markerCount, selectedIslandId, hoveredIslandId, opacity]);
 
-  useFrame((state) => {
-    uniforms.current.uTime.value = state.clock.getElapsedTime();
+  const timerRef = useRef(new THREE.Timer());
+  useFrame(() => {
+    timerRef.current.update();
+    uniforms.current.uTime.value = timerRef.current.getElapsed();
   });
 
   const occludedMaterial = useMemo(() => {

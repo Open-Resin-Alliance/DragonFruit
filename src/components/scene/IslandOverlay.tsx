@@ -111,10 +111,12 @@ export function IslandOverlay({
 
   const clippingPlanes = clippingPlanesRef.current;
 
-  // Single shared uTime uniform updated in the useFrame loop
+  // Single shared uTime uniform updated via THREE.Timer (Clock is deprecated)
   const globalTimeUniform = useMemo(() => ({ value: 0 }), []);
-  useFrame(({ clock }) => {
-    globalTimeUniform.value = clock.getElapsedTime();
+  const timerRef = useRef(new THREE.Timer());
+  useFrame(() => {
+    timerRef.current.update();
+    globalTimeUniform.value = timerRef.current.getElapsed();
   });
 
   // Filter unselected vs selected markers, and handle utility markers (negative IDs)
