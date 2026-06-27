@@ -188,11 +188,11 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
               type="button"
               onClick={() => { void islands.onRunScan(); }}
               disabled={!hasGeometry || scanning}
-              className="w-full h-9 rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors disabled:opacity-50"
+              className="ui-button w-full !h-8 text-[11px] disabled:opacity-50"
               style={{
-                borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                color: 'var(--accent-contrast)',
+                borderColor: 'var(--accent)',
+                background: 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
+                color: 'var(--accent)',
               }}
             >
               {scanning
