@@ -8,6 +8,7 @@ export type IslandMarker = {
   baseZ: number;
   pixelCount: number;
   geometry?: THREE.BufferGeometry; // 3D shape from island contours
+  radius?: number; // Optional radius for geometry-independent rendering
 };
 
 /**

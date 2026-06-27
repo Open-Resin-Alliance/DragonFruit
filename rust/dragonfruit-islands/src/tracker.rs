@@ -52,13 +52,21 @@ impl IslandTracker {
         current_components: &[ComponentInfo],
         prev_island_labels: Option<&RleLabels>,
         solid_mask: &RleMask,
+        candidate_only: bool,
     ) -> RleLabels {
         let width = current_labels.width;
         let height = current_labels.height;
 
-        match prev_island_labels {
-            None => self.process_first_layer(layer_index, current_labels, current_components, width, height),
-            Some(prev) => self.process_subsequent_layer(layer_index, current_labels, current_components, prev, solid_mask, width, height),
+        if candidate_only {
+            match prev_island_labels {
+                None => self.process_first_layer(layer_index, current_labels, current_components, width, height),
+                Some(prev) => self.process_subsequent_layer_candidates(layer_index, current_labels, current_components, prev, width, height),
+            }
+        } else {
+            match prev_island_labels {
+                None => self.process_first_layer(layer_index, current_labels, current_components, width, height),
+                Some(prev) => self.process_subsequent_layer(layer_index, current_labels, current_components, prev, solid_mask, width, height),
+            }
         }
     }
 
@@ -154,6 +162,76 @@ impl IslandTracker {
         self.evaluate_pending_merges(layer_index);
 
         self.map_labels_to_islands(&solid_labels, &solid_comp_to_island, width, height)
+    }
+
+    fn process_subsequent_layer_candidates(
+        &mut self,
+        layer_index: u32,
+        current_labels: &RleLabels,
+        current_components: &[ComponentInfo],
+        prev_island_labels: &RleLabels,
+        width: i32,
+        height: i32,
+    ) -> RleLabels {
+        let mut comp_to_island: HashMap<i32, IslandId> = HashMap::new();
+
+        for component in current_components {
+            let prev_id_overlaps =
+                self.find_overlapping_island_ids(component.id, current_labels, prev_island_labels);
+
+            let mut prev_ids: HashSet<IslandId> = HashSet::new();
+            for (&id, &count) in &prev_id_overlaps {
+                if count >= self.min_overlap_px as u64 {
+                    prev_ids.insert(id);
+                }
+            }
+
+            // Filter for active islands
+            let active_prev_ids: HashSet<IslandId> = prev_ids
+                .iter()
+                .copied()
+                .filter(|id| {
+                    self.islands
+                        .get(id)
+                        .map_or(false, |i| i.status == IslandStatus::Active)
+                })
+                .collect();
+
+            let area_mm2 = component.area_px as f64 * self.px_mm * self.px_mm;
+
+            let assigned_id = if active_prev_ids.is_empty() {
+                if !prev_ids.is_empty() {
+                    // Overlaps only non-active islands — resolve to parent chain
+                    let first = *prev_ids.iter().next().unwrap();
+                    let target = self.resolve_parent(first);
+                    self.update_island(target, layer_index, area_mm2, Some(component));
+                    target
+                } else {
+                    self.create_new_island(layer_index, area_mm2, Some(component))
+                }
+            } else if active_prev_ids.len() == 1 {
+                let id = *active_prev_ids.iter().next().unwrap();
+                self.update_island(id, layer_index, area_mm2, Some(component));
+                id
+            } else {
+                // Merge: resolve all to ultimate parents
+                let resolved: HashSet<IslandId> = active_prev_ids
+                    .iter()
+                    .map(|&id| self.resolve_parent(id))
+                    .collect();
+                self.merge_islands(layer_index, &resolved, prev_island_labels, area_mm2, Some(component))
+            };
+
+            comp_to_island.insert(component.id, assigned_id);
+
+            // Track overlaps for pending merges
+            self.track_pending_merge_overlaps(component.id, current_labels, prev_island_labels);
+        }
+
+        // Check and finalize pending merges
+        self.evaluate_pending_merges(layer_index);
+
+        self.map_labels_to_islands(current_labels, &comp_to_island, width, height)
     }
 
     // -----------------------------------------------------------------------
@@ -571,11 +649,11 @@ mod tests {
             0,0,0,0,0,
         ], w, h);
         let r0 = scan_layer(&mask0, None, 0.05, 0.1, Connectivity::Four);
-        let il0 = tracker.process_layer(0, &r0.labels, &r0.components, None, &r0.solid_mask);
+        let il0 = tracker.process_layer(0, &r0.labels, &r0.components, None, &r0.solid_mask, false);
 
         // Layer 1 (same shape)
         let r1 = scan_layer(&mask0, Some(&mask0), 0.05, 0.1, Connectivity::Four);
-        let _il1 = tracker.process_layer(1, &r1.labels, &r1.components, Some(&il0), &r1.solid_mask);
+        let _il1 = tracker.process_layer(1, &r1.labels, &r1.components, Some(&il0), &r1.solid_mask, false);
 
         let islands = tracker.get_islands();
         // Everything supported after layer 0, so no new island candidates on layer 1.
@@ -597,9 +675,55 @@ mod tests {
         let data: Vec<u8> = vec![1,1,0,0,0,0,0,0,1,1];
         let mask = rle_encode(&data, w, h);
         let r = scan_layer(&mask, None, 0.05, 0.1, Connectivity::Four);
-        let _il = tracker.process_layer(0, &r.labels, &r.components, None, &r.solid_mask);
+        let _il = tracker.process_layer(0, &r.labels, &r.components, None, &r.solid_mask, false);
 
         let islands = tracker.get_islands();
         assert_eq!(islands.len(), 2);
     }
+
+    #[test]
+    fn test_candidate_only_tracking() {
+        let w = 10;
+        let h = 1;
+
+        // 1. Run with candidate_only = false (Solid bulk propagation)
+        {
+            let mut tracker = IslandTracker::new(0.05, 1, 0);
+            // Layer 0: middle base [0,0,0,1,1,1,1,0,0,0]
+            let base = rle_encode(&vec![0,0,0,1,1,1,1,0,0,0], w, h);
+            // Layer 1: wider overhangs on both sides [0,1,1,1,1,1,1,1,1,0]
+            let wide = rle_encode(&vec![0,1,1,1,1,1,1,1,1,0], w, h);
+
+            let r0 = scan_layer(&base, None, 0.05, 0.0, Connectivity::Four);
+            let il0 = tracker.process_layer(0, &r0.labels, &r0.components, None, &r0.solid_mask, false);
+
+            let r1 = scan_layer(&wide, Some(&base), 0.05, 0.0, Connectivity::Four);
+            let _il1 = tracker.process_layer(1, &r1.labels, &r1.components, Some(&il0), &r1.solid_mask, false);
+
+            let islands = tracker.get_islands();
+            // The overhangs merge with the solid base component, so only 1 island is created
+            assert_eq!(islands.len(), 1);
+        }
+
+        // 2. Run with candidate_only = true (Candidate connected components)
+        {
+            let mut tracker = IslandTracker::new(0.05, 1, 0);
+            // Layer 0: middle base [0,0,0,1,1,1,1,0,0,0]
+            let base = rle_encode(&vec![0,0,0,1,1,1,1,0,0,0], w, h);
+            // Layer 1: wider overhangs on both sides [0,1,1,1,1,1,1,1,1,0]
+            let wide = rle_encode(&vec![0,1,1,1,1,1,1,1,1,0], w, h);
+
+            let r0 = scan_layer(&base, None, 0.05, 0.0, Connectivity::Four);
+            let il0 = tracker.process_layer(0, &r0.labels, &r0.components, None, &r0.solid_mask, true);
+
+            let r1 = scan_layer(&wide, Some(&base), 0.05, 0.0, Connectivity::Four);
+            let _il1 = tracker.process_layer(1, &r1.labels, &r1.components, Some(&il0), &r1.solid_mask, true);
+
+            let islands = tracker.get_islands();
+            // The base is 1 island. The two side overhangs do not overlap with candidates below, starting 2 new islands.
+            // Total = 3 islands.
+            assert_eq!(islands.len(), 3);
+        }
+    }
 }
+

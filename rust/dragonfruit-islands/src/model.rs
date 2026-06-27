@@ -227,7 +227,7 @@ impl Island {
             centroid_count,
             centroid: None,
             last_layer_centroid,
-            seed_voxel: None,
+            seed_voxel: last_layer_centroid,
         }
     }
 
@@ -298,6 +298,8 @@ pub struct IslandScanJob {
     pub num_layers: u32,
     pub min_overlap_px: i32,
     pub overlap_neighborhood_px: i32,
+    #[serde(default)]
+    pub candidate_only: bool,
 }
 
 impl IslandScanJob {

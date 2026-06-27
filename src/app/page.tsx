@@ -95,6 +95,11 @@ import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionMa
 import { useSlicingManager } from '@/features/slicing/useSlicingManager';
 import { useTransformManager } from '@/features/transform/useTransformManager';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
+// Islands PoC (Support-tab unified islands panel). Tab-agnostic + modular — see
+// agents/Claude/20260613-1404-Implementation-dev-islands-islands-panel-...md.
+import { useIslands } from '@/volumeAnalysis/Islands/useIslands';
+import { IslandsPanel } from '@/components/controls/IslandsPanel';
+import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { useSupportInteractionManager } from '@/features/supports/useSupportInteractionManager';
 import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
 import { useDeleteHotkey } from '@/features/delete/useDeleteHotkey';
@@ -12162,6 +12167,72 @@ export default function Home() {
     layerHeightMm: slicing.layerHeightMm
   });
 
+  // Islands PoC — fresh, tab-agnostic hook (true world-space). Mounted in the
+  // Support tab; relocatable to Analysis with a one-line move. supportTips is
+  // injected (no src/supports coupling in the Islands module).
+  const modelRaycastRef = React.useRef<((start: THREE.Vector3, end: THREE.Vector3) => boolean) | null>(null);
+  const [supportTips, setSupportTips] = React.useState<THREE.Vector3[]>([]);
+
+  React.useEffect(() => {
+    const updateSupportTips = () => {
+      const snap = getSupportSnapshot();
+      const tips: THREE.Vector3[] = [];
+      const activeModelId = scene.activeModel?.id;
+      if (!activeModelId) {
+        setSupportTips([]);
+        return;
+      }
+
+      const addPos = (pos?: { x: number; y: number; z: number }, modelId?: string) => {
+        if (pos && modelId === activeModelId) {
+          tips.push(new THREE.Vector3(pos.x, pos.y, pos.z));
+        }
+      };
+
+      for (const t of Object.values(snap.trunks)) {
+        if (t.contactCone) addPos(t.contactCone.pos, t.modelId);
+      }
+      for (const b of Object.values(snap.branches)) {
+        if (b.contactCone) addPos(b.contactCone.pos, b.modelId);
+      }
+      for (const l of Object.values(snap.leaves)) {
+        if (l.contactCone) addPos(l.contactCone.pos, l.modelId);
+      }
+      for (const a of Object.values(snap.anchors)) {
+        if (a.contactCone) addPos(a.contactCone.pos, a.modelId);
+      }
+      for (const tw of Object.values(snap.twigs)) {
+        if (tw.contactDiskA) addPos(tw.contactDiskA.pos, tw.modelId);
+        if (tw.contactDiskB) addPos(tw.contactDiskB.pos, tw.modelId);
+      }
+      for (const st of Object.values(snap.sticks)) {
+        if (st.contactConeA) addPos(st.contactConeA.pos, st.modelId);
+        if (st.contactConeB) addPos(st.contactConeB.pos, st.modelId);
+      }
+
+      setSupportTips(prevTips => {
+        if (prevTips.length !== tips.length) return tips;
+        for (let i = 0; i < tips.length; i++) {
+          if (!prevTips[i].equals(tips[i])) return tips;
+        }
+        return prevTips;
+      });
+    };
+
+    updateSupportTips();
+    return subscribeSupportState(updateSupportTips);
+  }, [scene.activeModel?.id]);
+
+  const islandsPoc = useIslands({
+    geom: scene.geom,
+    transform: transformMgr.transform,
+    layerHeightMm: slicing.layerHeightMm,
+    supportTips,
+    plateZ: 0,
+    sourcePath: scene.activeModel?.sourcePath,
+    activeTab: scene.mode,
+  });
+
   // 5. Supports
   const supports = useSupportInteractionManager({ mode: scene.mode });
 
@@ -18897,6 +18968,12 @@ export default function Home() {
         ) : scene.mode === 'support' ? (
           <>
             <SupportSidebar key="support-settings" />
+            <IslandsPanel
+              key="support-islands"
+              islands={islandsPoc}
+              hasGeometry={!!scene.geom}
+              bottomClearancePx={modelStatsBottomClearancePx}
+            />
           </>
         ) : scene.mode === 'printing' ? (
           <>
@@ -19279,13 +19356,18 @@ export default function Home() {
             hideCrossSectionCap={false}
             onCameraChange={handleCameraChange}
             onCameraEnd={handleCameraEnd}
-            islandMarkers={[
-              ...(islands.overlayEnabled ? islands.islandMarkers : []),
-            ] as any}
+            islandMarkers={
+              scene.mode === 'support'
+                ? islandsPoc.islandMarkers
+                : (islands.overlayEnabled ? islands.islandMarkers : [])
+            }
             overlayBrushRadius={islands.overlayBrushRadius}
             overlayColor={islands.overlayColor}
             overlayOpacity={islands.overlayOpacity}
-            overlaySelectedIslandId={islands.selectedIslandId}
+            overlaySelectedIslandId={
+              scene.mode === 'support' ? islandsPoc.selectedMarkerId : islands.selectedIslandId
+            }
+            enableVolumeGlow={islandsPoc.enableVolumeGlow}
             ambientIntensity={scene.ambientIntensity}
             directionalIntensity={scene.directionalIntensity}
             materialRoughness={scene.materialRoughness}
@@ -19357,6 +19439,17 @@ export default function Home() {
               onSelectionChange: handleBlockedHollowVoxelMarqueeSelection,
             }}
             renderSceneOverlays={({ raycastActiveModelFromRay }) => {
+              // Update raycast ref for island co-visibility checks
+              modelRaycastRef.current = (start, end) => {
+                const dir = new THREE.Vector3().subVectors(end, start).normalize();
+                const ray = new THREE.Ray(start, dir);
+                const hit = raycastActiveModelFromRay(ray);
+                if (hit && hit.distance < start.distanceTo(end) - 0.5) {
+                  return false; // occluded
+                }
+                return true; // clear
+              };
+
               const previewModel = hollowPreview
                 ? scene.models.find((model) => model.id === hollowPreview.modelId) ?? null
                 : null;
@@ -22983,6 +23076,50 @@ export default function Home() {
             </div>
             <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
               Processing {arrangeOverlayModelCount ?? 0} {arrangeOverlayModelCount === 1 ? 'model' : 'models'}
+            </div>
+
+            <div
+              className="ui-loading-track mt-3 h-2.5 w-full rounded-full"
+              style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
+            >
+              <div
+                className="ui-loading-indicator"
+                style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {islandsPoc.scanning && (
+        <div className="absolute inset-0 z-[121] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
+          <div
+            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
+            style={{
+              background: 'color-mix(in srgb, var(--surface-0), black 10%)',
+              borderColor: 'var(--border-subtle)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-live="polite"
+          >
+            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Analyzing Model Islands & Minima
+            </div>
+            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              <p>Slicing and analysis in progress...</p>
+              {islandsPoc.scanProgress && islandsPoc.scanProgress.total > 100 && (
+                <p>
+                  Layer {islandsPoc.scanProgress.done} of {islandsPoc.scanProgress.total}
+                </p>
+              )}
+            </div>
+
+            <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
+              Elapsed: {islandsPoc.elapsedLabel}
+            </div>
+            <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Processing 1 model
             </div>
 
             <div
