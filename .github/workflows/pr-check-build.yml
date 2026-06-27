@@ -38,11 +38,26 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Install Apple Certificate
-        if: matrix.platform == 'macos-latest'
         uses: apple-actions/import-codesign-certs@v3
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASS }}
+
+      - name: Fall back to ad-hoc signing if Developer ID cert is unavailable
+        shell: bash
+        run: |
+          if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer ID Application: Pascal Krumme (MHNF3GA2MM)"; then
+            echo "⚠️ Developer ID certificate not found in keychain — falling back to ad-hoc signing"
+            node -e "
+              const fs = require('fs');
+              const p = 'src-tauri/tauri.macos.conf.json';
+              const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+              cfg.bundle.macOS.signingIdentity = '-';
+              fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n');
+            "
+          else
+            echo "✅ Developer ID certificate available — using full codesigning"
+          fi
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
