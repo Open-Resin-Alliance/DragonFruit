@@ -14,15 +14,15 @@ thiserror = "1"
 rayon = "1.10"
 libdeflater = "1"
 crc32fast = "1"
-png = { version = "0.17", default-features = false }   # needed by ctb_preview thumbnail decoder
+png = { version = "0.17", default-features = false }                          # needed by ctb_preview thumbnail decoder
 zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 aes = "0.8"
 cbc = "0.1"
 sha2 = "0.10"
+md-5 = "0.10"
 time = "=0.3.36"
 time-core = "=0.1.2"
 crossbeam-channel = "0.5.15"
 
 [dev-dependencies]
-
