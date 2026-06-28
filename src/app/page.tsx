@@ -23315,7 +23315,7 @@ export default function Home() {
 
       {sproutParentingLockHeld && (
         <ToastViewport zIndex={125} offset="1.25rem">
-          <Toast tone="info" shape="rounded" visible={true} className="flex items-center gap-2">
+          <Toast tone="info" visible={true} className="flex items-center gap-2">
             {stage === 'awaitingSproutTip'
               ? "Leaf Fanning Active: Click model to sprout leaf"
               : "Leaf Fanning: Click a support shaft to lock anchor knot"}
