@@ -332,15 +332,15 @@ export function DiagnosticsModal({
 
     rafId = requestAnimationFrame(tick);
 
-    const onKeyDown = (event: CustomEvent) => {
-      if (event.detail.key === 'Escape') onClose();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
     };
 
-    window.addEventListener('app-hotkey-keydown', onKeyDown as EventListener);
+    window.addEventListener('keydown', onKeyDown);
 
     return () => {
       cancelAnimationFrame(rafId);
-      window.removeEventListener('app-hotkey-keydown', onKeyDown as EventListener);
+      window.removeEventListener('keydown', onKeyDown);
     };
   }, [isOpen, onClose]);
 

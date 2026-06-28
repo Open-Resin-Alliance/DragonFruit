@@ -14,6 +14,7 @@ import {
   type CrossSectionStencilCapEntry,
 } from '@/components/scene/CrossSectionStencilCap';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
+import IslandSurfaceDotsOverlay from '@/components/scene/IslandSurfaceDotsOverlay';
 import { IslandVoxelVisualization } from '@/components/scene/IslandVoxelVisualization';
 import { IslandExpansionVisualization } from '@/components/scene/IslandExpansionVisualization';
 import { MeshClassificationRenderer } from '@/components/scene/MeshClassificationRenderer';
@@ -136,6 +137,7 @@ import {
   toggleSupportPathfindingDebugEnabled,
   toggleSupportPathfindingDebugTuningEnabled,
 } from '@/supports/PlacementLogic/Pathfinding/pathfindingDebugState';
+import { applyScaleFactor } from '@/components/gizmo/scale/applyScaleFactor';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
@@ -333,6 +335,7 @@ export function SceneCanvas({
   overlayColor,
   overlayOpacity,
   overlaySelectedIslandId,
+  enableVolumeGlow = true,
   materialRoughness,
   scanResults,
   layerHeightMm,
@@ -345,6 +348,7 @@ export function SceneCanvas({
   voxelOpacity,
   transformMode,
   transform,
+  uniformScaling = true,
   autoLift = false,
   liftDistance = 5,
   autoSnapEnabled = true,
@@ -418,9 +422,11 @@ export function SceneCanvas({
   deferCameraIntro = false,
   freezeViewportActive = false,
   cavityGeometryByModelId,
+  onClearSelection,
 }: {
   models?: LoadedModel[];
   cavityGeometryByModelId?: Map<string, THREE.BufferGeometry>;
+  onClearSelection?: () => void;
   activeModelId?: string | null;
   visualActiveModelId?: string | null;
   selectedModelIds?: string[];
@@ -447,6 +453,7 @@ export function SceneCanvas({
   overlayColor?: string;
   overlayOpacity?: number;
   overlaySelectedIslandId?: number | null;
+  enableVolumeGlow?: boolean;
   ambientIntensity?: number;
   directionalIntensity?: number;
   headlightIntensity?: number;
@@ -462,6 +469,7 @@ export function SceneCanvas({
   voxelOpacity?: number;
   transformMode?: TransformMode;
   transform?: ModelTransform;
+  uniformScaling?: boolean;
   autoLift?: boolean;
   liftDistance?: number;
   autoSnapEnabled?: boolean;
@@ -598,6 +606,10 @@ export function SceneCanvas({
   freezeViewportActive?: boolean;
 }) {
   const DROP_ANIMATION_DURATION_MS = 760;
+  const selectedMarker = React.useMemo(() => {
+    if (overlaySelectedIslandId == null || !islandMarkers) return null;
+    return islandMarkers.find(m => m.id === overlaySelectedIslandId);
+  }, [islandMarkers, overlaySelectedIslandId]);
   const LARGE_MODEL_BOUNCE_THRESHOLD_POLYS = 900_000;
   const LARGE_MODEL_DROP_DEFER_THRESHOLD_POLYS = 1_200_000;
   const BUILD_VOLUME_BOUNDS_EPS_MM = 0.01;
@@ -5476,6 +5488,7 @@ export function SceneCanvas({
                         <group
                           matrix={activeModelAttachedSupportLocalMatrix ?? undefined}
                           matrixAutoUpdate={false}
+                          renderOrder={100000}
                         >
                           <ModelAttachedSupportLayer
                             mode={mode}
@@ -5508,8 +5521,20 @@ export function SceneCanvas({
                           />
                         </group>
                       )}
-                    </StlMesh>
 
+                      {isActive && (mode === 'support' || mode === 'analysis') && islandMarkers && islandMarkers.length > 0 && (
+                        <IslandSurfaceDotsOverlay
+                          geometry={model.geometry.geometry}
+                          islandMarkers={islandMarkers}
+                          scanBBox={scanBBox || null}
+                          selectedIslandId={overlaySelectedIslandId}
+                          clipLower={clipLower}
+                          clipUpper={clipUpper}
+                          opacity={overlayOpacity ?? 0.9}
+                          transform={transformToUse}
+                        />
+                      )}
+                    </StlMesh>
                   </React.Fragment>
                 );
               })}
@@ -5771,7 +5796,7 @@ export function SceneCanvas({
 
               {/* Raft system (Crenelated) - uses supports roots + active model footprint */}
               {/* Wrap all support/raft geometry in a drag group so they move as one during gizmo drags */}
-              <group ref={supportDragGroupRef ?? undefined}>
+              <group ref={supportDragGroupRef ?? undefined} renderOrder={100000}>
               {!useActiveModelAttachedSupportProxy && (
                 <ModelAttachedSupportLayer
                   mode={mode}
@@ -5894,6 +5919,7 @@ export function SceneCanvas({
 
               {/* During active-model proxy drag, keep other models' supports/rafts visible in world space. */}
               {useActiveModelAttachedSupportProxy && activeModelId && (
+                <group renderOrder={100000}>
                 <ModelAttachedSupportLayer
                   mode={mode}
                   excludeModelId={activeModelId}
@@ -5920,6 +5946,7 @@ export function SceneCanvas({
                   cavityGeometryByModelId={cavityGeometryByModelId}
                   modelWorldInverseById={modelWorldInverseById}
                 />
+                </group>
               )}
 
               {multiGizmoSupportPreviewDeltas.length > 0
@@ -5931,6 +5958,7 @@ export function SceneCanvas({
                       }}
                       matrix={delta}
                       matrixAutoUpdate={false}
+                      renderOrder={100000}
                       raycast={() => null}
                     >
                       <ModelAttachedSupportLayer
@@ -5983,6 +6011,7 @@ export function SceneCanvas({
                   enableMove
                   enableRotate={!isMultiGizmoSelection}
                   enableScale
+                  uniformScaling={uniformScaling}
                   enableLighting
                   onDragStateChange={setIsGizmoDragging}
                   onRetargetingChange={setIsGizmoRetargeting}
@@ -6316,11 +6345,10 @@ export function SceneCanvas({
                     }
                     return true;
                   }}
-                  onScale={(_axis, value) => {
+                  onScale={(axis, value) => {
                     if (activeGroupRef.current) {
-                      const scalarValue = Number(value);
-                      const safeScalar = Number.isFinite(scalarValue) ? scalarValue : 1;
-                      const nextScale = initialScaleRef.current.clone().multiplyScalar(Math.max(0.0001, safeScalar));
+                      const safeScalar = Number.isFinite(Number(value)) ? Number(value) : 1;
+                      const nextScale = applyScaleFactor(initialScaleRef.current, axis, safeScalar);
                       activeGroupRef.current.scale.copy(nextScale);
                       applySupportGroupDelta();
                       const live = captureActiveGroupTransform();
@@ -6427,17 +6455,18 @@ export function SceneCanvas({
                 />
               )}
 
-              <IslandOverlay
-                markers={islandMarkers ?? []}
-                meshRef={activeActualMeshRef.current}
-                brushRadiusMm={overlayBrushRadius ?? 2}
-                color={overlayColor ?? '#FF0000'}
-                opacity={overlayOpacity ?? 0.5}
-                transform={transform}
-                selectedIslandId={overlaySelectedIslandId}
-                clipLower={clipLower}
-                clipUpper={clipUpper}
-              />
+              {selectedMarker && enableVolumeGlow && (
+                <IslandOverlay
+                  markers={[selectedMarker]}
+                  brushRadiusMm={overlayBrushRadius ?? 2}
+                  color={overlayColor ?? '#FF0000'}
+                  opacity={overlayOpacity ?? 0.5}
+                  transform={transform}
+                  selectedIslandId={overlaySelectedIslandId}
+                  clipLower={clipLower}
+                  clipUpper={clipUpper}
+                />
+              )}
 
               <IslandVoxelVisualization
                 scanResults={scanResults ?? null}
@@ -6650,7 +6679,7 @@ export function SceneCanvas({
           plateWidthMm={activeBuildVolumeSettings.widthMm}
           plateDepthMm={activeBuildVolumeSettings.depthMm}
         />
-        <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} />
+        <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} onClearSelection={onClearSelection} />
         {mode === 'support' && supportPathfindingDebugState.enabled && (
           <SupportPathfindingDebugOverlay snapshot={supportPathfindingDebugState.snapshot} />
         )}

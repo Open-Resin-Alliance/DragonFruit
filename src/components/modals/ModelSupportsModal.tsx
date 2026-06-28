@@ -48,12 +48,12 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
   React.useEffect(() => {
     if (!isOpen) return;
 
-    const onKeyDown = (event: CustomEvent) => {
-      if (event.detail.key === 'Escape') onClose();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
     };
 
-    window.addEventListener('app-hotkey-keydown', onKeyDown as EventListener);
-    return () => window.removeEventListener('app-hotkey-keydown', onKeyDown as EventListener);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, [isOpen, onClose]);
 
   const groups = React.useMemo<ModelSupportGroups>(() => {

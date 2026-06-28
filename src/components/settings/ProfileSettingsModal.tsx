@@ -1778,8 +1778,9 @@ export function ProfileSettingsModal({
       return false;
     };
 
-    const onKeyDown = (event: CustomEvent) => {
-      if (event.detail.key !== 'Escape') return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (event.defaultPrevented) return;
 
       if (handleTopMostDialogEscape()) {
         event.preventDefault();
@@ -1790,8 +1791,8 @@ export function ProfileSettingsModal({
       onClose();
     };
 
-    window.addEventListener('app-hotkey-keydown', onKeyDown as EventListener);
-    return () => window.removeEventListener('app-hotkey-keydown', onKeyDown as EventListener);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     deleteConfirmTarget,
     isCreateMaterialOpen,

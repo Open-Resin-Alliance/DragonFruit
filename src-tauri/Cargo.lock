@@ -1410,6 +1410,7 @@ dependencies = [
  "clap",
  "dragonfruit-slicing-engine",
  "indexmap 2.14.0",
+ "log",
  "rayon",
  "serde",
  "serde_json",

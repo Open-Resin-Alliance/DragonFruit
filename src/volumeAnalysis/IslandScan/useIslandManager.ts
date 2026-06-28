@@ -196,8 +196,13 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
   // Compute markers
   const islandMarkers = useMemo<IslandMarker[]>(() => {
     if (!scanData || !scanBBox) return [];
-    return computeIslandMarkers(scanData, scanBBox, layerHeightMm, overlayTaper);
-  }, [scanData, scanBBox, layerHeightMm, overlayTaper]);
+    const raw = computeIslandMarkers(scanData, scanBBox, layerHeightMm, overlayTaper);
+    return raw.map(m => {
+      const area = m.pixelCount * pxMm * pxMm;
+      const radius = area > 0 ? Math.max(0.1, Math.sqrt(area / Math.PI)) : 0.1;
+      return { ...m, radius, type: 0, islandId: m.id } as any;
+    });
+  }, [scanData, scanBBox, layerHeightMm, overlayTaper, pxMm]);
 
   // Clear scan data (e.g. on rotation)
   const clearScanData = useCallback(() => {

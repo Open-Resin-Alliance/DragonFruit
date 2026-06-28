@@ -23,14 +23,14 @@ export function DestructiveTransformModal({
   React.useEffect(() => {
     if (!isOpen) return;
 
-    const handleKeyDown = (event: CustomEvent) => {
-      if (event.detail.key === 'Escape') {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
         onCancel();
       }
     };
 
-    window.addEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
-    return () => window.removeEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onCancel]);
 
   if (!isOpen) return null;

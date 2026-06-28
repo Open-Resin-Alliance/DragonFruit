@@ -3,6 +3,7 @@
 import React from 'react';
 import { Bug, ClipboardCopy, Database, Languages, LayoutGrid, RotateCcw } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/ui/LanguageSwitcher';
+import { type Locale } from '@/i18n';
 import type { ImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
 import {
   FLOATING_LAYOUT_DEBUG_REQUEST_EVENT,
@@ -18,6 +19,8 @@ interface GeneralSettingsTabProps {
   onDebugPrimitivesPanelVisibleChange: (enabled: boolean) => void;
   importDefaults: ImportDefaultsSettings;
   onImportDefaultsChange: (next: ImportDefaultsSettings) => void;
+  language: Locale;
+  onLanguageChange: (locale: Locale) => void;
 }
 
 export function GeneralSettingsTab({
@@ -28,6 +31,8 @@ export function GeneralSettingsTab({
   onDebugPrimitivesPanelVisibleChange,
   importDefaults,
   onImportDefaultsChange,
+  language,
+  onLanguageChange,
 }: GeneralSettingsTabProps) {
   const [layoutDump, setLayoutDump] = React.useState<string>('');
   const [dumpStatus, setDumpStatus] = React.useState<string | null>(null);
@@ -120,7 +125,7 @@ export function GeneralSettingsTab({
                 Applied immediately across the app.
               </div>
             </div>
-            <LanguageSwitcher />
+            <LanguageSwitcher value={language} onChange={onLanguageChange} />
           </div>
         </div>
       </section>

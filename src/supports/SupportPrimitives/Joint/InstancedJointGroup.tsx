@@ -116,6 +116,7 @@ export function InstancedJointGroup({
                 ref={meshRef}
                 args={[undefined, undefined, validJoints.length]}
                 frustumCulled={false}
+                renderOrder={100000}
                 onClick={onJointClick ? handleClick : undefined}
                 onPointerMove={onJointPointerMove ? handlePointerMove : undefined}
                 onPointerOut={onJointPointerOut ? handlePointerOut : undefined}
@@ -137,7 +138,7 @@ export function InstancedJointGroup({
                     args={[undefined, undefined, validJoints.length]}
                     frustumCulled={false}
                     raycast={() => null}
-                    renderOrder={3}
+                    renderOrder={100000}
                     material={outOfBoundsMaterial}
                 >
                     <sphereGeometry args={[1, widthSegments, heightSegments]} />

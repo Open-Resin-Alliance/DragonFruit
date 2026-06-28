@@ -18,7 +18,7 @@ use ahash::{AHashMap, AHashSet};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::analysis::{analyze, MeshAnalysis};
+use crate::analysis::{analyze, minimal_analysis, MeshAnalysis};
 use crate::arrangement::corefine_self_intersections;
 use crate::core::bvh::Bvh;
 use crate::core::halfedge::{edge_key, Topology};
@@ -671,7 +671,7 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     // per-section tinting can still work.
     if report.model_triangle_count.is_none() {
         let t = std::time::Instant::now();
-        if let Some((model_tri_count, likely_support_geometry)) =
+        if let Some((model_tri_count, likely_support_geometry, _comp_count)) =
             classify_and_reorder_model_support_triangles(&mut mesh)
         {
             report.model_triangle_count = Some(model_tri_count);
@@ -747,11 +747,16 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
 /// can apply section-specific tinting while honoring "Load As-Is" behavior.
 pub fn classify_support_split(mut mesh: IndexedMesh) -> RepairOutcome {
     let t_start = std::time::Instant::now();
-    let pre = analyze(&mesh);
+
+    // Pre-analysis with placeholder component count — the classifier
+    // computes union-find internally and returns the real count, which
+    // we use for both pre and post (classification only reorders
+    // triangles; topology — and therefore component count — is unchanged).
+    let pre = minimal_analysis(&mesh, 0);
     let mut report = MeshHealthReport::new(pre);
 
     let t = std::time::Instant::now();
-    if let Some((model_tri_count, likely_support_geometry)) =
+    let component_count = if let Some((model_tri_count, likely_support_geometry, cc)) =
         classify_and_reorder_model_support_triangles(&mut mesh)
     {
         report.model_triangle_count = Some(model_tri_count);
@@ -765,6 +770,7 @@ pub fn classify_support_split(mut mesh: IndexedMesh) -> RepairOutcome {
             )),
             elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
         });
+        cc
     } else {
         report.steps.push(RepairStepReport {
             name: "classify_support_geometry_split".into(),
@@ -772,10 +778,19 @@ pub fn classify_support_split(mut mesh: IndexedMesh) -> RepairOutcome {
             notes: Some("classify-only split: no reliable model/support partition found".into()),
             elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
         });
-    }
+        // Fall back to computing components ourselves for the report.
+        triangle_components(&mesh)
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(0) as usize
+            + 1
+    };
 
-    report.post = analyze(&mesh);
-    // Classification-only path does not attempt topology repair.
+    // Patch the pre-analysis with the real component count and build the
+    // post-analysis (identical since only triangle order changed).
+    report.pre.connected_components = component_count;
+    report.post = minimal_analysis(&mesh, component_count);
     report.fully_repaired = true;
     report.residual_issues = Vec::new();
     report.total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
@@ -2263,8 +2278,12 @@ fn cull_interior_components(mesh: &mut IndexedMesh) -> (usize, usize) {
 /// support sections by connected component height bands, then reorders the
 /// mesh triangles so model section comes first and support section follows.
 ///
-/// Returns `(model_triangle_count, likely_support_geometry)` on success.
-fn classify_and_reorder_model_support_triangles(mesh: &mut IndexedMesh) -> Option<(usize, bool)> {
+/// Returns `(model_triangle_count, likely_support_geometry, component_count)`
+/// on success.  The component count is the total number of connected components
+/// before reordering, which the caller can reuse to avoid a second union-find.
+fn classify_and_reorder_model_support_triangles(
+    mesh: &mut IndexedMesh,
+) -> Option<(usize, bool, usize)> {
     if mesh.triangles.len() < 8 || mesh.positions.is_empty() {
         return None;
     }
@@ -2414,7 +2433,7 @@ fn classify_and_reorder_model_support_triangles(mesh: &mut IndexedMesh) -> Optio
         support_input_triangles,
     );
 
-    Some((model_triangles_out, likely_support_geometry))
+    Some((model_triangles_out, likely_support_geometry, n_comps))
 }
 
 /// Assign a component id to each triangle via union-find over shared edges;

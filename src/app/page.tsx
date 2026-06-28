@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { msg } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
+import { detectIsIOS } from '@/hooks/usePlatform';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
 import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Plus, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
@@ -95,6 +96,11 @@ import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionMa
 import { useSlicingManager } from '@/features/slicing/useSlicingManager';
 import { useTransformManager } from '@/features/transform/useTransformManager';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
+// Islands PoC (Support-tab unified islands panel). Tab-agnostic + modular — see
+// agents/Claude/20260613-1404-Implementation-dev-islands-islands-panel-...md.
+import { useIslands } from '@/volumeAnalysis/Islands/useIslands';
+import { IslandsPanel } from '@/components/controls/IslandsPanel';
+import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { useSupportInteractionManager } from '@/features/supports/useSupportInteractionManager';
 import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
 import { hotkeyStore, useActionActive, isActionActiveSync } from '@/hotkeys/hotkeyStore';
@@ -1551,6 +1557,7 @@ export default function Home() {
 
   // 2. Transform Management (needs geom for bounds)
   const transformMgr = useTransformManager({ geom: scene.geom });
+  const [uniformScaling, setUniformScaling] = React.useState(true);
 
   // Ref for supports group (used for export)
   const supportsRef = React.useRef<THREE.Group | null>(null);
@@ -1996,6 +2003,7 @@ export default function Home() {
   const [printingArtifactIsInvalid, setPrintingArtifactIsInvalid] = React.useState(false);
   const slicedArtifactProfileFingerprintRef = React.useRef<string | null>(null);
   const [printingEstimatedResinMl, setPrintingEstimatedResinMl] = React.useState<number | null>(null);
+  const printingEstimatedResinMlRef = React.useRef<number | null>(null);
   const [isPrintingEstimatedResinBusy, setIsPrintingEstimatedResinBusy] = React.useState(false);
   const [resinEstimateRefreshTick, setResinEstimateRefreshTick] = React.useState(0);
   const printingBaseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
@@ -2687,6 +2695,7 @@ export default function Home() {
     return reopened;
   }, [importSceneFilesWithPluginWarning, markSceneSaveBaseline, maybeConfirmPluginImportWarning, recentOpenedFiles, reopenRecentOpenedFile]);
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
+  const [isExporting, setIsExporting] = React.useState(false);
   const [arrangeOverlayElapsedSec, setArrangeOverlayElapsedSec] = React.useState(0);
   const [arrangeOverlayModelCount, setArrangeOverlayModelCount] = React.useState<number | null>(null);
   const [duplicateTotalCopies, setDuplicateTotalCopies] = React.useState(1);
@@ -3549,11 +3558,17 @@ export default function Home() {
       ];
     }
 
+    const activeModel = scene.activeModelId
+      ? scene.models.find((m) => m.id === scene.activeModelId)
+      : undefined;
+    const canSplitSupports = !!activeModel?.geometry.meshDefects?.nativeRepairReport?.model_triangle_count;
+
     return [
       ...(!scene.activeModelId ? (['delete', 'cut', 'copy', 'repair'] as const) : []),
       ...(!scene.canPasteModel ? (['paste'] as const) : []),
+      ...(!canSplitSupports ? (['split-supports'] as const) : []),
     ];
-  }, [scene.activeModelId, scene.canPasteModel, scene.mode, supportsCanAddJoint, supportsCanToggleCurve]);
+  }, [scene.activeModelId, scene.canPasteModel, scene.mode, scene.models, supportsCanAddJoint, supportsCanToggleCurve]);
 
   const clearPrintingLayerPreviewUrls = React.useCallback(() => {
     printingLayerPreviewLoadInFlightRef.current.clear();
@@ -4413,14 +4428,12 @@ export default function Home() {
     const inBoundsModelIds = new Set<string>();
 
     for (const model of visibleModels) {
-      const effectiveTransform =
-        (scene.activeModelId === model.id && displayActiveModelId === scene.activeModelId)
-          ? transformMgr.transform
-          : model.transform;
-
-      const approxBounds = computeApproxModelWorldBounds(model.geometry, effectiveTransform);
+      // Use stored transform — bounds don't change on selection.
+      // Previously depended on scene.activeModelId, causing recomputation
+      // (including computePreciseModelWorldBounds, O(vertices)) on every click.
+      const approxBounds = computeApproxModelWorldBounds(model.geometry, model.transform);
       const bounds = isBoundsOutsideVolume(approxBounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)
-        ? computePreciseModelWorldBounds(model.geometry, effectiveTransform)
+        ? computePreciseModelWorldBounds(model.geometry, model.transform)
         : approxBounds;
 
       if (!isBoundsOutsideVolume(bounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)) {
@@ -4430,11 +4443,8 @@ export default function Home() {
 
     return inBoundsModelIds;
   }, [
-    displayActiveModelId,
     resinBuildVolumeBounds,
-    scene.activeModelId,
     scene.models,
-    transformMgr.transform,
   ]);
 
   const visibleResinModels = React.useMemo(() => {
@@ -4445,7 +4455,9 @@ export default function Home() {
 
   const resinEstimateComputationSignature = React.useMemo(() => {
     if (visibleResinModels.length === 0) return '';
-
+    // Stable signature — only changes when geometry or scale actually changes,
+    // NOT when selection changes. Prevents the resin estimate useEffect from
+    // firing extra state updates on every model click.
     const parts = visibleResinModels.map((model) => {
       const geometry = model.geometry.geometry;
       const positionAttr = geometry.getAttribute('position') as ({ version?: number; data?: { version?: number } } | null);
@@ -4826,6 +4838,7 @@ export default function Home() {
     if (!shouldEstimateResinInBackground) {
       if (visibleResinModels.length === 0) {
         lastCompletedResinEstimateSignatureRef.current = '';
+        printingEstimatedResinMlRef.current = null;
         setPrintingEstimatedResinMl(null);
       }
       setIsPrintingEstimatedResinBusy(false);
@@ -4837,7 +4850,8 @@ export default function Home() {
     const visibleModels = visibleResinModels;
     const compositeSignature = `${resinEstimateComputationSignature}::supports:${supportAndRaftResinMl.toFixed(6)}`;
     const hasChangedSinceLastSuccess = compositeSignature !== lastCompletedResinEstimateSignatureRef.current;
-    if (printingEstimatedResinMl == null || hasChangedSinceLastSuccess) {
+    const hadPriorValue = printingEstimatedResinMlRef.current != null;
+    if (hadPriorValue && hasChangedSinceLastSuccess) {
       setIsPrintingEstimatedResinBusy(true);
     }
 
@@ -4860,7 +4874,9 @@ export default function Home() {
 
       if (cancelled) return;
       const totalWithSupports = totalMl + supportAndRaftResinMl;
-      setPrintingEstimatedResinMl(found || totalWithSupports > 0 ? totalWithSupports : null);
+      const nextValue = found || totalWithSupports > 0 ? totalWithSupports : null;
+      printingEstimatedResinMlRef.current = nextValue;
+      setPrintingEstimatedResinMl(nextValue);
       lastCompletedResinEstimateSignatureRef.current = compositeSignature;
       setIsPrintingEstimatedResinBusy(false);
     };
@@ -4872,7 +4888,6 @@ export default function Home() {
     };
   }, [
     getOrComputeBaseResinMl,
-    printingEstimatedResinMl,
     resinEstimateComputationSignature,
     resinEstimateRefreshTick,
     shouldEstimateResinInBackground,
@@ -8532,7 +8547,10 @@ export default function Home() {
 
       const input = document.createElement('input');
       input.type = 'file';
-      input.accept = accept;
+      // iOS WebKit greys out files whose extension it can't map to a known UTI
+      // (e.g. .stl, .3mf), and it ignores MIME hints too, so drop the filter
+      // there and rely on extension validation when the picked files are processed.
+      input.accept = detectIsIOS() ? '' : accept;
       input.multiple = multiple;
 
       input.onchange = () => {
@@ -10611,7 +10629,7 @@ export default function Home() {
     }, 3800);
   }, []);
 
-  const handleExportError = React.useCallback((message: string) => {
+  const showOperationError = React.useCallback((message: string) => {
     setExportErrorToast({ id: Date.now(), text: message });
     setIsExportErrorToastVisible(true);
     if (exportErrorToastFadeTimeoutRef.current !== null) {
@@ -10939,6 +10957,15 @@ export default function Home() {
         }
         break;
       }
+      case 'split-supports': {
+        const targetId = scene.activeModelId;
+        if (targetId) {
+          closeEditorContextMenu();
+          scene.splitSupports(targetId);
+          return;
+        }
+        break;
+      }
       case 'delete':
         if (scene.activeModelId) {
           scene.deleteModel(scene.activeModelId);
@@ -10956,9 +10983,33 @@ export default function Home() {
           scene.cutModel(scene.activeModelId);
         }
         break;
-      case 'paste':
-        scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
+      case 'paste': {
+        const pastedIds = scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
+        if (pastedIds.length > 0 && printingEstimatedResinMlRef.current != null) {
+          const pastedModel = scene.models.find((m) => pastedIds.includes(m.id));
+          if (pastedModel) {
+            const geom = pastedModel.geometry.geometry;
+            const pos = geom.getAttribute('position');
+            const idx = geom.getIndex();
+            const sourceKey = String(geom.userData?.resinVolumeSourceKey ?? geom.uuid);
+            const posVer = (pos as { version?: number; data?: { version?: number } }).version
+              ?? (pos as { version?: number; data?: { version?: number } }).data?.version ?? 0;
+            const idxVer = (idx as { version?: number } | null)?.version ?? 0;
+            const cacheKey = `${sourceKey}:${posVer}:${idxVer}`;
+            const cachedMl = printingBaseResinMlCacheRef.current.get(cacheKey) ?? null;
+            if (cachedMl != null) {
+              const sx = Math.abs(pastedModel.transform.scale.x || 1);
+              const sy = Math.abs(pastedModel.transform.scale.y || 1);
+              const sz = Math.abs(pastedModel.transform.scale.z || 1);
+              const addedMl = cachedMl * sx * sy * sz;
+              const nextTotal = (printingEstimatedResinMlRef.current - supportAndRaftResinMl) + addedMl + supportAndRaftResinMl;
+              printingEstimatedResinMlRef.current = nextTotal;
+              setPrintingEstimatedResinMl(nextTotal);
+            }
+          }
+        }
         break;
+      }
       case 'repair': {
         const targetId = scene.activeModelId;
         if (targetId) {
@@ -12106,6 +12157,72 @@ export default function Home() {
     geom: scene.geom,
     transform: transformMgr.transform,
     layerHeightMm: slicing.layerHeightMm
+  });
+
+  // Islands PoC — fresh, tab-agnostic hook (true world-space). Mounted in the
+  // Support tab; relocatable to Analysis with a one-line move. supportTips is
+  // injected (no src/supports coupling in the Islands module).
+  const modelRaycastRef = React.useRef<((start: THREE.Vector3, end: THREE.Vector3) => boolean) | null>(null);
+  const [supportTips, setSupportTips] = React.useState<THREE.Vector3[]>([]);
+
+  React.useEffect(() => {
+    const updateSupportTips = () => {
+      const snap = getSupportSnapshot();
+      const tips: THREE.Vector3[] = [];
+      const activeModelId = scene.activeModel?.id;
+      if (!activeModelId) {
+        setSupportTips([]);
+        return;
+      }
+
+      const addPos = (pos?: { x: number; y: number; z: number }, modelId?: string) => {
+        if (pos && modelId === activeModelId) {
+          tips.push(new THREE.Vector3(pos.x, pos.y, pos.z));
+        }
+      };
+
+      for (const t of Object.values(snap.trunks)) {
+        if (t.contactCone) addPos(t.contactCone.pos, t.modelId);
+      }
+      for (const b of Object.values(snap.branches)) {
+        if (b.contactCone) addPos(b.contactCone.pos, b.modelId);
+      }
+      for (const l of Object.values(snap.leaves)) {
+        if (l.contactCone) addPos(l.contactCone.pos, l.modelId);
+      }
+      for (const a of Object.values(snap.anchors)) {
+        if (a.contactCone) addPos(a.contactCone.pos, a.modelId);
+      }
+      for (const tw of Object.values(snap.twigs)) {
+        if (tw.contactDiskA) addPos(tw.contactDiskA.pos, tw.modelId);
+        if (tw.contactDiskB) addPos(tw.contactDiskB.pos, tw.modelId);
+      }
+      for (const st of Object.values(snap.sticks)) {
+        if (st.contactConeA) addPos(st.contactConeA.pos, st.modelId);
+        if (st.contactConeB) addPos(st.contactConeB.pos, st.modelId);
+      }
+
+      setSupportTips(prevTips => {
+        if (prevTips.length !== tips.length) return tips;
+        for (let i = 0; i < tips.length; i++) {
+          if (!prevTips[i].equals(tips[i])) return tips;
+        }
+        return prevTips;
+      });
+    };
+
+    updateSupportTips();
+    return subscribeSupportState(updateSupportTips);
+  }, [scene.activeModel?.id]);
+
+  const islandsPoc = useIslands({
+    geom: scene.geom,
+    transform: transformMgr.transform,
+    layerHeightMm: slicing.layerHeightMm,
+    supportTips,
+    plateZ: 0,
+    sourcePath: scene.activeModel?.sourcePath,
+    activeTab: scene.mode,
   });
 
   // 5. Supports
@@ -13699,8 +13816,9 @@ export default function Home() {
 
     // Check for unapplied hole punches and warn the user.
     const hasUnapplied = scene.models.some((model) => {
-      const p = model.meshModifiers?.holePunches;
-      return p && p.length > 0 && !model.meshModifiers?.holePunchesBakedIntoGeometry;
+      const mm = scene.getModelMeshModifiers(model.id);
+      const p = mm?.holePunches;
+      return p && p.length > 0 && !mm?.holePunchesBakedIntoGeometry;
     });
     if (hasUnapplied && unappliedHolePunchResolveRef.current === null) {
       setShowUnappliedHolePunchModal(true);
@@ -14570,6 +14688,120 @@ export default function Home() {
   }, [isSelectAllModelsActive]);
 
 
+    const handleGlobalSelectAll = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (event.key.toLowerCase() !== 'a') return;
+      if (isEditableTarget(event.target)) return;
+      if (scene.models.length === 0) return;
+
+      // Prevent browser-level "select all text in the app" behavior and arm model select-all.
+      event.preventDefault();
+      event.stopPropagation();
+      const visibleIds = scene.models.filter((model) => model.visible).map((model) => model.id);
+      if (visibleIds.length > 0) {
+        scene.setSelectedModelIds(visibleIds);
+        scene.setActiveModelId(visibleIds[0]);
+      }
+      setIsSelectAllModelsActive(true);
+    };
+
+    window.addEventListener('keydown', handleGlobalSelectAll, true);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalSelectAll, true);
+    };
+  }, [scene]);
+
+  React.useEffect(() => {
+    const isEditableTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+    };
+
+    const handleClipboardHotkeys = (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (event.altKey) return;
+      if (isEditableTarget(event.target)) return;
+      if (scene.mode !== 'prepare') return;
+
+      const key = event.key.toLowerCase();
+      if (key === 'c') {
+        if (scene.selectedModelIds.length === 0 && !scene.activeModelId) return;
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (scene.selectedModelIds.length > 0) {
+          scene.copySelectedModels();
+        } else if (scene.activeModelId) {
+          scene.copyModel(scene.activeModelId);
+        }
+        return;
+      }
+
+      if (key === 'v') {
+        if (!scene.canPasteModel) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const pastedIds = scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
+        // Paste shares geometry with the source — add its cached volume directly
+        // instead of waiting for the async resin effect loop.
+        if (pastedIds.length > 0 && printingEstimatedResinMlRef.current != null) {
+          const pastedModel = scene.models.find((m) => pastedIds.includes(m.id));
+          if (pastedModel) {
+            const geom = pastedModel.geometry.geometry;
+            const pos = geom.getAttribute('position');
+            const idx = geom.getIndex();
+            const sourceKey = String(geom.userData?.resinVolumeSourceKey ?? geom.uuid);
+            const posVer = (pos as { version?: number; data?: { version?: number } }).version
+              ?? (pos as { version?: number; data?: { version?: number } }).data?.version ?? 0;
+            const idxVer = (idx as { version?: number } | null)?.version ?? 0;
+            const cacheKey = `${sourceKey}:${posVer}:${idxVer}`;
+            const cachedMl = printingBaseResinMlCacheRef.current.get(cacheKey) ?? null;
+            if (cachedMl != null) {
+              const sx = Math.abs(pastedModel.transform.scale.x || 1);
+              const sy = Math.abs(pastedModel.transform.scale.y || 1);
+              const sz = Math.abs(pastedModel.transform.scale.z || 1);
+              const addedMl = cachedMl * sx * sy * sz;
+              const nextTotal = (printingEstimatedResinMlRef.current - supportAndRaftResinMl) + addedMl + supportAndRaftResinMl;
+              printingEstimatedResinMlRef.current = nextTotal;
+              setPrintingEstimatedResinMl(nextTotal);
+            }
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleClipboardHotkeys, true);
+    return () => {
+      window.removeEventListener('keydown', handleClipboardHotkeys, true);
+    };
+  }, [arrangeSpacingMm, scene]);
+
+  React.useEffect(() => {
+    const isEditableTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+    };
+
+    const handleSceneSaveHotkey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.repeat || event.isComposing) return;
+      if (event.altKey || event.shiftKey) return;
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (event.key.toLowerCase() !== 's') return;
+      if (isEditableTarget(event.target)) return;
+      if (scene.models.length === 0) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      void handleTopBarSaveScene();
+    };
+
+    window.addEventListener('keydown', handleSceneSaveHotkey, true);
+    return () => {
+      window.removeEventListener('keydown', handleSceneSaveHotkey, true);
+    };
+  }, [handleTopBarSaveScene, scene.models.length]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -15155,8 +15387,7 @@ export default function Home() {
       if (!shouldApply) return;
 
       if (hollowingState.mode === 'shell_open_face' && !isShellOpenFaceSelected) {
-        setExportErrorToast({ id: Date.now(), text: 'Pick the face to open before applying Shell mode.' });
-        setIsExportErrorToastVisible(true);
+        showOperationError('Pick the face to open before applying Shell mode.');
         return;
       }
 
@@ -15223,8 +15454,7 @@ export default function Home() {
           ? await hollowApplyFromCapturedSource(options)
           : await hollowFromGeometry(sourceGeometry, options);
         if (!result) {
-          setExportErrorToast({ id: Date.now(), text: 'Hollowing is available in DragonFruit Desktop only.' });
-          setIsExportErrorToastVisible(true);
+          showOperationError('Hollowing is available in DragonFruit Desktop only.');
           return;
         }
 
@@ -15365,8 +15595,7 @@ export default function Home() {
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        setExportErrorToast({ id: Date.now(), text: `Hollowing failed: ${message}` });
-        setIsExportErrorToastVisible(true);
+        showOperationError(`Hollowing failed: ${message}`);
       } finally {
         setIsApplyingHollowing(false);
         setIsApplyingBlockersHollowing(false);
@@ -16132,8 +16361,8 @@ export default function Home() {
     ) ? hollowPreview.geometry : null;
 
     const shouldUseActiveGeometry = Boolean(
-      activeModel.meshModifiers?.hollowing?.enabled
-      && activeModel.meshModifiers?.hollowing?.bakedIntoGeometry,
+      scene.getModelMeshModifiers(modelId)?.hollowing?.enabled
+      && scene.getModelMeshModifiers(modelId)?.hollowing?.bakedIntoGeometry,
     );
 
     const targetGeometry = previewGeometry ?? (shouldUseActiveGeometry ? activeModel.geometry.geometry : null);
@@ -16866,11 +17095,7 @@ export default function Home() {
           });
 
           if (!restoredFromSnapshot) {
-            setExportErrorToast({
-              id: Date.now(),
-              text: 'Hole punch source snapshot is missing or invalid. Re-apply cannot continue.',
-            });
-            setIsExportErrorToastVisible(true);
+            showOperationError('Hole punch source snapshot is missing or invalid. Re-apply cannot continue.');
             return;
           }
 
@@ -16971,8 +17196,7 @@ export default function Home() {
           if (ownsSourceGeometry) {
             sourceGeometry.dispose();
           }
-          setExportErrorToast({ id: Date.now(), text: 'Hole punching is available in DragonFruit Desktop only.' });
-          setIsExportErrorToastVisible(true);
+          showOperationError('Hole punching is available in DragonFruit Desktop only.');
           return;
         }
 
@@ -16981,8 +17205,7 @@ export default function Home() {
           if (ownsSourceGeometry) {
             sourceGeometry.dispose();
           }
-          setExportErrorToast({ id: Date.now(), text: 'Hole punching is available in DragonFruit Desktop only.' });
-          setIsExportErrorToastVisible(true);
+          showOperationError('Hole punching is available in DragonFruit Desktop only.');
           return;
         }
 
@@ -17039,8 +17262,7 @@ export default function Home() {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        setExportErrorToast({ id: Date.now(), text: `Hole punching failed: ${message}` });
-        setIsExportErrorToastVisible(true);
+        showOperationError(`Hole punching failed: ${message}`);
       } finally {
         setIsApplyingHolePunch(false);
       }
@@ -17402,8 +17624,7 @@ export default function Home() {
       );
       if (!staged) {
         if (notifyUnavailable) {
-          setExportErrorToast({ id: Date.now(), text: 'Hollowing preview is available in DragonFruit Desktop only.' });
-          setIsExportErrorToastVisible(true);
+          showOperationError('Hollowing preview is available in DragonFruit Desktop only.');
         }
         return;
       }
@@ -17411,8 +17632,7 @@ export default function Home() {
       const result = await hollowPreviewFromCapturedSource(options);
       if (!result) {
         if (notifyUnavailable) {
-          setExportErrorToast({ id: Date.now(), text: 'Hollowing preview is available in DragonFruit Desktop only.' });
-          setIsExportErrorToastVisible(true);
+          showOperationError('Hollowing preview is available in DragonFruit Desktop only.');
         }
         return;
       }
@@ -17462,8 +17682,7 @@ export default function Home() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (notifyUnavailable) {
-        setExportErrorToast({ id: Date.now(), text: `Hollowing preview failed: ${message}` });
-        setIsExportErrorToastVisible(true);
+        showOperationError(`Hollowing preview failed: ${message}`);
       } else {
         console.warn('[Hollowing] Debounced preview failed:', message);
       }
@@ -17536,7 +17755,7 @@ export default function Home() {
   // Restore cavity geometry from persisted data for models with baked hollowing.
   React.useEffect(() => {
     for (const model of scene.models) {
-      const hollowing = model.meshModifiers?.hollowing;
+      const hollowing = scene.getModelMeshModifiers(model.id)?.hollowing;
       if (!hollowing?.enabled || !hollowing.cavityPositionsBase64 || !hollowing.cavityPositionCount) {
         continue;
       }
@@ -18509,6 +18728,8 @@ export default function Home() {
                   transformMgr.transformHook.setScale(x, y, z);
                 }}
                 onResetScale={transformMgr.transformHook.resetScale}
+                uniformScaling={uniformScaling}
+                onUniformScalingChange={setUniformScaling}
                 modelBBox={scene.geom.bbox}
                 autoLift={transformMgr.autoLift}
                 onAutoLiftChange={handleAutoLiftChange}
@@ -18743,7 +18964,8 @@ export default function Home() {
               supportsRef={supportsRef}
               captureSceneThumbnailPng={captureExportThumbnailPng}
               onExportSuccess={handleExportSuccess}
-              onExportError={handleExportError}
+              onExportError={showOperationError}
+              onExportProgress={setIsExporting}
             />
 
             <SlicingPanel
@@ -18779,6 +19001,12 @@ export default function Home() {
         ) : scene.mode === 'support' ? (
           <>
             <SupportSidebar key="support-settings" />
+            <IslandsPanel
+              key="support-islands"
+              islands={islandsPoc}
+              hasGeometry={!!scene.geom}
+              bottomClearancePx={modelStatsBottomClearancePx}
+            />
           </>
         ) : scene.mode === 'printing' ? (
           <>
@@ -19161,13 +19389,18 @@ export default function Home() {
             hideCrossSectionCap={false}
             onCameraChange={handleCameraChange}
             onCameraEnd={handleCameraEnd}
-            islandMarkers={[
-              ...(islands.overlayEnabled ? islands.islandMarkers : []),
-            ] as any}
+            islandMarkers={
+              scene.mode === 'support'
+                ? islandsPoc.islandMarkers
+                : (islands.overlayEnabled ? islands.islandMarkers : [])
+            }
             overlayBrushRadius={islands.overlayBrushRadius}
             overlayColor={islands.overlayColor}
             overlayOpacity={islands.overlayOpacity}
-            overlaySelectedIslandId={islands.selectedIslandId}
+            overlaySelectedIslandId={
+              scene.mode === 'support' ? islandsPoc.selectedMarkerId : islands.selectedIslandId
+            }
+            enableVolumeGlow={islandsPoc.enableVolumeGlow}
             ambientIntensity={scene.ambientIntensity}
             directionalIntensity={scene.directionalIntensity}
             materialRoughness={scene.materialRoughness}
@@ -19183,6 +19416,7 @@ export default function Home() {
             voxelOpacity={islands.voxelOpacity}
             transformMode={transformMgr.transformMode}
             transform={transformMgr.transform}
+            uniformScaling={uniformScaling}
             autoLift={transformMgr.autoLift}
             liftDistance={transformMgr.liftDistance}
             autoSnapEnabled={transformMgr.autoSnapEnabled}
@@ -19238,6 +19472,17 @@ export default function Home() {
               onSelectionChange: handleBlockedHollowVoxelMarqueeSelection,
             }}
             renderSceneOverlays={({ raycastActiveModelFromRay }) => {
+              // Update raycast ref for island co-visibility checks
+              modelRaycastRef.current = (start, end) => {
+                const dir = new THREE.Vector3().subVectors(end, start).normalize();
+                const ray = new THREE.Ray(start, dir);
+                const hit = raycastActiveModelFromRay(ray);
+                if (hit && hit.distance < start.distanceTo(end) - 0.5) {
+                  return false; // occluded
+                }
+                return true; // clear
+              };
+
               const previewModel = hollowPreview
                 ? scene.models.find((model) => model.id === hollowPreview.modelId) ?? null
                 : null;
@@ -22838,6 +23083,28 @@ export default function Home() {
               </div>
             )}
 
+      {isExporting && (
+        <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
+          <div
+            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
+            style={{ background: 'color-mix(in srgb, var(--surface-0), black 10%)', borderColor: 'var(--border-subtle)' }}
+            role="dialog"
+            aria-modal="true"
+            aria-live="polite"
+          >
+            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Exporting…
+            </div>
+            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              <p>Writing mesh geometry and support data to file…</p>
+            </div>
+            <div className="ui-loading-track mt-3 h-2.5 w-full rounded-full" style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}>
+              <div className="ui-loading-indicator" style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }} />
+            </div>
+          </div>
+        </div>
+      )}
+
       {showArrangeBlockingOverlay && (
         <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
           <div
@@ -22864,6 +23131,50 @@ export default function Home() {
             </div>
             <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
               Processing {arrangeOverlayModelCount ?? 0} {arrangeOverlayModelCount === 1 ? 'model' : 'models'}
+            </div>
+
+            <div
+              className="ui-loading-track mt-3 h-2.5 w-full rounded-full"
+              style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
+            >
+              <div
+                className="ui-loading-indicator"
+                style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {islandsPoc.scanning && (
+        <div className="absolute inset-0 z-[121] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
+          <div
+            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
+            style={{
+              background: 'color-mix(in srgb, var(--surface-0), black 10%)',
+              borderColor: 'var(--border-subtle)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-live="polite"
+          >
+            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Analyzing Model Islands & Minima
+            </div>
+            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              <p>Slicing and analysis in progress...</p>
+              {islandsPoc.scanProgress && islandsPoc.scanProgress.total > 100 && (
+                <p>
+                  Layer {islandsPoc.scanProgress.done} of {islandsPoc.scanProgress.total}
+                </p>
+              )}
+            </div>
+
+            <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
+              Elapsed: {islandsPoc.elapsedLabel}
+            </div>
+            <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Processing 1 model
             </div>
 
             <div

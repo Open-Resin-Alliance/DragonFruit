@@ -151,8 +151,10 @@ export function createPickingMaterial(pickId: number): THREE.MeshBasicMaterial {
     depthWrite: true,
     // No transparency
     transparent: false,
-    // Single side for performance
-    side: THREE.FrontSide,
+    // STL/3MF models often have inconsistent winding order; with FrontSide, those
+    // back-facing triangles vanish from the 3×3 pick buffer even when visually in
+    // front. DoubleSide fixes false misses — depth testing still picks the nearest hit.
+    side: THREE.DoubleSide,
   });
 }
 
@@ -172,7 +174,10 @@ export function createPickingMaterialNoDepth(pickId: number): THREE.MeshBasicMat
     depthTest: false,
     depthWrite: false,
     transparent: false,
-    side: THREE.FrontSide,
+    // STL/3MF models often have inconsistent winding order; with FrontSide, those
+    // back-facing triangles vanish from the 3×3 pick buffer even when visually in
+    // front. DoubleSide fixes false misses — depth testing still picks the nearest hit.
+    side: THREE.DoubleSide,
   });
 }
 

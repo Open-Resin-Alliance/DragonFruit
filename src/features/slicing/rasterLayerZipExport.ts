@@ -1431,76 +1431,121 @@ function buildWorldTriangles(models: LoadedModel[]): WorldTriangle[] {
   return triangles;
 }
 
-function appendModelWorldTrianglesToCollector(
-  models: LoadedModel[],
+function appendModelTrianglesInRange(
+  model: LoadedModel,
   collector: TriangleFloatCollector,
+  startTri: number,
+  endTri: number,
 ): void {
+  const matrix = composeModelMatrix(model.transform);
+  const center = model.geometry.center;
+  const geometry = model.geometry.geometry;
+  const position = geometry.getAttribute('position');
+  const index = geometry.getIndex();
+  if (!position) return;
+
   const v0 = new THREE.Vector3();
   const v1 = new THREE.Vector3();
   const v2 = new THREE.Vector3();
 
-  for (const model of models) {
-    const matrix = composeModelMatrix(model.transform);
-    const center = model.geometry.center;
-    const geometry = model.geometry.geometry;
-    const position = geometry.getAttribute('position');
-    const index = geometry.getIndex();
+  const readVertex = (vertexIndex: number, target: THREE.Vector3) => {
+    target.set(
+      position.getX(vertexIndex) - center.x,
+      position.getY(vertexIndex) - center.y,
+      position.getZ(vertexIndex) - center.z,
+    );
+    target.applyMatrix4(matrix);
+    return target;
+  };
 
-    if (!position) continue;
-
-    const readVertex = (vertexIndex: number, target: THREE.Vector3) => {
-      target.set(
-        position.getX(vertexIndex) - center.x,
-        position.getY(vertexIndex) - center.y,
-        position.getZ(vertexIndex) - center.z,
-      );
-      target.applyMatrix4(matrix);
-      return target;
-    };
-
-    if (index) {
-      const idx = index.array;
-      for (let i = 0; i < idx.length; i += 3) {
-        const a = Number(idx[i]);
-        const b = Number(idx[i + 1]);
-        const c = Number(idx[i + 2]);
-
-        readVertex(a, v0);
-        readVertex(b, v1);
-        readVertex(c, v2);
-
-        collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
-      }
-    } else {
-      const count = position.count;
-      for (let i = 0; i < count; i += 3) {
-        readVertex(i, v0);
-        readVertex(i + 1, v1);
-        readVertex(i + 2, v2);
-
-        collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
-      }
+  if (index) {
+    const idx = index.array;
+    const triStart = startTri * 3;
+    const triEnd = Math.min(endTri * 3, idx.length);
+    for (let i = triStart; i < triEnd; i += 3) {
+      readVertex(Number(idx[i]), v0);
+      readVertex(Number(idx[i + 1]), v1);
+      readVertex(Number(idx[i + 2]), v2);
+      collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
+    }
+  } else {
+    const triStart = startTri * 3;
+    const triEnd = Math.min(endTri * 3, position.count);
+    for (let i = triStart; i < triEnd; i += 3) {
+      readVertex(i, v0);
+      readVertex(i + 1, v1);
+      readVertex(i + 2, v2);
+      collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
     }
   }
 }
 
+/** Returns the number of triangles in a model that belong to the actual
+ *  model body (excluding imported support geometry).  When the repair
+ *  report has identified a clear model/support split this is the split
+ *  point; when the mesh is flagged as entirely support-dominant the count
+ *  is zero. */
+function effectiveModelTriangleCount(model: LoadedModel): number {
+  const totalTriCount = getModelTriangleCount(model);
+  const report = model.geometry.meshDefects?.nativeRepairReport;
+  const modelTriCount = report?.model_triangle_count;
+  if (modelTriCount != null && modelTriCount > 0) {
+    return Math.min(Math.floor(modelTriCount), totalTriCount);
+  }
+  if (report?.likely_support_geometry) return 0;
+  return totalTriCount;
+}
+
+/** Returns the total triangle count for a model's geometry
+ *  (used for both counting and iteration bounds). */
+function getModelTriangleCount(model: LoadedModel): number {
+  const geometry = model.geometry.geometry;
+  const position = geometry.getAttribute('position');
+  if (!position) return 0;
+  const index = geometry.getIndex();
+  if (index) return Math.floor(index.count / 3);
+  return Math.floor(position.count / 3);
+}
+
 function countModelWorldTriangles(models: LoadedModel[]): number {
   let count = 0;
-
   for (const model of models) {
-    const geometry = model.geometry.geometry;
-    const position = geometry.getAttribute('position');
-    if (!position) continue;
-
-    const index = geometry.getIndex();
-    if (index) {
-      count += Math.floor(index.count / 3);
-    } else {
-      count += Math.floor(position.count / 3);
-    }
+    count += effectiveModelTriangleCount(model);
   }
-
   return count;
+}
+
+function fingerprintTriangleFloats(
+  floats: Float32Array,
+  startFloat: number,
+  endFloat: number,
+): string {
+  const start = Math.max(0, Math.min(floats.length, Math.floor(startFloat)));
+  const end = Math.max(start, Math.min(floats.length, Math.floor(endFloat)));
+  const words = new Uint32Array(floats.buffer, floats.byteOffset, floats.length);
+  let hash = 0x811c9dc5;
+  for (let i = start; i < end; i += 1) {
+    hash ^= words[i];
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function fingerprintTriangleFloatMultiset(
+  floats: Float32Array,
+  startFloat: number,
+  endFloat: number,
+): string {
+  const start = Math.max(0, Math.min(floats.length, Math.floor(startFloat)));
+  const end = Math.max(start, Math.min(floats.length, Math.floor(endFloat)));
+  const words = new Uint32Array(floats.buffer, floats.byteOffset, floats.length);
+  let xor = 0;
+  let sum = 0;
+  for (let i = start; i < end; i += 1) {
+    xor ^= words[i];
+    sum = (sum + words[i]) >>> 0;
+  }
+  return `${(xor >>> 0).toString(16).padStart(8, '0')}:${sum.toString(16).padStart(8, '0')}`;
 }
 
 export function buildProjectedCrossSectionZRange(models: LoadedModel[]): { min: number; max: number } | null {
@@ -2113,13 +2158,48 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   const perfSettings = getSavedSlicingPerformanceSettings();
 
   const modelTriangleCount = countModelWorldTriangles(visibleModels);
+  console.warn('[SupportAA] collector input partitions', {
+    models: visibleModels.map((model) => {
+      const totalTriangles = getModelTriangleCount(model);
+      const effectiveModelTriangles = effectiveModelTriangleCount(model);
+      const report = model.geometry.meshDefects?.nativeRepairReport;
+      return {
+        id: model.id,
+        name: model.name,
+        totalTriangles,
+        effectiveModelTriangles,
+        effectiveSupportTriangles: totalTriangles - effectiveModelTriangles,
+        reportModelTriangles: report?.model_triangle_count ?? null,
+        likelySupportGeometry: report?.likely_support_geometry === true,
+        geometryCenter: model.geometry.center.toArray(),
+        position: model.transform.position.toArray(),
+        rotation: model.transform.rotation.toArray().slice(0, 3),
+        scale: model.transform.scale.toArray(),
+      };
+    }),
+    modelTriangleCount,
+  });
   const collector = new TriangleFloatCollector(
     modelTriangleCount + 4096,
     options.flushBinaryMeshChunk,
     options.meshChunkTargetBytes,
   );
 
-  appendModelWorldTrianglesToCollector(visibleModels, collector);
+  // Push model-only triangles first (across all models), then support-only.
+  // This produces the same collector layout as manually splitting before slicing.
+  for (const model of visibleModels) {
+    const modelTriCount = effectiveModelTriangleCount(model);
+    if (modelTriCount > 0) {
+      appendModelTrianglesInRange(model, collector, 0, modelTriCount);
+    }
+  }
+  for (const model of visibleModels) {
+    const totalTris = getModelTriangleCount(model);
+    const modelTriCount = effectiveModelTriangleCount(model);
+    if (modelTriCount < totalTris) {
+      appendModelTrianglesInRange(model, collector, modelTriCount, totalTris);
+    }
+  }
   emitMeshPrepDiagnostic('Mesh prep: models', 1, 4, {
     modelTriangleEstimate: modelTriangleCount,
     triangleCountAfterModels: collector.triangleCount,
@@ -2145,10 +2225,40 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   const totalLayers = Math.max(1, Math.ceil(tallestObjectHeightMm / settings.layerHeightMm));
 
   const trianglesXYZ = await collector.finalize();
+  console.warn('[SupportAA] collector finalized', {
+    modelTriangleCount,
+    totalTriangleCount: collector.triangleCount,
+    supportTriangleCount: Math.max(0, collector.triangleCount - modelTriangleCount),
+    triangleFloatCount: trianglesXYZ.length,
+    streamed: options.flushBinaryMeshChunk != null,
+    modelFloatFingerprint: fingerprintTriangleFloats(
+      trianglesXYZ,
+      0,
+      Math.min(trianglesXYZ.length, modelTriangleCount * 9),
+    ),
+    supportFloatFingerprint: fingerprintTriangleFloats(
+      trianglesXYZ,
+      Math.min(trianglesXYZ.length, modelTriangleCount * 9),
+      trianglesXYZ.length,
+    ),
+    modelFloatMultisetFingerprint: fingerprintTriangleFloatMultiset(
+      trianglesXYZ,
+      0,
+      Math.min(trianglesXYZ.length, modelTriangleCount * 9),
+    ),
+    supportFloatMultisetFingerprint: fingerprintTriangleFloatMultiset(
+      trianglesXYZ,
+      Math.min(trianglesXYZ.length, modelTriangleCount * 9),
+      trianglesXYZ.length,
+    ),
+    meshBounds: collector.meshBounds,
+  });
   emitMeshPrepDiagnostic('Mesh prep: finalize', 3, 4, {
     triangleFloatCount: trianglesXYZ.length,
     triangleBytes: trianglesXYZ.byteLength,
     totalLayers,
+    modelTriangleCount,
+    totalCollectorTris: collector.triangleCount,
   });
 
   const manifest = {

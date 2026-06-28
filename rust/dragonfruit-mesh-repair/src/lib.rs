@@ -12,7 +12,7 @@ pub mod io;
 pub mod repair;
 pub mod report;
 
-pub use crate::analysis::{analyze, MeshAnalysis};
+pub use crate::analysis::{analyze, minimal_analysis, MeshAnalysis};
 pub use crate::core::mesh::{IndexedMesh, Vec3};
 pub use crate::hollowing::{
     hollow_voxel, punch_cylinders, DrainHoleSpec, HolePunchOptions, HolePunchOutcome,
