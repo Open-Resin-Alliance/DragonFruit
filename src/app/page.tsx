@@ -14688,126 +14688,94 @@ export default function Home() {
   }, [isSelectAllModelsActive]);
 
 
-  React.useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
-
-    const handleGlobalSelectAll = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey)) return;
-      if (event.key.toLowerCase() !== 'a') return;
-      if (isEditableTarget(event.target)) return;
-      if (scene.models.length === 0) return;
-
-      // Prevent browser-level "select all text in the app" behavior and arm model select-all.
-      event.preventDefault();
-      event.stopPropagation();
-      const visibleIds = scene.models.filter((model) => model.visible).map((model) => model.id);
-      if (visibleIds.length > 0) {
-        scene.setSelectedModelIds(visibleIds);
-        scene.setActiveModelId(visibleIds[0]);
-      }
-      setIsSelectAllModelsActive(true);
-    };
-
-    window.addEventListener('keydown', handleGlobalSelectAll, true);
-    return () => {
-      window.removeEventListener('keydown', handleGlobalSelectAll, true);
-    };
-  }, [scene]);
+  const selectAllActive = useActionActive('CANVAS', 'SELECT_ALL');
+  const copyActive = useActionActive('CANVAS', 'COPY');
+  const pasteActive = useActionActive('CANVAS', 'PASTE');
+  const saveActive = useActionActive('GLOBAL', 'SAVE');
+  const wasSelectAllActive = React.useRef(false);
+  const wasCopyActive = React.useRef(false);
+  const wasPasteActive = React.useRef(false);
+  const wasSaveActive = React.useRef(false);
 
   React.useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
+    if (!selectAllActive || wasSelectAllActive.current) {
+      wasSelectAllActive.current = selectAllActive;
+      return;
+    }
+    wasSelectAllActive.current = true;
 
-    const handleClipboardHotkeys = (event: KeyboardEvent) => {
-      if (event.repeat) return;
-      if (!(event.ctrlKey || event.metaKey)) return;
-      if (event.altKey) return;
-      if (isEditableTarget(event.target)) return;
-      if (scene.mode !== 'prepare') return;
+    if (scene.models.length === 0) return;
+    const visibleIds = scene.models.filter((model) => model.visible).map((model) => model.id);
+    if (visibleIds.length > 0) {
+      scene.setSelectedModelIds(visibleIds);
+      scene.setActiveModelId(visibleIds[0]);
+    }
+    setIsSelectAllModelsActive(true);
+  }, [selectAllActive, scene, setIsSelectAllModelsActive]);
 
-      const key = event.key.toLowerCase();
-      if (key === 'c') {
-        if (scene.selectedModelIds.length === 0 && !scene.activeModelId) return;
-        event.preventDefault();
-        event.stopPropagation();
+  React.useEffect(() => {
+    if (!copyActive || wasCopyActive.current) {
+      wasCopyActive.current = copyActive;
+      return;
+    }
+    wasCopyActive.current = true;
 
-        if (scene.selectedModelIds.length > 0) {
-          scene.copySelectedModels();
-        } else if (scene.activeModelId) {
-          scene.copyModel(scene.activeModelId);
-        }
-        return;
-      }
+    if (scene.mode !== 'prepare') return;
+    if (scene.selectedModelIds.length === 0 && !scene.activeModelId) return;
+    if (scene.selectedModelIds.length > 0) {
+      scene.copySelectedModels();
+    } else if (scene.activeModelId) {
+      scene.copyModel(scene.activeModelId);
+    }
+  }, [copyActive, scene]);
 
-      if (key === 'v') {
-        if (!scene.canPasteModel) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const pastedIds = scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
-        // Paste shares geometry with the source — add its cached volume directly
-        // instead of waiting for the async resin effect loop.
-        if (pastedIds.length > 0 && printingEstimatedResinMlRef.current != null) {
-          const pastedModel = scene.models.find((m) => pastedIds.includes(m.id));
-          if (pastedModel) {
-            const geom = pastedModel.geometry.geometry;
-            const pos = geom.getAttribute('position');
-            const idx = geom.getIndex();
-            const sourceKey = String(geom.userData?.resinVolumeSourceKey ?? geom.uuid);
-            const posVer = (pos as { version?: number; data?: { version?: number } }).version
-              ?? (pos as { version?: number; data?: { version?: number } }).data?.version ?? 0;
-            const idxVer = (idx as { version?: number } | null)?.version ?? 0;
-            const cacheKey = `${sourceKey}:${posVer}:${idxVer}`;
-            const cachedMl = printingBaseResinMlCacheRef.current.get(cacheKey) ?? null;
-            if (cachedMl != null) {
-              const sx = Math.abs(pastedModel.transform.scale.x || 1);
-              const sy = Math.abs(pastedModel.transform.scale.y || 1);
-              const sz = Math.abs(pastedModel.transform.scale.z || 1);
-              const addedMl = cachedMl * sx * sy * sz;
-              const nextTotal = (printingEstimatedResinMlRef.current - supportAndRaftResinMl) + addedMl + supportAndRaftResinMl;
-              printingEstimatedResinMlRef.current = nextTotal;
-              setPrintingEstimatedResinMl(nextTotal);
-            }
-          }
+  React.useEffect(() => {
+    if (!pasteActive || wasPasteActive.current) {
+      wasPasteActive.current = pasteActive;
+      return;
+    }
+    wasPasteActive.current = true;
+
+    if (scene.mode !== 'prepare') return;
+    if (!scene.canPasteModel) return;
+    const pastedIds = scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
+    // Paste shares geometry with the source — add its cached volume directly
+    // instead of waiting for the async resin effect loop.
+    if (pastedIds.length > 0 && printingEstimatedResinMlRef.current != null) {
+      const pastedModel = scene.models.find((m) => pastedIds.includes(m.id));
+      if (pastedModel) {
+        const geom = pastedModel.geometry.geometry;
+        const pos = geom.getAttribute('position');
+        const idx = geom.getIndex();
+        const sourceKey = String(geom.userData?.resinVolumeSourceKey ?? geom.uuid);
+        const posVer = (pos as { version?: number; data?: { version?: number } }).version
+          ?? (pos as { version?: number; data?: { version?: number } }).data?.version ?? 0;
+        const idxVer = (idx as { version?: number } | null)?.version ?? 0;
+        const cacheKey = `${sourceKey}:${posVer}:${idxVer}`;
+        const cachedMl = printingBaseResinMlCacheRef.current.get(cacheKey) ?? null;
+        if (cachedMl != null) {
+          const sx = Math.abs(pastedModel.transform.scale.x || 1);
+          const sy = Math.abs(pastedModel.transform.scale.y || 1);
+          const sz = Math.abs(pastedModel.transform.scale.z || 1);
+          const addedMl = cachedMl * sx * sy * sz;
+          const nextTotal = (printingEstimatedResinMlRef.current - supportAndRaftResinMl) + addedMl + supportAndRaftResinMl;
+          printingEstimatedResinMlRef.current = nextTotal;
+          setPrintingEstimatedResinMl(nextTotal);
         }
       }
-    };
-
-    window.addEventListener('keydown', handleClipboardHotkeys, true);
-    return () => {
-      window.removeEventListener('keydown', handleClipboardHotkeys, true);
-    };
-  }, [arrangeSpacingMm, scene]);
+    }
+  }, [pasteActive, scene, arrangeSpacingMm, printingEstimatedResinMlRef, supportAndRaftResinMl, printingBaseResinMlCacheRef, setPrintingEstimatedResinMl]);
 
   React.useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
+    if (!saveActive || wasSaveActive.current) {
+      wasSaveActive.current = saveActive;
+      return;
+    }
+    wasSaveActive.current = true;
 
-    const handleSceneSaveHotkey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (event.repeat || event.isComposing) return;
-      if (event.altKey || event.shiftKey) return;
-      if (!(event.ctrlKey || event.metaKey)) return;
-      if (event.key.toLowerCase() !== 's') return;
-      if (isEditableTarget(event.target)) return;
-      if (scene.models.length === 0) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      void handleTopBarSaveScene();
-    };
-
-    window.addEventListener('keydown', handleSceneSaveHotkey, true);
-    return () => {
-      window.removeEventListener('keydown', handleSceneSaveHotkey, true);
-    };
-  }, [handleTopBarSaveScene, scene.models.length]);
+    if (scene.models.length === 0) return;
+    void handleTopBarSaveScene();
+  }, [saveActive, scene.models.length, handleTopBarSaveScene]);
 
   React.useEffect(() => {
     let cancelled = false;

@@ -110,6 +110,21 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
         TOOL_DUPLICATE: {
             key: 'd',
             description: 'Switch canvas tool to Duplicate'
+        },
+        SELECT_ALL: {
+            key: 'a',
+            modifier: 'ctrl',
+            description: 'Select all visible models'
+        },
+        COPY: {
+            key: 'c',
+            modifier: 'ctrl',
+            description: 'Copy selected model(s)'
+        },
+        PASTE: {
+            key: 'v',
+            modifier: 'ctrl',
+            description: 'Paste copied model(s)'
         }
     },
     PRESETS: {
