@@ -41,10 +41,10 @@ export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformT
 
   React.useEffect(() => {
     const update = () => {
-      // Toolbar full width with all labels: 7 buttons × ~82px + 6 gaps × 3px + 8px padding ≈ 592px
-      // Centered at innerWidth/2, so left edge = innerWidth/2 - 296
+      // Toolbar full width with all labels: 7 buttons × ~84px + 6 gaps × 6px + 10px padding ≈ 634px
+      // Centered at innerWidth/2, so left edge = innerWidth/2 - 317
       // Collapse when left edge is too close to the 320px panel
-      const fullLeft = window.innerWidth / 2 - 296;
+      const fullLeft = window.innerWidth / 2 - 317;
       const tooClose = fullLeft < 340;
       if (tooClose !== lastCollapseRef.current) {
         lastCollapseRef.current = tooClose;
@@ -59,11 +59,10 @@ export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformT
 
   React.useEffect(() => {
     const targetBtn = buttonsRef.current[activeIndex];
-    if (targetBtn && targetBtn.parentElement) {
-      const parent = targetBtn.parentElement;
+    if (targetBtn?.parentElement) {
       setIndicatorStyle({
         width: targetBtn.offsetWidth,
-        left: targetBtn.offsetLeft - parent.offsetLeft,
+        left: targetBtn.offsetLeft,
       });
     }
   }, [activeIndex, collapseToolLabels, hoveredMode]);
@@ -102,7 +101,7 @@ export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformT
     >
       <div
         ref={toolbarInnerRef}
-        className="relative grid items-center rounded-full px-1 py-1 gap-[3px]"
+        className="relative grid items-center rounded-full px-1.5 py-1 gap-1.5"
         onMouseLeave={() => {
           setHoveredMode(null);
           onModeHover?.(null);
@@ -134,7 +133,7 @@ export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformT
               onClick={() => handleModeClick(btn.mode)}
               onMouseEnter={() => handleModeHoverChange(btn.mode)}
               onFocus={() => handleModeHoverChange(btn.mode)}
-              className={`relative z-[1] flex items-center justify-center gap-1.5 rounded-full px-2.5 py-2 text-[11px] font-semibold uppercase tracking-wider transition-all duration-200 active:scale-[0.98] h-[34px] ${
+              className={`relative z-[1] flex items-center justify-center gap-1.5 rounded-full px-3 py-2 text-[11px] font-semibold uppercase tracking-wider transition-all duration-200 active:scale-[0.98] h-[36px] ${
                 active
                   ? 'scale-[1.01]'
                   : 'hover:-translate-y-[1px] hover:shadow-[0_4px_14px_rgba(0,0,0,0.22)]'
