@@ -6,7 +6,7 @@ import { useLingui } from '@lingui/react';
 import { detectIsIOS } from '@/hooks/usePlatform';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
-import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Plus, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Download, Gamepad2, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Plus, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
@@ -1658,6 +1658,9 @@ export default function Home() {
     lastPushApplied: null,
     lastAt: null,
   });
+  const [newDeviceToast, setNewDeviceToast] = React.useState<string | null>(null);
+  const [isNewDeviceToastVisible, setIsNewDeviceToastVisible] = React.useState(false);
+  const newDeviceToastTimeoutRef = React.useRef<number | null>(null);
   const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; text: string; direction: 'undo' | 'redo' } | null>(null);
   const [isHistoryActionToastVisible, setIsHistoryActionToastVisible] = React.useState(false);
   const [isSceneImportToastVisible, setIsSceneImportToastVisible] = React.useState(false);
@@ -10613,6 +10616,26 @@ export default function Home() {
       }
     };
   }, [scene.sceneImportReport]);
+
+  const handleNewDeviceDetected = React.useCallback((deviceId: string) => {
+    setNewDeviceToast(deviceId);
+    setIsNewDeviceToastVisible(true);
+    if (newDeviceToastTimeoutRef.current !== null) {
+      window.clearTimeout(newDeviceToastTimeoutRef.current);
+    }
+    newDeviceToastTimeoutRef.current = window.setTimeout(() => {
+      setIsNewDeviceToastVisible(false);
+      newDeviceToastTimeoutRef.current = null;
+    }, 9000);
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (newDeviceToastTimeoutRef.current !== null) {
+        window.clearTimeout(newDeviceToastTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleExportSuccess = React.useCallback((savedPath: string) => {
     setExportSuccessToast({ id: Date.now(), path: savedPath });
@@ -19730,6 +19753,7 @@ export default function Home() {
             freezeViewportActive={isSlicingBusy && scene.mode === 'export'}
             indicatorPlaneZ={scene.mode === 'printing' ? printingCurrentHeightMm : null}
             indicatorPlaneColor={scene.selectionColor || '#ec2a77'}
+            onNewDeviceDetected={handleNewDeviceDetected}
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (
               <MeshSmoothingBrushCursor />
@@ -23249,6 +23273,32 @@ export default function Home() {
             </div>
           </div>
         </div>
+      )}
+
+      {newDeviceToast && (
+        <ToastViewport zIndex={127} offset="1.25rem">
+          <Toast
+            tone="warning"
+            shape="rounded"
+            animated
+            visible={isNewDeviceToastVisible}
+            className="flex items-center gap-3 max-w-sm pointer-events-auto"
+          >
+            <Gamepad2 className="h-4 w-4 flex-shrink-0" />
+            <span className="flex-1 text-[12px] leading-snug">
+              New input device detected.<br />
+              <span style={{ fontWeight: 400, opacity: 0.8 }}>Go to Settings → 3D Mouse to configure or block it.</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsNewDeviceToastVisible(false)}
+              className="flex-shrink-0 rounded px-2 py-0.5 text-[11px] font-semibold"
+              style={{ background: 'color-mix(in srgb, #f59e0b, transparent 80%)', color: 'var(--text-strong)' }}
+            >
+              Dismiss
+            </button>
+          </Toast>
+        </ToastViewport>
       )}
 
       {isSaveToastVisible && (

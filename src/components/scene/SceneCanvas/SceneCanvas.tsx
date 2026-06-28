@@ -421,6 +421,7 @@ export function SceneCanvas({
   freezeViewportActive = false,
   cavityGeometryByModelId,
   onClearSelection,
+  onNewDeviceDetected,
 }: {
   models?: LoadedModel[];
   cavityGeometryByModelId?: Map<string, THREE.BufferGeometry>;
@@ -602,6 +603,7 @@ export function SceneCanvas({
   indicatorPlaneColor?: string;
   deferCameraIntro?: boolean;
   freezeViewportActive?: boolean;
+  onNewDeviceDetected?: (deviceId: string) => void;
 }) {
   const DROP_ANIMATION_DURATION_MS = 760;
   const selectedMarker = React.useMemo(() => {
@@ -6643,6 +6645,7 @@ export function SceneCanvas({
             mouseOrbitDragRunId={mouseOrbitDragRunId}
             onNavigationActiveChange={setSpaceMouseNavigationActive}
             onNavigationFrame={handleSpaceMouseNavigationFrame}
+            onNewDeviceDetected={onNewDeviceDetected}
           />
         )}
         {cameraInteractionCycleEnabled && (
