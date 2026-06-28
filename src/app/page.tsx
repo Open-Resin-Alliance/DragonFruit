@@ -14688,6 +14688,12 @@ export default function Home() {
   }, [isSelectAllModelsActive]);
 
 
+  React.useEffect(() => {
+    const isEditableTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+    };
+
     const handleGlobalSelectAll = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey)) return;
       if (event.key.toLowerCase() !== 'a') return;
