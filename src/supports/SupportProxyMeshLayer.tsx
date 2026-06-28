@@ -170,7 +170,12 @@ export function SupportProxyMeshLayer({
   cavityGeometryByModelId,
   modelWorldInverseById,
 }: SupportProxyMeshLayerProps) {
+  // usePicking() causes a re-render on every pointer-move frame — only
+  // subscribe when pointer interactions are enabled (prepare mode). In
+  // other modes, the hit data is unused but still cost us re-renders.
   const { hit } = usePicking();
+  const hitCategoryRef = React.useRef(hit.category);
+  hitCategoryRef.current = hit.category;
   const supportState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
   const kickstandState = useKickstandStoreState();
@@ -1068,9 +1073,9 @@ export function SupportProxyMeshLayer({
   const handleProxyShaftClick = React.useCallback((shaft: InstancedShaft) => {
     if (!pointerSelectionEnabled) return;
     if (!shaft.modelId) return;
-    if (hit.category === 'gizmo') return;
+    if (hitCategoryRef.current === 'gizmo') return;
     onModelPointerSelect?.(shaft.modelId);
-  }, [hit.category, onModelPointerSelect, pointerSelectionEnabled]);
+  }, [onModelPointerSelect, pointerSelectionEnabled]);
 
   const handleProxyShaftPointerMove = React.useCallback((shaft: InstancedShaft) => {
     if (!pointerHoverEnabled) return;
@@ -1080,9 +1085,9 @@ export function SupportProxyMeshLayer({
   const handleProxyRootClick = React.useCallback((root: InstancedRoot) => {
     if (!pointerSelectionEnabled) return;
     if (!root.modelId) return;
-    if (hit.category === 'gizmo') return;
+    if (hitCategoryRef.current === 'gizmo') return;
     onModelPointerSelect?.(root.modelId);
-  }, [hit.category, onModelPointerSelect, pointerSelectionEnabled]);
+  }, [onModelPointerSelect, pointerSelectionEnabled]);
 
   const handleProxyRootPointerMove = React.useCallback((root: InstancedRoot) => {
     if (!pointerHoverEnabled) return;
@@ -1092,9 +1097,9 @@ export function SupportProxyMeshLayer({
   const handleProxyJointClick = React.useCallback((joint: InstancedJoint) => {
     if (!pointerSelectionEnabled) return;
     if (!joint.modelId) return;
-    if (hit.category === 'gizmo') return;
+    if (hitCategoryRef.current === 'gizmo') return;
     onModelPointerSelect?.(joint.modelId);
-  }, [hit.category, onModelPointerSelect, pointerSelectionEnabled]);
+  }, [onModelPointerSelect, pointerSelectionEnabled]);
 
   const handleProxyJointPointerMove = React.useCallback((joint: InstancedJoint) => {
     if (!pointerHoverEnabled) return;
@@ -1104,9 +1109,9 @@ export function SupportProxyMeshLayer({
   const handleProxyConeClick = React.useCallback((cone: InstancedContactCone) => {
     if (!pointerSelectionEnabled) return;
     if (!cone.modelId) return;
-    if (hit.category === 'gizmo') return;
+    if (hitCategoryRef.current === 'gizmo') return;
     onModelPointerSelect?.(cone.modelId);
-  }, [hit.category, onModelPointerSelect, pointerSelectionEnabled]);
+  }, [onModelPointerSelect, pointerSelectionEnabled]);
 
   const handleProxyConePointerMove = React.useCallback((cone: InstancedContactCone) => {
     if (!pointerHoverEnabled) return;
