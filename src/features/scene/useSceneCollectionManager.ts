@@ -647,6 +647,7 @@ type PluginSceneImportPayload = {
     scale: THREE.Vector3;
   };
   modelId?: string;
+  objName?: string;
   supportData?: DragonfruitImportFormat | null;
   meshModifiers?: ModelMeshModifiers;
 };
@@ -714,6 +715,7 @@ function normalizePluginSceneImportPayload(payload: unknown): PluginSceneImportP
     geometry?: unknown;
     transform?: unknown;
     modelId?: unknown;
+    objName?: unknown;
     supportData?: unknown;
     meshModifiers?: unknown;
   };
@@ -748,6 +750,9 @@ function normalizePluginSceneImportPayload(payload: unknown): PluginSceneImportP
     },
     modelId: typeof source.modelId === 'string' && source.modelId.trim().length > 0
       ? source.modelId
+      : undefined,
+    objName: typeof source.objName === 'string' && source.objName.trim().length > 0
+      ? source.objName.trim()
       : undefined,
     supportData: asDragonfruitImportFormat(source.supportData),
     meshModifiers,
@@ -3539,9 +3544,11 @@ export function useSceneCollectionManager() {
           originalPosition.z,
         );
 
-        const modelName = processedItems.length === 1
-          ? sanitizeImportedModelDisplayName(file.name)
-          : `${sanitizeImportedModelDisplayName(file.name)} (${i + 1})`;
+        const modelName = normalized.objName
+          ? sanitizeImportedModelDisplayName(normalized.objName)
+          : processedItems.length === 1
+            ? sanitizeImportedModelDisplayName(file.name)
+            : `${sanitizeImportedModelDisplayName(file.name)} (${i + 1})`;
 
         const model: LoadedModel = {
           id: importedModelId || generateId(),
