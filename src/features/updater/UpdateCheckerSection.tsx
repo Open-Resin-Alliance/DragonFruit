@@ -228,20 +228,27 @@ function AvailableState({
           Download &amp; Install
         </button>
 
-        <a
-          href={`https://github.com/Open-Resin-Alliance/DragonFruit/releases/tag/v${info.version}`}
-          target="_blank"
-          rel="noopener noreferrer"
+        <button
+          onClick={async () => {
+            const url = `https://github.com/Open-Resin-Alliance/DragonFruit/releases/tag/v${info.version}`;
+            try {
+              const { invoke } = await import('@tauri-apps/api/core');
+              await invoke('open_external_url', { url });
+            } catch {
+              window.open(url, '_blank');
+            }
+          }}
           className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12px] transition-all duration-150"
           style={{
             color: 'var(--text-muted)',
             borderColor: 'var(--border-subtle)',
             background: 'var(--surface-2)',
+            cursor: 'pointer',
           }}
         >
           <ExternalLink className="h-3.5 w-3.5" />
           View on GitHub
-        </a>
+        </button>
 
         <button
           type="button"

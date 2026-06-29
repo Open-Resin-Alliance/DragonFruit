@@ -2944,7 +2944,32 @@ async fn discover_uvtools_path(candidates: Vec<String>) -> Result<Option<String>
     Ok(None)
 }
 
+/// Open a URL in the default system browser (cross-platform).
 #[tauri::command]
+async fn open_external_url(url: String) -> Result<(), String> {
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        return Err("URL is empty".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("cmd")
+        .args(["/c", "start", &url])
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open")
+        .arg(&url)
+        .spawn();
+    #[cfg(target_os = "linux")]
+    let result = std::process::Command::new("xdg-open")
+        .arg(&url)
+        .spawn();
+
+    result.map_err(|e| format!("Failed to open URL in browser: {e}"))?;
+    Ok(())
+}
+
+        #[tauri::command]
 async fn launch_external_process(exe_path: String, file_arg: String) -> Result<(), String> {
     let exe_path = exe_path.trim().to_string();
     let file_arg = file_arg.trim().to_string();
@@ -3337,6 +3362,7 @@ fn main() {
             scene_autosave_read_manifest,
             scene_autosave_read_voxl_bytes,
             reveal_in_file_manager,
+            open_external_url,
             launch_external_process,
             discover_uvtools_path,
             set_log_level_pref,
