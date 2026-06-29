@@ -115,8 +115,8 @@ paste_logo(sidebar, ora, W_S // 2, ora_cy, LOGO_SIZE_S)
 sidebar.convert("RGB").save(f"{OUT_DIR}/sidebar.bmp", format="BMP")
 print(f"Sidebar saved: {sidebar.size}")
 
-# ── DMG BACKGROUND: 660 × 400 ────────────────────────────────────────────────
-W_D, H_D = 660, 400
+# ── DMG BACKGROUND: 660 × 440 ────────────────────────────────────────────────
+W_D, H_D = 660, 440
 dmg_bg = Image.new("RGB", (W_D, H_D), BG_DARK)
 draw = ImageDraw.Draw(dmg_bg)
 
@@ -127,7 +127,7 @@ footer_bbox = draw.textbbox((0, 0), footer_text, font=font_footer)
 footer_w = footer_bbox[2] - footer_bbox[0]
 footer_h = footer_bbox[3] - footer_bbox[1]
 footer_x = (W_D - footer_w) // 2
-footer_y = H_D - footer_h - 18
+footer_y = H_D - footer_h - 32
 
 draw.text((footer_x, footer_y), footer_text, font=font_footer, fill=FOOTER)
 
