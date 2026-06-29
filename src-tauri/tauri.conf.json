@@ -14,9 +14,7 @@
     "createUpdaterArtifacts": "v1Compatible",
     "fileAssociations": [
       {
-        "ext": [
-          "voxl"
-        ],
+        "ext": ["voxl"],
         "name": "DragonFruit Scene File",
         "description": "DragonFruit scene",
         "mimeType": "application/vnd.dragonfruit.voxl+json"
@@ -50,17 +48,18 @@
       {
         "label": "splashscreen",
         "url": "/splashscreen.html",
-        "width": 360,
-        "height": 280,
+        "width": 400,
+        "height": 330,
         "center": true,
         "resizable": false,
         "maximizable": false,
         "minimizable": false,
         "decorations": false,
+        "transparent": true,
         "visible": true,
         "alwaysOnTop": true,
         "theme": "Dark",
-        "backgroundColor": "#17161C",
+        "backgroundColor": "#14061b",
         "title": "DragonFruit"
       },
       {
@@ -87,10 +86,7 @@
     ],
     "security": {
       "csp": null,
-      "capabilities": [
-        "default",
-        "logging"
-      ]
+      "capabilities": ["default", "logging"]
     }
   }
 }

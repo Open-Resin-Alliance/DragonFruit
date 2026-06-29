@@ -8423,7 +8423,13 @@ export default function Home() {
     // a short setTimeout gives the browser time to commit the first full frame.
     timerId = setTimeout(() => {
       if (!cancelled) {
-        void revealWindow();
+        // Signal the splashscreen to fade out gracefully before revealing.
+        import('@tauri-apps/api/event').then(({ emit }) => {
+          emit('splash-fade-out').catch(() => {});
+        });
+        setTimeout(() => {
+          if (!cancelled) void revealWindow();
+        }, 180);
       }
     }, 350);
 
