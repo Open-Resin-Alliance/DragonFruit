@@ -36,17 +36,25 @@ function deadzoneAxis(value: number, deadzone: number) {
   return Math.sign(value) * normalized;
 }
 
-function getActiveSpaceMousePad(): Gamepad | null {
-  if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') return null;
-  const pads = navigator.getGamepads();
-  const list = Array.from(pads).filter((pad): pad is Gamepad => !!pad);
-  if (list.length === 0) return null;
+export const NAMED_3D_MOUSE = /spacemouse|3dconnexion|space navigator|spacepilot/i;
+const KNOWN_NON_3D_MOUSE = /xbox|wireless controller|dualshock|dualsense|joy-?con|switch pro|stadia|hotas|joystick|throttle|flight|rudder|pedal/i;
 
-  const named = list.find((pad) => /spacemouse|3dconnexion|space navigator|spacepilot/i.test(pad.id));
-  if (named && named.axes.length >= 6) return named;
+// Module-level: survives component remounts (e.g. cameraInteractionCycleEnabled toggling).
+const seenDeviceIds = new Set<string>();
 
-  const nonSpaceMouseGamepads = /xbox|wireless controller|dualshock|dualsense|joy-?con|switch pro|stadia/i;
-  return list.find((pad) => pad.axes.length >= 6 && !nonSpaceMouseGamepads.test(pad.id)) ?? null;
+export function getCandidateGamepads(): Gamepad[] {
+  if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') return [];
+  return Array.from(navigator.getGamepads()).filter((pad): pad is Gamepad => !!pad && pad.axes.length >= 6);
+}
+
+function getActiveSpaceMousePad(candidates: Gamepad[], blockedDeviceIds: string[]): Gamepad | null {
+  const unblocked = candidates.filter((pad) => !blockedDeviceIds.includes(pad.id));
+  if (unblocked.length === 0) return null;
+
+  const named = unblocked.find((pad) => NAMED_3D_MOUSE.test(pad.id));
+  if (named) return named;
+
+  return unblocked.find((pad) => !KNOWN_NON_3D_MOUSE.test(pad.id)) ?? null;
 }
 
 /**
@@ -86,6 +94,7 @@ export function SpaceMouseController({
   mouseOrbitDragRunId,
   onNavigationActiveChange,
   onNavigationFrame,
+  onNewDeviceDetected,
 }: {
   pivotPoint?: THREE.Vector3 | null;
   pivotCandidates?: THREE.Vector3[];
@@ -93,6 +102,7 @@ export function SpaceMouseController({
   mouseOrbitDragRunId?: number;
   onNavigationActiveChange?: (active: boolean) => void;
   onNavigationFrame?: () => void;
+  onNewDeviceDetected?: (deviceId: string) => void;
 }) {
   const { camera, controls, scene } = useThree();
 
@@ -293,7 +303,27 @@ export function SpaceMouseController({
       return;
     }
 
-    const pad = getActiveSpaceMousePad();
+    // Capture once per frame — shared by detection loop and active-pad selection.
+    const allCandidates = getCandidateGamepads();
+
+    // Detect newly connected candidate devices and notify once per app session.
+    // Only notify for unrecognized fallback devices that aren't already blocked —
+    // named SpaceMice need no action, and blocked devices were handled intentionally.
+    for (const candidate of allCandidates) {
+      if (!seenDeviceIds.has(candidate.id)) {
+        seenDeviceIds.add(candidate.id);
+        if (NAMED_3D_MOUSE.test(candidate.id)) {
+          console.info(`[3DMouse] Named device detected: "${candidate.id}" (${candidate.axes.length} axes)`);
+        } else {
+          console.warn(`[3DMouse] Fallback device detected: "${candidate.id}" (${candidate.axes.length} axes). Block it in Settings → 3D Mouse if it is not a 3D mouse.`);
+          if (!settings.blockedDeviceIds.includes(candidate.id)) {
+            onNewDeviceDetected?.(candidate.id);
+          }
+        }
+      }
+    }
+
+    const pad = getActiveSpaceMousePad(allCandidates, settings.blockedDeviceIds);
     if (!pad) {
       if (isNavigatingRef.current) {
         isNavigatingRef.current = false;
