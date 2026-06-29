@@ -16,3 +16,6 @@
 [submodule "plugins/lys-import"]
 	path = plugins/lys-import
 	url = https://github.com/Open-Resin-Alliance/df-plugin-lys
+[submodule "plugins/chitubox-import"]
+	path = plugins/chitubox-import
+	url = https://github.com/Open-Resin-Alliance/df-plugin-chitubox
