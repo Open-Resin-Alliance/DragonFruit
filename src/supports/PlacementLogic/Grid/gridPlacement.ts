@@ -375,14 +375,72 @@ function selectHighestValidAttachment(args: {
     return null;
 }
 
-function findHostTrunkAtNode(snapshot: SupportState, modelId: string, nodeKey: string, spacingMm: number): { trunkId: string; trunk: Trunk; root: Roots } | null {
-    for (const trunk of Object.values(snapshot.trunks)) {
-        if (trunk.modelId !== modelId) continue;
-        const root = snapshot.roots[trunk.rootId];
-        if (!root) continue;
-        const trunkKey = gridNodeKeyFromXY(root.transform.pos.x, root.transform.pos.y, spacingMm);
-        if (trunkKey !== nodeKey) continue;
-        return { trunkId: trunk.id, trunk, root };
+function findNeighborAttachment(args: {
+    nodeKey: string;
+    trunkGridMap: Map<string, { trunkId: string; trunk: Trunk; root: Roots }>;
+    tipPos: Vec3;
+    tipNormal: Vec3;
+    modelId: string;
+    minAngleDeg: number;
+    settings: DecideGridPlacementArgs['settings'];
+    attachStepMm: number;
+    mesh?: THREE.Mesh;
+}): GridPlacementDecision | null {
+    const [gxStr, gyStr] = args.nodeKey.split(',');
+    const gx = Number(gxStr);
+    const gy = Number(gyStr);
+    const neighborOffsets = [
+        // Cardinals
+        { dx: 0, dy: 1 }, { dx: 0, dy: -1 }, { dx: 1, dy: 0 }, { dx: -1, dy: 0 },
+        // Diagonals
+        { dx: 1, dy: 1 }, { dx: 1, dy: -1 }, { dx: -1, dy: 1 }, { dx: -1, dy: -1 }
+    ];
+
+    for (const offset of neighborOffsets) {
+        const neighborKey = `${gx + offset.dx},${gy + offset.dy}`;
+        const neighborHost = args.trunkGridMap.get(neighborKey);
+        if (neighborHost && neighborHost.trunk.segments.length > 0) {
+            const neighborKnot = selectHighestValidAttachment({
+                hostTrunk: neighborHost.trunk,
+                hostRoot: neighborHost.root,
+                tipPos: args.tipPos,
+                minAngleDeg: args.minAngleDeg,
+                settings: args.settings,
+                attachStepMm: args.attachStepMm,
+                mesh: args.mesh,
+                tipNormal: args.tipNormal,
+                modelId: args.modelId,
+            });
+            if (neighborKnot) {
+                const { branch, supportData } = buildBranchData({
+                    tipPos: args.tipPos,
+                    tipNormal: args.tipNormal,
+                    modelId: args.modelId,
+                    parentKnot: neighborKnot,
+                    mesh: args.mesh,
+                });
+                const leafDecision = tryBuildAutoLeafDecision({
+                    nodeKey: neighborKey,
+                    hostTrunkId: neighborHost.trunkId,
+                    knot: neighborKnot,
+                    tipPos: args.tipPos,
+                    tipNormal: args.tipNormal,
+                    modelId: args.modelId,
+                    settings: args.settings,
+                });
+                if (leafDecision) {
+                    return leafDecision;
+                }
+                return {
+                    kind: 'place_branch',
+                    nodeKey: neighborKey,
+                    hostTrunkId: neighborHost.trunkId,
+                    knot: neighborKnot,
+                    branch,
+                    supportData,
+                };
+            }
+        }
     }
     return null;
 }
@@ -412,6 +470,18 @@ function trunkCollidesWithMesh(
 export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacementDecision {
     const { settings, snapshot, candidate, tipPos, tipNormal, modelId, mesh } = args;
 
+    const spacingMm = settings.grid?.spacingMm ?? 4;
+    
+    // Build O(1) grid hash map of hosts
+    const trunkGridMap = new Map<string, { trunkId: string; trunk: Trunk; root: Roots }>();
+    for (const trunk of Object.values(snapshot.trunks)) {
+        if (trunk.modelId !== modelId) continue;
+        const root = snapshot.roots[trunk.rootId];
+        if (!root) continue;
+        const trunkKey = gridNodeKeyFromXY(root.transform.pos.x, root.transform.pos.y, spacingMm);
+        trunkGridMap.set(trunkKey, { trunkId: trunk.id, trunk, root });
+    }
+
     // Near-plate contacts get a minimal anchor support instead of trunk/branch
     if (tipPos.z < ANCHOR_HEIGHT_THRESHOLD_MM) {
         const { anchor, supportData } = buildAnchorData({ tipPos, tipNormal, modelId, mesh });
@@ -430,7 +500,6 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
         };
     }
 
-    const spacingMm = settings.grid.spacingMm;
     const minAngleDeg = settings.grid.minBranchAngleDeg;
     const attachStepMm = settings.grid.attachSearchStepMm;
     const resolvedNodeKey = getResolvedSnappedNodeKey(candidate.route);
@@ -442,7 +511,7 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
         { x: preferredReference.x, y: preferredReference.y }
     );
     const nodeKey = preferredNodeKey;
-    const host = findHostTrunkAtNode(snapshot, modelId, nodeKey, spacingMm);
+    const host = trunkGridMap.get(nodeKey) ?? null;
     const snappedCandidate = hasResolvedSnappedRoot(candidate.route) && nodeKey === resolvedNodeKey
         ? candidate
         : applyGridSnapToNodeKey(
@@ -466,6 +535,21 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
                 }),
                 nodeKey,
             };
+        }
+
+        const neighborDecision = findNeighborAttachment({
+            nodeKey,
+            trunkGridMap,
+            tipPos,
+            tipNormal,
+            modelId,
+            minAngleDeg,
+            settings,
+            attachStepMm,
+            mesh,
+        });
+        if (neighborDecision) {
+            return neighborDecision;
         }
 
         return {
@@ -520,6 +604,21 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
     perfMeasureWithSpike('grid:attach-search', 'grid:attachment-search');
 
     if (!selectedKnot) {
+        const neighborDecision = findNeighborAttachment({
+            nodeKey,
+            trunkGridMap,
+            tipPos,
+            tipNormal,
+            modelId,
+            minAngleDeg,
+            settings,
+            attachStepMm,
+            mesh,
+        });
+        if (neighborDecision) {
+            return neighborDecision;
+        }
+
         return {
             kind: 'reject',
             nodeKey,
@@ -585,5 +684,3 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
         supportData,
     };
 }
-
-

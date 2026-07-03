@@ -57,10 +57,6 @@ export function ContactDiskHud({
 
     const stopPointerEvent = React.useCallback((e: ThreeEvent<Event> | null) => {
         if (e?.stopPropagation) e.stopPropagation();
-        if (e?.nativeEvent) {
-            e.nativeEvent.stopPropagation?.();
-            e.nativeEvent.stopImmediatePropagation?.();
-        }
     }, []);
 
     React.useEffect(() => {
@@ -142,7 +138,7 @@ export function ContactDiskHud({
     }, [isDragging, setHovered, stopPointerEvent]);
 
     return (
-        <group rotation={[Math.PI / 2, 0, 0]} renderOrder={999}>
+        <group rotation={[Math.PI / 2, 0, 0]} renderOrder={100000}>
             <mesh
                 onPointerEnter={handlePointerEnterInternal}
                 onPointerMove={handlePointerMoveInternal}

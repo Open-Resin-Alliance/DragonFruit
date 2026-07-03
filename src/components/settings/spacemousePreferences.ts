@@ -17,6 +17,7 @@ export type SpaceMouseSettings = {
   invertRx: boolean;
   invertRy: boolean;
   invertRz: boolean;
+  blockedDeviceIds: string[];
 };
 
 export const DEFAULT_SPACEMOUSE_SETTINGS: SpaceMouseSettings = {
@@ -33,6 +34,7 @@ export const DEFAULT_SPACEMOUSE_SETTINGS: SpaceMouseSettings = {
   invertRx: false,    // Pitch
   invertRy: true,     // Yaw
   invertRz: false,    // Roll
+  blockedDeviceIds: [],
 };
 
 let cachedRawSettings: string | null | undefined;
@@ -62,6 +64,9 @@ export function normalizeSpaceMouseSettings(value?: Partial<SpaceMouseSettings> 
     invertRx: !!merged.invertRx,
     invertRy: !!merged.invertRy,
     invertRz: !!merged.invertRz,
+    blockedDeviceIds: Array.isArray(merged.blockedDeviceIds)
+      ? merged.blockedDeviceIds.filter((id) => typeof id === 'string')
+      : [],
   };
 }
 

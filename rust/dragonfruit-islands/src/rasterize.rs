@@ -32,8 +32,12 @@ fn key2(x: f64, y: f64) -> (i64, i64) {
 /// Returns (x, y) intersection point or None.
 /// Matches TS `intersectEdgeZ` with its epsilon tolerance.
 fn intersect_edge_z(
-    ax: f64, ay: f64, az: f64,
-    bx: f64, by: f64, bz: f64,
+    ax: f64,
+    ay: f64,
+    az: f64,
+    bx: f64,
+    by: f64,
+    bz: f64,
     z_slice: f64,
 ) -> Option<(f64, f64)> {
     let dz = bz - az;
@@ -217,11 +221,7 @@ fn rasterize_loops(
                 continue; // skip horizontal edges
             }
 
-            let (y_min, y_max, x_val) = if y1 > y2 {
-                (y2, y1, x2)
-            } else {
-                (y1, y2, x1)
-            };
+            let (y_min, y_max, x_val) = if y1 > y2 { (y2, y1, x2) } else { (y1, y2, x1) };
 
             let slope = (x2 - x1) / (y2 - y1);
             let start_row = y_min.ceil() as i32;
@@ -296,6 +296,11 @@ fn rasterize_loops(
 ///   `BucketedSlicer.slice()` → `rasterizeLoopsToExistingGridScanline()`
 ///
 /// Returns `(masks, grid_width, grid_height, num_layers, origin_x, origin_z)`.
+///
+/// **Z-bucket optimization**: triangles are pre-indexed by their Z-span so each
+/// layer only tests triangles that actually intersect its Z plane instead of
+/// iterating all triangles O(N_layers × N_triangles). For meshes with millions
+/// of triangles this is the dominant speedup.
 pub fn rasterize_for_island_scan(
     triangles: &[Triangle],
     bbox_min_x: f64,
@@ -317,6 +322,51 @@ pub fn rasterize_for_island_scan(
     let w = grid_width as usize;
     let h = grid_height as usize;
 
+    // ── Pre-index triangles into Z-buckets ──
+    // Each triangle goes into every bucket whose Z-band it spans.
+    let z_range = bbox_max_z - bbox_min_z;
+    let num_z_buckets = num_layers.max(1);
+    let mut z_buckets: Vec<Vec<u32>> = vec![Vec::new(); num_z_buckets];
+    for (ti, tri) in triangles.iter().enumerate() {
+        let tri_min_z = tri.a.z.min(tri.b.z).min(tri.c.z) as f64;
+        let tri_max_z = tri.a.z.max(tri.b.z).max(tri.c.z) as f64;
+        if tri_max_z < bbox_min_z + EPS || tri_min_z > bbox_max_z + EPS {
+            continue; // triangle entirely outside model Z range
+        }
+        let b_start = if z_range > EPS {
+            (((tri_min_z - bbox_min_z) / z_range) * (num_z_buckets as f64 - 1.0))
+                .floor()
+                .max(0.0) as usize
+        } else {
+            0
+        };
+        let b_end = if z_range > EPS {
+            (((tri_max_z - bbox_min_z) / z_range) * (num_z_buckets as f64 - 1.0))
+                .ceil()
+                .min(num_z_buckets as f64 - 1.0) as usize
+        } else {
+            num_z_buckets - 1
+        };
+        for b in b_start..=b_end {
+            z_buckets[b].push(ti as u32);
+        }
+    }
+
+    let bucket_tri_counts: Vec<usize> = z_buckets.iter().map(|b| b.len()).collect();
+    let total_bucket_entries: usize = bucket_tri_counts.iter().sum();
+    let avg_per_layer = if num_layers > 0 {
+        total_bucket_entries / num_layers
+    } else {
+        0
+    };
+    log::info!(
+        "Rasterization Z-buckets: {} total entries across {} layers (avg {:.0} tri/layer vs {} total)",
+        total_bucket_entries,
+        num_layers,
+        avg_per_layer,
+        triangles.len(),
+    );
+
     use rayon::prelude::*;
     let masks: Vec<RleMask> = (0..num_layers)
         .into_par_iter()
@@ -324,8 +374,12 @@ pub fn rasterize_for_island_scan(
             // Match TS: z = zOffset + (idx + 1) * layerHeight + 1e-6
             let z = bbox_min_z + (l as f64 + 1.0) * layer_height_mm + 1e-6;
 
-            // Step 1: Slice triangles → closed polygon loops
-            let loops = slice_to_loops(triangles, z);
+            // Step 1: Slice only triangles from this Z-bucket
+            let bucket_tris: Vec<&Triangle> = z_buckets[l]
+                .iter()
+                .map(|&ti| &triangles[ti as usize])
+                .collect();
+            let loops = slice_to_loops_from_slice(&bucket_tris, z);
 
             // Step 2: Rasterize loops using edge-table scanline fill
             let dense = rasterize_loops(&loops, w, h, origin_x, origin_z, px_mm);
@@ -334,5 +388,77 @@ pub fn rasterize_for_island_scan(
         })
         .collect();
 
-    (masks, grid_width, grid_height, num_layers, origin_x, origin_z)
+    (
+        masks,
+        grid_width,
+        grid_height,
+        num_layers,
+        origin_x,
+        origin_z,
+    )
+}
+
+/// Slice a pre-filtered set of triangles at Z height, building polygon loops.
+/// Same logic as `slice_to_loops` but takes a slice instead of iterating all triangles.
+fn slice_to_loops_from_slice(triangles: &[&Triangle], z: f64) -> Vec<Vec<Pt2>> {
+    let z_slice = z + 1e-5;
+    let mut segments: Vec<(Pt2, Pt2)> = Vec::new();
+
+    for tri in triangles {
+        let (v0x, v0y, v0z) = (tri.a.x as f64, tri.a.y as f64, tri.a.z as f64);
+        let (v1x, v1y, v1z) = (tri.b.x as f64, tri.b.y as f64, tri.b.z as f64);
+        let (v2x, v2y, v2z) = (tri.c.x as f64, tri.c.y as f64, tri.c.z as f64);
+
+        let above0 = v0z >= z_slice + 10.0 * EPS;
+        let above1 = v1z >= z_slice + 10.0 * EPS;
+        let above2 = v2z >= z_slice + 10.0 * EPS;
+        let below0 = v0z <= z_slice - 10.0 * EPS;
+        let below1 = v1z <= z_slice - 10.0 * EPS;
+        let below2 = v2z <= z_slice - 10.0 * EPS;
+
+        if (above0 && above1 && above2) || (below0 && below1 && below2) {
+            continue;
+        }
+
+        let mut points: Vec<(f64, f64)> = Vec::new();
+        if let Some(p) = intersect_edge_z(v0x, v0y, v0z, v1x, v1y, v1z, z_slice) {
+            points.push(p);
+        }
+        if let Some(p) = intersect_edge_z(v1x, v1y, v1z, v2x, v2y, v2z, z_slice) {
+            points.push(p);
+        }
+        if let Some(p) = intersect_edge_z(v2x, v2y, v2z, v0x, v0y, v0z, z_slice) {
+            points.push(p);
+        }
+
+        if points.len() == 2 {
+            let a = (points[0].0, -points[0].1);
+            let b = (points[1].0, -points[1].1);
+            segments.push((a, b));
+        }
+    }
+
+    build_loops(&segments)
+}
+
+/// Helper to slice, rasterize, and RLE-encode a single layer.
+pub fn rasterize_layer_for_island_scan(
+    triangles: &[Triangle],
+    z: f64,
+    grid_width: i32,
+    grid_height: i32,
+    origin_x: f64,
+    origin_z: f64,
+    px_mm: f64,
+) -> RleMask {
+    let loops = slice_to_loops(triangles, z);
+    let dense = rasterize_loops(
+        &loops,
+        grid_width as usize,
+        grid_height as usize,
+        origin_x,
+        origin_z,
+        px_mm,
+    );
+    rle_encode(&dense, grid_width, grid_height)
 }

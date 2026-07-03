@@ -6,6 +6,18 @@ import {
     toggleSelectedSupportId,
 } from '@/supports/interaction/supportMultiSelection';
 import type { SupportSelectionClickInput } from './selectionTypes';
+import { isActionActiveSync } from '@/hotkeys/hotkeyStore';
+import { jointCreationStore } from '@/supports/SupportPrimitives/Joint/jointCreationState';
+
+function isPlacementActive() {
+    const isPlacementModeActive =
+        isActionActiveSync('SUPPORTS', 'LEAF_PLACEMENT') ||
+        isActionActiveSync('SUPPORTS', 'BRANCH_PLACEMENT') ||
+        isActionActiveSync('SUPPORTS', 'KICKSTAND_PLACEMENT') ||
+        isActionActiveSync('SUPPORTS', 'SPROUTED_PARENTING_LOCK');
+    const isJointCreationActive = jointCreationStore.getState().isActive;
+    return isPlacementModeActive || isJointCreationActive;
+}
 
 const SUPPORT_SELECTION_CATEGORIES = new Set([
     'trunk',
@@ -24,6 +36,7 @@ function isSupportCategory(category: string | null | undefined) {
 }
 
 export function selectPrimitiveById(id: string) {
+    if (isPlacementActive()) return;
     if (!id) return;
     setSelectedId(id);
 }
@@ -33,11 +46,13 @@ export function selectJointById(id: string) {
 }
 
 export function clearSupportSelection() {
+    if (isPlacementActive()) return;
     clearSelectedSupportIds();
     setSelectedId(null);
 }
 
 export function selectSupportIds(ids: Iterable<string>) {
+    if (isPlacementActive()) return;
     const normalized = Array.from(new Set(Array.from(ids).filter(Boolean)));
     clearSelectedSupportIds();
     setSelectedSupportIds(normalized);
@@ -45,6 +60,7 @@ export function selectSupportIds(ids: Iterable<string>) {
 }
 
 export function selectSupportById(id: string, toggle: boolean) {
+    if (isPlacementActive()) return;
     if (!id) return;
 
     if (!toggle) {

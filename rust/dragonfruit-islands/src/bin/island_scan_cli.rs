@@ -142,6 +142,7 @@ fn main() {
         grid: GridRef { origin_x, origin_z, width: grid_width, height: grid_height, px_mm },
         num_layers: num_layers as u32,
         min_overlap_px, overlap_neighborhood_px,
+        candidate_only: false,
     };
 
     let t1 = Instant::now();

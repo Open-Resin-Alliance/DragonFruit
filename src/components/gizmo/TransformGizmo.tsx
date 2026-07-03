@@ -183,6 +183,7 @@ export function TransformGizmo({
   disableRingBillboard,
   disableViewCull,
   axisVisualFlip,
+  uniformScaling = true,
 }: TransformGizmoProps) {
   const { isDragging: isGlobalDragging } = usePicking();
   const { camera } = useThree();
@@ -683,6 +684,7 @@ export function TransformGizmo({
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('scale-x')}
               interactionsEnabled={partIsInteractable('scale-x')}
+              isUniform={uniformScaling}
               gizmoPosition={posVec}
               onDragStart={(isUniform: boolean) => handleDragStart('scale-x', isUniform)}
               onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('x', factor, isUniform)}
@@ -701,6 +703,7 @@ export function TransformGizmo({
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('scale-y')}
               interactionsEnabled={partIsInteractable('scale-y')}
+              isUniform={uniformScaling}
               gizmoPosition={posVec}
               onDragStart={(isUniform: boolean) => handleDragStart('scale-y', isUniform)}
               onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('y', factor, isUniform)}
@@ -719,6 +722,7 @@ export function TransformGizmo({
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('scale-z')}
               interactionsEnabled={partIsInteractable('scale-z')}
+              isUniform={uniformScaling}
               gizmoPosition={posVec}
               onDragStart={(isUniform: boolean) => handleDragStart('scale-z', isUniform)}
               onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('z', factor, isUniform)}

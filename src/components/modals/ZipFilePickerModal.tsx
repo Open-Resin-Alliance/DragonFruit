@@ -137,11 +137,11 @@ export function ZipFilePickerModal({
   }, [defaultSelectedIndices]);
 
   React.useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
+    const handleKeyDown = (e: CustomEvent) => {
+      if (e.detail.key === 'Escape') onCancel();
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
+    return () => window.removeEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
   }, [onCancel]);
 
   const toggleFile = (index: number) => {

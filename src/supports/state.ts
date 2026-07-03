@@ -3800,15 +3800,25 @@ export function removeLeaf(leafId: string): { leaf: Leaf; knot: Knot | null } | 
     const { [leafId]: _, ...remainingLeaves } = state.leaves;
 
     let nextKnots = state.knots;
+    let knotDeleted = false;
     if (knotId && state.knots[knotId]) {
-        const { [knotId]: removedKnot, ...restKnots } = state.knots;
-        snapshots.knot = deepClone(removedKnot);
-        nextKnots = restKnots;
+        const isShared =
+            Object.values(state.leaves).some((l) => l.id !== leafId && l.parentKnotId === knotId) ||
+            Object.values(state.branches).some((b) => b.parentKnotId === knotId) ||
+            Object.values(state.braces).some((brace) => brace.startKnotId === knotId || brace.endKnotId === knotId) ||
+            Object.values(getKickstandSnapshot().kickstands).some((k) => k.hostKnotId === knotId);
+
+        if (!isShared) {
+            const { [knotId]: removedKnot, ...restKnots } = state.knots;
+            snapshots.knot = deepClone(removedKnot);
+            nextKnots = restKnots;
+            knotDeleted = true;
+        }
     }
 
     let nextSelectedId = state.selectedId;
     let nextSelectedCategory = state.selectedCategory;
-    if (state.selectedId === leafId || (knotId && state.selectedId === knotId)) {
+    if (state.selectedId === leafId || (knotId && knotDeleted && state.selectedId === knotId)) {
         nextSelectedId = null;
         nextSelectedCategory = null;
     }

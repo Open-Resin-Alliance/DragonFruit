@@ -318,16 +318,16 @@ export function ModelManagerPanel({
     if (!contextMenu) return;
 
     const handlePointerDown = () => closeContextMenu();
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeContextMenu();
+    const handleEscape = (e: CustomEvent) => {
+      if (e.detail.key === 'Escape') closeContextMenu();
     };
 
     window.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('keydown', handleEscape);
+    window.addEventListener('app-hotkey-keydown', handleEscape as EventListener);
 
     return () => {
       window.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('keydown', handleEscape);
+      window.removeEventListener('app-hotkey-keydown', handleEscape as EventListener);
     };
   }, [contextMenu]);
 

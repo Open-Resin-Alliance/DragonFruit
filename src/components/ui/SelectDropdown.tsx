@@ -113,18 +113,18 @@ export function SelectDropdown<T extends string | number = string>({
       setIsOpen(false);
     };
 
-    const onEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+    const onEscape = (event: CustomEvent) => {
+      if (event.detail.key === 'Escape') {
         setIsOpen(false);
       }
     };
 
     window.addEventListener('pointerdown', onPointerDown);
-    window.addEventListener('keydown', onEscape);
+    window.addEventListener('app-hotkey-keydown', onEscape as EventListener);
 
     return () => {
       window.removeEventListener('pointerdown', onPointerDown);
-      window.removeEventListener('keydown', onEscape);
+      window.removeEventListener('app-hotkey-keydown', onEscape as EventListener);
     };
   }, [isOpen]);
 

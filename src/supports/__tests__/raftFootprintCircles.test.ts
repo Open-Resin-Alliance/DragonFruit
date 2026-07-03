@@ -12,7 +12,7 @@ test('collectRaftBaseCirclesByModel includes support roots, anchors, and kicksta
       {
         modelId: 'model-a',
         diameter: 4,
-        transform: { pos: { x: 1, y: 2, z: 0 } },
+        transform: { pos: { x: 1, y: 2, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
       },
     ],
     anchors: [
@@ -26,12 +26,12 @@ test('collectRaftBaseCirclesByModel includes support roots, anchors, and kicksta
       {
         modelId: 'model-a',
         diameter: 2,
-        transform: { pos: { x: 5, y: 6, z: 0 } },
+        transform: { pos: { x: 5, y: 6, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
       },
       {
-        modelId: null,
+        modelId: null as any,
         diameter: 8,
-        transform: { pos: { x: -1, y: -2, z: 0 } },
+        transform: { pos: { x: -1, y: -2, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
       },
     ],
   });
@@ -52,19 +52,19 @@ test('collectRaftBaseCirclesByModel honors model filters and exclusions for kick
       {
         modelId: 'model-a',
         diameter: 4,
-        transform: { pos: { x: 1, y: 1, z: 0 } },
+        transform: { pos: { x: 1, y: 1, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
       },
     ],
     kickstandRoots: [
       {
         modelId: 'model-a',
         diameter: 2,
-        transform: { pos: { x: 2, y: 2, z: 0 } },
+        transform: { pos: { x: 2, y: 2, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
       },
       {
         modelId: 'model-b',
         diameter: 2,
-        transform: { pos: { x: 3, y: 3, z: 0 } },
+        transform: { pos: { x: 3, y: 3, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
       },
     ],
   }, {
@@ -79,12 +79,12 @@ test('collectRaftBaseCirclesByModel honors model filters and exclusions for kick
       {
         modelId: 'model-a',
         diameter: 2,
-        transform: { pos: { x: 2, y: 2, z: 0 } },
+        transform: { pos: { x: 2, y: 2, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
       },
       {
         modelId: 'model-b',
         diameter: 2,
-        transform: { pos: { x: 3, y: 3, z: 0 } },
+        transform: { pos: { x: 3, y: 3, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
       },
     ],
   }, {

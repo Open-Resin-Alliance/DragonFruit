@@ -1,6 +1,7 @@
-﻿"use client";
+"use client";
 
 import React, { useEffect } from 'react';
+import { hotkeyStore, useActionActive } from '@/hotkeys/hotkeyStore';
 import dynamic from 'next/dynamic';
 import * as THREE from 'three';
 import { AlertTriangle } from 'lucide-react';
@@ -13,6 +14,7 @@ import {
   type CrossSectionStencilCapEntry,
 } from '@/components/scene/CrossSectionStencilCap';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
+import IslandSurfaceDotsOverlay from '@/components/scene/IslandSurfaceDotsOverlay';
 import { IslandVoxelVisualization } from '@/components/scene/IslandVoxelVisualization';
 import { IslandExpansionVisualization } from '@/components/scene/IslandExpansionVisualization';
 import { MeshClassificationRenderer } from '@/components/scene/MeshClassificationRenderer';
@@ -41,6 +43,7 @@ import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFo
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 import { JointPlacementPreview } from '@/supports/SupportPrimitives/Joint/JointPlacementPreview';
+import { useJointCreationState } from '@/supports/SupportPrimitives/Joint/jointCreationState';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
 import { isContactDiskHudInteractionActive } from '@/supports/SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { BranchPlacementController } from '@/supports/SupportTypes/Branch/BranchPlacementController';
@@ -134,6 +137,7 @@ import {
   toggleSupportPathfindingDebugEnabled,
   toggleSupportPathfindingDebugTuningEnabled,
 } from '@/supports/PlacementLogic/Pathfinding/pathfindingDebugState';
+import { applyScaleFactor } from '@/components/gizmo/scale/applyScaleFactor';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
@@ -331,6 +335,7 @@ export function SceneCanvas({
   overlayColor,
   overlayOpacity,
   overlaySelectedIslandId,
+  enableVolumeGlow = true,
   materialRoughness,
   scanResults,
   layerHeightMm,
@@ -343,6 +348,7 @@ export function SceneCanvas({
   voxelOpacity,
   transformMode,
   transform,
+  uniformScaling = true,
   autoLift = false,
   liftDistance = 5,
   autoSnapEnabled = true,
@@ -416,9 +422,12 @@ export function SceneCanvas({
   deferCameraIntro = false,
   freezeViewportActive = false,
   cavityGeometryByModelId,
+  onClearSelection,
+  onNewDeviceDetected,
 }: {
   models?: LoadedModel[];
   cavityGeometryByModelId?: Map<string, THREE.BufferGeometry>;
+  onClearSelection?: () => void;
   activeModelId?: string | null;
   visualActiveModelId?: string | null;
   selectedModelIds?: string[];
@@ -445,6 +454,7 @@ export function SceneCanvas({
   overlayColor?: string;
   overlayOpacity?: number;
   overlaySelectedIslandId?: number | null;
+  enableVolumeGlow?: boolean;
   ambientIntensity?: number;
   directionalIntensity?: number;
   headlightIntensity?: number;
@@ -460,6 +470,7 @@ export function SceneCanvas({
   voxelOpacity?: number;
   transformMode?: TransformMode;
   transform?: ModelTransform;
+  uniformScaling?: boolean;
   autoLift?: boolean;
   liftDistance?: number;
   autoSnapEnabled?: boolean;
@@ -594,8 +605,13 @@ export function SceneCanvas({
   indicatorPlaneColor?: string;
   deferCameraIntro?: boolean;
   freezeViewportActive?: boolean;
+  onNewDeviceDetected?: (deviceId: string) => void;
 }) {
   const DROP_ANIMATION_DURATION_MS = 760;
+  const selectedMarker = React.useMemo(() => {
+    if (overlaySelectedIslandId == null || !islandMarkers) return null;
+    return islandMarkers.find(m => m.id === overlaySelectedIslandId);
+  }, [islandMarkers, overlaySelectedIslandId]);
   const LARGE_MODEL_BOUNCE_THRESHOLD_POLYS = 900_000;
   const LARGE_MODEL_DROP_DEFER_THRESHOLD_POLYS = 1_200_000;
   const BUILD_VOLUME_BOUNDS_EPS_MM = 0.01;
@@ -692,6 +708,22 @@ export function SceneCanvas({
   );
 
   const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const { isActive: isJointCreationActive } = useJointCreationState();
+  const isPlacementActive = React.useMemo(() => {
+    return !!(
+      isBranchPlacementActive ||
+      isLeafPlacementActive ||
+      isBracePlacementActive ||
+      isKickstandPlacementActive ||
+      isJointCreationActive
+    );
+  }, [
+    isBranchPlacementActive,
+    isLeafPlacementActive,
+    isBracePlacementActive,
+    isKickstandPlacementActive,
+    isJointCreationActive
+  ]);
   const [viewportSizeForUiAnchors, setViewportSizeForUiAnchors] = React.useState({ width: 0, height: 0 });
 
   React.useEffect(() => {
@@ -3876,32 +3908,30 @@ export function SceneCanvas({
   }, []);
 
   React.useEffect(() => {
-    const handleEscapeDeselect = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      if (event.defaultPrevented) return;
-      if (mode !== 'prepare') return;
-      if (!onActiveModelChange) return;
+    if (mode !== 'prepare') return;
+    if (!onActiveModelChange) return;
 
-      const target = event.target as HTMLElement | null;
-      const tag = target?.tagName;
-      const isTypingContext = !!target && (
-        target.isContentEditable
-        || tag === 'INPUT'
-        || tag === 'TEXTAREA'
-        || tag === 'SELECT'
-      );
-      if (isTypingContext) return;
+    let wasEscapePressed = false;
 
-      if (!activeModelId && (!selectedModelIds || selectedModelIds.length === 0)) return;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      const isEscapeJustPressed = isEscapePressed && !wasEscapePressed;
 
-      onActiveModelChange(null);
-      window.dispatchEvent(new CustomEvent('model-deselected'));
-    };
+      if (isEscapeJustPressed) {
+        if (!activeModelId && (!selectedModelIds || selectedModelIds.length === 0)) {
+          wasEscapePressed = isEscapePressed;
+          return;
+        }
 
-    window.addEventListener('keydown', handleEscapeDeselect);
-    return () => {
-      window.removeEventListener('keydown', handleEscapeDeselect);
-    };
+        onActiveModelChange(null);
+        window.dispatchEvent(new CustomEvent('model-deselected'));
+      }
+
+      wasEscapePressed = isEscapePressed;
+    });
+
+    return unsubscribe;
   }, [activeModelId, mode, onActiveModelChange, selectedModelIds]);
 
   React.useEffect(() => {
@@ -3911,49 +3941,38 @@ export function SceneCanvas({
       return;
     }
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (event.repeat) return;
-      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+    let wasJPressed = false;
+    let wasMPressed = false;
 
-      const target = event.target as HTMLElement | null;
-      const tag = target?.tagName;
-      const isTypingContext = !!target && (
-        target.isContentEditable
-        || tag === 'INPUT'
-        || tag === 'TEXTAREA'
-        || tag === 'SELECT'
-      );
-      if (isTypingContext) return;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isJPressed = active.has('j');
+      const isMPressed = active.has('m');
 
-      const isMHotkey = event.code === 'KeyM' || event.key.toLowerCase() === 'm';
-      if (isMHotkey && supportPathfindingDebugState.enabled) {
-        event.preventDefault();
-        event.stopPropagation();
+      const isJJustPressed = isJPressed && !wasJPressed;
+      const isMJustPressed = isMPressed && !wasMPressed;
+
+      if (isMJustPressed && supportPathfindingDebugState.enabled) {
         toggleSupportPathfindingDebugTuningEnabled();
         setShowSupportPathfindingTuningSuggestions((prev) => !prev);
-        return;
       }
 
-      const isJHotkey = event.code === 'KeyJ' || event.key.toLowerCase() === 'j';
-      if (!isJHotkey) return;
+      if (isJJustPressed) {
+        const nowMs = performance.now();
+        const elapsedMs = nowMs - supportPathfindingDebugLastTapMsRef.current;
+        supportPathfindingDebugLastTapMsRef.current = nowMs;
 
-      const nowMs = performance.now();
-      const elapsedMs = nowMs - supportPathfindingDebugLastTapMsRef.current;
-      supportPathfindingDebugLastTapMsRef.current = nowMs;
+        if (elapsedMs <= SUPPORT_PATHFINDING_DEBUG_DOUBLE_TAP_WINDOW_MS) {
+          toggleSupportPathfindingDebugEnabled();
+          supportPathfindingDebugLastTapMsRef.current = 0;
+        }
+      }
 
-      if (elapsedMs > SUPPORT_PATHFINDING_DEBUG_DOUBLE_TAP_WINDOW_MS) return;
+      wasJPressed = isJPressed;
+      wasMPressed = isMPressed;
+    });
 
-      event.preventDefault();
-      event.stopPropagation();
-      toggleSupportPathfindingDebugEnabled();
-      supportPathfindingDebugLastTapMsRef.current = 0;
-    };
-
-    window.addEventListener('keydown', onKeyDown, true);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown, true);
-    };
+    return unsubscribe;
   }, [mode, supportPathfindingDebugState.enabled]);
 
   React.useEffect(() => {
@@ -3999,6 +4018,7 @@ export function SceneCanvas({
   const handleScenePointerMissed = React.useCallback(() => {
     if (!cameraInteractionCycleEnabled) return;
     if (isMarqueeSelecting) return;
+    if (isPlacementActive) return;
     if (window.__modelClickedThisFrame) return;
     if (orbitInteractionActiveRef.current || spaceMouseNavigationActive) return;
 
@@ -4020,7 +4040,7 @@ export function SceneCanvas({
       if (supportStateForBounds.hoveredCategory === 'contactDisk') return;
       clearSupportSelection();
     }
-  }, [cameraInteractionCycleEnabled, isMarqueeSelecting, mode, onActiveModelChange, spaceMouseNavigationActive, supportStateForBounds.hoveredCategory]);
+  }, [cameraInteractionCycleEnabled, isMarqueeSelecting, mode, onActiveModelChange, spaceMouseNavigationActive, supportStateForBounds.hoveredCategory, isPlacementActive]);
 
   React.useEffect(() => {
     updateCameraBelowBuildPlate();
@@ -5077,7 +5097,8 @@ export function SceneCanvas({
     };
 
     const suppressContextMenuDuringOrbit = (event: Event) => {
-      if (orbitInteractionActiveRef.current) {
+      const container = containerRef.current;
+      if (orbitInteractionActiveRef.current && container && container.contains(event.target as Node)) {
         event.preventDefault();
       }
       forceOrbitEndIfActive();
@@ -5221,24 +5242,16 @@ export function SceneCanvas({
     }
   }, [crossSectionCapDebugState]);
 
+  const isCapsDebugActive = useActionActive('DEBUG', 'TOGGLE_CAPS');
+  const wasCapsDebugActive = React.useRef(false);
+
   React.useEffect(() => {
     if (!CROSS_SECTION_CAP_DEBUG_HOTKEY_ENABLED) return;
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      const isToggle = event.ctrlKey
-        && event.shiftKey
-        && (event.code === 'KeyK' || event.key.toLowerCase() === 'k');
-      if (!isToggle) return;
-      event.preventDefault();
-      event.stopPropagation();
+    if (isCapsDebugActive && !wasCapsDebugActive.current) {
       setShowCrossSectionCapDebugPanel((prev) => !prev);
-    };
-
-    window.addEventListener('keydown', onKeyDown, true);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown, true);
-    };
-  }, []);
+    }
+    wasCapsDebugActive.current = isCapsDebugActive;
+  }, [isCapsDebugActive]);
 
   const topCapDebugOverrides = crossSectionCapDebugState.enabled
     ? crossSectionCapDebugState.top
@@ -5477,6 +5490,7 @@ export function SceneCanvas({
                         <group
                           matrix={activeModelAttachedSupportLocalMatrix ?? undefined}
                           matrixAutoUpdate={false}
+                          renderOrder={100000}
                         >
                           <ModelAttachedSupportLayer
                             mode={mode}
@@ -5509,8 +5523,20 @@ export function SceneCanvas({
                           />
                         </group>
                       )}
-                    </StlMesh>
 
+                      {isActive && (mode === 'support' || mode === 'analysis') && islandMarkers && islandMarkers.length > 0 && (
+                        <IslandSurfaceDotsOverlay
+                          geometry={model.geometry.geometry}
+                          islandMarkers={islandMarkers}
+                          scanBBox={scanBBox || null}
+                          selectedIslandId={overlaySelectedIslandId}
+                          clipLower={clipLower}
+                          clipUpper={clipUpper}
+                          opacity={overlayOpacity ?? 0.9}
+                          transform={transformToUse}
+                        />
+                      )}
+                    </StlMesh>
                   </React.Fragment>
                 );
               })}
@@ -5772,7 +5798,7 @@ export function SceneCanvas({
 
               {/* Raft system (Crenelated) - uses supports roots + active model footprint */}
               {/* Wrap all support/raft geometry in a drag group so they move as one during gizmo drags */}
-              <group ref={supportDragGroupRef ?? undefined}>
+              <group ref={supportDragGroupRef ?? undefined} renderOrder={100000}>
               {!useActiveModelAttachedSupportProxy && (
                 <ModelAttachedSupportLayer
                   mode={mode}
@@ -5895,6 +5921,7 @@ export function SceneCanvas({
 
               {/* During active-model proxy drag, keep other models' supports/rafts visible in world space. */}
               {useActiveModelAttachedSupportProxy && activeModelId && (
+                <group renderOrder={100000}>
                 <ModelAttachedSupportLayer
                   mode={mode}
                   excludeModelId={activeModelId}
@@ -5921,6 +5948,7 @@ export function SceneCanvas({
                   cavityGeometryByModelId={cavityGeometryByModelId}
                   modelWorldInverseById={modelWorldInverseById}
                 />
+                </group>
               )}
 
               {multiGizmoSupportPreviewDeltas.length > 0
@@ -5932,6 +5960,7 @@ export function SceneCanvas({
                       }}
                       matrix={delta}
                       matrixAutoUpdate={false}
+                      renderOrder={100000}
                       raycast={() => null}
                     >
                       <ModelAttachedSupportLayer
@@ -5984,6 +6013,7 @@ export function SceneCanvas({
                   enableMove
                   enableRotate={!isMultiGizmoSelection}
                   enableScale
+                  uniformScaling={uniformScaling}
                   enableLighting
                   onDragStateChange={setIsGizmoDragging}
                   onRetargetingChange={setIsGizmoRetargeting}
@@ -6317,11 +6347,10 @@ export function SceneCanvas({
                     }
                     return true;
                   }}
-                  onScale={(_axis, value) => {
+                  onScale={(axis, value) => {
                     if (activeGroupRef.current) {
-                      const scalarValue = Number(value);
-                      const safeScalar = Number.isFinite(scalarValue) ? scalarValue : 1;
-                      const nextScale = initialScaleRef.current.clone().multiplyScalar(Math.max(0.0001, safeScalar));
+                      const safeScalar = Number.isFinite(Number(value)) ? Number(value) : 1;
+                      const nextScale = applyScaleFactor(initialScaleRef.current, axis, safeScalar);
                       activeGroupRef.current.scale.copy(nextScale);
                       applySupportGroupDelta();
                       const live = captureActiveGroupTransform();
@@ -6428,17 +6457,18 @@ export function SceneCanvas({
                 />
               )}
 
-              <IslandOverlay
-                markers={islandMarkers ?? []}
-                meshRef={activeActualMeshRef.current}
-                brushRadiusMm={overlayBrushRadius ?? 2}
-                color={overlayColor ?? '#FF0000'}
-                opacity={overlayOpacity ?? 0.5}
-                transform={transform}
-                selectedIslandId={overlaySelectedIslandId}
-                clipLower={clipLower}
-                clipUpper={clipUpper}
-              />
+              {selectedMarker && enableVolumeGlow && (
+                <IslandOverlay
+                  markers={[selectedMarker]}
+                  brushRadiusMm={overlayBrushRadius ?? 2}
+                  color={overlayColor ?? '#FF0000'}
+                  opacity={overlayOpacity ?? 0.5}
+                  transform={transform}
+                  selectedIslandId={overlaySelectedIslandId}
+                  clipLower={clipLower}
+                  clipUpper={clipUpper}
+                />
+              )}
 
               <IslandVoxelVisualization
                 scanResults={scanResults ?? null}
@@ -6531,7 +6561,7 @@ export function SceneCanvas({
               {mode === 'support' && <BranchPlacementController />}
 
               {/* Leaf Placement Controller - handles snapping logic */}
-              {mode === 'support' && <LeafPlacementController />}
+              {mode === 'support' && <LeafPlacementController activeModelId={activeModelId} />}
 
               {/* Brace Placement Controller - handles snapping logic */}
               {mode === 'support' && <BracePlacementController />}
@@ -6582,7 +6612,7 @@ export function SceneCanvas({
             && !(mode === 'prepare' && transformMode === 'smoothing' && smoothingBrushState.isStrokeActive)
             && !isGizmoDragging
             && !isMarqueeSelecting
-            && !customPrepareMarqueeSelection?.enabled
+            && !isPlacementActive
           }
           onStart={handleOrbitStart}
           onChange={handleOrbitChange}
@@ -6614,6 +6644,7 @@ export function SceneCanvas({
             mouseOrbitDragRunId={mouseOrbitDragRunId}
             onNavigationActiveChange={setSpaceMouseNavigationActive}
             onNavigationFrame={handleSpaceMouseNavigationFrame}
+            onNewDeviceDetected={onNewDeviceDetected}
           />
         )}
         {cameraInteractionCycleEnabled && (
@@ -6651,7 +6682,7 @@ export function SceneCanvas({
           plateWidthMm={activeBuildVolumeSettings.widthMm}
           plateDepthMm={activeBuildVolumeSettings.depthMm}
         />
-        <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} />
+        <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} onClearSelection={onClearSelection} />
         {mode === 'support' && supportPathfindingDebugState.enabled && (
           <SupportPathfindingDebugOverlay snapshot={supportPathfindingDebugState.snapshot} />
         )}

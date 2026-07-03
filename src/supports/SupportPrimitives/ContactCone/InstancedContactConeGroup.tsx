@@ -246,6 +246,7 @@ function ConeBucketMesh({
                     ref={diskRef}
                     args={[undefined, undefined, bucket.cones.length]}
                     frustumCulled={false}
+                    renderOrder={100000}
                     {...sharedHandlers}
                 >
                     <cylinderGeometry args={[bucket.contactRadius, bucket.contactRadius, bucket.diskThickness + bucket.penetration, 10]} />
@@ -268,6 +269,7 @@ function ConeBucketMesh({
                 ref={bodyRef}
                 args={[undefined, undefined, bucket.cones.length]}
                 frustumCulled={false}
+                renderOrder={100000}
                 {...sharedHandlers}
             >
                 <cylinderGeometry args={[bucket.contactRadius, bucket.bodyRadius, bucket.length, 10]} />
@@ -286,6 +288,7 @@ function ConeBucketMesh({
                 ref={tipSphereRef}
                 args={[undefined, undefined, bucket.cones.length]}
                 frustumCulled={false}
+                renderOrder={100000}
                 {...sharedHandlers}
             >
                 <sphereGeometry args={[bucket.contactRadius, 10, 8]} />
@@ -307,7 +310,7 @@ function ConeBucketMesh({
                         args={[undefined, undefined, bucket.cones.length]}
                         frustumCulled={false}
                         raycast={() => null}
-                        renderOrder={3}
+                        renderOrder={100000}
                         material={outOfBoundsMaterial}
                     >
                         <cylinderGeometry args={[bucket.contactRadius, bucket.bodyRadius, bucket.length, 10]} />
@@ -317,7 +320,7 @@ function ConeBucketMesh({
                         args={[undefined, undefined, bucket.cones.length]}
                         frustumCulled={false}
                         raycast={() => null}
-                        renderOrder={3}
+                        renderOrder={100000}
                         material={outOfBoundsMaterial}
                     >
                         <sphereGeometry args={[bucket.contactRadius, 10, 8]} />
@@ -328,7 +331,7 @@ function ConeBucketMesh({
                             args={[undefined, undefined, bucket.cones.length]}
                             frustumCulled={false}
                             raycast={() => null}
-                            renderOrder={3}
+                            renderOrder={100000}
                             material={outOfBoundsMaterial}
                         >
                             <cylinderGeometry args={[bucket.contactRadius, bucket.contactRadius, bucket.diskThickness + bucket.penetration, 10]} />
