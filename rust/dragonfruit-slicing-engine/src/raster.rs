@@ -309,12 +309,68 @@ fn build_row_spans_nonzero(
     spans
 }
 
+/// Diagnostic gate for the `DF_DEBUG_WIDE_ROWS=1` tracer. Announces itself
+/// on first query so a silent run proves the traced build actually executed
+/// (instead of stderr being lost or an old binary running).
+pub(crate) fn debug_wide_trace_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        let on = std::env::var_os("DF_DEBUG_WIDE_ROWS").is_some();
+        if on {
+            eprintln!("[df-trace] wide-row tracer ACTIVE (reports nonzero fill >= width/2)");
+        }
+        on
+    })
+}
+
+/// Diagnostic aid: with `DF_DEBUG_WIDE_ROWS=1`, report an RLE stream whose
+/// total pixel count differs from the frame size. Misaligned streams shift
+/// every downstream run boundary, which RLE-domain merging turns into
+/// row-crossing smears.
+pub(crate) fn debug_check_rle_total(
+    runs: &[crate::rle::RleRun],
+    width: usize,
+    height: usize,
+    tag: &str,
+) {
+    if !debug_wide_trace_enabled() {
+        return;
+    }
+    let total: u64 = runs.iter().map(|r| r.length as u64).sum();
+    let expected = width as u64 * height as u64;
+    if total != expected {
+        eprintln!("[rle-total:{tag}] total={total} expected={expected} ({width}x{height})");
+    }
+}
+
+/// Diagnostic aid: with `DF_DEBUG_WIDE_ROWS=1`, report any nonzero RLE run
+/// covering at least half a row, with the pipeline stage that produced it,
+/// so a leak can be attributed to the first stage where it exists.
+pub(crate) fn debug_scan_rle_wide_runs(runs: &[crate::rle::RleRun], width: usize, tag: &str) {
+    if width == 0 || !debug_wide_trace_enabled() {
+        return;
+    }
+    let threshold = ((width / 2).max(1)) as u64;
+    let mut offset = 0u64;
+    for run in runs {
+        if run.value > 0 && run.length as u64 >= threshold {
+            eprintln!(
+                "[wide-rle:{tag}] value={} len={} start_row={} start_col={}",
+                run.value,
+                run.length,
+                offset / width as u64,
+                offset % width as u64
+            );
+        }
+        offset += run.length as u64;
+    }
+}
+
 /// Diagnostic aid: with `DF_DEBUG_WIDE_ROWS=1`, dump the crossing list of
 /// any row that produced a span wider than half the frame, so leaks that
 /// survive the winding hardening can be traced to their crossings.
 fn debug_dump_wide_row(spans: &[RowSpan], active_edges: &[ActiveEdge], width: usize) {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if !*ENABLED.get_or_init(|| std::env::var_os("DF_DEBUG_WIDE_ROWS").is_some()) {
+    if !debug_wide_trace_enabled() {
         return;
     }
     let threshold = (width / 2).max(1);
@@ -1555,7 +1611,9 @@ pub(crate) fn encode_mask_to_rle(
         let row = &mask[row_start..row_start + width];
         emit_row(&mut rle, row);
     }
-    rle.finish()
+    let runs = rle.finish();
+    debug_scan_rle_wide_runs(&runs, width, "mask-encode");
+    runs
 }
 
 #[inline]
@@ -2642,6 +2700,7 @@ pub fn rasterize_layer_rle(
 
         stats.total_solid_pixels /= aa_steps as u32;
         let runs = rle.finish();
+        debug_scan_rle_wide_runs(&runs, width, "raster-3daa");
 
         if stats.total_solid_pixels > 0 {
             stats.min_x = min_x;
@@ -2784,6 +2843,7 @@ pub fn rasterize_layer_rle(
     }
 
     let runs = rle.finish();
+    debug_scan_rle_wide_runs(&runs, width, "raster-rle");
 
     if stats.total_solid_pixels > 0 {
         stats.min_x = min_x;
@@ -3042,7 +3102,9 @@ pub fn downsample_binary_rle_to_gray_rle(
         }
     }
 
-    out_rle.finish()
+    let runs = out_rle.finish();
+    debug_scan_rle_wide_runs(&runs, out_width, "downsample");
+    runs
 }
 
 #[inline]
@@ -3432,7 +3494,9 @@ pub fn blur_gray_rle_streaming_with_bounds(
 
     emit_zero_rows(&mut out_rle, height - 1 - roi_max_y, width);
 
-    (out_rle.finish(), out_bounds)
+    let runs = out_rle.finish();
+    debug_scan_rle_wide_runs(&runs, width, "blur");
+    (runs, out_bounds)
 }
 
 #[cfg(test)]

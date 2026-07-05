@@ -502,7 +502,12 @@ fn finalize_perturb_rle_post_layer(
 
     if let Some(ref support_runs) = task.support_runs {
         let support_merge_start = std::time::Instant::now();
+        crate::raster::debug_scan_rle_wide_runs(&final_runs, width, "3daa-model-premerge");
+        crate::raster::debug_scan_rle_wide_runs(support_runs, width, "3daa-support-premerge");
+        crate::raster::debug_check_rle_total(&final_runs, width, height, "3daa-model-premerge");
+        crate::raster::debug_check_rle_total(support_runs, width, height, "3daa-support-premerge");
         final_runs = merge_rle_max(final_runs, support_runs);
+        crate::raster::debug_scan_rle_wide_runs(&final_runs, width, "3daa-postmerge");
         support_merge_ns.fetch_add(
             support_merge_start
                 .elapsed()
@@ -3488,7 +3493,13 @@ pub fn slice_and_rasterize_rle_v3(
                 } else {
                     support_raster_runs.clone()
                 };
-                merge_rle_max(final_runs, &support_runs)
+                crate::raster::debug_scan_rle_wide_runs(&final_runs, out_width, "model-premerge");
+                crate::raster::debug_scan_rle_wide_runs(&support_runs, out_width, "support-premerge");
+                crate::raster::debug_check_rle_total(&final_runs, out_width, out_height, "model-premerge");
+                crate::raster::debug_check_rle_total(&support_runs, out_width, out_height, "support-premerge");
+                let merged = merge_rle_max(final_runs, &support_runs);
+                crate::raster::debug_scan_rle_wide_runs(&merged, out_width, "postmerge");
+                merged
             } else {
                 final_runs
             };
