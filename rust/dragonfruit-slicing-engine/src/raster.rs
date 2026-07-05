@@ -376,6 +376,94 @@ pub(crate) fn debug_scan_rle_wide_runs(runs: &[crate::rle::RleRun], width: usize
         }
         offset += run.length as u64;
     }
+
+    debug_scan_rle_row_anomaly(runs, width, tag);
+}
+
+/// Detect single rows that massively disagree with BOTH vertical neighbors —
+/// the signature of a row whose tail got inverted or overwritten. A wide-run
+/// scan cannot see an inverted tail (it is many alternating short runs), but
+/// solid geometry changes little row-to-row, so a corrupt row shows a large
+/// pixel diff against the rows above and below simultaneously.
+pub(crate) fn debug_scan_rle_row_anomaly(
+    runs: &[crate::rle::RleRun],
+    width: usize,
+    tag: &str,
+) -> Vec<u64> {
+    let mut found = Vec::new();
+    let total: u64 = runs.iter().map(|r| r.length as u64).sum();
+    if width == 0 || total % width as u64 != 0 {
+        return found;
+    }
+
+    let diff_threshold = (width / 4).max(16);
+    let mut have_prev = false;
+    let mut prev_row = vec![0u8; width];
+    let mut cur_row = vec![0u8; width];
+    let mut col = 0usize;
+    let mut row_idx = 0u64;
+    // diff between the previous two completed rows; row R is reported when
+    // diff(R-1,R) and diff(R,R+1) both exceed the threshold.
+    let mut pending: Option<(u64, usize, Vec<u8>)> = None; // (row, diff_prev, pixels)
+
+    let mut on_row_complete = |row_idx: u64,
+                               have_prev: &mut bool,
+                               prev_row: &mut Vec<u8>,
+                               cur_row: &mut Vec<u8>,
+                               pending: &mut Option<(u64, usize, Vec<u8>)>,
+                               found: &mut Vec<u64>| {
+        if *have_prev {
+            let diff = prev_row
+                .iter()
+                .zip(cur_row.iter())
+                .filter(|(a, b)| a != b)
+                .count();
+            if let Some((p_row, p_diff, p_pixels)) = pending.take() {
+                if diff >= diff_threshold {
+                    let transitions: Vec<usize> = p_pixels
+                        .windows(2)
+                        .enumerate()
+                        .filter(|(_, w)| w[0] != w[1])
+                        .map(|(i, _)| i + 1)
+                        .take(24)
+                        .collect();
+                    debug_trace_report(&format!(
+                        "[row-anomaly:{tag}] row={p_row} diff_prev={p_diff} diff_next={diff} transitions={transitions:?}"
+                    ));
+                    found.push(p_row);
+                }
+            }
+            if diff >= diff_threshold {
+                *pending = Some((row_idx, diff, cur_row.clone()));
+            }
+        }
+        *have_prev = true;
+        std::mem::swap(prev_row, cur_row);
+    };
+
+    for run in runs {
+        let mut remaining = run.length as usize;
+        while remaining > 0 {
+            let take = remaining.min(width - col);
+            cur_row[col..col + take].fill(run.value);
+            col += take;
+            remaining -= take;
+            if col == width {
+                on_row_complete(
+                    row_idx,
+                    &mut have_prev,
+                    &mut prev_row,
+                    &mut cur_row,
+                    &mut pending,
+                    &mut found,
+                );
+                row_idx += 1;
+                col = 0;
+            }
+        }
+    }
+
+    found
 }
 
 /// Diagnostic aid: with `DF_DEBUG_WIDE_ROWS=1`, dump the crossing list of
@@ -3767,6 +3855,47 @@ mod tests {
         assert_eq!(spans.len(), 2, "inverted junk must not fill the gap");
         assert_eq!((spans[0].start, spans[0].end), (10, 39));
         assert_eq!((spans[1].start, spans[1].end), (100, 129));
+    }
+
+    #[test]
+    fn row_anomaly_scan_detects_inverted_tail_row() {
+        use crate::rle::{emit_row, RleAccum};
+
+        // 5 rows, width 64 (diff threshold 16). Rows 1-3 hold a blob at
+        // cols 10..20 — narrower than the threshold, like real geometry
+        // against a full plate width. Row 2's tail is inverted from col 15
+        // onward (the observed leak signature: blob pixels drop to 0,
+        // background flips to 255 through row end).
+        let width = 64usize;
+        let mut blob_row = vec![0u8; width];
+        blob_row[10..20].fill(255);
+        let mut inverted_row = blob_row.clone();
+        for px in inverted_row[15..].iter_mut() {
+            *px = if *px > 0 { 0 } else { 255 };
+        }
+
+        let mut acc = RleAccum::new();
+        emit_row(&mut acc, &vec![0u8; width]);
+        emit_row(&mut acc, &blob_row);
+        emit_row(&mut acc, &inverted_row);
+        emit_row(&mut acc, &blob_row);
+        emit_row(&mut acc, &vec![0u8; width]);
+        let runs = acc.finish();
+
+        let found = super::debug_scan_rle_row_anomaly(&runs, width, "test");
+        assert_eq!(found, vec![2], "the inverted-tail row must be flagged");
+
+        let mut clean = RleAccum::new();
+        emit_row(&mut clean, &vec![0u8; width]);
+        for _ in 0..3 {
+            emit_row(&mut clean, &blob_row);
+        }
+        emit_row(&mut clean, &vec![0u8; width]);
+        let clean_runs = clean.finish();
+        assert!(
+            super::debug_scan_rle_row_anomaly(&clean_runs, width, "test").is_empty(),
+            "clean geometry must not be flagged"
+        );
     }
 
     #[test]
