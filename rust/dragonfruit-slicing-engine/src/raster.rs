@@ -304,6 +304,32 @@ fn build_row_spans_nonzero(
     if active_edges.len() < 2 {
         return Vec::new();
     }
+    let spans = build_row_spans_nonzero_inner(active_edges, width, snap_to_integer);
+    debug_dump_wide_row(&spans, active_edges, width);
+    spans
+}
+
+/// Diagnostic aid: with `DF_DEBUG_WIDE_ROWS=1`, dump the crossing list of
+/// any row that produced a span wider than half the frame, so leaks that
+/// survive the winding hardening can be traced to their crossings.
+fn debug_dump_wide_row(spans: &[RowSpan], active_edges: &[ActiveEdge], width: usize) {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ENABLED.get_or_init(|| std::env::var_os("DF_DEBUG_WIDE_ROWS").is_some()) {
+        return;
+    }
+    let threshold = (width / 2).max(1);
+    if spans.iter().any(|s| s.end - s.start >= threshold) {
+        let edges: Vec<(f32, i32)> = active_edges.iter().map(|e| (e.x, e.wind)).collect();
+        let spans: Vec<(f32, f32)> = spans.iter().map(|s| (s.a, s.b)).collect();
+        eprintln!("[wide-row] width={width} edges={edges:?} spans={spans:?}");
+    }
+}
+
+fn build_row_spans_nonzero_inner(
+    active_edges: &[ActiveEdge],
+    width: usize,
+    snap_to_integer: bool,
+) -> Vec<RowSpan> {
 
     let mut spans = Vec::with_capacity(active_edges.len() / 2 + 1);
     let mut winding = 0i32;
