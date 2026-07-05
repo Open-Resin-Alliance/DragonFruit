@@ -309,18 +309,29 @@ fn build_row_spans_nonzero(
     spans
 }
 
-/// Diagnostic gate for the `DF_DEBUG_WIDE_ROWS=1` tracer. Announces itself
-/// on first query so a silent run proves the traced build actually executed
-/// (instead of stderr being lost or an old binary running).
-pub(crate) fn debug_wide_trace_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        let on = std::env::var_os("DF_DEBUG_WIDE_ROWS").is_some();
-        if on {
-            eprintln!("[df-trace] wide-row tracer ACTIVE (reports nonzero fill >= width/2)");
-        }
-        on
-    })
+// ---------------------------------------------------------------------------
+// TEMPORARY wide-row triage tracer — remove before merge.
+//
+// Reports go through the app's main logging engine (`log` crate → the Tauri
+// log plugin's stdout/logdir/webview targets) at WARN level so they survive
+// level filters. The session banner is emitted the first time any probe
+// runs, so a log with the banner but no findings proves the traced build
+// executed and the probed pipeline was clean, while a log without the banner
+// proves the traced build never ran.
+// ---------------------------------------------------------------------------
+
+/// Mark that a probe executed (logs the session banner on first call).
+pub(crate) fn debug_trace_touch() {
+    static BANNER: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    BANNER.get_or_init(|| {
+        log::warn!("[df-trace] wide-row triage active");
+    });
+}
+
+/// Report a triage finding through the main logging engine.
+pub(crate) fn debug_trace_report(line: &str) {
+    debug_trace_touch();
+    log::warn!("{line}");
 }
 
 /// Diagnostic aid: with `DF_DEBUG_WIDE_ROWS=1`, report an RLE stream whose
@@ -333,13 +344,13 @@ pub(crate) fn debug_check_rle_total(
     height: usize,
     tag: &str,
 ) {
-    if !debug_wide_trace_enabled() {
-        return;
-    }
+    debug_trace_touch();
     let total: u64 = runs.iter().map(|r| r.length as u64).sum();
     let expected = width as u64 * height as u64;
     if total != expected {
-        eprintln!("[rle-total:{tag}] total={total} expected={expected} ({width}x{height})");
+        debug_trace_report(&format!(
+            "[rle-total:{tag}] total={total} expected={expected} ({width}x{height})"
+        ));
     }
 }
 
@@ -347,20 +358,21 @@ pub(crate) fn debug_check_rle_total(
 /// covering at least half a row, with the pipeline stage that produced it,
 /// so a leak can be attributed to the first stage where it exists.
 pub(crate) fn debug_scan_rle_wide_runs(runs: &[crate::rle::RleRun], width: usize, tag: &str) {
-    if width == 0 || !debug_wide_trace_enabled() {
+    if width == 0 {
         return;
     }
+    debug_trace_touch();
     let threshold = ((width / 2).max(1)) as u64;
     let mut offset = 0u64;
     for run in runs {
         if run.value > 0 && run.length as u64 >= threshold {
-            eprintln!(
+            debug_trace_report(&format!(
                 "[wide-rle:{tag}] value={} len={} start_row={} start_col={}",
                 run.value,
                 run.length,
                 offset / width as u64,
                 offset % width as u64
-            );
+            ));
         }
         offset += run.length as u64;
     }
@@ -370,14 +382,14 @@ pub(crate) fn debug_scan_rle_wide_runs(runs: &[crate::rle::RleRun], width: usize
 /// any row that produced a span wider than half the frame, so leaks that
 /// survive the winding hardening can be traced to their crossings.
 fn debug_dump_wide_row(spans: &[RowSpan], active_edges: &[ActiveEdge], width: usize) {
-    if !debug_wide_trace_enabled() {
-        return;
-    }
+    debug_trace_touch();
     let threshold = (width / 2).max(1);
     if spans.iter().any(|s| s.end - s.start >= threshold) {
         let edges: Vec<(f32, i32)> = active_edges.iter().map(|e| (e.x, e.wind)).collect();
         let spans: Vec<(f32, f32)> = spans.iter().map(|s| (s.a, s.b)).collect();
-        eprintln!("[wide-row] width={width} edges={edges:?} spans={spans:?}");
+        debug_trace_report(&format!(
+            "[wide-row] width={width} edges={edges:?} spans={spans:?}"
+        ));
     }
 }
 
