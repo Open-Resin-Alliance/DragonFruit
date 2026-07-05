@@ -8229,6 +8229,14 @@ export default function Home() {
     })();
   }, [queueTopBarSaveScene, resolveSceneSaveNativePath]);
 
+  const handleTopBarSaveSceneAs = React.useCallback(() => {
+    // Save As: always route through the native save dialog (a null override
+    // suppresses any remembered path), skipping the overwrite/save-as choice
+    // modal. A successful save re-points the scene's save target — and future
+    // Ctrl+S overwrites — at the newly chosen file.
+    queueTopBarSaveScene(null);
+  }, [queueTopBarSaveScene]);
+
   React.useEffect(() => {
     if (scene.models.length !== 0) return;
 
@@ -14721,10 +14729,12 @@ export default function Home() {
   const copyActive = useActionActive('CANVAS', 'COPY');
   const pasteActive = useActionActive('CANVAS', 'PASTE');
   const saveActive = useActionActive('GLOBAL', 'SAVE');
+  const saveAsActive = useActionActive('GLOBAL', 'SAVE_AS');
   const wasSelectAllActive = React.useRef(false);
   const wasCopyActive = React.useRef(false);
   const wasPasteActive = React.useRef(false);
   const wasSaveActive = React.useRef(false);
+  const wasSaveAsActive = React.useRef(false);
 
   React.useEffect(() => {
     if (!selectAllActive || wasSelectAllActive.current) {
@@ -14805,6 +14815,17 @@ export default function Home() {
     if (scene.models.length === 0) return;
     void handleTopBarSaveScene();
   }, [saveActive, scene.models.length, handleTopBarSaveScene]);
+
+  React.useEffect(() => {
+    if (!saveAsActive || wasSaveAsActive.current) {
+      wasSaveAsActive.current = saveAsActive;
+      return;
+    }
+    wasSaveAsActive.current = true;
+
+    if (scene.models.length === 0) return;
+    handleTopBarSaveSceneAs();
+  }, [saveAsActive, scene.models.length, handleTopBarSaveSceneAs]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -18635,6 +18656,7 @@ export default function Home() {
         onLoadMeshChange={handleLoadMeshChangeWithZip}
         onImportSceneChange={handleImportSceneChangeWithZip}
         onSaveScene={() => { void handleTopBarSaveScene(); }}
+        onSaveSceneAs={() => { handleTopBarSaveSceneAs(); }}
         onOpenScene={handleTopBarOpenScene}
         onCloseProgram={handleRequestProgramClose}
         showMonitorButton={showTopbarMonitorButton}
