@@ -161,10 +161,12 @@ fn push_span_snapped(
 /// Crossings left unmatched are then paired even-odd style among
 /// themselves, keeping meshes whose winding carries no information
 /// (partially inverted faces produce same-sign walls) filled as before —
-/// with one exception: an exit-then-entry orphan pair is the signature of
-/// the gap between two objects, and filling it is exactly the row-leak
-/// this repair exists to prevent, so it is dropped. A defect then costs at
-/// worst a one-row sliver of fill instead of a solid line across the row.
+/// unless the pair is exit-then-entry (the signature of the gap between
+/// two objects) or a matched crossing lies between the orphans (the pair
+/// would bridge fill across healthy geometry). Filling those intervals is
+/// exactly the row-leak this repair exists to prevent, so they are
+/// dropped. A defect then costs at worst a one-row sliver of fill instead
+/// of a solid line across the row.
 ///
 /// On a well-formed row this produces exactly the non-zero-winding result;
 /// it only differs where the crossing sequence is inconsistent.
@@ -207,12 +209,28 @@ fn build_row_spans_matched(
     }
     orphans.sort_by(|a, b| a.0.total_cmp(&b.0));
 
+    // An orphan pair may only fill if no matched crossing lies strictly
+    // between the two orphans. The same-sign walls of a single solid have
+    // an empty interior, but instanced copies of a defective mesh shed one
+    // orphan per instance onto the same row, and pairing those would
+    // bridge fill across every healthy object in between.
+    let mut matched_xs: Vec<f32> = Vec::with_capacity(pairs.len() * 2);
+    for &(a, b) in &pairs {
+        matched_xs.push(a);
+        matched_xs.push(b);
+    }
+    matched_xs.sort_by(f32::total_cmp);
+
     let mut i = 0usize;
     while i + 1 < orphans.len() {
         let (x_left, w_left) = orphans[i];
         let (x_right, w_right) = orphans[i + 1];
         // Skip exit-then-entry pairs: that interval lies between objects.
-        if !(w_left < 0 && w_right > 0) && x_right > x_left {
+        let gap_signature = w_left < 0 && w_right > 0;
+        let first_inside = matched_xs.partition_point(|&x| x <= x_left);
+        let crosses_matched_fill =
+            matched_xs.get(first_inside).is_some_and(|&x| x < x_right);
+        if !gap_signature && !crosses_matched_fill && x_right > x_left {
             pairs.push((x_left, x_right));
         }
         i += 2;
@@ -3647,6 +3665,30 @@ mod tests {
         assert_eq!(spans.len(), 2, "inverted junk must not fill the gap");
         assert_eq!((spans[0].start, spans[0].end), (10, 39));
         assert_eq!((spans[1].start, spans[1].end), (100, 129));
+    }
+
+    #[test]
+    fn repeated_instance_defects_do_not_bridge_the_plate() {
+        // Instanced copies of the same defective mesh shed one orphaned
+        // entry per instance onto the same row. Pairing those orphans
+        // (10, 200) would draw a line across both healthy objects between
+        // them — the full-plate leak seen on multi-instance plates.
+        let spans = build_row_spans_nonzero(
+            &[
+                edge(10.0, 1),
+                edge(30.0, 1),
+                edge(50.0, -1),
+                edge(100.0, 1),
+                edge(120.0, -1),
+                edge(200.0, 1),
+            ],
+            256,
+            true,
+        );
+
+        assert_eq!(spans.len(), 2, "orphan entries must not pair across matched fill");
+        assert_eq!((spans[0].start, spans[0].end), (30, 49));
+        assert_eq!((spans[1].start, spans[1].end), (100, 119));
     }
 
     #[test]
