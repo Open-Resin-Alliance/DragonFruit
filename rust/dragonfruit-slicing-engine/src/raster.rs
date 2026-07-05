@@ -301,17 +301,55 @@ fn distinct_points_push(points: &mut [(f32, f32); 3], count: &mut usize, candida
 /// and skip the pair if both round to the same pixel,
 /// eliminating the 1-px bogus spans that near-coincident crossings on
 /// defective meshes used to produce.
+fn build_row_spans_nonzero_ctx(
+    active_edges: &[ActiveEdge],
+    width: usize,
+    snap_to_integer: bool,
+    prev_spans: Option<&[RowSpan]>,
+) -> Vec<RowSpan> {
+    if active_edges.len() < 2 {
+        return Vec::new();
+    }
+    let (spans, repaired) =
+        build_row_spans_nonzero_inner(active_edges, width, snap_to_integer, prev_spans);
+    debug_dump_wide_row(&spans, active_edges, width, repaired);
+    spans
+}
+
+/// Context-free variant for callers (and tests) without row history.
+#[cfg(test)]
 fn build_row_spans_nonzero(
     active_edges: &[ActiveEdge],
     width: usize,
     snap_to_integer: bool,
 ) -> Vec<RowSpan> {
-    if active_edges.len() < 2 {
-        return Vec::new();
+    build_row_spans_nonzero_ctx(active_edges, width, snap_to_integer, None)
+}
+
+/// Total overlap in pixels between two sorted, disjoint span lists.
+fn spans_overlap_px(a: &[RowSpan], b: &[RowSpan]) -> u64 {
+    let mut total = 0u64;
+    let mut j = 0usize;
+    for sa in a {
+        while j < b.len() && b[j].end < sa.start {
+            j += 1;
+        }
+        let mut k = j;
+        while k < b.len() && b[k].start <= sa.end {
+            let lo = sa.start.max(b[k].start);
+            let hi = sa.end.min(b[k].end);
+            if hi >= lo {
+                total += (hi - lo + 1) as u64;
+            }
+            k += 1;
+        }
     }
-    let (spans, repaired) = build_row_spans_nonzero_inner(active_edges, width, snap_to_integer);
-    debug_dump_wide_row(&spans, active_edges, width, repaired);
-    spans
+    total
+}
+
+#[inline]
+fn spans_total_px(spans: &[RowSpan]) -> u64 {
+    spans.iter().map(|s| (s.end - s.start + 1) as u64).sum()
 }
 
 // ---------------------------------------------------------------------------
@@ -490,6 +528,7 @@ fn build_row_spans_nonzero_inner(
     active_edges: &[ActiveEdge],
     width: usize,
     snap_to_integer: bool,
+    prev_spans: Option<&[RowSpan]>,
 ) -> (Vec<RowSpan>, bool) {
     let mut spans = Vec::with_capacity(active_edges.len() / 2 + 1);
     let mut winding = 0i32;
@@ -547,24 +586,33 @@ fn build_row_spans_nonzero_inner(
         // Decide the row's true orientation by evidence, not by winding
         // extremes: a single flipped triangle can drive the winding lower
         // than the legitimate peak and would invert the whole row's
-        // interpretation. A mostly-correct row matches nearly all of its
-        // crossings in the true orientation and almost none in the flipped
-        // one, so run the pairing both ways and keep the stronger result;
-        // the winding extents only break exact ties.
+        // interpretation — and an alternating crossing sequence pairs
+        // almost equally well in both directions, so within-row evidence
+        // alone can tie. The cascade:
+        //   1. vertical coherence — defects are single-row events, so the
+        //      orientation whose fill agrees with the previous row's spans
+        //      is the true one;
+        //   2. more orientation-consistent (entry, exit) matches;
+        //   3. less total fill — when everything ties, a missing sliver is
+        //      a safer failure than a phantom line across the plate.
         let (pos_spans, pos_pairs) =
             build_row_spans_matched(active_edges, width, snap_to_integer, 1);
         let (neg_spans, neg_pairs) =
             build_row_spans_matched(active_edges, width, snap_to_integer, -1);
-        let spans = if pos_pairs > neg_pairs {
-            pos_spans
-        } else if neg_pairs > pos_pairs {
-            neg_spans
-        } else if max_winding >= -min_winding {
-            pos_spans
+
+        let prev = prev_spans.unwrap_or(&[]);
+        let pos_overlap = spans_overlap_px(&pos_spans, prev);
+        let neg_overlap = spans_overlap_px(&neg_spans, prev);
+
+        let choose_pos = if pos_overlap != neg_overlap {
+            pos_overlap > neg_overlap
+        } else if pos_pairs != neg_pairs {
+            pos_pairs > neg_pairs
         } else {
-            neg_spans
+            spans_total_px(&pos_spans) <= spans_total_px(&neg_spans)
         };
-        return (spans, true);
+
+        return (if choose_pos { pos_spans } else { neg_spans }, true);
     }
 
     (spans, false)
@@ -2185,6 +2233,7 @@ fn rasterize_layer_with_stats_impl(
     } else {
         0
     };
+    let mut prev_spans: Vec<RowSpan> = Vec::new();
 
     for y in y_start..y_end_exclusive {
         let physical_y = y / aa_steps;
@@ -2249,14 +2298,16 @@ fn rasterize_layer_with_stats_impl(
             );
         }
         if active_edges.is_empty() {
+            prev_spans.clear();
             continue;
         }
 
         let row_start = physical_y * width;
 
-        let spans = build_row_spans_nonzero(&active_edges, width, !aa_enabled);
+        let spans =
+            build_row_spans_nonzero_ctx(&active_edges, width, !aa_enabled, Some(&prev_spans));
 
-        for span in spans {
+        for span in spans.iter().copied() {
             if !aa_enabled {
                 let row = &mut mask[row_start..row_start + width];
                 row[span.start..=span.end].fill(255);
@@ -2306,6 +2357,8 @@ fn rasterize_layer_with_stats_impl(
             min_y = min_y.min(physical_y as i32);
             max_y = max_y.max(physical_y as i32);
         }
+
+        prev_spans = spans;
 
         for edge in &mut active_edges {
             edge.x += edge.dx_dy;
@@ -2741,6 +2794,7 @@ pub fn rasterize_layer_rle(
             }};
         }
 
+        let mut prev_spans: Vec<RowSpan> = Vec::new();
         for y in y_start..y_end_exclusive {
             let physical_y = y / aa_steps;
 
@@ -2760,11 +2814,13 @@ pub fn rasterize_layer_rle(
                 );
             }
             if active_edges.is_empty() {
+                prev_spans.clear();
                 continue;
             }
 
-            let spans = build_row_spans_nonzero(&active_edges, width, false);
-            for span in spans {
+            let spans =
+                build_row_spans_nonzero_ctx(&active_edges, width, false, Some(&prev_spans));
+            for span in spans.iter().copied() {
                 let left_i = span.a.floor() as i32;
                 let right_i = span.b.ceil() as i32 - 1;
 
@@ -2807,6 +2863,8 @@ pub fn rasterize_layer_rle(
                 min_y = min_y.min(physical_y as i32);
                 max_y = max_y.max(physical_y as i32);
             }
+
+            prev_spans = spans;
 
             for edge in &mut active_edges {
                 edge.x += edge.dx_dy;
@@ -2915,6 +2973,7 @@ pub fn rasterize_layer_rle(
         }};
     }
 
+    let mut prev_spans: Vec<RowSpan> = Vec::new();
     for y in y_start..y_end_exclusive {
         let physical_y = y;
 
@@ -2934,12 +2993,13 @@ pub fn rasterize_layer_rle(
             );
         }
         if active_edges.is_empty() {
+            prev_spans.clear();
             continue;
         }
 
-        let spans = build_row_spans_nonzero(&active_edges, width, true);
+        let spans = build_row_spans_nonzero_ctx(&active_edges, width, true, Some(&prev_spans));
 
-        for span in spans {
+        for span in spans.iter().copied() {
             row_buf[span.start..=span.end].fill(255);
 
             let filled = (span.end - span.start + 1) as u32;
@@ -2949,6 +3009,8 @@ pub fn rasterize_layer_rle(
             min_y = min_y.min(physical_y as i32);
             max_y = max_y.max(physical_y as i32);
         }
+
+        prev_spans = spans;
 
         for edge in &mut active_edges {
             edge.x += edge.dx_dy;
@@ -3905,6 +3967,116 @@ mod tests {
         assert_eq!((spans[0].start, spans[0].end), (10, 39));
         assert_eq!((spans[1].start, spans[1].end), (100, 129));
         assert_eq!((spans[2].start, spans[2].end), (200, 229));
+    }
+
+    #[test]
+    fn real_world_flipped_cluster_row_keeps_objects_and_gaps() {
+        // Regression data: the actual crossing list captured from row 2364
+        // of an 11520 px frame sliced from a defective mesh. A flipped
+        // triangle sheds a micro-cluster of crossings at x≈4104 leaving
+        // closure -1 and a winding dip to -2; pairing evidence ties in both
+        // orientations, and the old winding-extent vote inverted the row —
+        // filling the 5644..8618 gap as a line across the plate.
+        let defective: [(f32, i32); 31] = [
+            (3459.9434, 1),
+            (3470.0964, -1),
+            (3779.1995, 1),
+            (3903.8005, -1),
+            (3944.261, 1),
+            (4103.43, -1),
+            (4103.759, 1),
+            (4103.8467, -1),
+            (4103.8843, -1),
+            (4103.887, 1),
+            (4103.896, 1),
+            (4103.903, -1),
+            (4103.9097, -1),
+            (4103.911, -1),
+            (4103.9478, 1),
+            (4103.98, 1),
+            (4104.374, -1),
+            (4104.568, 1),
+            (4313.804, -1),
+            (4415.3384, 1),
+            (4456.252, -1),
+            (4784.626, 1),
+            (4874.465, -1),
+            (4997.4087, 1),
+            (5422.0386, -1),
+            (5628.915, 1),
+            (5644.446, -1),
+            (8618.343, 1),
+            (9020.281, -1),
+            (9533.445, 1),
+            (9558.4795, -1),
+        ];
+        let edges: Vec<ActiveEdge> = defective.iter().map(|&(x, w)| edge(x, w)).collect();
+
+        // Healthy neighbor row: the same objects without the defect cluster.
+        let healthy: [(f32, i32); 18] = [
+            (3459.9, 1),
+            (3470.1, -1),
+            (3779.2, 1),
+            (3903.8, -1),
+            (3944.3, 1),
+            (4103.4, -1),
+            (4415.3, 1),
+            (4456.3, -1),
+            (4784.6, 1),
+            (4874.5, -1),
+            (4997.4, 1),
+            (5422.0, -1),
+            (5628.9, 1),
+            (5644.4, -1),
+            (8618.3, 1),
+            (9020.3, -1),
+            (9533.4, 1),
+            (9558.5, -1),
+        ];
+        let prev_edges: Vec<ActiveEdge> = healthy.iter().map(|&(x, w)| edge(x, w)).collect();
+        let prev = build_row_spans_nonzero(&prev_edges, 11520, true);
+
+        let spans = super::build_row_spans_nonzero_ctx(&edges, 11520, true, Some(&prev));
+
+        assert!(
+            spans.iter().all(|s| s.end < 5646 || s.start > 8617),
+            "the 5644..8618 gap must stay empty, got {:?}",
+            spans
+                .iter()
+                .map(|s| (s.start, s.end))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            spans.iter().any(|s| s.start <= 5000 && s.end >= 5400),
+            "the 4997..5422 object must fill"
+        );
+        assert!(
+            spans.iter().any(|s| s.start <= 8620 && s.end >= 9019),
+            "the 8618..9020 object must fill"
+        );
+    }
+
+    #[test]
+    fn neighbor_coherence_resolves_orientation_ties() {
+        // One correctly wound object (10..40) and one fully flipped object
+        // (100..130) tie on every within-row metric: one matched pair and
+        // 30 px of fill in either orientation. The previous row's spans
+        // (healthy geometry at 100..130) must break the tie.
+        let prev = build_row_spans_nonzero(&[edge(100.0, 1), edge(130.0, -1)], 256, true);
+        let spans = super::build_row_spans_nonzero_ctx(
+            &[
+                edge(10.0, 1),
+                edge(40.0, -1),
+                edge(100.0, -1),
+                edge(130.0, 1),
+            ],
+            256,
+            true,
+            Some(&prev),
+        );
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!((spans[0].start, spans[0].end), (100, 129));
     }
 
     #[test]
