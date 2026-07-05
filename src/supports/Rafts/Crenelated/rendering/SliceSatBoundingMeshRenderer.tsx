@@ -1027,13 +1027,13 @@ export default function SliceSatBoundingMeshRenderer({
         position={modelTransform.position}
         quaternion={quaternionFromGlobalEuler(modelTransform.rotation)}
         scale={modelTransform.scale}
-        renderOrder={7}
+        renderOrder={100000}
       >
         <mesh
           geometry={satGeometries.hullGeometry}
           position={[-hullLocalCenter.x, -hullLocalCenter.y, -hullLocalCenter.z]}
           raycast={() => null}
-          renderOrder={7}
+          renderOrder={100000}
         >
           <meshStandardMaterial
             color="#baf72e"
@@ -1050,7 +1050,7 @@ export default function SliceSatBoundingMeshRenderer({
             geometry={satGeometries.hullEdgeGeometry}
             position={[-hullLocalCenter.x, -hullLocalCenter.y, -hullLocalCenter.z]}
             raycast={() => null}
-            renderOrder={8}
+            renderOrder={100000}
           >
             <lineBasicMaterial color="#baf72e" transparent opacity={0.7} depthWrite={false} depthTest />
           </lineSegments>
@@ -1063,13 +1063,13 @@ export default function SliceSatBoundingMeshRenderer({
 
   if (renderMode === 'wireframe') {
     return (
-      <group renderOrder={7}>
+      <group renderOrder={100000}>
         {/* Depth pre-pass: occludes back-side wireframe segments without visible fill. */}
-        <mesh geometry={satGeometries.meshGeometry} raycast={() => null} renderOrder={7}>
+        <mesh geometry={satGeometries.meshGeometry} raycast={() => null} renderOrder={100000}>
           <meshBasicMaterial colorWrite={false} depthWrite depthTest side={THREE.DoubleSide} />
         </mesh>
         {satGeometries.wireGeometry && (
-          <lineSegments geometry={satGeometries.wireGeometry} raycast={() => null} renderOrder={8}>
+          <lineSegments geometry={satGeometries.wireGeometry} raycast={() => null} renderOrder={100000}>
             <lineBasicMaterial color="#baf72e" transparent opacity={0.95} depthWrite={false} depthTest />
           </lineSegments>
         )}
@@ -1078,7 +1078,7 @@ export default function SliceSatBoundingMeshRenderer({
   }
 
   return (
-    <mesh geometry={satGeometries.meshGeometry} raycast={() => null} renderOrder={7}>
+    <mesh geometry={satGeometries.meshGeometry} raycast={() => null} renderOrder={100000}>
       <meshStandardMaterial
         color="#baf72e"
         transparent

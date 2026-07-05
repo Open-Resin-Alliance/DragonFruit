@@ -350,12 +350,13 @@ test('decideGridPlacement rejects when the fixed preferred host cannot accept an
         }
 
         if (gx === 1 && gy === 0) {
+            // Keep Z height out of candidate's (tipZ=6.5) branch angle reach (Z 5 to 7)
             return buildManualHostFixture({
                 x: gx * GRID_SPACING_MM,
                 y: gy * GRID_SPACING_MM,
-                tipZ: 2.5,
-                bottomZ: 0,
-                topZ: 2,
+                tipZ: 8,
+                bottomZ: 5,
+                topZ: 7,
             });
         }
 
@@ -431,4 +432,50 @@ test('decideGridPlacement applies the same trunk collision gate for preview and 
     assert.equal(commitDecision.nodeKey, '0,0');
     assert.equal(previewDecision.reason, 'COLLISION_WITH_MODEL');
     assert.equal(commitDecision.reason, 'COLLISION_WITH_MODEL');
+});
+
+test('decideGridPlacement places branch on neighbor host when co-located host cannot accept attachment but neighbor is valid', () => {
+    const settings = makeSettings();
+    setSettings(settings);
+
+    const snapshot = makeEmptySnapshot();
+    // Co-located host too high
+    const preferredHost = buildManualHostFixture({
+        x: 0,
+        y: 0,
+        tipZ: 7.1,
+        bottomZ: 6.7,
+        topZ: 6.9,
+    });
+    addTrunkBuild(snapshot, preferredHost);
+
+    // Neighbor host at 1,0 is valid (bottomZ=0, topZ=2)
+    const neighborHost = buildManualHostFixture({
+        x: 1 * GRID_SPACING_MM,
+        y: 0,
+        tipZ: 2.5,
+        bottomZ: 0,
+        topZ: 2,
+    });
+    addTrunkBuild(snapshot, neighborHost);
+
+    const candidate = buildStraightFixture({
+        x: 0,
+        y: 0,
+        tipZ: 6.5,
+        socketZ: 6,
+    });
+
+    const decision = decideGridPlacement({
+        settings,
+        snapshot,
+        candidate: candidate.build,
+        tipPos: candidate.input.tipPos,
+        tipNormal: candidate.input.tipNormal,
+        modelId: MODEL_ID,
+    });
+
+    assert.equal(decision.kind, 'place_branch');
+    assert.equal(decision.nodeKey, '1,0'); // Snapped to neighbor node
+    assert.equal(decision.hostTrunkId, neighborHost.build.trunk.id);
 });

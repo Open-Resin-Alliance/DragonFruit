@@ -1,9 +1,10 @@
 import { applySupportSelectionClick, selectJointById, selectPrimitiveById } from './shared/selection/selectionController';
 import { isContactDiskHudInteractionActive } from '../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
+import { getSnapshot } from '../state';
+import { isKeyPressedSync } from '@/hotkeys/hotkeyStore';
 
 let hoverGuardInitialized = false;
 let orbitInteractionActive = false;
-let shiftModifierActive = false;
 let lastDispatchedHoverModelId: string | null = null;
 
 function initializeHoverGuards() {
@@ -22,18 +23,6 @@ function initializeHoverGuards() {
         orbitInteractionActive = false;
     };
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-        if (event.key === 'Shift') shiftModifierActive = true;
-    };
-
-    const handleKeyUp = (event: KeyboardEvent) => {
-        if (event.key === 'Shift') shiftModifierActive = false;
-    };
-
-    const clearModifiers = () => {
-        shiftModifierActive = false;
-    };
-
     window.addEventListener('picking-orbit-start', markOrbitActive);
     window.addEventListener('picking-orbit-change', markOrbitActive);
     window.addEventListener('picking-orbit-end', markOrbitInactive);
@@ -41,12 +30,8 @@ function initializeHoverGuards() {
     window.addEventListener('pointercancel', markOrbitInactiveFromPointer, true);
     window.addEventListener('mouseup', markOrbitInactiveFromPointer, true);
     window.addEventListener('contextmenu', markOrbitInactiveFromPointer, true);
-    window.addEventListener('keydown', handleKeyDown, true);
-    window.addEventListener('keyup', handleKeyUp, true);
     window.addEventListener('blur', markOrbitInactiveFromPointer);
-    window.addEventListener('blur', clearModifiers);
     document.addEventListener('visibilitychange', markOrbitInactiveFromPointer);
-    document.addEventListener('visibilitychange', clearModifiers);
 }
 
 function isShiftActiveFromEvent(e: any) {
@@ -54,7 +39,7 @@ function isShiftActiveFromEvent(e: any) {
         e?.shiftKey
         || e?.nativeEvent?.shiftKey
         || e?.sourceEvent?.shiftKey
-        || shiftModifierActive
+        || isKeyPressedSync('shift')
     );
 }
 
@@ -172,6 +157,29 @@ export function handleKnotClick(
     if (e.nativeEvent) {
         e.nativeEvent.stopPropagation();
         e.nativeEvent.stopImmediatePropagation();
+    }
+
+    const state = getSnapshot();
+    const clickedKnot = state.knots[id];
+    if (clickedKnot) {
+        const allKnots = Object.values(state.knots);
+        const coincident = allKnots.filter(
+            k => k.parentShaftId === clickedKnot.parentShaftId &&
+                 k.t !== undefined && clickedKnot.t !== undefined &&
+                 Math.abs(k.t - clickedKnot.t) < 0.0001
+        );
+
+        if (isKnotSelected && coincident.length > 1) {
+            coincident.sort((a, b) => a.id.localeCompare(b.id));
+            const currentIndex = coincident.findIndex(k => k.id === id);
+            if (currentIndex !== -1) {
+                const nextIndex = (currentIndex + 1) % coincident.length;
+                const nextKnotId = coincident[nextIndex].id;
+                selectPrimitiveById(nextKnotId);
+                if (onSelect) onSelect(nextKnotId);
+                return;
+            }
+        }
     }
 
     selectPrimitiveById(id);

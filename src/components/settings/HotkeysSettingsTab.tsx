@@ -95,6 +95,8 @@ export function HotkeysSettingsTab() {
   useEffect(() => {
     if (!recordingKey) return;
 
+    let pressedNonModifier = false;
+
     const handleKeyDown = (e: KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
@@ -112,9 +114,11 @@ export function HotkeysSettingsTab() {
       if (e.altKey) modifiers.push('alt');
       if (e.metaKey) modifiers.push('meta');
 
-      // If only modifiers are pressed, don't save yet (wait for the main key)
-      if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+      if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) {
+        return;
+      }
 
+      pressedNonModifier = true;
       const finalKey = normalizeRecordedKey(e.key);
 
       const newBinding: HotkeyBinding = {
@@ -127,8 +131,48 @@ export function HotkeysSettingsTab() {
       setRecordingKey(null);
     };
 
-    window.addEventListener('keydown', handleKeyDown, true); // Capture phase to prevent other app hotkeys
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (pressedNonModifier) return;
+
+      if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const keyMap: Record<string, string> = {
+          'Control': 'Control',
+          'Shift': 'Shift',
+          'Alt': 'Alt',
+          'Meta': 'Meta'
+        };
+
+        const targetKey = keyMap[e.key] || e.key;
+
+        const modifiers: string[] = [];
+        if (e.ctrlKey && e.key !== 'Control') modifiers.push('ctrl');
+        if (e.shiftKey && e.key !== 'Shift') modifiers.push('shift');
+        if (e.altKey && e.key !== 'Alt') modifiers.push('alt');
+        if (e.metaKey && e.key !== 'Meta') modifiers.push('meta');
+
+        const newBinding: HotkeyBinding = {
+          key: targetKey,
+          modifier: modifiers.length > 0 ? modifiers.join('+') : undefined,
+          description: config[recordingKey.category][recordingKey.action].description
+        };
+
+        updateHotkey(recordingKey.category, recordingKey.action, newBinding);
+        setRecordingKey(null);
+      }
+    };
+
+    (handleKeyDown as any).__isHotkeySystemInternal = true;
+    (handleKeyUp as any).__isHotkeySystemInternal = true;
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('keyup', handleKeyUp, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('keyup', handleKeyUp, true);
+    };
   }, [recordingKey, config, updateHotkey]);
 
   const configurableSections = useMemo(() => {

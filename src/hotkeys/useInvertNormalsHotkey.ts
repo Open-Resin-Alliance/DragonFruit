@@ -1,33 +1,14 @@
-import { useEffect } from 'react';
-import { matchesConfiguredHotkeyDown } from './hotkeyConfig';
-import { useHotkeyConfig } from './HotkeyContext';
+import { useEffect, useRef } from 'react';
+import { useActionActive } from './hotkeyStore';
 
-function isTextInput(element: EventTarget | null): boolean {
-  if (!element || !(element instanceof HTMLElement)) return false;
-  const tag = element.tagName.toLowerCase();
-  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
-  if (element.isContentEditable) return true;
-  return false;
-}
-
-export function useInteriorViewHotkey(onToggle: () => void) {
-  const { getHotkey } = useHotkeyConfig();
-  const toggleKey = getHotkey('CAMERA', 'INTERIOR_VIEW');
+export function useInvertNormalsHotkey(onToggle: () => void) {
+  const active = useActionActive('MESH', 'INVERT_NORMALS');
+  const wasActive = useRef(false);
 
   useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      if (isTextInput(e.target)) return;
-
-      const matches = matchesConfiguredHotkeyDown(e, { key: toggleKey.key, modifier: toggleKey.modifier });
-      if (matches && !e.repeat) {
-        e.preventDefault();
-        onToggle();
-      }
-    };
-
-    window.addEventListener('keydown', down, true);
-    return () => {
-      window.removeEventListener('keydown', down, true);
-    };
-  }, [toggleKey, onToggle]);
+    if (active && !wasActive.current) {
+      onToggle();
+    }
+    wasActive.current = active;
+  }, [active, onToggle]);
 }

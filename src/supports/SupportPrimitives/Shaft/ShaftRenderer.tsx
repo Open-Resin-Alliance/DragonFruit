@@ -65,8 +65,8 @@ export function ShaftRenderer({
 
     const { altActive: braceAltActive } = useBracePlacementState();
     const { hotkeyActive: kickstandHotkeyActive } = useKickstandPlacementState();
-    const { hotkeyActive: leafHotkeyActive, stage: leafStage } = useLeafPlacementState();
-    const leafPlacementActive = leafHotkeyActive || leafStage === 'awaitingBase';
+    const { hotkeyActive: leafHotkeyActive, stage: leafStage, sproutParentingLockHeld } = useLeafPlacementState();
+    const leafPlacementActive = leafHotkeyActive || leafStage === 'awaitingBase' || leafStage === 'awaitingSproutTip' || sproutParentingLockHeld;
     const placementInteractionActive = !suppressPlacementInteraction && (braceAltActive || kickstandHotkeyActive || leafPlacementActive);
     const enableSegmentInteraction = (isParentSelected || placementInteractionActive) && (isInteractable || placementInteractionActive);
 
@@ -118,10 +118,23 @@ export function ShaftRenderer({
     };
     
     const handleClick = (e: any) => {
-        if (rayIntersectsJointOrKnot(e)) return;
-
         const altDown = !!(e?.nativeEvent?.altKey || e?.altKey);
         const ctrlDown = !!(e?.nativeEvent?.ctrlKey || e?.ctrlKey);
+        const shiftDown = !!(e?.nativeEvent?.shiftKey || e?.shiftKey);
+
+        console.log('[DEBUG ShaftRenderer handleClick]', {
+            segmentId: id,
+            rayIntersectsJointOrKnot: rayIntersectsJointOrKnot(e),
+            altDown,
+            ctrlDown,
+            shiftDown,
+            isParentSelected,
+            isTopPickedSegment,
+            point: e?.point ? { x: e.point.x, y: e.point.y, z: e.point.z } : null,
+            intersectionsCount: e?.intersections?.length,
+        });
+
+        if (rayIntersectsJointOrKnot(e)) return;
 
         // If Alt is held, this click is intended for placement tools (Brace/Branch/etc.).
         // Stop propagation so it does not fall through to the canvas/model click handlers.
@@ -134,6 +147,10 @@ export function ShaftRenderer({
         }
 
         if ((altDown || ctrlDown || isParentSelected) && isTopPickedSegment) {
+            console.log('[DEBUG ShaftRenderer handleClick] Dispatching shaft-click CustomEvent:', {
+                segmentId: id,
+                point: e.point ? { x: e.point.x, y: e.point.y, z: e.point.z } : null,
+            });
             // Emit global event for branch placement and editable-segment clicks only.
             window.dispatchEvent(new CustomEvent('shaft-click', {
                 detail: {
@@ -218,8 +235,6 @@ export function ShaftRenderer({
     const handlePointerLeave = () => {
         setPointerHoverActive((prev) => (prev ? false : prev));
         emitImmediateModelHover(null);
-
-        if (!enableSegmentInteraction) return;
 
         window.dispatchEvent(new CustomEvent('shaft-leave', {
             detail: { segmentId: id }

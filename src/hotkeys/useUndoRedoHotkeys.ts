@@ -1,41 +1,40 @@
 import { useEffect } from 'react';
 import { redo, undo } from '@/history/historyStore';
-import { UNIVERSAL_HOTKEYS } from './hotkeyConfig';
+import { hotkeyStore } from './hotkeyStore';
 
-function isTextInput(element: EventTarget | null): boolean {
-  if (!element || !(element instanceof HTMLElement)) return false;
-  const tag = element.tagName.toLowerCase();
-  if (tag === 'input' || tag === 'textarea') return true;
-  if (element.isContentEditable) return true;
-  return false;
-}
-
-export function useUndoRedoHotkeys() {
+export function useUndoRedoHotkeys({ disabled = false }: { disabled?: boolean } = {}) {
   useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (isTextInput(event.target)) return;
-      const isMeta = event.metaKey || event.ctrlKey;
-      if (!isMeta) return;
-      const key = event.key.toLowerCase();
+    if (disabled) return;
 
-      // Windows/Linux-friendly redo shortcut.
-      if (key === 'y') {
-        event.preventDefault();
-        redo();
-        return;
+    let wasZPressed = false;
+    let wasYPressed = false;
+
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const hasCtrl = active.has('ctrl') || active.has('meta') || active.has('control');
+      const hasShift = active.has('shift');
+      const hasZ = active.has('z');
+      const hasY = active.has('y');
+
+      const isZJustPressed = hasZ && !wasZPressed;
+      const isYJustPressed = hasY && !wasYPressed;
+
+      if (hasCtrl) {
+        if (isYJustPressed) {
+          redo();
+        } else if (isZJustPressed) {
+          if (hasShift) {
+            redo();
+          } else {
+            undo();
+          }
+        }
       }
 
-      if (key !== UNIVERSAL_HOTKEYS.UNDO.key) return;
+      wasZPressed = hasZ;
+      wasYPressed = hasY;
+    });
 
-      event.preventDefault();
-      if (event.shiftKey) {
-        redo();
-      } else {
-        undo();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+    return unsubscribe;
+  }, [disabled]);
 }

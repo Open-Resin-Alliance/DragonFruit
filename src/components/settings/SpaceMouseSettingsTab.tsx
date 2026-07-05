@@ -1,8 +1,9 @@
 'use client';
 
 import React from 'react';
-import { ArrowLeftRight, Gamepad2, MousePointer2, SlidersHorizontal } from 'lucide-react';
+import { ArrowLeftRight, Ban, CheckCircle2, Gamepad2, MousePointer2, SlidersHorizontal } from 'lucide-react';
 import type { SpaceMouseSettings } from '@/components/settings/spacemousePreferences';
+import { getCandidateGamepads, NAMED_3D_MOUSE } from '@/components/scene/camera/SpaceMouseController';
 import { Select } from '@/components/ui/primitives';
 
 type SpaceMouseSettingsTabProps = {
@@ -15,27 +16,22 @@ function formatNumber(value: number) {
 }
 
 export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettingsTabProps) {
-  const [connectedDevice, setConnectedDevice] = React.useState<string | null>(null);
+  const [candidatePads, setCandidatePads] = React.useState<Gamepad[]>([]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined' || typeof navigator === 'undefined') return;
 
-    const matchSpaceMouse = () => {
-      const pads = navigator.getGamepads?.() ?? [];
-      const found = Array.from(pads).find((pad) => pad && /spacemouse|3dconnexion|space navigator|spacepilot/i.test(pad.id));
-      setConnectedDevice(found?.id ?? null);
-    };
+    const refresh = () => setCandidatePads(getCandidateGamepads());
 
-    matchSpaceMouse();
-    const interval = window.setInterval(matchSpaceMouse, 800);
-
-    window.addEventListener('gamepadconnected', matchSpaceMouse);
-    window.addEventListener('gamepaddisconnected', matchSpaceMouse);
+    refresh();
+    const interval = window.setInterval(refresh, 800);
+    window.addEventListener('gamepadconnected', refresh);
+    window.addEventListener('gamepaddisconnected', refresh);
 
     return () => {
       window.clearInterval(interval);
-      window.removeEventListener('gamepadconnected', matchSpaceMouse);
-      window.removeEventListener('gamepaddisconnected', matchSpaceMouse);
+      window.removeEventListener('gamepadconnected', refresh);
+      window.removeEventListener('gamepaddisconnected', refresh);
     };
   }, []);
 
@@ -100,20 +96,72 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
         </div>
 
         <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-start gap-2">
-            <Gamepad2 className="h-4 w-4 mt-0.5" style={{ color: connectedDevice ? 'var(--accent)' : 'var(--text-muted)' }} />
-            <div className="min-w-0">
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Device status
-              </div>
-              <div className="text-[11px] break-words" style={{ color: 'var(--text-muted)' }}>
-                {connectedDevice ?? 'No 3D mouse detected yet. Ensure driver is installed and browser input is permitted.'}
-              </div>
-              <div className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
-                Note: some Bluetooth 3D mouse models may still work even if they do not appear in detected device status.
-              </div>
+          <div className="flex items-center gap-2 mb-2">
+            <Gamepad2 className="h-4 w-4" style={{ color: candidatePads.length > 0 ? 'var(--accent)' : 'var(--text-muted)' }} />
+            <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Detected devices
             </div>
           </div>
+          {candidatePads.length === 0 ? (
+            <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              No compatible input devices detected. Ensure your 3D mouse driver is installed.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {candidatePads.map((pad) => {
+                const isNamed = NAMED_3D_MOUSE.test(pad.id);
+                const isBlocked = settings.blockedDeviceIds.includes(pad.id);
+                return (
+                  <div
+                    key={pad.id}
+                    className="flex items-start gap-2 rounded-md border p-2"
+                    style={{
+                      borderColor: isBlocked
+                        ? 'color-mix(in srgb, #f87171, var(--border-subtle) 60%)'
+                        : isNamed
+                          ? 'color-mix(in srgb, var(--accent), var(--border-subtle) 60%)'
+                          : 'color-mix(in srgb, #fb923c, var(--border-subtle) 60%)',
+                      background: isBlocked
+                        ? 'color-mix(in srgb, #f87171, var(--surface-1) 94%)'
+                        : 'var(--surface-1)',
+                    }}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        {isBlocked ? (
+                          <Ban className="h-3 w-3 flex-shrink-0" style={{ color: '#f87171' }} />
+                        ) : (
+                          <CheckCircle2 className="h-3 w-3 flex-shrink-0" style={{ color: isNamed ? 'var(--accent)' : '#fb923c' }} />
+                        )}
+                        <span className="text-[11px] font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
+                          {pad.id}
+                        </span>
+                      </div>
+                      <div className="text-[10px] mt-0.5 pl-4.5" style={{ color: 'var(--text-muted)' }}>
+                        {pad.axes.length} axes ·{' '}
+                        {isBlocked ? 'blocked' : isNamed ? 'recognized 3D mouse' : 'unrecognized — used as fallback'}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = isBlocked
+                          ? settings.blockedDeviceIds.filter((id) => id !== pad.id)
+                          : [...settings.blockedDeviceIds, pad.id];
+                        onChange({ blockedDeviceIds: next });
+                      }}
+                      className="flex-shrink-0 rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition-colors"
+                      style={isBlocked
+                        ? { borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }
+                        : { borderColor: 'color-mix(in srgb, #f87171, var(--border-subtle) 50%)', color: '#f87171', background: 'color-mix(in srgb, #f87171, var(--surface-0) 92%)' }}
+                    >
+                      {isBlocked ? 'Unblock' : 'Block'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>

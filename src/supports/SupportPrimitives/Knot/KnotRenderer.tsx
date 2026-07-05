@@ -4,6 +4,7 @@ import { Knot } from '../../types';
 import { usePicking } from '@/components/picking';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { getSelectedId, subscribe } from '../../state';
+import { useLeafPlacementState } from '../../SupportTypes/Leaf/leafPlacementState';
 import { handleKnotClick } from '../../interaction/clickHandlers';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
@@ -40,6 +41,7 @@ export function KnotRenderer({
     raycast,
     enablePicking = true,
 }: KnotRendererProps) {
+    const leafPlacementState = useLeafPlacementState();
     const SELECTABLE_KNOT_VISUAL_SCALE = 1.15;
     const SELECTABLE_KNOT_HITBOX_SCALE = 1.15;
 
@@ -93,9 +95,20 @@ export function KnotRenderer({
         && isParentSelected;
     const isHovered = !isDragging && !isSupportEditInteractionActive() && isTopPickedKnot && !isSelected;
 
-    const displayColor = isSelected ? '#1a75ff' : (isHovered ? '#efd8c2' : (isParentSelected ? '#7fc56a' : propColor));
-    const displayEmissive = isHovered ? '#efd8c2' : propEmissive;
-    const displayEmissiveIntensity = isHovered ? 0.18 : propEmissiveIntensity;
+    const w = (typeof window !== 'undefined' ? window : {}) as any;
+    const isGroupDragging = !!w.__knotDragIsGroup && Array.isArray(w.__draggedKnotGroup) && w.__draggedKnotGroup.includes(knot.id);
+
+    const isJunctionHub = leafPlacementState.junctionHubId === knot.id;
+
+    const displayColor = isJunctionHub
+        ? '#00ff00'
+        : (isGroupDragging
+            ? '#ffd700'
+            : (isSelected ? '#1a75ff' : (isHovered ? '#efd8c2' : (isParentSelected ? '#7fc56a' : propColor))));
+    const displayEmissive = isJunctionHub ? '#00ff00' : (isHovered ? '#efd8c2' : propEmissive);
+    const displayEmissiveIntensity = isJunctionHub ? 0.5 : (isHovered ? 0.18 : propEmissiveIntensity);
+    const effectiveOpacity = isJunctionHub ? 0.70 : opacity;
+    const effectiveTransparent = isJunctionHub ? true : transparent;
 
     const isPointerOverThisKnot = (e: any): boolean => {
         if (!groupRef.current) return false;
@@ -234,9 +247,9 @@ export function KnotRenderer({
                     emissiveIntensity={displayEmissiveIntensity}
                     metalness={0.3}
                     roughness={0.6}
-                    transparent={transparent}
-                    opacity={opacity}
-                    depthWrite={!transparent}
+                    transparent={effectiveTransparent}
+                    opacity={effectiveOpacity}
+                    depthWrite={!effectiveTransparent}
                 />
             </mesh>
         </group>

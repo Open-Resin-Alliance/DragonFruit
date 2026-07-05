@@ -25,14 +25,14 @@ export function SliceCompletedModal({
   React.useEffect(() => {
     if (!isOpen) return;
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+    const handleKeyDown = (event: CustomEvent) => {
+      if (event.detail.key === 'Escape') {
         onClose();
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
+    return () => window.removeEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
   }, [isOpen, onClose]);
 
   React.useEffect(() => {

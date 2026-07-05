@@ -66,6 +66,14 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
         FORCE_PLACE_SUPPORT: {
             key: 'q',
             description: 'Hold to force placing support'
+        },
+        SPROUTED_PARENTING_LOCK: {
+            key: 'w',
+            description: 'Hold to enter Sprouted Leaf Fanning Mode'
+        },
+        TOGGLE_CONE_KNOT_SELECTION: {
+            key: 'e',
+            description: 'Press to toggle selection between support cone and parent base knot'
         }
     },
     CAMERA: {
@@ -102,6 +110,21 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
         TOOL_DUPLICATE: {
             key: 'd',
             description: 'Switch canvas tool to Duplicate'
+        },
+        SELECT_ALL: {
+            key: 'a',
+            modifier: 'ctrl',
+            description: 'Select all visible models'
+        },
+        COPY: {
+            key: 'c',
+            modifier: 'ctrl',
+            description: 'Copy selected model(s)'
+        },
+        PASTE: {
+            key: 'v',
+            modifier: 'ctrl',
+            description: 'Paste copied model(s)'
         }
     },
     PRESETS: {
@@ -140,6 +163,79 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             key: 'drag',
             modifier: 'meta+shift',
             description: 'Snap rotation to 15° increments (Cmd/Ctrl + Shift + drag)'
+        }
+    },
+    GLOBAL: {
+        SAVE: {
+            key: 's',
+            modifier: 'ctrl',
+            description: 'Save active scene'
+        }
+    },
+    DEBUG: {
+        DIAGNOSTICS: {
+            key: 'd',
+            modifier: 'ctrl+shift',
+            description: 'Toggle diagnostics modal'
+        },
+        FORCE_UPDATE: {
+            key: 'u',
+            modifier: 'ctrl+shift',
+            description: 'Force mock update notification'
+        },
+        HISTORY: {
+            key: 'c',
+            modifier: 'ctrl+shift',
+            description: 'Toggle history debug'
+        },
+        TRANSFORM: {
+            key: 'x',
+            modifier: 'ctrl+shift',
+            description: 'Toggle transform debug overlay'
+        },
+        SLICE_METRICS: {
+            key: 'a',
+            modifier: 'ctrl+shift',
+            description: 'Toggle slice metrics debug'
+        },
+        PRINT_MONITOR: {
+            key: 'n',
+            modifier: 'ctrl+shift',
+            description: 'Toggle printing monitor debug'
+        },
+        PRINT_RTSP: {
+            key: 'm',
+            modifier: 'ctrl+shift',
+            description: 'Toggle printing monitor RTSP debug'
+        },
+        TOGGLE_CAPS: {
+            key: 'k',
+            modifier: 'ctrl+shift',
+            description: 'Toggle cross section caps debug panel'
+        }
+    },
+    MESH: {
+        INVERT_NORMALS: {
+            key: 'n',
+            modifier: 'alt',
+            description: 'Invert selected model normals'
+        }
+    },
+    NAVIGATION: {
+        LAYER_UP: {
+            key: 'arrowup',
+            description: 'Navigate layer up'
+        },
+        LAYER_DOWN: {
+            key: 'arrowdown',
+            description: 'Navigate layer down'
+        }
+    },
+    HOLE_PUNCH: {
+        SELECT_ALL: {
+            key: 'a',
+            modifier: 'ctrl',
+            description: 'Select all hole punches / items'
         }
     }
 } as const;

@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import type { Vec3 } from '../../types';
 
-type Stage = 'idle' | 'awaitingBase';
+type Stage = 'idle' | 'awaitingBase' | 'awaitingSproutTip';
 type PlacementSurface = 'interior' | 'exterior';
 
 interface LeafPlacementState {
@@ -22,6 +22,9 @@ interface LeafPlacementState {
     } | null;
     justFinalized: boolean;
     hoverPosition: Vec3 | null;
+    sproutParentingLockHeld: boolean;
+    junctionHubId: string | null;
+    junctionHubIsNew: boolean | null;
 }
 
 const initialState: LeafPlacementState = {
@@ -35,6 +38,9 @@ const initialState: LeafPlacementState = {
     snapTarget: null,
     justFinalized: false,
     hoverPosition: null,
+    sproutParentingLockHeld: false,
+    junctionHubId: null,
+    junctionHubIsNew: null,
 };
 
 let state = { ...initialState };
@@ -84,6 +90,49 @@ export const leafPlacementStore = {
             ...initialState,
             hotkeyActive: false,
         };
+        notify();
+    },
+
+    setSproutParentingLockHeld(held: boolean) {
+        if (state.sproutParentingLockHeld !== held) {
+            state = { ...state, sproutParentingLockHeld: held };
+            notify();
+        }
+    },
+
+    setJunctionHub(junctionHubId: string | null, junctionHubIsNew: boolean | null) {
+        if (state.junctionHubId !== junctionHubId || state.junctionHubIsNew !== junctionHubIsNew) {
+            state = { ...state, junctionHubId, junctionHubIsNew };
+            notify();
+        }
+    },
+
+    setStage(stage: Stage) {
+        if (state.stage !== stage) {
+            state = { ...state, stage };
+            notify();
+        }
+    },
+
+    clearJunctionHubIsNew() {
+        if (state.junctionHubIsNew !== null) {
+            state = { ...state, junctionHubIsNew: null };
+            notify();
+        }
+    },
+
+    updateFanningTip(tipPosition: Vec3 | null, surfaceNormal: Vec3 | null, modelId?: string) {
+        const nextState = { ...state };
+        if (tipPosition !== null) {
+            nextState.tipPosition = tipPosition;
+        }
+        if (surfaceNormal !== null) {
+            nextState.surfaceNormal = surfaceNormal;
+        }
+        if (modelId !== undefined && modelId !== null) {
+            nextState.modelId = modelId;
+        }
+        state = nextState;
         notify();
     },
 
@@ -152,6 +201,9 @@ export const leafPlacementStore = {
             && state.hoverPosition === nextState.hoverPosition
             && state.snapTarget === nextState.snapTarget
             && state.justFinalized === nextState.justFinalized
+            && state.sproutParentingLockHeld === nextState.sproutParentingLockHeld
+            && state.junctionHubId === nextState.junctionHubId
+            && state.junctionHubIsNew === nextState.junctionHubIsNew
         ) {
             return;
         }
@@ -161,7 +213,7 @@ export const leafPlacementStore = {
     },
 
     isActive(): boolean {
-        return state.hotkeyActive || state.stage === 'awaitingBase';
+        return state.hotkeyActive || state.stage === 'awaitingBase' || state.stage === 'awaitingSproutTip' || state.sproutParentingLockHeld;
     },
 };
 
@@ -174,6 +226,6 @@ export function useLeafPlacementState() {
 
     return {
         ...snapshot,
-        isActive: snapshot.hotkeyActive || snapshot.stage === 'awaitingBase',
+        isActive: snapshot.hotkeyActive || snapshot.stage === 'awaitingBase' || snapshot.stage === 'awaitingSproutTip' || snapshot.sproutParentingLockHeld,
     };
 }

@@ -41,25 +41,15 @@ import { SUPPORT_REMOVE_ANCHOR, SUPPORT_REMOVE_BRANCH, SUPPORT_REMOVE_BRACE, SUP
 import { clearSupportSelection, getResolvedPrimarySelection, selectSupportIds } from '@/supports/interaction/shared/selection/selectionController';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
-import { getSupportPlacementModifierState, resolveSupportPlacementHotkeyBindings } from '@/supports/interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
+import { resolveSupportPlacementHotkeyBindings } from '@/supports/interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { resolveSupportPlacementRouting } from '@/supports/interaction/shared/placement/hotkeys/supportPlacementRouting';
+import { isKeyPressedSync } from '@/hotkeys/hotkeyStore';
 
 interface SupportInteractionOptions {
   mode: SupportMode;
 }
 
-function isEditableTarget(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable) return true;
 
-  const tagName = target.tagName.toLowerCase();
-  if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') return true;
-
-  const role = target.getAttribute('role');
-  if (role === 'textbox' || role === 'combobox' || role === 'searchbox' || role === 'spinbutton') return true;
-
-  return false;
-}
 
 function resolveSupportCategoryFromSnapshot(id: string) {
   const snapshot = getSnapshot();
@@ -184,18 +174,23 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     const bindings = resolveSupportPlacementHotkeyBindings(getHotkey);
     return resolveSupportPlacementRouting({
       bindings,
-      modifierState: getSupportPlacementModifierState(source),
+      modifierState: {
+        ctrlKey: isKeyPressedSync('ctrl'),
+        altKey: isKeyPressedSync('alt'),
+        shiftKey: isKeyPressedSync('shift'),
+        metaKey: isKeyPressedSync('meta'),
+      },
       state: {
-        branchHotkeyActive: branchPlacement.altActive,
+        branchHotkeyActive: branchPlacement.branchHotkeyActive,
         branchAwaitingBase: branchPlacement.stage === 'awaitingBase',
         leafHotkeyActive: leafPlacement.hotkeyActive,
         leafAwaitingBase: leafPlacement.stage === 'awaitingBase',
-        braceHotkeyActive: bracePlacement.altActive,
+        braceHotkeyActive: branchPlacement.braceHotkeyActive,
         braceAwaitingEnd: bracePlacement.stage === 'awaitingEnd',
         kickstandHotkeyActive: kickstandPlacement.hotkeyActive,
       },
     });
-  }, [getHotkey, branchPlacement.altActive, branchPlacement.stage, leafPlacement.hotkeyActive, leafPlacement.stage, bracePlacement.altActive, bracePlacement.stage, kickstandPlacement.hotkeyActive]);
+  }, [getHotkey, branchPlacement.branchHotkeyActive, branchPlacement.stage, leafPlacement.hotkeyActive, leafPlacement.stage, branchPlacement.braceHotkeyActive, bracePlacement.stage, kickstandPlacement.hotkeyActive]);
 
   // Handler for MODEL hover (used for trunk placement preview, or branch tip preview)
   const onModelHover = useCallback((hit: THREE.Intersection | null) => {
@@ -226,6 +221,14 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       trunkPlacementV2.onSupportHover(null);
       branchPlacement.onModelHover(null);
       leafPlacement.onModelHover(null);
+      return;
+    }
+
+    const fanningActive = leafPlacement.sproutParentingLockHeld || leafPlacement.stage === 'awaitingSproutTip';
+    if (fanningActive) {
+      trunkPlacementV2.onSupportHover(null);
+      branchPlacement.onModelHover(null);
+      leafPlacement.onModelHover(hit);
       return;
     }
 
@@ -267,6 +270,12 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       return;
     }
 
+    const fanningActive = leafPlacement.sproutParentingLockHeld || leafPlacement.stage === 'awaitingSproutTip';
+    if (fanningActive) {
+      leafPlacement.onModelClick(hit);
+      return;
+    }
+
     const routing = resolvePlacementRouting(nativeEvent ?? hit);
 
     if (routing.modelClickOwner === 'leaf') {
@@ -299,13 +308,25 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       return;
     }
 
+    const fanningActive = leafPlacement.sproutParentingLockHeld || leafPlacement.stage === 'awaitingSproutTip';
+    if (fanningActive) {
+      branchPlacement.onSupportHover(null);
+      leafPlacement.onSupportHover(hit);
+      return;
+    }
+
     const nativeEvent = getNativeEventSource(hit);
     const routing = resolvePlacementRouting(nativeEvent ?? hit);
 
     if (routing.supportHoverOwner === 'leaf') {
       leafPlacement.onSupportHover(hit);
+      branchPlacement.onSupportHover(null);
     } else if (routing.supportHoverOwner === 'branch') {
       branchPlacement.onSupportHover(hit);
+      leafPlacement.onSupportHover(null);
+    } else {
+      leafPlacement.onSupportHover(null);
+      branchPlacement.onSupportHover(null);
     }
   }, [mode, branchPlacement, leafPlacement, resolvePlacementRouting]);
 
@@ -317,8 +338,18 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       return;
     }
 
+    const fanningActive = leafPlacement.sproutParentingLockHeld || leafPlacement.stage === 'awaitingSproutTip';
+    if (fanningActive) {
+      leafPlacement.onSupportClick(hit);
+      return;
+    }
+
     const nativeEvent = getNativeEventSource(hit);
     const routing = resolvePlacementRouting(nativeEvent ?? hit);
+
+    if (routing.blocksDefaultSupportPlacement) {
+      return;
+    }
 
     if (routing.supportClickOwner === 'leaf') {
       leafPlacement.onSupportClick(hit);
@@ -601,9 +632,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       return false;
     };
 
-    const isAltEvent = (e: KeyboardEvent) => {
-      return e.key === 'Alt' || e.key === 'AltGraph' || e.code === 'AltLeft' || e.code === 'AltRight';
-    };
+
 
     const canDeleteSelection = () => {
       const multiSelectedIds = getResolvedPrimarySelection().selectedIds;
@@ -680,53 +709,74 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       setHoveredState('none', null);
     };
 
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (isEditableTarget(e.target)) return;
+    const onKeyDown = (e: CustomEvent) => {
+      const { key, code, repeat, ctrlKey, metaKey } = e.detail;
 
-      if (!e.metaKey && !e.ctrlKey && (e.key === 'Delete' || e.key === 'Backspace')) {
+      if (key.toLowerCase() === 'e') {
+        const category = getSelectedCategory();
+        const id = getSelectedId();
+        if (id) {
+          if (category === 'leaf' || category === 'branch') {
+            const snapshot = getSnapshot();
+            const parentKnotId = category === 'leaf'
+              ? snapshot.leaves[id]?.parentKnotId
+              : snapshot.branches[id]?.parentKnotId;
+            if (parentKnotId && snapshot.knots[parentKnotId]) {
+              setSelectedId(parentKnotId);
+            }
+          } else if (category === 'knot') {
+            const snapshot = getSnapshot();
+            const childLeaves = Object.values(snapshot.leaves).filter(l => l.parentKnotId === id);
+            const childBranches = Object.values(snapshot.branches).filter(b => b.parentKnotId === id);
+            const children = [
+              ...childLeaves.map(l => ({ id: l.id, category: 'leaf' })),
+              ...childBranches.map(b => ({ id: b.id, category: 'branch' })),
+            ];
+            if (children.length > 0) {
+              children.sort((a, b) => a.id.localeCompare(b.id));
+              selectSupportIds([children[0].id]);
+            }
+          }
+        }
+        return;
+      }
+
+      if (!metaKey && !ctrlKey && (key === 'Delete' || key === 'Backspace')) {
         if (!canDeleteSelection()) return;
-        e.preventDefault();
-        e.stopPropagation();
         performDeleteSelection();
         return;
       }
 
-      if (e.key === 'Escape') {
+      if (key === 'Escape') {
         if (getSelectedId() || getResolvedPrimarySelection().selectedIds.length > 0) {
-          e.preventDefault();
-          e.stopPropagation();
           clearSupportSelection();
           setHoveredState('none', null);
         }
         return;
       }
 
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
-        e.preventDefault();
-        e.stopPropagation();
+      if ((ctrlKey || metaKey) && key.toLowerCase() === 'a') {
         const allSupportIds = collectAllSupportIds();
         selectSupportIds(allSupportIds);
         return;
       }
 
-      if (!isAltEvent(e)) return;
-      if (e.repeat) return;
-      if (altDownRef.current) return;
+      if (!(key === 'Alt' || key === 'AltGraph' || code === 'AltLeft' || code === 'AltRight')) return;
+      if (repeat || altDownRef.current) return;
       altDownRef.current = true;
-      console.log('[AltKey]', 'down', { key: e.key, code: e.code, time: performance.now() });
+      console.log('[AltKey]', 'down', { key, code, time: performance.now() });
     };
 
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (!isAltEvent(e)) return;
+    const onKeyUp = (e: CustomEvent) => {
+      const { key, code } = e.detail;
+      if (!(key === 'Alt' || key === 'AltGraph' || code === 'AltLeft' || code === 'AltRight')) return;
       if (!altDownRef.current) return;
       altDownRef.current = false;
-      console.log('[AltKey]', 'up', { key: e.key, code: e.code, time: performance.now() });
+      console.log('[AltKey]', 'up', { key, code, time: performance.now() });
     };
 
-    window.addEventListener('keydown', onKeyDown, true);
-    window.addEventListener('keyup', onKeyUp, true);
-    document.addEventListener('keydown', onKeyDown, true);
-    document.addEventListener('keyup', onKeyUp, true);
+    window.addEventListener('app-hotkey-keydown', onKeyDown as EventListener);
+    window.addEventListener('app-hotkey-keyup', onKeyUp as EventListener);
 
     const unregister = registerDeleteHandler(
       () => mode === 'support' && canDeleteSelection(),
@@ -735,10 +785,8 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     );
 
     return () => {
-      window.removeEventListener('keydown', onKeyDown, true);
-      window.removeEventListener('keyup', onKeyUp, true);
-      document.removeEventListener('keydown', onKeyDown, true);
-      document.removeEventListener('keyup', onKeyUp, true);
+      window.removeEventListener('app-hotkey-keydown', onKeyDown as EventListener);
+      window.removeEventListener('app-hotkey-keyup', onKeyUp as EventListener);
       altDownRef.current = false;
       unregister();
     };
