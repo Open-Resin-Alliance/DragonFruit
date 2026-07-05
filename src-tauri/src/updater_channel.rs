@@ -9,6 +9,7 @@
 //!     update (signature verification, installer launch, app exit — the
 //!     plugin handles everything).
 
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -53,9 +54,9 @@ fn cached_update() -> &'static Mutex<Option<tauri_plugin_updater::Update>> {
 // ---------------------------------------------------------------------------
 
 const STABLE_ENDPOINT: &str =
-    "https://github.com/Open-Resin-Alliance/DragonFruit/releases/latest/download/latest.json";
+    "https://open-resin-alliance.github.io/DragonFruit/latest.json";
 const DEV_ENDPOINT: &str =
-    "https://github.com/Open-Resin-Alliance/DragonFruit/releases/latest/download/latest-dev.json";
+    "https://open-resin-alliance.github.io/DragonFruit/latest-dev.json";
 
 fn endpoint_for_channel(channel: &str) -> &'static str {
     match channel {
@@ -78,6 +79,8 @@ pub async fn check_updates(
     let channel = channel.as_deref().unwrap_or("stable");
     let endpoint_str = endpoint_for_channel(channel);
 
+    info!("[updater] check_updates called — channel={channel} endpoint={endpoint_str}");
+
     let endpoint_url: url::Url = endpoint_str
         .parse()
         .map_err(|e: url::ParseError| format!("Invalid endpoint URL: {e}"))?;
@@ -87,14 +90,23 @@ pub async fn check_updates(
     let updater = app_handle
         .updater_builder()
         .endpoints(vec![endpoint_url])
-        .map_err(|e| format!("Failed to set updater endpoints: {e}"))?
+        .map_err(|e| {
+            warn!("[updater] Failed to set updater endpoints: {e}");
+            format!("Failed to set updater endpoints: {e}")
+        })?
         .build()
-        .map_err(|e| format!("Failed to build updater: {e}"))?;
+        .map_err(|e| {
+            warn!("[updater] Failed to build updater: {e}");
+            format!("Failed to build updater: {e}")
+        })?;
 
     let update = updater
         .check()
         .await
-        .map_err(|e| format!("Update check failed: {e}"))?;
+        .map_err(|e| {
+            warn!("[updater] Update check failed: {e}");
+            format!("Update check failed: {e}")
+        })?;
 
     match update {
         Some(update) => {
@@ -104,6 +116,8 @@ pub async fn check_updates(
             let body = update.body.clone();
             let date = update.date.map(|d| d.to_string());
             let download_url = Some(update.download_url.to_string());
+
+            info!("[updater] Update available: current={current_version} → new={version} url={}", download_url.as_deref().unwrap_or("?"));
 
             let mut cache = cached_update()
                 .lock()
@@ -119,7 +133,10 @@ pub async fn check_updates(
                 download_url,
             }))
         }
-        None => Ok(None),
+        None => {
+            info!("[updater] No update available on channel={channel}");
+            Ok(None)
+        }
     }
 }
 
@@ -200,14 +217,16 @@ pub fn get_saved_update_channel(app_handle: UpdaterAppHandle) -> String {
         .app_data_dir()
         .map(|p| p.join("update-channel.txt"));
 
-    match path {
+    let channel = match path {
         Ok(p) if p.exists() => std::fs::read_to_string(&p)
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| s == "stable" || s == "dev")
             .unwrap_or_else(|| "stable".to_string()),
         _ => "stable".to_string(),
-    }
+    };
+    info!("[updater] get_saved_update_channel → {channel}");
+    channel
 }
 
 /// Save the channel preference to app data dir.
