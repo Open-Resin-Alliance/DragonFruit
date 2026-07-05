@@ -304,8 +304,8 @@ fn build_row_spans_nonzero(
     if active_edges.len() < 2 {
         return Vec::new();
     }
-    let spans = build_row_spans_nonzero_inner(active_edges, width, snap_to_integer);
-    debug_dump_wide_row(&spans, active_edges, width);
+    let (spans, repaired) = build_row_spans_nonzero_inner(active_edges, width, snap_to_integer);
+    debug_dump_wide_row(&spans, active_edges, width, repaired);
     spans
 }
 
@@ -469,14 +469,14 @@ pub(crate) fn debug_scan_rle_row_anomaly(
 /// Diagnostic aid: with `DF_DEBUG_WIDE_ROWS=1`, dump the crossing list of
 /// any row that produced a span wider than half the frame, so leaks that
 /// survive the winding hardening can be traced to their crossings.
-fn debug_dump_wide_row(spans: &[RowSpan], active_edges: &[ActiveEdge], width: usize) {
+fn debug_dump_wide_row(spans: &[RowSpan], active_edges: &[ActiveEdge], width: usize, repaired: bool) {
     debug_trace_touch();
-    let threshold = (width / 2).max(1);
+    let threshold = (width / 8).max(64);
     if spans.iter().any(|s| s.end - s.start >= threshold) {
         let edges: Vec<(f32, i32)> = active_edges.iter().map(|e| (e.x, e.wind)).collect();
         let spans: Vec<(f32, f32)> = spans.iter().map(|s| (s.a, s.b)).collect();
         debug_trace_report(&format!(
-            "[wide-row] width={width} edges={edges:?} spans={spans:?}"
+            "[wide-row] width={width} repaired={repaired} edges={edges:?} spans={spans:?}"
         ));
     }
 }
@@ -485,8 +485,7 @@ fn build_row_spans_nonzero_inner(
     active_edges: &[ActiveEdge],
     width: usize,
     snap_to_integer: bool,
-) -> Vec<RowSpan> {
-
+) -> (Vec<RowSpan>, bool) {
     let mut spans = Vec::with_capacity(active_edges.len() / 2 + 1);
     let mut winding = 0i32;
     let n = active_edges.len();
@@ -541,10 +540,13 @@ fn build_row_spans_nonzero_inner(
     // so a stray crossing cannot leak fill across the row.
     if closure_winding != 0 || (min_winding < 0 && max_winding > 0) {
         let entry_wind = if max_winding >= -min_winding { 1 } else { -1 };
-        return build_row_spans_matched(active_edges, width, snap_to_integer, entry_wind);
+        return (
+            build_row_spans_matched(active_edges, width, snap_to_integer, entry_wind),
+            true,
+        );
     }
 
-    spans
+    (spans, false)
 }
 
 #[inline]
