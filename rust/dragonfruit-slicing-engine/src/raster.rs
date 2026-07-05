@@ -175,7 +175,7 @@ fn build_row_spans_matched(
     width: usize,
     snap_to_integer: bool,
     entry_wind: i32,
-) -> Vec<RowSpan> {
+) -> (Vec<RowSpan>, usize) {
     let mut open: Vec<f32> = Vec::with_capacity(4);
     let mut pairs: Vec<(f32, f32)> = Vec::with_capacity(active_edges.len() / 2 + 1);
     let mut orphans: Vec<(f32, i32)> = Vec::new();
@@ -209,6 +209,11 @@ fn build_row_spans_matched(
     }
     orphans.sort_by(|a, b| a.0.total_cmp(&b.0));
 
+    // The count of orientation-consistent (entry, exit) matches is the
+    // evidence used to pick the row's true orientation; orphan pairs added
+    // below are orientation-free and must not count.
+    let matched_pair_count = pairs.len();
+
     // An orphan pair may only fill if no matched crossing lies strictly
     // between the two orphans. The same-sign walls of a single solid have
     // an empty interior, but instanced copies of a defective mesh shed one
@@ -237,7 +242,7 @@ fn build_row_spans_matched(
     }
 
     if pairs.is_empty() {
-        return Vec::new();
+        return (Vec::new(), matched_pair_count);
     }
 
     // Nested pairs emit innermost-first, so intervals may overlap; merge
@@ -255,7 +260,7 @@ fn build_row_spans_matched(
     }
     push_span_snapped(&mut spans, cur_a, cur_b, width, snap_to_integer);
 
-    spans
+    (spans, matched_pair_count)
 }
 
 #[inline]
@@ -539,11 +544,27 @@ fn build_row_spans_nonzero_inner(
     // row; discard the naive spans and rebuild from matched crossing pairs
     // so a stray crossing cannot leak fill across the row.
     if closure_winding != 0 || (min_winding < 0 && max_winding > 0) {
-        let entry_wind = if max_winding >= -min_winding { 1 } else { -1 };
-        return (
-            build_row_spans_matched(active_edges, width, snap_to_integer, entry_wind),
-            true,
-        );
+        // Decide the row's true orientation by evidence, not by winding
+        // extremes: a single flipped triangle can drive the winding lower
+        // than the legitimate peak and would invert the whole row's
+        // interpretation. A mostly-correct row matches nearly all of its
+        // crossings in the true orientation and almost none in the flipped
+        // one, so run the pairing both ways and keep the stronger result;
+        // the winding extents only break exact ties.
+        let (pos_spans, pos_pairs) =
+            build_row_spans_matched(active_edges, width, snap_to_integer, 1);
+        let (neg_spans, neg_pairs) =
+            build_row_spans_matched(active_edges, width, snap_to_integer, -1);
+        let spans = if pos_pairs > neg_pairs {
+            pos_spans
+        } else if neg_pairs > pos_pairs {
+            neg_spans
+        } else if max_winding >= -min_winding {
+            pos_spans
+        } else {
+            neg_spans
+        };
+        return (spans, true);
     }
 
     (spans, false)
@@ -3857,6 +3878,33 @@ mod tests {
         assert_eq!(spans.len(), 2, "inverted junk must not fill the gap");
         assert_eq!((spans[0].start, spans[0].end), (10, 39));
         assert_eq!((spans[1].start, spans[1].end), (100, 129));
+    }
+
+    #[test]
+    fn flipped_triangle_does_not_invert_the_row() {
+        // Three objects; the middle object's left crossing passes through a
+        // flipped triangle so its wind reads -1 instead of +1. The winding
+        // dips to -2 (below the legitimate +1 peak), which used to flip the
+        // orientation vote and fill the gaps instead of the objects —
+        // rendering the row inverted. Evidence-based orientation must keep
+        // all three objects filled.
+        let spans = build_row_spans_nonzero(
+            &[
+                edge(10.0, 1),
+                edge(40.0, -1),
+                edge(100.0, -1),
+                edge(130.0, -1),
+                edge(200.0, 1),
+                edge(230.0, -1),
+            ],
+            256,
+            true,
+        );
+
+        assert_eq!(spans.len(), 3, "all three objects must fill, nothing else");
+        assert_eq!((spans[0].start, spans[0].end), (10, 39));
+        assert_eq!((spans[1].start, spans[1].end), (100, 129));
+        assert_eq!((spans[2].start, spans[2].end), (200, 229));
     }
 
     #[test]
