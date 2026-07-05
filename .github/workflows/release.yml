@@ -1,9 +1,10 @@
-name: Dev Pre-Release
+name: Release
 
 on:
   workflow_dispatch:
   push:
     branches:
+      - main
       - dev
     paths:
       - package.json
@@ -11,13 +12,13 @@ on:
       - src-tauri/**
       - scripts/**
       - flatpak/**
-      - .github/workflows/dev-prerelease.yml
+      - .github/workflows/release.yml
 
 permissions:
   contents: write
 
 concurrency:
-  group: dev-prerelease
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -30,6 +31,8 @@ jobs:
       tag_name: ${{ steps.version.outputs.tag_name }}
       release_name: ${{ steps.version.outputs.release_name }}
       release_body: ${{ steps.version.outputs.release_body }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+      updater_json: ${{ steps.version.outputs.updater_json }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,14 +45,27 @@ jobs:
         run: |
           current_version="$(node -p "require('./package.json').version")"
 
+          if [[ "${{ github.ref_name }}" == "dev" ]]; then
+            tag_prefix="dev_"
+            is_prerelease="true"
+            updater_json="latest-dev.json"
+          else
+            tag_prefix="v"
+            is_prerelease="false"
+            updater_json="latest.json"
+          fi
+
+          echo "is_prerelease=${is_prerelease}" >> "$GITHUB_OUTPUT"
+          echo "updater_json=${updater_json}" >> "$GITHUB_OUTPUT"
+
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "should_release=true" >> "$GITHUB_OUTPUT"
             echo "version=$current_version" >> "$GITHUB_OUTPUT"
-            echo "tag_name=dev_${current_version}" >> "$GITHUB_OUTPUT"
-            echo "release_name=Pre-Release dev_${current_version}" >> "$GITHUB_OUTPUT"
+            echo "tag_name=${tag_prefix}${current_version}" >> "$GITHUB_OUTPUT"
+            echo "release_name=Pre-Release ${tag_prefix}${current_version}" >> "$GITHUB_OUTPUT"
             {
               echo "release_body<<EOF"
-              echo "Manually triggered prerelease for version ${current_version} from the dev branch."
+              echo "Manually triggered release for version ${current_version} from the ${{ github.ref_name }} branch."
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
             exit 0
@@ -68,11 +84,11 @@ jobs:
 
           echo "should_release=true" >> "$GITHUB_OUTPUT"
           echo "version=$current_version" >> "$GITHUB_OUTPUT"
-          echo "tag_name=dev_${current_version}" >> "$GITHUB_OUTPUT"
-          echo "release_name=Pre-Release dev_${current_version}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${tag_prefix}${current_version}" >> "$GITHUB_OUTPUT"
+          echo "release_name=Pre-Release ${tag_prefix}${current_version}" >> "$GITHUB_OUTPUT"
           {
             echo "release_body<<EOF"
-            echo "Automated prerelease for version ${current_version} from the dev branch."
+            echo "Automated release for version ${current_version} from the ${{ github.ref_name }} branch."
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -150,9 +166,6 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: ${{ matrix.platform == 'ubuntu-22.04' && '1' || '' }}
           CMAKE_OSX_ARCHITECTURES: ${{ matrix.cmake_archs || '' }}
           DF_BUILD_TARGET_TRIPLE: ${{ matrix.df_build_triple || '' }}
-          # Tauri updater signing — set these as repo secrets:
-          # TAURI_SIGNING_PRIVATE_KEY — content of .tauri/app.key
-          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD — optional password set during key gen
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -200,13 +213,23 @@ jobs:
         if: matrix.build_kind == 'flatpak'
         run: node scripts/tauri-build.mjs --target x86_64-unknown-linux-gnu --no-bundle
 
-      - name: Upload installer + updater artifacts
-        if: matrix.build_kind == 'tauri' && (matrix.platform == 'macos-latest' || matrix.platform == 'windows-latest')
+      - name: Upload macOS installer + updater artifacts
+        if: matrix.build_kind == 'tauri' && matrix.platform == 'macos-latest'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: |
-            ${{ matrix.platform == 'macos-latest' && 'src-tauri/target/*/release/bundle/dmg/*' || 'src-tauri/target/*/release/bundle/nsis/*' }}
+            src-tauri/target/*/release/bundle/dmg/*.dmg
+            src-tauri/target/*/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/*/release/bundle/macos/*.app.tar.gz.sig
+          if-no-files-found: error
+
+      - name: Upload Windows installer + updater artifacts
+        if: matrix.build_kind == 'tauri' && matrix.platform == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: src-tauri/target/*/release/bundle/nsis/*
           if-no-files-found: error
 
       - name: Upload flatpak artifact
@@ -217,8 +240,8 @@ jobs:
           path: src-tauri/target/release/bundle/flatpak/*.flatpak
           if-no-files-found: error
 
-  publish-prerelease:
-    name: Publish prerelease
+  publish-release:
+    name: Publish release
     needs:
       - detect-version-bump
       - build-tauri
@@ -229,6 +252,53 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: release-assets
+
+      - name: Generate updater JSON
+        uses: actions/github-script@v7
+        env:
+          VERSION: ${{ needs.detect-version-bump.outputs.version }}
+          TAG_NAME: ${{ needs.detect-version-bump.outputs.tag_name }}
+          UPDATER_JSON: ${{ needs.detect-version-bump.outputs.updater_json }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { execSync } = require('child_process');
+
+            const version = process.env.VERSION;
+            const tag = process.env.TAG_NAME;
+            const jsonFile = process.env.UPDATER_JSON;
+            const baseUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}`;
+
+            function findOne(pattern) {
+              const results = execSync(`find release-assets -name "${pattern}"`).toString().trim().split('\n').filter(Boolean);
+              if (results.length === 0) throw new Error(`No file matching ${pattern} in release-assets`);
+              if (results.length > 1) throw new Error(`Multiple files matching ${pattern}: ${results.join(', ')}`);
+              return results[0];
+            }
+
+            const darwinTgz = findOne('*.app.tar.gz');
+            const darwinSig = findOne('*.app.tar.gz.sig');
+            const windowsZip = findOne('*.nsis.zip');
+            const windowsSig = findOne('*.nsis.zip.sig');
+
+            const json = {
+              version,
+              pub_date: new Date().toISOString(),
+              platforms: {
+                'darwin-universal': {
+                  url: `${baseUrl}/${path.basename(darwinTgz)}`,
+                  signature: fs.readFileSync(darwinSig, 'utf8').trim(),
+                },
+                'windows-x86_64': {
+                  url: `${baseUrl}/${path.basename(windowsZip)}`,
+                  signature: fs.readFileSync(windowsSig, 'utf8').trim(),
+                },
+              },
+            };
+
+            fs.writeFileSync(jsonFile, JSON.stringify(json, null, 2));
+            core.info(`Generated ${jsonFile}:\n${JSON.stringify(json, null, 2)}`);
 
       - name: Create tag if needed
         uses: actions/github-script@v7
@@ -244,25 +314,52 @@ jobs:
             try {
               await github.rest.git.getRef({ owner, repo, ref: `tags/${tag}` });
             } catch (error) {
-              if (error.status !== 404) {
-                throw error;
-              }
-              await github.rest.git.createRef({
-                owner,
-                repo,
-                ref,
-                sha: context.sha
-              });
+              if (error.status !== 404) throw error;
+              await github.rest.git.createRef({ owner, repo, ref, sha: context.sha });
             }
 
-      - name: Publish GitHub prerelease
+      - name: Resolve release notes from matching dev prerelease
+        id: release_notes
+        if: needs.detect-version-bump.outputs.is_prerelease == 'false'
+        uses: actions/github-script@v7
+        env:
+          VERSION: ${{ needs.detect-version-bump.outputs.version }}
+          FALLBACK_BODY: ${{ needs.detect-version-bump.outputs.release_body }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const version = process.env.VERSION;
+            const devTag = `dev_${version}`;
+            let body = process.env.FALLBACK_BODY || "";
+
+            try {
+              const { data } = await github.rest.repos.getReleaseByTag({ owner, repo, tag: devTag });
+              if (data?.body?.trim()) {
+                body = data.body;
+                core.info(`Using hand-written notes from prerelease ${devTag}`);
+              } else {
+                core.warning(`Prerelease ${devTag} has no body; using fallback notes.`);
+              }
+            } catch (error) {
+              if (error.status === 404) {
+                core.warning(`Prerelease ${devTag} not found; using fallback notes.`);
+              } else {
+                core.warning(`Failed fetching ${devTag}: ${error.message}; using fallback notes.`);
+              }
+            }
+
+            core.setOutput("body", body);
+
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.detect-version-bump.outputs.tag_name }}
           name: ${{ needs.detect-version-bump.outputs.release_name }}
-          body: ${{ needs.detect-version-bump.outputs.release_body }}
-          prerelease: true
+          body: ${{ steps.release_notes.outputs.body || needs.detect-version-bump.outputs.release_body }}
+          prerelease: ${{ needs.detect-version-bump.outputs.is_prerelease }}
           draft: false
           target_commitish: ${{ github.sha }}
           files: |
             release-assets/**/*
+            ${{ needs.detect-version-bump.outputs.updater_json }}
