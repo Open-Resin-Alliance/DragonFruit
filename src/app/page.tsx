@@ -13550,9 +13550,11 @@ export default function Home() {
     const countY = Math.max(1, Math.round(arrangeArrayCountY));
     const countZ = Math.max(1, Math.round(arrangeArrayCountZ));
 
-    const gapX = Math.max(0, arrangeArrayGapX);
-    const gapY = Math.max(0, arrangeArrayGapY);
-    const gapZ = Math.max(0, arrangeArrayGapZ);
+    // Gaps may be negative (nested arrays); the steps below keep a small
+    // positive floor so the array still advances.
+    const gapX = arrangeArrayGapX;
+    const gapY = arrangeArrayGapY;
+    const gapZ = arrangeArrayGapZ;
 
     const baseDims = visibleModels.map((model) => {
       const t = modelTransformById.get(model.id) ?? model.transform;
@@ -13570,9 +13572,9 @@ export default function Home() {
     const maxDepth = Math.max(...baseDims.map((d) => d.depth));
     const maxHeight = Math.max(...baseDims.map((d) => d.height));
 
-    const stepX = maxWidth + gapX;
-    const stepY = maxDepth + gapY;
-    const stepZ = maxHeight + gapZ;
+    const stepX = Math.max(0.1, maxWidth + gapX);
+    const stepY = Math.max(0.1, maxDepth + gapY);
+    const stepZ = Math.max(0.1, maxHeight + gapZ);
 
     const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
     const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
@@ -14867,9 +14869,10 @@ export default function Home() {
       const countX = Math.max(1, Math.round(duplicateArrayCountX));
       const countY = Math.max(1, Math.round(duplicateArrayCountY));
       const countZ = Math.max(1, Math.round(duplicateArrayCountZ));
-      const stepX = width + Math.max(0, duplicateArrayGapX);
-      const stepY = depth + Math.max(0, duplicateArrayGapY);
-      const stepZ = height + Math.max(0, duplicateArrayGapZ);
+      // Gaps may be negative (nested arrays); floor the step so it advances.
+      const stepX = Math.max(0.1, width + duplicateArrayGapX);
+      const stepY = Math.max(0.1, depth + duplicateArrayGapY);
+      const stepZ = Math.max(0.1, height + duplicateArrayGapZ);
 
       const originOffsetX = ((countX - 1) * stepX) * 0.5;
       const originOffsetY = ((countY - 1) * stepY) * 0.5;
@@ -14888,7 +14891,8 @@ export default function Home() {
       }
     } else {
       const totalCount = Math.max(1, duplicateTotalCopies);
-      const spacing = Math.max(0, duplicateSpacingMm);
+      // Spacing may be negative (nesting); clamp so a step never collapses.
+      const spacing = Math.max(-Math.min(width, depth) + 0.1, duplicateSpacingMm);
 
       const rawDupMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
       const rawDupMaxX = rawDupMinX + scene.view3dSettings.widthMm;
@@ -15280,7 +15284,8 @@ export default function Home() {
     const sourceDims = getModelSupportAwareDimensionsMm(model, undefined, model.transform);
     const width = sourceDims.width;
     const depth = sourceDims.depth;
-    const spacing = Math.max(0, duplicateSpacingMm);
+    // Spacing may be negative (nesting); clamp so a step never collapses.
+    const spacing = Math.max(-Math.min(width, depth) + 0.1, duplicateSpacingMm);
 
     const rawFillMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
     const rawFillMaxX = rawFillMinX + scene.view3dSettings.widthMm;
