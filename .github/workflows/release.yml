@@ -279,8 +279,8 @@ jobs:
 
             const darwinTgz = findOne('*.app.tar.gz');
             const darwinSig = findOne('*.app.tar.gz.sig');
-            const windowsZip = findOne('*.nsis.zip');
-            const windowsSig = findOne('*.nsis.zip.sig');
+            const windowsZip = findOne('*.exe');
+            const windowsSig = findOne('*.exe.sig');
 
             const json = {
               version,
