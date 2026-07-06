@@ -3169,7 +3169,7 @@ pub fn rasterize_layer_rle_block(
                 continue;
             }
 
-            let spans = build_row_spans_nonzero(&active_edges, full_width, false);
+            let spans = build_row_spans_nonzero_ctx(&active_edges, full_width, false, None);
             for span in spans {
                 // Clamp the fractional span to the window. The cut edge
                 // becomes a full-coverage boundary, so pixel values inside
@@ -3337,7 +3337,7 @@ pub fn rasterize_layer_rle_block(
             continue;
         }
 
-        let spans = build_row_spans_nonzero(&active_edges, full_width, true);
+        let spans = build_row_spans_nonzero_ctx(&active_edges, full_width, true, None);
 
         for span in spans {
             let s = span.start.max(wstart);
