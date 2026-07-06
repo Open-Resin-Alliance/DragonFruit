@@ -2,7 +2,7 @@ import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profil
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
 import { prepareLoadedModelsForOutput } from '@/features/mesh-modifiers/prepareModelGeometry';
-import { resolveOutputFormatVersion, resolveOutputSettingsMode, resolveSlicingFormatDefinition } from './formats/registry';
+import { resolveOutputFileExtension, resolveOutputFormatVersion, resolveOutputSettingsMode, resolveSlicingFormatDefinition } from './formats/registry';
 import { getSavedSlicingPerformanceSettings, type PngCompressionStrategy } from '@/components/settings/performancePreferences';
 import {
     isNativeSlicerAvailable,
@@ -845,7 +845,10 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     throwIfAborted(options.abortSignal);
     options.onProgress?.(Math.max(progressDone, progressTotal), progressTotal, 'Finalizing');
 
-    const printerExt = options.printerProfile.display.outputFormat.replace(/^\./, '') || format.outputFormat.replace(/^\./, '') || 'slice';
+    const printerExt = resolveOutputFileExtension(
+        options.printerProfile.display.outputFormat,
+        options.printerProfile.display.formatVersion,
+    ) || format.outputFormat.replace(/^\./, '') || 'slice';
     const outputName = `${safeFilenameBase(options.filenameBase)}.${printerExt}`;
 
     const totalElapsedMs = performance.now() - orchestratorStartMs;

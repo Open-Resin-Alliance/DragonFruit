@@ -139,6 +139,32 @@ export function getAvailableSettingsModeOptions(
   }));
 }
 
+/**
+ * Returns the file extension for a sliced output file.
+ *
+ * When the format declares `fileExtensionFromVersion`, the selected formatVersion
+ * is the printer-specific extension (e.g. "pwmo", "pm7"). Otherwise the canonical
+ * outputFormat itself is the extension (e.g. "ctb", "goo").
+ */
+export function resolveOutputFileExtension(
+  outputFormat: PrinterOutputFormat | string | null | undefined,
+  formatVersion?: string | null,
+): string {
+  const raw = (outputFormat ?? '').trim();
+  const canonical = raw.startsWith('.') ? raw : `.${raw}`;
+  if (canonical.length <= 1) return 'print';
+
+  const formatVersionClean = (formatVersion ?? '').trim();
+  if (formatVersionClean.length > 0) {
+    const def = resolveSlicingFormatDefinitionByOutput(canonical as PrinterOutputFormat);
+    if (def?.fileExtensionFromVersion) {
+      return formatVersionClean;
+    }
+  }
+
+  return canonical.replace(/^\./, '');
+}
+
 export function resolveOutputSettingsMode(
   outputFormat: PrinterOutputFormat | string | null | undefined,
   requestedMode: string | null | undefined,
