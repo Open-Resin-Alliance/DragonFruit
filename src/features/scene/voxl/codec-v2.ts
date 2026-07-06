@@ -52,6 +52,14 @@ import type { DragonfruitImportFormat } from '@/supports/types';
 
 export const VOXL_V2 = 2;
 export const VOXL_V2_SEMANTIC_REVISION = 2.1;
+/**
+ * Container version written when identical-geometry MESH chunk dedup removed
+ * at least one chunk (duplicate models share one chunk via meshRef.chunkIndex).
+ * Bumped from 2 so older readers — which map MESH chunks 1:1 to model index —
+ * fail the strict version check cleanly instead of silently dropping the
+ * duplicate models. All-unique scenes keep writing V2 and stay old-readable.
+ */
+export const VOXL_V3 = 3;
 
 const HEADER_SIZE = 16;
 const DIR_ENTRY_SIZE = 20;
@@ -119,8 +127,32 @@ export async function serializeVoxlDocumentV2(
     selectedModelIds: [...input.selectedModelIds],
   };
 
+  // ── Identical-geometry MESH chunk dedup ───────────────────────────────
+  // Models with the same content SHA share ONE chunk: the first occurrence
+  // owns it, later ones reference it via meshRef.chunkIndex. Only owner
+  // chunks are written, so a Fill-Plate bed of N copies stores 1 mesh, not N.
+  // Falls back to 1:1 when a SHA is missing (dedup is best-effort, never
+  // wrong: without a hash we cannot prove two meshes are identical).
+  const chunkOwnerByModelIndex = new Map<number, number>(); // model i → owning chunk index
+  const ownerBySha = new Map<string, number>();
+  const dedupedMeshBytes = new Map<number, Uint8Array>();
+  for (let i = 0; i < input.models.length; i += 1) {
+    if (!meshBytes.has(i)) continue;
+    const sha = sha256Map?.get(i);
+    const existingOwner = sha !== undefined ? ownerBySha.get(sha) : undefined;
+    if (existingOwner !== undefined) {
+      chunkOwnerByModelIndex.set(i, existingOwner); // duplicate → share owner's chunk
+    } else {
+      chunkOwnerByModelIndex.set(i, i); // owner → keeps its own chunk
+      if (sha !== undefined) ownerBySha.set(sha, i);
+      dedupedMeshBytes.set(i, meshBytes.get(i)!);
+    }
+  }
+  const dedupRemovedChunks = meshBytes.size > dedupedMeshBytes.size;
+
   const models: VoxlModelEntry[] = input.models.map((m, i) => {
     const hasChunk = meshBytes.has(i);
+    const ownerIndex = chunkOwnerByModelIndex.get(i);
     const meshRef: VoxlMeshRef = hasChunk
       ? {
           mode: 'embedded-chunk',
@@ -128,6 +160,11 @@ export async function serializeVoxlDocumentV2(
           mimeType: m.mesh?.mimeType ?? 'model/stl',
           uncompressedSizeBytes: meshBytes.get(i)!.length,
           sha256: sha256Map?.get(i),
+          // Only duplicates carry an explicit pointer; owners default to `i`,
+          // keeping V2 files byte-identical to before when no dedup occurs.
+          ...(ownerIndex !== undefined && ownerIndex !== i
+            ? { chunkIndex: ownerIndex }
+            : {}),
         }
       : m.mesh ?? { mode: 'none' };
 
@@ -160,8 +197,9 @@ export async function serializeVoxlDocumentV2(
   pending.push({ type: CHUNK_SCNE, index: 0, raw: textEncoder.encode(JSON.stringify(scene)), compress: false });
   pending.push({ type: CHUNK_MODL, index: 0, raw: textEncoder.encode(JSON.stringify(models)), compress: true });
 
-  // One MESH chunk per model with embedded data, sorted by index
-  const sortedMeshEntries = [...meshBytes.entries()].sort((a, b) => a[0] - b[0]);
+  // One MESH chunk per UNIQUE mesh (owner index), sorted by index. Duplicates
+  // reference an owner via meshRef.chunkIndex and get no chunk of their own.
+  const sortedMeshEntries = [...dedupedMeshBytes.entries()].sort((a, b) => a[0] - b[0]);
   for (const [modelIndex, bytes] of sortedMeshEntries) {
     pending.push({ type: CHUNK_MESH, index: modelIndex, raw: bytes, compress: true });
   }
@@ -224,9 +262,11 @@ export async function serializeVoxlDocumentV2(
   const view = new DataView(buffer);
   const out = new Uint8Array(buffer);
 
-  // Header
+  // Header. Version bumps to 3 only when dedup removed chunks, so old readers
+  // reject deduped files cleanly rather than losing the shared-chunk models;
+  // non-deduped scenes stay V2 and remain readable by older builds.
   out.set(MAGIC_BYTES, 0);
-  view.setUint16(4, VOXL_V2, true);
+  view.setUint16(4, dedupRemovedChunks ? VOXL_V3 : VOXL_V2, true);
   view.setUint16(6, 0, true);
   view.setUint32(8, chunkCount, true);
   view.setUint32(12, 0, true);
@@ -273,8 +313,10 @@ export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
   }
 
   const version = view.getUint16(4, true);
-  if (version !== VOXL_V2) {
-    throw new Error(`Unsupported VOXL binary version: ${version}. Expected ${VOXL_V2}.`);
+  if (version !== VOXL_V2 && version !== VOXL_V3) {
+    throw new Error(
+      `Unsupported VOXL binary version: ${version}. Expected ${VOXL_V2} or ${VOXL_V3}.`,
+    );
   }
 
   const chunkCount = view.getUint32(8, true);
@@ -346,13 +388,26 @@ export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
   // ── Resolve MESH chunks ───────────────────────────────────────────────
 
   const meshBytesMap = new Map<string, Uint8Array>();
+  // Decompress each MESH chunk at most once even when many models share it
+  // (dedup) — the shared bytes are handed to every referencing model.
+  const chunkBytesByIndex = new Map<number, Uint8Array>();
 
   for (let i = 0; i < models.length; i += 1) {
     const model = models[i];
     if (model.mesh?.mode === 'embedded-chunk') {
-      const meshEntry = entries.find((e) => e.type === CHUNK_MESH && e.index === i);
-      if (meshEntry) {
-        meshBytesMap.set(model.id, readChunk(meshEntry));
+      // V3 duplicates point at an owner chunk via chunkIndex; V2/legacy files
+      // map 1:1, so a missing chunkIndex means "my own model index".
+      const chunkIdx = typeof model.mesh.chunkIndex === 'number' ? model.mesh.chunkIndex : i;
+      let bytes = chunkBytesByIndex.get(chunkIdx);
+      if (!bytes) {
+        const meshEntry = entries.find((e) => e.type === CHUNK_MESH && e.index === chunkIdx);
+        if (meshEntry) {
+          bytes = readChunk(meshEntry);
+          chunkBytesByIndex.set(chunkIdx, bytes);
+        }
+      }
+      if (bytes) {
+        meshBytesMap.set(model.id, bytes);
       }
     }
   }

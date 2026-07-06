@@ -2691,6 +2691,522 @@ pub fn rasterize_layer_rle(
     (runs, stats)
 }
 
+/// Compute per-window layer stats from a window-relative run stream.
+///
+/// X-extents are reported in absolute frame columns (`+ window_start_col`);
+/// pixel totals count only pixels inside the window, so per-block stats can
+/// be summed into an exact per-layer total.
+fn window_stats_from_runs(
+    runs: &[crate::rle::RleRun],
+    window_width: usize,
+    height: usize,
+    window_start_col: usize,
+    pixel_area_mm2: f64,
+    compute_area_stats: bool,
+) -> LayerAreaStatsV3 {
+    let mut stats = LayerAreaStatsV3::default();
+    if window_width == 0 || height == 0 {
+        return stats;
+    }
+
+    let row_w = window_width as u64;
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
+
+    let mut pos: u64 = 0;
+    for run in runs {
+        let end = pos + run.length as u64;
+        if run.value > 0 {
+            let mut p = pos;
+            while p < end {
+                let row = p / row_w;
+                let row_start = row * row_w;
+                let seg_end = end.min(row_start + row_w);
+                min_x = min_x.min((p - row_start) as i32);
+                max_x = max_x.max((seg_end - 1 - row_start) as i32);
+                min_y = min_y.min(row as i32);
+                max_y = max_y.max(row as i32);
+                stats.total_solid_pixels =
+                    stats.total_solid_pixels.saturating_add((seg_end - p) as u32);
+                p = seg_end;
+            }
+        }
+        pos = end;
+    }
+
+    if stats.total_solid_pixels > 0 {
+        stats.min_x = min_x + window_start_col as i32;
+        stats.max_x = max_x + window_start_col as i32;
+        stats.min_y = min_y;
+        stats.max_y = max_y;
+
+        if compute_area_stats {
+            let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
+                compute_component_area_stats_from_rle_8_connected(
+                    runs,
+                    window_width,
+                    height,
+                    pixel_area_mm2,
+                );
+            stats.total_solid_pixels = total_pixels;
+            stats.total_solid_area_mm2 = (total_pixels as f64) * pixel_area_mm2;
+            stats.largest_area_mm2 = largest_area_mm2;
+            stats.smallest_area_mm2 = smallest_area_mm2;
+            stats.area_count = area_count;
+        } else {
+            let total_area = (stats.total_solid_pixels as f64) * pixel_area_mm2;
+            stats.total_solid_area_mm2 = total_area;
+            stats.largest_area_mm2 = total_area;
+            stats.smallest_area_mm2 = total_area;
+            stats.area_count = 1;
+        }
+    }
+
+    stats
+}
+
+/// Rasterize one column window ("block") of a layer directly into RLE output.
+///
+/// The windowed counterpart of `rasterize_layer_rle`: emits an independent
+/// `block.width × height` row-major run stream containing pixels
+/// `[block.start_col, block.start_col + block.width)` of every row, so
+/// encoders that store layers as column partitions (e.g. GOO V5 half-screen
+/// panels) receive per-block streams directly instead of splitting a
+/// full-width stream. Edge geometry is built once per call and painting is
+/// clamped to the window, so pixel values inside the window are identical to
+/// the full-width raster. Stats count window pixels only, with x-extents in
+/// absolute frame columns, allowing exact per-layer aggregation across blocks.
+/// Component counts are window-local: an island spanning a block seam is
+/// counted once per block it touches.
+#[allow(unused_assignments)]
+pub fn rasterize_layer_rle_block(
+    job: &SliceJobV3,
+    triangles: &[Triangle],
+    layer_indices: &[usize],
+    layer_index: u32,
+    compute_area_stats: bool,
+    block: crate::rle::RleBlockSpec,
+) -> (Vec<crate::rle::RleRun>, LayerAreaStatsV3) {
+    use crate::rle::{emit_row, emit_zero_rows, RleAccum};
+
+    let full_width = job.effective_render_width_px() as usize;
+    let height = job.source_height_px as usize;
+    let wstart = (block.start_col as usize).min(full_width);
+    let wend = wstart
+        .saturating_add(block.width as usize)
+        .min(full_width);
+    let wwidth = wend - wstart;
+
+    let mut rle = RleAccum::new();
+    let mut stats = LayerAreaStatsV3::default();
+
+    if wwidth == 0 || height == 0 {
+        return (rle.finish(), stats);
+    }
+
+    if layer_indices.is_empty() {
+        emit_zero_rows(&mut rle, height, wwidth);
+        return (rle.finish(), stats);
+    }
+
+    let pixel_area_mm2 = ((job.build_width_mm as f64)
+        / (job.effective_render_width_px().max(1) as f64))
+        * ((job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64));
+
+    if supports_should_bypass_aa(job, triangles.len()) {
+        let (mask, _) =
+            rasterize_layer_with_stats(job, triangles, layer_indices, layer_index, false);
+        let mut window_mask = Vec::with_capacity(wwidth * height);
+        for row in 0..height {
+            let row_start = row * full_width;
+            window_mask.extend_from_slice(&mask[row_start + wstart..row_start + wend]);
+        }
+        let runs = encode_mask_to_rle(&window_mask, wwidth, height);
+        let stats = window_stats_from_runs(
+            &runs,
+            wwidth,
+            height,
+            wstart,
+            pixel_area_mm2,
+            compute_area_stats,
+        );
+        return (runs, stats);
+    }
+
+    let aa_level_steps = job.effective_xy_aa_steps();
+    let aa_steps = (aa_level_steps as usize).max(1);
+    let aa_enabled = aa_steps > 1;
+    let use_z_perturbation = zaa::use_raster_perturbation(job) && aa_enabled;
+
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
+
+    if use_z_perturbation {
+        let segments_list =
+            build_z_perturbed_segments_list(job, triangles, layer_indices, layer_index, aa_steps);
+        if segments_list.iter().all(|segments| segments.is_empty()) {
+            emit_zero_rows(&mut rle, height, wwidth);
+            return (rle.finish(), stats);
+        }
+
+        let Some(scanline_index) =
+            build_scanline_segment_index_z_perturbed(&segments_list, height, aa_steps)
+        else {
+            emit_zero_rows(&mut rle, height, wwidth);
+            return (rle.finish(), stats);
+        };
+
+        let scanline_starts = scanline_index.starts;
+        let scanline_row_offsets = scanline_index.row_offsets;
+        let y_start = scanline_index.y_start;
+        let y_end_exclusive = scanline_index.y_end_exclusive;
+        let track_aa_components = compute_area_stats && aa_enabled;
+        let mut aa_component_tracker = if track_aa_components {
+            Some(ComponentSpanTracker::new())
+        } else {
+            None
+        };
+
+        let first_physical_y = y_start / aa_steps;
+        emit_zero_rows(&mut rle, first_physical_y, wwidth);
+
+        let segment_capacity = segments_list
+            .iter()
+            .map(|segments| segments.len())
+            .max()
+            .unwrap_or(0);
+        let mut active_edges: Vec<ActiveEdge> = Vec::with_capacity(segment_capacity.min(256));
+        let mut merge_scratch: Vec<ActiveEdge> = Vec::with_capacity(segment_capacity.min(256));
+
+        let mut row_buf = vec![0u8; wwidth];
+        let mut row_accum = vec![0.0f32; wwidth];
+        let mut row_delta = vec![0i32; wwidth + 1];
+        let mut row_hit_delta = if track_aa_components {
+            vec![0i32; wwidth + 1]
+        } else {
+            Vec::new()
+        };
+        let mut current_physical_y = first_physical_y;
+        #[allow(unused_assignments)]
+        let mut last_emitted_py = first_physical_y.wrapping_sub(1);
+
+        macro_rules! flush_up_to {
+            ($next_py:expr) => {{
+                let mut coverage = 0i32;
+                let mut occupied = 0i32;
+                let mut run_start: Option<usize> = None;
+
+                for x in 0..wwidth {
+                    coverage += row_delta[x];
+                    let resolved = resolve_accumulated_aa_alpha(row_accum[x], coverage, aa_steps);
+                    if resolved > 0 {
+                        row_buf[x] = resolved;
+                    }
+                    row_accum[x] = 0.0;
+                    row_delta[x] = 0;
+
+                    if track_aa_components {
+                        occupied += row_hit_delta[x];
+                        let is_occupied = occupied > 0;
+                        if is_occupied {
+                            if run_start.is_none() {
+                                run_start = Some(x);
+                            }
+                        } else if let Some(start) = run_start.take() {
+                            if let Some(ref mut tracker) = aa_component_tracker {
+                                tracker.push_span(start, x - 1);
+                            }
+                        }
+                        row_hit_delta[x] = 0;
+                    }
+                }
+
+                row_delta[wwidth] = 0;
+                if track_aa_components {
+                    if let Some(start) = run_start {
+                        if let Some(ref mut tracker) = aa_component_tracker {
+                            tracker.push_span(start, wwidth - 1);
+                        }
+                    }
+                    row_hit_delta[wwidth] = 0;
+                    if let Some(ref mut tracker) = aa_component_tracker {
+                        tracker.finish_row();
+                    }
+                }
+
+                emit_row(&mut rle, &row_buf);
+                row_buf.fill(0);
+                last_emitted_py = current_physical_y;
+
+                let next = $next_py;
+                let gap = next.saturating_sub(last_emitted_py + 1);
+                if gap > 0 {
+                    emit_zero_rows(&mut rle, gap, wwidth);
+                    last_emitted_py = next - 1;
+                }
+            }};
+        }
+
+        for y in y_start..y_end_exclusive {
+            let physical_y = y / aa_steps;
+
+            if physical_y != current_physical_y {
+                flush_up_to!(physical_y);
+                current_physical_y = physical_y;
+            }
+
+            active_edges.retain(|edge| edge.end_exclusive > y);
+            let row_start = scanline_row_offsets[y];
+            let row_end = scanline_row_offsets[y + 1];
+            if row_start != row_end {
+                merge_active_edges_sorted(
+                    &mut active_edges,
+                    &scanline_starts[row_start..row_end],
+                    &mut merge_scratch,
+                );
+            }
+            if active_edges.is_empty() {
+                continue;
+            }
+
+            let spans = build_row_spans_nonzero(&active_edges, full_width, false);
+            for span in spans {
+                // Clamp the fractional span to the window. The cut edge
+                // becomes a full-coverage boundary, so pixel values inside
+                // the window match the full-width raster exactly.
+                let a = span.a.max(wstart as f32);
+                let b = span.b.min(wend as f32);
+
+                if b > a {
+                    let left_i = a.floor() as i32;
+                    let right_i = b.ceil() as i32 - 1;
+
+                    if left_i <= right_i {
+                        if left_i == right_i {
+                            if left_i >= wstart as i32 && left_i < wend as i32 {
+                                let cov = (b - a).clamp(0.0, 1.0) * 255.0;
+                                row_accum[(left_i - wstart as i32) as usize] += cov;
+                            }
+                        } else {
+                            let left_cov = ((left_i as f32 + 1.0) - a).clamp(0.0, 1.0) * 255.0;
+                            let right_cov = (b - right_i as f32).clamp(0.0, 1.0) * 255.0;
+
+                            if left_i >= wstart as i32 && left_i < wend as i32 {
+                                row_accum[(left_i - wstart as i32) as usize] += left_cov;
+                            }
+
+                            let interior_start_i = (left_i + 1).max(wstart as i32);
+                            let interior_end_i = (right_i - 1).min(wend as i32 - 1);
+                            if interior_start_i <= interior_end_i {
+                                row_delta[(interior_start_i - wstart as i32) as usize] += 255;
+                                row_delta[(interior_end_i - wstart as i32) as usize + 1] -= 255;
+                            }
+
+                            if right_i >= wstart as i32 && right_i < wend as i32 {
+                                row_accum[(right_i - wstart as i32) as usize] += right_cov;
+                            }
+                        }
+                    }
+                }
+
+                let s = span.start.max(wstart);
+                let e = span.end.min(wend - 1);
+                if s <= e {
+                    if track_aa_components {
+                        row_hit_delta[s - wstart] += 1;
+                        row_hit_delta[e - wstart + 1] -= 1;
+                    }
+
+                    let filled = (e - s + 1) as u32;
+                    stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
+                    min_x = min_x.min(s as i32);
+                    max_x = max_x.max(e as i32);
+                    min_y = min_y.min(physical_y as i32);
+                    max_y = max_y.max(physical_y as i32);
+                }
+            }
+
+            for edge in &mut active_edges {
+                edge.x += edge.dx_dy;
+            }
+            restore_active_edges_sorted(&mut active_edges);
+        }
+
+        flush_up_to!(current_physical_y + 1);
+
+        let rows_emitted = last_emitted_py + 1;
+        if rows_emitted < height {
+            emit_zero_rows(&mut rle, height - rows_emitted, wwidth);
+        }
+
+        stats.total_solid_pixels /= aa_steps as u32;
+        let runs = rle.finish();
+
+        if stats.total_solid_pixels > 0 {
+            stats.min_x = min_x;
+            stats.min_y = min_y;
+            stats.max_x = max_x;
+            stats.max_y = max_y;
+
+            if compute_area_stats {
+                let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
+                    aa_component_tracker
+                        .take()
+                        .map(|tracker| tracker.finalize(pixel_area_mm2))
+                        .unwrap_or((0, 0.0, 0.0, 0));
+
+                stats.total_solid_pixels = total_pixels;
+                let total_area = (total_pixels as f64) * pixel_area_mm2;
+                stats.total_solid_area_mm2 = total_area;
+                stats.largest_area_mm2 = largest_area_mm2;
+                stats.smallest_area_mm2 = smallest_area_mm2;
+                stats.area_count = area_count;
+            } else {
+                let total_area = (stats.total_solid_pixels as f64) * pixel_area_mm2;
+                stats.total_solid_area_mm2 = total_area;
+                stats.largest_area_mm2 = total_area;
+                stats.smallest_area_mm2 = total_area;
+                stats.area_count = 1;
+            }
+        }
+
+        return (runs, stats);
+    }
+
+    // Binary single-Z streaming path, window-clamped.
+    let z_mm = (layer_index as f32 + 0.5) * job.layer_height_mm;
+    let segments = build_segments_for_layer(job, triangles, layer_indices, z_mm);
+    if segments.is_empty() {
+        emit_zero_rows(&mut rle, height, wwidth);
+        return (rle.finish(), stats);
+    }
+
+    let Some(scanline_index) = build_scanline_segment_index(&segments, height, 1, 0.5) else {
+        emit_zero_rows(&mut rle, height, wwidth);
+        return (rle.finish(), stats);
+    };
+    let scanline_starts = scanline_index.starts;
+    let scanline_row_offsets = scanline_index.row_offsets;
+    let y_start = scanline_index.y_start;
+    let y_end_exclusive = scanline_index.y_end_exclusive;
+    let first_physical_y = y_start;
+    emit_zero_rows(&mut rle, first_physical_y, wwidth);
+
+    let mut active_edges: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
+    let mut merge_scratch: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
+
+    let mut row_buf = vec![0u8; wwidth];
+    let mut current_physical_y = first_physical_y;
+    #[allow(unused_assignments)]
+    let mut last_emitted_py = first_physical_y.wrapping_sub(1);
+
+    macro_rules! flush_up_to {
+        ($next_py:expr) => {{
+            emit_row(&mut rle, &row_buf);
+            row_buf.fill(0);
+            last_emitted_py = current_physical_y;
+
+            let next = $next_py;
+            let gap = next.saturating_sub(last_emitted_py + 1);
+            if gap > 0 {
+                emit_zero_rows(&mut rle, gap, wwidth);
+                last_emitted_py = next - 1;
+            }
+        }};
+    }
+
+    for y in y_start..y_end_exclusive {
+        let physical_y = y;
+
+        if physical_y != current_physical_y {
+            flush_up_to!(physical_y);
+            current_physical_y = physical_y;
+        }
+
+        active_edges.retain(|edge| edge.end_exclusive > y);
+        let row_start = scanline_row_offsets[y];
+        let row_end = scanline_row_offsets[y + 1];
+        if row_start != row_end {
+            merge_active_edges_sorted(
+                &mut active_edges,
+                &scanline_starts[row_start..row_end],
+                &mut merge_scratch,
+            );
+        }
+        if active_edges.is_empty() {
+            continue;
+        }
+
+        let spans = build_row_spans_nonzero(&active_edges, full_width, true);
+
+        for span in spans {
+            let s = span.start.max(wstart);
+            let e = span.end.min(wend - 1);
+            if s > e {
+                continue;
+            }
+            row_buf[s - wstart..=e - wstart].fill(255);
+
+            let filled = (e - s + 1) as u32;
+            stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
+            min_x = min_x.min(s as i32);
+            max_x = max_x.max(e as i32);
+            min_y = min_y.min(physical_y as i32);
+            max_y = max_y.max(physical_y as i32);
+        }
+
+        for edge in &mut active_edges {
+            edge.x += edge.dx_dy;
+        }
+        restore_active_edges_sorted(&mut active_edges);
+    }
+
+    flush_up_to!(current_physical_y + 1);
+
+    let rows_emitted = last_emitted_py + 1;
+    if rows_emitted < height {
+        emit_zero_rows(&mut rle, height - rows_emitted, wwidth);
+    }
+
+    let runs = rle.finish();
+
+    if stats.total_solid_pixels > 0 {
+        stats.min_x = min_x;
+        stats.min_y = min_y;
+        stats.max_x = max_x;
+        stats.max_y = max_y;
+
+        if compute_area_stats {
+            let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
+                compute_component_area_stats_from_rle_8_connected(
+                    &runs,
+                    wwidth,
+                    height,
+                    pixel_area_mm2,
+                );
+
+            stats.total_solid_pixels = total_pixels;
+            let total_area = (total_pixels as f64) * pixel_area_mm2;
+            stats.total_solid_area_mm2 = total_area;
+            stats.largest_area_mm2 = largest_area_mm2;
+            stats.smallest_area_mm2 = smallest_area_mm2;
+            stats.area_count = area_count;
+        } else {
+            let total_area = (stats.total_solid_pixels as f64) * pixel_area_mm2;
+            stats.total_solid_area_mm2 = total_area;
+            stats.largest_area_mm2 = total_area;
+            stats.smallest_area_mm2 = total_area;
+            stats.area_count = 1;
+        }
+    }
+
+    (runs, stats)
+}
+
 // ── Resolution-scaling supersampler ───────────────────────────────────────────
 //
 // The approach:
@@ -3313,8 +3829,9 @@ mod tests {
     use super::{
         apply_blur_postprocess_inplace, blur_gray_rle_streaming, build_row_spans_nonzero,
         encode_bounded_gray_mask_to_rle, encode_mask_to_rle, encode_mask_to_rle_in_bounds,
-        rasterize_layer, rasterize_layer_rle, rasterize_layer_with_stats, remap_gray_rle_with_lut,
-        resolve_accumulated_aa_alpha, ActiveEdge,
+        rasterize_layer, rasterize_layer_rle, rasterize_layer_rle_block,
+        rasterize_layer_with_stats, remap_gray_rle_with_lut, resolve_accumulated_aa_alpha,
+        ActiveEdge,
     };
     use crate::binary_mask::BoundedGrayMask;
     use crate::encoders::registry::supported_output_formats;
@@ -3419,6 +3936,120 @@ mod tests {
             metadata_json: "{}".to_string(),
             x_packing_mode: "none".to_string(),
         }
+    }
+
+    #[test]
+    fn windowed_rle_blocks_hstack_matches_full_width_raster() {
+        let job = job_for_single_layer();
+        let width = job.source_width_px as usize;
+        let height = job.source_height_px as usize;
+
+        // Plate coordinates are centre-origin: one box straddling the centre
+        // seam (x = 0), one entirely in the left half.
+        let mut xyz = Vec::new();
+        push_box_triangles(&mut xyz, 0.0, 5.0, 0.0, 2.0, 30.0, 25.0);
+        push_box_triangles(&mut xyz, -30.0, -20.0, 0.0, 2.0, 18.0, 12.0);
+        let mut triangles = parse_triangles(&xyz);
+        project_triangles_inplace(&mut triangles, &job);
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+
+        let (full_runs, full_stats) = rasterize_layer_rle(&job, &triangles, &indices, 0, false);
+        let full_mask = expand_rle_to_mask(&full_runs, width * height);
+
+        let half = width / 2;
+        let (left_runs, left_stats) = rasterize_layer_rle_block(
+            &job,
+            &triangles,
+            &indices,
+            0,
+            false,
+            crate::rle::make_rle_block(0, half as u32),
+        );
+        let (right_runs, right_stats) = rasterize_layer_rle_block(
+            &job,
+            &triangles,
+            &indices,
+            0,
+            false,
+            crate::rle::make_rle_block(half as u32, (width - half) as u32),
+        );
+
+        let left_mask = expand_rle_to_mask(&left_runs, half * height);
+        let right_mask = expand_rle_to_mask(&right_runs, (width - half) * height);
+
+        let mut stacked = Vec::with_capacity(width * height);
+        for row in 0..height {
+            stacked.extend_from_slice(&left_mask[row * half..(row + 1) * half]);
+            stacked
+                .extend_from_slice(&right_mask[row * (width - half)..(row + 1) * (width - half)]);
+        }
+
+        assert_eq!(stacked, full_mask);
+        assert!(full_stats.total_solid_pixels > 0);
+        assert!(left_stats.total_solid_pixels > 0);
+        assert!(right_stats.total_solid_pixels > 0);
+        assert_eq!(
+            left_stats.total_solid_pixels + right_stats.total_solid_pixels,
+            full_stats.total_solid_pixels
+        );
+        // Block stats report x-extents in absolute frame columns.
+        assert_eq!(left_stats.min_x.min(right_stats.min_x), full_stats.min_x);
+        assert_eq!(left_stats.max_x.max(right_stats.max_x), full_stats.max_x);
+    }
+
+    #[test]
+    fn blur_halo_crop_matches_full_width_blur_at_seam() {
+        // Validates the engine's halo strategy: blurring a window widened by
+        // the kernel radius, then cropping the halo columns, must equal the
+        // corresponding columns of the full-width blur.
+        let width = 64usize;
+        let height = 16usize;
+        let radius = 3usize;
+
+        // Content crossing the seam at width/2.
+        let mut mask = vec![0u8; width * height];
+        for y in 4..12 {
+            for x in 24..44 {
+                mask[y * width + x] = 255;
+            }
+        }
+        let full_runs = encode_mask_to_rle(&mask, width, height);
+        let full_blur = blur_gray_rle_streaming(&full_runs, width, height, radius, 0);
+        let full_blur_mask = expand_rle_to_mask(&full_blur, width * height);
+
+        let half = width / 2;
+        let mut stacked = Vec::with_capacity(width * height);
+        let mut halves: Vec<Vec<u8>> = Vec::new();
+        for (start, w) in [(0usize, half), (half, width - half)] {
+            let halo_left = radius.min(start);
+            let halo_right = radius.min(width - (start + w));
+            let wid_start = start - halo_left;
+            let wid_w = (start + w + halo_right) - wid_start;
+
+            // Window-rasterized equivalent: crop the binary runs to the
+            // widened window, blur at the widened width, crop the halo.
+            let widened = crate::rle::crop_rle_columns(
+                &full_runs,
+                width as u32,
+                wid_start as u32,
+                (width - (wid_start + wid_w)) as u32,
+            );
+            let blurred = blur_gray_rle_streaming(&widened, wid_w, height, radius, 0);
+            let cropped = crate::rle::crop_rle_columns(
+                &blurred,
+                wid_w as u32,
+                halo_left as u32,
+                halo_right as u32,
+            );
+            halves.push(expand_rle_to_mask(&cropped, w * height));
+        }
+        for row in 0..height {
+            stacked.extend_from_slice(&halves[0][row * half..(row + 1) * half]);
+            stacked
+                .extend_from_slice(&halves[1][row * (width - half)..(row + 1) * (width - half)]);
+        }
+
+        assert_eq!(stacked, full_blur_mask);
     }
 
     fn run_count(row: &[u8]) -> usize {

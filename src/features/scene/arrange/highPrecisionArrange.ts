@@ -108,7 +108,9 @@ export function computeHighPrecisionArrangeResult(input: HighPrecisionArrangeInp
 
   // Numerical tolerance guard used in spacing enforcement to avoid near-contact jitter.
   const SAT_EPS_MM = 0.05;
-  const spacing = Math.max(0, arrangeSpacingMm);
+  // Negative spacing is allowed (parts may nest/interlock tighter than contact);
+  // floored at -50mm to keep the SAT search well-conditioned.
+  const spacing = Math.max(-50, arrangeSpacingMm);
   const minSpacing = spacing + SAT_EPS_MM;
   const PERF_COMPLEX_SCENE = visibleModels.length >= 30;
 

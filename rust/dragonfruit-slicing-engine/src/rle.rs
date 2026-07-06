@@ -113,3 +113,123 @@ pub fn expand_rle_to_mask(runs: &[RleRun], total_pixels: usize) -> Vec<u8> {
     }
     out
 }
+
+/// A column window of a row-major layer: pixels `[start_col, start_col + width)`
+/// of every row, emitted as an independent `width × height` row-major run
+/// stream. Runs inside a block never carry pixels from outside its columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RleBlockSpec {
+    pub start_col: u32,
+    pub width: u32,
+}
+
+/// Describe a column-window RLE block starting at `start_column` and spanning
+/// `width` pixels of every row.
+pub fn make_rle_block(start_column: u32, width: u32) -> RleBlockSpec {
+    RleBlockSpec {
+        start_col: start_column,
+        width,
+    }
+}
+
+/// Re-emit the inner `[crop_left, row_width - crop_right)` columns of a
+/// `row_width`-wide row-major run stream as an independent run stream of the
+/// cropped width. Used to strip blur halo columns from windowed rasterization.
+pub fn crop_rle_columns(
+    runs: &[RleRun],
+    row_width: u32,
+    crop_left: u32,
+    crop_right: u32,
+) -> Vec<RleRun> {
+    let row_width = row_width as u64;
+    let keep_start = crop_left as u64;
+    let keep_end = row_width.saturating_sub(crop_right as u64);
+    if row_width == 0 || keep_end <= keep_start {
+        return Vec::new();
+    }
+
+    let mut acc = RleAccum::new();
+    let mut pos: u64 = 0;
+    for run in runs {
+        let end = pos + run.length as u64;
+        let mut p = pos;
+        while p < end {
+            let row_start = (p / row_width) * row_width;
+            let seg_end = end.min(row_start + row_width);
+            let a = (p - row_start).max(keep_start);
+            let b = (seg_end - row_start).min(keep_end);
+            if b > a {
+                acc.push_run((b - a) as u32, run.value);
+            }
+            p = seg_end;
+        }
+        pos = end;
+    }
+    acc.finish()
+}
+
+#[cfg(test)]
+mod block_tests {
+    use super::*;
+
+    fn runs_of(pixels: &[u8]) -> Vec<RleRun> {
+        let mut acc = RleAccum::new();
+        emit_row(&mut acc, pixels);
+        acc.finish()
+    }
+
+    #[test]
+    fn make_rle_block_carries_window() {
+        let block = make_rle_block(7560, 7560);
+        assert_eq!(block.start_col, 7560);
+        assert_eq!(block.width, 7560);
+    }
+
+    #[test]
+    fn crop_rle_columns_extracts_inner_window() {
+        // 3 rows × 6 cols; keep cols 2..4.
+        #[rustfmt::skip]
+        let pixels = [
+            0u8, 0, 1, 2, 0, 0,
+            5,   5, 5, 5, 5, 5,
+            0,   9, 9, 9, 9, 0,
+        ];
+        let cropped = crop_rle_columns(&runs_of(&pixels), 6, 2, 2);
+        let mask = expand_rle_to_mask(&cropped, 6);
+        assert_eq!(mask, vec![1, 2, 5, 5, 9, 9]);
+    }
+
+    #[test]
+    fn crop_rle_columns_handles_runs_spanning_rows() {
+        // One run covering 4 rows × 4 cols entirely.
+        let runs = vec![RleRun {
+            length: 16,
+            value: 7,
+        }];
+        let cropped = crop_rle_columns(&runs, 4, 1, 1);
+        assert_eq!(
+            cropped,
+            vec![RleRun {
+                length: 8,
+                value: 7
+            }]
+        );
+    }
+
+    #[test]
+    fn crop_rle_columns_zero_crop_is_identity() {
+        let pixels = [0u8, 1, 1, 0, 2, 2, 2, 0];
+        let runs = runs_of(&pixels);
+        assert_eq!(crop_rle_columns(&runs, 8, 0, 0), runs);
+    }
+
+    #[test]
+    fn crop_rle_columns_degenerate_window_is_empty() {
+        let runs = vec![RleRun {
+            length: 8,
+            value: 1,
+        }];
+        assert!(crop_rle_columns(&runs, 4, 2, 2).is_empty());
+        assert!(crop_rle_columns(&runs, 4, 3, 3).is_empty());
+    }
+}

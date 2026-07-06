@@ -11,7 +11,7 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": "v1Compatible",
+    "createUpdaterArtifacts": true,
     "fileAssociations": [
       {
         "ext": [
