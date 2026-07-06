@@ -170,6 +170,11 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             key: 's',
             modifier: 'ctrl',
             description: 'Save active scene'
+        },
+        SAVE_AS: {
+            key: 's',
+            modifier: 'ctrl+shift',
+            description: 'Save active scene as…'
         }
     },
     DEBUG: {

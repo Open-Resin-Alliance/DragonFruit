@@ -10,7 +10,7 @@ import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { Button } from '@/components/ui/primitives';
-import { Activity, AlertTriangle, Anchor, ChevronDown, FolderInput, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, Square, Upload, X } from 'lucide-react';
+import { Activity, AlertTriangle, Anchor, ChevronDown, FolderInput, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, SaveAll, Square, Upload, X } from 'lucide-react';
 import {
   applyThemeCustomColors,
   getSavedThemeCustomColors,
@@ -88,6 +88,7 @@ interface TopBarProps {
   onHeatmapColorChange: (index: number, color: string) => void;
   isSlicingBusy?: boolean;
   onSaveScene?: () => void;
+  onSaveSceneAs?: () => void;
   onOpenScene?: () => void;
   onLoadMeshChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onImportSceneChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -155,6 +156,7 @@ export function TopBar({
   onLoadMeshChange,
   onImportSceneChange,
   onSaveScene,
+  onSaveSceneAs,
   onOpenScene,
   onCloseProgram,
   showMonitorButton = false,
@@ -818,6 +820,26 @@ export function TopBar({
                 <Save className="h-3.5 w-3.5" />
               </span>
               <span>Save Scene</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                closeAppMenu();
+                onSaveSceneAs?.();
+              }}
+              disabled={topbarActionsDisabled || !onSaveSceneAs}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
+              style={{
+                color: (topbarActionsDisabled || !onSaveSceneAs) ? 'var(--text-muted)' : 'var(--text-strong)',
+                opacity: (topbarActionsDisabled || !onSaveSceneAs) ? 0.55 : 1,
+              }}
+              role="menuitem"
+            >
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <SaveAll className="h-3.5 w-3.5" />
+              </span>
+              <span>Save Scene As…</span>
             </button>
 
             <button

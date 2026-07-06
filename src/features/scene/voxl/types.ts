@@ -31,6 +31,13 @@ export type VoxlMeshRef = {
   dataEncoding?: VoxlMeshEncoding;
   uncompressedSizeBytes?: number;
   sha256?: string;
+  /**
+   * For `embedded-chunk` models: the MESH-chunk ordinal this model's geometry
+   * lives in. Present only on DUPLICATE models that share another model's
+   * chunk (identical-geometry dedup); absent means "my own model index" (the
+   * legacy 1:1 mapping). Files that use this carry container version 3.
+   */
+  chunkIndex?: number;
 };
 
 export type VoxlModelEntry = {

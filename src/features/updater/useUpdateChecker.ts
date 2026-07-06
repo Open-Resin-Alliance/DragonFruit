@@ -35,14 +35,19 @@ export function useUpdateChecker() {
   const [state, setState] = useState<UpdateState>({ status: 'idle' });
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
   const [channel, setChannel] = useState<UpdateChannel>('stable');
+  const [channelLoaded, setChannelLoaded] = useState(false);
 
   // Load the saved channel on mount.
   useEffect(() => {
-    getUpdateChannel().then(setChannel);
+    getUpdateChannel().then((ch) => {
+      setChannel(ch);
+      setChannelLoaded(true);
+    });
   }, []);
 
   const handleCheck = useCallback(async () => {
     setState({ status: 'checking' });
+    console.log('[updater] checking for updates on channel:', channel);
 
     try {
       const info = await fetchUpdateInfo(channel);
@@ -74,7 +79,7 @@ export function useUpdateChecker() {
         err instanceof Error ? err.message : 'Unknown error checking for updates.';
       setState({ status: 'error', message });
     }
-  }, []);
+  }, [channel]);
 
   const handleDownloadAndInstall = useCallback(async () => {
     setState({ status: 'downloading', progress: { contentLength: 0, downloaded: 0 } });
@@ -98,9 +103,9 @@ export function useUpdateChecker() {
     setState({ status: 'idle' });
   }, []);
 
-  // Auto-check on mount if enough time has passed.
+  // Auto-check once the channel is loaded from disk and enough time has passed.
   useEffect(() => {
-    if (!autoCheckEnabled) return;
+    if (!autoCheckEnabled || !channelLoaded) return;
 
     const lastCheck = (() => {
       if (typeof window === 'undefined') return 0;
@@ -116,9 +121,7 @@ export function useUpdateChecker() {
     if (elapsed >= CHECK_INTERVAL_MS || lastCheck === 0) {
       handleCheck();
     }
-    // Only run on mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoCheckEnabled]);
+  }, [autoCheckEnabled, channelLoaded, handleCheck]);
 
   return {
     state,

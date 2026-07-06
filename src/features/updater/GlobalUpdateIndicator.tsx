@@ -81,14 +81,15 @@ export function GlobalUpdateIndicator() {
         });
     };
 
-    // Load the saved channel first, then schedule the startup check.
+    // Load the saved channel first, then schedule checks.
+    let startupTimer: ReturnType<typeof setTimeout> | undefined;
+    let interval: ReturnType<typeof setInterval> | undefined;
+
     getUpdateChannel().then((c) => {
       channel = c;
       startupTimer = setTimeout(runCheck, STARTUP_CHECK_DELAY_MS);
+      interval = setInterval(runCheck, RE_CHECK_INTERVAL_MS);
     });
-
-    let startupTimer: ReturnType<typeof setTimeout> | undefined;
-    const interval = setInterval(runCheck, RE_CHECK_INTERVAL_MS);
 
     return () => {
       clearTimeout(startupTimer);
