@@ -11655,10 +11655,43 @@ export default function Home() {
 
   // For non-printing workflows, avoid expensive world-triangle projection work by default.
   // Keep layer floor at 0 when support/raft geometry exists so layer-1 alignment is correct.
+  //
+  // Compute an accurate max Z from actual geometry vertices to match the slicing
+  // engine's own max-Z computation.  The legacy sceneBounds path uses
+  // Box3.applyMatrix4 which overestimates the envelope for rotated models.
+  const accurateMaxZ = React.useMemo(() => {
+    let maxZ = 0;
+    for (const model of scene.models) {
+      if (!model.visible) continue;
+      const position = model.geometry.geometry.getAttribute('position');
+      if (!position) continue;
+      const center = model.geometry.center;
+      const t = model.transform;
+      const matrix = new THREE.Matrix4().compose(
+        t.position,
+        quaternionFromGlobalEuler(t.rotation),
+        t.scale,
+      );
+      const me = matrix.elements;
+      // worldZ = me[2]*vcx + me[6]*vcy + me[10]*vcz + me[14]
+      const a = me[2], b = me[6], c = me[10], d = me[14];
+      const src = position.array as Float32Array | number[];
+      const count = position.count;
+      for (let i = 0; i < count; i++) {
+        const vx = src[i * 3] - center.x;
+        const vy = src[i * 3 + 1] - center.y;
+        const vz = src[i * 3 + 2] - center.z;
+        const worldZ = a * vx + b * vy + c * vz + d;
+        if (worldZ > maxZ) maxZ = worldZ;
+      }
+    }
+    return maxZ;
+  }, [scene.models]);
+
   const fallbackZRange = React.useMemo(() => ({
     min: hasSupportOrRaftGeometry ? 0 : (scene.sceneBounds?.min.z ?? 0),
-    max: scene.sceneBounds?.max.z ?? 100,
-  }), [hasSupportOrRaftGeometry, scene.sceneBounds]);
+    max: accurateMaxZ > 0 ? accurateMaxZ : (scene.sceneBounds?.max.z ?? 100),
+  }), [hasSupportOrRaftGeometry, scene.sceneBounds, accurateMaxZ]);
 
   const normalizeToSlicerZRange = React.useCallback((range: { min: number; max: number }) => {
     const maxZMm = Math.max(0, Number(range.max) || 0);
