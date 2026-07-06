@@ -29,6 +29,11 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    permissions:
+      actions: write
+      contents: read
+      pages: write
+      id-token: write
 
     steps:
       - name: Checkout

@@ -15,6 +15,9 @@ permissions:
 jobs:
   verify-generated-plugin-registry:
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
 
     steps:
       - name: Checkout
