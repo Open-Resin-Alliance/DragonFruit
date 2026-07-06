@@ -76,6 +76,49 @@ pub trait RleStreamEncoder: Send {
     /// Store a pre-encoded layer produced by `parallel_encode_fn`.
     /// Only called when `parallel_encode_fn` returns Some.
     fn store_encoded_layer(&mut self, _layer_index: u32, _bytes: Vec<u8>) {}
+
+    /// Optionally declare column-window blocks for this job (see
+    /// `crate::rle::make_rle_block`). When `Some`, the engine rasterizes each
+    /// layer directly as these blocks and delivers per-block payloads through
+    /// `consume_rle_block` / `store_encoded_block`; the whole-layer methods
+    /// above are never called. Formats that store layers as column
+    /// partitions (e.g. GOO V5 half-screen panels) use this to receive
+    /// per-panel run streams without splitting a full-width stream.
+    fn rle_blocks(&self, _job: &SliceJobV3) -> Option<Vec<crate::rle::RleBlockSpec>> {
+        None
+    }
+
+    /// Consume one rasterized block of a layer. Blocks arrive in display
+    /// order: all blocks of layer N (in `rle_blocks()` order) before any
+    /// block of layer N+1. Runs are window-relative
+    /// (`block.width × height` row-major).
+    fn consume_rle_block(
+        &mut self,
+        _layer_index: u32,
+        _block_index: u32,
+        _runs: Vec<crate::rle::RleRun>,
+    ) -> Result<(), SlicerV3Error> {
+        Ok(())
+    }
+
+    /// Optionally return a thread-safe function that encodes one block's runs
+    /// into bytes. When provided, the pipeline calls it inside parallel
+    /// workers and delivers results via `store_encoded_block` instead of
+    /// `consume_rle_block`.
+    fn parallel_encode_block_fn(
+        &self,
+    ) -> Option<
+        std::sync::Arc<
+            dyn Fn(u32, u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error>
+                + Send
+                + Sync,
+        >,
+    > {
+        None
+    }
+
+    /// Store a pre-encoded block produced by `parallel_encode_block_fn`.
+    fn store_encoded_block(&mut self, _layer_index: u32, _block_index: u32, _bytes: Vec<u8>) {}
 }
 
 /// Trait implemented by concrete output format encoders.

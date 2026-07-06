@@ -25,6 +25,7 @@ fn make_job(width: i32, height: i32, num_layers: u32) -> IslandScanJob {
         num_layers,
         min_overlap_px: 1,
         overlap_neighborhood_px: 1,
+        candidate_only: false,
     }
 }
 

@@ -2,6 +2,10 @@
 
 import React from 'react';
 import { FolderInput, Loader2, Upload, Printer, Wrench } from 'lucide-react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import type { MessageDescriptor } from '@lingui/core';
 import type { RecentOpenedFileEntry } from '@/features/scene/useSceneCollectionManager';
 
 const BUILD_CHANNEL = (process.env.NEXT_PUBLIC_BUILD_CHANNEL ?? '').toLowerCase();
@@ -24,66 +28,73 @@ type EmptySceneStateProps = {
   onUseWithoutPrinter?: () => void;
 };
 
-function formatRecentOpenedAt(openedAt: number): string {
+// Returns null for "just now" (< 60 s), or a translated compact period string for everything else.
+// The period is just the quantity+unit, e.g. "5m" — the caller wraps it with "last opened {period} ago".
+// NOTE: some locales write a space between number and unit (e.g. "5 min", "3 h").
+// Translators control this through their own msgstr for each period string below.
+function formatRecentOpenedAt(openedAt: number, translate: (descriptor: MessageDescriptor) => string): string | null {
   const deltaMs = Date.now() - openedAt;
-  if (!Number.isFinite(deltaMs) || deltaMs < 0) return 'just now';
+  if (!Number.isFinite(deltaMs) || deltaMs < 0) return null;
 
   const deltaSec = Math.floor(deltaMs / 1000);
-  if (deltaSec < 60) return 'just now';
+  if (deltaSec < 60) return null;
 
+  // {deltaMin} = number of minutes elapsed (1–59)
   const deltaMin = Math.floor(deltaSec / 60);
-  if (deltaMin < 60) return `${deltaMin}m ago`;
+  if (deltaMin < 60) return translate(msg`${deltaMin}m`);
 
+  // {deltaHours} = number of hours elapsed (1–23)
   const deltaHours = Math.floor(deltaMin / 60);
-  if (deltaHours < 24) return `${deltaHours}h ago`;
+  if (deltaHours < 24) return translate(msg`${deltaHours}h`);
 
+  // {deltaDays} = number of days elapsed (1–6)
   const deltaDays = Math.floor(deltaHours / 24);
-  if (deltaDays < 7) return `${deltaDays}d ago`;
+  if (deltaDays < 7) return translate(msg`${deltaDays}d`);
 
-  return new Date(openedAt).toLocaleString();
+  return new Date(openedAt).toLocaleDateString();
 }
 
-const TAGLINES = [
+const TAGLINES: MessageDescriptor[] = [
   // Adventurous
-  "Ready for your next adventure?",
-  "The build plate awaits.",
-  "What are we printing today?",
-  "Time to make something real.",
-  "Every great print starts with an empty scene.",
+  msg`Ready for your next adventure?`,
+  msg`The build plate awaits.`,
+  msg`What are we printing today?`,
+  msg`Time to make something real.`,
+  msg`Every great print starts with an empty scene.`,
   // Snarky / witty
-  "Nothing to see here. Yet.",
-  "Your models called. They want to be sliced.",
-  "Suspiciously empty in here.",
-  "This scene is aggressively unoccupied.",
-  "Zero polygons. Infinite potential.",
-  "The resin is ready. Are you?",
-  "Currently displaying nothing at maximum fidelity.",
-  "Idle hands do no slicing.",
-  "The build volume misses you.",
-  "Drag a file in. The platform is judging you.",
+  msg`Nothing to see here. Yet.`,
+  msg`Your models called. They want to be sliced.`,
+  msg`Suspiciously empty in here.`,
+  msg`This scene is aggressively unoccupied.`,
+  msg`Zero polygons. Infinite potential.`,
+  msg`The resin is ready. Are you?`,
+  msg`Currently displaying nothing at maximum fidelity.`,
+  msg({ message: 'Idle hands do no slicing.', comment: 'Adaptation of the English proverb "Idle hands are the devil\'s workshop".' }),
+  msg`The build volume misses you.`,
+  msg`Drag a file in. The platform is judging you.`,
   // Movie / pop-culture references
-  "Do or do not. There is no try... oh wait, just click Load Mesh.",
-  "In space, no one can hear you slice.",
-  "You shall not pass... until you load a model.",
-  "I am the one who slices.",
-  "With great resin comes great responsibility.",
-  "Why so empty?",
-  "We're gonna need a bigger build plate.",
-  "One does not simply import a mesh... or actually, you just click a button.",
-  "I'll be back. (Drop a file and I really will be.)",
-  "It's a trap! ...just kidding, drop your STL.",
-  "The spice must flow. The resin must cure.",
-  "Elementary, my dear user — load a model.",
-  "Roads? Where we're printing, we don't need roads.",
+  msg({ message: 'Do or do not. There is no try... oh wait, just click Load Mesh.', comment: 'Paraphrase of Yoda\'s line from Star Wars: The Empire Strikes Back (1980): "Do or do not. There is no try."' }),
+  msg({ message: 'In space, no one can hear you slice.', comment: 'Parody of the tagline for Alien (1979): "In space, no one can hear you scream."' }),
+  msg({ message: 'You shall not pass... until you load a model.', comment: 'Paraphrase of Gandalf\'s line from The Lord of the Rings: The Fellowship of the Ring (2001): "You shall not pass!"' }),
+  msg({ message: 'I am the one who slices.', comment: 'Paraphrase of Walter White\'s line from Breaking Bad, S04E06 "Cornered": "I am the one who knocks."' }),
+  msg({ message: 'With great resin comes great responsibility.', comment: 'Paraphrase of the Spider-Man motto, originating in Amazing Fantasy #15 (1962): "With great power comes great responsibility."' }),
+  msg({ message: 'Why so empty?', comment: 'Paraphrase of the Joker\'s line from The Dark Knight (2008): "Why so serious?"' }),
+  msg({ message: "We're gonna need a bigger build plate.", comment: 'Paraphrase of Chief Brody\'s line from Jaws (1975): "You\'re gonna need a bigger boat."' }),
+  msg({ message: 'One does not simply import a mesh... or actually, you just click a button.', comment: 'Paraphrase of Boromir\'s line from The Lord of the Rings: The Fellowship of the Ring (2001): "One does not simply walk into Mordor."' }),
+  msg({ message: "I'll be back. (Drop a file and I really will be.)", comment: 'Paraphrase of the Terminator\'s line from The Terminator (1984): "I\'ll be back."' }),
+  msg({ message: "It's a trap! ...just kidding, drop your STL.", comment: 'Paraphrase of Admiral Ackbar\'s line from Star Wars: Return of the Jedi (1983): "It\'s a trap!"' }),
+  msg({ message: 'The spice must flow. The resin must cure.', comment: 'Paraphrase of "The spice must flow" from Dune (novel by Frank Herbert, 1965; films 1984 and 2021).' }),
+  msg({ message: 'Elementary, my dear user — load a model.', comment: 'Paraphrase of "Elementary, my dear Watson", the line associated with Sherlock Holmes (Arthur Conan Doyle stories; multiple film and TV adaptations).' }),
+  msg({ message: "Roads? Where we're printing, we don't need roads.", comment: 'Paraphrase of Doc Brown\'s line from Back to the Future (1985): "Roads? Where we\'re going, we don\'t need roads."' }),
   // Engineering/maker flavour
-  "Waiting for first layer adhesion... to reality.",
-  "No supports needed for an empty scene.",
-  "Layer 0 of 0. Living dangerously.",
-  "Anti-aliasing: nothing to anti-alias.",
+  msg`Waiting for first layer adhesion... to reality.`,
+  msg`No supports needed for an empty scene.`,
+  msg`Layer 0 of 0. Living dangerously.`,
+  msg`Anti-aliasing: nothing to anti-alias.`,
   // Open Resin Alliance
-  "Join the Open Resin Alliance!",
+  msg`Join the Open Resin Alliance!`,
   // Origin story
-  "Not all slicers are created equal. This one's free!",
+  msg({ message: "Not all slicers are created equal. This one's free!", comment: 'Play on "all men are created equal" from the United States Declaration of Independence (1776).' }),
 ];
 
 function formatBytes(bytes?: number): string | null {
@@ -196,7 +207,8 @@ export function EmptySceneState({
   onAddPrinter,
   onUseWithoutPrinter,
 }: EmptySceneStateProps) {
-  const [tagline] = React.useState(() => TAGLINES[Math.floor(Math.random() * TAGLINES.length)]);
+  const { _ } = useLingui();
+  const [taglineDescriptor] = React.useState(() => TAGLINES[Math.floor(Math.random() * TAGLINES.length)]);
   const [isDropActive, setIsDropActive] = React.useState(false);
   const [isDropUnsupported, setIsDropUnsupported] = React.useState(false);
   const [reopeningEntryId, setReopeningEntryId] = React.useState<string | null>(null);
@@ -366,10 +378,10 @@ export function EmptySceneState({
     try {
       const result = await onReopenRecentFile(entryId);
       if (result === false) {
-        setReopenError('Could not reopen this file from cache.');
+        setReopenError(_(msg`Could not reopen this file from cache.`));
       }
     } catch {
-      setReopenError('Could not reopen this file from cache.');
+      setReopenError(_(msg`Could not reopen this file from cache.`));
     } finally {
       setReopeningEntryId(null);
     }
@@ -417,16 +429,16 @@ export function EmptySceneState({
                 : '0 0 0 1px color-mix(in srgb, #f97316, transparent 62%), 0 0 10px color-mix(in srgb, #fb923c, transparent 74%)',
             }}
           >
-            BETA VERSION
+            {_(msg({ message: 'BETA VERSION', comment: 'Badge shown in the top of the empty workspace when the app is a beta build. Uppercase label.' }))}
           </div>
         ) : (
           <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>
-            Empty workspace
+            {_(msg`Empty workspace`)}
           </div>
         )}
-        <h1 className="ui-empty-title" suppressHydrationWarning>{tagline}</h1>
+        <h1 className="ui-empty-title" suppressHydrationWarning>{_(taglineDescriptor)}</h1>
         <p className="ui-empty-text" style={{ maxWidth: 560, marginLeft: 'auto', marginRight: 'auto' }}>
-          Bring in a mesh or scene to start preparing, analyzing, supporting, and exporting your print.
+          {_(msg`Bring in a mesh or scene to start preparing, analyzing, supporting, and exporting your print.`)}
         </p>
 
         {isLoading ? (
@@ -439,10 +451,10 @@ export function EmptySceneState({
           >
             <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
               <Loader2 className="h-4 w-4 animate-spin" style={{ color: 'var(--accent)' }} />
-              <span>{loadingLabel ?? 'Importing your file…'}</span>
+              <span>{loadingLabel ?? _(msg`Importing your file…`)}</span>
             </div>
             <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              {loadingDetail ?? 'Please hang tight while we prepare your scene.'}
+              {loadingDetail ?? _(msg`Please hang tight while we prepare your scene.`)}
             </div>
             <div
               className="ui-loading-track mt-3 h-2 w-full rounded-full"
@@ -464,7 +476,7 @@ export function EmptySceneState({
               }}
             >
               <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                Get started
+                {_(msg`Get started`)}
               </div>
               <div className="grid gap-2 grid-cols-1">
                 <button
@@ -479,10 +491,10 @@ export function EmptySceneState({
                 >
                   <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold">
                     <Printer className="w-4 h-4" />
-                    <span>Add Printer</span>
+                    <span>{_(msg`Add Printer`)}</span>
                   </div>
                   <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-contrast), black 16%)' }}>
-                    Open printer library and add one now.
+                    {_(msg`Open printer library and add one now.`)}
                   </div>
                 </button>
 
@@ -498,16 +510,16 @@ export function EmptySceneState({
                 >
                   <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold">
                     <Wrench className="w-4 h-4" />
-                    <span>Use without Printer</span>
+                    <span>{_(msg`Use without Printer`)}</span>
                   </div>
                   <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-secondary-contrast), black 18%)' }}>
-                    Keep going without a printer. You can add one later.
+                    {_(msg`Keep going without a printer. You can add one later.`)}
                   </div>
                 </button>
               </div>
 
               <div className="mt-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Add or switch printer anytime from the top bar.
+                {_(msg`Add or switch printer anytime from the top bar.`)}
               </div>
             </div>
           </>
@@ -521,7 +533,7 @@ export function EmptySceneState({
               }}
             >
               <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                Import
+                {_(msg({ message: 'Import', comment: 'Section header label above the file import buttons. Noun, not imperative verb.' }))}
               </div>
               <div className={`grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}>
                 <button
@@ -535,10 +547,10 @@ export function EmptySceneState({
                 >
                   <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold" style={{ color: 'var(--accent-contrast)' }}>
                     <Upload className="w-4 h-4" />
-                    <span>Load Mesh</span>
+                    <span>{_(msg`Load Mesh`)}</span>
                   </div>
                   <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-contrast), black 16%)' }}>
-                    Mesh Files (.stl, .obj, .3mf)
+                    {_(msg`Mesh Files (.stl, .obj, .3mf)`)}
                   </div>
                 </button>
 
@@ -554,17 +566,17 @@ export function EmptySceneState({
                   >
                     <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold" style={{ color: 'var(--accent-secondary-contrast)' }}>
                       <FolderInput className="w-4 h-4" />
-                      <span>Import Scene</span>
+                      <span>{_(msg`Import Scene`)}</span>
                     </div>
                     <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-secondary-contrast), black 18%)' }}>
-                      Scene Files (.voxl, .lys)
+                      {_(msg`Scene Files (.voxl, .lys)`)}
                     </div>
                   </button>
                 )}
               </div>
 
               <div className="mt-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Tip: Start with <span style={{ color: 'var(--text-strong)' }}>Load Mesh</span> for clean prints, or <span style={{ color: 'var(--text-strong)' }}>Import Scene</span> to continue an existing setup.
+                <Trans comment="Tip shown below the import buttons. <0> wraps the highlighted label 'Load Mesh'; <1> wraps 'Import Scene'. Keep both placeholders in your translation.">Tip: Start with <span style={{ color: 'var(--text-strong)' }}>Load Mesh</span> for clean prints, or <span style={{ color: 'var(--text-strong)' }}>Import Scene</span> to continue an existing setup.</Trans>
               </div>
             </div>
 
@@ -576,7 +588,7 @@ export function EmptySceneState({
               }}
             >
               <div className="flex items-center justify-between text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                <span className="font-semibold uppercase tracking-wide">Recent files</span>
+                <span className="font-semibold uppercase tracking-wide">{_(msg`Recent files`)}</span>
                 <span
                   className="inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold"
                   style={{
@@ -591,13 +603,14 @@ export function EmptySceneState({
 
               {recentOpenedFiles.length === 0 ? (
                 <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                  No recent files yet.
+                  {_(msg`No recent files yet.`)}
                 </div>
               ) : (
                 <div className="mt-1.5 grid grid-cols-2 gap-1.5">
                   {recentOpenedFiles.slice().reverse().slice(0, 6).map((entry) => {
                     const sizeLabel = formatBytes(entry.sizeBytes);
                     const isBusy = reopeningEntryId === entry.id;
+                    const period = formatRecentOpenedAt(entry.openedAt, _);
                     const kindAccent = entry.kind === 'scene'
                       ? (isLightTheme ? '#c2410c' : '#fb923c')
                       : (isLightTheme ? '#6d28d9' : '#a78bfa');
@@ -615,7 +628,7 @@ export function EmptySceneState({
                           background: 'color-mix(in srgb, var(--surface-1), transparent 8%)',
                           opacity: isBusy ? 0.65 : 1,
                         }}
-                        title={`Reopen ${entry.name}`}
+                        title={_(msg`Reopen ${entry.name}`)}
                       >
                         <span className="min-w-0 inline-flex items-center gap-1.5">
                           <span
@@ -626,19 +639,25 @@ export function EmptySceneState({
                               border: `1px solid color-mix(in srgb, ${kindAccent}, var(--border-subtle) ${isLightTheme ? '38%' : '46%'})`,
                             }}
                           >
-                            {entry.kind === 'scene' ? 'Scene' : 'Mesh'}
+                            {entry.kind === 'scene'
+                              ? _(msg({ message: 'Scene', comment: 'File type badge on the recent files list. Noun — labels a saved scene file (.voxl, .lys).' }))
+                              : _(msg({ message: 'Mesh', comment: 'File type badge on the recent files list. Noun — labels a mesh file (.stl, .obj, .3mf).' }))}
                           </span>
                           <span className="min-w-0">
                             <span className="block max-w-[132px] truncate text-[10px] leading-tight" title={entry.name}>
                               {entry.name}
                             </span>
                             <span className="block text-[9px]" style={{ color: 'var(--text-muted)' }}>
-                              last opened {formatRecentOpenedAt(entry.openedAt)}
+                              {period === null
+                                ? _(msg`last opened just now`)
+                                : _(msg`last opened ${period} ago`)}
                             </span>
                           </span>
                         </span>
                         <span className="shrink-0 text-[9px]" style={{ color: 'var(--text-muted)' }}>
-                          {isBusy ? 'loading…' : (sizeLabel ?? 'cached')}
+                          {isBusy
+                            ? _(msg({ message: 'loading…', comment: 'Shown in place of file size while a recent file is being reopened. Keep it short.' }))
+                            : (sizeLabel ?? _(msg({ message: 'cached', comment: 'Shown in place of file size when the file is in cache but its size is unknown. Adjective/state label.' })))}
                         </span>
                       </button>
                     );
@@ -673,7 +692,7 @@ export function EmptySceneState({
                   <div className="min-w-0 inline-flex items-center gap-2">
                     <Upload className="h-4 w-4" style={{ color: isDropUnsupported ? 'var(--danger)' : 'var(--accent)' }} />
                     <span className="truncate text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                      {isDropUnsupported ? 'Unsupported File Type' : 'Drop supported files'}
+                      {isDropUnsupported ? _(msg`Unsupported File Type`) : _(msg`Drop supported files`)}
                     </span>
                   </div>
                   <span
@@ -693,7 +712,7 @@ export function EmptySceneState({
                 </div>
                 {isDropUnsupported && (
                   <div className="mt-1 text-[11px]" style={{ color: 'var(--danger)' }}>
-                    Unsupported format detected. Please drop STL, OBJ, 3MF, VOXL, or LYS files.
+                    {_(msg`Unsupported format detected. Please drop STL, OBJ, 3MF, VOXL, or LYS files.`)}
                   </div>
                 )}
               </div>

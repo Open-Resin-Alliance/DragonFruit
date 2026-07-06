@@ -81,14 +81,15 @@ export function GlobalUpdateIndicator() {
         });
     };
 
-    // Load the saved channel first, then schedule the startup check.
+    // Load the saved channel first, then schedule checks.
+    let startupTimer: ReturnType<typeof setTimeout> | undefined;
+    let interval: ReturnType<typeof setInterval> | undefined;
+
     getUpdateChannel().then((c) => {
       channel = c;
       startupTimer = setTimeout(runCheck, STARTUP_CHECK_DELAY_MS);
+      interval = setInterval(runCheck, RE_CHECK_INTERVAL_MS);
     });
-
-    let startupTimer: ReturnType<typeof setTimeout> | undefined;
-    const interval = setInterval(runCheck, RE_CHECK_INTERVAL_MS);
 
     return () => {
       clearTimeout(startupTimer);
@@ -98,9 +99,9 @@ export function GlobalUpdateIndicator() {
 
   // ── Dev shortcut: Ctrl+Shift+U ──────────────────────────────────────
   useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && e.key === 'U') {
-        e.preventDefault();
+    const handleKeyDown = (e: CustomEvent) => {
+      const { key, ctrlKey, shiftKey } = e.detail;
+      if (ctrlKey && shiftKey && key.toLowerCase() === 'u') {
         setState({
           status: 'available',
           info: {
@@ -112,8 +113,8 @@ export function GlobalUpdateIndicator() {
         });
       }
     };
-    window.addEventListener('keydown', down);
-    return () => window.removeEventListener('keydown', down);
+    window.addEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
+    return () => window.removeEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
   }, []);
 
   // ── Handlers ────────────────────────────────────────────────────────

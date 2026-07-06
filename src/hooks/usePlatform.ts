@@ -16,3 +16,13 @@ export function useIsLinux(): boolean {
   }, []);
   return isLinux;
 }
+
+// iOS WebKit greys out files whose extension it can't map to a known UTI
+// (e.g. .stl, .3mf), so callers relax a file input's `accept` on iOS and rely
+// on extension validation when the picked files are processed.
+export function detectIsIOS(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent ?? '';
+  // iPhone/iPod/iPad, plus iPadOS 13+ which reports as Macintosh but is touch.
+  return /iP(hone|od|ad)/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+}

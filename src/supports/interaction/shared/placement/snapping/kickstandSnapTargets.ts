@@ -10,6 +10,7 @@ export interface KickstandSnapTargetMeta {
     diameterMm: number;
     minT: number;
     target: SnapTarget;
+    hostRootId?: string;
 }
 
 export function buildKickstandSnapTargetMetaIndex(
@@ -38,6 +39,7 @@ export function buildKickstandSnapTargetMetaIndex(
                 diameterMm: segment.diameter,
                 minT: 0,
                 target,
+                hostRootId: trunk.rootId,
             });
         }
     }

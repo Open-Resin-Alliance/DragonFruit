@@ -135,6 +135,7 @@ export function InstancedShaftGroup({
                 ref={meshRef}
                 args={[undefined, undefined, validShafts.length]}
                 frustumCulled={false}
+                renderOrder={100000}
                 onClick={onShaftClick ? handleClick : undefined}
                 onPointerMove={onShaftPointerMove ? handlePointerMove : undefined}
                 onPointerOut={onShaftPointerOut ? handlePointerOut : undefined}
@@ -156,7 +157,7 @@ export function InstancedShaftGroup({
                     args={[undefined, undefined, validShafts.length]}
                     frustumCulled={false}
                     raycast={() => null}
-                    renderOrder={3}
+                    renderOrder={100000}
                     material={outOfBoundsMaterial}
                 >
                     <cylinderGeometry args={[0.5, 0.5, 1, radialSegments, 1, false]} />

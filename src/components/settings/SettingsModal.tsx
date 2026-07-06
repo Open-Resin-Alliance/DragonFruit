@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { GeneralSettingsTab } from '@/components/settings/GeneralSettingsTab';
+import { useLocale } from '@/components/I18nClientProvider';
 import { CameraSettingsTab } from '@/components/settings/CameraSettingsTab';
 import { HotkeysSettingsTab } from '@/components/settings/HotkeysSettingsTab';
 import { MeshSettingsTab } from '@/components/settings/MeshSettingsTab';
@@ -237,6 +238,11 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTabKey>(initialTab ?? 'general');
 
+  // Language is a draft like every other setting: changing the switcher only
+  // updates draftLocale; the actual loadLocale happens in handleApply.
+  const { locale: activeLocale, setLocale: applyLocale } = useLocale();
+  const [draftLocale, setDraftLocale] = useState(activeLocale);
+
   const [draftMeshColor, setDraftMeshColor] = useState(meshColor);
   const [draftShaderType, setDraftShaderType] = useState(shaderType);
   const [draftMatcapVariant, setDraftMatcapVariant] = useState(matcapVariant);
@@ -376,7 +382,9 @@ export function SettingsModal({
     setDraftSlicingThumbnailRenderSettings(slicingThumbnailRenderSettings ?? DEFAULT_SLICING_THUMBNAIL_RENDER_SETTINGS);
     setDraftUvToolsSettings(getSavedUvToolsSettings());
     setDraftLogLevel(getSavedLogLevel());
+    setDraftLocale(activeLocale);
   }, [
+    activeLocale,
     ambientIntensity,
     directionalIntensity,
     flatUseVertexColors,
@@ -753,6 +761,7 @@ export function SettingsModal({
   }, []);
 
   const handleApply = React.useCallback(() => {
+    applyLocale(draftLocale);
     onMeshColorChange(draftMeshColor);
     onShaderTypeChange(draftShaderType);
     onMatcapVariantChange(draftMatcapVariant);
@@ -811,6 +820,8 @@ export function SettingsModal({
     didCommitThemeDraftRef.current = true;
     onClose();
   }, [
+    applyLocale,
+    draftLocale,
     draftAmbientIntensity,
     draftDirectionalIntensity,
     draftFlatUseVertexColors,
@@ -950,8 +961,8 @@ export function SettingsModal({
   useEffect(() => {
     if (!isOpen) return;
 
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+    const onKeyDown = (e: CustomEvent) => {
+      if (e.detail.key !== 'Escape') return;
       if (showThemeDeleteConfirm) {
         handleCancelThemeDeleteConfirm();
         return;
@@ -971,8 +982,8 @@ export function SettingsModal({
       handleCancel();
     };
 
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('app-hotkey-keydown', onKeyDown as EventListener);
+    return () => window.removeEventListener('app-hotkey-keydown', onKeyDown as EventListener);
   }, [
     isOpen,
     handleCancel,
@@ -1330,6 +1341,8 @@ export function SettingsModal({
                   onDebugPrimitivesPanelVisibleChange={setDraftDebugPrimitivesPanelVisible}
                   importDefaults={draftImportDefaults}
                   onImportDefaultsChange={setDraftImportDefaults}
+                  language={draftLocale}
+                  onLanguageChange={setDraftLocale}
                 />
               )}
               {activeTab === 'camera' && (
@@ -1797,16 +1810,22 @@ export function SettingsModal({
                       <div className="min-w-0 flex-1 space-y-2 text-center">
                         <div className="flex items-center justify-center gap-2 text-[12px]">
                           <Github className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--accent)' }} />
-                          <a
-                            href={DRAGONFRUIT_REPO_URL}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                          <button
+                            onClick={async () => {
+                              const url = DRAGONFRUIT_REPO_URL;
+                              try {
+                                const { invoke } = await import('@tauri-apps/api/core');
+                                await invoke('open_external_url', { url });
+                              } catch {
+                                window.open(url, '_blank');
+                              }
+                            }}
                             className="inline-flex items-center gap-1 underline underline-offset-2 font-mono tracking-tighter"
-                            style={{ color: 'var(--accent)' }}
+                            style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
                           >
                             Open-Resin-Alliance/DragonFruit
                             <ExternalLink className="h-3 w-3" />
-                          </a>
+                          </button>
                         </div>
 
                         <div className="flex items-center justify-center gap-2 text-[12px]" style={{ color: 'var(--text-strong)' }}>

@@ -1,4 +1,6 @@
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import { Hand, Move3D, Paintbrush2, LayoutGrid, ArrowDownToLine, FlipHorizontal2, Droplets } from 'lucide-react';
 import type { TransformMode } from '@/hooks/useModelTransform';
 import { usePlatformModifier } from '@/hooks/usePlatformModifier';
@@ -13,18 +15,43 @@ interface TransformToolbarProps {
 export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformToolbarProps) {
   const [hoveredMode, setHoveredMode] = React.useState<TransformMode | null>(null);
   const modKey = usePlatformModifier();
+  const { _ } = useLingui();
+
+  const toolbarInnerRef = React.useRef<HTMLDivElement>(null);
+  const [collapseToolLabels, setCollapseToolLabels] = React.useState(() => {
+    if (typeof window === 'undefined') return false;
+    const fullLeft = window.innerWidth / 2 - 321;
+    return fullLeft < 340;
+  });
+  const lastCollapseRef = React.useRef(false);
 
   const buttons: Array<{ mode: TransformMode; label: string; icon: React.ReactNode; hint: string }> = [
-    { mode: 'select', label: 'Select', icon: <Hand className="w-4 h-4" />, hint: 'Select and inspect model' },
-    { mode: 'transform', label: 'Modify', icon: <Move3D className="w-4 h-4" />, hint: 'Move, rotate, and scale' },
-    { mode: 'placeOnFace', label: 'On-Face', icon: <ArrowDownToLine className="w-4 h-4" />, hint: 'Orient flat against plate' },
-    { mode: 'mirror', label: 'Mirror', icon: <FlipHorizontal2 className="w-4 h-4" />, hint: 'Mirror across X, Y, or Z' },
-    { mode: 'hollowing', label: 'Hollow', icon: <Droplets className="w-4 h-4" />, hint: 'Create cavity or open-face shell' },
-    { mode: 'smoothing', label: 'Smooth', icon: <Paintbrush2 className="w-4 h-4" />, hint: 'Sculpt and smooth surface' },
-    { mode: 'arrange', label: 'Arrange', icon: <LayoutGrid className="w-4 h-4" />, hint: 'Auto-arrange models on plate' },
+    { mode: 'select', label: _(msg`Select`), icon: <Hand className="w-4 h-4" />, hint: _(msg`Select and inspect model`) },
+    { mode: 'transform', label: _(msg`Modify`), icon: <Move3D className="w-4 h-4" />, hint: _(msg`Move, rotate, and scale`) },
+    { mode: 'placeOnFace', label: _(msg({ message: 'On-Face', comment: 'Toolbar button label. Short for "lay the model flat on a selected face"; keep it terse so the toolbar pill stays narrow.' })), icon: <ArrowDownToLine className="w-4 h-4" />, hint: _(msg`Orient flat against plate`) },
+    { mode: 'mirror', label: _(msg`Mirror`), icon: <FlipHorizontal2 className="w-4 h-4" />, hint: _(msg`Mirror across X, Y, or Z`) },
+    { mode: 'hollowing', label: _(msg`Hollow`), icon: <Droplets className="w-4 h-4" />, hint: _(msg`Create cavity or open-face shell`) },
+    { mode: 'smoothing', label: _(msg`Smooth`), icon: <Paintbrush2 className="w-4 h-4" />, hint: _(msg`Sculpt and smooth surface`) },
+    { mode: 'arrange', label: _(msg`Arrange`), icon: <LayoutGrid className="w-4 h-4" />, hint: _(msg`Auto-arrange models on plate`) },
   ];
 
-  const activeIndex = Math.max(0, buttons.findIndex((btn) => btn.mode === mode));
+  React.useEffect(() => {
+    const update = () => {
+      // Toolbar full width with all labels: ~642px
+      // Centered at innerWidth/2, so left edge = innerWidth/2 - 321
+      // Collapse when left edge is too close to the 320px panel
+      const fullLeft = window.innerWidth / 2 - 321;
+      const tooClose = fullLeft < 340;
+      if (tooClose !== lastCollapseRef.current) {
+        lastCollapseRef.current = tooClose;
+        setCollapseToolLabels(tooClose);
+      }
+    };
+
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
 
   const handleModeClick = React.useCallback((next: TransformMode) => {
     React.startTransition(() => {
@@ -59,31 +86,19 @@ export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformT
       }}
     >
       <div
-        className={`relative grid items-center rounded-full px-1 py-1 ${
-          buttons.length === 7
-            ? 'grid-cols-7'
-            : buttons.length === 6
-              ? 'grid-cols-6'
-              : buttons.length === 5
-                ? 'grid-cols-5'
-                : 'grid-cols-4'
-        }`}
+        ref={toolbarInnerRef}
+        className="relative grid items-center rounded-full px-1 py-1 gap-1"
+        onMouseLeave={() => {
+          setHoveredMode(null);
+          onModeHover?.(null);
+        }}
         style={{
+          gridTemplateColumns: `repeat(${buttons.length}, auto)`,
           background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 50%)',
           backdropFilter: 'blur(12px)',
         }}
       >
-        <div
-          className="pointer-events-none absolute left-1 top-1 bottom-1 rounded-full transition-transform duration-300 ease-out"
-          style={{
-            width: `calc((100% - 8px) / ${buttons.length})`,
-            transform: `translateX(${activeIndex * 100}%)`,
-            background: 'var(--accent-secondary)',
-            boxShadow: '0 2px 12px color-mix(in srgb, var(--accent-secondary), transparent 50%)',
-          }}
-        />
-
-        {buttons.map((btn) => {
+        {buttons.map((btn, index) => {
           const active = mode === btn.mode;
           const hovered = hoveredMode === btn.mode;
 
@@ -92,16 +107,16 @@ export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformT
               key={btn.mode}
               onClick={() => handleModeClick(btn.mode)}
               onMouseEnter={() => handleModeHoverChange(btn.mode)}
-              onMouseLeave={() => handleModeLeave(btn.mode)}
               onFocus={() => handleModeHoverChange(btn.mode)}
-              onBlur={() => handleModeLeave(btn.mode)}
-              className={`relative z-[1] flex w-[112px] items-center justify-center gap-1.5 rounded-full px-3.5 py-2 text-[11px] font-semibold uppercase tracking-wider transition-all duration-200 active:scale-[0.98] ${
+              className={`relative z-[1] flex items-center justify-center gap-1.5 rounded-full px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider transition-all duration-200 active:scale-[0.98] h-[34px] ${
                 active
                   ? 'scale-[1.01]'
                   : 'hover:-translate-y-[1px] hover:shadow-[0_4px_14px_rgba(0,0,0,0.22)]'
               }`}
               style={active ? {
+                background: 'var(--accent-secondary)',
                 color: '#000000',
+                boxShadow: '0 2px 12px color-mix(in srgb, var(--accent-secondary), transparent 50%)',
               } : {
                 background: hovered
                   ? 'color-mix(in srgb, var(--surface-2), transparent 18%)'
@@ -110,8 +125,10 @@ export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformT
               }}
               title={`${btn.label} • ${btn.hint}`}
             >
-              <span>{btn.icon}</span>
-              <span>{btn.label}</span>
+              <span className="shrink-0">{btn.icon}</span>
+              {collapseToolLabels && (hoveredMode ? hoveredMode !== btn.mode : !active) ? null : (
+                <span className="whitespace-nowrap overflow-hidden">{btn.label}</span>
+              )}
             </button>
           );
         })}

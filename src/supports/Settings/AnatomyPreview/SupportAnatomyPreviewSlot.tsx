@@ -19,15 +19,15 @@ function PreviewContextMenu({
         if (!position) return;
 
         const handlePointerDown = () => onClose();
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') onClose();
+        const handleKeyDown = (event: CustomEvent) => {
+            if (event.detail.key === 'Escape') onClose();
         };
 
         window.addEventListener('pointerdown', handlePointerDown);
-        window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
         return () => {
             window.removeEventListener('pointerdown', handlePointerDown);
-            window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
         };
     }, [onClose, position]);
 

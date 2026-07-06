@@ -26,16 +26,15 @@ export function UvToolsLaunchingModal({
   React.useEffect(() => {
     if (!isOpen) return;
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        event.stopPropagation();
+    const handleKeyDown = (event: CustomEvent) => {
+      if (event.detail.key === 'Escape') {
+        event.stopImmediatePropagation();
       }
     };
 
     // Use capture phase to intercept Escape before anything else
-    window.addEventListener('keydown', handleKeyDown, { capture: true });
-    return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
+    window.addEventListener('app-hotkey-keydown', handleKeyDown as EventListener, { capture: true });
+    return () => window.removeEventListener('app-hotkey-keydown', handleKeyDown as EventListener, { capture: true });
   }, [isOpen]);
 
   if (!isOpen || typeof document === 'undefined') return null;

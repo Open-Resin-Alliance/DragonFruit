@@ -1,4 +1,4 @@
-# DragonFruit Slicing Engine — V3.1 Docs
+# DragonFruit Slicing Engine — v3.2 Docs
 
 This folder is the canonical technical documentation for `dragonfruit-slicing-engine`.
 
@@ -6,12 +6,14 @@ This folder is the canonical technical documentation for `dragonfruit-slicing-en
 
 `dragonfruit-slicing-engine` is DragonFruit Desktop’s native Rust slicer backend. It turns packed triangle data into per-layer outputs and delegates final container assembly to plugin-driven encoders.
 
-V3.1 focuses on throughput, deterministic behavior, and memory efficiency:
+v3.2 adds volumetric anti-aliasing, grayscale dithering, and a parallel post-processing pipeline:
 
-- parallel rasterize+encode pipeline
-- O(num_runs) PNG encoding from RLE
-- encode-time sub-pixel packing (`rgb8_div3`, `gray3_div2`)
-- smooth progress semantics for UI integration
+- 3DAA with perturbation-based Z supersampling, XY/Z blur, cross-layer blending, and topology-gated thresholds
+- RLE-native low-memory 3DAA path for 12K-class printers
+- Binned Floyd–Steinberg dithering for non-8-bit display systems
+- Dedicated encode thread overlapping PNG/format work with raster + EDT
+- Parallel post-processing workers with ROI-local workspace bounds
+- Gaussian blur kernels (X, Y, Z) with adjustable sigma
 
 ## Read these first
 
@@ -29,21 +31,25 @@ V3.1 focuses on throughput, deterministic behavior, and memory efficiency:
 
 ## Module map
 
-- `src/lib.rs` — exports
+- `src/lib.rs` — exports, `ENGINE_VERSION`
 - `src/types.rs` — contracts / job model
-- `src/engine.rs` — orchestration / validation / errors
-- `src/geometry.rs` — triangle parsing
+- `src/engine.rs` — orchestration / validation / 3DAA pump / errors
+- `src/geometry.rs` — triangle parsing and XY projection
 - `src/index.rs` — layer triangle lookup index
-- `src/raster.rs` — scanline rasterization (AA + non-AA)
-- `src/rle.rs` — run-length building utilities
+- `src/raster.rs` — scanline rasterisation (AA + non-AA)
+- `src/rle.rs` — run-length encoding primitives
 - `src/pipeline.rs` — bounded parallel work + progress + cancellation
-- `src/encode.rs` — RLE-to-PNG encoders
-- `src/encoders/` — format registry + encoder traits
+- `src/binary_mask.rs` — bounded binary/gray masks with row-span views
+- `src/zaa.rs` — Z-axis anti-aliasing kernels and perturbation patterns
+- `src/dither.rs` — Floyd–Steinberg binned dithering
+- `src/encode.rs` — RLE-to-PNG encoding, sub-pixel packing
+- `src/encoders/` — format registry + encoder traits + plugin-generated encoders
+- `src/metrics.rs` — performance counters
 
 ## Documentation policy
 
-Any change to pipeline semantics, public types, encoder contracts, or packing behavior should update docs in the same PR.
+Any change to pipeline semantics, public types, encoder contracts, AA behaviour, or packing logic should update the relevant docs in the same PR.
 
 ## Acknowledgment
 
-Many thanks to **mslicer** for the inspiration behind several algorithmic ideas and practical slicing methods that informed DragonFruit V3.1.
+Many thanks to **mslicer** for the inspiration behind several algorithmic ideas and practical slicing methods that informed DragonFruit's design.

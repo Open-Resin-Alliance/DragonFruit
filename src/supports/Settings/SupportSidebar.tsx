@@ -209,6 +209,7 @@ export function SupportSidebar() {
     usePresetHotkeys();
     const settings = useSyncExternalStore(subscribeToSettings, getSettings, getSettings);
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
+    const [presetSaveTrigger, setPresetSaveTrigger] = useState(0);
     const [autoBraceStatus, setAutoBraceStatus] = useState<{ kind: 'success' | 'warning' | 'error'; message: string } | null>(null);
     const [defaultsAnimating, setDefaultsAnimating] = useState(false);
     const [expanded, setExpanded] = React.useState(true);
@@ -578,6 +579,11 @@ export function SupportSidebar() {
         try {
             saveSettingsToLocalStorage();
             localStorage.setItem(RAFT_STORAGE_KEY, JSON.stringify(getRaftSettings()));
+
+            // Trigger PresetSelector to save any dirty preset from within its
+            // own component scope, matching the context-menu "Save Changes" path.
+            setPresetSaveTrigger((n) => n + 1);
+
             setSaveStatus('saved');
         } catch (err) {
             console.error('[SupportSidebar] Failed to save settings:', err);
@@ -591,7 +597,7 @@ export function SupportSidebar() {
             setSaveStatus('idle');
             saveStatusTimeoutRef.current = null;
         }, 2000);
-    }, []);
+    }, [settings]);
 
     const handleRestoreDefaults = React.useCallback(() => {
         const RAFT_STORAGE_KEY = 'raft-settings';
@@ -1272,6 +1278,7 @@ export function SupportSidebar() {
                                                 <PresetSelector
                                                     selectedPresetIdOverride={effectivePresetIdOverride}
                                                     disableGlobalPresetActivation={Boolean(editableTarget)}
+                                                    saveTrigger={presetSaveTrigger}
                                                     onPresetSelected={(presetId) => {
                                                         const preset = getPresetById(presetId);
                                                         if (!preset) return;
@@ -1313,6 +1320,7 @@ export function SupportSidebar() {
                                     )}
                                 </>
                             )}
+
                         </div>
                     </div>
 

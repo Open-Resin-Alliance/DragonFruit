@@ -92,10 +92,10 @@ export function getSupportPlacementModifierState(source: unknown): SupportPlacem
     };
 
     return {
-        ctrlKey: Boolean(candidate.ctrlKey ?? candidate.nativeEvent?.ctrlKey),
-        altKey: Boolean(candidate.altKey ?? candidate.nativeEvent?.altKey),
-        shiftKey: Boolean(candidate.shiftKey ?? candidate.nativeEvent?.shiftKey),
-        metaKey: Boolean(candidate.metaKey ?? candidate.nativeEvent?.metaKey),
+        ctrlKey: Boolean(candidate.ctrlKey || candidate.nativeEvent?.ctrlKey),
+        altKey: Boolean(candidate.altKey || candidate.nativeEvent?.altKey),
+        shiftKey: Boolean(candidate.shiftKey || candidate.nativeEvent?.shiftKey),
+        metaKey: Boolean(candidate.metaKey || candidate.nativeEvent?.metaKey),
     };
 }
 

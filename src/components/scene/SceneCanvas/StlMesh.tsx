@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
 import { MeshShaderMaterial, type MeshShaderType } from '@/features/shaders/mesh';
+import { isKeyPressedSync } from '@/hotkeys/hotkeyStore';
 import { OpaqueWireOverlayMaterial } from '@/features/shaders/mesh/opaqueWireMesh';
 import {
   beginMeshSmoothingStroke,
@@ -310,7 +311,6 @@ function StlMeshComponent({
   const supportDimMaterialRef = React.useRef<THREE.MeshStandardMaterial | null>(null);
   const supportDimShaderUniformsRef = React.useRef<{ uDitherAmount: THREE.IUniform<number> } | null>(null);
   const supportDimRaycastBlockedRef = React.useRef(false);
-  const shiftHeldRef = React.useRef(false);
   // Updated each render — readable inside stable callbacks without causing re-renders.
   const isSupportDimmedRef = React.useRef(false);
   // Stable shim that delegates to THREE.Mesh.prototype.raycast unless the ghost is
@@ -599,18 +599,7 @@ if (uDitherAmount > 0.0) {
     return () => { supportDimMaterialObj?.dispose(); };
   }, [supportDimMaterialObj]);
 
-  // Track Shift key so dissolved ghost models can still be selected with Shift+click.
-  React.useEffect(() => {
-    if (!isSupportDimmed) return;
-    const onKey = (e: KeyboardEvent) => { shiftHeldRef.current = e.shiftKey; };
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('keyup', onKey);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('keyup', onKey);
-      shiftHeldRef.current = false;
-    };
-  }, [isSupportDimmed]);
+
 
   useFrame(() => {
     if (!isSupportDimmed) return;
@@ -661,7 +650,7 @@ if (uDitherAmount > 0.0) {
 
     // Update proximity block — supportDimRaycastRef reads this ref at call time,
     // so no direct mesh.raycast mutation is needed here.
-    const shouldBlockRaycast = proximityT >= 0.25 && !shiftHeldRef.current;
+    const shouldBlockRaycast = proximityT >= 0.25 && !isKeyPressedSync('shift');
     if (supportDimRaycastBlockedRef.current !== shouldBlockRaycast) {
       supportDimRaycastBlockedRef.current = shouldBlockRaycast;
     }

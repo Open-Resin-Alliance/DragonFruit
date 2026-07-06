@@ -1,57 +1,28 @@
 import { useEffect } from 'react';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { bracePlacementStore, useBracePlacementState } from './bracePlacementState';
-import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
-import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
+import { useActionActive } from '@/hotkeys/hotkeyStore';
 
 export function useBracePlacement() {
-    const { getHotkey } = useHotkeyConfig();
-    const binding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
-
     const { isPlacementDisabled } = useInteractionStatus();
     const state = useBracePlacementState();
 
+    const braceHotkeyActive = useActionActive('SUPPORTS', 'BRANCH_PLACEMENT');
     useEffect(() => {
-        const down = (e: KeyboardEvent) => {
-            const matches = matchesConfiguredHotkeyDown(e, binding);
-            if (matches) {
-                e.preventDefault();
-                bracePlacementStore.setAltActive(true);
-            }
-        };
-        const up = (e: KeyboardEvent) => {
-            const matches = matchesConfiguredHotkeyUp(e, binding);
-            if (matches) {
-                e.preventDefault();
-                bracePlacementStore.setAltActive(false);
-                bracePlacementStore.reset();
-            }
-        };
-
-        const blur = () => {
-            // Losing focus can prevent keyup from firing. Treat it as a cancel.
-            bracePlacementStore.setAltActive(false);
+        bracePlacementStore.setAltActive(braceHotkeyActive);
+        if (!braceHotkeyActive) {
             bracePlacementStore.reset();
-        };
-
-        window.addEventListener('keydown', down);
-        window.addEventListener('keyup', up);
-        window.addEventListener('blur', blur);
-        return () => {
-            window.removeEventListener('keydown', down);
-            window.removeEventListener('keyup', up);
-            window.removeEventListener('blur', blur);
-        };
-    }, [binding]);
+        }
+    }, [braceHotkeyActive]);
 
     useEffect(() => {
-        const handleEscape = (e: KeyboardEvent) => {
-            if (e.key === 'Escape' && state.stage === 'awaitingEnd') {
+        const handleEscape = (e: CustomEvent) => {
+            if (e.detail.key === 'Escape' && state.stage === 'awaitingEnd') {
                 bracePlacementStore.reset();
             }
         };
-        window.addEventListener('keydown', handleEscape);
-        return () => window.removeEventListener('keydown', handleEscape);
+        window.addEventListener('app-hotkey-keydown', handleEscape as EventListener);
+        return () => window.removeEventListener('app-hotkey-keydown', handleEscape as EventListener);
     }, [state.stage]);
 
     useEffect(() => {

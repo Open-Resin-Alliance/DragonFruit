@@ -134,7 +134,10 @@ export function PickingRenderer({
         depthTest: !noDepthTest,
         depthWrite: !noDepthTest,
         transparent: false,
-        side: THREE.FrontSide,
+        // STL/3MF models often have inconsistent winding order; with FrontSide, those
+        // back-facing triangles vanish from the 3×3 pick buffer even when visually in
+        // front. DoubleSide fixes false misses — depth testing still picks the nearest hit.
+        side: THREE.DoubleSide,
       });
       materialCacheRef.current.set(cacheKey, material);
     }

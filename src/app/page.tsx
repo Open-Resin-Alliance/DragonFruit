@@ -3,9 +3,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { msg } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
+import { detectIsIOS } from '@/hooks/usePlatform';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
-import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Plus, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Download, Gamepad2, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Plus, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
@@ -34,6 +35,7 @@ import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { LayerSlider } from '@/components/controls/LayerSlider';
 import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
 import { SupportSidebar } from '@/supports/Settings';
+import { useLeafPlacementState } from '@/supports/SupportTypes/Leaf/leafPlacementState';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { ExportManager } from '@/features/export/logic/ExportManager';
 import { resolveEntirePlateExportBaseName } from '@/features/export/logic/exportFileNaming';
@@ -94,8 +96,14 @@ import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionMa
 import { useSlicingManager } from '@/features/slicing/useSlicingManager';
 import { useTransformManager } from '@/features/transform/useTransformManager';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
+// Islands PoC (Support-tab unified islands panel). Tab-agnostic + modular — see
+// agents/Claude/20260613-1404-Implementation-dev-islands-islands-panel-...md.
+import { useIslands } from '@/volumeAnalysis/Islands/useIslands';
+import { IslandsPanel } from '@/components/controls/IslandsPanel';
+import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { useSupportInteractionManager } from '@/features/supports/useSupportInteractionManager';
 import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
+import { hotkeyStore, useActionActive, isActionActiveSync } from '@/hotkeys/hotkeyStore';
 import { useDeleteHotkey } from '@/features/delete/useDeleteHotkey';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { useCameraProjectionHotkey } from '@/hotkeys/useCameraProjectionHotkey';
@@ -1525,6 +1533,7 @@ function readNumberField(payload: JsonObject, key: string): number | null {
 
 export default function Home() {
   const { _ } = useLingui();
+  const { stage, sproutParentingLockHeld } = useLeafPlacementState();
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
   const importSceneFile = scene.importSceneFile;
@@ -1548,6 +1557,7 @@ export default function Home() {
 
   // 2. Transform Management (needs geom for bounds)
   const transformMgr = useTransformManager({ geom: scene.geom });
+  const [uniformScaling, setUniformScaling] = React.useState(true);
 
   // Ref for supports group (used for export)
   const supportsRef = React.useRef<THREE.Group | null>(null);
@@ -1651,6 +1661,9 @@ export default function Home() {
     lastPushApplied: null,
     lastAt: null,
   });
+  const [newDeviceToast, setNewDeviceToast] = React.useState<string | null>(null);
+  const [isNewDeviceToastVisible, setIsNewDeviceToastVisible] = React.useState(false);
+  const newDeviceToastTimeoutRef = React.useRef<number | null>(null);
   const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; text: string; direction: 'undo' | 'redo' } | null>(null);
   const [isHistoryActionToastVisible, setIsHistoryActionToastVisible] = React.useState(false);
   const [isSceneImportToastVisible, setIsSceneImportToastVisible] = React.useState(false);
@@ -1829,7 +1842,7 @@ export default function Home() {
     : (sessionShaderOverride ?? scene.shaderType);
   const [isPrepareDragActive, setIsPrepareDragActive] = React.useState(false);
   const [isPrepareDragUnsupported, setIsPrepareDragUnsupported] = React.useState(false);
-  const [isSupportSpotlightHoldActive, setIsSupportSpotlightHoldActive] = React.useState(false);
+  const isSupportSpotlightHoldActive = useActionActive('SUPPORTS', 'TEMP_SPOTLIGHT_HOLD');
   const [allowPrepareWithoutPrinter, setAllowPrepareWithoutPrinter] = React.useState(false);
   const [prepareSmoothingSettingsExpanded, setPrepareSmoothingSettingsExpanded] = React.useState(true);
   const [hollowingState, setHollowingState] = React.useState<HollowingPanelState>({
@@ -1993,6 +2006,7 @@ export default function Home() {
   const [printingArtifactIsInvalid, setPrintingArtifactIsInvalid] = React.useState(false);
   const slicedArtifactProfileFingerprintRef = React.useRef<string | null>(null);
   const [printingEstimatedResinMl, setPrintingEstimatedResinMl] = React.useState<number | null>(null);
+  const printingEstimatedResinMlRef = React.useRef<number | null>(null);
   const [isPrintingEstimatedResinBusy, setIsPrintingEstimatedResinBusy] = React.useState(false);
   const [resinEstimateRefreshTick, setResinEstimateRefreshTick] = React.useState(0);
   const printingBaseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
@@ -2290,16 +2304,18 @@ export default function Home() {
   React.useEffect(() => {
     if (!scene.sceneImportPlacementPrompt) return;
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+    let wasEscapePressed = false;
+
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
         scene.resolveSceneImportPlacementPrompt('load_as_is');
       }
-    };
+      wasEscapePressed = isEscapePressed;
+    });
 
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-    };
+    return unsubscribe;
   }, [scene.sceneImportPlacementPrompt, scene.resolveSceneImportPlacementPrompt]);
 
   const hasPluginSceneFile = React.useCallback((filesInput: FileList | File[]) => {
@@ -2379,16 +2395,18 @@ export default function Home() {
   React.useEffect(() => {
     if (!showSceneSaveChoiceModal) return;
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+    let wasEscapePressed = false;
+
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
         resolveSceneSaveChoice('cancel');
       }
-    };
+      wasEscapePressed = isEscapePressed;
+    });
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
+    return unsubscribe;
   }, [resolveSceneSaveChoice, showSceneSaveChoiceModal]);
 
   React.useEffect(() => {
@@ -2680,6 +2698,7 @@ export default function Home() {
     return reopened;
   }, [importSceneFilesWithPluginWarning, markSceneSaveBaseline, maybeConfirmPluginImportWarning, recentOpenedFiles, reopenRecentOpenedFile]);
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
+  const [isExporting, setIsExporting] = React.useState(false);
   const [arrangeOverlayElapsedSec, setArrangeOverlayElapsedSec] = React.useState(0);
   const [arrangeOverlayModelCount, setArrangeOverlayModelCount] = React.useState<number | null>(null);
   const [duplicateTotalCopies, setDuplicateTotalCopies] = React.useState(1);
@@ -3542,11 +3561,17 @@ export default function Home() {
       ];
     }
 
+    const activeModel = scene.activeModelId
+      ? scene.models.find((m) => m.id === scene.activeModelId)
+      : undefined;
+    const canSplitSupports = !!activeModel?.geometry.meshDefects?.nativeRepairReport?.model_triangle_count;
+
     return [
       ...(!scene.activeModelId ? (['delete', 'cut', 'copy', 'repair'] as const) : []),
       ...(!scene.canPasteModel ? (['paste'] as const) : []),
+      ...(!canSplitSupports ? (['split-supports'] as const) : []),
     ];
-  }, [scene.activeModelId, scene.canPasteModel, scene.mode, supportsCanAddJoint, supportsCanToggleCurve]);
+  }, [scene.activeModelId, scene.canPasteModel, scene.mode, scene.models, supportsCanAddJoint, supportsCanToggleCurve]);
 
   const clearPrintingLayerPreviewUrls = React.useCallback(() => {
     printingLayerPreviewLoadInFlightRef.current.clear();
@@ -4406,14 +4431,12 @@ export default function Home() {
     const inBoundsModelIds = new Set<string>();
 
     for (const model of visibleModels) {
-      const effectiveTransform =
-        (scene.activeModelId === model.id && displayActiveModelId === scene.activeModelId)
-          ? transformMgr.transform
-          : model.transform;
-
-      const approxBounds = computeApproxModelWorldBounds(model.geometry, effectiveTransform);
+      // Use stored transform — bounds don't change on selection.
+      // Previously depended on scene.activeModelId, causing recomputation
+      // (including computePreciseModelWorldBounds, O(vertices)) on every click.
+      const approxBounds = computeApproxModelWorldBounds(model.geometry, model.transform);
       const bounds = isBoundsOutsideVolume(approxBounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)
-        ? computePreciseModelWorldBounds(model.geometry, effectiveTransform)
+        ? computePreciseModelWorldBounds(model.geometry, model.transform)
         : approxBounds;
 
       if (!isBoundsOutsideVolume(bounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)) {
@@ -4423,11 +4446,8 @@ export default function Home() {
 
     return inBoundsModelIds;
   }, [
-    displayActiveModelId,
     resinBuildVolumeBounds,
-    scene.activeModelId,
     scene.models,
-    transformMgr.transform,
   ]);
 
   const visibleResinModels = React.useMemo(() => {
@@ -4438,7 +4458,9 @@ export default function Home() {
 
   const resinEstimateComputationSignature = React.useMemo(() => {
     if (visibleResinModels.length === 0) return '';
-
+    // Stable signature — only changes when geometry or scale actually changes,
+    // NOT when selection changes. Prevents the resin estimate useEffect from
+    // firing extra state updates on every model click.
     const parts = visibleResinModels.map((model) => {
       const geometry = model.geometry.geometry;
       const positionAttr = geometry.getAttribute('position') as ({ version?: number; data?: { version?: number } } | null);
@@ -4819,6 +4841,7 @@ export default function Home() {
     if (!shouldEstimateResinInBackground) {
       if (visibleResinModels.length === 0) {
         lastCompletedResinEstimateSignatureRef.current = '';
+        printingEstimatedResinMlRef.current = null;
         setPrintingEstimatedResinMl(null);
       }
       setIsPrintingEstimatedResinBusy(false);
@@ -4830,7 +4853,8 @@ export default function Home() {
     const visibleModels = visibleResinModels;
     const compositeSignature = `${resinEstimateComputationSignature}::supports:${supportAndRaftResinMl.toFixed(6)}`;
     const hasChangedSinceLastSuccess = compositeSignature !== lastCompletedResinEstimateSignatureRef.current;
-    if (printingEstimatedResinMl == null || hasChangedSinceLastSuccess) {
+    const hadPriorValue = printingEstimatedResinMlRef.current != null;
+    if (hadPriorValue && hasChangedSinceLastSuccess) {
       setIsPrintingEstimatedResinBusy(true);
     }
 
@@ -4853,7 +4877,9 @@ export default function Home() {
 
       if (cancelled) return;
       const totalWithSupports = totalMl + supportAndRaftResinMl;
-      setPrintingEstimatedResinMl(found || totalWithSupports > 0 ? totalWithSupports : null);
+      const nextValue = found || totalWithSupports > 0 ? totalWithSupports : null;
+      printingEstimatedResinMlRef.current = nextValue;
+      setPrintingEstimatedResinMl(nextValue);
       lastCompletedResinEstimateSignatureRef.current = compositeSignature;
       setIsPrintingEstimatedResinBusy(false);
     };
@@ -4865,7 +4891,6 @@ export default function Home() {
     };
   }, [
     getOrComputeBaseResinMl,
-    printingEstimatedResinMl,
     resinEstimateComputationSignature,
     resinEstimateRefreshTick,
     shouldEstimateResinInBackground,
@@ -7801,17 +7826,21 @@ export default function Home() {
       setIsPrintingMonitorPrinterMenuOpen(false);
     };
 
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+    window.addEventListener('mousedown', handlePointerDown);
+
+    let wasEscapePressed = false;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
         setIsPrintingMonitorPrinterMenuOpen(false);
       }
-    };
+      wasEscapePressed = isEscapePressed;
+    });
 
-    window.addEventListener('mousedown', handlePointerDown);
-    window.addEventListener('keydown', handleEscape);
     return () => {
       window.removeEventListener('mousedown', handlePointerDown);
-      window.removeEventListener('keydown', handleEscape);
+      unsubscribe();
     };
   }, [isPrintingMonitorPrinterMenuOpen]);
 
@@ -8200,6 +8229,14 @@ export default function Home() {
     })();
   }, [queueTopBarSaveScene, resolveSceneSaveNativePath]);
 
+  const handleTopBarSaveSceneAs = React.useCallback(() => {
+    // Save As: always route through the native save dialog (a null override
+    // suppresses any remembered path), skipping the overwrite/save-as choice
+    // modal. A successful save re-points the scene's save target — and future
+    // Ctrl+S overwrites — at the newly chosen file.
+    queueTopBarSaveScene(null);
+  }, [queueTopBarSaveScene]);
+
   React.useEffect(() => {
     if (scene.models.length !== 0) return;
 
@@ -8394,7 +8431,13 @@ export default function Home() {
     // a short setTimeout gives the browser time to commit the first full frame.
     timerId = setTimeout(() => {
       if (!cancelled) {
-        void revealWindow();
+        // Signal the splashscreen to fade out gracefully before revealing.
+        import('@tauri-apps/api/event').then(({ emit }) => {
+          emit('splash-fade-out').catch(() => {});
+        });
+        setTimeout(() => {
+          if (!cancelled) void revealWindow();
+        }, 180);
       }
     }, 350);
 
@@ -8428,6 +8471,15 @@ export default function Home() {
   const waitForUiTick = React.useCallback(() => new Promise<void>((resolve) => {
     setTimeout(resolve, 0);
   }), []);
+
+  const createPathBackedStlFile = React.useCallback((sourcePath: string, name: string): File => {
+    const file = new File([], name, {
+      type: getDroppedFileMimeType(name),
+      lastModified: Date.now(),
+    });
+    (file as File & { filePath?: string }).filePath = sourcePath;
+    return file;
+  }, []);
 
   const pickFilesWithNativeDialog = React.useCallback(async (category: 'mesh' | 'scene', multiple: boolean): Promise<File[] | null> => {
     if (!isDesktopRuntime()) return null;
@@ -8470,13 +8522,16 @@ export default function Home() {
             progress: null,
           });
 
-          const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
           const name = resolvedName;
-
-          files.push(new File([new Uint8Array(bytes)], name, {
-            type: getDroppedFileMimeType(name),
-            lastModified: Date.now(),
-          }));
+          if (getFileExtensionLower(name) === '.stl') {
+            files.push(createPathBackedStlFile(sourcePath, name));
+          } else {
+            const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
+            files.push(new File([new Uint8Array(bytes)], name, {
+              type: getDroppedFileMimeType(name),
+              lastModified: Date.now(),
+            }));
+          }
         } catch (error) {
           console.warn(`[Picker] Failed reading picked file path: ${entry.path}`, error);
         }
@@ -8498,7 +8553,7 @@ export default function Home() {
       console.warn(`[Picker] Native ${category} picker failed, falling back to web input.`, error);
       return null;
     }
-  }, [isDesktopRuntime, waitForUiTick]);
+  }, [createPathBackedStlFile, isDesktopRuntime, waitForUiTick]);
 
   const pickFilesWithWebInput = React.useCallback((accept: string, multiple: boolean): Promise<File[]> => {
     return new Promise((resolve) => {
@@ -8509,7 +8564,10 @@ export default function Home() {
 
       const input = document.createElement('input');
       input.type = 'file';
-      input.accept = accept;
+      // iOS WebKit greys out files whose extension it can't map to a known UTI
+      // (e.g. .stl, .3mf), and it ignores MIME hints too, so drop the filter
+      // there and rely on extension validation when the picked files are processed.
+      input.accept = detectIsIOS() ? '' : accept;
       input.multiple = multiple;
 
       input.onchange = () => {
@@ -8596,7 +8654,7 @@ export default function Home() {
       if (nativeFiles.length === 0) return;
       const expanded = await expandPickedFilesWithZip(nativeFiles, 'mesh');
       if (expanded.meshFiles.length > 0) {
-        scene.onFileChange(buildSyntheticFileChangeEvent(expanded.meshFiles));
+        void scene.loadFiles(expanded.meshFiles);
       }
       if (expanded.sceneFiles.length > 0) {
         await importSceneFilesWithPluginWarning(expanded.sceneFiles, { resultingScenePath: null });
@@ -9634,16 +9692,17 @@ export default function Home() {
   React.useEffect(() => {
     if (!printingMonitorPendingConfirmation) return;
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+    let wasEscapePressed = false;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
         setPrintingMonitorPendingConfirmation(null);
       }
-    };
+      wasEscapePressed = isEscapePressed;
+    });
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
+    return unsubscribe;
   }, [printingMonitorPendingConfirmation]);
 
   const handlePrintingLayerChange = React.useCallback((nextLayer: number) => {
@@ -9899,12 +9958,16 @@ export default function Home() {
 
       for (const sourcePath of normalizedSupportedPaths) {
         try {
-          const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
           const name = getFileNameFromPath(sourcePath);
-          files.push(new File([new Uint8Array(bytes)], name, {
-            type: getDroppedFileMimeType(name),
-            lastModified: Date.now(),
-          }));
+          if (getFileExtensionLower(name) === '.stl') {
+            files.push(createPathBackedStlFile(sourcePath, name));
+          } else {
+            const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
+            files.push(new File([new Uint8Array(bytes)], name, {
+              type: getDroppedFileMimeType(name),
+              lastModified: Date.now(),
+            }));
+          }
         } catch (error) {
           console.warn(`[DragDrop] Failed reading dropped file path: ${sourcePath}`, error);
         }
@@ -9914,7 +9977,7 @@ export default function Home() {
     } catch {
       return [] as File[];
     }
-  }, []);
+  }, [createPathBackedStlFile]);
 
   const sceneModeRef = React.useRef(scene.mode);
   const createFilesFromTauriDroppedPathsRef = React.useRef(createFilesFromTauriDroppedPaths);
@@ -10212,6 +10275,10 @@ export default function Home() {
     scene.ungroupGroup(groupId);
   }, [scene]);
 
+  const handleSplitImportGroup = React.useCallback((modelId: string) => {
+    scene.splitImportGroup(modelId);
+  }, [scene]);
+
   const handleRenameFolder = React.useCallback((groupId: string, nextName: string) => {
     scene.renameGroup(groupId, nextName);
   }, [scene]);
@@ -10247,28 +10314,19 @@ export default function Home() {
       return;
     }
 
-    const handleEscToDeselectHolePunch = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-
-      const target = event.target;
-      if (
-        target instanceof HTMLElement
-        && target.closest('input, textarea, select, [contenteditable="true"]')
-      ) {
-        return;
+    let wasEscapePressed = false;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
+        setSelectedHolePunchPlacementIds([]);
+        setHoveredHolePunchPlacementId(null);
+        setHolePunchHoverPlacement(null);
       }
+      wasEscapePressed = isEscapePressed;
+    });
 
-      event.preventDefault();
-      event.stopPropagation();
-      setSelectedHolePunchPlacementIds([]);
-      setHoveredHolePunchPlacementId(null);
-      setHolePunchHoverPlacement(null);
-    };
-
-    window.addEventListener('keydown', handleEscToDeselectHolePunch, true);
-    return () => {
-      window.removeEventListener('keydown', handleEscToDeselectHolePunch, true);
-    };
+    return unsubscribe;
   }, [scene.mode, selectedHolePunchPlacementIds.length, transformMgr.transformMode]);
 
   const handleSceneMarqueeSelection = React.useCallback((ids: string[]) => {
@@ -10576,6 +10634,26 @@ export default function Home() {
     };
   }, [scene.sceneImportReport]);
 
+  const handleNewDeviceDetected = React.useCallback((deviceId: string) => {
+    setNewDeviceToast(deviceId);
+    setIsNewDeviceToastVisible(true);
+    if (newDeviceToastTimeoutRef.current !== null) {
+      window.clearTimeout(newDeviceToastTimeoutRef.current);
+    }
+    newDeviceToastTimeoutRef.current = window.setTimeout(() => {
+      setIsNewDeviceToastVisible(false);
+      newDeviceToastTimeoutRef.current = null;
+    }, 9000);
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (newDeviceToastTimeoutRef.current !== null) {
+        window.clearTimeout(newDeviceToastTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const handleExportSuccess = React.useCallback((savedPath: string) => {
     setExportSuccessToast({ id: Date.now(), path: savedPath });
     setIsExportSuccessToastVisible(true);
@@ -10588,7 +10666,7 @@ export default function Home() {
     }, 3800);
   }, []);
 
-  const handleExportError = React.useCallback((message: string) => {
+  const showOperationError = React.useCallback((message: string) => {
     setExportErrorToast({ id: Date.now(), text: message });
     setIsExportErrorToastVisible(true);
     if (exportErrorToastFadeTimeoutRef.current !== null) {
@@ -10916,6 +10994,15 @@ export default function Home() {
         }
         break;
       }
+      case 'split-supports': {
+        const targetId = scene.activeModelId;
+        if (targetId) {
+          closeEditorContextMenu();
+          scene.splitSupports(targetId);
+          return;
+        }
+        break;
+      }
       case 'delete':
         if (scene.activeModelId) {
           scene.deleteModel(scene.activeModelId);
@@ -10933,9 +11020,33 @@ export default function Home() {
           scene.cutModel(scene.activeModelId);
         }
         break;
-      case 'paste':
-        scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
+      case 'paste': {
+        const pastedIds = scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
+        if (pastedIds.length > 0 && printingEstimatedResinMlRef.current != null) {
+          const pastedModel = scene.models.find((m) => pastedIds.includes(m.id));
+          if (pastedModel) {
+            const geom = pastedModel.geometry.geometry;
+            const pos = geom.getAttribute('position');
+            const idx = geom.getIndex();
+            const sourceKey = String(geom.userData?.resinVolumeSourceKey ?? geom.uuid);
+            const posVer = (pos as { version?: number; data?: { version?: number } }).version
+              ?? (pos as { version?: number; data?: { version?: number } }).data?.version ?? 0;
+            const idxVer = (idx as { version?: number } | null)?.version ?? 0;
+            const cacheKey = `${sourceKey}:${posVer}:${idxVer}`;
+            const cachedMl = printingBaseResinMlCacheRef.current.get(cacheKey) ?? null;
+            if (cachedMl != null) {
+              const sx = Math.abs(pastedModel.transform.scale.x || 1);
+              const sy = Math.abs(pastedModel.transform.scale.y || 1);
+              const sz = Math.abs(pastedModel.transform.scale.z || 1);
+              const addedMl = cachedMl * sx * sy * sz;
+              const nextTotal = (printingEstimatedResinMlRef.current - supportAndRaftResinMl) + addedMl + supportAndRaftResinMl;
+              printingEstimatedResinMlRef.current = nextTotal;
+              setPrintingEstimatedResinMl(nextTotal);
+            }
+          }
+        }
         break;
+      }
       case 'repair': {
         const targetId = scene.activeModelId;
         if (targetId) {
@@ -11025,88 +11136,55 @@ export default function Home() {
   }, [jumpHistoryToCounts]);
 
   React.useEffect(() => {
-    const handleDiagnosticsHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftD = event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'd';
-      if (!isCtrlShiftD) return;
+    let wasDiagnostics = false;
+    let wasHistory = false;
+    let wasTransform = false;
+    let wasSliceMetrics = false;
+    let wasPrintMonitor = false;
+    let wasPrintRtsp = false;
 
-      // Important: block browser default (e.g. "Bookmark all tabs").
-      event.preventDefault();
-      event.stopPropagation();
-      setIsDiagnosticsOpen((prev) => !prev);
-    };
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const isDiagnosticsActive = isActionActiveSync('DEBUG', 'DIAGNOSTICS');
+      const isHistoryActive = isActionActiveSync('DEBUG', 'HISTORY');
+      const isTransformActive = isActionActiveSync('DEBUG', 'TRANSFORM');
+      const isSliceMetricsActive = isActionActiveSync('DEBUG', 'SLICE_METRICS');
+      const isPrintMonitorActive = isActionActiveSync('DEBUG', 'PRINT_MONITOR');
+      const isPrintRtspActive = isActionActiveSync('DEBUG', 'PRINT_RTSP');
 
-    const handleHistoryDebugHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftC = event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'c';
-      if (!isCtrlShiftC) return;
+      if (isDiagnosticsActive && !wasDiagnostics) {
+        setIsDiagnosticsOpen((prev) => !prev);
+      }
+      if (isHistoryActive && !wasHistory) {
+        setIsHistoryDebugOpen((prev) => !prev);
+      }
+      if (isTransformActive && !wasTransform) {
+        setIsTransformDebugOverlayOpen((prev) => !prev);
+      }
+      if (isSliceMetricsActive && !wasSliceMetrics) {
+        if (printingSlicingBenchmark) {
+          setIsSliceMetricsDebugOpen((prev) => !prev);
+        }
+      }
+      if (isPrintMonitorActive && !wasPrintMonitor) {
+        if (printingMonitorModalOpen) {
+          setIsPrintingMonitorDebugOpen((prev) => !prev);
+        }
+      }
+      if (isPrintRtspActive && !wasPrintRtsp) {
+        if (printingMonitorModalOpen) {
+          setIsPrintingMonitorRtspDebugOpen((prev) => !prev);
+        }
+      }
 
-      event.preventDefault();
-      event.stopPropagation();
-      setIsHistoryDebugOpen((prev) => !prev);
-    };
+      wasDiagnostics = isDiagnosticsActive;
+      wasHistory = isHistoryActive;
+      wasTransform = isTransformActive;
+      wasSliceMetrics = isSliceMetricsActive;
+      wasPrintMonitor = isPrintMonitorActive;
+      wasPrintRtsp = isPrintRtspActive;
+    });
 
-    const handleTransformDebugOverlayHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftX = event.ctrlKey
-        && event.shiftKey
-        && (event.code === 'KeyX' || event.key.toLowerCase() === 'x');
-      if (!isCtrlShiftX) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      setIsTransformDebugOverlayOpen((prev) => !prev);
-    };
-
-    const handleSliceMetricsDebugHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftA = event.ctrlKey
-        && event.shiftKey
-        && (event.code === 'KeyA' || event.key.toLowerCase() === 'a');
-      if (!isCtrlShiftA) return;
-
-      // Only toggle when we actually have slicing metrics from a completed run.
-      if (!printingSlicingBenchmark) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      setIsSliceMetricsDebugOpen((prev) => !prev);
-    };
-
-    const handlePrintingMonitorDebugHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftN = event.ctrlKey
-        && event.shiftKey
-        && (event.code === 'KeyN' || event.key.toLowerCase() === 'n');
-      if (!isCtrlShiftN) return;
-      if (!printingMonitorModalOpen) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      setIsPrintingMonitorDebugOpen((prev) => !prev);
-    };
-
-    const handlePrintingMonitorRtspDebugHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftM = event.ctrlKey
-        && event.shiftKey
-        && (event.code === 'KeyM' || event.key.toLowerCase() === 'm');
-      if (!isCtrlShiftM) return;
-      if (!printingMonitorModalOpen) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      setIsPrintingMonitorRtspDebugOpen((prev) => !prev);
-    };
-
-    window.addEventListener('keydown', handleDiagnosticsHotkey, true);
-    window.addEventListener('keydown', handleHistoryDebugHotkey, true);
-    window.addEventListener('keydown', handleTransformDebugOverlayHotkey, true);
-    window.addEventListener('keydown', handleSliceMetricsDebugHotkey, true);
-    window.addEventListener('keydown', handlePrintingMonitorDebugHotkey, true);
-    window.addEventListener('keydown', handlePrintingMonitorRtspDebugHotkey, true);
-    return () => {
-      window.removeEventListener('keydown', handleDiagnosticsHotkey, true);
-      window.removeEventListener('keydown', handleHistoryDebugHotkey, true);
-      window.removeEventListener('keydown', handleTransformDebugOverlayHotkey, true);
-      window.removeEventListener('keydown', handleSliceMetricsDebugHotkey, true);
-      window.removeEventListener('keydown', handlePrintingMonitorDebugHotkey, true);
-      window.removeEventListener('keydown', handlePrintingMonitorRtspDebugHotkey, true);
-    };
+    return unsubscribe;
   }, [printingMonitorModalOpen, printingSlicingBenchmark]);
 
   const printingMonitorDebugBundle = React.useMemo(() => {
@@ -11272,21 +11350,27 @@ export default function Home() {
     if (!editorContextMenuPos) return;
 
     const handlePointerDown = () => closeEditorContextMenu();
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeEditorContextMenu();
-    };
     const handleScrollOrResize = () => closeEditorContextMenu();
 
     window.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('keydown', handleEscape);
     window.addEventListener('resize', handleScrollOrResize);
     window.addEventListener('scroll', handleScrollOrResize, true);
 
+    let wasEscapePressed = false;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
+        closeEditorContextMenu();
+      }
+      wasEscapePressed = isEscapePressed;
+    });
+
     return () => {
       window.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('keydown', handleEscape);
       window.removeEventListener('resize', handleScrollOrResize);
       window.removeEventListener('scroll', handleScrollOrResize, true);
+      unsubscribe();
     };
   }, [editorContextMenuPos, closeEditorContextMenu]);
 
@@ -11571,10 +11655,43 @@ export default function Home() {
 
   // For non-printing workflows, avoid expensive world-triangle projection work by default.
   // Keep layer floor at 0 when support/raft geometry exists so layer-1 alignment is correct.
+  //
+  // Compute an accurate max Z from actual geometry vertices to match the slicing
+  // engine's own max-Z computation.  The legacy sceneBounds path uses
+  // Box3.applyMatrix4 which overestimates the envelope for rotated models.
+  const accurateMaxZ = React.useMemo(() => {
+    let maxZ = 0;
+    for (const model of scene.models) {
+      if (!model.visible) continue;
+      const position = model.geometry.geometry.getAttribute('position');
+      if (!position) continue;
+      const center = model.geometry.center;
+      const t = model.transform;
+      const matrix = new THREE.Matrix4().compose(
+        t.position,
+        quaternionFromGlobalEuler(t.rotation),
+        t.scale,
+      );
+      const me = matrix.elements;
+      // worldZ = me[2]*vcx + me[6]*vcy + me[10]*vcz + me[14]
+      const a = me[2], b = me[6], c = me[10], d = me[14];
+      const src = position.array as Float32Array | number[];
+      const count = position.count;
+      for (let i = 0; i < count; i++) {
+        const vx = src[i * 3] - center.x;
+        const vy = src[i * 3 + 1] - center.y;
+        const vz = src[i * 3 + 2] - center.z;
+        const worldZ = a * vx + b * vy + c * vz + d;
+        if (worldZ > maxZ) maxZ = worldZ;
+      }
+    }
+    return maxZ;
+  }, [scene.models]);
+
   const fallbackZRange = React.useMemo(() => ({
     min: hasSupportOrRaftGeometry ? 0 : (scene.sceneBounds?.min.z ?? 0),
-    max: scene.sceneBounds?.max.z ?? 100,
-  }), [hasSupportOrRaftGeometry, scene.sceneBounds]);
+    max: accurateMaxZ > 0 ? accurateMaxZ : (scene.sceneBounds?.max.z ?? 100),
+  }), [hasSupportOrRaftGeometry, scene.sceneBounds, accurateMaxZ]);
 
   const normalizeToSlicerZRange = React.useCallback((range: { min: number; max: number }) => {
     const maxZMm = Math.max(0, Number(range.max) || 0);
@@ -11783,24 +11900,14 @@ export default function Home() {
   }, [crossSectionLayerHeightMm, printingPreviewTotalLayers, printingSelectedLayer, scene.mode, slicing.heightMm]);
 
   React.useEffect(() => {
-    const isTypingTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
+    const handleLayerHotkeys = (event: CustomEvent) => {
+      const { key, altKey, ctrlKey, metaKey } = event.detail;
+      if (altKey || ctrlKey || metaKey) return;
 
-    const handleLayerHotkeys = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (event.altKey || event.ctrlKey || event.metaKey) return;
-      if (isTypingTarget(event.target)) return;
-
-      const key = event.key;
       const isPrinting = scene.mode === 'printing';
       const isUp = key === 'ArrowUp' || (isPrinting && (key === 'w' || key === 'W'));
       const isDown = key === 'ArrowDown' || (isPrinting && (key === 's' || key === 'S'));
       if (!isUp && !isDown) return;
-
-      event.preventDefault();
-      event.stopPropagation();
 
       const delta = isUp ? 1 : -1;
 
@@ -11815,9 +11922,9 @@ export default function Home() {
       slicing.setLayerIndex((previous) => previous + delta);
     };
 
-    window.addEventListener('keydown', handleLayerHotkeys, true);
+    window.addEventListener('app-hotkey-keydown', handleLayerHotkeys as EventListener);
     return () => {
-      window.removeEventListener('keydown', handleLayerHotkeys, true);
+      window.removeEventListener('app-hotkey-keydown', handleLayerHotkeys as EventListener);
     };
   }, [handlePrintingLayerChange, printingPreviewTotalLayers, scene.mode, slicing.layerIndex, slicing.numLayers, slicing.setLayerIndex]);
 
@@ -12120,6 +12227,72 @@ export default function Home() {
     geom: scene.geom,
     transform: transformMgr.transform,
     layerHeightMm: slicing.layerHeightMm
+  });
+
+  // Islands PoC — fresh, tab-agnostic hook (true world-space). Mounted in the
+  // Support tab; relocatable to Analysis with a one-line move. supportTips is
+  // injected (no src/supports coupling in the Islands module).
+  const modelRaycastRef = React.useRef<((start: THREE.Vector3, end: THREE.Vector3) => boolean) | null>(null);
+  const [supportTips, setSupportTips] = React.useState<THREE.Vector3[]>([]);
+
+  React.useEffect(() => {
+    const updateSupportTips = () => {
+      const snap = getSupportSnapshot();
+      const tips: THREE.Vector3[] = [];
+      const activeModelId = scene.activeModel?.id;
+      if (!activeModelId) {
+        setSupportTips([]);
+        return;
+      }
+
+      const addPos = (pos?: { x: number; y: number; z: number }, modelId?: string) => {
+        if (pos && modelId === activeModelId) {
+          tips.push(new THREE.Vector3(pos.x, pos.y, pos.z));
+        }
+      };
+
+      for (const t of Object.values(snap.trunks)) {
+        if (t.contactCone) addPos(t.contactCone.pos, t.modelId);
+      }
+      for (const b of Object.values(snap.branches)) {
+        if (b.contactCone) addPos(b.contactCone.pos, b.modelId);
+      }
+      for (const l of Object.values(snap.leaves)) {
+        if (l.contactCone) addPos(l.contactCone.pos, l.modelId);
+      }
+      for (const a of Object.values(snap.anchors)) {
+        if (a.contactCone) addPos(a.contactCone.pos, a.modelId);
+      }
+      for (const tw of Object.values(snap.twigs)) {
+        if (tw.contactDiskA) addPos(tw.contactDiskA.pos, tw.modelId);
+        if (tw.contactDiskB) addPos(tw.contactDiskB.pos, tw.modelId);
+      }
+      for (const st of Object.values(snap.sticks)) {
+        if (st.contactConeA) addPos(st.contactConeA.pos, st.modelId);
+        if (st.contactConeB) addPos(st.contactConeB.pos, st.modelId);
+      }
+
+      setSupportTips(prevTips => {
+        if (prevTips.length !== tips.length) return tips;
+        for (let i = 0; i < tips.length; i++) {
+          if (!prevTips[i].equals(tips[i])) return tips;
+        }
+        return prevTips;
+      });
+    };
+
+    updateSupportTips();
+    return subscribeSupportState(updateSupportTips);
+  }, [scene.activeModel?.id]);
+
+  const islandsPoc = useIslands({
+    geom: scene.geom,
+    transform: transformMgr.transform,
+    layerHeightMm: slicing.layerHeightMm,
+    supportTips,
+    plateZ: 0,
+    sourcePath: scene.activeModel?.sourcePath,
+    activeTab: scene.mode,
   });
 
   // 5. Supports
@@ -13410,9 +13583,11 @@ export default function Home() {
     const countY = Math.max(1, Math.round(arrangeArrayCountY));
     const countZ = Math.max(1, Math.round(arrangeArrayCountZ));
 
-    const gapX = Math.max(0, arrangeArrayGapX);
-    const gapY = Math.max(0, arrangeArrayGapY);
-    const gapZ = Math.max(0, arrangeArrayGapZ);
+    // Gaps may be negative (nested arrays); the steps below keep a small
+    // positive floor so the array still advances.
+    const gapX = arrangeArrayGapX;
+    const gapY = arrangeArrayGapY;
+    const gapZ = arrangeArrayGapZ;
 
     const baseDims = visibleModels.map((model) => {
       const t = modelTransformById.get(model.id) ?? model.transform;
@@ -13430,9 +13605,9 @@ export default function Home() {
     const maxDepth = Math.max(...baseDims.map((d) => d.depth));
     const maxHeight = Math.max(...baseDims.map((d) => d.height));
 
-    const stepX = maxWidth + gapX;
-    const stepY = maxDepth + gapY;
-    const stepZ = maxHeight + gapZ;
+    const stepX = Math.max(0.1, maxWidth + gapX);
+    const stepY = Math.max(0.1, maxDepth + gapY);
+    const stepZ = Math.max(0.1, maxHeight + gapZ);
 
     const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
     const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
@@ -13677,7 +13852,7 @@ export default function Home() {
     transformMgr.setTransformMode(nextMode);
   }, [suppressTransformPersistenceCycles, transformMgr.transformMode, transformMgr.setTransformMode]);
 
-  useUndoRedoHotkeys();
+  useUndoRedoHotkeys({ disabled: hollowingEditMode });
   useDeleteHotkey();
   useCameraProjectionHotkey();
   const hasCavityGeometry = scene.activeModel
@@ -13713,8 +13888,9 @@ export default function Home() {
 
     // Check for unapplied hole punches and warn the user.
     const hasUnapplied = scene.models.some((model) => {
-      const p = model.meshModifiers?.holePunches;
-      return p && p.length > 0 && !model.meshModifiers?.holePunchesBakedIntoGeometry;
+      const mm = scene.getModelMeshModifiers(model.id);
+      const p = mm?.holePunches;
+      return p && p.length > 0 && !mm?.holePunchesBakedIntoGeometry;
     });
     if (hasUnapplied && unappliedHolePunchResolveRef.current === null) {
       setShowUnappliedHolePunchModal(true);
@@ -13779,39 +13955,7 @@ export default function Home() {
     // }
   }, [scene.mode, scene.selectionHighlightMode, scene.setSelectionHighlightMode]);
 
-  React.useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
 
-    const binding = { key: supportSpotlightHoldHotkey.key, modifier: supportSpotlightHoldHotkey.modifier };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (isEditableTarget(event.target)) return;
-      if (!matchesConfiguredHotkeyDown(event, binding)) return;
-      setIsSupportSpotlightHoldActive(true);
-    };
-
-    const handleKeyUp = (event: KeyboardEvent) => {
-      if (!matchesConfiguredHotkeyUp(event, binding)) return;
-      setIsSupportSpotlightHoldActive(false);
-    };
-
-    const handleBlur = () => {
-      setIsSupportSpotlightHoldActive(false);
-    };
-
-    window.addEventListener('keydown', handleKeyDown, true);
-    window.addEventListener('keyup', handleKeyUp, true);
-    window.addEventListener('blur', handleBlur);
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown, true);
-      window.removeEventListener('keyup', handleKeyUp, true);
-      window.removeEventListener('blur', handleBlur);
-    };
-  }, [scene.mode, supportSpotlightHoldHotkey.key, supportSpotlightHoldHotkey.modifier]);
 
   const effectiveSelectionHighlightMode = React.useMemo(() => {
     if (scene.mode === 'printing') return 'none';
@@ -14615,101 +14759,108 @@ export default function Home() {
     };
   }, [isSelectAllModelsActive]);
 
-  React.useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
 
-    const handleGlobalSelectAll = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey)) return;
-      if (event.key.toLowerCase() !== 'a') return;
-      if (isEditableTarget(event.target)) return;
-      if (scene.models.length === 0) return;
-
-      // Prevent browser-level "select all text in the app" behavior and arm model select-all.
-      event.preventDefault();
-      event.stopPropagation();
-      const visibleIds = scene.models.filter((model) => model.visible).map((model) => model.id);
-      if (visibleIds.length > 0) {
-        scene.setSelectedModelIds(visibleIds);
-        scene.setActiveModelId(visibleIds[0]);
-      }
-      setIsSelectAllModelsActive(true);
-    };
-
-    window.addEventListener('keydown', handleGlobalSelectAll, true);
-    return () => {
-      window.removeEventListener('keydown', handleGlobalSelectAll, true);
-    };
-  }, [scene]);
+  const selectAllActive = useActionActive('CANVAS', 'SELECT_ALL');
+  const copyActive = useActionActive('CANVAS', 'COPY');
+  const pasteActive = useActionActive('CANVAS', 'PASTE');
+  const saveActive = useActionActive('GLOBAL', 'SAVE');
+  const saveAsActive = useActionActive('GLOBAL', 'SAVE_AS');
+  const wasSelectAllActive = React.useRef(false);
+  const wasCopyActive = React.useRef(false);
+  const wasPasteActive = React.useRef(false);
+  const wasSaveActive = React.useRef(false);
+  const wasSaveAsActive = React.useRef(false);
 
   React.useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
+    if (!selectAllActive || wasSelectAllActive.current) {
+      wasSelectAllActive.current = selectAllActive;
+      return;
+    }
+    wasSelectAllActive.current = true;
 
-    const handleClipboardHotkeys = (event: KeyboardEvent) => {
-      if (event.repeat) return;
-      if (!(event.ctrlKey || event.metaKey)) return;
-      if (event.altKey) return;
-      if (isEditableTarget(event.target)) return;
-      if (scene.mode !== 'prepare') return;
+    if (scene.models.length === 0) return;
+    const visibleIds = scene.models.filter((model) => model.visible).map((model) => model.id);
+    if (visibleIds.length > 0) {
+      scene.setSelectedModelIds(visibleIds);
+      scene.setActiveModelId(visibleIds[0]);
+    }
+    setIsSelectAllModelsActive(true);
+  }, [selectAllActive, scene, setIsSelectAllModelsActive]);
 
-      const key = event.key.toLowerCase();
-      if (key === 'c') {
-        if (scene.selectedModelIds.length === 0 && !scene.activeModelId) return;
-        event.preventDefault();
-        event.stopPropagation();
+  React.useEffect(() => {
+    if (!copyActive || wasCopyActive.current) {
+      wasCopyActive.current = copyActive;
+      return;
+    }
+    wasCopyActive.current = true;
 
-        if (scene.selectedModelIds.length > 0) {
-          scene.copySelectedModels();
-        } else if (scene.activeModelId) {
-          scene.copyModel(scene.activeModelId);
+    if (scene.mode !== 'prepare') return;
+    if (scene.selectedModelIds.length === 0 && !scene.activeModelId) return;
+    if (scene.selectedModelIds.length > 0) {
+      scene.copySelectedModels();
+    } else if (scene.activeModelId) {
+      scene.copyModel(scene.activeModelId);
+    }
+  }, [copyActive, scene]);
+
+  React.useEffect(() => {
+    if (!pasteActive || wasPasteActive.current) {
+      wasPasteActive.current = pasteActive;
+      return;
+    }
+    wasPasteActive.current = true;
+
+    if (scene.mode !== 'prepare') return;
+    if (!scene.canPasteModel) return;
+    const pastedIds = scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
+    // Paste shares geometry with the source — add its cached volume directly
+    // instead of waiting for the async resin effect loop.
+    if (pastedIds.length > 0 && printingEstimatedResinMlRef.current != null) {
+      const pastedModel = scene.models.find((m) => pastedIds.includes(m.id));
+      if (pastedModel) {
+        const geom = pastedModel.geometry.geometry;
+        const pos = geom.getAttribute('position');
+        const idx = geom.getIndex();
+        const sourceKey = String(geom.userData?.resinVolumeSourceKey ?? geom.uuid);
+        const posVer = (pos as { version?: number; data?: { version?: number } }).version
+          ?? (pos as { version?: number; data?: { version?: number } }).data?.version ?? 0;
+        const idxVer = (idx as { version?: number } | null)?.version ?? 0;
+        const cacheKey = `${sourceKey}:${posVer}:${idxVer}`;
+        const cachedMl = printingBaseResinMlCacheRef.current.get(cacheKey) ?? null;
+        if (cachedMl != null) {
+          const sx = Math.abs(pastedModel.transform.scale.x || 1);
+          const sy = Math.abs(pastedModel.transform.scale.y || 1);
+          const sz = Math.abs(pastedModel.transform.scale.z || 1);
+          const addedMl = cachedMl * sx * sy * sz;
+          const nextTotal = (printingEstimatedResinMlRef.current - supportAndRaftResinMl) + addedMl + supportAndRaftResinMl;
+          printingEstimatedResinMlRef.current = nextTotal;
+          setPrintingEstimatedResinMl(nextTotal);
         }
-        return;
       }
-
-      if (key === 'v') {
-        if (!scene.canPasteModel) return;
-        event.preventDefault();
-        event.stopPropagation();
-        scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
-      }
-    };
-
-    window.addEventListener('keydown', handleClipboardHotkeys, true);
-    return () => {
-      window.removeEventListener('keydown', handleClipboardHotkeys, true);
-    };
-  }, [arrangeSpacingMm, scene]);
+    }
+  }, [pasteActive, scene, arrangeSpacingMm, printingEstimatedResinMlRef, supportAndRaftResinMl, printingBaseResinMlCacheRef, setPrintingEstimatedResinMl]);
 
   React.useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
+    if (!saveActive || wasSaveActive.current) {
+      wasSaveActive.current = saveActive;
+      return;
+    }
+    wasSaveActive.current = true;
 
-    const handleSceneSaveHotkey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (event.repeat || event.isComposing) return;
-      if (event.altKey || event.shiftKey) return;
-      if (!(event.ctrlKey || event.metaKey)) return;
-      if (event.key.toLowerCase() !== 's') return;
-      if (isEditableTarget(event.target)) return;
-      if (scene.models.length === 0) return;
+    if (scene.models.length === 0) return;
+    void handleTopBarSaveScene();
+  }, [saveActive, scene.models.length, handleTopBarSaveScene]);
 
-      event.preventDefault();
-      event.stopPropagation();
-      void handleTopBarSaveScene();
-    };
+  React.useEffect(() => {
+    if (!saveAsActive || wasSaveAsActive.current) {
+      wasSaveAsActive.current = saveAsActive;
+      return;
+    }
+    wasSaveAsActive.current = true;
 
-    window.addEventListener('keydown', handleSceneSaveHotkey, true);
-    return () => {
-      window.removeEventListener('keydown', handleSceneSaveHotkey, true);
-    };
-  }, [handleTopBarSaveScene, scene.models.length]);
+    if (scene.models.length === 0) return;
+    handleTopBarSaveSceneAs();
+  }, [saveAsActive, scene.models.length, handleTopBarSaveSceneAs]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -14751,9 +14902,10 @@ export default function Home() {
       const countX = Math.max(1, Math.round(duplicateArrayCountX));
       const countY = Math.max(1, Math.round(duplicateArrayCountY));
       const countZ = Math.max(1, Math.round(duplicateArrayCountZ));
-      const stepX = width + Math.max(0, duplicateArrayGapX);
-      const stepY = depth + Math.max(0, duplicateArrayGapY);
-      const stepZ = height + Math.max(0, duplicateArrayGapZ);
+      // Gaps may be negative (nested arrays); floor the step so it advances.
+      const stepX = Math.max(0.1, width + duplicateArrayGapX);
+      const stepY = Math.max(0.1, depth + duplicateArrayGapY);
+      const stepZ = Math.max(0.1, height + duplicateArrayGapZ);
 
       const originOffsetX = ((countX - 1) * stepX) * 0.5;
       const originOffsetY = ((countY - 1) * stepY) * 0.5;
@@ -14772,7 +14924,8 @@ export default function Home() {
       }
     } else {
       const totalCount = Math.max(1, duplicateTotalCopies);
-      const spacing = Math.max(0, duplicateSpacingMm);
+      // Spacing may be negative (nesting); clamp so a step never collapses.
+      const spacing = Math.max(-Math.min(width, depth) + 0.1, duplicateSpacingMm);
 
       const rawDupMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
       const rawDupMaxX = rawDupMinX + scene.view3dSettings.widthMm;
@@ -15164,7 +15317,8 @@ export default function Home() {
     const sourceDims = getModelSupportAwareDimensionsMm(model, undefined, model.transform);
     const width = sourceDims.width;
     const depth = sourceDims.depth;
-    const spacing = Math.max(0, duplicateSpacingMm);
+    // Spacing may be negative (nesting); clamp so a step never collapses.
+    const spacing = Math.max(-Math.min(width, depth) + 0.1, duplicateSpacingMm);
 
     const rawFillMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
     const rawFillMaxX = rawFillMinX + scene.view3dSettings.widthMm;
@@ -15295,8 +15449,7 @@ export default function Home() {
       if (!shouldApply) return;
 
       if (hollowingState.mode === 'shell_open_face' && !isShellOpenFaceSelected) {
-        setExportErrorToast({ id: Date.now(), text: 'Pick the face to open before applying Shell mode.' });
-        setIsExportErrorToastVisible(true);
+        showOperationError('Pick the face to open before applying Shell mode.');
         return;
       }
 
@@ -15363,8 +15516,7 @@ export default function Home() {
           ? await hollowApplyFromCapturedSource(options)
           : await hollowFromGeometry(sourceGeometry, options);
         if (!result) {
-          setExportErrorToast({ id: Date.now(), text: 'Hollowing is available in DragonFruit Desktop only.' });
-          setIsExportErrorToastVisible(true);
+          showOperationError('Hollowing is available in DragonFruit Desktop only.');
           return;
         }
 
@@ -15505,8 +15657,7 @@ export default function Home() {
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        setExportErrorToast({ id: Date.now(), text: `Hollowing failed: ${message}` });
-        setIsExportErrorToastVisible(true);
+        showOperationError(`Hollowing failed: ${message}`);
       } finally {
         setIsApplyingHollowing(false);
         setIsApplyingBlockersHollowing(false);
@@ -15751,37 +15902,83 @@ export default function Home() {
   }, [holePunchPlacements, scene.activeModel?.id]);
 
   React.useEffect(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'hollowing') {
-      return;
-    }
+    let wasAPressed = false;
+    let wasCPressed = false;
+    let wasVPressed = false;
+    let wasSPressed = false;
 
-    const handleSelectAllHolePunches = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'a') return;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isCtrlOrMeta = active.has('ctrl') || active.has('meta') || active.has('control');
+      const isAPressed = active.has('a') && isCtrlOrMeta;
+      const isCPressed = active.has('c') && isCtrlOrMeta;
+      const isVPressed = active.has('v') && isCtrlOrMeta;
+      const isSPressed = active.has('s') && isCtrlOrMeta;
 
-      const target = event.target;
-      if (
-        target instanceof HTMLElement
-        && target.closest('input, textarea, select, [contenteditable="true"]')
-      ) {
-        return;
+      const isAJustPressed = isAPressed && !wasAPressed;
+      const isCJustPressed = isCPressed && !wasCPressed;
+      const isVJustPressed = isVPressed && !wasVPressed;
+      const isSJustPressed = isSPressed && !wasSPressed;
+
+      if (isAJustPressed) {
+        if (scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing') {
+          if (activeHolePunchPlacements.length > 0) {
+            const nextIds = activeHolePunchPlacements.map((placement) => placement.id);
+            setSelectedHolePunchPlacementIds(nextIds);
+            syncHolePunchPanelFromSelection(nextIds, activeHolePunchPlacements, nextIds[nextIds.length - 1] ?? null);
+            setHoveredHolePunchPlacementId(null);
+            setHolePunchHoverPlacement(null);
+          }
+        } else if (scene.mode === 'prepare') {
+          if (scene.models.length > 0) {
+            const visibleIds = scene.models.filter((model) => model.visible).map((model) => model.id);
+            if (visibleIds.length > 0) {
+              scene.setSelectedModelIds(visibleIds);
+              scene.setActiveModelId(visibleIds[0]);
+            }
+            setIsSelectAllModelsActive(true);
+          }
+        }
       }
 
-      if (activeHolePunchPlacements.length === 0) return;
+      if (isCJustPressed && !active.has('alt')) {
+        if (scene.mode === 'prepare') {
+          if (scene.selectedModelIds.length === 0 && !scene.activeModelId) return;
+          if (scene.selectedModelIds.length > 0) {
+            scene.copySelectedModels();
+          } else if (scene.activeModelId) {
+            scene.copyModel(scene.activeModelId);
+          }
+        }
+      }
 
-      event.preventDefault();
-      event.stopPropagation();
-      const nextIds = activeHolePunchPlacements.map((placement) => placement.id);
-      setSelectedHolePunchPlacementIds(nextIds);
-      syncHolePunchPanelFromSelection(nextIds, activeHolePunchPlacements, nextIds[nextIds.length - 1] ?? null);
-      setHoveredHolePunchPlacementId(null);
-      setHolePunchHoverPlacement(null);
-    };
+      if (isVJustPressed && !active.has('alt')) {
+        if (scene.mode === 'prepare' && scene.canPasteModel) {
+          scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
+        }
+      }
 
-    window.addEventListener('keydown', handleSelectAllHolePunches, true);
-    return () => {
-      window.removeEventListener('keydown', handleSelectAllHolePunches, true);
-    };
-  }, [activeHolePunchPlacements, scene.mode, syncHolePunchPanelFromSelection, transformMgr.transformMode]);
+      if (isSJustPressed && !active.has('alt') && !active.has('shift')) {
+        if (scene.models.length > 0) {
+          void handleTopBarSaveScene();
+        }
+      }
+
+      wasAPressed = isAPressed;
+      wasCPressed = isCPressed;
+      wasVPressed = isVPressed;
+      wasSPressed = isSPressed;
+    });
+
+    return unsubscribe;
+  }, [
+    scene,
+    transformMgr.transformMode,
+    activeHolePunchPlacements,
+    syncHolePunchPanelFromSelection,
+    arrangeSpacingMm,
+    handleTopBarSaveScene
+  ]);
 
   const previousRecommendedHolePunchDepthRef = React.useRef<number>(recommendedHolePunchDepthMm);
 
@@ -16009,28 +16206,33 @@ export default function Home() {
       return;
     }
 
-    const handleHollowVoxelEditHistoryHotkey = (event: KeyboardEvent) => {
-      if (isKeyboardTargetEditable(event.target)) return;
-      if (!(event.ctrlKey || event.metaKey)) return;
+    let wasZPressed = false;
+    let wasYPressed = false;
 
-      const key = event.key.toLowerCase();
-      const handled = key === 'y'
-        ? redoHollowVoxelEdit()
-        : key === 'z'
-          ? (event.shiftKey ? redoHollowVoxelEdit() : undoHollowVoxelEdit())
-          : false;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isCtrlOrMeta = active.has('ctrl') || active.has('meta') || active.has('control');
+      const isZPressed = active.has('z') && isCtrlOrMeta;
+      const isYPressed = active.has('y') && isCtrlOrMeta;
 
-      if (!handled) return;
+      const isZJustPressed = isZPressed && !wasZPressed;
+      const isYJustPressed = isYPressed && !wasYPressed;
 
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation?.();
-    };
+      if (isZJustPressed) {
+        if (active.has('shift')) {
+          redoHollowVoxelEdit();
+        } else {
+          undoHollowVoxelEdit();
+        }
+      } else if (isYJustPressed) {
+        redoHollowVoxelEdit();
+      }
 
-    window.addEventListener('keydown', handleHollowVoxelEditHistoryHotkey, true);
-    return () => {
-      window.removeEventListener('keydown', handleHollowVoxelEditHistoryHotkey, true);
-    };
+      wasZPressed = isZPressed;
+      wasYPressed = isYPressed;
+    });
+
+    return unsubscribe;
   }, [hollowingEditMode, redoHollowVoxelEdit, scene.mode, transformMgr.transformMode, undoHollowVoxelEdit]);
 
   const blockedPreviewVoxelInstanceIdSet = React.useMemo(() => {
@@ -16221,8 +16423,8 @@ export default function Home() {
     ) ? hollowPreview.geometry : null;
 
     const shouldUseActiveGeometry = Boolean(
-      activeModel.meshModifiers?.hollowing?.enabled
-      && activeModel.meshModifiers?.hollowing?.bakedIntoGeometry,
+      scene.getModelMeshModifiers(modelId)?.hollowing?.enabled
+      && scene.getModelMeshModifiers(modelId)?.hollowing?.bakedIntoGeometry,
     );
 
     const targetGeometry = previewGeometry ?? (shouldUseActiveGeometry ? activeModel.geometry.geometry : null);
@@ -16955,11 +17157,7 @@ export default function Home() {
           });
 
           if (!restoredFromSnapshot) {
-            setExportErrorToast({
-              id: Date.now(),
-              text: 'Hole punch source snapshot is missing or invalid. Re-apply cannot continue.',
-            });
-            setIsExportErrorToastVisible(true);
+            showOperationError('Hole punch source snapshot is missing or invalid. Re-apply cannot continue.');
             return;
           }
 
@@ -17060,8 +17258,7 @@ export default function Home() {
           if (ownsSourceGeometry) {
             sourceGeometry.dispose();
           }
-          setExportErrorToast({ id: Date.now(), text: 'Hole punching is available in DragonFruit Desktop only.' });
-          setIsExportErrorToastVisible(true);
+          showOperationError('Hole punching is available in DragonFruit Desktop only.');
           return;
         }
 
@@ -17070,8 +17267,7 @@ export default function Home() {
           if (ownsSourceGeometry) {
             sourceGeometry.dispose();
           }
-          setExportErrorToast({ id: Date.now(), text: 'Hole punching is available in DragonFruit Desktop only.' });
-          setIsExportErrorToastVisible(true);
+          showOperationError('Hole punching is available in DragonFruit Desktop only.');
           return;
         }
 
@@ -17128,8 +17324,7 @@ export default function Home() {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        setExportErrorToast({ id: Date.now(), text: `Hole punching failed: ${message}` });
-        setIsExportErrorToastVisible(true);
+        showOperationError(`Hole punching failed: ${message}`);
       } finally {
         setIsApplyingHolePunch(false);
       }
@@ -17491,8 +17686,7 @@ export default function Home() {
       );
       if (!staged) {
         if (notifyUnavailable) {
-          setExportErrorToast({ id: Date.now(), text: 'Hollowing preview is available in DragonFruit Desktop only.' });
-          setIsExportErrorToastVisible(true);
+          showOperationError('Hollowing preview is available in DragonFruit Desktop only.');
         }
         return;
       }
@@ -17500,8 +17694,7 @@ export default function Home() {
       const result = await hollowPreviewFromCapturedSource(options);
       if (!result) {
         if (notifyUnavailable) {
-          setExportErrorToast({ id: Date.now(), text: 'Hollowing preview is available in DragonFruit Desktop only.' });
-          setIsExportErrorToastVisible(true);
+          showOperationError('Hollowing preview is available in DragonFruit Desktop only.');
         }
         return;
       }
@@ -17551,8 +17744,7 @@ export default function Home() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (notifyUnavailable) {
-        setExportErrorToast({ id: Date.now(), text: `Hollowing preview failed: ${message}` });
-        setIsExportErrorToastVisible(true);
+        showOperationError(`Hollowing preview failed: ${message}`);
       } else {
         console.warn('[Hollowing] Debounced preview failed:', message);
       }
@@ -17625,7 +17817,7 @@ export default function Home() {
   // Restore cavity geometry from persisted data for models with baked hollowing.
   React.useEffect(() => {
     for (const model of scene.models) {
-      const hollowing = model.meshModifiers?.hollowing;
+      const hollowing = scene.getModelMeshModifiers(model.id)?.hollowing;
       if (!hollowing?.enabled || !hollowing.cavityPositionsBase64 || !hollowing.cavityPositionCount) {
         continue;
       }
@@ -18502,6 +18694,7 @@ export default function Home() {
         onLoadMeshChange={handleLoadMeshChangeWithZip}
         onImportSceneChange={handleImportSceneChangeWithZip}
         onSaveScene={() => { void handleTopBarSaveScene(); }}
+        onSaveSceneAs={() => { handleTopBarSaveSceneAs(); }}
         onOpenScene={handleTopBarOpenScene}
         onCloseProgram={handleRequestProgramClose}
         showMonitorButton={showTopbarMonitorButton}
@@ -18530,6 +18723,7 @@ export default function Home() {
               onGroupModels={handleGroupSelectedModels}
               onUngroupModels={handleUngroupSelectedModels}
               onUngroupGroup={handleUngroupFolder}
+              onSplitImportGroup={handleSplitImportGroup}
               onRenameGroup={handleRenameFolder}
               onRenameModel={handleRenameModel}
               onModelContextMenu={handleModelListContextMenu}
@@ -18597,6 +18791,8 @@ export default function Home() {
                   transformMgr.transformHook.setScale(x, y, z);
                 }}
                 onResetScale={transformMgr.transformHook.resetScale}
+                uniformScaling={uniformScaling}
+                onUniformScalingChange={setUniformScaling}
                 modelBBox={scene.geom.bbox}
                 autoLift={transformMgr.autoLift}
                 onAutoLiftChange={handleAutoLiftChange}
@@ -18831,7 +19027,8 @@ export default function Home() {
               supportsRef={supportsRef}
               captureSceneThumbnailPng={captureExportThumbnailPng}
               onExportSuccess={handleExportSuccess}
-              onExportError={handleExportError}
+              onExportError={showOperationError}
+              onExportProgress={setIsExporting}
             />
 
             <SlicingPanel
@@ -18867,6 +19064,12 @@ export default function Home() {
         ) : scene.mode === 'support' ? (
           <>
             <SupportSidebar key="support-settings" />
+            <IslandsPanel
+              key="support-islands"
+              islands={islandsPoc}
+              hasGeometry={!!scene.geom}
+              bottomClearancePx={modelStatsBottomClearancePx}
+            />
           </>
         ) : scene.mode === 'printing' ? (
           <>
@@ -19249,13 +19452,18 @@ export default function Home() {
             hideCrossSectionCap={false}
             onCameraChange={handleCameraChange}
             onCameraEnd={handleCameraEnd}
-            islandMarkers={[
-              ...(islands.overlayEnabled ? islands.islandMarkers : []),
-            ] as any}
+            islandMarkers={
+              scene.mode === 'support'
+                ? islandsPoc.islandMarkers
+                : (islands.overlayEnabled ? islands.islandMarkers : [])
+            }
             overlayBrushRadius={islands.overlayBrushRadius}
             overlayColor={islands.overlayColor}
             overlayOpacity={islands.overlayOpacity}
-            overlaySelectedIslandId={islands.selectedIslandId}
+            overlaySelectedIslandId={
+              scene.mode === 'support' ? islandsPoc.selectedMarkerId : islands.selectedIslandId
+            }
+            enableVolumeGlow={islandsPoc.enableVolumeGlow}
             ambientIntensity={scene.ambientIntensity}
             directionalIntensity={scene.directionalIntensity}
             materialRoughness={scene.materialRoughness}
@@ -19271,6 +19479,7 @@ export default function Home() {
             voxelOpacity={islands.voxelOpacity}
             transformMode={transformMgr.transformMode}
             transform={transformMgr.transform}
+            uniformScaling={uniformScaling}
             autoLift={transformMgr.autoLift}
             liftDistance={transformMgr.liftDistance}
             autoSnapEnabled={transformMgr.autoSnapEnabled}
@@ -19326,6 +19535,17 @@ export default function Home() {
               onSelectionChange: handleBlockedHollowVoxelMarqueeSelection,
             }}
             renderSceneOverlays={({ raycastActiveModelFromRay }) => {
+              // Update raycast ref for island co-visibility checks
+              modelRaycastRef.current = (start, end) => {
+                const dir = new THREE.Vector3().subVectors(end, start).normalize();
+                const ray = new THREE.Ray(start, dir);
+                const hit = raycastActiveModelFromRay(ray);
+                if (hit && hit.distance < start.distanceTo(end) - 0.5) {
+                  return false; // occluded
+                }
+                return true; // clear
+              };
+
               const previewModel = hollowPreview
                 ? scene.models.find((model) => model.id === hollowPreview.modelId) ?? null
                 : null;
@@ -19553,6 +19773,7 @@ export default function Home() {
             freezeViewportActive={isSlicingBusy && scene.mode === 'export'}
             indicatorPlaneZ={scene.mode === 'printing' ? printingCurrentHeightMm : null}
             indicatorPlaneColor={scene.selectionColor || '#ec2a77'}
+            onNewDeviceDetected={handleNewDeviceDetected}
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (
               <MeshSmoothingBrushCursor />
@@ -22926,6 +23147,28 @@ export default function Home() {
               </div>
             )}
 
+      {isExporting && (
+        <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
+          <div
+            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
+            style={{ background: 'color-mix(in srgb, var(--surface-0), black 10%)', borderColor: 'var(--border-subtle)' }}
+            role="dialog"
+            aria-modal="true"
+            aria-live="polite"
+          >
+            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Exporting…
+            </div>
+            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              <p>Writing mesh geometry and support data to file…</p>
+            </div>
+            <div className="ui-loading-track mt-3 h-2.5 w-full rounded-full" style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}>
+              <div className="ui-loading-indicator" style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }} />
+            </div>
+          </div>
+        </div>
+      )}
+
       {showArrangeBlockingOverlay && (
         <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
           <div
@@ -22952,6 +23195,50 @@ export default function Home() {
             </div>
             <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
               Processing {arrangeOverlayModelCount ?? 0} {arrangeOverlayModelCount === 1 ? 'model' : 'models'}
+            </div>
+
+            <div
+              className="ui-loading-track mt-3 h-2.5 w-full rounded-full"
+              style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
+            >
+              <div
+                className="ui-loading-indicator"
+                style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {islandsPoc.scanning && (
+        <div className="absolute inset-0 z-[121] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
+          <div
+            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
+            style={{
+              background: 'color-mix(in srgb, var(--surface-0), black 10%)',
+              borderColor: 'var(--border-subtle)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-live="polite"
+          >
+            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Analyzing Model Islands & Minima
+            </div>
+            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              <p>Slicing and analysis in progress...</p>
+              {islandsPoc.scanProgress && islandsPoc.scanProgress.total > 100 && (
+                <p>
+                  Layer {islandsPoc.scanProgress.done} of {islandsPoc.scanProgress.total}
+                </p>
+              )}
+            </div>
+
+            <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
+              Elapsed: {islandsPoc.elapsedLabel}
+            </div>
+            <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Processing 1 model
             </div>
 
             <div
@@ -23006,6 +23293,32 @@ export default function Home() {
             </div>
           </div>
         </div>
+      )}
+
+      {newDeviceToast && (
+        <ToastViewport zIndex={127} offset="1.25rem">
+          <Toast
+            tone="warning"
+            shape="rounded"
+            animated
+            visible={isNewDeviceToastVisible}
+            className="flex items-center gap-3 max-w-sm pointer-events-auto"
+          >
+            <Gamepad2 className="h-4 w-4 flex-shrink-0" />
+            <span className="flex-1 text-[12px] leading-snug">
+              New input device detected.<br />
+              <span style={{ fontWeight: 400, opacity: 0.8 }}>Go to Settings → 3D Mouse to configure or block it.</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsNewDeviceToastVisible(false)}
+              className="flex-shrink-0 rounded px-2 py-0.5 text-[11px] font-semibold"
+              style={{ background: 'color-mix(in srgb, #f59e0b, transparent 80%)', color: 'var(--text-strong)' }}
+            >
+              Dismiss
+            </button>
+          </Toast>
+        </ToastViewport>
       )}
 
       {isSaveToastVisible && (
@@ -23112,6 +23425,16 @@ export default function Home() {
           <Toast tone="error" animated visible={isExportErrorToastVisible} className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
             {exportErrorToast.text}
+          </Toast>
+        </ToastViewport>
+      )}
+
+      {sproutParentingLockHeld && (
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast tone="info" visible={true} className="flex items-center gap-2">
+            {stage === 'awaitingSproutTip'
+              ? "Leaf Fanning Active: Click model to sprout leaf"
+              : "Leaf Fanning: Click a support shaft to lock anchor knot"}
           </Toast>
         </ToastViewport>
       )}

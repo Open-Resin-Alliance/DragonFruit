@@ -26,12 +26,16 @@ type PresetSelectorProps = {
     selectedPresetIdOverride?: string | null;
     onPresetSelected?: (presetId: string) => void;
     disableGlobalPresetActivation?: boolean;
+    /** Incremented externally to trigger a save of the currently-selected
+     *  dirty preset (e.g. from the Support Studio save button). */
+    saveTrigger?: number;
 };
 
 export function PresetSelector({
     selectedPresetIdOverride,
     onPresetSelected,
     disableGlobalPresetActivation = false,
+    saveTrigger,
 }: PresetSelectorProps) {
     const settings = useSyncExternalStore(subscribeToSettings, getSettings, getSettings);
     const [presets, setPresets] = useState(() => getPresetList());
@@ -87,6 +91,24 @@ export function PresetSelector({
     const hoveredPreset = hoveredPresetId ? presets.find((preset) => preset.id === hoveredPresetId) ?? null : null;
     const previewDescription = hoveredPreset?.description ?? selectedPreset?.description ?? '';
     const selectedPresetIsDirty = isPresetDirtyForSettings(effectiveSelectedPresetId, settings);
+
+    // Keep a ref so the save-trigger effect always reads the latest values
+    // without needing them as effect dependencies.
+    const effectiveSelectedPresetIdRef = useRef(effectiveSelectedPresetId);
+    effectiveSelectedPresetIdRef.current = effectiveSelectedPresetId;
+    const settingsRef = useRef(settings);
+    settingsRef.current = settings;
+
+    // When the parent save button triggers a save, persist any dirty preset
+    // changes from within the same component scope so the dirty indicator
+    // clears reliably.
+    useEffect(() => {
+        if (saveTrigger === undefined || saveTrigger === 0) return;
+        const presetId = effectiveSelectedPresetIdRef.current;
+        if (!presetId) return;
+        if (!isPresetDirtyForSettings(presetId, settingsRef.current)) return;
+        savePreset(presetId);
+    }, [saveTrigger]);
 
     useEffect(() => {
         if (!selectedPreset) {

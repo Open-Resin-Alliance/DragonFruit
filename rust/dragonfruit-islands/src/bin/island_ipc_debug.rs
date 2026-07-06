@@ -152,6 +152,7 @@ fn main() {
         num_layers: num_layers as u32,
         min_overlap_px: params.min_overlap_px,
         overlap_neighborhood_px: params.overlap_neighborhood_px,
+        candidate_only: false,
     };
 
     println!("Running island scan...");

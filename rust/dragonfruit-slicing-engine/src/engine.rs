@@ -533,16 +533,32 @@ struct SupportMaskLayer {
 }
 
 impl SupportMaskContext {
-    fn from_job(job: &SliceJobV3) -> Option<Self> {
+    fn from_job(job: &SliceJobV3, triangles_xyz: &[f32]) -> Option<Self> {
         if job.aa_on_supports {
+            eprintln!(
+                "[SupportAA] full-mask support context disabled: aa_on_supports=true"
+            );
             return None;
         }
 
-        let total_triangles = job.triangles_xyz.len() / 9;
+        let total_triangles = triangles_xyz.len() / 9;
         let model_triangle_count = (job.model_triangle_count as usize).min(total_triangles);
         if model_triangle_count == 0 || model_triangle_count >= total_triangles {
+            eprintln!(
+                "[SupportAA] full-mask support context disabled: model_triangles={} total_triangles={}",
+                model_triangle_count, total_triangles
+            );
             return None;
         }
+
+        eprintln!(
+            "[SupportAA] full-mask support context enabled: model_triangles={} support_triangles={} total_triangles={} mode={} level={}",
+            model_triangle_count,
+            total_triangles - model_triangle_count,
+            total_triangles,
+            job.anti_aliasing_mode,
+            job.anti_aliasing_level,
+        );
 
         let mut support_job = job.clone();
         support_job.anti_aliasing_level = "Off".to_string();
@@ -552,7 +568,7 @@ impl SupportMaskContext {
         support_job.aa_on_supports = true;
         support_job.model_triangle_count = 0;
 
-        let mut triangles = parse_triangles(&support_job.triangles_xyz);
+        let mut triangles = parse_triangles(triangles_xyz);
         project_triangles_inplace(&mut triangles, &support_job);
         let layer_index = build_layer_index(
             &triangles,
@@ -1975,7 +1991,11 @@ fn rasterize_vertical_aa_streaming_v3(
     // They are recovered at the end via `encode_handle_guard.finish()`.
     // ──────────────────────────────────────────────────────────────────────────
 
-    let mut support_mask_context = SupportMaskContext::from_job(raster_job);
+    // `raster_job.triangles_xyz` is intentionally cleared above to avoid a
+    // multi-GB duplicate. Build support masking from the real external mesh
+    // buffer or classified model/support boundaries silently disappear.
+    let mut support_mask_context =
+        SupportMaskContext::from_job(raster_job, &raster_triangles_xyz);
     let model_active_layer_window = resolve_model_active_layer_window(raster_job);
 
     // Pending queue for symmetric forward-compensation blending.
@@ -3119,6 +3139,63 @@ pub fn slice_with_progress_v3(
                 }) as ProgressCallbackV3
             });
 
+            // Block-partitioned RLE path: the encoder wants per-column-window
+            // payloads (e.g. GOO V5 half-screen panels) rasterized directly.
+            if !is_3daa {
+                if let Some(blocks) = rle_enc.rle_blocks(job) {
+                    let encode_block_fn = rle_enc.parallel_encode_block_fn();
+                    let on_block = |layer: u32,
+                                    block: u32,
+                                    payload: crate::pipeline::RleBlockPayload|
+                     -> Result<(), SlicerV3Error> {
+                        match payload {
+                            crate::pipeline::RleBlockPayload::Runs(runs) => {
+                                rle_enc.consume_rle_block(layer, block, runs)
+                            }
+                            crate::pipeline::RleBlockPayload::Encoded(bytes) => {
+                                rle_enc.store_encoded_block(layer, block, bytes);
+                                Ok(())
+                            }
+                        }
+                    };
+                    let (layer_area_stats, mut perf) = slice_and_rasterize_rle_blocks_v3(
+                        job,
+                        &blocks,
+                        requires_area_stats,
+                        encode_block_fn,
+                        on_block,
+                        slicing_progress.clone(),
+                        cancel_flag,
+                    )?;
+                    rle_enc.set_area_stats(layer_area_stats);
+
+                    if let Some(cb) = on_progress.as_ref() {
+                        cb(SliceProgressUpdateV3 {
+                            done: job_total_layers,
+                            total: progress_total,
+                            phase: SliceProgressPhaseV3::Finalizing,
+                        });
+                    }
+
+                    let encode_start = std::time::Instant::now();
+                    let bytes = rle_enc.finalize_to_bytes()?;
+
+                    if let Some(cb) = on_progress.as_ref() {
+                        cb(SliceProgressUpdateV3 {
+                            done: progress_total,
+                            total: progress_total,
+                            phase: SliceProgressPhaseV3::Finalizing,
+                        });
+                    }
+
+                    perf.archive_encode_ns = encode_start.elapsed().as_nanos() as u64;
+                    perf.total_ns = total_start.elapsed().as_nanos() as u64;
+                    perf.layers = job.total_layers;
+
+                    return Ok(SliceArtifactV3 { bytes, perf });
+                }
+            }
+
             // Parallel-encode path: rasterize + encode PNG in rayon workers.
             let (_rendered_layers, layer_area_stats, mut perf) = if is_3daa {
                 // RLE-native perturbation 3DAA: raster emits grayscale RLE,
@@ -3396,6 +3473,18 @@ pub fn slice_and_rasterize_rle_v3(
         } else {
             None
         };
+    eprintln!(
+        "[SupportAA] RLE raster partition: enabled={} model_triangles={} support_triangles={} total_triangles={} aa_on_supports={} mode={} level={}",
+        support_split_model_triangle_count.is_some(),
+        support_split_model_triangle_count.unwrap_or(triangles.len()),
+        support_split_model_triangle_count
+            .map(|count| triangles.len().saturating_sub(count))
+            .unwrap_or(0),
+        triangles.len(),
+        job.aa_on_supports,
+        job.anti_aliasing_mode,
+        job.anti_aliasing_level,
+    );
     let index_start = std::time::Instant::now();
     let layer_index = build_layer_index(
         &triangles,
@@ -3479,6 +3568,325 @@ pub fn slice_and_rasterize_rle_v3(
     Ok((rendered_layers, layer_area_stats, perf))
 }
 
+/// Accumulate one block's stats into the layer total. Pixel totals/areas and
+/// extents merge exactly; component counts are summed, so an island spanning
+/// a block seam is counted once per block it touches.
+fn accumulate_block_stats(total: &mut LayerAreaStatsV3, part: &LayerAreaStatsV3) {
+    if part.total_solid_pixels == 0 {
+        return;
+    }
+    if total.total_solid_pixels == 0 {
+        *total = part.clone();
+        return;
+    }
+    total.total_solid_pixels = total.total_solid_pixels.saturating_add(part.total_solid_pixels);
+    total.total_solid_area_mm2 += part.total_solid_area_mm2;
+    total.largest_area_mm2 = total.largest_area_mm2.max(part.largest_area_mm2);
+    total.smallest_area_mm2 = total.smallest_area_mm2.min(part.smallest_area_mm2);
+    total.min_x = total.min_x.min(part.min_x);
+    total.min_y = total.min_y.min(part.min_y);
+    total.max_x = total.max_x.max(part.max_x);
+    total.max_y = total.max_y.max(part.max_y);
+    total.area_count = total.area_count.saturating_add(part.area_count);
+}
+
+/// Block-partitioned RLE raster stage: rasterizes each layer directly as the
+/// requested column-window blocks (see `crate::rle::make_rle_block`) and
+/// delivers per-(layer, block) payloads in display order — no full-width run
+/// stream is ever produced or split. Blur/SSAA post-processing runs per block
+/// with a blur-radius halo on interior edges that is cropped afterwards, so
+/// pixel values inside every block match the full-width path exactly.
+pub fn slice_and_rasterize_rle_blocks_v3(
+    job: &SliceJobV3,
+    blocks: &[crate::rle::RleBlockSpec],
+    compute_area_stats: bool,
+    encode_block_fn: Option<
+        Arc<
+            dyn Fn(u32, u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error>
+                + Send
+                + Sync,
+        >,
+    >,
+    on_block: impl FnMut(u32, u32, crate::pipeline::RleBlockPayload) -> Result<(), SlicerV3Error>,
+    on_progress: Option<ProgressCallbackV3>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<(Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
+    validate_job(job)?;
+
+    let ssaa_factor =
+        if is_vertical_aa_mode(&job.anti_aliasing_mode) || job.anti_aliasing_mode_is_blur() {
+            1usize
+        } else {
+            (job.configured_xy_aa_steps() as usize).max(1)
+        };
+    let use_raster_perturbation = is_vertical_aa_mode(&job.anti_aliasing_mode)
+        && zaa::use_raster_perturbation(job)
+        && job.effective_xy_aa_steps() > 1;
+    let blur_radius = if (job.anti_aliasing_mode_is_blur() || use_raster_perturbation)
+        && job.blur_brush_radius_px > 0
+    {
+        effective_xy_blur_radius(job.blur_brush_radius_px.max(1) as usize)
+    } else {
+        0
+    };
+    let tail_cure_lut = if blur_radius > 0 || ssaa_factor > 1 {
+        job.normalized_tail_cure_lut()
+    } else {
+        None
+    };
+
+    let raster_job_owned: Option<SliceJobV3> =
+        if ssaa_factor > 1 || (blur_radius > 0 && !use_raster_perturbation) {
+            let mut j = job.clone();
+            j.triangles_xyz = Vec::new();
+            j.anti_aliasing_level = "Off".to_string();
+            j.anti_aliasing_mode = "Coverage".to_string();
+            j.blur_brush_radius_px = 0;
+            j.minimum_aa_alpha_percent = 0.0;
+            if ssaa_factor > 1 {
+                j.source_width_px = job.source_width_px.saturating_mul(ssaa_factor as u32);
+                j.source_height_px = job.source_height_px.saturating_mul(ssaa_factor as u32);
+                j.width_px = job.width_px.saturating_mul(ssaa_factor as u32);
+                j.height_px = job.height_px.saturating_mul(ssaa_factor as u32);
+            }
+            Some(j)
+        } else {
+            None
+        };
+    let raster_job = raster_job_owned.as_ref().unwrap_or(job);
+
+    let mut triangles = parse_triangles(&job.triangles_xyz);
+    project_triangles_inplace(&mut triangles, raster_job);
+    let support_split_model_triangle_count =
+        if (ssaa_factor > 1 || blur_radius > 0) && !job.aa_on_supports {
+            let model_triangle_count = (job.model_triangle_count as usize).min(triangles.len());
+            (model_triangle_count > 0 && model_triangle_count < triangles.len())
+                .then_some(model_triangle_count)
+        } else {
+            None
+        };
+    let index_start = std::time::Instant::now();
+    let layer_index = build_layer_index(
+        &triangles,
+        raster_job.total_layers,
+        raster_job.layer_height_mm,
+        layer_index_sampling_span(raster_job),
+    );
+    let index_ns = index_start.elapsed().as_nanos() as u64;
+
+    let super_height = raster_job.source_height_px as usize;
+    let out_width = job.effective_render_width_px() as usize;
+    let out_height = job.source_height_px as usize;
+
+    // Support geometry is rasterized separately as binary when the split is
+    // active (mirrors `rasterize_layer_rle_with_support_split`).
+    let support_job: Option<SliceJobV3> = support_split_model_triangle_count.map(|_| {
+        let mut sj = raster_job.clone();
+        sj.triangles_xyz = Vec::new();
+        sj.anti_aliasing_level = "Off".to_string();
+        sj.anti_aliasing_mode = "Coverage".to_string();
+        sj.blur_brush_radius_px = 0;
+        sj.minimum_aa_alpha_percent = 100.0;
+        sj.aa_on_supports = true;
+        sj.model_triangle_count = 0;
+        sj
+    });
+
+    let pixel_area_mm2 = ((raster_job.build_width_mm as f64)
+        / (raster_job.effective_render_width_px().max(1) as f64))
+        * ((raster_job.build_depth_mm as f64) / (raster_job.source_height_px.max(1) as f64));
+
+    let triangles = &triangles;
+    let layer_index = &layer_index;
+    let raster_job_ref = raster_job;
+    let support_job_ref = support_job.as_ref();
+    let tail_cure_lut_ref = tail_cure_lut.as_ref();
+    let encode_block_fn_ref = encode_block_fn.as_ref();
+
+    let produce_layer = |layer: u32| -> Result<
+        (Vec<crate::pipeline::RleBlockPayload>, LayerAreaStatsV3),
+        SlicerV3Error,
+    > {
+        use crate::pipeline::RleBlockPayload;
+        use crate::rle::{crop_rle_columns, make_rle_block};
+
+        let layer_candidates = layer_index.candidates_for_layer(layer);
+
+        let (model_indices, support_indices): (Vec<usize>, Vec<usize>) =
+            if let Some(model_triangle_count) = support_split_model_triangle_count {
+                let mut model = Vec::with_capacity(layer_candidates.len());
+                let mut support = Vec::new();
+                for &candidate in layer_candidates {
+                    if candidate < model_triangle_count {
+                        model.push(candidate);
+                    } else {
+                        support.push(candidate);
+                    }
+                }
+                (model, support)
+            } else {
+                (layer_candidates.to_vec(), Vec::new())
+            };
+
+        let mut payloads = Vec::with_capacity(blocks.len());
+        let mut layer_stats = LayerAreaStatsV3::default();
+
+        for (block_index, block) in blocks.iter().enumerate() {
+            let out_start = (block.start_col as usize).min(out_width);
+            let out_end = out_start
+                .saturating_add(block.width as usize)
+                .min(out_width);
+            if out_end <= out_start {
+                let empty: Vec<crate::rle::RleRun> = Vec::new();
+                payloads.push(match encode_block_fn_ref {
+                    Some(f) => RleBlockPayload::Encoded(f(layer, block_index as u32, &empty)?),
+                    None => RleBlockPayload::Runs(empty),
+                });
+                continue;
+            }
+
+            // Blur reads neighbor columns: over-render interior edges by the
+            // kernel radius, post-process at the widened width, then crop the
+            // halo so the seam matches the full-width raster exactly.
+            let halo_left = blur_radius.min(out_start);
+            let halo_right = blur_radius.min(out_width - out_end);
+            let wid_start = out_start - halo_left;
+            let wid_w = (out_end + halo_right) - wid_start;
+
+            let raster_block = make_rle_block(
+                (wid_start * ssaa_factor) as u32,
+                (wid_w * ssaa_factor) as u32,
+            );
+
+            let (raster_runs, _) = crate::raster::rasterize_layer_rle_block(
+                raster_job_ref,
+                triangles,
+                &model_indices,
+                layer,
+                false,
+                raster_block,
+            );
+
+            let support_raster_runs = match (support_job_ref, support_indices.is_empty()) {
+                (Some(sj), false) => Some(
+                    crate::raster::rasterize_layer_rle_block(
+                        sj,
+                        triangles,
+                        &support_indices,
+                        layer,
+                        false,
+                        raster_block,
+                    )
+                    .0,
+                ),
+                _ => None,
+            };
+
+            // Per-block stats over the exact (halo-cropped) raster window,
+            // merged with support geometry, in absolute raster-space columns.
+            {
+                let raster_w = (wid_w * ssaa_factor) as u32;
+                let crop_l = (halo_left * ssaa_factor) as u32;
+                let crop_r = (halo_right * ssaa_factor) as u32;
+                let model_exact = if crop_l > 0 || crop_r > 0 {
+                    crop_rle_columns(&raster_runs, raster_w, crop_l, crop_r)
+                } else {
+                    raster_runs.clone()
+                };
+                let stats_runs = if let Some(support) = support_raster_runs.as_ref() {
+                    let support_exact = if crop_l > 0 || crop_r > 0 {
+                        crop_rle_columns(support, raster_w, crop_l, crop_r)
+                    } else {
+                        support.clone()
+                    };
+                    merge_rle_max(model_exact, &support_exact)
+                } else {
+                    model_exact
+                };
+                let mut stats = crate::raster::recompute_layer_stats_from_rle(
+                    &stats_runs,
+                    (out_end - out_start) * ssaa_factor,
+                    super_height,
+                    pixel_area_mm2,
+                    compute_area_stats,
+                );
+                if stats.total_solid_pixels > 0 {
+                    stats.min_x += (out_start * ssaa_factor) as i32;
+                    stats.max_x += (out_start * ssaa_factor) as i32;
+                }
+                accumulate_block_stats(&mut layer_stats, &stats);
+            }
+
+            // Post-process at the widened width (mirrors `wrapped_on_rle`).
+            let downsample_min_alpha_u8 = ssaa_downsample_min_alpha_u8(blur_radius, 0);
+            let gray_runs = if ssaa_factor > 1 {
+                downsample_binary_rle_to_gray_rle(
+                    &raster_runs,
+                    wid_w * ssaa_factor,
+                    super_height,
+                    ssaa_factor,
+                    downsample_min_alpha_u8,
+                )
+            } else {
+                raster_runs
+            };
+
+            let post_aa_runs = if blur_radius > 0 {
+                blur_gray_rle_streaming(&gray_runs, wid_w, out_height, blur_radius, 0)
+            } else {
+                gray_runs
+            };
+
+            let final_runs = if let Some(lut) = tail_cure_lut_ref {
+                remap_gray_rle_with_lut(&post_aa_runs, lut)
+            } else {
+                post_aa_runs
+            };
+
+            let final_runs = if let Some(support_raster_runs) = support_raster_runs.as_ref() {
+                let support_runs = if ssaa_factor > 1 {
+                    downsample_binary_rle_to_gray_rle(
+                        support_raster_runs,
+                        wid_w * ssaa_factor,
+                        super_height,
+                        ssaa_factor,
+                        255,
+                    )
+                } else {
+                    support_raster_runs.clone()
+                };
+                merge_rle_max(final_runs, &support_runs)
+            } else {
+                final_runs
+            };
+
+            let final_runs = if halo_left > 0 || halo_right > 0 {
+                crop_rle_columns(&final_runs, wid_w as u32, halo_left as u32, halo_right as u32)
+            } else {
+                final_runs
+            };
+
+            payloads.push(match encode_block_fn_ref {
+                Some(f) => RleBlockPayload::Encoded(f(layer, block_index as u32, &final_runs)?),
+                None => RleBlockPayload::Runs(final_runs),
+            });
+        }
+
+        Ok((payloads, layer_stats))
+    };
+
+    let (layer_area_stats, mut perf) = crate::pipeline::render_layers_rle_blocks(
+        job.total_layers,
+        produce_layer,
+        on_block,
+        on_progress,
+        cancel_flag,
+    )?;
+    perf.index_build_ns = index_ns;
+
+    Ok((layer_area_stats, perf))
+}
+
 /// Streaming perturbation-3DAA RLE pipeline.
 ///
 /// The rasterizer emits Z-perturbed grayscale RLE directly.  This function then
@@ -3516,6 +3924,16 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     } else {
         None
     };
+    eprintln!(
+        "[SupportAA] perturb-3DAA RLE partition: enabled={} model_triangles={} support_triangles={} total_triangles={} aa_on_supports={}",
+        support_split_model_triangle_count.is_some(),
+        support_split_model_triangle_count.unwrap_or(triangles.len()),
+        support_split_model_triangle_count
+            .map(|count| triangles.len().saturating_sub(count))
+            .unwrap_or(0),
+        triangles.len(),
+        job.aa_on_supports,
+    );
 
     let index_start = std::time::Instant::now();
     let layer_index = build_layer_index(
@@ -3906,6 +4324,20 @@ pub fn slice_and_rasterize_rle_encoded_v3(
         } else {
             None
         };
+    eprintln!(
+        "[SupportAA] encoded-RLE raster partition: enabled={} model_triangles={} support_triangles={} total_triangles={} aa_on_supports={} mode={} level={} blur_radius={} ssaa_factor={}",
+        support_split_model_triangle_count.is_some(),
+        support_split_model_triangle_count.unwrap_or(triangles.len()),
+        support_split_model_triangle_count
+            .map(|count| triangles.len().saturating_sub(count))
+            .unwrap_or(0),
+        triangles.len(),
+        job.aa_on_supports,
+        job.anti_aliasing_mode,
+        job.anti_aliasing_level,
+        blur_radius,
+        ssaa_factor,
+    );
     let index_start = std::time::Instant::now();
     let layer_index = build_layer_index(
         &triangles,
@@ -4261,6 +4693,63 @@ pub fn slice_with_progress_v3_to_path(
                     });
                 }) as ProgressCallbackV3
             });
+
+            // Block-partitioned RLE path (disk-streaming twin of the branch
+            // in the in-memory encode driver above).
+            if !is_3daa {
+                if let Some(blocks) = rle_enc.rle_blocks(job) {
+                    let encode_block_fn = rle_enc.parallel_encode_block_fn();
+                    let on_block = |layer: u32,
+                                    block: u32,
+                                    payload: crate::pipeline::RleBlockPayload|
+                     -> Result<(), SlicerV3Error> {
+                        match payload {
+                            crate::pipeline::RleBlockPayload::Runs(runs) => {
+                                rle_enc.consume_rle_block(layer, block, runs)
+                            }
+                            crate::pipeline::RleBlockPayload::Encoded(bytes) => {
+                                rle_enc.store_encoded_block(layer, block, bytes);
+                                Ok(())
+                            }
+                        }
+                    };
+                    let (layer_area_stats, mut perf) = slice_and_rasterize_rle_blocks_v3(
+                        job,
+                        &blocks,
+                        requires_area_stats,
+                        encode_block_fn,
+                        on_block,
+                        slicing_progress.clone(),
+                        cancel_flag,
+                    )?;
+                    rle_enc.set_area_stats(layer_area_stats);
+
+                    if let Some(cb) = on_progress.as_ref() {
+                        cb(SliceProgressUpdateV3 {
+                            done: job_total_layers,
+                            total: progress_total,
+                            phase: SliceProgressPhaseV3::Finalizing,
+                        });
+                    }
+
+                    let encode_start = std::time::Instant::now();
+                    rle_enc.finalize_to_path(output_path)?;
+
+                    if let Some(cb) = on_progress.as_ref() {
+                        cb(SliceProgressUpdateV3 {
+                            done: progress_total,
+                            total: progress_total,
+                            phase: SliceProgressPhaseV3::Finalizing,
+                        });
+                    }
+
+                    perf.archive_encode_ns = encode_start.elapsed().as_nanos() as u64;
+                    perf.total_ns = total_start.elapsed().as_nanos() as u64;
+                    perf.layers = job.total_layers;
+
+                    return Ok(perf);
+                }
+            }
 
             let (_rendered_layers, layer_area_stats, mut perf) = if is_3daa {
                 // RLE-native perturbation 3DAA: raster emits grayscale RLE,
@@ -4660,6 +5149,23 @@ mod tests {
     }
 
     #[test]
+    fn perturb_3daa_rle_keeps_classified_support_geometry_binary() {
+        let mut job = base_perturb_3daa_rle_test_job();
+        job.model_triangle_count = 12;
+
+        // Keep model geometry above layer 0 so that layer contains only the
+        // classified support half of the combined triangle stream.
+        push_box_triangles(&mut job.triangles_xyz, 0.0, 0.0, 2.0, 3.0, 20.0, 20.0);
+        push_box_triangles(&mut job.triangles_xyz, 0.0, 0.0, 0.0, 0.8, 20.0, 20.0);
+
+        let support_layer = render_perturb_3daa_rle_test_layer(&job, 0);
+        assert!(
+            support_layer.iter().all(|&px| px == 0 || px == 255),
+            "classified support geometry must bypass perturbation and post-process AA"
+        );
+    }
+
+    #[test]
     fn perturb_3daa_rle_path_applies_xy_blur_without_full_mask_pump() {
         let mut unblurred = base_perturb_3daa_rle_test_job();
         unblurred.blur_brush_radius_px = 0;
@@ -4818,7 +5324,9 @@ mod tests {
         push_box_triangles(&mut flat, 0.0, 0.0, 0.0, 0.8, 20.0, 20.0);
 
         job.triangles_xyz = flat;
-        let mut ctx = super::SupportMaskContext::from_job(&job).expect(
+        let mut context_job = job.clone();
+        context_job.triangles_xyz.clear();
+        let mut ctx = super::SupportMaskContext::from_job(&context_job, &job.triangles_xyz).expect(
             "split support metadata should enable support masking when support AA is disabled",
         );
         let support_layer = ctx

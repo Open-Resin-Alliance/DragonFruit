@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod astar;
+mod mesh_minima;
 mod mesh_repair;
 mod network;
 mod sdf;
@@ -1400,6 +1401,49 @@ async fn slice_solid_native_to_temp_path(
             metadata_json: meta.metadata_json,
         };
 
+        eprintln!(
+            "[SupportAA] native job decoded: model_triangles={} support_triangles={} total_triangles={} aa_on_supports={} mode={} level={} mesh_encoding={}",
+            job.model_triangle_count,
+            (job.triangles_xyz.len() / 9).saturating_sub(job.model_triangle_count as usize),
+            job.triangles_xyz.len() / 9,
+            job.aa_on_supports,
+            job.anti_aliasing_mode,
+            job.anti_aliasing_level,
+            meta.mesh_encoding.as_deref().unwrap_or("raw_f32"),
+        );
+        let fingerprint = |start: usize, end: usize| {
+            let mut hash = 0x811c9dc5u32;
+            for value in &job.triangles_xyz[start.min(job.triangles_xyz.len())
+                ..end.min(job.triangles_xyz.len())]
+            {
+                hash ^= value.to_bits();
+                hash = hash.wrapping_mul(0x01000193);
+            }
+            format!("{hash:08x}")
+        };
+        let multiset_fingerprint = |start: usize, end: usize| {
+            let mut xor = 0u32;
+            let mut sum = 0u32;
+            for value in &job.triangles_xyz[start.min(job.triangles_xyz.len())
+                ..end.min(job.triangles_xyz.len())]
+            {
+                let bits = value.to_bits();
+                xor ^= bits;
+                sum = sum.wrapping_add(bits);
+            }
+            format!("{xor:08x}:{sum:08x}")
+        };
+        let model_float_end = (job.model_triangle_count as usize)
+            .saturating_mul(9)
+            .min(job.triangles_xyz.len());
+        eprintln!(
+            "[SupportAA] native geometry fingerprints: model={} support={} model_multiset={} support_multiset={}",
+            fingerprint(0, model_float_end),
+            fingerprint(model_float_end, job.triangles_xyz.len()),
+            multiset_fingerprint(0, model_float_end),
+            multiset_fingerprint(model_float_end, job.triangles_xyz.len()),
+        );
+
         let progress_cb = make_throttled_progress_cb(win);
         let requested_output_path = requested_output_path.clone();
 
@@ -1641,36 +1685,18 @@ async fn run_island_scan_native(
         );
         log::debug!("[island-scan-native] debug dump: {}", dump_dir.display());
 
-        // Phase A: Rasterize all layers using shared module (same code as bench)
-        let total_layers;
-        let grid_width;
-        let grid_height;
-        let origin_x;
-        let origin_z;
-        let w;
-        let h;
+        // Phase A: Calculate grid dimensions and bounds
+        let origin_x = params.bbox_min_x;
+        let origin_z = -params.bbox_max_y; // mask Y = -world Y
+        let grid_width = ((params.bbox_max_x - params.bbox_min_x) / params.px_mm).ceil().max(1.0) as i32;
+        let grid_height = ((params.bbox_max_y - params.bbox_min_y) / params.px_mm).ceil().max(1.0) as i32;
+        let model_height = params.bbox_max_z - params.bbox_min_z;
+        let num_layers = (model_height / params.layer_height_mm).ceil().max(0.0) as usize;
 
-        let t_raster = std::time::Instant::now();
-        let (masks, gw, gh, num_layers, ox, oz) = slicer_pool().install(|| {
-            dragonfruit_islands::rasterize::rasterize_for_island_scan(
-                &triangles,
-                params.bbox_min_x, params.bbox_max_x,
-                params.bbox_min_y, params.bbox_max_y,
-                params.bbox_min_z, params.bbox_max_z,
-                params.px_mm,
-                params.layer_height_mm,
-            )
-        });
-        grid_width = gw;
-        grid_height = gh;
-        origin_x = ox;
-        origin_z = oz;
-        w = grid_width as usize;
-        h = grid_height as usize;
-        total_layers = num_layers as u32;
-        let rasterize_ms = t_raster.elapsed().as_secs_f64() * 1000.0;
+        let w = grid_width as usize;
+        let h = grid_height as usize;
 
-        // Phase B: Island scan pipeline (sequential tracking — progress per layer)
+        // Phase B: Island scan pipeline (sequential tracking using streaming)
         let t_scan = std::time::Instant::now();
         let connectivity = if params.connectivity == 8 {
             dragonfruit_islands::model::Connectivity::Eight
@@ -1694,33 +1720,45 @@ async fn run_island_scan_native(
             num_layers: num_layers as u32,
             min_overlap_px: params.min_overlap_px,
             overlap_neighborhood_px: params.overlap_neighborhood_px,
+            candidate_only: false,
         };
 
         let win_scan = win.clone();
         let scan_result = slicer_pool().install(|| {
-            dragonfruit_islands::pipeline::run_island_scan(
+            dragonfruit_islands::stream::run_island_scan_streaming(
                 &job,
-                &masks,
+                &triangles,
+                params.bbox_min_z,
+                true, // store_labels = true for Volume Analysis
                 Some(&move |done: u32, total: u32| {
-                    // Map pipeline progress (0..total) to layer count (0..total_layers)
-                    // — same convention as TS ScanOrchestrator onProgress(done, numLayers)
-                    let layer = (done as u64 * total_layers as u64 / total.max(1) as u64) as u32;
                     let _ = win_scan.emit("islandscan://progress", SliceProgressPayload {
-                        done: layer.min(total_layers),
-                        total: total_layers,
+                        done,
+                        total,
                         phase: "Scanning".to_string(),
                     });
                 }),
             )
         });
         let scan_ms = t_scan.elapsed().as_secs_f64() * 1000.0;
-        let total_ms = rasterize_ms + scan_ms;
+        let rasterize_ms = 0.0;
+        let total_ms = scan_ms;
 
-        let total_solid_px: u64 = masks.iter().map(|m| m.pixel_count()).sum();
+        let total_solid_px: u64 = scan_result
+            .island_labels_per_layer
+            .iter()
+            .map(|labels| {
+                labels
+                    .rows
+                    .iter()
+                    .map(|row| row.iter().map(|run| run.length as u64).sum::<u64>())
+                    .sum::<u64>()
+            })
+            .sum();
+
         log::info!(
-            "[island-scan-native] grid={}x{} layers={} solid_px={} islands={} raster={:.0}ms scan={:.0}ms",
+            "[island-scan-native] grid={}x{} layers={} solid_px={} islands={} scan={:.0}ms",
             grid_width, grid_height, num_layers, total_solid_px,
-            scan_result.islands.len(), rasterize_ms, scan_ms,
+            scan_result.islands.len(), scan_ms,
         );
 
         // Phase C: Build frontend-compatible result
@@ -2906,7 +2944,32 @@ async fn discover_uvtools_path(candidates: Vec<String>) -> Result<Option<String>
     Ok(None)
 }
 
+/// Open a URL in the default system browser (cross-platform).
 #[tauri::command]
+async fn open_external_url(url: String) -> Result<(), String> {
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        return Err("URL is empty".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("cmd")
+        .args(["/c", "start", &url])
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open")
+        .arg(&url)
+        .spawn();
+    #[cfg(target_os = "linux")]
+    let result = std::process::Command::new("xdg-open")
+        .arg(&url)
+        .spawn();
+
+    result.map_err(|e| format!("Failed to open URL in browser: {e}"))?;
+    Ok(())
+}
+
+        #[tauri::command]
 async fn launch_external_process(exe_path: String, file_arg: String) -> Result<(), String> {
     let exe_path = exe_path.trim().to_string();
     let file_arg = file_arg.trim().to_string();
@@ -3264,6 +3327,10 @@ fn main() {
             slice_solid_native_to_temp_path,
             cancel_slicing,
             run_island_scan_native,
+            mesh_minima::scan_mesh_minima,
+            mesh_minima::scan_mesh_minima_from_path,
+            mesh_minima::scan_voxel_islands_from_path,
+            mesh_minima::scan_islands_from_path,
             export_mesh_file,
             save_print_file,
             save_print_file_from_path,
@@ -3295,6 +3362,7 @@ fn main() {
             scene_autosave_read_manifest,
             scene_autosave_read_voxl_bytes,
             reveal_in_file_manager,
+            open_external_url,
             launch_external_process,
             discover_uvtools_path,
             set_log_level_pref,
@@ -3324,6 +3392,7 @@ fn main() {
             mesh_repair::mesh_punch_from_captured_source,
             mesh_repair::mesh_punch_read_positions,
             mesh_repair::mesh_repair_read_positions,
+            mesh_repair::load_stl_file,
             sdf::compute_sdf_from_staged,
             sdf::compute_heightmap_from_staged,
             sdf::invalidate_sdf_cache,

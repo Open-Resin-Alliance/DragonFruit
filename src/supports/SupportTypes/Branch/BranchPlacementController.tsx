@@ -36,7 +36,6 @@ import { generateUuid } from '@/utils/uuid';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
-import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { isSupportTargetHoverCategory } from '../../interaction/shared/hover/supportHoverResolver';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
 import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
@@ -251,70 +250,33 @@ export function BranchPlacementController() {
         }
     }, [isActive, stage]);
 
-    // Fallback: pointer events inside the canvas may not reach window listeners.
-    // If Alt is released but keyup is missed, pointer events still report modifier state.
+    // Consolidated keyup listener using centralized app-hotkey-keyup custom event
     useEffect(() => {
-        const el = gl.domElement;
-        const modifierResolvable = canResolveSupportPlacementBindingFromModifierState(branchFamilyBinding);
+        const handleKeyUp = (e: CustomEvent) => {
+            const { key } = e.detail;
+            const releasedKey = (key ?? '').trim().toLowerCase();
+            const normalizedBindingKey = (branchFamilyBinding.key ?? '').trim().toLowerCase();
+            
+            const isAlt = releasedKey === 'alt' || releasedKey === 'control' || releasedKey === 'shift' || releasedKey === 'meta';
+            const primaryReleased = normalizedBindingKey === 'alt'
+                ? releasedKey === 'alt'
+                : releasedKey === normalizedBindingKey;
 
-        const checkAlt = (e: PointerEvent) => {
-            if (!modifierResolvable) return;
-            if (isSupportPlacementBindingSatisfiedByModifierState(branchFamilyBinding, getSupportPlacementModifierState(e))) return;
-
-            const snapshot = branchPlacementStore.getSnapshot();
-            if (snapshot.altActive || snapshot.stage === 'awaitingBase') {
-                branchPlacementStore.setAltActive(false);
-                branchPlacementStore.setPreviewData(null);
-                branchPlacementStore.setSnapTarget(null);
-                branchPlacementStore.reset();
-                resetSnapping();
+            if (primaryReleased || (isAlt && releasedKey === normalizedBindingKey)) {
+                const snapshot = branchPlacementStore.getSnapshot();
+                if (snapshot.altActive || snapshot.stage === 'awaitingBase') {
+                    branchPlacementStore.setAltActive(false);
+                    branchPlacementStore.setPreviewData(null);
+                    branchPlacementStore.setSnapTarget(null);
+                    branchPlacementStore.setHoverPosition(null);
+                    branchPlacementStore.reset();
+                    resetSnapping();
+                }
             }
         };
 
-        const keyUp = (e: KeyboardEvent) => {
-            if (!matchesConfiguredHotkeyUp(e, branchFamilyBinding)) return;
-
-            const snapshot = branchPlacementStore.getSnapshot();
-            if (snapshot.altActive || snapshot.stage === 'awaitingBase') {
-                branchPlacementStore.setAltActive(false);
-                branchPlacementStore.setPreviewData(null);
-                branchPlacementStore.setSnapTarget(null);
-                branchPlacementStore.setHoverPosition(null);
-                branchPlacementStore.reset();
-                resetSnapping();
-            }
-        };
-
-        el.addEventListener('pointermove', checkAlt, true);
-        el.addEventListener('pointerdown', checkAlt, true);
-        el.addEventListener('pointerup', checkAlt, true);
-        el.addEventListener('keyup', keyUp, true);
-        return () => {
-            el.removeEventListener('pointermove', checkAlt, true);
-            el.removeEventListener('pointerdown', checkAlt, true);
-            el.removeEventListener('pointerup', checkAlt, true);
-            el.removeEventListener('keyup', keyUp, true);
-        };
-    }, [gl, branchFamilyBinding, resetSnapping]);
-
-    // Fallback: some environments can miss Alt keyup while hovering interactive canvas content.
-    // Ensure we cancel immediately on any observed Alt release.
-    useEffect(() => {
-        const handleKeyUp = (e: KeyboardEvent) => {
-            if (!matchesConfiguredHotkeyUp(e, branchFamilyBinding)) return;
-
-            const snapshot = branchPlacementStore.getSnapshot();
-            if (snapshot.altActive || snapshot.stage === 'awaitingBase') {
-                branchPlacementStore.setAltActive(false);
-                branchPlacementStore.setPreviewData(null);
-                branchPlacementStore.setSnapTarget(null);
-                branchPlacementStore.reset();
-                resetSnapping();
-            }
-        };
-
-        window.addEventListener('keyup', handleKeyUp, true);
-        return () => window.removeEventListener('keyup', handleKeyUp, true);
+        window.addEventListener('app-hotkey-keyup', handleKeyUp as EventListener);
+        return () => window.removeEventListener('app-hotkey-keyup', handleKeyUp as EventListener);
     }, [branchFamilyBinding, resetSnapping]);
 
     useEffect(() => {
@@ -745,6 +707,7 @@ export function BranchPlacementController() {
         if (!isActive || stage !== 'awaitingBase') return;
 
         const handleClick = (e: MouseEvent) => {
+            if (e.target !== gl.domElement) return;
             if (shouldSuppressContactDiskHudPlacementCommit()) {
                 e.stopPropagation();
                 e.preventDefault();
@@ -869,7 +832,7 @@ export function BranchPlacementController() {
 
         window.addEventListener('click', handleClick, true);
         return () => window.removeEventListener('click', handleClick, true);
-    }, [isActive, stage, tipPosition, tipNormal, modelId, placementSurface, resetSnapping, resolveTipMesh]);
+    }, [isActive, stage, tipPosition, tipNormal, modelId, placementSurface, resetSnapping, resolveTipMesh, gl]);
 
     // Reset snapping when deactivated
     useEffect(() => {

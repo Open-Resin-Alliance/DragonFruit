@@ -1,9 +1,9 @@
 import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { loadMeshGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { loadMeshGeometry, load3mfGeometryMergedWithSplitData, processGeometry, type GeometryWithBounds, type ProcessGeometryOptions } from '@/hooks/useStlGeometry';
 import type { MeshHealthReport, MeshAnalysisJson } from '@/utils/meshRepair';
-import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
+import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { isVoxlBinaryV2, parseVoxlBinaryV2, parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
 import { getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
@@ -38,6 +38,7 @@ import {
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
+import { splitClassifiedSupportGeometry } from '@/features/scene/splitClassifiedSupports';
 
 type PersistedMeshAppearance = {
   v: 1;
@@ -142,11 +143,73 @@ function cloneLoadedModel(model: LoadedModel): LoadedModel {
   return {
     ...model,
     transform: cloneTransform(model.transform),
-    meshModifiers: model.meshModifiers ? clonePlainObject(model.meshModifiers) : undefined,
+    // meshModifiers are stored externally in meshModifierStoreRef — never on the model object.
+    meshModifiers: undefined,
   };
 }
 
+/**
+ * Lightweight shallow clone — avoids JSON round-trip through MB-scale
+ * base64 strings (cavityPositionsBase64, holePunchSourcePositionsBase64)
+ * that LYS imports carry in meshModifiers.
+ *
+ * NOTE: Since meshModifiers are now stored externally in
+ * meshModifierStoreRef and stripped from model objects, this function is
+ * only used during import to sanitize the payload before storing it in
+ * the external store.
+ */
+function cloneMeshModifiersShallow(modifiers: ModelMeshModifiers): ModelMeshModifiers {
+  return {
+    ...modifiers,
+    hollowing: modifiers.hollowing ? { ...modifiers.hollowing } : undefined,
+    holePunches: modifiers.holePunches ? modifiers.holePunches.map((p) => ({ ...p })) : undefined,
+    holePunchAppliedPlacements: modifiers.holePunchAppliedPlacements
+      ? modifiers.holePunchAppliedPlacements.map((p) => ({ ...p }))
+      : undefined,
+  };
+}
+
+// ── External Mesh Modifier Store ─────────────────────────────────────────
+//
+// Model mesh modifiers (especially the MB-scale cavityPositionsBase64 /
+// sourcePositionsBase64 from LYS imports) are kept in this module-level Map
+// instead of on model objects. This prevents React's state reconciliation
+// from churning on large payloads during selection, copy, paste, and
+// duplicate operations.
+const meshModifierStoreRef: { current: Map<string, ModelMeshModifiers> } = {
+  current: new Map(),
+};
+
+function storeModelMeshModifiers(modelId: string, modifiers: ModelMeshModifiers | undefined | null): void {
+  if (modifiers) {
+    meshModifierStoreRef.current.set(modelId, modifiers);
+  } else {
+    meshModifierStoreRef.current.delete(modelId);
+  }
+}
+
+function getStoredMeshModifiers(modelId: string): ModelMeshModifiers | undefined {
+  return meshModifierStoreRef.current.get(modelId);
+}
+
+function deleteStoredMeshModifiers(modelId: string): void {
+  meshModifierStoreRef.current.delete(modelId);
+}
+
+function schedulePostPaint(callback: () => void): void {
+  if (typeof window === 'undefined') {
+    setTimeout(callback, 0);
+    return;
+  }
+  window.setTimeout(callback, 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+
 function clonePlainObject<T>(value: T): T {
+  if (typeof structuredClone === 'function') {
+    return structuredClone(value) as T;
+  }
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
@@ -760,12 +823,18 @@ export interface LoadedModel {
   groupId?: string;
   groupName?: string;
   fileUrl: string;
+  /** Original on-disk mesh retained when `geometry` is a reduced native preview. */
+  sourcePath?: string | null;
   fileSizeBytes?: number;
   geometry: GeometryWithBounds;
   transform: ModelTransform;
   visible: boolean;
   color: string;
   polygonCount: number;
+  /** Pre-processed individual body geometries for multi-body 3MF imports.
+   *  When set, "Split to Bodies" replaces this single model with separate
+   *  models for each entry — instant, no reprocessing needed. */
+  splitBodies?: GeometryWithBounds[];
   meshModifiers?: ModelMeshModifiers;
   ignoreAutoLift?: boolean;
   manualZMoveOverride?: boolean;
@@ -796,6 +865,7 @@ import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/c
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 import { beginKickstandStoreBatch, endKickstandStoreBatch } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getImportDefaultsRaftPatch, getSavedImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
+import { readNativeFileSize } from '@/utils/pluginNetworkBridge';
 
 type ImportProgressState = {
   active: boolean;
@@ -1775,7 +1845,7 @@ export function useSceneCollectionManager() {
   const trackRecentOpenedFiles = useCallback((
     files: File[],
     kind: RecentOpenedFileKind,
-    options?: { sourcePaths?: Array<string | null | undefined> },
+    options?: { sourcePaths?: Array<string | null | undefined>; fileSizes?: Array<number | undefined> },
   ) => {
     if (files.length === 0) return;
 
@@ -1788,18 +1858,19 @@ export function useSceneCollectionManager() {
         const name = file.name?.trim();
         if (!name) return;
 
-        const sourcePath = kind === 'scene'
-          ? (typeof options?.sourcePaths?.[index] === 'string' && options.sourcePaths[index]!.trim().length > 0
-              ? options.sourcePaths[index]!.trim()
-              : undefined)
-          : undefined;
+        const sourcePath = (typeof options?.sourcePaths?.[index] === 'string' && options.sourcePaths[index]!.trim().length > 0
+          ? options.sourcePaths[index]!.trim()
+          : undefined);
 
-        const sizeBytes = Number.isFinite(file.size) ? file.size : undefined;
+        // Use the resolved on-disk file size (for path-backed files whose
+        // File.size is 0) when available, falling back to the File API size.
+        const sizeBytes = options?.fileSizes?.[index] ?? (Number.isFinite(file.size) && file.size > 0 ? file.size : undefined);
 
         // When a concrete sourcePath is known, use it as the primary dedup key,
         // ignoring sizeBytes. This prevents duplicates when Ctrl+S re-saves the
-        // file with an updated thumbnail (changing its size).
-        const matchBySourcePath = kind === 'scene' && sourcePath != null;
+        // file with an updated thumbnail (changing its size), and ensures mesh
+        // files backed by a disk path can be re-opened via the Rust sideload.
+        const matchBySourcePath = sourcePath != null;
 
         const isMatchingEntry = (entry: RecentOpenedFileEntry): boolean => {
           if (entry.kind !== kind || entry.name !== name) return false;
@@ -1858,10 +1929,15 @@ export function useSceneCollectionManager() {
     });
   }, []);
 
-  // Active model derived state
-  const activeModel = useMemo(() =>
-    models.find(m => m.id === activeModelId) || null
-    , [models, activeModelId]);
+  // Active model derived state — meshModifiers are hydrated from the
+  // external store so model objects never carry the heavy base64 payloads.
+  const activeModel = useMemo(() => {
+    const model = models.find(m => m.id === activeModelId) || null;
+    if (!model) return null;
+    const storedModifiers = getStoredMeshModifiers(model.id);
+    if (!storedModifiers) return model;
+    return { ...model, meshModifiers: storedModifiers };
+  }, [models, activeModelId]);
 
   useEffect(() => {
     const modelIdSet = new Set(models.map((m) => m.id));
@@ -1913,7 +1989,24 @@ export function useSceneCollectionManager() {
 
     await waitForUiYield();
 
-    trackRecentOpenedFiles(files, 'mesh');
+    // Collect on-disk file paths so recent-file entries can re-open via the
+    // Rust sideload (which reads directly from disk) instead of restoring from
+    // the empty IndexedDB blob created by createPathBackedStlFile. Also resolve
+    // the real file size for path-backed files (file.size is 0 for those).
+    const meshSourcePaths: Array<string | undefined> = [];
+    const meshFileSizes: Array<number | undefined> = [];
+    for (const f of files) {
+      const fp = (f as File & { filePath?: string }).filePath;
+      meshSourcePaths.push(fp);
+      if (fp && f.size === 0) {
+        // Path-backed STL — read the actual file size from disk.
+        const realSize = await readNativeFileSize(fp).catch(() => null);
+        meshFileSizes.push(realSize ?? undefined);
+      } else {
+        meshFileSizes.push(f.size > 0 ? f.size : undefined);
+      }
+    }
+    trackRecentOpenedFiles(files, 'mesh', { sourcePaths: meshSourcePaths, fileSizes: meshFileSizes });
 
     // Read auto-lift settings from storage (mirroring useTransformManager logic)
     let autoLift = false;
@@ -1952,11 +2045,16 @@ export function useSceneCollectionManager() {
           progress: null,
         });
 
+        console.log(`[SceneCollection] Loading ${file.name}... (${(file.size / 1_000_000).toFixed(0)} MB)`);
+
         try {
           console.log(`[SceneCollection] Loading ${file.name}...`);
-          const geom = await loadMeshGeometry(url, file.name, {
+
+          // Shared loading options for all mesh types
+          const loadOptions = {
             nativeProcessingMode: getSavedImportDefaultsSettings().autoRepair ? 'auto' : 'none',
-            onNativeProcessingStage: (stage) => {
+            filePath: (file as File & { filePath?: string }).filePath,
+            onNativeProcessingStage: (stage: string) => {
               if (stage === 'repairing') {
                 setImportProgress({
                   active: true,
@@ -1995,7 +2093,7 @@ export function useSceneCollectionManager() {
                 });
               }
             },
-            onConfirmHeavyRepair: async (analysis) => {
+            onConfirmHeavyRepair: async (analysis: MeshAnalysisJson) => {
               const choice = await requestMeshRepairConfirmation({ fileName: file.name, analysis });
               if (choice === 'cancel_import') {
                 throw new Error('MESH_IMPORT_CANCELLED_BY_USER');
@@ -2013,93 +2111,100 @@ export function useSceneCollectionManager() {
               }
               return choice === 'repair';
             },
-          });
+          } satisfies ProcessGeometryOptions;
 
-          // Keep mesh color metadata only; avoid eager vertex color buffer allocation.
+          // Determine if this is a 3MF file for multi-body import
+          const is3mf = file.name.toLowerCase().endsWith('.3mf');
+
           const color = preferredMeshColor;
 
-          // Calculate initial transform with auto-lift
-          // By default, loaded geometry is centered at 0,0,0 but bottom might be < 0 or > 0 depending on normalization.
-          // loadStlGeometry normalizes: center X/Z at 0, set bottom Y (mapped to Z here?) to 0?
-          // Wait, loadStlGeometry: geometry.translate(-preCenter.x, -preBBox.min.y, -preCenter.z);
-          // This puts the bottom at Y=0.
-          // When rendered, we use Y-up or Z-up? SceneCanvas uses Z-up logic in some places, but Three.js is Y-up.
-          // StlMesh rotates geometry? No.
-          // Let's assume standard orientation: we want bottom at Z=0 (platform) or Z=liftDistance.
-          // Since loadStlGeometry normalizes bottom to Y=0, and we usually rotate meshes -90X or similar...
-          // Actually, `loadStlGeometry` normalizes it such that "bottom" is at Y=0.
-          // In `SceneCanvas` / `StlMesh`, we render it directly.
-          // If the model is oriented Z-up (common for 3D printing), `loadStlGeometry` might have put it on its side if it used Y for height.
-          // Let's check `loadStlGeometry` normalization: `geometry.translate(-preCenter.x, -preBBox.min.y, -preCenter.z);`
-          // This zeroes the Y minimum.
+          if (is3mf) {
+            // Use the merged+split loader: returns a single merged geometry
+            // (preserving body positions) and pre-processed individual bodies
+            // for instant "Split to Bodies".
+            const { merged, splitBodies } = await load3mfGeometryMergedWithSplitData(url, loadOptions);
 
-          // The `computeLowestZ` util takes a matrix.
-          // Default transform is identity.
-          // If we assume the model is upright after load (or we don't rotate it yet), the lowest point is 0.
+            const bbox = merged.bbox;
+            const center = merged.center;
+            const heightOffset = center.z - bbox.min.z;
+            const initialZ = autoLift ? heightOffset + liftDistance : heightOffset;
 
-          // However, `useTransformManager` uses `computeLowestZ` to find the world Z bottom.
-          // If we want to lift it, we set Z position.
+            const model: LoadedModel = {
+              id: generateId(),
+              name: file.name,
+              fileUrl: url,
+              fileSizeBytes: file.size,
+              sourcePath: (file as File & { filePath?: string }).filePath,
+              geometry: merged,
+              splitBodies: splitBodies.length > 1 ? splitBodies : undefined,
+              transform: {
+                position: new THREE.Vector3(defaultImportCenterXY.x, defaultImportCenterXY.y, initialZ),
+                rotation: new THREE.Euler(0, 0, 0),
+                scale: new THREE.Vector3(1, 1, 1),
+              },
+              visible: true,
+              color,
+              polygonCount: merged.nativePreview?.originalTriangleCount
+                ?? merged.geometry.getAttribute('position').count / 3,
+            };
 
-          // Let's calculate the default Z position.
-          // If the geometry is already normalized to sit at 0, then:
-          // platformZ = 0.
-          // liftZ = liftDistance.
+            const assignedCenter = findFreeSpotCentersForModels([...stagedNewModels, model], 5).at(-1);
+            if (assignedCenter) {
+              model.transform.position.set(assignedCenter.x, assignedCenter.y, model.transform.position.z);
+            }
 
-          // But wait, `StlMesh` applies `centerOffset` to the geometry: 
-          // `position={new THREE.Vector3(-centerOffset.x, -centerOffset.y, -centerOffset.z)}`
-          // `centerOffset` is `bbox.getCenter()`.
-          // So the mesh is centered at (0,0,0) inside the group.
-          // The group is at `transform.position`.
-          // So if we want the bottom of the mesh to be at `targetZ`, we need to know the distance from center to bottom.
-          // halfHeight = (max.z - min.z) / 2.
-          // targetGroupZ = targetZ + halfHeight.
+            stagedNewModels.push(model);
+            if (!firstLoadedModelId) firstLoadedModelId = model.id;
+            setModels((prev) => [...prev, model]);
 
-          // Wait, `useTransformManager` uses `computeLowestZ`.
-          // Let's stick to the logic that `useTransformManager` uses, but applied initially.
-          // Actually, `useTransformManager` logic:
-          // `const heightOffset = center.z - bbox.min.z;`
-          // `const finalZ = autoLift ? heightOffset + liftDistance : heightOffset;`
+            if (merged.meshDefects?.nativeRepairReport) {
+              repairReports.push({
+                id: model.id,
+                modelName: file.name,
+                report: merged.meshDefects.nativeRepairReport,
+              });
+            }
+          } else {
+            const geom = await loadMeshGeometry(url, file.name, loadOptions);
+            const bbox = geom.bbox;
+            const center = geom.center;
+            const heightOffset = center.z - bbox.min.z;
+            const initialZ = autoLift ? heightOffset + liftDistance : heightOffset;
 
-          // So we replicate that logic.
-          const bbox = geom.bbox;
-          const center = geom.center;
-          const heightOffset = center.z - bbox.min.z;
-          const initialZ = autoLift ? heightOffset + liftDistance : heightOffset;
+            const model: LoadedModel = {
+              id: generateId(),
+              name: file.name,
+              fileUrl: url,
+              fileSizeBytes: file.size,
+              sourcePath: (file as File & { filePath?: string }).filePath,
+              geometry: geom,
+              transform: {
+                position: new THREE.Vector3(defaultImportCenterXY.x, defaultImportCenterXY.y, initialZ),
+                rotation: new THREE.Euler(0, 0, 0),
+                scale: new THREE.Vector3(1, 1, 1),
+              },
+              visible: true,
+              color,
+              polygonCount: geom.nativePreview?.originalTriangleCount
+                ?? geom.geometry.getAttribute('position').count / 3,
+            };
 
-          const model: LoadedModel = {
-            id: generateId(),
-            name: file.name,
-            fileUrl: url,
-            fileSizeBytes: file.size,
-            geometry: geom,
-            transform: {
-              position: new THREE.Vector3(defaultImportCenterXY.x, defaultImportCenterXY.y, initialZ),
-              rotation: new THREE.Euler(0, 0, 0),
-              scale: new THREE.Vector3(1, 1, 1)
-            },
-            visible: true,
-            color,
-            polygonCount: geom.geometry.getAttribute('position').count / 3
-          };
+            const assignedCenter = findFreeSpotCentersForModels([...stagedNewModels, model], 5).at(-1);
+            if (assignedCenter) {
+              model.transform.position.set(assignedCenter.x, assignedCenter.y, model.transform.position.z);
+            }
 
-          const assignedCenter = findFreeSpotCentersForModels([...stagedNewModels, model], 5).at(-1);
-          if (assignedCenter) {
-            model.transform.position.set(assignedCenter.x, assignedCenter.y, model.transform.position.z);
-          }
+            stagedNewModels.push(model);
+            if (!firstLoadedModelId) firstLoadedModelId = model.id;
+            setModels((prev) => [...prev, model]);
 
-          stagedNewModels.push(model);
-          if (!firstLoadedModelId) {
-            firstLoadedModelId = model.id;
-          }
-
-          setModels((prev) => [...prev, model]);
-
-          if (geom.meshDefects?.nativeRepairReport) {
-            repairReports.push({
-              id: model.id,
-              modelName: file.name,
-              report: geom.meshDefects.nativeRepairReport,
-            });
+            if (geom.meshDefects?.nativeRepairReport) {
+              repairReports.push({
+                id: model.id,
+                modelName: file.name,
+                report: geom.meshDefects.nativeRepairReport,
+              });
+            }
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -2376,10 +2481,29 @@ export function useSceneCollectionManager() {
     // the geometry has changed (e.g. after hole punch / hollowing).  Compute it
     // only if the old geometry had one (i.e. the user has edge lines enabled),
     // and skip during deferred post-processing to avoid blocking the UI.
+    // Skip for very large meshes — EdgesGeometry uses `for...in` over a hash map
+    // of unique edges and V8 throws "Too many properties to enumerate" beyond ~2M entries.
     const hadEdgeGeometry = !!target.geometry.edgeGeometry;
-    const nextEdgeGeometry = hadEdgeGeometry && !options?.deferPostProcessing
-      ? new THREE.EdgesGeometry(nextBufferGeometry, 30)
-      : target.geometry.edgeGeometry;
+    let nextEdgeGeometry: THREE.EdgesGeometry | undefined;
+    if (hadEdgeGeometry && !options?.deferPostProcessing) {
+      const triCount = (nextBufferGeometry.getIndex()?.count ?? nextBufferGeometry.getAttribute('position')?.count ?? 0) / 3;
+      if (triCount < 800_000) {
+        try {
+          nextEdgeGeometry = new THREE.EdgesGeometry(nextBufferGeometry, 30);
+        } catch (edgeError) {
+          console.warn(
+            '[SceneCollection] Edge geometry recompute failed for large mesh',
+            edgeError,
+          );
+        }
+      } else {
+        console.warn(
+          `[SceneCollection] Skipping edge geometry recompute for large mesh (${Math.round(triCount).toLocaleString()} triangles).`,
+        );
+      }
+    } else {
+      nextEdgeGeometry = target.geometry.edgeGeometry;
+    }
 
     const nextGeometry: GeometryWithBounds = {
       geometry: nextBufferGeometry,
@@ -2471,9 +2595,13 @@ export function useSceneCollectionManager() {
   }, []);
 
   const setModelMeshModifiers = useCallback((id: string, meshModifiers: ModelMeshModifiers | undefined) => {
+    // Store externally — model objects never carry meshModifiers directly.
+    storeModelMeshModifiers(id, meshModifiers);
+    // Still trigger a shallow React update so consumers that derive from
+    // the store can re-render.
     setModels(prev => prev.map((model) => (
       model.id === id
-        ? { ...model, meshModifiers }
+        ? { ...model }
         : model
     )));
   }, []);
@@ -2556,6 +2684,199 @@ export function useSceneCollectionManager() {
         : model
     )));
   }, []);
+
+  /** Splits a multi-body 3MF model into independent models using the
+   *  pre-processed `splitBodies` geometries. Instant — no reprocessing. */
+  const splitImportGroup = useCallback((modelId: string) => {
+    const source = modelsRef.current.find((m) => m.id === modelId);
+    if (!source?.splitBodies || source.splitBodies.length < 2) return;
+
+    const newModels: LoadedModel[] = source.splitBodies.map((bodyGeom, i) => ({
+      id: generateId(),
+      name: `${source.name.replace(/\.3mf$/i, '')} (${i + 1})`,
+      fileUrl: source.fileUrl,
+      fileSizeBytes: source.fileSizeBytes,
+      sourcePath: source.sourcePath,
+      geometry: bodyGeom,
+      transform: {
+        position: source.transform.position.clone(),
+        rotation: source.transform.rotation.clone(),
+        scale: source.transform.scale.clone(),
+      },
+      visible: source.visible,
+      color: source.color,
+      polygonCount: bodyGeom.nativePreview?.originalTriangleCount
+        ?? bodyGeom.geometry.getAttribute('position').count / 3,
+    }));
+
+    // Remove the merged source, add individual models
+    setModels((prev) => [
+      ...prev.filter((m) => m.id !== modelId),
+      ...newModels,
+    ]);
+
+    // Select all new bodies
+    const newIds = newModels.map((m) => m.id);
+    setActiveModelId(newIds[0]);
+    setSelectedModelIds(newIds);
+  }, []);
+
+  /** Splits a model that has a classified model/support triangle split
+   *  (from the native repair engine) into two independent models:
+   *  one for the model body and one for the support geometry.
+   *  Requires `model_triangle_count` in the native repair report. */
+  const splitSupports = useCallback(async (modelId: string) => {
+    setImportProgress({
+      active: true,
+      type: 'mesh',
+      label: 'Splitting Supports…',
+      detail: 'Separating model and support geometry…',
+      progress: null,
+    });
+    await waitForUiYield();
+
+    try {
+    const source = modelsRef.current.find((m) => m.id === modelId);
+    if (!source) return;
+
+    const split = splitClassifiedSupportGeometry(source, { interactive: true });
+    if (!split) return;
+    const {
+      modelGeometry: modelGeom,
+      supportGeometry: supportGeom,
+      modelPosition,
+      supportPosition,
+      modelTriangleCount: modelTriCount,
+      supportTriangleCount: supportTriCount,
+      totalTriangleCount: totalTris,
+    } = split;
+
+    setImportProgress((p) => ({ ...p, detail: 'Finalizing…' }));
+    await waitForUiYield();
+
+    // Tag the support geometry so the renderer uses orange hover/select tints
+    // (the `likely_support_geometry` flag drives tint color in SceneCanvas).
+    supportGeom.meshDefects = {
+      hasDefects: false,
+      repairedFloats: 0,
+      totalVertices: supportTriCount * 3,
+      nativeRepairReport: {
+        version: 1,
+        source_path: null,
+        pre: {
+          triangle_count: supportTriCount,
+          vertex_count: supportTriCount * 3,
+          non_manifold_edges: 0,
+          non_manifold_vertices: 0,
+          boundary_edges: 0,
+          boundary_loops: 0,
+          inconsistent_edges: 0,
+          degenerate_triangles: 0,
+          duplicate_triangles: 0,
+          component_count: 0,
+          self_intersections: 0,
+          signed_volume: 0,
+          is_watertight: false,
+          timings_ms: { topology_ms: 0, self_intersections_ms: 0, components_ms: 0, total_ms: 0 },
+        },
+        post: {
+          triangle_count: supportTriCount,
+          vertex_count: supportTriCount * 3,
+          non_manifold_edges: 0,
+          non_manifold_vertices: 0,
+          boundary_edges: 0,
+          boundary_loops: 0,
+          inconsistent_edges: 0,
+          degenerate_triangles: 0,
+          duplicate_triangles: 0,
+          component_count: 0,
+          self_intersections: 0,
+          signed_volume: 0,
+          is_watertight: false,
+          timings_ms: { topology_ms: 0, self_intersections_ms: 0, components_ms: 0, total_ms: 0 },
+        },
+        steps: [],
+        likely_support_geometry: true,
+        residual_issues: [],
+        fully_repaired: true,
+        total_ms: 0,
+      },
+    };
+
+    const currentActiveModelId = activeModelIdRef.current;
+    const currentSelectedModelIds = selectedModelIdsRef.current;
+
+    const before = captureSceneSnapshot(
+      modelsRef.current,
+      currentActiveModelId,
+      currentSelectedModelIds,
+      { includeSupportState: true },
+    );
+
+    const baseName = source.name.replace(/\.(stl|obj|3mf)$/i, '');
+    const modelModel: LoadedModel = {
+      id: generateId(),
+      name: `${baseName} (Model)`,
+      fileUrl: source.fileUrl,
+      fileSizeBytes: source.fileSizeBytes ? Math.round(source.fileSizeBytes * (modelTriCount / totalTris)) : undefined,
+      // The split geometry no longer matches the original file on disk, so
+      // clear sourcePath to prevent downstream consumers (e.g. island scanner)
+      // from sideloading stale data from the original file.
+      sourcePath: null,
+      geometry: modelGeom,
+      transform: {
+        position: modelPosition,
+        rotation: source.transform.rotation.clone(),
+        scale: source.transform.scale.clone(),
+      },
+      visible: source.visible,
+      color: source.color,
+      polygonCount: modelTriCount,
+      ignoreAutoLift: source.ignoreAutoLift,
+      manualZMoveOverride: source.manualZMoveOverride,
+    };
+
+    const supportModel: LoadedModel = {
+      id: generateId(),
+      name: `${baseName} (Supports)`,
+      fileUrl: source.fileUrl,
+      fileSizeBytes: source.fileSizeBytes ? Math.round(source.fileSizeBytes * (supportTriCount / totalTris)) : undefined,
+      // The split geometry no longer matches the original file on disk.
+      sourcePath: null,
+      geometry: supportGeom,
+      transform: {
+        position: supportPosition,
+        rotation: source.transform.rotation.clone(),
+        scale: source.transform.scale.clone(),
+      },
+      visible: source.visible,
+      color: source.color,
+      polygonCount: supportTriCount,
+      ignoreAutoLift: source.ignoreAutoLift,
+      manualZMoveOverride: source.manualZMoveOverride,
+    };
+
+    const nextModels = [
+      ...modelsRef.current.filter((m) => m.id !== modelId),
+      modelModel,
+      supportModel,
+    ];
+
+    setModels(nextModels);
+    setActiveModelId(modelModel.id);
+    setSelectedModelIds([modelModel.id, supportModel.id]);
+
+    const after = captureSceneSnapshot(
+      nextModels,
+      modelModel.id,
+      [modelModel.id, supportModel.id],
+      { includeSupportState: true },
+    );
+    pushSceneSnapshotHistory(before, after, `Split Supports from ${source.name}`);
+    } finally {
+      setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
+    }
+  }, [pushSceneSnapshotHistory, setImportProgress, waitForUiYield]);
 
   const renameGroup = useCallback((groupId: string, nextName: string) => {
     const trimmed = nextName.trim();
@@ -2661,6 +2982,9 @@ export function useSceneCollectionManager() {
     setModels(nextModels);
     setActiveModelId(nextActiveModelId);
     setSelectedModelIds(nextSelectedModelIds);
+
+    // Clean up external mesh modifier store
+    ids.forEach((id) => deleteStoredMeshModifiers(id));
 
     // Clean up associated supports before capturing the "after" snapshot so undo/redo remains atomic.
     const supportState = getSnapshot();
@@ -2773,7 +3097,7 @@ export function useSceneCollectionManager() {
         },
         color: source.color,
         polygonCount: source.polygonCount,
-        meshModifiers: source.meshModifiers ? clonePlainObject(source.meshModifiers) : undefined,
+        meshModifiers: undefined,
         supportClipboard,
       },
     ]);
@@ -2802,7 +3126,7 @@ export function useSceneCollectionManager() {
         },
         color: source.color,
         polygonCount: source.polygonCount,
-        meshModifiers: source.meshModifiers ? clonePlainObject(source.meshModifiers) : undefined,
+        meshModifiers: undefined,
         supportClipboard,
       };
     }));
@@ -2820,7 +3144,11 @@ export function useSceneCollectionManager() {
   const pasteModel = useCallback(() => {
     if (modelClipboard.length === 0) return null;
 
-    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds, { includeSupportState: true });
+    const beforeModels = models;
+    const beforeActiveModelId = activeModelId;
+    const beforeSelectedModelIds = selectedModelIds;
+    const supportStateBefore = getSnapshot();
+    const kickstandStateBefore = getKickstandSnapshot();
 
     const first = modelClipboard[0];
 
@@ -2841,7 +3169,7 @@ export function useSceneCollectionManager() {
       visible: true,
       color: first.color,
       polygonCount: first.polygonCount,
-      meshModifiers: first.meshModifiers ? clonePlainObject(first.meshModifiers) : undefined,
+      meshModifiers: undefined,
     };
 
     const nextModels = [...models, pastedModel];
@@ -2849,16 +3177,30 @@ export function useSceneCollectionManager() {
     setActiveModelId(id);
     setSelectedModelIds([id]);
 
-    pasteModelSupportsFromClipboard(
-      first.supportClipboard,
-      id,
-      first.transform,
-      pastedModel.transform,
-      { recordHistory: false },
-    );
+    schedulePostPaint(() => {
+      beginSupportStateBatch();
+      beginKickstandStoreBatch();
+      try {
+        pasteModelSupportsFromClipboard(
+          first.supportClipboard,
+          id,
+          first.transform,
+          pastedModel.transform,
+          { recordHistory: false },
+        );
+      } finally {
+        endKickstandStoreBatch();
+        endSupportStateBatch();
+      }
 
-    const after = captureSceneSnapshot(nextModels, id, [id], { includeSupportState: true });
-    pushSceneSnapshotHistory(before, after, `Paste Model ${first.name}`);
+      const before = captureSceneSnapshot(beforeModels, beforeActiveModelId, beforeSelectedModelIds, {
+        includeSupportState: true,
+        supportStateOverride: supportStateBefore,
+        kickstandStateOverride: kickstandStateBefore,
+      });
+      const after = captureSceneSnapshot(nextModels, id, [id], { includeSupportState: true });
+      pushSceneSnapshotHistory(before, after, `Paste Model ${first.name}`);
+    });
 
     return id;
   }, [activeModelId, cloneGeometryWithBounds, generateId, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds]);
@@ -2866,7 +3208,11 @@ export function useSceneCollectionManager() {
   const pasteCopiedModelsAutoArrange = useCallback((spacingMm = 5) => {
     if (modelClipboard.length === 0) return [] as string[];
 
-    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds, { includeSupportState: true });
+    const beforeModels = models;
+    const beforeActiveModelId = activeModelId;
+    const beforeSelectedModelIds = selectedModelIds;
+    const supportStateBefore = getSnapshot();
+    const kickstandStateBefore = getKickstandSnapshot();
 
     const entries = modelClipboard;
 
@@ -3215,38 +3561,45 @@ export function useSceneCollectionManager() {
         visible: true,
         color: entry.color,
         polygonCount: entry.polygonCount,
-        meshModifiers: entry.meshModifiers ? clonePlainObject(entry.meshModifiers) : undefined,
+        meshModifiers: undefined,
       };
     });
 
     const nextModels = [...models, ...pastedModels];
     setModels(nextModels);
 
-    beginSupportStateBatch();
-    beginKickstandStoreBatch();
-    try {
-      pastedModels.forEach((pastedModel, index) => {
-        const sourceEntry = entries[index];
-        if (!sourceEntry) return;
-        pasteModelSupportsFromClipboard(
-          sourceEntry.supportClipboard,
-          pastedModel.id,
-          sourceEntry.transform,
-          pastedModel.transform,
-          { recordHistory: false },
-        );
-      });
-    } finally {
-      endKickstandStoreBatch();
-      endSupportStateBatch();
-    }
-
     if (createdIds.length > 0) {
       setActiveModelId(createdIds[0]);
       setSelectedModelIds(createdIds);
 
-      const after = captureSceneSnapshot(nextModels, createdIds[0], createdIds, { includeSupportState: true });
-      pushSceneSnapshotHistory(before, after, createdIds.length === 1 ? 'Paste Model' : `Paste ${createdIds.length} Models`);
+      schedulePostPaint(() => {
+        beginSupportStateBatch();
+        beginKickstandStoreBatch();
+        try {
+          pastedModels.forEach((pastedModel, index) => {
+            const sourceEntry = entries[index];
+            if (!sourceEntry) return;
+            pasteModelSupportsFromClipboard(
+              sourceEntry.supportClipboard,
+              pastedModel.id,
+              sourceEntry.transform,
+              pastedModel.transform,
+              { recordHistory: false },
+            );
+          });
+        } finally {
+          endKickstandStoreBatch();
+          endSupportStateBatch();
+        }
+
+        const before = captureSceneSnapshot(beforeModels, beforeActiveModelId, beforeSelectedModelIds, {
+          includeSupportState: true,
+          supportStateOverride: supportStateBefore,
+          kickstandStateOverride: kickstandStateBefore,
+        });
+        const after = captureSceneSnapshot(nextModels, createdIds[0], createdIds, { includeSupportState: true });
+        pushSceneSnapshotHistory(before, after, createdIds.length === 1 ? 'Paste Model' : `Paste ${createdIds.length} Models`);
+      });
     }
 
     return createdIds;
@@ -3276,7 +3629,8 @@ export function useSceneCollectionManager() {
         name: `${source.name} Copy ${index + 1}`,
         groupId: resolvedGroupId,
         groupName: resolvedGroupName,
-        fileUrl: '',
+        fileUrl: source.fileUrl,
+        sourcePath: source.sourcePath,
         fileSizeBytes: source.fileSizeBytes,
         geometry,
         transform: {
@@ -3287,7 +3641,7 @@ export function useSceneCollectionManager() {
         visible: source.visible,
         color: source.color,
         polygonCount: source.polygonCount,
-        meshModifiers: source.meshModifiers ? clonePlainObject(source.meshModifiers) : undefined,
+        meshModifiers: undefined,
       };
     });
 
@@ -3558,9 +3912,14 @@ export function useSceneCollectionManager() {
           color: '#a3a3a3',
           polygonCount: processed.geometry.getAttribute('position').count / 3,
           ignoreAutoLift: true,
-          meshModifiers: meshModifiers ? clonePlainObject(meshModifiers) : undefined,
+          meshModifiers: undefined,
           manualZMoveOverride: true,
         };
+
+        // Store meshModifiers externally so model objects stay lightweight
+        if (meshModifiers) {
+          storeModelMeshModifiers(model.id, cloneMeshModifiersShallow(meshModifiers));
+        }
 
         newModels.push(model);
         supportEntries.push({ model, sourceTransform, supportData });
@@ -3678,6 +4037,15 @@ export function useSceneCollectionManager() {
       const importedModels: LoadedModel[] = [];
       let skippedModels = 0;
 
+      // Identical-geometry dedup: a scene with N copies of one mesh (e.g. a
+      // Fill-Plate bed) stores N identical payloads, and decode + SHA-256 +
+      // native repair per copy dominates load time. Build each UNIQUE mesh
+      // once (keyed by its content SHA) and share the result for duplicates
+      // via the existing cloneGeometryWithBounds({ shared: true }) — the same
+      // path duplicate/paste already use.
+      const builtGeometryByHash = new Map<string, GeometryWithBounds>();
+      let dedupHits = 0;
+
       for (let i = 0; i < document.models.length; i += 1) {
         const model = document.models[i];
         const meshRef = model.mesh;
@@ -3718,22 +4086,41 @@ export function useSceneCollectionManager() {
         try {
           const bytes = meshDataBytes;
 
-          if (typeof meshRef.sha256 === 'string' && meshRef.sha256.trim().length > 0) {
-            const expected = meshRef.sha256.trim().toLowerCase();
-            const actual = await sha256Hex(bytes);
-            if (actual !== expected) {
-              throw new Error('VOXL integrity check failed (SHA-256 mismatch).');
+          // Dedup key: the file's own SHA when present, else the content hash
+          // (also the integrity value). Compute once; reused as the cache key.
+          const declaredSha =
+            typeof meshRef.sha256 === 'string' && meshRef.sha256.trim().length > 0
+              ? meshRef.sha256.trim().toLowerCase()
+              : undefined;
+          const contentHash = declaredSha ?? (await sha256Hex(bytes));
+
+          const cached = builtGeometryByHash.get(contentHash);
+          let geometry: GeometryWithBounds;
+          if (cached) {
+            // Identical mesh already built — clone, skipping decode + native
+            // repair entirely (the expensive part). Integrity was verified on
+            // the first occurrence.
+            dedupHits += 1;
+            console.log(
+              `[SceneCollection] Geometry with hash ${contentHash} already processed — cloning it.`,
+            );
+            geometry = cloneGeometryWithBounds(cached, { shared: true });
+          } else {
+            if (declaredSha) {
+              const actual = await sha256Hex(bytes);
+              if (actual !== declaredSha) {
+                throw new Error('VOXL integrity check failed (SHA-256 mismatch).');
+              }
             }
-          }
 
-          const embeddedName = meshRef.fileName?.trim() || `${model.name || 'model'}.stl`;
-          const mimeType = meshRef.mimeType?.trim() || 'model/stl';
-          // Create a clean copy with explicit ArrayBuffer for Blob compatibility
-          const blobData = new Uint8Array(bytes);
-          const blob = new Blob([blobData], { type: mimeType });
-          url = URL.createObjectURL(blob);
+            const embeddedName = meshRef.fileName?.trim() || `${model.name || 'model'}.stl`;
+            const mimeType = meshRef.mimeType?.trim() || 'model/stl';
+            // Create a clean copy with explicit ArrayBuffer for Blob compatibility
+            const blobData = new Uint8Array(bytes);
+            const blob = new Blob([blobData], { type: mimeType });
+            url = URL.createObjectURL(blob);
 
-          const geometry = await loadMeshGeometry(url, embeddedName, {
+            geometry = await loadMeshGeometry(url, embeddedName, {
             nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
             onNativeProcessingStage: (stage) => {
               if (stage === 'repairing') {
@@ -3768,7 +4155,10 @@ export function useSceneCollectionManager() {
                 });
               }
             },
-          });
+            });
+            // Cache the freshly-built mesh so identical copies clone it.
+            builtGeometryByHash.set(contentHash, geometry);
+          }
 
           let resolvedId = model.id;
           if (!resolvedId || existingIds.has(resolvedId)) {
@@ -3794,10 +4184,15 @@ export function useSceneCollectionManager() {
             visible: model.visible,
             color,
             polygonCount,
-            meshModifiers: model.meshModifiers ? clonePlainObject(model.meshModifiers) : undefined,
+            meshModifiers: undefined,
             ignoreAutoLift: true,
             manualZMoveOverride: true,
           });
+
+          // Store meshModifiers externally so model objects stay lightweight
+          if (model.meshModifiers) {
+            storeModelMeshModifiers(resolvedId, cloneMeshModifiersShallow(model.meshModifiers));
+          }
         } catch (error) {
           console.error(`[SceneCollection] Failed importing embedded VOXL mesh for model "${model.name}"`, error);
           skippedModels += 1;
@@ -3806,6 +4201,13 @@ export function useSceneCollectionManager() {
             URL.revokeObjectURL(url);
           }
         }
+      }
+
+      if (dedupHits > 0) {
+        console.log(
+          `[SceneCollection] VOXL load: ${builtGeometryByHash.size} unique mesh(es) built, ` +
+          `${dedupHits} duplicate(s) reused (skipped decode + native repair).`,
+        );
       }
 
       const sourceTransformsByModelId = new Map<string, ModelTransform>();
@@ -3915,7 +4317,7 @@ export function useSceneCollectionManager() {
         });
       }
     }
-  }, [emitSceneImportReport, findFreeSpotCentersForModels, generateId, isModelFootprintInsidePlate, requestSceneImportPlacementChoice, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
+  }, [cloneGeometryWithBounds, emitSceneImportReport, findFreeSpotCentersForModels, generateId, isModelFootprintInsidePlate, requestSceneImportPlacementChoice, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
 
   const importSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     const extension = getSceneExtension(file.name);
@@ -4008,9 +4410,33 @@ export function useSceneCollectionManager() {
     const entry = recentOpenedFiles.find((item) => item.id === entryId);
     if (!entry) return false;
 
+    // If this is a mesh with a known on-disk path, skip IndexedDB entirely and
+    // create a path-backed file so the Rust sideload reads from disk directly.
+    // IndexedDB blobs for these files were stored empty (0 bytes) because
+    // createPathBackedStlFile builds the File object with an empty blob.
+    if (entry.kind === 'mesh' && entry.sourcePath) {
+      const pathFile = new File([], entry.name, {
+        type: 'application/octet-stream',
+        lastModified: Date.now(),
+      });
+      (pathFile as File & { filePath?: string }).filePath = entry.sourcePath;
+      await loadFiles([pathFile]);
+      return true;
+    }
+
     const file = await readRecentOpenedFileBlob(entry);
     if (!file) {
       console.warn('[SceneCollection] Unable to restore recent file from local cache.');
+      return false;
+    }
+
+    // Recovered file is empty and there is no disk path to fall back to — the
+    // entry is broken (e.g. created before sourcePath was tracked for meshes).
+    if (entry.kind === 'mesh' && file.size === 0) {
+      console.warn(
+        '[SceneCollection] Recent mesh file blob is empty and no on-disk path is available. ' +
+        'The file may need to be re-imported from the original location.',
+      );
       return false;
     }
 
@@ -4343,10 +4769,13 @@ export function useSceneCollectionManager() {
     setModelManualZMoveOverride,
     setModelVisibility,
     setModelMeshModifiers,
+    getModelMeshModifiers: useCallback((id: string) => getStoredMeshModifiers(id), []),
     renameModel,
     groupModels,
     ungroupModels,
     ungroupGroup,
+    splitImportGroup,
+    splitSupports,
     renameGroup,
     selectGroup,
     deleteModels,

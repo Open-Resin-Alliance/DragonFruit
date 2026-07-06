@@ -75,9 +75,10 @@ test('buildTrunkDataFromPlacement preserves a solver-authored offset socket in t
     );
 
     assert.deepEqual(built.route.socketPos, { x: 2, y: 0, z: 10 });
-    assert.equal(built.trunk.contactCone.pos.x, 0);
-    assert.equal(built.trunk.contactCone.pos.y, 0);
-    assert.equal(built.trunk.contactCone.normal.x > 0, true);
+    assert.ok(built.trunk.contactCone);
+    assert.equal(built.trunk.contactCone!.pos.x, 0);
+    assert.equal(built.trunk.contactCone!.pos.y, 0);
+    assert.equal(built.trunk.contactCone!.normal.x > 0, true);
 });
 
     test('buildTrunkDataFromPlacement normalizes routed joints into a strictly rising base-to-socket chain', () => {

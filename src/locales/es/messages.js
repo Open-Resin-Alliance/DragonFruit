@@ -1,1 +1,0 @@
-/*eslint-disable*/module.exports={messages:JSON.parse("{\"1LOqzE\":[\"Reparar\"],\"HzVv6g\":[\"Pegar\"],\"V8JmyJ\":[\"Alternar curva\"],\"bnWKFr\":[\"Menú contextual del editor\"],\"cCd8Bs\":[\"Cortar\"],\"cnGeoo\":[\"Eliminar\"],\"gO04dm\":[\"Añadir unión\"],\"he3ygx\":[\"Copiar\"],\"qnIA1S\":[\"Soportes\"],\"uBAxNB\":[\"Editor\"]}")};

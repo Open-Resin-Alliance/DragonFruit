@@ -260,8 +260,19 @@ fn rasterize_layer_rle_with_support_split(
         rasterize_layer_rle(job, triangles, &model_layer_indices, layer, false).0
     };
 
+    // Support geometry must be binary before it is held aside from the model
+    // AA post-process. This matters for perturbation 3DAA, whose rasterizer
+    // itself emits grayscale coverage before the later XY/Z blur stages.
+    let mut support_job = job.clone();
+    support_job.anti_aliasing_level = "Off".to_string();
+    support_job.anti_aliasing_mode = "Coverage".to_string();
+    support_job.blur_brush_radius_px = 0;
+    support_job.minimum_aa_alpha_percent = 100.0;
+    support_job.aa_on_supports = true;
+    support_job.model_triangle_count = 0;
+
     let (support_runs, support_stats) = rasterize_layer_rle(
-        job,
+        &support_job,
         triangles,
         &support_layer_indices,
         layer,
@@ -1058,4 +1069,135 @@ pub fn render_layers_rle_encoded(
         area_stats,
         perf,
     ))
+}
+
+/// One delivered payload for a (layer, block) pair on the block-partitioned
+/// RLE path: either window-relative runs, or bytes pre-encoded inside a
+/// parallel worker by `RleStreamEncoder::parallel_encode_block_fn`.
+pub enum RleBlockPayload {
+    Runs(Vec<RleRun>),
+    Encoded(Vec<u8>),
+}
+
+/// Parallel scaffold for the block-partitioned RLE path.
+///
+/// `produce_layer` runs inside rayon workers and returns every block payload
+/// for one layer (in `rle_blocks()` order) plus that layer's merged stats.
+/// Payloads are drained in display order: all blocks of layer N before any
+/// block of layer N+1.
+pub fn render_layers_rle_blocks(
+    total_layers: u32,
+    produce_layer: impl Fn(u32) -> Result<(Vec<RleBlockPayload>, LayerAreaStatsV3), SlicerV3Error>
+        + Sync,
+    mut on_block: impl FnMut(u32, u32, RleBlockPayload) -> Result<(), SlicerV3Error>,
+    on_progress: Option<ProgressCallbackV3>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<(Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
+    let render_wall_start = std::time::Instant::now();
+    let max_concurrent = choose_max_concurrent();
+    let buffer = (max_concurrent * 4).clamp(4, 64);
+
+    let raster_ns = AtomicU64::new(0);
+    let progress = AtomicU32::new(0);
+
+    let (tx, rx) = std::sync::mpsc::sync_channel::<
+        Result<(u32, Vec<RleBlockPayload>, LayerAreaStatsV3), SlicerV3Error>,
+    >(buffer);
+
+    let mut pipeline_error: Result<(), SlicerV3Error> = Ok(());
+    let mut area_stats = vec![LayerAreaStatsV3::default(); total_layers as usize];
+
+    rayon::in_place_scope(|s| {
+        s.spawn(|_| {
+            let produce = |tx: std::sync::mpsc::SyncSender<
+                Result<(u32, Vec<RleBlockPayload>, LayerAreaStatsV3), SlicerV3Error>,
+            >| {
+                (0..total_layers)
+                    .into_par_iter()
+                    .for_each_with(tx, |tx, layer| {
+                        let result = (|| {
+                            if cancel_flag
+                                .map(|flag| flag.load(Ordering::Relaxed))
+                                .unwrap_or(false)
+                            {
+                                return Err(SlicerV3Error::Cancelled);
+                            }
+                            let raster_start = std::time::Instant::now();
+                            let (payloads, stats) = produce_layer(layer)?;
+                            raster_ns.fetch_add(
+                                raster_start.elapsed().as_nanos() as u64,
+                                Ordering::Relaxed,
+                            );
+                            Ok((layer, payloads, stats))
+                        })();
+                        let _ = tx.send(result);
+                    });
+            };
+
+            match ThreadPoolBuilder::new().num_threads(max_concurrent).build() {
+                Ok(pool) => pool.install(|| produce(tx)),
+                Err(_) => produce(tx),
+            }
+        });
+
+        let mut pending: Vec<Option<(Vec<RleBlockPayload>, LayerAreaStatsV3)>> =
+            Vec::with_capacity(total_layers as usize);
+        pending.resize_with(total_layers as usize, || None);
+        let mut next = 0u32;
+
+        for msg in &rx {
+            if pipeline_error.is_err() {
+                continue;
+            }
+            match msg {
+                Err(e) => pipeline_error = Err(e),
+                Ok((layer, payloads, stats)) => {
+                    pending[layer as usize] = Some((payloads, stats));
+                    let done = progress.fetch_add(1, Ordering::Relaxed) + 1;
+                    if let Some(ref cb) = on_progress {
+                        cb(SliceProgressUpdateV3 {
+                            done,
+                            total: total_layers,
+                            phase: SliceProgressPhaseV3::Slicing,
+                        });
+                    }
+
+                    while next < total_layers {
+                        let Some((payloads, stats)) = pending[next as usize].take() else {
+                            break;
+                        };
+                        for (block_index, payload) in payloads.into_iter().enumerate() {
+                            if let Err(e) = on_block(next, block_index as u32, payload) {
+                                pipeline_error = Err(e);
+                                break;
+                            }
+                        }
+                        if pipeline_error.is_err() {
+                            break;
+                        }
+                        area_stats[next as usize] = stats;
+                        if cancel_flag
+                            .map(|flag| flag.load(Ordering::Relaxed))
+                            .unwrap_or(false)
+                        {
+                            pipeline_error = Err(SlicerV3Error::Cancelled);
+                            break;
+                        }
+                        next += 1;
+                    }
+                }
+            }
+        }
+    });
+
+    pipeline_error?;
+
+    let perf = SlicingPerfV3 {
+        render_wall_ns: render_wall_start.elapsed().as_nanos() as u64,
+        render_ns: raster_ns.load(Ordering::Relaxed),
+        layers: total_layers,
+        ..Default::default()
+    };
+
+    Ok((area_stats, perf))
 }

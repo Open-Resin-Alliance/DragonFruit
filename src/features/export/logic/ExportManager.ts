@@ -674,7 +674,10 @@ export class ExportManager {
     const ensure = (n: number) => { if (off + n > cur.length) flush(); };
 
     const ws = (s: string) => {
-      for (let i = 0; i < s.length; i++) cur[off++] = s.charCodeAt(i);
+      for (let i = 0; i < s.length; i++) {
+        if (off >= cur.length) flush();
+        cur[off++] = s.charCodeAt(i);
+      }
     };
 
     /**
@@ -729,27 +732,30 @@ export class ExportManager {
     ws('<?xml version="1.0" encoding="UTF-8"?>\n<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"><resources><object id="1" type="model"><mesh><vertices>');
 
     let writtenTris = 0;
+    let vertexOffset = 0;
     const wv = new THREE.Vector3();
     const tmpMat = new THREE.Matrix4();
     const comMat = new THREE.Matrix4();
 
-    const processGeo = (geo: THREE.BufferGeometry, mat: THREE.Matrix4) => {
+    // ── Pass 1: write ALL vertices ──
+    // Collect (geometry, matrix, vertexOffset) for the triangle pass.
+    const geoEntries: Array<{
+      geo: THREE.BufferGeometry;
+      mat: THREE.Matrix4;
+      startVertex: number;
+    }> = [];
+
+    const collectVertices = (geo: THREE.BufferGeometry, mat: THREE.Matrix4) => {
       const pos = geo.getAttribute('position');
-      if (!pos) return;
-      const idx = geo.getIndex();
-      const emit = (a: number, b: number, c: number) => {
-        ensure(180); // 3 vertex tags, ~60 bytes each
-        ws('<vertex x="');  wv.fromBufferAttribute(pos, a).applyMatrix4(mat); wf4(wv.x); ws('" y="'); wf4(wv.y); ws('" z="'); wf4(wv.z); ws('"/>');
-        ws('<vertex x="');  wv.fromBufferAttribute(pos, b).applyMatrix4(mat); wf4(wv.x); ws('" y="'); wf4(wv.y); ws('" z="'); wf4(wv.z); ws('"/>');
-        ws('<vertex x="');  wv.fromBufferAttribute(pos, c).applyMatrix4(mat); wf4(wv.x); ws('" y="'); wf4(wv.y); ws('" z="'); wf4(wv.z); ws('"/>');
-        writtenTris++;
-      };
-      if (idx) {
-        const arr = idx.array;
-        for (let i = 0; i + 2 < arr.length; i += 3) emit(arr[i], arr[i + 1], arr[i + 2]);
-      } else {
-        for (let i = 0; i + 2 < pos.count; i += 3) emit(i, i + 1, i + 2);
+      if (!pos || pos.count === 0) return;
+      const startVertex = vertexOffset;
+      geoEntries.push({ geo, mat, startVertex });
+
+      for (let i = 0; i < pos.count; i++) {
+        wv.fromBufferAttribute(pos, i).applyMatrix4(mat);
+        ws('<vertex x="'); wf4(wv.x); ws('" y="'); wf4(wv.y); ws('" z="'); wf4(wv.z); ws('"/>');
       }
+      vertexOffset += pos.count;
     };
 
     for (const obj of objects) {
@@ -759,34 +765,47 @@ export class ExportManager {
           for (let i = 0; i < node.count; i++) {
             node.getMatrixAt(i, tmpMat);
             comMat.multiplyMatrices(node.matrixWorld, tmpMat);
-            processGeo(node.geometry, comMat);
+            collectVertices(node.geometry, comMat);
           }
           return;
         }
         if (!(node instanceof THREE.Mesh) || !(node.geometry instanceof THREE.BufferGeometry)) return;
         if (this.isMaterialHitbox(node.material)) return;
-        processGeo(node.geometry, node.matrixWorld);
+        collectVertices(node.geometry, node.matrixWorld);
       });
     }
 
-    if (writtenTris === 0) throw new Error('Cannot export 3MF: no triangle geometry found.');
+    if (geoEntries.length === 0) throw new Error('Cannot export 3MF: no triangle geometry found.');
 
-    ensure(16);
     ws('</vertices>');
 
     // Yield to unblock the render loop between the two heavyweight passes.
     await new Promise<void>(r => setTimeout(r, 0));
 
-    ensure(16);
+    // ── Pass 2: write ALL triangles ──
     ws('<triangles>');
-    // Triangles are always sequential: vertex indices for triangle i are 3i, 3i+1, 3i+2.
-    for (let i = 0; i < writtenTris; i++) {
-      const b = i * 3;
-      ensure(55); // one triangle tag ~53 bytes worst case
-      ws('<triangle v1="'); wu(b); ws('" v2="'); wu(b + 1); ws('" v3="'); wu(b + 2); ws('"/>');
+
+    for (const entry of geoEntries) {
+      const { geo, mat, startVertex } = entry;
+      const pos = geo.getAttribute('position')!;
+      const idx = geo.getIndex();
+
+      if (idx) {
+        const arr = idx.array;
+        for (let i = 0; i + 2 < arr.length; i += 3) {
+          ws('<triangle v1="'); wu(startVertex + arr[i]); ws('" v2="'); wu(startVertex + arr[i + 1]); ws('" v3="'); wu(startVertex + arr[i + 2]); ws('"/>');
+          writtenTris++;
+        }
+      } else {
+        for (let i = 0; i + 2 < pos.count; i += 3) {
+          ws('<triangle v1="'); wu(startVertex + i); ws('" v2="'); wu(startVertex + i + 1); ws('" v3="'); wu(startVertex + i + 2); ws('"/>');
+          writtenTris++;
+        }
+      }
     }
 
-    ensure(128);
+    if (writtenTris === 0) throw new Error('Cannot export 3MF: no triangle geometry found.');
+
     ws('</triangles></mesh></object></resources><build><item objectid="1"/></build></model>');
 
     flush();
