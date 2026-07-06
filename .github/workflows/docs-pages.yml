@@ -4,12 +4,17 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - paul/docs-cleanup
+      - main
     paths:
       - docs/**
       - mkdocs.yml
       - .github/workflows/docs-pages.yml
       - docs/requirements.txt
+  workflow_run:
+    workflows:
+      - Release
+    types:
+      - completed
 
 permissions:
   contents: read
@@ -23,6 +28,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
 
     steps:
       - name: Checkout
@@ -46,6 +52,48 @@ jobs:
 
       - name: Build docs site
         run: mkdocs build --strict --site-dir site
+
+      - name: Inject updater JSONs into site
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            async function fetchUpdaterJson(isPrerelease) {
+              const releases = await github.rest.repos.listReleases({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 20,
+              });
+
+              const release = releases.data.find(r => r.prerelease === isPrerelease);
+              if (!release) {
+                core.warning(`No ${isPrerelease ? 'pre' : 'stable'} release found — skipping`);
+                return null;
+              }
+
+              const assetName = isPrerelease ? 'latest-dev.json' : 'latest.json';
+              const asset = release.assets.find(a => a.name === assetName);
+              if (!asset) {
+                core.warning(`${assetName} not found in release ${release.tag_name} — skipping`);
+                return null;
+              }
+
+              const response = await fetch(asset.browser_download_url);
+              if (!response.ok) throw new Error(`Failed to fetch ${assetName}: ${response.status}`);
+              return { name: assetName, content: await response.text() };
+            }
+
+            const results = await Promise.all([
+              fetchUpdaterJson(false),
+              fetchUpdaterJson(true),
+            ]);
+
+            for (const result of results) {
+              if (!result) continue;
+              fs.writeFileSync(`site/${result.name}`, result.content);
+              core.info(`Wrote site/${result.name}`);
+            }
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
