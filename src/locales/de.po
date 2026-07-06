@@ -37,7 +37,7 @@ msgstr ""
 #~ msgid "{deltaMin}m ago"
 #~ msgstr ""
 
-#: src/app/page.tsx:3529
+#: src/app/page.tsx:3548
 msgid "Add Joint"
 msgstr "Verbindung hinzufügen"
 
@@ -53,15 +53,15 @@ msgstr ""
 msgid "Anti-aliasing: nothing to anti-alias."
 msgstr ""
 
-#: src/components/controls/TransformToolbar.tsx:27
+#: src/components/controls/TransformToolbar.tsx:35
 msgid "Arrange"
 msgstr "Anordnen"
 
-#: src/components/layout/TopBar.tsx:610
+#: src/components/layout/TopBar.tsx:630
 msgid "Arrange model and transforms"
 msgstr ""
 
-#: src/components/controls/TransformToolbar.tsx:27
+#: src/components/controls/TransformToolbar.tsx:35
 msgid "Auto-arrange models on plate"
 msgstr "Modelle automatisch auf der Platte anordnen"
 
@@ -74,7 +74,7 @@ msgstr ""
 msgid "Bring in a mesh or scene to start preparing, analyzing, supporting, and exporting your print."
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:617
+#: src/components/layout/TopBar.tsx:638
 msgid "Build and tune supports"
 msgstr ""
 
@@ -83,7 +83,7 @@ msgstr ""
 msgid "cached"
 msgstr ""
 
-#: src/components/ui/EditorContextMenu.tsx:48
+#: src/components/ui/EditorContextMenu.tsx:50
 msgid "Copy"
 msgstr "Kopieren"
 
@@ -92,7 +92,7 @@ msgstr "Kopieren"
 msgid "Could not reopen this file from cache."
 msgstr ""
 
-#: src/components/controls/TransformToolbar.tsx:25
+#: src/components/controls/TransformToolbar.tsx:33
 msgid "Create cavity or open-face shell"
 msgstr "Hohlraum oder offene Schale erstellen"
 
@@ -100,11 +100,11 @@ msgstr "Hohlraum oder offene Schale erstellen"
 msgid "Currently displaying nothing at maximum fidelity."
 msgstr ""
 
-#: src/components/ui/EditorContextMenu.tsx:47
+#: src/components/ui/EditorContextMenu.tsx:49
 msgid "Cut"
 msgstr "Ausschneiden"
 
-#: src/components/ui/EditorContextMenu.tsx:46
+#: src/components/ui/EditorContextMenu.tsx:48
 msgid "Delete"
 msgstr "Löschen"
 
@@ -121,12 +121,12 @@ msgstr ""
 msgid "Drop supported files"
 msgstr ""
 
-#: src/app/page.tsx:3535
-#: src/components/ui/EditorContextMenu.tsx:85
+#: src/app/page.tsx:3554
+#: src/components/ui/EditorContextMenu.tsx:88
 msgid "Editor"
 msgstr "Editor"
 
-#: src/components/ui/EditorContextMenu.tsx:82
+#: src/components/ui/EditorContextMenu.tsx:85
 msgid "Editor context menu"
 msgstr "Editor-Kontextmenü"
 
@@ -143,11 +143,11 @@ msgstr ""
 msgid "Every great print starts with an empty scene."
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:622
+#: src/components/layout/TopBar.tsx:643
 msgid "Export"
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:624
+#: src/components/layout/TopBar.tsx:646
 msgid "Finalize and export output"
 msgstr ""
 
@@ -155,7 +155,7 @@ msgstr ""
 msgid "Get started"
 msgstr ""
 
-#: src/components/controls/TransformToolbar.tsx:25
+#: src/components/controls/TransformToolbar.tsx:33
 msgid "Hollow"
 msgstr "Aushöhlen"
 
@@ -192,7 +192,7 @@ msgstr ""
 msgid "In space, no one can hear you slice."
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:631
+#: src/components/layout/TopBar.tsx:654
 msgid "Inspect sliced layers before printing"
 msgstr ""
 
@@ -262,19 +262,19 @@ msgstr ""
 msgid "Mesh Files (.stl, .obj, .3mf)"
 msgstr ""
 
-#: src/components/controls/TransformToolbar.tsx:24
+#: src/components/controls/TransformToolbar.tsx:32
 msgid "Mirror"
 msgstr "Spiegeln"
 
-#: src/components/controls/TransformToolbar.tsx:24
+#: src/components/controls/TransformToolbar.tsx:32
 msgid "Mirror across X, Y, or Z"
 msgstr "An X, Y oder Z spiegeln"
 
-#: src/components/controls/TransformToolbar.tsx:22
+#: src/components/controls/TransformToolbar.tsx:30
 msgid "Modify"
 msgstr "Ändern"
 
-#: src/components/controls/TransformToolbar.tsx:22
+#: src/components/controls/TransformToolbar.tsx:30
 msgid "Move, rotate, and scale"
 msgstr "Verschieben, drehen und skalieren"
 
@@ -296,7 +296,7 @@ msgid "Nothing to see here. Yet."
 msgstr ""
 
 #. Toolbar button label. Short for "lay the model flat on a selected face"; keep it terse so the toolbar pill stays narrow.
-#: src/components/controls/TransformToolbar.tsx:23
+#: src/components/controls/TransformToolbar.tsx:31
 msgid "On-Face"
 msgstr "Auf Fläche"
 
@@ -309,11 +309,11 @@ msgstr ""
 msgid "Open printer library and add one now."
 msgstr ""
 
-#: src/components/controls/TransformToolbar.tsx:23
+#: src/components/controls/TransformToolbar.tsx:31
 msgid "Orient flat against plate"
 msgstr "Flach auf der Platte ausrichten"
 
-#: src/components/ui/EditorContextMenu.tsx:49
+#: src/components/ui/EditorContextMenu.tsx:51
 msgid "Paste"
 msgstr "Einfügen"
 
@@ -321,11 +321,11 @@ msgstr "Einfügen"
 msgid "Please hang tight while we prepare your scene."
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:608
+#: src/components/layout/TopBar.tsx:627
 msgid "Prepare"
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:629
+#: src/components/layout/TopBar.tsx:651
 msgid "Printing"
 msgstr ""
 
@@ -342,7 +342,7 @@ msgstr ""
 msgid "Reopen {0}"
 msgstr ""
 
-#: src/components/ui/EditorContextMenu.tsx:50
+#: src/components/ui/EditorContextMenu.tsx:52
 msgid "Repair"
 msgstr "Reparieren"
 
@@ -360,27 +360,31 @@ msgstr ""
 msgid "Scene Files (.voxl, .lys)"
 msgstr ""
 
-#: src/components/controls/TransformToolbar.tsx:26
+#: src/components/controls/TransformToolbar.tsx:34
 msgid "Sculpt and smooth surface"
 msgstr "Oberfläche modellieren und glätten"
 
-#: src/components/controls/TransformToolbar.tsx:21
+#: src/components/controls/TransformToolbar.tsx:29
 msgid "Select"
 msgstr "Auswählen"
 
-#: src/components/controls/TransformToolbar.tsx:21
+#: src/components/controls/TransformToolbar.tsx:29
 msgid "Select and inspect model"
 msgstr "Modell auswählen und untersuchen"
 
-#: src/components/controls/TransformToolbar.tsx:26
+#: src/components/controls/TransformToolbar.tsx:34
 msgid "Smooth"
 msgstr "Glätten"
 
-#: src/components/layout/TopBar.tsx:615
+#: src/components/ui/EditorContextMenu.tsx:53
+msgid "Split Supports"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:635
 msgid "Support"
 msgstr ""
 
-#: src/app/page.tsx:3535
+#: src/app/page.tsx:3554
 msgid "Supports"
 msgstr "Stützen"
 
@@ -418,7 +422,7 @@ msgstr ""
 msgid "Tip: Start with <0>Load Mesh</0> for clean prints, or <1>Import Scene</1> to continue an existing setup."
 msgstr ""
 
-#: src/app/page.tsx:3524
+#: src/app/page.tsx:3543
 msgid "Toggle Curve"
 msgstr "Kurve umschalten"
 
