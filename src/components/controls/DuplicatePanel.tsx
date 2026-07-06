@@ -111,7 +111,8 @@ export function DuplicatePanel({
   const setClampedSpacing = React.useCallback((value: number) => {
     const next = sanitizeNumber(value, 0.5);
     const rounded = Number((Math.round(next * 10) / 10).toFixed(1));
-    onSpacingMmChange(Math.min(5, Math.max(0, rounded)));
+    // Negative spacing nests copies (matches Arrange/Fill Plate).
+    onSpacingMmChange(Math.min(5, Math.max(-5, rounded)));
   }, [onSpacingMmChange, sanitizeNumber]);
 
   const setClampedArrayCount = React.useCallback((setter: (value: number) => void, value: number) => {
@@ -121,7 +122,8 @@ export function DuplicatePanel({
 
   const setClampedArrayGap = React.useCallback((setter: (value: number) => void, value: number) => {
     const next = sanitizeNumber(value, 0);
-    setter(Math.min(120, Math.max(0, Math.round(next))));
+    // Negative gaps nest/overlap array copies.
+    setter(Math.min(120, Math.max(-120, Math.round(next))));
   }, [sanitizeNumber]);
 
   const displayTotalCopies = Math.max(1, layoutMode === 'array'
@@ -263,7 +265,7 @@ export function DuplicatePanel({
                   className="mt-1"
                   value={spacingMm}
                   onChange={setClampedSpacing}
-                  min={0}
+                  min={-5}
                   max={5}
                   step={0.1}
                   unit="mm"
@@ -303,7 +305,7 @@ export function DuplicatePanel({
                   <ScrollableNumberField
                     value={gapValue}
                     onChange={(next) => setClampedArrayGap(onGapChange, next)}
-                    min={0}
+                    min={-120}
                     max={120}
                     step={1}
                     unit="mm"
