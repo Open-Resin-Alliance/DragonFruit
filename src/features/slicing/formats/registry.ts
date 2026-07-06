@@ -62,7 +62,10 @@ export function getAvailableOutputFormatOptions(): Array<{ value: PrinterOutputF
 
   return Array.from(formats)
     .sort((a, b) => a.localeCompare(b))
-    .map((format) => ({ value: format, label: format }));
+    .map((format) => {
+      const def = resolveBuiltinPluginSlicingFormat(format) ?? CORE_FALLBACK_BY_OUTPUT_FORMAT[format];
+      return { value: format, label: def?.displayName ?? format };
+    });
 }
 
 export function resolveSlicingFormatDefinition(context: ResolveSlicingFormatContext): SlicingFormatDefinition {
