@@ -1,4 +1,4 @@
-# Architecture (V3.1)
+# Architecture (v3.2)
 
 ## Intent
 
@@ -18,8 +18,11 @@ SliceJobV3
   -> validate_job (engine)
   -> parse_triangles (geometry)
   -> build_layer_index (index)
-  -> render pipeline (raster + encode)
-  -> encoder finalize (encoders)
+  -> render pipeline (raster + 3DAA post + encode)
+       ├─ rasterize → RLE/binary masks
+       ├─ [3DAA] backward EDT → cross-blend → XY/Z blur → topology-gated floors
+       ├─ [support] rasterize support-only masks → merge into model mask
+       └─ encode → format-specific container assembly
   -> SliceArtifactV3 / output path
 ```
 
