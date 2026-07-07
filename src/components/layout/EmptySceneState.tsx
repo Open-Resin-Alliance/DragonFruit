@@ -491,7 +491,7 @@ export function EmptySceneState({
                 >
                   <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold">
                     <Printer className="w-4 h-4" />
-                    <span>{_(msg`Add Printer`)}</span>
+                    <span>{_(msg`Add printer`)}</span>
                   </div>
                   <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-contrast), black 16%)' }}>
                     {_(msg`Open printer library and add one now.`)}
@@ -510,7 +510,7 @@ export function EmptySceneState({
                 >
                   <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold">
                     <Wrench className="w-4 h-4" />
-                    <span>{_(msg`Use without Printer`)}</span>
+                    <span>{_(msg`Use without printer`)}</span>
                   </div>
                   <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-secondary-contrast), black 18%)' }}>
                     {_(msg`Keep going without a printer. You can add one later.`)}
@@ -547,10 +547,10 @@ export function EmptySceneState({
                 >
                   <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold" style={{ color: 'var(--accent-contrast)' }}>
                     <Upload className="w-4 h-4" />
-                    <span>{_(msg`Load Mesh`)}</span>
+                    <span>{_(msg`Load mesh`)}</span>
                   </div>
                   <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-contrast), black 16%)' }}>
-                    {_(msg`Mesh Files (.stl, .obj, .3mf)`)}
+                    {_(msg`Mesh files (.stl, .obj, .3mf)`)}
                   </div>
                 </button>
 
@@ -566,17 +566,17 @@ export function EmptySceneState({
                   >
                     <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold" style={{ color: 'var(--accent-secondary-contrast)' }}>
                       <FolderInput className="w-4 h-4" />
-                      <span>{_(msg`Import Scene`)}</span>
+                      <span>{_(msg`Import scene`)}</span>
                     </div>
                     <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-secondary-contrast), black 18%)' }}>
-                      {_(msg`Scene Files (.voxl, .lys)`)}
+                      {_(msg`Scene files (.voxl, .lys)`)}
                     </div>
                   </button>
                 )}
               </div>
 
               <div className="mt-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                <Trans comment="Tip shown below the import buttons. <0> wraps the highlighted label 'Load Mesh'; <1> wraps 'Import Scene'. Keep both placeholders in your translation.">Tip: Start with <span style={{ color: 'var(--text-strong)' }}>Load Mesh</span> for clean prints, or <span style={{ color: 'var(--text-strong)' }}>Import Scene</span> to continue an existing setup.</Trans>
+                <Trans comment="Tip shown below the import buttons. <0> wraps the highlighted label 'Load mesh'; <1> wraps 'Import scene'. These match the button labels above verbatim (same casing) — keep them consistent with however you translated those buttons. Keep both placeholders in your translation.">Tip: Start with <span style={{ color: 'var(--text-strong)' }}>Load mesh</span> for clean prints, or <span style={{ color: 'var(--text-strong)' }}>Import scene</span> to continue an existing setup.</Trans>
               </div>
             </div>
 
@@ -692,7 +692,7 @@ export function EmptySceneState({
                   <div className="min-w-0 inline-flex items-center gap-2">
                     <Upload className="h-4 w-4" style={{ color: isDropUnsupported ? 'var(--danger)' : 'var(--accent)' }} />
                     <span className="truncate text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                      {isDropUnsupported ? _(msg`Unsupported File Type`) : _(msg`Drop supported files`)}
+                      {isDropUnsupported ? _(msg`Unsupported file type`) : _(msg`Drop supported files`)}
                     </span>
                   </div>
                   <span
