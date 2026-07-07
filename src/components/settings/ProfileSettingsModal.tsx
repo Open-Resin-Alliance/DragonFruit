@@ -3381,7 +3381,7 @@ export function ProfileSettingsModal({
             </span>
           )}
         </div>
-        <div className="mt-1.5 min-w-0">
+        <div className="mt-2.5 min-w-0">
           <div className="truncate text-[12px] font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
             {preset.name}
           </div>
