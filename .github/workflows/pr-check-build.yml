@@ -16,6 +16,9 @@ jobs:
   macos-build:
     name: macOS compile check (Universal)
     runs-on: macos-latest
+    permissions:
+      actions: write
+      contents: write
     outputs:
       version: ${{ steps.version.outputs.version }}
       commit_hash: ${{ steps.version.outputs.commit_hash }}
@@ -66,6 +69,7 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ./src-tauri -> target
+          shared-key: tauri
 
       - name: Install frontend dependencies
         run: npm ci

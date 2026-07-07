@@ -115,6 +115,9 @@ jobs:
             build_kind: flatpak
             artifact_name: dragonfruit-linux-flatpak-x64
     runs-on: ${{ matrix.platform }}
+    permissions:
+      actions: write
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -149,6 +152,7 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ./src-tauri -> target
+          shared-key: tauri
 
       - name: Install frontend dependencies
         run: npm ci
