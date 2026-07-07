@@ -29,8 +29,8 @@ type EmptySceneStateProps = {
 };
 
 // Returns null for "just now" (< 60 s), or a translated compact period string for everything else.
-// The period is just the quantity+unit, e.g. "5m" — the caller wraps it with "last opened {period} ago".
-// NOTE: some locales write a space between number and unit (e.g. "5 min", "3 h").
+// The period is just the quantity +unit, e.g. "5 min" — the caller wraps it with "last opened {period} ago".
+// NOTE: some locales may or may not write a space between number and unit (e.g. "5min", "3h").
 // Translators control this through their own msgstr for each period string below.
 function formatRecentOpenedAt(openedAt: number, translate: (descriptor: MessageDescriptor) => string): string | null {
   const deltaMs = Date.now() - openedAt;
@@ -41,15 +41,15 @@ function formatRecentOpenedAt(openedAt: number, translate: (descriptor: MessageD
 
   // {deltaMin} = number of minutes elapsed (1–59)
   const deltaMin = Math.floor(deltaSec / 60);
-  if (deltaMin < 60) return translate(msg`${deltaMin}m`);
+  if (deltaMin < 60) return translate(msg`${deltaMin} min`);
 
   // {deltaHours} = number of hours elapsed (1–23)
   const deltaHours = Math.floor(deltaMin / 60);
-  if (deltaHours < 24) return translate(msg`${deltaHours}h`);
+  if (deltaHours < 24) return translate(msg`${deltaHours} h`);
 
   // {deltaDays} = number of days elapsed (1–6)
   const deltaDays = Math.floor(deltaHours / 24);
-  if (deltaDays < 7) return translate(msg`${deltaDays}d`);
+  if (deltaDays < 7) return translate(msg`${deltaDays} d`);
 
   return new Date(openedAt).toLocaleDateString();
 }
