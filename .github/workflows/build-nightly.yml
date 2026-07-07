@@ -366,6 +366,7 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ./src-tauri -> target
+          shared-key: tauri
 
       - name: Install frontend dependencies
         run: npm ci
@@ -497,6 +498,7 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ./src-tauri -> target
+          shared-key: tauri
 
       - name: Install frontend dependencies
         run: npm ci
