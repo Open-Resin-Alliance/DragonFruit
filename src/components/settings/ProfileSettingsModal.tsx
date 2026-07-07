@@ -492,6 +492,8 @@ export function ProfileSettingsModal({
 
   const groupedFilteredPrinterPresets = React.useMemo(() => {
     const grouped = new Map<string, typeof filteredPrinterPresets>();
+    // Track first-appearance order so families display in manifest order.
+    const familyOrder = new Map<string, number>();
     filteredPrinterPresets.forEach((preset) => {
       const family = (preset.family ?? '').trim() || 'Other';
       const current = grouped.get(family);
@@ -499,11 +501,12 @@ export function ProfileSettingsModal({
         current.push(preset);
       } else {
         grouped.set(family, [preset]);
+        familyOrder.set(family, familyOrder.size);
       }
     });
 
     return Array.from(grouped.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
+      .sort(([a], [b]) => (familyOrder.get(a) ?? 999) - (familyOrder.get(b) ?? 999))
       .map(([family, presets]) => ({ family, presets }));
   }, [filteredPrinterPresets, selectedPresetManufacturer]);
 
@@ -4544,7 +4547,7 @@ export function ProfileSettingsModal({
               style={{
                 borderColor: 'var(--border-strong)',
                 background: 'var(--surface-0)',
-                height: 'min(90vh, 820px)',
+                height: 'min(90vh, 1066px)',
                 maxHeight: 'calc(100vh - 2rem)',
               }}
             >
@@ -5174,7 +5177,7 @@ export function ProfileSettingsModal({
               style={{
                 borderColor: 'var(--border-strong)',
                 background: 'var(--surface-0)',
-                height: 'min(90vh, 820px)',
+                height: 'min(90vh, 1066px)',
                 maxHeight: 'calc(100vh - 2rem)',
               }}
             >
