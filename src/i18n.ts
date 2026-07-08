@@ -2,7 +2,7 @@ import { i18n } from "@lingui/core";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import { messages as enMessages } from "./locales/en.js";
 
-export const SUPPORTED_LOCALES = ["en", "es", "de", "fr"] as const;
+export const SUPPORTED_LOCALES = ["en", "es", "de", "fr", "sk", "cs"] as const;
 export type Locale = (typeof SUPPORTED_LOCALES)[number];
 
 // Native-language labels for the language switcher.
@@ -11,6 +11,8 @@ export const LOCALE_LABELS: Record<Locale, string> = {
   es: "Español",
   de: "Deutsch",
   fr: "Français",
+  sk: "Slovenčina",
+  cs: "Čeština",
 };
 
 const STORAGE_KEY = "dragonfruit.locale";
