@@ -253,6 +253,7 @@ dependencies = [
  "bytemuck",
  "cdt",
  "clap",
+ "log",
  "manifold-csg",
  "proptest",
  "quick-xml",

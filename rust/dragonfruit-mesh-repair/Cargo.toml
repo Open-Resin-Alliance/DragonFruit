@@ -31,6 +31,7 @@ quick-xml = { version = "0.31", features = ["serialize"] }
 ahash = "0.8"
 smallvec = "1"
 cdt = "0.1"
+log = "0.4"
 manifold-csg = { version = "0.1.4", optional = true, default-features = false }
 
 [dev-dependencies]

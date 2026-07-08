@@ -15,6 +15,7 @@ import {
   isHeavyRepair,
   isTauriRuntime,
   repairFromGeometry,
+  willRunDeepRepair,
   type MeshAnalysisJson,
   type MeshHealthReport,
 } from '@/utils/meshRepair';
@@ -109,7 +110,7 @@ export interface ProcessGeometryOptions {
    * Optional status callback for native mesh processing stages.
    * Useful for surfacing progress text in import loading overlays.
    */
-  onNativeProcessingStage?: (stage: 'analyzing' | 'repairing' | 'classifying' | 'postprocess') => void;
+  onNativeProcessingStage?: (stage: 'analyzing' | 'repairing' | 'deep-repairing' | 'classifying' | 'postprocess') => void;
   /**
    * When running in Tauri, the on-disk file path for native (Rust-side) mesh
    * loading. If provided, `loadStlGeometry` will use a Tauri IPC command to
@@ -290,6 +291,10 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
     } else try {
       let classifyOnly = nativeMode === 'classify-only' || nativeMode === 'none';
       const forceRepair = nativeMode === 'repair';
+      // Set when the pre-repair analysis predicts the native engine will engage
+      // its deeper solidify / self-intersection path, so we can surface a
+      // "Performing Deeper Repairs" stage.
+      let deepRepair = false;
 
       // If a confirmation callback is wired up, run a quick pre-repair analysis
       // so we can ask the user before committing to a heavy solidification pass.
@@ -298,6 +303,9 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
           options.onNativeProcessingStage?.('analyzing');
           console.log(`[${new Date().toISOString()}] [processGeometry] Running pre-repair analysis`);
           const analysis = await analyzeFromGeometry(geometry);
+          if (analysis) {
+            deepRepair = willRunDeepRepair(analysis);
+          }
           if (analysis && isHeavyRepair(analysis)) {
             console.log(
               `[processGeometry] Heavy repair detected (components=${analysis.component_count}, ` +
@@ -307,6 +315,7 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
             if (!confirmed) {
               console.log('[processGeometry] User declined heavy repair — running classify-only shell split pass.');
               classifyOnly = true;
+              deepRepair = false;
             }
           }
         } catch (analysisErr) {
@@ -318,7 +327,7 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
         }
       }
 
-      options.onNativeProcessingStage?.(classifyOnly ? 'classifying' : 'repairing');
+      options.onNativeProcessingStage?.(classifyOnly ? 'classifying' : deepRepair ? 'deep-repairing' : 'repairing');
       console.log(`[${new Date().toISOString()}] [processGeometry] Running native ${classifyOnly ? 'classification' : 'repair/classification'}`);
       const nativeStart = performance.now();
       const result = classifyOnly

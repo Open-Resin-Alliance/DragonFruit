@@ -68,11 +68,15 @@ impl Default for RepairOptions {
             // Off by default because this path can be expensive on huge meshes;
             // callers can opt in explicitly or rely on fragmented auto mode.
             resolve_self_intersections: false,
-            // On by default for highly fragmented support-style meshes; guarded
-            // by high pre-analysis thresholds to avoid impacting normal models.
+            // On by default. Triggers the solidify / self-intersection path
+            // whenever a mesh carries a meaningful number of self-intersecting
+            // triangles, regardless of shell count — so single-shell models
+            // (e.g. Netfabb-flagged parts) qualify, not just fragmented support
+            // soups. `solidify_component_threshold` no longer gates the trigger;
+            // it only tunes the fill-holes fast-path for huge fragmented meshes.
             solidify_fragmented_components: true,
             solidify_component_threshold: 256,
-            solidify_self_intersection_threshold: 128,
+            solidify_self_intersection_threshold: 16,
         }
     }
 }
@@ -87,25 +91,49 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     let t_start = std::time::Instant::now();
 
     let pre = analyze(&mesh);
-    let auto_fragmented_solidify = options.solidify_fragmented_components
-        && pre.connected_components >= options.solidify_component_threshold
+    // Trigger the solidify / self-intersection path whenever the mesh has a
+    // meaningful number of self-intersecting triangles — independent of shell
+    // count. The previous gate additionally required
+    // `connected_components >= solidify_component_threshold`, so single- or
+    // few-shell meshes (the common case for imported models flagged broken by
+    // Netfabb) never qualified even when badly self-intersecting.
+    let auto_solidify = options.solidify_fragmented_components
         && pre.self_intersection_triangles >= options.solidify_self_intersection_threshold;
-    let run_self_intersection_path = options.resolve_self_intersections || auto_fragmented_solidify;
+    let run_self_intersection_path = options.resolve_self_intersections || auto_solidify;
     let mut applied_self_intersection_path = false;
     let mut skip_final_orientation = false;
     let mut solidify_rollback_reason: Option<String> = None;
+
+    if run_self_intersection_path {
+        log::info!(
+            "mesh-repair: engaging deeper repair (solidify / self-intersection path) — \
+             trigger={}, components={}, self_intersection_triangles={} (>= {}), \
+             non_manifold_edges={}, boundary_edges={}, triangles={}",
+            if options.resolve_self_intersections {
+                "explicit"
+            } else {
+                "auto-self-intersections"
+            },
+            pre.connected_components,
+            pre.self_intersection_triangles,
+            options.solidify_self_intersection_threshold,
+            pre.non_manifold_edges,
+            pre.boundary_edges,
+            pre.triangle_count,
+        );
+    }
+
     let mut report = MeshHealthReport::new(pre);
 
-    if auto_fragmented_solidify {
+    if auto_solidify {
         report.steps.push(RepairStepReport {
             name: "auto_enable_solidify".into(),
             changed: 0,
             notes: Some(format!(
-                "auto-triggered: components={} (>= {}), self_intersections={} (>= {})",
-                report.pre.connected_components,
-                options.solidify_component_threshold,
+                "auto-triggered: self_intersections={} (>= {}), components={}",
                 report.pre.self_intersection_triangles,
                 options.solidify_self_intersection_threshold,
+                report.pre.connected_components,
             )),
             elapsed_ms: 0.0,
         });
@@ -736,6 +764,24 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     report.fully_repaired = residuals.is_empty();
     report.residual_issues = residuals;
     report.total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+
+    if run_self_intersection_path {
+        log::info!(
+            "mesh-repair: deeper repair complete — applied_solidify_path={}, fully_repaired={}, \
+             residual_issues={}, self_intersections {}->{}, non_manifold {}->{}, \
+             boundary {}->{}, {:.1}ms",
+            applied_self_intersection_path,
+            report.fully_repaired,
+            report.residual_issues.len(),
+            report.pre.self_intersection_triangles,
+            report.post.self_intersection_triangles,
+            report.pre.non_manifold_edges,
+            report.post.non_manifold_edges,
+            report.pre.boundary_edges,
+            report.post.boundary_edges,
+            report.total_ms,
+        );
+    }
 
     RepairOutcome { mesh, report }
 }

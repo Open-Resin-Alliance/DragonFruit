@@ -305,6 +305,20 @@ export function isHeavyRepair(analysis: MeshAnalysisJson): boolean {
 }
 
 /**
+ * Predicts whether the native repair engine will engage the deeper
+ * solidify / self-intersection path. Mirrors the Rust trigger in
+ * `RepairOptions::default()` (`solidify_self_intersection_threshold`), which
+ * fires on self-intersections regardless of shell count — so single-shell
+ * models qualify, not just fragmented support soups. Used to surface the
+ * "Performing Deeper Repairs" status; distinct from `isHeavyRepair`, which
+ * gates the (expensive-repair) confirmation prompt.
+ */
+export const DEEP_REPAIR_SELF_INTERSECTION_THRESHOLD = 16;
+export function willRunDeepRepair(analysis: MeshAnalysisJson): boolean {
+  return analysis.self_intersections >= DEEP_REPAIR_SELF_INTERSECTION_THRESHOLD;
+}
+
+/**
  * Runs the native mesh-repair engine over an existing THREE.BufferGeometry
  * by staging its position buffer and invoking the staged-repair command.
  * Returns null if not running under Tauri.
