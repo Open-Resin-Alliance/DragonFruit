@@ -241,6 +241,49 @@ impl Bvh {
         count
     }
 
+    /// Closest point on the mesh surface to `p`. Returns
+    /// `(squared distance, face index, closest point on that face)`.
+    /// Best-first branch-and-bound descent using node-AABB lower bounds.
+    pub fn closest_point(&self, mesh: &IndexedMesh, p: Vec3) -> (f32, u32, Vec3) {
+        let mut best = (f32::INFINITY, u32::MAX, Vec3::ZERO);
+        self.closest_rec(mesh, self.root, p, &mut best);
+        best
+    }
+
+    fn closest_rec(&self, mesh: &IndexedMesh, node: u32, p: Vec3, best: &mut (f32, u32, Vec3)) {
+        match self.nodes[node as usize] {
+            Node::Leaf { face, ref bbox } => {
+                if aabb_dist_sq(p, bbox) >= best.0 {
+                    return;
+                }
+                let [a, b, c] = mesh.tri_positions(face);
+                let q = closest_point_on_triangle(p, a, b, c);
+                let d = q.sub(p);
+                let d2 = d.dot(d);
+                if d2 < best.0 {
+                    *best = (d2, face, q);
+                }
+            }
+            Node::Internal { left, right, .. } => {
+                let dl = aabb_dist_sq(p, &node_bbox(&self.nodes, left));
+                let dr = aabb_dist_sq(p, &node_bbox(&self.nodes, right));
+                // Descend the nearer child first so the far child is more
+                // likely to be pruned by the tightened bound.
+                let (first, first_d, second, second_d) = if dl <= dr {
+                    (left, dl, right, dr)
+                } else {
+                    (right, dr, left, dl)
+                };
+                if first_d < best.0 {
+                    self.closest_rec(mesh, first, p, best);
+                }
+                if second_d < best.0 {
+                    self.closest_rec(mesh, second, p, best);
+                }
+            }
+        }
+    }
+
     fn ray_rec_excluding(
         &self,
         mesh: &IndexedMesh,
@@ -323,6 +366,77 @@ fn node_bbox(nodes: &[Node], idx: u32) -> Aabb {
         Node::Leaf { ref bbox, .. } => *bbox,
         Node::Internal { ref bbox, .. } => *bbox,
     }
+}
+
+#[inline]
+fn aabb_dist_sq(p: Vec3, bbox: &Aabb) -> f32 {
+    let dx = (bbox.min.x - p.x).max(p.x - bbox.max.x).max(0.0);
+    let dy = (bbox.min.y - p.y).max(p.y - bbox.max.y).max(0.0);
+    let dz = (bbox.min.z - p.z).max(p.z - bbox.max.z).max(0.0);
+    dx * dx + dy * dy + dz * dz
+}
+
+/// Closest point on triangle `abc` to `p` (Ericson, Real-Time Collision
+/// Detection §5.1.5). Handles all vertex/edge/face regions; degenerate
+/// triangles fall back to the nearest vertex.
+pub fn closest_point_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
+    let ab = b.sub(a);
+    let ac = c.sub(a);
+    let ap = p.sub(a);
+    let d1 = ab.dot(ap);
+    let d2 = ac.dot(ap);
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return a;
+    }
+    let bp = p.sub(b);
+    let d3 = ab.dot(bp);
+    let d4 = ac.dot(bp);
+    if d3 >= 0.0 && d4 <= d3 {
+        return b;
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let denom = d1 - d3;
+        if denom > 0.0 {
+            return a.add(ab.scale(d1 / denom));
+        }
+    }
+    let cp = p.sub(c);
+    let d5 = ab.dot(cp);
+    let d6 = ac.dot(cp);
+    if d6 >= 0.0 && d5 <= d6 {
+        return c;
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let denom = d2 - d6;
+        if denom > 0.0 {
+            return a.add(ac.scale(d2 / denom));
+        }
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let denom = (d4 - d3) + (d5 - d6);
+        if denom > 0.0 {
+            return b.add(c.sub(b).scale((d4 - d3) / denom));
+        }
+    }
+    let denom = va + vb + vc;
+    if denom.abs() < 1e-30 {
+        // Degenerate (zero-area) triangle: nearest vertex.
+        let da = ap.dot(ap);
+        let db = bp.dot(bp);
+        let dc = cp.dot(cp);
+        return if da <= db && da <= dc {
+            a
+        } else if db <= dc {
+            b
+        } else {
+            c
+        };
+    }
+    let inv = 1.0 / denom;
+    a.add(ab.scale(vb * inv)).add(ac.scale(vc * inv))
 }
 
 #[inline]

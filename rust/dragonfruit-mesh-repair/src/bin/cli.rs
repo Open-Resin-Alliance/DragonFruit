@@ -94,6 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 solidify_fragmented_components,
                 solidify_component_threshold,
                 solidify_self_intersection_threshold,
+                ..RepairOptions::default()
             };
             let outcome = repair_path(&input, &options)?;
             if let Some(p) = &out_stl {

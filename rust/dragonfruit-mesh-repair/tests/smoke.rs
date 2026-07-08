@@ -141,7 +141,7 @@ fn defaults_enable_fragmented_auto_solidify_with_guards() {
         "fragmented auto-solidify should be enabled by default"
     );
     assert_eq!(defaults.solidify_component_threshold, 256);
-    assert_eq!(defaults.solidify_self_intersection_threshold, 128);
+    assert_eq!(defaults.solidify_self_intersection_threshold, 16);
 }
 
 #[test]
@@ -176,16 +176,34 @@ fn fragmented_auto_solidify_triggers_without_explicit_resolve_flag() {
             .any(|s| s.name == "auto_enable_solidify"),
         "auto solidify step should be recorded"
     );
+    // With the wrap enabled (default), the per-shell routing path handles
+    // the deep repair; with it off, the legacy corefine path must still run.
     assert!(
         outcome
             .report
             .steps
             .iter()
-            .any(|s| s.name == "corefine_self_intersections"),
-        "co-refinement should run when auto solidify triggers"
+            .any(|s| s.name == "route_shells"),
+        "per-shell routing should run when auto solidify triggers"
+    );
+
+    let legacy = repair(
+        mesh.clone(),
+        &RepairOptions {
+            wrap_mode: dragonfruit_mesh_repair::WrapMode::Off,
+            ..options.clone()
+        },
     );
     assert!(
-        outcome
+        legacy
+            .report
+            .steps
+            .iter()
+            .any(|s| s.name == "corefine_self_intersections"),
+        "co-refinement should run when auto solidify triggers with wrap off"
+    );
+    assert!(
+        legacy
             .report
             .steps
             .iter()

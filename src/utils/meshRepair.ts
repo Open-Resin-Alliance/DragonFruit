@@ -25,6 +25,7 @@ export interface MeshAnalysisJson {
   non_manifold_vertices: number;
   boundary_edges: number;
   boundary_loops: number;
+  largest_boundary_loop: number;
   inconsistent_edges: number;
   degenerate_triangles: number;
   duplicate_triangles: number;
@@ -60,6 +61,15 @@ export interface MeshHealthReport {
   residual_issues: string[];
   fully_repaired: boolean;
   total_ms: number;
+  /** Per-shell routing breakdown (all zero when routing did not run). */
+  shells_total?: number;
+  shells_passthrough?: number;
+  shells_local?: number;
+  shells_unioned?: number;
+  shells_wrapped?: number;
+  shells_fallback?: number;
+  /** Routing/wrap advisories: "thin_walls:…", "wrap_budget_exhausted", … */
+  wrap_flags?: string[];
 }
 
 export interface MeshRepairOptions {
@@ -71,6 +81,12 @@ export interface MeshRepairOptions {
   solidifyFragmentedComponents?: boolean;
   solidifyComponentThreshold?: number;
   solidifySelfIntersectionThreshold?: number;
+  /** Volumetric wrap gate: 'off' | 'auto' | 'force' (default 'auto'). */
+  wrapMode?: 'off' | 'auto' | 'force';
+  wrapMinShellTriangles?: number;
+  wrapMaxCellsPerCluster?: number;
+  wrapMaxCellsTotal?: number;
+  wrapTargetTriangleFactor?: number;
 }
 
 export interface MeshRepairResult {
@@ -89,6 +105,7 @@ interface RawMeshAnalysisJson extends UnknownRecord {
   non_manifold_vertices?: unknown;
   boundary_edges?: unknown;
   boundary_loops?: unknown;
+  largest_boundary_loop?: unknown;
   inconsistent_edges?: unknown;
   inconsistent_winding_edges?: unknown;
   degenerate_triangles?: unknown;
@@ -123,6 +140,13 @@ interface RawMeshHealthReport extends UnknownRecord {
   residual_issues?: unknown;
   fully_repaired?: unknown;
   total_ms?: unknown;
+  shells_total?: unknown;
+  shells_passthrough?: unknown;
+  shells_local?: unknown;
+  shells_unioned?: unknown;
+  shells_wrapped?: unknown;
+  shells_fallback?: unknown;
+  wrap_flags?: unknown;
 }
 
 type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown> | ArrayBuffer | ArrayBufferView, opts?: { headers?: Record<string, string> }) => Promise<T>;
@@ -167,6 +191,7 @@ function normalizeMeshAnalysis(input: unknown): MeshAnalysisJson {
     non_manifold_vertices: asNumber(raw.non_manifold_vertices),
     boundary_edges: asNumber(raw.boundary_edges),
     boundary_loops: asNumber(raw.boundary_loops),
+    largest_boundary_loop: asNumber(raw.largest_boundary_loop),
     inconsistent_edges: asNumber(raw.inconsistent_edges ?? raw.inconsistent_winding_edges),
     degenerate_triangles: asNumber(raw.degenerate_triangles),
     duplicate_triangles: asNumber(raw.duplicate_triangles),
@@ -210,6 +235,13 @@ function normalizeMeshHealthReport(input: unknown): MeshHealthReport {
     residual_issues: asStringArray(raw.residual_issues),
     fully_repaired: asBoolean(raw.fully_repaired),
     total_ms: asNumber(raw.total_ms),
+    shells_total: asNumber(raw.shells_total),
+    shells_passthrough: asNumber(raw.shells_passthrough),
+    shells_local: asNumber(raw.shells_local),
+    shells_unioned: asNumber(raw.shells_unioned),
+    shells_wrapped: asNumber(raw.shells_wrapped),
+    shells_fallback: asNumber(raw.shells_fallback),
+    wrap_flags: asStringArray(raw.wrap_flags),
   };
 }
 
@@ -314,8 +346,16 @@ export function isHeavyRepair(analysis: MeshAnalysisJson): boolean {
  * gates the (expensive-repair) confirmation prompt.
  */
 export const DEEP_REPAIR_SELF_INTERSECTION_THRESHOLD = 16;
+/** Mirrors the widened Rust trigger (wrap enabled by default): open meshes
+ *  with unfillable holes and non-manifold soups also take the deep path. */
+export const DEEP_REPAIR_NON_MANIFOLD_THRESHOLD = 8;
+export const DEEP_REPAIR_MAX_FILLABLE_LOOP = 64; // RepairOptions::fill_holes_max_edges
 export function willRunDeepRepair(analysis: MeshAnalysisJson): boolean {
-  return analysis.self_intersections >= DEEP_REPAIR_SELF_INTERSECTION_THRESHOLD;
+  return (
+    analysis.self_intersections >= DEEP_REPAIR_SELF_INTERSECTION_THRESHOLD ||
+    analysis.non_manifold_edges >= DEEP_REPAIR_NON_MANIFOLD_THRESHOLD ||
+    analysis.largest_boundary_loop > DEEP_REPAIR_MAX_FILLABLE_LOOP
+  );
 }
 
 /**

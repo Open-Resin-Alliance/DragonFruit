@@ -27,6 +27,24 @@ pub struct MeshHealthReport {
     pub residual_issues: Vec<String>,
     pub fully_repaired: bool,
     pub total_ms: f64,
+    /// Per-shell routing breakdown (deep-repair path only; all zero when the
+    /// routing did not run). Fields are `serde(default)` so VERSION stays 1.
+    #[serde(default)]
+    pub shells_total: usize,
+    #[serde(default)]
+    pub shells_passthrough: usize,
+    #[serde(default)]
+    pub shells_local: usize,
+    #[serde(default)]
+    pub shells_unioned: usize,
+    #[serde(default)]
+    pub shells_wrapped: usize,
+    #[serde(default)]
+    pub shells_fallback: usize,
+    /// Routing/wrap advisories: "thin_walls:…", "wrap_budget_exhausted",
+    /// "cluster_kept_original:…".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wrap_flags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +70,13 @@ impl MeshHealthReport {
             residual_issues: Vec::new(),
             fully_repaired: false,
             total_ms: 0.0,
+            shells_total: 0,
+            shells_passthrough: 0,
+            shells_local: 0,
+            shells_unioned: 0,
+            shells_wrapped: 0,
+            shells_fallback: 0,
+            wrap_flags: Vec::new(),
         }
     }
 }

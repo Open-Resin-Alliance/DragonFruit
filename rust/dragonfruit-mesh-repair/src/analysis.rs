@@ -415,6 +415,52 @@ fn count_components(mesh: &IndexedMesh) -> usize {
     seen.len()
 }
 
+/// All unordered intersecting triangle pairs `(lo, hi)`, same BVH walk and
+/// adjacency skips as [`count_self_intersections`]. Used where the *actual*
+/// pairs matter: shell-cluster edges in routing, and targeted intersection
+/// relaxation in the volumetric track. Note the counting semantics differ
+/// from `count_self_intersections`, which counts only the lower-index
+/// triangle of each pair.
+pub fn self_intersection_pairs(mesh: &IndexedMesh) -> Vec<(u32, u32)> {
+    if mesh.triangles.len() < 2 {
+        return Vec::new();
+    }
+    let bvh = Bvh::build(mesh);
+    let mut pairs: Vec<(u32, u32)> = (0..mesh.triangles.len())
+        .into_par_iter()
+        .fold(Vec::new, |mut acc, fi| {
+            let [a, b, c] = mesh.tri_positions(fi as u32);
+            let mut bb = Aabb::empty();
+            bb.expand(a);
+            bb.expand(b);
+            bb.expand(c);
+            let tri_a = [a, b, c];
+            let tri_verts = mesh.triangles[fi];
+            bvh.query_aabb(&bb, |other| {
+                if other <= fi as u32 {
+                    return;
+                }
+                let other_verts = mesh.triangles[other as usize];
+                for vi in tri_verts {
+                    if other_verts.contains(&vi) {
+                        return;
+                    }
+                }
+                let [oa, ob, oc] = mesh.tri_positions(other);
+                if tri_tri_intersect(tri_a, [oa, ob, oc]) {
+                    acc.push((fi as u32, other));
+                }
+            });
+            acc
+        })
+        .reduce(Vec::new, |mut a, mut b| {
+            a.append(&mut b);
+            a
+        });
+    pairs.par_sort_unstable();
+    pairs
+}
+
 /// Count triangles that have at least one non-shared-edge intersection with
 /// another triangle. Parallel over triangles; each BVH query is independent.
 pub fn count_self_intersections(mesh: &IndexedMesh) -> usize {

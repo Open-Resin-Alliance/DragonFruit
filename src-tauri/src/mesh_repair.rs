@@ -100,6 +100,12 @@ struct RepairOptionsDto {
     solidify_fragmented_components: Option<bool>,
     solidify_component_threshold: Option<usize>,
     solidify_self_intersection_threshold: Option<usize>,
+    /// "off" | "auto" | "force" — volumetric wrap gate.
+    wrap_mode: Option<String>,
+    wrap_min_shell_triangles: Option<usize>,
+    wrap_max_cells_per_cluster: Option<usize>,
+    wrap_max_cells_total: Option<usize>,
+    wrap_target_triangle_factor: Option<f32>,
 }
 
 impl From<RepairOptionsDto> for RepairOptions {
@@ -128,6 +134,29 @@ impl From<RepairOptionsDto> for RepairOptions {
             solidify_self_intersection_threshold: dto
                 .solidify_self_intersection_threshold
                 .unwrap_or(defaults.solidify_self_intersection_threshold),
+            wrap_mode: dto
+                .wrap_mode
+                .as_deref()
+                .and_then(|s| match s {
+                    "off" => Some(dragonfruit_mesh_repair::WrapMode::Off),
+                    "auto" => Some(dragonfruit_mesh_repair::WrapMode::Auto),
+                    "force" => Some(dragonfruit_mesh_repair::WrapMode::Force),
+                    _ => None,
+                })
+                .unwrap_or(defaults.wrap_mode),
+            wrap_min_shell_triangles: dto
+                .wrap_min_shell_triangles
+                .unwrap_or(defaults.wrap_min_shell_triangles),
+            wrap_max_cells_per_cluster: dto
+                .wrap_max_cells_per_cluster
+                .unwrap_or(defaults.wrap_max_cells_per_cluster),
+            wrap_max_cells_total: dto
+                .wrap_max_cells_total
+                .unwrap_or(defaults.wrap_max_cells_total),
+            wrap_target_triangle_factor: dto
+                .wrap_target_triangle_factor
+                .unwrap_or(defaults.wrap_target_triangle_factor),
+            ..defaults
         }
     }
 }

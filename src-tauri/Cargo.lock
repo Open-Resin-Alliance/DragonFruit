@@ -1424,6 +1424,7 @@ dependencies = [
  "bytemuck",
  "cdt",
  "clap",
+ "log",
  "manifold-csg",
  "quick-xml 0.31.0",
  "rayon",

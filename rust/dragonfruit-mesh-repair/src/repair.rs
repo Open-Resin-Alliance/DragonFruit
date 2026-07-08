@@ -25,7 +25,25 @@ use crate::core::halfedge::{edge_key, Topology};
 use crate::core::mesh::{IndexedMesh, Vec3};
 use crate::report::{MeshHealthReport, RepairStepReport};
 
+/// Runtime gate for the volumetric wrap track. No cargo feature: the track
+/// is pure Rust with zero extra dependencies, so it is always compiled and
+/// gated here instead (a second feature would double the `manifold`×wrap CI
+/// matrix for no build-cost win).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WrapMode {
+    /// Never route to the volumetric track (legacy whole-mesh solidify).
+    Off,
+    /// Per-shell routing with the wrap as the escalation tier (default).
+    #[default]
+    Auto,
+    /// Run the deep path (and per-shell routing) even when the trigger
+    /// heuristics would not fire.
+    Force,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RepairOptions {
     /// Relative to bbox diagonal. Vertices within this distance are welded.
     pub weld_epsilon: f32,
@@ -56,6 +74,24 @@ pub struct RepairOptions {
     /// Minimum self-intersection-triangle count in the *pre* analysis required
     /// for `solidify_fragmented_components` to auto-trigger.
     pub solidify_self_intersection_threshold: usize,
+    /// Volumetric wrap gate (see [`WrapMode`]).
+    pub wrap_mode: WrapMode,
+    /// Clusters below this triangle count (and below 1% of the mesh diagonal)
+    /// are never wrapped solo — broken debris rides along inside bigger
+    /// clusters or ships verbatim with a residual flag.
+    pub wrap_min_shell_triangles: usize,
+    /// Memory budget: max narrow-band corners for a single cluster.
+    pub wrap_max_cells_per_cluster: usize,
+    /// Memory budget: max narrow-band corners across the whole repair.
+    pub wrap_max_cells_total: usize,
+    /// Voxel size = cluster bbox diagonal / this divisor …
+    pub wrap_voxel_divisor: f32,
+    /// … clamped into [wrap_min_voxel_mm, wrap_max_voxel_mm].
+    pub wrap_min_voxel_mm: f32,
+    pub wrap_max_voxel_mm: f32,
+    /// Wrap output triangle budget = input triangles × this factor,
+    /// clamped to [2_000, 400_000].
+    pub wrap_target_triangle_factor: f32,
 }
 
 impl Default for RepairOptions {
@@ -77,6 +113,14 @@ impl Default for RepairOptions {
             solidify_fragmented_components: true,
             solidify_component_threshold: 256,
             solidify_self_intersection_threshold: 16,
+            wrap_mode: WrapMode::Auto,
+            wrap_min_shell_triangles: 64,
+            wrap_max_cells_per_cluster: 3_000_000,
+            wrap_max_cells_total: 12_000_000,
+            wrap_voxel_divisor: 220.0,
+            wrap_min_voxel_mm: 0.04,
+            wrap_max_voxel_mm: 0.8,
+            wrap_target_triangle_factor: 1.0,
         }
     }
 }
@@ -97,11 +141,22 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     // `connected_components >= solidify_component_threshold`, so single- or
     // few-shell meshes (the common case for imported models flagged broken by
     // Netfabb) never qualified even when badly self-intersecting.
+    // With per-shell routing available, open-but-not-self-intersecting
+    // garbage (large unfillable holes, non-manifold soups) also qualifies for
+    // the deep path — the wrap handles what the union structurally can't.
+    // The widened signals only apply when the wrap is enabled, so
+    // `wrap_mode: Off` preserves the legacy trigger exactly.
     let auto_solidify = options.solidify_fragmented_components
-        && pre.self_intersection_triangles >= options.solidify_self_intersection_threshold;
-    let run_self_intersection_path = options.resolve_self_intersections || auto_solidify;
+        && (pre.self_intersection_triangles >= options.solidify_self_intersection_threshold
+            || (options.wrap_mode != WrapMode::Off
+                && (pre.non_manifold_edges >= 8
+                    || pre.largest_boundary_loop > options.fill_holes_max_edges)));
+    let run_self_intersection_path = options.resolve_self_intersections
+        || auto_solidify
+        || options.wrap_mode == WrapMode::Force;
     let mut applied_self_intersection_path = false;
     let mut skip_final_orientation = false;
+    let mut routing_all_validated = false;
     let mut solidify_rollback_reason: Option<String> = None;
 
     if run_self_intersection_path {
@@ -200,14 +255,40 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     //             intersections, then keep only faces that separate inside and
     //             outside volume states. No voxel remeshing.
     if run_self_intersection_path {
+        // 4a+4b. Per-shell routing (primary deep path): partition shells into
+        // model/support groups FIRST, then repair each cluster of
+        // mutually-intersecting shells independently — healthy shells pass
+        // through untouched, and no repair job ever mixes groups, so the
+        // support split survives by construction. The legacy whole-mesh
+        // blocks below run only when the wrap is disabled.
+        if options.wrap_mode != WrapMode::Off && !applied_self_intersection_path {
+            let partition = crate::routing::partition_shells(&mesh);
+            let summary =
+                crate::routing::route_and_repair(&mut mesh, &partition, options, &mut report);
+            if summary.applied {
+                applied_self_intersection_path = true;
+                report.likely_support_geometry = summary.likely_support_geometry;
+                if let Some(mtc) = summary.model_triangle_count {
+                    if mtc < mesh.triangles.len() {
+                        report.model_triangle_count = Some(mtc);
+                    }
+                }
+                // Every shipped cluster was validated coherent-outward, so
+                // the whole-mesh ray-parity orientation vote is unnecessary
+                // (and can misfire on coincident interfaces).
+                skip_final_orientation = summary.all_validated;
+                routing_all_validated = summary.all_validated;
+            }
+        }
+
         // Fast-path: try manifold batch union before expensive orientation and
         // component-culling passes. On highly fragmented meshes this typically
         // succeeds directly and saves several seconds.
         #[cfg(feature = "manifold")]
-        {
+        if !applied_self_intersection_path {
             let analysis_before_fast = analyze(&mesh);
             let t = std::time::Instant::now();
-            match try_solidify_via_manifold_union(&mesh) {
+            match try_solidify_via_manifold_union(&mesh, options.wrap_mode != WrapMode::Off) {
                 Some((
                     unioned,
                     manifold_accepted,
@@ -362,7 +443,7 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
             #[cfg(feature = "manifold")]
             {
                 let t = std::time::Instant::now();
-                match try_solidify_via_manifold_union(&mesh) {
+                match try_solidify_via_manifold_union(&mesh, options.wrap_mode != WrapMode::Off) {
                     Some((
                         unioned,
                         manifold_accepted,
@@ -581,10 +662,14 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     // always roll back, wasting 8+ seconds per iteration. Skipping here is
     // correct: the slicing engine handles ≤ 10 NME edges fine, and attempting
     // to "fix" them only risks making the mesh worse.
-    let post_solidify_clean = applied_self_intersection_path && {
-        let s = analyze(&mesh);
-        s.is_watertight || (s.non_manifold_edges <= 10 && s.boundary_edges <= 20)
-    };
+    // When routing validated every cluster, skip the analyze() call too — a
+    // full self-intersection pass on a large wrapped mesh just to decide a
+    // short-circuit is wasted work.
+    let post_solidify_clean = applied_self_intersection_path
+        && (routing_all_validated || {
+            let s = analyze(&mesh);
+            s.is_watertight || (s.non_manifold_edges <= 10 && s.boundary_edges <= 20)
+        });
     const MAX_TOPOLOGY_ITERS: usize = 5;
     'topology_loop: for _iter in 0..MAX_TOPOLOGY_ITERS {
         if post_solidify_clean {
@@ -849,7 +934,7 @@ pub fn classify_support_split(mut mesh: IndexedMesh) -> RepairOutcome {
 ///
 /// `components` must be the output of [`triangle_components`] for `mesh`.
 /// Only triangles where `components[fi] == comp_id` are included.
-fn extract_component_submesh(mesh: &IndexedMesh, components: &[u32], comp_id: u32) -> IndexedMesh {
+pub(crate) fn extract_component_submesh(mesh: &IndexedMesh, components: &[u32], comp_id: u32) -> IndexedMesh {
     // Collect face indices for this component.
     let face_iter = mesh
         .triangles
@@ -880,16 +965,16 @@ fn extract_component_submesh(mesh: &IndexedMesh, components: &[u32], comp_id: u3
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GeometryGroup {
+pub(crate) enum GeometryGroup {
     Model,
     Support,
 }
 
-const RAFT_Z_CUTOFF_MM: f32 = 2.0;
+pub(crate) const RAFT_Z_CUTOFF_MM: f32 = 2.0;
 const TOP_MODEL_BAND_MM: f32 = 1.0;
-const MODEL_MIN_TRIS_FLOOR: usize = 200;
+pub(crate) const MODEL_MIN_TRIS_FLOOR: usize = 200;
 
-fn classify_model_support_group(
+pub(crate) fn classify_model_support_group(
     cid: usize,
     raft_z_cut: f32,
     model_seed: Option<usize>,
@@ -921,7 +1006,7 @@ fn classify_model_support_group(
     }
 }
 
-fn compute_likely_support_geometry(
+pub(crate) fn compute_likely_support_geometry(
     model_triangles_out: usize,
     support_triangles_out: usize,
     model_comp_count: usize,
@@ -981,51 +1066,17 @@ fn compute_likely_support_geometry(
 #[cfg(feature = "manifold")]
 fn try_solidify_via_manifold_union(
     mesh: &IndexedMesh,
+    wrap_rescue: bool,
 ) -> Option<(IndexedMesh, usize, usize, usize, usize, bool, usize)> {
     use manifold_csg::Manifold;
 
-    let components = triangle_components(mesh);
-    let n_comps = components.iter().copied().max().unwrap_or(0) as usize + 1;
-
-    let global_min_z = mesh
-        .positions
-        .iter()
-        .map(|p| p.z)
-        .fold(f32::INFINITY, f32::min);
-    let raft_z_cut = global_min_z + RAFT_Z_CUTOFF_MM;
-
-    let mut comp_max_z = vec![f32::NEG_INFINITY; n_comps];
-    let mut comp_tri_count = vec![0usize; n_comps];
-    for (fi, tri) in mesh.triangles.iter().enumerate() {
-        let cid = components[fi] as usize;
-        comp_tri_count[cid] += 1;
-        let z0 = mesh.positions[tri[0] as usize].z;
-        let z1 = mesh.positions[tri[1] as usize].z;
-        let z2 = mesh.positions[tri[2] as usize].z;
-        comp_max_z[cid] = comp_max_z[cid].max(z0.max(z1).max(z2));
-    }
-
-    let model_seed = (0..n_comps)
-        .filter(|&cid| comp_tri_count[cid] >= 4 && comp_max_z[cid] > raft_z_cut)
-        .max_by(|&a, &b| {
-            comp_max_z[a]
-                .partial_cmp(&comp_max_z[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    let model_min_tris = model_seed
-        .map(|seed| (comp_tri_count[seed] / 8).max(MODEL_MIN_TRIS_FLOOR))
-        .unwrap_or(MODEL_MIN_TRIS_FLOOR);
-
-    let classify_group = |cid: usize| {
-        classify_model_support_group(
-            cid,
-            raft_z_cut,
-            model_seed,
-            model_min_tris,
-            &comp_max_z,
-            &comp_tri_count,
-        )
-    };
+    // Single source of truth for the model/support decision — delegate to
+    // the same partition the per-shell routing path uses, so the two paths
+    // can never disagree about what is model and what is support.
+    let partition = crate::routing::partition_shells(mesh);
+    let components = &partition.components;
+    let n_comps = partition.n_comps;
+    let classify_group = |cid: usize| partition.group[cid];
 
     let mut model_manifolds: Vec<Manifold> = Vec::with_capacity(n_comps.min(4096));
     let mut support_manifolds: Vec<Manifold> = Vec::with_capacity(n_comps.min(4096));
@@ -1305,6 +1356,36 @@ fn try_solidify_via_manifold_union(
                             rescued = true;
                             break 'rescue2;
                         }
+                    }
+                }
+            }
+        }
+
+        if !rescued && wrap_rescue {
+            // ── Tier-2.5 rescue: volumetric wrap ─────────────────────────────
+            //
+            // Rebuild the shell as a watertight manifold from its GWN-signed
+            // narrow band instead of collapsing it to a convex hull below —
+            // the wrap preserves the actual shape (concavities, holes sealed
+            // at their rims) where the hull blobs it. Disabled when
+            // `wrap_mode: Off` so the legacy pipeline stays bit-for-bit.
+            let mut wopts =
+                crate::volumetric::WrapOptions::for_diagonal(fb.bbox().diag().max(1e-3));
+            wopts.close_radius_voxels = 2; // rejects here are typically open
+            if let Ok((wrapped, _)) = crate::volumetric::wrap_cluster(&fb, &wopts) {
+                let vert_props3: Vec<f32> = wrapped
+                    .positions
+                    .iter()
+                    .flat_map(|v| [v.x, v.y, v.z])
+                    .collect();
+                let idx3: Vec<u32> = wrapped.triangles.iter().flat_map(|t| *t).collect();
+                if let Ok(m) = Manifold::from_mesh_f32(&vert_props3, 3, &idx3) {
+                    if !m.is_empty()
+                        && m.num_tri() > 0
+                        && union_into_group(out_positions, out_triangles, &m)
+                    {
+                        fallback_rescued += 1;
+                        rescued = true;
                     }
                 }
             }
@@ -2004,7 +2085,7 @@ fn prune_unused_vertices(mesh: &mut IndexedMesh) -> usize {
 /// project loop vertices onto a best-fit plane (via normal averaging) and
 /// triangulate 2D. Convex-first greedy — does not handle self-intersecting
 /// polygons but handles the common case of small planar/near-planar holes.
-fn fill_small_holes(mesh: &mut IndexedMesh, max_edges: usize) -> usize {
+pub(crate) fn fill_small_holes(mesh: &mut IndexedMesh, max_edges: usize) -> usize {
     let topo = Topology::build(mesh);
     let loops = topo.boundary_loops();
     let mut added = 0usize;
@@ -2334,8 +2415,12 @@ fn classify_and_reorder_model_support_triangles(
         return None;
     }
 
-    let components = triangle_components(mesh);
-    let n_comps = components.iter().copied().max().unwrap_or(0) as usize + 1;
+    // Single source of truth for the model/support decision — the same
+    // partition the per-shell routing path uses (`routing::partition_shells`),
+    // so this fallback classifier can never drift from it.
+    let partition = crate::routing::partition_shells(mesh);
+    let components = &partition.components;
+    let n_comps = partition.n_comps;
     if n_comps < 2 {
         return None;
     }
@@ -2347,46 +2432,9 @@ fn classify_and_reorder_model_support_triangles(
         .iter()
         .map(|p| p.z)
         .fold(f32::INFINITY, f32::min);
-    let raft_z_cut = global_min_z + RAFT_Z_CUTOFF_MM;
-
-    let mut comp_max_z = vec![f32::NEG_INFINITY; n_comps];
-    let mut comp_min_z = vec![f32::INFINITY; n_comps];
-    let mut comp_tri_count = vec![0usize; n_comps];
-    for (fi, tri) in mesh.triangles.iter().enumerate() {
-        let cid = components[fi] as usize;
-        comp_tri_count[cid] += 1;
-        let z0 = mesh.positions[tri[0] as usize].z;
-        let z1 = mesh.positions[tri[1] as usize].z;
-        let z2 = mesh.positions[tri[2] as usize].z;
-        comp_max_z[cid] = comp_max_z[cid].max(z0.max(z1).max(z2));
-        comp_min_z[cid] = comp_min_z[cid].min(z0.min(z1).min(z2));
-    }
-
-    let model_seed = (0..n_comps)
-        .filter(|&cid| comp_tri_count[cid] >= 4 && comp_max_z[cid] > raft_z_cut)
-        .max_by(|&a, &b| {
-            comp_max_z[a]
-                .partial_cmp(&comp_max_z[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })?;
-
-    // Components with at least 1/8 of the seed's triangle count are "high-poly"
-    // and treated as model shells even if they don't reach the top Z band.
-    // This handles multi-shell models where parts sit at different heights while
-    // still separating them from the low-poly support scaffold. Support posts,
-    // cylinders, and contact tips are far below this threshold.
-    let model_min_tris = (comp_tri_count[model_seed] / 8).max(MODEL_MIN_TRIS_FLOOR);
-
-    let classify_group = |cid: usize| {
-        classify_model_support_group(
-            cid,
-            raft_z_cut,
-            Some(model_seed),
-            model_min_tris,
-            &comp_max_z,
-            &comp_tri_count,
-        )
-    };
+    let comp_tri_count = &partition.comp_tri_count;
+    let comp_min_z = &partition.comp_min_z;
+    let classify_group = |cid: usize| partition.group[cid];
 
     let mut model_comp_count = 0usize;
     let mut support_comp_count = 0usize;
@@ -2487,7 +2535,7 @@ fn classify_and_reorder_model_support_triangles(
 /// random direction and count hits. If the count is even when the component
 /// is supposed to contain the origin, or if the signed volume disagrees with
 /// the majority-normal direction, flip every triangle's winding.
-fn repair_orientation(mesh: &mut IndexedMesh) -> usize {
+pub(crate) fn repair_orientation(mesh: &mut IndexedMesh) -> usize {
     if mesh.triangles.is_empty() {
         return 0;
     }
@@ -2566,7 +2614,7 @@ fn repair_orientation(mesh: &mut IndexedMesh) -> usize {
 }
 
 /// Assign each triangle to a connected-component id (edge-shared).
-fn triangle_components(mesh: &IndexedMesh) -> Vec<u32> {
+pub(crate) fn triangle_components(mesh: &IndexedMesh) -> Vec<u32> {
     let n = mesh.triangles.len();
     let mut edge_to_face: AHashMap<(u32, u32), u32> = AHashMap::with_capacity(n * 3);
     let mut parent: Vec<u32> = (0..n as u32).collect();
