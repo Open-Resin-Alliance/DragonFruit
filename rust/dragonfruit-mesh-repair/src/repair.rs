@@ -94,6 +94,26 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     let mut applied_self_intersection_path = false;
     let mut skip_final_orientation = false;
     let mut solidify_rollback_reason: Option<String> = None;
+
+    // Deeper repairs (self-intersection resolution / manifold solidify) are the
+    // expensive path. Surface when we engage it so hosts can trace which meshes
+    // triggered heavy work and why.
+    if run_self_intersection_path {
+        log::info!(
+            "mesh-repair: engaging deeper repair (self-intersection/solidify path) — \
+             trigger={}, components={}, self_intersection_triangles={}, boundary_edges={}, triangles={}",
+            if auto_fragmented_solidify {
+                "auto-fragmented"
+            } else {
+                "explicit"
+            },
+            pre.connected_components,
+            pre.self_intersection_triangles,
+            pre.boundary_edges,
+            pre.triangle_count,
+        );
+    }
+
     let mut report = MeshHealthReport::new(pre);
 
     if auto_fragmented_solidify {
@@ -736,6 +756,19 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     report.fully_repaired = residuals.is_empty();
     report.residual_issues = residuals;
     report.total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+
+    if run_self_intersection_path {
+        log::info!(
+            "mesh-repair: deeper repair complete — applied_solidify_path={}, fully_repaired={}, \
+             residual_issues={}, si_triangles {}->{}, {:.1}ms",
+            applied_self_intersection_path,
+            report.fully_repaired,
+            report.residual_issues.len(),
+            report.pre.self_intersection_triangles,
+            report.post.self_intersection_triangles,
+            report.total_ms,
+        );
+    }
 
     RepairOutcome { mesh, report }
 }
