@@ -14,30 +14,55 @@ msgstr ""
 "Plural-Forms: \n"
 
 #: src/components/layout/EmptySceneState.tsx:52
-msgid "{deltaDays}d"
-msgstr "{deltaDays}d"
-
-#: src/components/layout/EmptySceneState.tsx:45
-#~ msgid "{deltaDays}d ago"
-#~ msgstr "hace {deltaDays}d"
+msgid "{deltaDays} d"
+msgstr "{deltaDays} d"
 
 #: src/components/layout/EmptySceneState.tsx:48
-msgid "{deltaHours}h"
-msgstr "{deltaHours}h"
-
-#: src/components/layout/EmptySceneState.tsx:42
-#~ msgid "{deltaHours}h ago"
-#~ msgstr "hace {deltaHours}h"
+msgid "{deltaHours} h"
+msgstr "{deltaHours} h"
 
 #: src/components/layout/EmptySceneState.tsx:44
-msgid "{deltaMin}m"
-msgstr "{deltaMin}m"
+msgid "{deltaMin} min"
+msgstr "{deltaMin} min"
 
-#: src/components/layout/EmptySceneState.tsx:39
-#~ msgid "{deltaMin}m ago"
-#~ msgstr "hace {deltaMin}m"
+#: src/app/page.tsx:11895
+msgid "{hours} h {minutes} min"
+msgstr "{hours} h {minutes} min"
 
-#: src/app/page.tsx:3548
+#: src/app/page.tsx:1385
+msgid "{hours} h {paddedMinutes} min"
+msgstr "{hours} h {paddedMinutes} min"
+
+#: src/app/page.tsx:1389
+msgid "{minutes} min"
+msgstr "{minutes} min"
+
+#: src/app/page.tsx:5471
+#: src/app/page.tsx:11896
+msgid "{minutes} min {paddedSeconds} s"
+msgstr "{minutes} min {paddedSeconds} s"
+
+#. Shown when the estimated print time rounds down to under one minute. Keep the "<" comparison symbol.
+#: src/app/page.tsx:1392
+msgid "< 1 min"
+msgstr "< 1 min"
+
+#. Approximate estimated print time (the "~" marks it as a rough estimate). {hours}/{mins} are whole-number quantities.
+#: src/app/page.tsx:4936
+msgid "~{hours} h {mins} min"
+msgstr "~{hours} h {mins} min"
+
+#. Approximate estimated print time under an hour (the "~" marks it as a rough estimate).
+#: src/app/page.tsx:4937
+msgid "~{mins} min"
+msgstr "~{mins} min"
+
+#. Badge next to the currently-selected printer in the fleet list (adjective describing the device, e.g. "the active one").
+#: src/components/layout/TopBar.tsx:1017
+msgid "Active"
+msgstr "Activo"
+
+#: src/app/page.tsx:3552
 msgid "Add Joint"
 msgstr "Añadir unión"
 
@@ -46,18 +71,23 @@ msgid "Add or switch printer anytime from the top bar."
 msgstr "Añade o cambia de impresora en cualquier momento desde la barra superior."
 
 #: src/components/layout/EmptySceneState.tsx:494
-msgid "Add Printer"
+msgid "Add printer"
 msgstr "Añadir impresora"
 
 #: src/components/layout/EmptySceneState.tsx:93
 msgid "Anti-aliasing: nothing to anti-alias."
 msgstr "Antialiasing: nada que suavizar."
 
+#. Cross-sectional area stats for the current print layer: "Area Σ" = total/summed solid area (Σ is the mathematical summation symbol, usually kept as-is); "Min"/"Max" = smallest/largest single contiguous area, abbreviating "Minimum"/"Maximum".
+#: src/app/page.tsx:22286
+msgid "Area Σ {totalAreaLabel} • Min {minAreaLabel} • Max {maxAreaLabel}"
+msgstr "Área Σ {totalAreaLabel} • Mín {minAreaLabel} • Máx {maxAreaLabel}"
+
 #: src/components/controls/TransformToolbar.tsx:35
 msgid "Arrange"
 msgstr "Distribuir"
 
-#: src/components/layout/TopBar.tsx:630
+#: src/components/layout/TopBar.tsx:632
 msgid "Arrange model and transforms"
 msgstr "Colocar el modelo y aplicar transformaciones"
 
@@ -74,7 +104,7 @@ msgstr "VERSIÓN BETA"
 msgid "Bring in a mesh or scene to start preparing, analyzing, supporting, and exporting your print."
 msgstr "Carga una malla o escena para empezar a preparar, analizar, añadir soportes y exportar tu impresión."
 
-#: src/components/layout/TopBar.tsx:638
+#: src/components/layout/TopBar.tsx:640
 msgid "Build and tune supports"
 msgstr "Crear y ajustar soportes"
 
@@ -82,6 +112,35 @@ msgstr "Crear y ajustar soportes"
 #: src/components/layout/EmptySceneState.tsx:660
 msgid "cached"
 msgstr "en caché"
+
+#: src/components/layout/TopBar.tsx:1269
+msgid "Changing print settings invalidates the current sliced file."
+msgstr "Cambiar los ajustes de impresión invalida el archivo laminado actual."
+
+#: src/components/layout/TopBar.tsx:1250
+msgid "Changing printer profile requires re-slice"
+msgstr "Cambiar el perfil de impresora requiere volver a laminar"
+
+#: src/components/layout/TopBar.tsx:1230
+msgid "Close"
+msgstr "Cerrar"
+
+#: src/components/layout/TopBar.tsx:922
+msgid "Close Program"
+msgstr "Cerrar programa"
+
+#: src/components/layout/TopBar.tsx:1282
+msgid "Close warning"
+msgstr "Cerrar aviso"
+
+#: src/components/layout/TopBar.tsx:1231
+msgid "Close window"
+msgstr "Cerrar ventana"
+
+#. Confirms proceeding with the profile change despite the re-slice warning above (paired with "Keep Current Profiles", which cancels).
+#: src/components/layout/TopBar.tsx:1315
+msgid "Continue"
+msgstr "Continuar"
 
 #: src/components/ui/EditorContextMenu.tsx:50
 msgid "Copy"
@@ -117,11 +176,21 @@ msgstr "Hazlo, o no lo hagas. Pero no lo intentes... espera, sólo haz clic en C
 msgid "Drag a file in. The platform is judging you."
 msgstr "Arrastra un archivo. La plataforma te está juzgando."
 
+#. "DragonFruit" is the product name and should stay untranslated/unchanged.
+#: src/components/layout/TopBar.tsx:799
+msgid "DragonFruit app menu"
+msgstr "Menú de aplicación de DragonFruit"
+
+#. "DragonFruit" is the product name and should stay untranslated/unchanged; only "menu" needs translating.
+#: src/components/layout/TopBar.tsx:688
+msgid "DragonFruit menu"
+msgstr "Menú de DragonFruit"
+
 #: src/components/layout/EmptySceneState.tsx:695
 msgid "Drop supported files"
 msgstr "Suelta archivos compatibles"
 
-#: src/app/page.tsx:3554
+#: src/app/page.tsx:3558
 #: src/components/ui/EditorContextMenu.tsx:88
 msgid "Editor"
 msgstr "Editor"
@@ -139,17 +208,32 @@ msgstr "Elemental, querido usuario: carga un modelo."
 msgid "Empty workspace"
 msgstr "Espacio de trabajo vacío"
 
+#. "Est." abbreviates "Estimated", qualifying the print-time figure that follows it (e.g. "Est. 2h 05m • 12.50 ml"), not an abbreviation of anything else.
+#: src/app/page.tsx:22278
+msgid "Est. {estimatedTimeLabel} • {usedMaterialLabel}"
+msgstr "Est. {estimatedTimeLabel} • {usedMaterialLabel}"
+
 #: src/components/layout/EmptySceneState.tsx:63
 msgid "Every great print starts with an empty scene."
 msgstr "Toda gran impresión empieza con una escena vacía."
 
-#: src/components/layout/TopBar.tsx:643
+#: src/components/layout/TopBar.tsx:645
 msgid "Export"
 msgstr "Exportar"
 
-#: src/components/layout/TopBar.tsx:646
+#: src/components/layout/TopBar.tsx:648
 msgid "Finalize and export output"
 msgstr "Finalizar y exportar el resultado"
+
+#. "Fleet" means the set of physical network printers discovered under the current printer profile, not a literal fleet of vehicles.
+#: src/components/layout/TopBar.tsx:955
+msgid "Fleet quick switch"
+msgstr "Cambio rápido de flota"
+
+#. Section heading above the list of network printers belonging to the current profile. "Units" = individual printers.
+#: src/components/layout/TopBar.tsx:958
+msgid "Fleet Units"
+msgstr "Unidades de la flota"
 
 #: src/components/layout/EmptySceneState.tsx:479
 msgid "Get started"
@@ -179,9 +263,17 @@ msgstr "Las manos ociosas no laminan."
 msgid "Import"
 msgstr "Importación"
 
+#: src/components/layout/TopBar.tsx:884
+msgid "Import Mesh…"
+msgstr "Importar malla…"
+
 #: src/components/layout/EmptySceneState.tsx:569
-msgid "Import Scene"
+msgid "Import scene"
 msgstr "Importar escena"
+
+#: src/components/layout/TopBar.tsx:906
+msgid "Import Scene…"
+msgstr "Importar escena…"
 
 #: src/components/layout/EmptySceneState.tsx:454
 msgid "Importing your file…"
@@ -192,9 +284,28 @@ msgstr "Importando tu archivo…"
 msgid "In space, no one can hear you slice."
 msgstr "En el espacio, nadie puede oírte laminar."
 
-#: src/components/layout/TopBar.tsx:654
+#: src/components/layout/TopBar.tsx:656
 msgid "Inspect sliced layers before printing"
 msgstr "Inspeccionar las capas laminadas antes de imprimir"
+
+#: src/components/layout/TopBar.tsx:1143
+#: src/components/layout/TopBar.tsx:1144
+msgid "Interior View: Off"
+msgstr "Vista interior: desactivada"
+
+#. Tooltip for a toggle button showing its current state, format "Feature name: state". Interior View is a 3D viewport mode that renders the inside of a hollowed model.
+#: src/components/layout/TopBar.tsx:1143
+#: src/components/layout/TopBar.tsx:1144
+msgid "Interior View: On"
+msgstr "Vista interior: activada"
+
+#: src/components/layout/TopBar.tsx:1144
+msgid "Interior View: Unavailable"
+msgstr "Vista interior: no disponible"
+
+#: src/components/layout/TopBar.tsx:1143
+msgid "Interior View: Unavailable (apply hollowing first)"
+msgstr "Vista interior: no disponible (aplica primero el vaciado)"
 
 #. Paraphrase of Admiral Ackbar's line from Star Wars: Return of the Jedi (1983): "It's a trap!"
 #: src/components/layout/EmptySceneState.tsx:85
@@ -205,10 +316,10 @@ msgstr "¡Es una trampa! ...es broma, suelta tu STL."
 msgid "Join the Open Resin Alliance!"
 msgstr "¡Únete a la Open Resin Alliance!"
 
-#: src/components/layout/EmptySceneState.tsx:33
-#: src/components/layout/EmptySceneState.tsx:36
-#~ msgid "just now"
-#~ msgstr "ahora mismo"
+#. Cancels the pending profile change and closes this warning dialog, leaving the previous profile selection untouched. Paired with the "Continue" button below.
+#: src/components/layout/TopBar.tsx:1300
+msgid "Keep Current Profiles"
+msgstr "Mantener perfiles actuales"
 
 #: src/components/layout/EmptySceneState.tsx:516
 msgid "Keep going without a printer. You can add one later."
@@ -219,10 +330,6 @@ msgid "last opened {period} ago"
 msgstr "abierto hace {period}"
 
 # Shows when a recent file was last accessed. {relativeOpenedAt} is a translated relative time (e.g. "just now", "5m ago"). Place {relativeOpenedAt} wherever the time fits in your language.
-#: src/components/layout/EmptySceneState.tsx:644
-#~ msgid "last opened {timeAgo}"
-#~ msgstr "abierto {timeAgo}"
-
 #: src/components/layout/EmptySceneState.tsx:652
 msgid "last opened just now"
 msgstr "abierto ahora mismo"
@@ -231,8 +338,12 @@ msgstr "abierto ahora mismo"
 msgid "Layer 0 of 0. Living dangerously."
 msgstr "Capa 0 de 0. Viviendo al límite."
 
+#: src/components/layout/TopBar.tsx:1088
+msgid "Load a model in Prepare to unlock this stage"
+msgstr "Carga un modelo en Preparar para desbloquear esta etapa"
+
 #: src/components/layout/EmptySceneState.tsx:550
-msgid "Load Mesh"
+msgid "Load mesh"
 msgstr "Cargar malla"
 
 #. Shown in place of file size while a recent file is being reopened. Keep it short.
@@ -240,14 +351,34 @@ msgstr "Cargar malla"
 msgid "loading…"
 msgstr "cargando…"
 
+#: src/app/page.tsx:22272
+msgid "Material profile unavailable"
+msgstr "Perfil de material no disponible"
+
+#: src/components/layout/TopBar.tsx:1208
+msgid "Maximize"
+msgstr "Maximizar"
+
+#: src/components/layout/TopBar.tsx:1209
+msgid "Maximize window"
+msgstr "Maximizar ventana"
+
 #. File type badge on the recent files list. Noun — labels a mesh file (.stl, .obj, .3mf).
 #: src/components/layout/EmptySceneState.tsx:644
 msgid "Mesh"
 msgstr "Malla"
 
 #: src/components/layout/EmptySceneState.tsx:553
-msgid "Mesh Files (.stl, .obj, .3mf)"
+msgid "Mesh files (.stl, .obj, .3mf)"
 msgstr "Archivos de malla (.stl, .obj, .3mf)"
+
+#: src/components/layout/TopBar.tsx:1190
+msgid "Minimize"
+msgstr "Minimizar"
+
+#: src/components/layout/TopBar.tsx:1191
+msgid "Minimize window"
+msgstr "Minimizar ventana"
 
 #: src/components/controls/TransformToolbar.tsx:32
 msgid "Mirror"
@@ -261,9 +392,24 @@ msgstr "Reflejar en X, Y o Z"
 msgid "Modify"
 msgstr "Modificar"
 
+#. Topbar button that opens the live print-progress monitoring view for the active printer. Refers to the monitoring feature, not a display screen.
+#: src/components/layout/TopBar.tsx:563
+msgid "Monitor"
+msgstr "Monitor"
+
 #: src/components/controls/TransformToolbar.tsx:30
 msgid "Move, rotate, and scale"
 msgstr "Mover, rotar y escalar"
+
+#: src/components/layout/TopBar.tsx:540
+#: src/components/layout/TopBar.tsx:547
+#: src/components/layout/TopBar.tsx:555
+msgid "No active printer"
+msgstr "Sin impresora activa"
+
+#: src/components/layout/TopBar.tsx:1012
+msgid "No IP"
+msgstr "Sin IP"
 
 #: src/components/layout/EmptySceneState.tsx:606
 msgid "No recent files yet."
@@ -282,6 +428,11 @@ msgstr "No todos los laminadores son iguales. ¡Este es gratis!"
 msgid "Nothing to see here. Yet."
 msgstr "Nada que ver aquí. Todavía."
 
+#: src/components/layout/TopBar.tsx:563
+#: src/components/layout/TopBar.tsx:1012
+msgid "Offline"
+msgstr "Sin conexión"
+
 #. Toolbar button label. Short for "lay the model flat on a selected face"; keep it terse so the toolbar pill stays narrow.
 #: src/components/controls/TransformToolbar.tsx:31
 msgid "On-Face"
@@ -292,9 +443,27 @@ msgstr "Sobre cara"
 msgid "One does not simply import a mesh... or actually, you just click a button."
 msgstr "No se importa una malla sin más... aunque en realidad sí, solo hay que hacer clic en un botón."
 
+#: src/components/layout/TopBar.tsx:1012
+msgid "Online"
+msgstr "En línea"
+
+#. "DragonFruit" is the product name and should stay untranslated/unchanged.
+#: src/components/layout/TopBar.tsx:689
+msgid "Open DragonFruit menu"
+msgstr "Abrir menú de DragonFruit"
+
 #: src/components/layout/EmptySceneState.tsx:497
 msgid "Open printer library and add one now."
 msgstr "Abre la biblioteca de impresoras y añade una ahora."
+
+#: src/components/layout/TopBar.tsx:770
+#: src/components/layout/TopBar.tsx:771
+msgid "Open printer monitor"
+msgstr "Abrir monitor de impresora"
+
+#: src/components/layout/TopBar.tsx:862
+msgid "Open Scene…"
+msgstr "Abrir escena…"
 
 #: src/components/controls/TransformToolbar.tsx:31
 msgid "Orient flat against plate"
@@ -308,13 +477,49 @@ msgstr "Pegar"
 msgid "Please hang tight while we prepare your scene."
 msgstr "Espera un momento mientras preparamos tu escena."
 
-#: src/components/layout/TopBar.tsx:627
+#: src/components/layout/TopBar.tsx:629
 msgid "Prepare"
 msgstr "Preparar"
 
-#: src/components/layout/TopBar.tsx:651
+#. Static field-label shown above the printer name in the topbar badge (like "Printer: <name>"), not an instruction. Only shown when a profile has a single printer, so there is no fleet to pick from.
+#: src/components/layout/TopBar.tsx:536
+msgid "Printer"
+msgstr "Impresora"
+
+#. Fallback shown only when a network printer has no display name, host name, or IP address yet. {0} is an internal device identifier, not a human-friendly value.
+#. placeholder {0}: device.id
+#: src/components/layout/TopBar.tsx:964
+msgid "Printer {0}"
+msgstr "Impresora {0}"
+
+#. placeholder {0}: activePrinterProfile.name
+#: src/components/layout/TopBar.tsx:558
+msgid "Printer profile {0}"
+msgstr "Perfil de impresora {0}"
+
+#. Same distinction as the title tooltip above (profile = saved configuration, printer = connected physical device), phrased for screen readers without the bullet separator.
+#: src/components/layout/TopBar.tsx:556
+msgid "Printer profile {profileName}, active printer {printerName}"
+msgstr "Perfil de impresora {profileName}, impresora activa {printerName}"
+
+#. placeholder {0}: activePrinterProfile.name
+#: src/components/layout/TopBar.tsx:550
+msgid "Printer profile: {0}"
+msgstr "Perfil de impresora: {0}"
+
+#. "Printer profile" is the saved configuration (material, output format, etc.); "Active printer" is the physical network device currently connected under that profile. The two are distinct concepts that happen to both contain the word "printer".
+#: src/components/layout/TopBar.tsx:548
+msgid "Printer profile: {profileName} • Active printer: {printerName}"
+msgstr "Perfil de impresora: {profileName} • Impresora activa: {printerName}"
+
+#: src/components/layout/TopBar.tsx:653
 msgid "Printing"
 msgstr "Imprimir"
+
+#. "Slice"/"re-slice" is the 3D-printing step that converts a model into printer instructions (G-code). This dialog warns that switching printer profile invalidates the already-sliced file.
+#: src/components/layout/TopBar.tsx:1266
+msgid "Re-slice required after profile change"
+msgstr "Es necesario volver a laminar tras cambiar de perfil"
 
 #: src/components/layout/EmptySceneState.tsx:59
 msgid "Ready for your next adventure?"
@@ -333,10 +538,30 @@ msgstr "Reabrir {0}"
 msgid "Repair"
 msgstr "Reparar"
 
+#: src/components/layout/TopBar.tsx:1208
+msgid "Restore"
+msgstr "Restaurar"
+
+#: src/components/layout/TopBar.tsx:1209
+msgid "Restore window"
+msgstr "Restaurar ventana"
+
 #. Paraphrase of Doc Brown's line from Back to the Future (1985): "Roads? Where we're going, we don't need roads."
 #: src/components/layout/EmptySceneState.tsx:88
 msgid "Roads? Where we're printing, we don't need roads."
 msgstr "¿Carreteras? Donde imprimimos, no necesitamos carreteras."
+
+#: src/components/layout/TopBar.tsx:1087
+msgid "Run slicing in Export to unlock Printing preview"
+msgstr "Lamina en Exportar para desbloquear la vista previa de Impresión"
+
+#: src/components/layout/TopBar.tsx:822
+msgid "Save Scene"
+msgstr "Guardar escena"
+
+#: src/components/layout/TopBar.tsx:842
+msgid "Save Scene As…"
+msgstr "Guardar escena como…"
 
 #. File type badge on the recent files list. Noun — labels a saved scene file (.voxl, .lys).
 #: src/components/layout/EmptySceneState.tsx:643
@@ -344,7 +569,7 @@ msgid "Scene"
 msgstr "Escena"
 
 #: src/components/layout/EmptySceneState.tsx:572
-msgid "Scene Files (.voxl, .lys)"
+msgid "Scene files (.voxl, .lys)"
 msgstr "Archivos de escena (.voxl, .lys)"
 
 #: src/components/controls/TransformToolbar.tsx:34
@@ -359,19 +584,54 @@ msgstr "Seleccionar"
 msgid "Select and inspect model"
 msgstr "Seleccionar e inspeccionar el modelo"
 
+#: src/components/layout/TopBar.tsx:542
+msgid "Select printer"
+msgstr "Seleccionar impresora"
+
+#: src/components/layout/TopBar.tsx:550
+#: src/components/layout/TopBar.tsx:558
+msgid "Select printer profile"
+msgstr "Seleccionar perfil de impresora"
+
+#: src/components/layout/TopBar.tsx:534
+#: src/components/layout/TopBar.tsx:546
+#: src/components/layout/TopBar.tsx:554
+msgid "Select profile"
+msgstr "Seleccionar perfil"
+
+#: src/components/layout/TopBar.tsx:770
+#: src/components/layout/TopBar.tsx:771
+msgid "Selected printer is offline"
+msgstr "La impresora seleccionada está sin conexión"
+
+#: src/components/layout/TopBar.tsx:1160
+#: src/components/layout/TopBar.tsx:1161
+msgid "Settings"
+msgstr "Ajustes"
+
+#. Opens the Printer Manager screen (printer profile settings), reached from this quick-switch popover. "Manager" refers to that screen, kept as a menu-style label so it stays Title Case.
+#: src/components/layout/TopBar.tsx:1034
+msgid "Show Manager"
+msgstr "Mostrar gestor"
+
+#: src/components/layout/TopBar.tsx:1084
+msgid "Slicing in progress. Topbar actions are temporarily disabled."
+msgstr "Laminado en curso. Las acciones de la barra superior están temporalmente deshabilitadas."
+
 #: src/components/controls/TransformToolbar.tsx:34
 msgid "Smooth"
 msgstr "Suavizar"
 
+#. Context-menu command that detaches the generated support scaffolding at the clicked point. "Supports" = the temporary print scaffolding structures, not customer support.
 #: src/components/ui/EditorContextMenu.tsx:53
 msgid "Split Supports"
-msgstr ""
+msgstr "Dividir soportes"
 
-#: src/components/layout/TopBar.tsx:635
+#: src/components/layout/TopBar.tsx:637
 msgid "Support"
 msgstr "Soportes"
 
-#: src/app/page.tsx:3554
+#: src/app/page.tsx:3558
 msgid "Supports"
 msgstr "Soportes"
 
@@ -404,17 +664,17 @@ msgstr "Esta escena está agresivamente desocupada."
 msgid "Time to make something real."
 msgstr "Es hora de crear algo real."
 
-#. Tip shown below the import buttons. <0> wraps the highlighted label 'Load Mesh'; <1> wraps 'Import Scene'. Keep both placeholders in your translation.
+#. Tip shown below the import buttons. <0> wraps the highlighted label 'Load mesh'; <1> wraps 'Import scene'. These match the button labels above verbatim (same casing) — keep them consistent with however you translated those buttons. Keep both placeholders in your translation.
 #: src/components/layout/EmptySceneState.tsx:579
-msgid "Tip: Start with <0>Load Mesh</0> for clean prints, or <1>Import Scene</1> to continue an existing setup."
+msgid "Tip: Start with <0>Load mesh</0> for clean prints, or <1>Import scene</1> to continue an existing setup."
 msgstr "Consejo: empieza con <0>Cargar malla</0> para impresiones limpias, o <1>Importar escena</1> para continuar con una configuración existente."
 
-#: src/app/page.tsx:3543
+#: src/app/page.tsx:3547
 msgid "Toggle Curve"
 msgstr "Alternar curva"
 
 #: src/components/layout/EmptySceneState.tsx:695
-msgid "Unsupported File Type"
+msgid "Unsupported file type"
 msgstr "Tipo de archivo no compatible"
 
 #: src/components/layout/EmptySceneState.tsx:715
@@ -422,8 +682,12 @@ msgid "Unsupported format detected. Please drop STL, OBJ, 3MF, VOXL, or LYS file
 msgstr "Formato no compatible. Suelta archivos STL, OBJ, 3MF, VOXL o LYS."
 
 #: src/components/layout/EmptySceneState.tsx:513
-msgid "Use without Printer"
+msgid "Use without printer"
 msgstr "Usar sin impresora"
+
+#: src/components/layout/TopBar.tsx:1134
+msgid "View mode"
+msgstr "Modo de vista"
 
 #: src/components/layout/EmptySceneState.tsx:90
 msgid "Waiting for first layer adhesion... to reality."
@@ -443,10 +707,18 @@ msgstr "¿Qué imprimimos hoy?"
 msgid "Why so empty?"
 msgstr "¿Por qué tan vacío?"
 
+#: src/components/layout/TopBar.tsx:1176
+msgid "Window controls"
+msgstr "Controles de ventana"
+
 #. Paraphrase of the Spider-Man motto, originating in Amazing Fantasy #15 (1962): "With great power comes great responsibility."
 #: src/components/layout/EmptySceneState.tsx:80
 msgid "With great resin comes great responsibility."
 msgstr "Una gran resina conlleva una gran responsabilidad."
+
+#: src/components/layout/TopBar.tsx:1291
+msgid "You can continue to adjust profiles, but you’ll be prompted to re-slice before printing with the updated settings."
+msgstr "Puedes seguir ajustando los perfiles, pero se te pedirá que vuelvas a laminar antes de imprimir con los ajustes actualizados."
 
 #. Paraphrase of Gandalf's line from The Lord of the Rings: The Fellowship of the Ring (2001): "You shall not pass!"
 #: src/components/layout/EmptySceneState.tsx:78
