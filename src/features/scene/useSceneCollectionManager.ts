@@ -2055,19 +2055,6 @@ export function useSceneCollectionManager() {
             nativeProcessingMode: getSavedImportDefaultsSettings().autoRepair ? 'auto' : 'none',
             filePath: (file as File & { filePath?: string }).filePath,
             onNativeProcessingStage: (stage: string) => {
-              if (stage === 'deep-repairing') {
-                setImportProgress({
-                  active: true,
-                  type: 'mesh',
-                  label: 'Performing Deeper Repairs…',
-                  detail: files.length > 1
-                    ? `${i + 1}/${files.length}: ${file.name}`
-                    : `Deep-repairing ${file.name}`,
-                  progress: null,
-                });
-                return;
-              }
-
               if (stage === 'repairing') {
                 setImportProgress({
                   active: true,
@@ -3808,19 +3795,6 @@ export function useSceneCollectionManager() {
           onNativeProcessingStage: (stage) => {
             if (options?.suppressProgress) return;
 
-            if (stage === 'deep-repairing') {
-              setImportProgress({
-                active: true,
-                type: 'scene',
-                label: `Importing ${pluginImport.fileType.displayName}…`,
-                detail: normalizedPayloads.length > 1
-                  ? `Performing Deeper Repairs — Mesh ${processedItems.length + 1}/${normalizedPayloads.length}`
-                  : `Performing Deeper Repairs — ${file.name}`,
-                progress: null,
-              });
-              return;
-            }
-
             if (stage === 'repairing') {
               setImportProgress({
                 active: true,
@@ -4149,17 +4123,6 @@ export function useSceneCollectionManager() {
             geometry = await loadMeshGeometry(url, embeddedName, {
             nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
             onNativeProcessingStage: (stage) => {
-              if (stage === 'deep-repairing') {
-                setImportProgress({
-                  active: true,
-                  type: 'scene',
-                  label: 'Importing VOXL Scene…',
-                  detail: `Performing Deeper Repairs — Mesh ${i + 1}/${document.models.length}: ${model.name}`,
-                  progress: null,
-                });
-                return;
-              }
-
               if (stage === 'repairing') {
                 setImportProgress({
                   active: true,

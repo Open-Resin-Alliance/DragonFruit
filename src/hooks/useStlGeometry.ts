@@ -109,7 +109,7 @@ export interface ProcessGeometryOptions {
    * Optional status callback for native mesh processing stages.
    * Useful for surfacing progress text in import loading overlays.
    */
-  onNativeProcessingStage?: (stage: 'analyzing' | 'repairing' | 'deep-repairing' | 'classifying' | 'postprocess') => void;
+  onNativeProcessingStage?: (stage: 'analyzing' | 'repairing' | 'classifying' | 'postprocess') => void;
   /**
    * When running in Tauri, the on-disk file path for native (Rust-side) mesh
    * loading. If provided, `loadStlGeometry` will use a Tauri IPC command to
@@ -290,9 +290,6 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
     } else try {
       let classifyOnly = nativeMode === 'classify-only' || nativeMode === 'none';
       const forceRepair = nativeMode === 'repair';
-      // Tracks whether the pre-repair analysis flagged this mesh for the heavy
-      // solidification path, so we can surface a "deeper repairs" stage.
-      let deepRepair = false;
 
       // If a confirmation callback is wired up, run a quick pre-repair analysis
       // so we can ask the user before committing to a heavy solidification pass.
@@ -302,7 +299,6 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
           console.log(`[${new Date().toISOString()}] [processGeometry] Running pre-repair analysis`);
           const analysis = await analyzeFromGeometry(geometry);
           if (analysis && isHeavyRepair(analysis)) {
-            deepRepair = true;
             console.log(
               `[processGeometry] Heavy repair detected (components=${analysis.component_count}, ` +
               `self_intersections=${analysis.self_intersections}). Requesting user confirmation.`,
@@ -322,7 +318,7 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
         }
       }
 
-      options.onNativeProcessingStage?.(classifyOnly ? 'classifying' : deepRepair ? 'deep-repairing' : 'repairing');
+      options.onNativeProcessingStage?.(classifyOnly ? 'classifying' : 'repairing');
       console.log(`[${new Date().toISOString()}] [processGeometry] Running native ${classifyOnly ? 'classification' : 'repair/classification'}`);
       const nativeStart = performance.now();
       const result = classifyOnly
