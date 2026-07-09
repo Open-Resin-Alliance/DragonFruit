@@ -1,6 +1,8 @@
 import { i18n } from "@lingui/core";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import { messages as enMessages } from "./locales/en.js";
 
-export const SUPPORTED_LOCALES = ["en", "es", "de", "fr"] as const;
+export const SUPPORTED_LOCALES = ["en", "es", "de", "fr", "sk", "cs"] as const;
 export type Locale = (typeof SUPPORTED_LOCALES)[number];
 
 // Native-language labels for the language switcher.
@@ -9,6 +11,8 @@ export const LOCALE_LABELS: Record<Locale, string> = {
   es: "Español",
   de: "Deutsch",
   fr: "Français",
+  sk: "Slovenčina",
+  cs: "Čeština",
 };
 
 const STORAGE_KEY = "dragonfruit.locale";
@@ -19,8 +23,9 @@ function isSupported(value: string): value is Locale {
 }
 
 // Bootstrap: activate English immediately so components render without waiting.
-// For the source locale an empty catalog is correct — strings pass through as-is.
-i18n.load(DEFAULT_LOCALE, {});
+// The compiled catalog must be loaded (not {}) so SSR/SSG can resolve the SWC-
+// generated message IDs; an empty catalog would cause "Uncompiled message" errors.
+i18n.load(DEFAULT_LOCALE, enMessages);
 i18n.activate(DEFAULT_LOCALE);
 
 // Resolve the initial locale, client-side only:
