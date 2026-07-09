@@ -703,7 +703,11 @@ fn derive_wrap_options(
             0.0
         },
         target_triangles: target,
-        feature_angle_deg: 35.0,
+        // 45° (was 35°): shallow fillets / slightly-rounded edges below this are
+        // treated as smooth so they get full Taubin+reproject smoothing instead
+        // of being frozen as feature lines and left serrated. True mechanical
+        // edges (~90°) stay features and keep their crease.
+        feature_angle_deg: 45.0,
         max_active_corners: options.wrap_max_cells_per_cluster,
         // 2.5 voxels: DC vertices roam their cell (~0.87 voxel) and feature
         // corners erode slightly under decimation; genuine missing geometry

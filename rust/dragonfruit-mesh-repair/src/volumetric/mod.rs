@@ -71,7 +71,9 @@ impl WrapOptions {
             close_radius_voxels: 0,
             hole_bridge_mm: 0.0,
             target_triangles: 400_000,
-            feature_angle_deg: 35.0,
+            // 45°: shallow fillets smooth instead of freezing as serrated
+            // feature lines; true sharp edges (~90°) still preserved.
+            feature_angle_deg: 45.0,
             max_active_corners: 16_000_000,
             fidelity_max_dist: 2.0 * voxel,
         }
