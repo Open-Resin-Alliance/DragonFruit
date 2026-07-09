@@ -116,19 +116,21 @@ impl Default for RepairOptions {
             wrap_mode: WrapMode::Auto,
             wrap_min_shell_triangles: 64,
             // Budgets sized for detail preservation: a 16M-corner band is
-            // ~1.1 GB peak for one cluster (clusters run sequentially, so
-            // this — not the total — is the RAM driver). It lets a ~180 mm
-            // model wrap near ~0.15 mm voxels instead of falling back.
-            wrap_max_cells_per_cluster: 16_000_000,
-            wrap_max_cells_total: 48_000_000,
-            // Fidelity-first resolution: voxel = diag / 300 clamped to
-            // [0.03, 0.15] mm. The 0.15 ceiling (was 0.8) is what keeps gun
-            // barrels / thin features from melting into voxel-scale facets;
-            // the area-based auto-rescale in `wrap_cluster` only coarsens when
-            // a cluster's band would blow the corner budget.
-            wrap_voxel_divisor: 300.0,
+            // ~2 GB peak for one cluster (clusters run sequentially, so
+            // this — not the total — is the RAM driver). Raised 16M→28M so a
+            // finer voxel ceiling (0.10 mm) actually survives on a large model
+            // instead of being auto-coarsened back to fit the budget.
+            wrap_max_cells_per_cluster: 28_000_000,
+            wrap_max_cells_total: 84_000_000,
+            // Fidelity-first resolution: voxel = diag / 350 clamped to
+            // [0.03, 0.10] mm. The ceiling (0.15→0.10) buys finer topology-scale
+            // detail (barrel gaps) at ~2 GB; sub-voxel *edge* refinement (remesh
+            // sizing_min = 0.5·voxel, in `wrap_cluster`) recovers rounded-edge
+            // fillet detail for free on top. The area-based auto-rescale in
+            // `wrap_cluster` only coarsens when a band would blow the budget.
+            wrap_voxel_divisor: 350.0,
             wrap_min_voxel_mm: 0.03,
-            wrap_max_voxel_mm: 0.15,
+            wrap_max_voxel_mm: 0.10,
             // Keep the output near the DC (voxel-resolution) density — decimate
             // only when the wrap would otherwise emit an unreasonable count.
             wrap_target_triangle_factor: 2.0,

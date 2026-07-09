@@ -64,7 +64,7 @@ impl WrapOptions {
     /// Fidelity-first: fine voxels (≤ 0.15 mm) with a generous corner budget;
     /// `wrap_cluster` auto-coarsens only if the band would exceed the budget.
     pub fn for_diagonal(diag_mm: f32) -> Self {
-        let voxel = (diag_mm / 300.0).clamp(0.03, 0.15);
+        let voxel = (diag_mm / 350.0).clamp(0.03, 0.10);
         Self {
             voxel_mm: voxel,
             band_halfwidth_voxels: 3.0,
@@ -74,7 +74,7 @@ impl WrapOptions {
             // 45°: shallow fillets smooth instead of freezing as serrated
             // feature lines; true sharp edges (~90°) still preserved.
             feature_angle_deg: 45.0,
-            max_active_corners: 16_000_000,
+            max_active_corners: 28_000_000,
             fidelity_max_dist: 2.0 * voxel,
         }
     }
@@ -217,12 +217,15 @@ pub fn wrap_cluster(
         &remesh::RemeshParams {
             target_triangles: opts.target_triangles,
             feature_angle_deg: opts.feature_angle_deg,
-            // Keep edges short so flat regions retain their DC tessellation
-            // instead of being coarsened into voxel-scale facets. sizing_max
-            // was 8·voxel — the direct cause of the "edges too long" faceting.
-            sizing_min: 1.0 * voxel,
+            // sizing_min = 0.5·voxel (was 1.0) lets the curvature-adaptive field
+            // subdivide fillets/rounded edges SUB-voxel; those new midpoint verts
+            // are reprojected onto the true surface each iteration, recovering
+            // rounded-edge detail at the same voxel/RAM. Flat regions keep large
+            // L (up to sizing_max), so the extra triangles land only where the
+            // surface curves. sizing_max was 8·voxel — the old faceting cause.
+            sizing_min: 0.5 * voxel,
             sizing_max: 2.5 * voxel,
-            iterations: 3,
+            iterations: 4,
             reproject_max_dist: 1.5 * voxel,
             // De-quantize the voxel staircase: feature verts (which dominate a
             // mechanical model and are otherwise left at their DC grid position
