@@ -30,6 +30,20 @@ pub struct RemeshParams {
     /// only when the reference is within this distance — gap-fill regions
     /// synthesized by the wrap must not get dragged onto a distant hole rim.
     pub reproject_max_dist: f32,
+    /// After the quality loop, reproject *all* live vertices (including
+    /// feature verts) onto the reference surface. `smooth_pass` leaves feature
+    /// vertices at their voxel-quantized DC positions; on a mechanical model
+    /// nearly every edge is a feature, so that staircase dominates the output.
+    /// This pass lands feature verts on the true crease (de-quantized) without
+    /// tangentially smoothing them, so creases are preserved. No-op without a
+    /// reference. Off ⇒ legacy behaviour.
+    pub reproject_features: bool,
+    /// Taubin λ/μ polish passes on non-feature verts after the quality loop
+    /// (0 disables). Removes the residual voxel staircase on smooth panels that
+    /// tangential-only `smooth_pass` cannot, without net shrinkage.
+    pub taubin_iterations: usize,
+    pub taubin_lambda: f32,
+    pub taubin_mu: f32,
 }
 
 impl Default for RemeshParams {
@@ -41,6 +55,10 @@ impl Default for RemeshParams {
             sizing_max: 10.0,
             iterations: 4,
             reproject_max_dist: f32::INFINITY,
+            reproject_features: false,
+            taubin_iterations: 0,
+            taubin_lambda: 0.53,
+            taubin_mu: -0.55,
         }
     }
 }
@@ -71,6 +89,19 @@ pub fn remesh(
         em.flip_pass(params);
         em.smooth_pass(params, reference);
         rounds += 1;
+    }
+    // Polish: flatten residual voxel staircase on the smooth panels (Taubin,
+    // non-feature verts), then pin *every* vertex — creases included — back
+    // onto the true surface so nothing is left at a voxel-quantized position.
+    // Reprojection runs last so the smoothing above cannot drift geometry off
+    // the model. Both are no-ops under the defaults (legacy behaviour).
+    for _ in 0..params.taubin_iterations {
+        em.taubin_pass(params);
+    }
+    if params.reproject_features {
+        if let Some(reference) = reference {
+            em.reproject_pass(params, reference);
+        }
     }
     em.compact()
 }
@@ -712,8 +743,14 @@ impl EditMesh {
             }
             moved.push((v, p));
         }
-        // Apply with a fold-over revert: skip the move if any incident face
-        // flips against its previous normal.
+        self.commit_moves(moved);
+    }
+
+    /// Apply a batch of vertex moves with a fold-over revert: a move is skipped
+    /// if it flips any incident face against its previous normal (keeps the
+    /// mesh manifold and inversion-free). Shared by `smooth_pass`,
+    /// `taubin_pass`, and `reproject_pass`.
+    fn commit_moves(&mut self, moved: Vec<(u32, Vec3)>) {
         for (v, p) in moved {
             let old = self.pos[v as usize];
             let mut ok = true;
@@ -733,6 +770,57 @@ impl EditMesh {
             if !ok {
                 self.pos[v as usize] = old;
             }
+        }
+    }
+
+    /// Snap every live vertex onto the closest point of the reference (input)
+    /// surface, clamped to `reproject_max_dist`. Unlike `smooth_pass` this
+    /// INCLUDES feature vertices — it moves them onto the true crease instead
+    /// of leaving them at their voxel-quantized DC position — but it does not
+    /// tangentially smooth, so creases are preserved. Fold-over reverts (via
+    /// `commit_moves`) keep it manifold; the reproject cap stops a barrel-wall
+    /// vertex from snapping across a thin gap onto a neighbour.
+    fn reproject_pass(&mut self, params: &RemeshParams, reference: (&IndexedMesh, &Bvh)) {
+        let (rmesh, rbvh) = reference;
+        let mut moved: Vec<(u32, Vec3)> = Vec::new();
+        for v in 0..self.pos.len() as u32 {
+            if !self.vert_alive[v as usize] {
+                continue;
+            }
+            let (d2, _, q) = rbvh.closest_point(rmesh, self.pos[v as usize]);
+            if d2.sqrt() <= params.reproject_max_dist {
+                moved.push((v, q));
+            }
+        }
+        self.commit_moves(moved);
+    }
+
+    /// Feature-preserving Taubin (λ|μ) smoothing on non-feature verts. Applies
+    /// the FULL Laplacian (normal component included — that is what flattens
+    /// the voxel staircase) in a λ (shrink) then μ (unshrink, larger magnitude)
+    /// step, so net volume is preserved. Feature verts stay locked, so creases
+    /// survive; `reproject_pass` afterwards recovers any minor drift on flats.
+    fn taubin_pass(&mut self, params: &RemeshParams) {
+        for &factor in &[params.taubin_lambda, params.taubin_mu] {
+            let (_, fcount) = self.classify_features(params.feature_angle_deg);
+            let mut moved: Vec<(u32, Vec3)> = Vec::new();
+            for v in 0..self.pos.len() as u32 {
+                if !self.vert_alive[v as usize] || fcount[v as usize] > 0 {
+                    continue;
+                }
+                let nbrs = self.neighbors(v);
+                if nbrs.len() < 3 {
+                    continue;
+                }
+                let mut centroid = Vec3::ZERO;
+                for &w in &nbrs {
+                    centroid = centroid.add(self.pos[w as usize]);
+                }
+                centroid = centroid.scale(1.0 / nbrs.len() as f32);
+                let d = centroid.sub(self.pos[v as usize]).scale(factor);
+                moved.push((v, self.pos[v as usize].add(d)));
+            }
+            self.commit_moves(moved);
         }
     }
 

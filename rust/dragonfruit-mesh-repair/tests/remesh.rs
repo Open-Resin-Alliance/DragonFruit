@@ -171,6 +171,7 @@ fn remesh_random_params_never_break_manifoldness() {
             sizing_max: rng.range(0.2, 1.0),
             iterations: 1 + (rng.next_u64() % 5) as usize,
             reproject_max_dist: rng.range(0.05, 0.5),
+            ..Default::default()
         };
         let out = remesh(mesh, Some((mesh, &bvh)), &params);
         assert!(out.triangle_count() >= 4, "round {round}: collapsed away");

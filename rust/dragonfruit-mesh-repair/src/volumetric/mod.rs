@@ -222,6 +222,16 @@ pub fn wrap_cluster(
             sizing_max: 2.5 * voxel,
             iterations: 3,
             reproject_max_dist: 1.5 * voxel,
+            // De-quantize the voxel staircase: feature verts (which dominate a
+            // mechanical model and are otherwise left at their DC grid position
+            // by smooth_pass) get pinned onto the true crease, and the smooth
+            // panels get a Taubin polish. Removes the faceting at the *same*
+            // triangle count — no resolution/RAM increase. The fidelity gate
+            // still guards the result, so an over-smooth falls back to raw DC.
+            reproject_features: true,
+            taubin_iterations: 4,
+            taubin_lambda: 0.53,
+            taubin_mu: -0.55,
         },
     );
     report.timings_ms[3] = t.elapsed().as_secs_f64() * 1000.0;
