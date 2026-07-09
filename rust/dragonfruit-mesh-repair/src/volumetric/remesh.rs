@@ -757,28 +757,38 @@ impl EditMesh {
         self.commit_moves(moved);
     }
 
-    /// Apply a batch of vertex moves with a fold-over revert: a move is skipped
-    /// if it flips any incident face against its previous normal (keeps the
-    /// mesh manifold and inversion-free). Shared by `smooth_pass`,
-    /// `taubin_pass`, and `reproject_pass`.
+    /// Apply a batch of vertex moves, each damped by a short line search so it
+    /// never flips an incident face (keeps the mesh manifold and
+    /// inversion-free). Shared by `smooth_pass`, `taubin_pass`,
+    /// `reproject_pass`, and `feature_line_smooth_pass`.
+    ///
+    /// A *full* revert (the old behaviour) leaves a vertex whose full move would
+    /// fold stuck at its raw voxel position while its neighbours smooth around
+    /// it — an isolated stuck vertex reads as a serration/scar. Instead we take
+    /// the largest fraction of the move that does not fold, so a stuck vertex
+    /// still follows its neighbourhood partway. Only a move that folds even at
+    /// 1/8 is fully reverted.
     fn commit_moves(&mut self, moved: Vec<(u32, Vec3)>) {
         for (v, p) in moved {
             let old = self.pos[v as usize];
-            let mut ok = true;
             let before: SmallVec<[(u32, Vec3); 8]> = self.vert_faces[v as usize]
                 .iter()
                 .filter(|&&f| self.face_alive(f))
                 .map(|&f| (f, self.face_normal(f)))
                 .collect();
-            self.pos[v as usize] = p;
-            for (f, nb) in &before {
-                let na = self.face_normal(*f);
-                if na == Vec3::ZERO || (nb != &Vec3::ZERO && nb.dot(na) < 0.05) {
-                    ok = false;
+            let mut committed = false;
+            for &frac in &[1.0f32, 0.5, 0.25, 0.125] {
+                self.pos[v as usize] = old.add(p.sub(old).scale(frac));
+                let folds = before.iter().any(|(f, nb)| {
+                    let na = self.face_normal(*f);
+                    na == Vec3::ZERO || (*nb != Vec3::ZERO && nb.dot(na) < 0.05)
+                });
+                if !folds {
+                    committed = true;
                     break;
                 }
             }
-            if !ok {
+            if !committed {
                 self.pos[v as usize] = old;
             }
         }
