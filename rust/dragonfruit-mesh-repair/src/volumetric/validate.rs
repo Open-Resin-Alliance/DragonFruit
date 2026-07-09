@@ -49,6 +49,26 @@ pub fn validate_invariants(mesh: &IndexedMesh) -> Result<(), WrapError> {
     Ok(())
 }
 
+/// Count knife-fold edges: manifold edges whose two faces have nearly
+/// opposite normals. A folded-over triangle keeps index-winding consistency
+/// and positive total volume — so it slips past every topological gate — yet
+/// it renders backfacing ("inverted faces") and double-counts winding in the
+/// slicer's scanline fill. Genuine geometry never needs a < 2.6° dihedral
+/// gap at wrap resolution, so any hit is a solver artifact.
+pub fn fold_edge_count(mesh: &IndexedMesh) -> usize {
+    let topo = Topology::build(mesh);
+    topo.edges
+        .values()
+        .filter(|info| {
+            info.faces.len() == 2 && {
+                let n0 = mesh.tri_normal(info.faces[0]);
+                let n1 = mesh.tri_normal(info.faces[1]);
+                n0 != Vec3::ZERO && n1 != Vec3::ZERO && n0.dot(n1) < -0.999
+            }
+        })
+        .count()
+}
+
 /// Deterministic area-weighted surface samples (LCG; no rand dependency).
 pub fn area_weighted_samples(mesh: &IndexedMesh, n: usize, seed: u64) -> Vec<(Vec3, u32)> {
     let mut cumulative: Vec<f64> = Vec::with_capacity(mesh.triangle_count());
@@ -175,20 +195,55 @@ pub fn fidelity_check(
     Ok(report)
 }
 
-/// Resolve residual geometric self-intersections by relaxing only the
-/// involved vertices toward their one-ring centroid. Position-only, so
-/// watertightness/manifoldness are untouched; moves are voxel-scale and the
-/// fidelity gate still runs after. DC placement is not provably
-/// intersection-free — isolated folded quads (a handful per hundred thousand
-/// triangles) are a known artifact, and this converges in a round or two.
-/// Returns true when no intersections remain.
+/// Undirected knife-fold edges (manifold edges whose two faces have nearly
+/// opposite normals) — the geometric-flip artifacts that share an edge and so
+/// slip past `self_intersection_pairs` (which skips edge-adjacent triangles).
+fn fold_edges(mesh: &IndexedMesh) -> Vec<(u32, u32)> {
+    let topo = Topology::build(mesh);
+    topo.edges
+        .iter()
+        .filter_map(|(k, info)| {
+            if info.faces.len() == 2 {
+                let n0 = mesh.tri_normal(info.faces[0]);
+                let n1 = mesh.tri_normal(info.faces[1]);
+                if n0 != Vec3::ZERO && n1 != Vec3::ZERO && n0.dot(n1) < -0.999 {
+                    return Some(*k);
+                }
+            }
+            None
+        })
+        .collect()
+}
+
+/// Resolve residual geometric artifacts — self-intersecting triangle pairs
+/// *and* knife folds — by relaxing the involved vertices toward their
+/// one-ring centroid. Position-only, so watertightness/manifoldness are
+/// untouched; moves are voxel-scale and the fidelity gate still runs after.
+/// DC placement is not provably artifact-free (a handful of folded quads per
+/// hundred-thousand triangles is a known artifact); this converges in a few
+/// rounds. Returns true when neither artifact class remains.
+///
+/// Faces that are *already* bad (part of a fold or self-intersection, or
+/// degenerate) are exempt from the fold-over guard: those are exactly the
+/// faces we need to change, and guarding against flipping them would revert
+/// the fix.
 pub fn relax_self_intersections(mesh: &mut IndexedMesh, max_rounds: usize) -> bool {
+    let face_normal = |mesh: &IndexedMesh, f: u32| -> Vec3 {
+        let [a, b, c] = mesh.tri_positions(f);
+        let n = b.sub(a).cross(c.sub(a));
+        let len = n.length();
+        if len > 1e-20 {
+            n.scale(1.0 / len)
+        } else {
+            Vec3::ZERO
+        }
+    };
     for _ in 0..max_rounds {
         let pairs = crate::analysis::self_intersection_pairs(mesh);
-        if pairs.is_empty() {
+        let folds = fold_edges(mesh);
+        if pairs.is_empty() && folds.is_empty() {
             return true;
         }
-        // One-ring adjacency, built lazily only when needed.
         let mut neighbors: Vec<smallvec::SmallVec<[u32; 8]>> =
             vec![smallvec::SmallVec::new(); mesh.positions.len()];
         for t in &mesh.triangles {
@@ -201,34 +256,88 @@ pub fn relax_self_intersections(mesh: &mut IndexedMesh, max_rounds: usize) -> bo
                 }
             }
         }
+        // Affected vertices, and the set of "bad" faces exempt from the guard.
         let mut affected: Vec<u32> = Vec::new();
+        let mut bad_faces: ahash::AHashSet<u32> = ahash::AHashSet::new();
         for (f, g) in &pairs {
             affected.extend_from_slice(&mesh.triangles[*f as usize]);
             affected.extend_from_slice(&mesh.triangles[*g as usize]);
+            bad_faces.insert(*f);
+            bad_faces.insert(*g);
+        }
+        let topo = Topology::build(mesh);
+        for &(a, b) in &folds {
+            affected.push(a);
+            affected.push(b);
+            if let Some(info) = topo.edges.get(&crate::core::halfedge::edge_key(a, b)) {
+                for &f in &info.faces {
+                    bad_faces.insert(f);
+                    affected.extend_from_slice(&mesh.triangles[f as usize]);
+                }
+            }
         }
         affected.sort_unstable();
         affected.dedup();
-        let moved: Vec<(u32, Vec3)> = affected
-            .iter()
-            .filter_map(|&v| {
-                let nbrs = &neighbors[v as usize];
-                if nbrs.len() < 3 {
-                    return None;
+
+        let affected_set: ahash::AHashSet<u32> = affected.iter().copied().collect();
+        let mut vfaces: ahash::AHashMap<u32, smallvec::SmallVec<[u32; 8]>> =
+            ahash::AHashMap::with_capacity(affected.len());
+        for (fi, t) in mesh.triangles.iter().enumerate() {
+            for &v in t {
+                if affected_set.contains(&v) {
+                    vfaces.entry(v).or_default().push(fi as u32);
                 }
-                let mut c = Vec3::ZERO;
-                for &w in nbrs {
-                    c = c.add(mesh.positions[w as usize]);
+            }
+        }
+        let touches_bad: ahash::AHashSet<u32> = {
+            let mut s = ahash::AHashSet::new();
+            for (&v, fs) in &vfaces {
+                if fs.iter().any(|f| bad_faces.contains(f)) {
+                    s.insert(v);
                 }
-                c = c.scale(1.0 / nbrs.len() as f32);
-                let p = mesh.positions[v as usize];
-                Some((v, p.add(c.sub(p).scale(0.6))))
-            })
-            .collect();
-        for (v, p) in moved {
-            mesh.positions[v as usize] = p;
+            }
+            s
+        };
+        for &v in &affected {
+            let nbrs = &neighbors[v as usize];
+            if nbrs.len() < 3 {
+                continue;
+            }
+            let mut c = Vec3::ZERO;
+            for &w in nbrs {
+                c = c.add(mesh.positions[w as usize]);
+            }
+            c = c.scale(1.0 / nbrs.len() as f32);
+            let old = mesh.positions[v as usize];
+            // A vertex on a bad (folded/self-intersecting) face is pulled
+            // fully onto its one-ring centroid *unguarded* — the surrounding
+            // "good" faces would otherwise veto the move that flattens the
+            // fold, and a Laplacian pull onto a planar-ish one-ring cannot
+            // itself create a fold. Vertices merely adjacent to the defect are
+            // relaxed with the normal fold-over guard. Either way the loop
+            // re-checks and the fidelity gate runs after.
+            if touches_bad.contains(&v) {
+                mesh.positions[v as usize] = c;
+                continue;
+            }
+            let before: smallvec::SmallVec<[(u32, Vec3); 8]> = vfaces
+                .get(&v)
+                .map(|fs| fs.iter().map(|&f| (f, face_normal(mesh, f))).collect())
+                .unwrap_or_default();
+            for step in [0.8f32, 0.5, 0.25, 0.1] {
+                mesh.positions[v as usize] = old.add(c.sub(old).scale(step));
+                let ok = before.iter().all(|(f, nb)| {
+                    let na = face_normal(mesh, *f);
+                    na != Vec3::ZERO && (*nb == Vec3::ZERO || nb.dot(na) >= 0.05)
+                });
+                if ok {
+                    break;
+                }
+                mesh.positions[v as usize] = old;
+            }
         }
     }
-    crate::analysis::self_intersection_pairs(mesh).is_empty()
+    crate::analysis::self_intersection_pairs(mesh).is_empty() && fold_edges(mesh).is_empty()
 }
 
 /// Fraction of the surface thinner than `min_thickness` (wall-thickness

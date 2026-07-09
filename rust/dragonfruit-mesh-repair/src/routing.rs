@@ -425,6 +425,7 @@ pub(crate) fn route_and_repair(
                         && a.inconsistent_winding_edges == 0
                         && a.signed_volume > 0.0
                         && count_self_intersections(&sub) == 0
+                        && crate::volumetric::validate::fold_edge_count(&sub) == 0
                     {
                         outs.push(sub);
                         route_counts[2] += 1;
@@ -526,10 +527,16 @@ pub(crate) fn route_and_repair(
                 }
                 Route::Fallback => {
                     // Terminal rung: original triangles + residual flag —
-                    // never drop geometry, never ship silently.
+                    // never drop geometry, never ship silently. Orient each
+                    // kept shell locally (the global orient pass is skipped
+                    // for the routing path, so this is the only orientation
+                    // fallback geometry gets).
+                    all_validated = false;
                     for &cid in cluster {
                         if metrics[cid as usize].tri_count >= 4 || !drop_shards {
-                            outs.push(submeshes[cid as usize].clone());
+                            let mut sub = submeshes[cid as usize].clone();
+                            repair_orientation(&mut sub);
+                            outs.push(sub);
                         }
                     }
                     wrap_flags.push(format!(
@@ -539,7 +546,6 @@ pub(crate) fn route_and_repair(
                             .map(|&i| metrics[i as usize].tri_count)
                             .sum::<usize>()
                     ));
-                    all_validated = false;
                     route_counts[5] += 1;
                     shipped = true;
                 }
@@ -677,12 +683,25 @@ fn derive_wrap_options(
 ) -> WrapOptions {
     let voxel = (cluster_diag / options.wrap_voxel_divisor)
         .clamp(options.wrap_min_voxel_mm, options.wrap_max_voxel_mm);
+    // Keep the output near the DC (voxel-resolution) density. The 2M ceiling
+    // (was 400k) only trips on genuinely huge clusters; below it the remesh
+    // decimation loop never fires, so flat regions stay at their DC tessellation
+    // instead of being coarsened into facets.
     let target = ((input_tris as f32 * options.wrap_target_triangle_factor) as usize)
-        .clamp(2_000, 400_000);
+        .clamp(2_000, 2_000_000);
     WrapOptions {
         voxel_mm: voxel,
         band_halfwidth_voxels: 3.0,
-        close_radius_voxels: if any_open { 2 } else { 0 },
+        close_radius_voxels: 0,
+        // Open clusters need the band to physically span + bridge their holes;
+        // target ~0.35 of the cluster diagonal, capped so a large open part
+        // doesn't demand an enormous band. Closed clusters bridge nothing and
+        // keep a thin band + fine voxel for maximum detail.
+        hole_bridge_mm: if any_open {
+            (0.35 * cluster_diag).min(3.0)
+        } else {
+            0.0
+        },
         target_triangles: target,
         feature_angle_deg: 35.0,
         max_active_corners: options.wrap_max_cells_per_cluster,
@@ -796,7 +815,9 @@ mod manifold_tests {
         let mut open = sphere(Vec3::new(0.0, 0.0, 0.0), 1.0, 16, 24);
         open.triangles.drain(0..40); // rip the north cap off
         let mut wopts = crate::volumetric::WrapOptions::for_diagonal(open.bbox().diag());
-        wopts.close_radius_voxels = 2;
+        // Open shell: the band must physically span the missing cap for GWN
+        // to seal it (a fixed voxel close radius under-seals at fine voxels).
+        wopts.hole_bridge_mm = 0.7;
         let (wrapped, _) = crate::volumetric::wrap_cluster(&open, &wopts).expect("wrap");
         let props: Vec<f32> = wrapped.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
         let idx: Vec<u32> = wrapped.triangles.iter().flat_map(|t| *t).collect();

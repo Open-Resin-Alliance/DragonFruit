@@ -26,6 +26,7 @@ pub use band::WrapError;
 
 use crate::core::bvh::Bvh;
 use crate::core::mesh::IndexedMesh;
+use rayon::prelude::*;
 
 #[derive(Clone, Debug)]
 pub struct WrapOptions {
@@ -37,8 +38,16 @@ pub struct WrapOptions {
     pub band_halfwidth_voxels: f32,
     /// Morphological close radius (voxels); 0 disables. Seals holes/gaps up
     /// to ~2r voxels wide. Automatically skipped when thin walls are
-    /// detected (the close eats gaps thinner than 2r by design).
+    /// detected (the close eats gaps thinner than 2r by design). Ignored when
+    /// `hole_bridge_mm > 0`, which derives a physically-scaled radius instead.
     pub close_radius_voxels: u8,
+    /// Physical gap (mm) the close pass should bridge, 0 = no bridging.
+    /// Holes are a fixed physical size but voxels shrink for detail, so a
+    /// fixed voxel radius under-seals at fine resolution; deriving the radius
+    /// (and band half-width) from this keeps hole-sealing scale-invariant.
+    /// Set only for open clusters — closed clusters keep a thin band + fine
+    /// voxel for maximum detail.
+    pub hole_bridge_mm: f32,
     /// Remesh/decimate budget for the output.
     pub target_triangles: usize,
     /// Dihedral feature-protection threshold for the remesher.
@@ -52,15 +61,18 @@ pub struct WrapOptions {
 
 impl WrapOptions {
     /// Sensible defaults for a cluster of the given bounding-box diagonal.
+    /// Fidelity-first: fine voxels (≤ 0.15 mm) with a generous corner budget;
+    /// `wrap_cluster` auto-coarsens only if the band would exceed the budget.
     pub fn for_diagonal(diag_mm: f32) -> Self {
-        let voxel = (diag_mm / 220.0).clamp(0.04, 0.8);
+        let voxel = (diag_mm / 300.0).clamp(0.03, 0.15);
         Self {
             voxel_mm: voxel,
             band_halfwidth_voxels: 3.0,
             close_radius_voxels: 0,
-            target_triangles: 200_000,
+            hole_bridge_mm: 0.0,
+            target_triangles: 400_000,
             feature_angle_deg: 35.0,
-            max_active_corners: 3_000_000,
+            max_active_corners: 16_000_000,
             fidelity_max_dist: 2.0 * voxel,
         }
     }
@@ -80,6 +92,10 @@ pub struct WrapReport {
     /// Remesh output failed the gate and the (denser) DC output shipped
     /// instead.
     pub remesh_rolled_back: bool,
+    /// Knife-fold edges left in the shipped output (topological folds that
+    /// survived relaxation). Tolerated below a small threshold; reported so a
+    /// nonzero value is visible.
+    pub residual_fold_edges: usize,
     /// [band, sign, contour, remesh, validate] wall times, ms.
     pub timings_ms: [f64; 5],
 }
@@ -102,24 +118,57 @@ pub fn wrap_cluster(
     if mesh.triangle_count() == 0 {
         return Err((WrapError::EmptyExtraction, report));
     }
-    let voxel = opts.voxel_mm;
-
     // Shared acceleration structures: one BVH + one winding tree per cluster.
     let bvh = Bvh::build(mesh);
     let tree = gwn::WindingTree::build(mesh);
 
     // Thin-wall probe: decides whether the close pass is safe and feeds the
     // report (routing may retry at finer voxel on a thin-wall flag).
+    //
+    // Hole sealing is driven by band *half-width*, not the morphological
+    // close: a hole is sealed when the band has corners spanning its opening
+    // so GWN can sign them and DC contours the soap-film across it. The close
+    // pass only mops up sub-band pixel gaps. A fixed voxel half-width spans a
+    // fixed *physical* distance, which shrinks with voxel — so for open
+    // clusters we scale the half-width to reach ~the hole radius
+    // (`hole_bridge_mm`), keeping the close radius small.
     let mut close_radius = opts.close_radius_voxels;
+    let mut band_halfwidth = opts.band_halfwidth_voxels;
+    if opts.hole_bridge_mm > 0.0 {
+        // Reach the hole *radius* (≈ half the bridge span), plus margin.
+        let span_v = (0.5 * opts.hole_bridge_mm / opts.voxel_mm).clamp(1.0, 40.0);
+        band_halfwidth = band_halfwidth.max(span_v + 2.0);
+        close_radius = close_radius.max(2);
+    }
     report.thin_wall_fraction =
-        validate::thin_wall_fraction(mesh, &tree, 2.5 * voxel, voxel);
+        validate::thin_wall_fraction(mesh, &tree, 2.5 * opts.voxel_mm, opts.voxel_mm);
     if close_radius > 0 && report.thin_wall_fraction > 0.10 {
         close_radius = 0;
         report.close_skipped_for_thin_walls = true;
     }
-    let halfwidth = opts
-        .band_halfwidth_voxels
-        .max(3.0 + close_radius as f32);
+    let halfwidth = band_halfwidth.max(3.0 + close_radius as f32);
+
+    // Area-based voxel auto-rescale. We prefer the finest voxel the caller
+    // asked for, but a band whose estimated corner count exceeds the memory
+    // budget is *coarsened to fit* rather than aborted — a slightly coarser
+    // wrap is always better than falling back to the original (broken) mesh.
+    // Estimate: surface_area / voxel² × band thickness (in corner layers).
+    let mut voxel = opts.voxel_mm;
+    let total_area: f64 = (0..mesh.triangle_count() as u32)
+        .into_par_iter()
+        .map(|f| mesh.tri_area(f) as f64)
+        .sum();
+    let band_layers = 2.0 * halfwidth as f64 + 1.0;
+    let est_corners = total_area / (voxel as f64 * voxel as f64) * band_layers;
+    // Target half the budget for the *final* band so the transient seeded
+    // superset (~2× the band) still fits the build's `seeded.len()` guard.
+    let budget_target = opts.max_active_corners as f64 * 0.5;
+    if est_corners > budget_target {
+        // voxel ∝ sqrt(cells): scale up to land under the target.
+        let scale = (est_corners / budget_target).sqrt() as f32;
+        voxel *= scale;
+    }
+    report.voxel_mm = voxel;
 
     // 1. Narrow band.
     let t = std::time::Instant::now();
@@ -166,8 +215,11 @@ pub fn wrap_cluster(
         &remesh::RemeshParams {
             target_triangles: opts.target_triangles,
             feature_angle_deg: opts.feature_angle_deg,
-            sizing_min: 1.5 * voxel,
-            sizing_max: 8.0 * voxel,
+            // Keep edges short so flat regions retain their DC tessellation
+            // instead of being coarsened into voxel-scale facets. sizing_max
+            // was 8·voxel — the direct cause of the "edges too long" faceting.
+            sizing_min: 1.0 * voxel,
+            sizing_max: 2.5 * voxel,
             iterations: 3,
             reproject_max_dist: 1.5 * voxel,
         },
@@ -183,24 +235,40 @@ pub fn wrap_cluster(
     // in which case the DC output ships instead of failing the whole wrap.
     let t = std::time::Instant::now();
     let out_to_in_limit = (halfwidth + 2.0) * voxel * 1.7321;
+    // The in→out gate must track the *actual* (possibly rescaled) voxel — a
+    // budget-coarsened cluster legitimately deviates more — so scale the
+    // caller's gate by the rescale ratio. This preserves a deliberately tight
+    // gate (ratio 1 when no rescale) while loosening proportionally when the
+    // band was coarsened to fit the budget.
+    let fidelity_max = opts.fidelity_max_dist * (voxel / opts.voxel_mm).max(1.0);
     let mut last_err = WrapError::EmptyExtraction;
     for (is_remesh, candidate) in [(true, remeshed), (false, contoured)] {
         let mut candidate = candidate;
-        if validate::validate_invariants(&candidate).is_err()
-            || !validate::relax_self_intersections(&mut candidate, 4)
-        {
-            last_err =
-                WrapError::InvariantViolation("candidate failed manifold/SI gate".into());
+        // Relax residual artifacts (self-intersecting pairs + knife folds).
+        // Most clear; a few knife folds are *topological* (a folded fin the
+        // connectivity encodes) and survive vertex smoothing. Those are
+        // tolerated up to a tiny threshold — they do not register as
+        // self-intersections and are vastly less harmful than the fallback
+        // (which ships the original mesh with ALL its defects). The residual
+        // is reported so it is never silent.
+        validate::relax_self_intersections(&mut candidate, 12);
+        let fold_tol = (candidate.triangle_count() / 2000).max(4);
+        let folds = validate::fold_edge_count(&candidate);
+        if validate::validate_invariants(&candidate).is_err() || folds > fold_tol {
+            last_err = WrapError::InvariantViolation(format!(
+                "candidate failed manifold/SI/fold gate ({folds} residual folds)"
+            ));
             report.remesh_rolled_back = true;
             continue;
         }
+        report.residual_fold_edges = folds;
         match validate::fidelity_check(
             mesh,
             &bvh,
             &tree,
             &candidate,
             0.5 * voxel,
-            opts.fidelity_max_dist,
+            fidelity_max,
             out_to_in_limit,
         ) {
             Ok(fidelity) => {

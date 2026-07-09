@@ -127,6 +127,24 @@ impl EditMesh {
         }
     }
 
+    /// A face is degenerate when its area is vanishing *relative to its edge
+    /// lengths* (needle/cap sliver). Its normal is numerical noise: it must
+    /// never seed feature classification or fold/knife guards, or the sliver
+    /// locks itself in place (noisy dihedral ⇒ spurious feature edges ⇒
+    /// corner-locked vertices ⇒ the cleanup collapse is forbidden forever).
+    fn face_degenerate(&self, f: u32) -> bool {
+        let [a, b, c] = self.tri[f as usize];
+        let pa = self.pos[a as usize];
+        let pb = self.pos[b as usize];
+        let pc = self.pos[c as usize];
+        let e0 = pb.sub(pa);
+        let e1 = pc.sub(pb);
+        let e2 = pa.sub(pc);
+        let n_len = e0.cross(pc.sub(pa)).length(); // 2 × area
+        let e_max2 = e0.dot(e0).max(e1.dot(e1)).max(e2.dot(e2));
+        n_len < 1e-4 * e_max2.max(1e-20)
+    }
+
     /// Faces incident to the undirected edge (u, v).
     fn edge_faces(&self, u: u32, v: u32) -> SmallVec<[u32; 2]> {
         let mut out = SmallVec::new();
@@ -193,6 +211,10 @@ impl EditMesh {
         for (u, v) in self.edges() {
             let fs = self.edge_faces(u, v);
             if fs.len() != 2 {
+                continue;
+            }
+            // Degenerate slivers have noise normals — never features.
+            if self.face_degenerate(fs[0]) || self.face_degenerate(fs[1]) {
                 continue;
             }
             let n0 = self.face_normal(fs[0]);
@@ -311,14 +333,18 @@ impl EditMesh {
             // Feature rules: never collapse across a feature. Moving `u`
             // into `v` is allowed if u is featureless, or the edge itself is
             // a feature line and u is a regular feature vertex (2 feature
-            // edges — not a corner).
+            // edges — not a corner). Exception: an edge this much shorter
+            // than the sizing floor is numerical debris, not geometry —
+            // always collapsible, or degenerate slivers survive forever.
+            let degenerate_edge = len < 0.1 * params.sizing_min;
             let ek = if u < v { (u, v) } else { (v, u) };
             let u_feat = fcount[u as usize];
-            let allowed = if u_feat == 0 {
-                true
-            } else {
-                feature.contains(&ek) && u_feat == 2
-            };
+            let allowed = degenerate_edge
+                || if u_feat == 0 {
+                    true
+                } else {
+                    feature.contains(&ek) && u_feat == 2
+                };
             if !allowed {
                 continue;
             }
@@ -364,11 +390,15 @@ impl EditMesh {
         }
         // Fold-over guard: every surviving face of u must keep a sane normal
         // after u moves to v's position, and must not become oversized.
+        // Faces that are *already* degenerate slivers are exempt from the
+        // rotation checks — their normals are noise, and rejecting on them
+        // would permanently block the very collapse that cleans them up.
         let pv = self.pos[v as usize];
         for &f in &self.vert_faces[u as usize] {
             if !self.face_alive(f) || fs.contains(&f) {
                 continue;
             }
+            let was_degenerate = self.face_degenerate(f);
             let t = self.tri[f as usize];
             let before = self.face_normal(f);
             let p = |w: u32| if w == u { pv } else { self.pos[w as usize] };
@@ -376,12 +406,12 @@ impl EditMesh {
             let after = {
                 let n = pb.sub(pa).cross(pc.sub(pa));
                 let len = n.length();
-                if len < 1e-20 {
+                if len < 1e-20 && !was_degenerate {
                     return false; // degenerate result
                 }
-                n.scale(1.0 / len)
+                n.scale(1.0 / len.max(1e-20))
             };
-            if before != Vec3::ZERO && before.dot(after) < 0.1 {
+            if !was_degenerate && before != Vec3::ZERO && before.dot(after) < 0.1 {
                 return false;
             }
             // Collapsing must not create edges so long the split pass undoes
@@ -396,6 +426,107 @@ impl EditMesh {
             }
         }
         let _ = params;
+
+        // Knife-edge guard: the per-face rotation check above bounds each
+        // op, but successive collapses can still walk a thin-wall face past
+        // 180° in steps — the resulting knife fold passes every topological
+        // gate yet renders backfacing and double-counts slicer winding.
+        // Reject the collapse if any two post-collapse faces around u/v
+        // would share an edge with nearly opposite normals.
+        {
+            let post_faces: SmallVec<[(u32, [u32; 3]); 16]> = self.vert_faces[u as usize]
+                .iter()
+                .chain(self.vert_faces[v as usize].iter())
+                .filter(|&&f| self.face_alive(f) && !fs.contains(&f))
+                .map(|&f| {
+                    let mut t = self.tri[f as usize];
+                    for w in &mut t {
+                        if *w == u {
+                            *w = v;
+                        }
+                    }
+                    (f, t)
+                })
+                .collect();
+            // Returns ZERO for degenerate (sliver) triples — their direction
+            // is noise and must not trigger knife rejections.
+            let normal_of = |t: &[u32; 3]| -> Vec3 {
+                let (pa, pb, pc) = (
+                    self.pos[t[0] as usize],
+                    self.pos[t[1] as usize],
+                    self.pos[t[2] as usize],
+                );
+                let e0 = pb.sub(pa);
+                let e1 = pc.sub(pb);
+                let e2 = pa.sub(pc);
+                let n = e0.cross(pc.sub(pa));
+                let len = n.length();
+                let e_max2 = e0.dot(e0).max(e1.dot(e1)).max(e2.dot(e2));
+                if len > 1e-4 * e_max2.max(1e-20) {
+                    n.scale(1.0 / len)
+                } else {
+                    Vec3::ZERO
+                }
+            };
+            for (i, (fa, ta)) in post_faces.iter().enumerate() {
+                for (fb, tb) in post_faces.iter().skip(i + 1) {
+                    if fa == fb {
+                        continue;
+                    }
+                    let shared = ta.iter().filter(|w| tb.contains(w)).count();
+                    if shared < 2 {
+                        continue;
+                    }
+                    let na = normal_of(ta);
+                    let nb = normal_of(tb);
+                    if na != Vec3::ZERO && nb != Vec3::ZERO && na.dot(nb) < -0.9 {
+                        return false;
+                    }
+                }
+            }
+            // Rewired faces must also be checked against their *unchanged*
+            // neighbors across the ring edge that contains neither u nor v —
+            // that neighbor isn't in `post_faces`, and it is exactly where
+            // thin-wall folds kept forming.
+            for &f in &self.vert_faces[u as usize] {
+                if !self.face_alive(f) || fs.contains(&f) {
+                    continue;
+                }
+                let was_degenerate = self.face_degenerate(f);
+                let t = self.tri[f as usize];
+                let (x, y) = {
+                    let mut others = t.iter().copied().filter(|&w| w != u);
+                    (others.next().unwrap(), others.next().unwrap())
+                };
+                let mut nt = t;
+                for w in &mut nt {
+                    if *w == u {
+                        *w = v;
+                    }
+                }
+                let nf = normal_of(&nt);
+                if nf == Vec3::ZERO {
+                    if was_degenerate {
+                        continue; // sliver stays sliver: cleanup handles it
+                    }
+                    return false;
+                }
+                for &g in &self.edge_faces(x, y) {
+                    if g == f {
+                        continue;
+                    }
+                    // Neighbor unchanged unless it also touches u (then it
+                    // was covered by the pairwise check above).
+                    if self.tri[g as usize].contains(&u) || self.face_degenerate(g) {
+                        continue;
+                    }
+                    let ng = self.face_normal(g);
+                    if ng != Vec3::ZERO && nf.dot(ng) < -0.9 {
+                        return false;
+                    }
+                }
+            }
+        }
 
         // Execute: retire the two edge faces, rewire u's remaining faces to v.
         for &f in &fs {
@@ -507,7 +638,25 @@ impl EditMesh {
         if l1 < 1e-20 || l2 < 1e-20 {
             return false;
         }
-        if n1.scale(1.0 / l1).dot(n_old) < 0.1 || n2.scale(1.0 / l2).dot(n_old) < 0.1 {
+        let n1 = n1.scale(1.0 / l1);
+        let n2 = n2.scale(1.0 / l2);
+        if n1.dot(n_old) < 0.1 || n2.dot(n_old) < 0.1 {
+            return false;
+        }
+        // Knife-edge guard: the new faces must not sit nearly opposite any
+        // unchanged neighbor across their boundary edges (see try_collapse).
+        for (na, e0, e1) in [(n1, u, b), (n1, a, u), (n2, b, v), (n2, v, a)] {
+            for &g in &self.edge_faces(e0, e1) {
+                if g == f1 || g == f2 {
+                    continue;
+                }
+                let ng = self.face_normal(g);
+                if ng != Vec3::ZERO && na.dot(ng) < -0.9 {
+                    return false;
+                }
+            }
+        }
+        if n1.dot(n2) < -0.9 {
             return false;
         }
         self.remove_face(f1);

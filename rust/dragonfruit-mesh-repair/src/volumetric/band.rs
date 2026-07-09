@@ -128,26 +128,29 @@ pub fn build_narrow_band(
         bbox.min.z - band_mm - 0.267_949 * voxel,
     );
 
-    // Cheap pre-estimate so a pathological input aborts before allocating:
-    // raw per-triangle corner-box counts (over-counts shared corners, hence
-    // the generous slack factor).
-    let mut raw_estimate: usize = 0;
-    for f in 0..mesh.triangle_count() as u32 {
-        let [a, b, c] = mesh.tri_positions(f);
-        let mut bb_min = a.min(b).min(c);
-        let mut bb_max = a.max(b).max(c);
-        bb_min = bb_min.sub(Vec3::new(band_mm, band_mm, band_mm));
-        bb_max = bb_max.add(Vec3::new(band_mm, band_mm, band_mm));
-        let nx = ((bb_max.x - bb_min.x) / voxel) as usize + 2;
-        let ny = ((bb_max.y - bb_min.y) / voxel) as usize + 2;
-        let nz = ((bb_max.z - bb_min.z) / voxel) as usize + 2;
-        raw_estimate = raw_estimate.saturating_add(nx * ny * nz);
-        if raw_estimate / 64 > params.max_corners {
-            return Err(WrapError::BudgetExceeded {
-                needed: raw_estimate / 64,
-                budget: params.max_corners,
-            });
-        }
+    // Cheap pre-estimate so a pathological input aborts before allocating.
+    // Model the band as a shell of thickness `2·band_mm` around the surface:
+    // stored corners ≈ surface_area / voxel² × (band thickness in layers).
+    // (The old per-triangle box-sum over-counted catastrophically for thick
+    // bands — each triangle's inflated AABB overlaps its neighbours far more
+    // than a fixed slack factor captures — and aborted on bands that easily
+    // fit.) A 2× cushion covers curvature / non-uniform tessellation.
+    let total_area: f64 = (0..mesh.triangle_count() as u32)
+        .into_par_iter()
+        .map(|f| mesh.tri_area(f) as f64)
+        .sum();
+    // This estimates the *final* stored corner count. The transient seeded
+    // superset (box corners beyond the band, before distance filtering) is
+    // larger and is caught by the `seeded.len() > max_corners` guard below;
+    // `wrap_cluster` keeps the estimate to ~half the budget so that superset
+    // still fits.
+    let band_layers = 2.0 * params.halfwidth_voxels as f64 + 1.0;
+    let est_corners = total_area / (voxel as f64 * voxel as f64) * band_layers;
+    if est_corners > params.max_corners as f64 {
+        return Err(WrapError::BudgetExceeded {
+            needed: est_corners as usize,
+            budget: params.max_corners,
+        });
     }
 
     // Seed candidate corners: every lattice point inside a triangle's AABB

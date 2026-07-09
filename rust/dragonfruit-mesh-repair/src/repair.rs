@@ -115,12 +115,23 @@ impl Default for RepairOptions {
             solidify_self_intersection_threshold: 16,
             wrap_mode: WrapMode::Auto,
             wrap_min_shell_triangles: 64,
-            wrap_max_cells_per_cluster: 3_000_000,
-            wrap_max_cells_total: 12_000_000,
-            wrap_voxel_divisor: 220.0,
-            wrap_min_voxel_mm: 0.04,
-            wrap_max_voxel_mm: 0.8,
-            wrap_target_triangle_factor: 1.0,
+            // Budgets sized for detail preservation: a 16M-corner band is
+            // ~1.1 GB peak for one cluster (clusters run sequentially, so
+            // this — not the total — is the RAM driver). It lets a ~180 mm
+            // model wrap near ~0.15 mm voxels instead of falling back.
+            wrap_max_cells_per_cluster: 16_000_000,
+            wrap_max_cells_total: 48_000_000,
+            // Fidelity-first resolution: voxel = diag / 300 clamped to
+            // [0.03, 0.15] mm. The 0.15 ceiling (was 0.8) is what keeps gun
+            // barrels / thin features from melting into voxel-scale facets;
+            // the area-based auto-rescale in `wrap_cluster` only coarsens when
+            // a cluster's band would blow the corner budget.
+            wrap_voxel_divisor: 300.0,
+            wrap_min_voxel_mm: 0.03,
+            wrap_max_voxel_mm: 0.15,
+            // Keep the output near the DC (voxel-resolution) density — decimate
+            // only when the wrap would otherwise emit an unreasonable count.
+            wrap_target_triangle_factor: 2.0,
         }
     }
 }
@@ -273,10 +284,15 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
                         report.model_triangle_count = Some(mtc);
                     }
                 }
-                // Every shipped cluster was validated coherent-outward, so
-                // the whole-mesh ray-parity orientation vote is unnecessary
-                // (and can misfire on coincident interfaces).
-                skip_final_orientation = summary.all_validated;
+                // The routing path orients every cluster individually
+                // (passthrough/local/union/wrap are all outward by
+                // construction; fallback shells are oriented locally). The
+                // whole-mesh ray-parity vote is therefore not just
+                // unnecessary but *harmful*: it misfires on coincident/wrapped
+                // interfaces and can flip entire components inside-out. Always
+                // skip it when routing ran. `all_validated` still gates the
+                // heavier topology-repair short-circuit below.
+                skip_final_orientation = true;
                 routing_all_validated = summary.all_validated;
             }
         }
