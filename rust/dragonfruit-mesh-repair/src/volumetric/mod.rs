@@ -232,6 +232,9 @@ pub fn wrap_cluster(
             taubin_iterations: 4,
             taubin_lambda: 0.53,
             taubin_mu: -0.55,
+            // Straighten the zig-zag DC leaves along rounded feature edges
+            // (the residual faceting after the panels are de-quantized).
+            feature_smooth_iterations: 3,
         },
     );
     report.timings_ms[3] = t.elapsed().as_secs_f64() * 1000.0;

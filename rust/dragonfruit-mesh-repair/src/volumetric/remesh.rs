@@ -44,6 +44,11 @@ pub struct RemeshParams {
     pub taubin_iterations: usize,
     pub taubin_lambda: f32,
     pub taubin_mu: f32,
+    /// Feature-line smoothing passes (0 disables). Straightens the zig-zag
+    /// serration DC leaves along curved/rounded feature edges by smoothing each
+    /// feature vertex *along its crease* (1-D Laplacian over its two feature-edge
+    /// neighbours) then reprojecting — creases and corners are preserved.
+    pub feature_smooth_iterations: usize,
 }
 
 impl Default for RemeshParams {
@@ -59,6 +64,7 @@ impl Default for RemeshParams {
             taubin_iterations: 0,
             taubin_lambda: 0.53,
             taubin_mu: -0.55,
+            feature_smooth_iterations: 0,
         }
     }
 }
@@ -97,6 +103,11 @@ pub fn remesh(
     // the model. Both are no-ops under the defaults (legacy behaviour).
     for _ in 0..params.taubin_iterations {
         em.taubin_pass(params);
+    }
+    // Straighten serration along feature lines (rounded edges) before the final
+    // reprojection pins everything to the surface.
+    for _ in 0..params.feature_smooth_iterations {
+        em.feature_line_smooth_pass(params, reference);
     }
     if params.reproject_features {
         if let Some(reference) = reference {
@@ -822,6 +833,53 @@ impl EditMesh {
             }
             self.commit_moves(moved);
         }
+    }
+
+    /// Smooth feature vertices ALONG their crease. `smooth_pass`/`taubin_pass`
+    /// leave feature verts frozen (only `reproject_pass` moves them, onto the
+    /// nearest surface point), so the zig-zag DC produces along a curved/rounded
+    /// feature edge survives as serration. This applies a 1-D Laplacian using a
+    /// vertex's two feature-edge neighbours — motion confined to the crease
+    /// tangent — then reprojects onto the reference so the line stays on the
+    /// true fillet. Corners/junctions (feature-edge count ≠ 2) stay locked, so
+    /// sharp corners are never rounded. No-op without a reference.
+    fn feature_line_smooth_pass(
+        &mut self,
+        params: &RemeshParams,
+        reference: Option<(&IndexedMesh, &Bvh)>,
+    ) {
+        let reference = match reference {
+            Some(r) => r,
+            None => return,
+        };
+        let (feat_edges, fcount) = self.classify_features(params.feature_angle_deg);
+        // Feature-edge neighbours per vertex (only meaningful where count == 2).
+        let mut fnbr: Vec<SmallVec<[u32; 2]>> = vec![SmallVec::new(); self.pos.len()];
+        for &(u, v) in &feat_edges {
+            fnbr[u as usize].push(v);
+            fnbr[v as usize].push(u);
+        }
+        let (rmesh, rbvh) = reference;
+        let mut moved: Vec<(u32, Vec3)> = Vec::new();
+        for v in 0..self.pos.len() as u32 {
+            if !self.vert_alive[v as usize] || fcount[v as usize] != 2 {
+                continue;
+            }
+            let nb = &fnbr[v as usize];
+            if nb.len() != 2 {
+                continue;
+            }
+            let mid = self.pos[nb[0] as usize]
+                .add(self.pos[nb[1] as usize])
+                .scale(0.5);
+            let mut p = self.pos[v as usize].add(mid.sub(self.pos[v as usize]).scale(0.5));
+            let (d2, _, q) = rbvh.closest_point(rmesh, p);
+            if d2.sqrt() <= params.reproject_max_dist {
+                p = q;
+            }
+            moved.push((v, p));
+        }
+        self.commit_moves(moved);
     }
 
     // ---- structural helpers ----------------------------------------------
