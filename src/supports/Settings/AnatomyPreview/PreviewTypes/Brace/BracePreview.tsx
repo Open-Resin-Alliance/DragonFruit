@@ -2,6 +2,7 @@ import React from 'react';
 import * as THREE from 'three';
 import { SupportBuilder } from '@/supports/rendering/SupportBuilder';
 import { ANATOMY_CONFIG } from '../../AnatomyPreviewConfig';
+import { DEFAULT_TIP_PENETRATION_MM } from '../../../defaults';
 import type { SupportKind } from '../../../supportKindState';
 
 interface BracePreviewProps {
@@ -81,7 +82,7 @@ function buildTrunkData(
             contactDiameterMm: 0.35,
             bodyDiameterMm: shaftDiameterMm,
             lengthMm: 2.0,
-            penetrationMm: 0.1,
+            penetrationMm: DEFAULT_TIP_PENETRATION_MM,
             diskThicknessMm: 0.1,
             maxStandoffMm: 1.5,
             standoffAngleThreshold: Math.PI / 4,

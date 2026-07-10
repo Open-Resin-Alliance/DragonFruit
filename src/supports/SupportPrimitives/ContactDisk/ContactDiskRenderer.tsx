@@ -1,9 +1,8 @@
 import React, { useMemo } from 'react';
-import * as THREE from 'three';
 import { usePicking } from '@/components/picking';
 import { Vec3 } from '../../types';
 import { ContactDiskProfile } from '../ContactCone/types';
-import { calculateDiskThickness, getDiskCenter, getDiskRotation } from './contactDiskUtils';
+import { getContactDiskGeometrySpec } from './contactDiskUtils';
 import { ContactDiskHud } from './ContactDiskHud';
 import { handleContactDiskClick } from '../../interaction/clickHandlers';
 import { setContactDiskHudDraggingActive, setContactDiskHudHoverActive, setContactDiskHudInteractionTarget, setContactDiskHudPointerCaptureActive } from './contactDiskHudInteraction';
@@ -19,7 +18,7 @@ interface ContactDiskRendererProps {
     profile: ContactDiskProfile;
     contactDiameterMm: number;
     overrideThickness?: number; // Explicit thickness from collision logic
-    penetrationMm?: number;
+    penetrationMm?: number;     // Explicit override; defaults to profile.penetrationMm
     color?: string;
     transparent?: boolean;
     opacity?: number;
@@ -42,7 +41,7 @@ export function ContactDiskRenderer({
     profile,
     contactDiameterMm,
     overrideThickness,
-    penetrationMm = 0,
+    penetrationMm,
     color = '#ff8800',
     transparent = false,
     opacity = 1,
@@ -61,29 +60,27 @@ export function ContactDiskRenderer({
     const [isHovered, setIsHovered] = React.useState(false);
     const { register, unregister } = usePicking();
     
-    // Calculate geometry based on angle between Surface Normal and Cone Axis
-    // Use overrideThickness if provided (from collision logic)
-    const thickness = useMemo(() => {
-        if (overrideThickness !== undefined) return overrideThickness;
-        return calculateDiskThickness(normal, coneAxis, profile);
-    }, [normal, coneAxis, profile, overrideThickness]);
-    
-    const center = useMemo(() => getDiskCenter(pos, normal, thickness), [pos, normal, thickness]);
-    const rotation = useMemo(() => getDiskRotation(normal), [normal]);
+    // Single-source disk solid spec (thickness, penetration, center, tip) —
+    // see getContactDiskGeometrySpec. Uses overrideThickness if provided (from
+    // collision logic). Penetration defaults to profile.penetrationMm when the
+    // prop is not passed, so every caller gets the universal embed behavior.
+    const spec = useMemo(() => getContactDiskGeometrySpec({
+        pos,
+        surfaceNormal: normal,
+        coneAxis,
+        profile,
+        contactDiameterMm,
+        penetrationMm,
+        overrideThickness,
+    }), [pos, normal, coneAxis, profile, contactDiameterMm, penetrationMm, overrideThickness]);
 
-    const radius = contactDiameterMm / 2;
+    const { radius, height, center, rotation } = spec;
 
-    // We want a Flat Base (Model Side) and a Round Tip (Cone Side).
-    // We also want Center-to-Center alignment:
-    // The Center of the Tip Sphere should be at 'thickness' distance from surface.
-    // The Cylinder Shaft should go from Surface (0) to Tip Center (thickness).
-    
-    // Our Group is centered at 'thickness / 2' (by getDiskCenter).
-    // Local Y=0 is at Global 'thickness / 2'.
-    // Surface is at Local Y = -thickness / 2.
-    // Tip Center is at Local Y = +thickness / 2.
+    // Layout (local Y along the surface normal, group centered on the cylinder):
+    // - Cylinder spans ±height/2: from (surface - penetration) up to the tip center.
+    // - Model surface sits at local Y = -(thickness - penetration) / 2.
+    // - Tip Center (round cap, cone side) sits at local Y = +height / 2.
 
-    const effectivePenetration = Math.max(0, penetrationMm);
     const hoverVisible = isHovered && isInteractable && isParentSelected;
     const displayColor = isContactDiskSelected ? '#c11f61' : color;
     const displayEmissive = hoverVisible ? '#efd8c2' : '#000000';
@@ -206,7 +203,7 @@ export function ContactDiskRenderer({
     return (
         <group ref={groupRef} position={[center.x, center.y, center.z]} quaternion={rotation}>
             {isContactDiskSelected ? (
-                <group position={[0, -thickness / 2, 0]}>
+                <group position={[0, -(spec.thickness - spec.penetrationMm) / 2, 0]}>
                     <ContactDiskHud
                         radius={radius}
                         color="#ffffff"
@@ -218,14 +215,13 @@ export function ContactDiskRenderer({
                     />
                 </group>
             ) : null}
-            <mesh position={[0, -effectivePenetration / 2, 0]} raycast={raycast} onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
+            <mesh raycast={raycast} onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
                 {/*
-                  Extend the disk into the model without moving the cone-side connection.
-                  We keep the cone-side "top" aligned by:
-                  - increasing height by penetration
-                  - shifting the cylinder down by penetration/2
+                  The cylinder extends into the model without moving the cone-side
+                  connection: spec.height already includes the penetration depth and
+                  spec.center is penetration-aware, so the tip center stays fixed.
                 */}
-                <cylinderGeometry args={[radius, radius, thickness + effectivePenetration, radialSegments]} />
+                <cylinderGeometry args={[radius, radius, height, radialSegments]} />
                 <meshStandardMaterial
                     color={displayColor}
                     emissive={displayEmissive}
@@ -240,7 +236,7 @@ export function ContactDiskRenderer({
             </mesh>
 
             {/* Round Tip: stays exactly where it was (cone side alignment) */}
-            <mesh position={[0, thickness / 2, 0]} raycast={raycast} onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
+            <mesh position={[0, height / 2, 0]} raycast={raycast} onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
                 <sphereGeometry args={[radius, sphereSegments, Math.max(6, Math.floor(sphereSegments * 0.75))]} />
                 <meshStandardMaterial
                     color={displayColor}

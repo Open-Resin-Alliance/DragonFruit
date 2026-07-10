@@ -3,6 +3,7 @@ import { buildTrunkData } from '@/supports/SupportTypes/Trunk/trunkBuilder';
 import { resolveConeAxisPolicy } from '@/supports/PlacementLogic/ConeAxisPolicy';
 import type { SupportTipProfile } from '@/supports/SupportPrimitives/ContactCone/types';
 import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
+import { DEFAULT_TIP_PENETRATION_MM } from '../../../defaults';
 import type { SupportKind } from '../../../supportKindState';
 
 interface GridPreviewProps {
@@ -30,7 +31,7 @@ export function buildGridPreviewSupports({ settings, liveConfig, activeKind }: G
         contactDiameterMm: 0.35, // Reduced tip size for sharper look
         bodyDiameterMm: 1.0,     // Standard body size (matches 1.0mm shaft)
         lengthMm: 3.0,          // Slightly longer cone
-        penetrationMm: 0.1,
+        penetrationMm: DEFAULT_TIP_PENETRATION_MM,
         diskThicknessMm: 0.1,
         maxStandoffMm: 1.5,
         standoffAngleThreshold: Math.PI / 4,

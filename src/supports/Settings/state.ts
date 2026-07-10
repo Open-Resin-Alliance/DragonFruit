@@ -142,6 +142,24 @@ export function updateTipProfile(tip: Partial<SupportSettings['tip']>): void {
     notify();
 }
 
+// --- Tip penetration ("embed depth") convenience API ---
+// Public handoff surface for other panels: read/write the contact-disk
+// penetration depth without knowing the settings-object shape. The setter
+// enforces the app-wide clamp so no caller can bypass it.
+
+export const TIP_PENETRATION_MIN_MM = 0;
+export const TIP_PENETRATION_MAX_MM = 0.5;
+
+export function getTipPenetrationMm(): number {
+    return currentSettings.tip.penetrationMm;
+}
+
+export function setTipPenetrationMm(valueMm: number): void {
+    if (!Number.isFinite(valueMm)) return;
+    const clamped = Math.min(TIP_PENETRATION_MAX_MM, Math.max(TIP_PENETRATION_MIN_MM, valueMm));
+    updateTipProfile({ penetrationMm: clamped });
+}
+
 export function updateShaftProfile(shaft: Partial<SupportSettings['shaft']>): void {
     const nextShaft = { ...currentSettings.shaft, ...shaft };
     const nextDiameter = shaft.diameterMm;

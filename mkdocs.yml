@@ -80,6 +80,7 @@ nav:
       - Plugin Framework: dev/plugins-framework.md
       - Complex Plugin Contributing: dev/plugins-complex-contributing.md
       - Support System: dev/support-system.md
+      - Support Settings API: dev/support-settings-api.md
       - Support Pathfinding V3: dev/support-pathfinding-v3.md
       - Branch Supports: dev/branch-supports.md
       - Grid and Branching: dev/grid-and-branching.md

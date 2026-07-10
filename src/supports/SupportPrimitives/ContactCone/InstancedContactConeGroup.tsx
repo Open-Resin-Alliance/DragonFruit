@@ -4,7 +4,7 @@ import type { ThreeEvent } from '@react-three/fiber';
 import type { Vec3 } from '../../types';
 import type { SupportTipProfile } from './types';
 import { getConeCenterPosition, getConeQuaternion } from './contactConeUtils';
-import { calculateDiskThickness, getDiskCenter, getDiskRotation } from '../ContactDisk/contactDiskUtils';
+import { calculateDiskThickness, getContactDiskGeometrySpec } from '../ContactDisk/contactDiskUtils';
 
 export interface InstancedContactCone {
     id: string;
@@ -99,6 +99,22 @@ function ConeBucketMesh({
             ?? getDiskThicknessForCone(cone);
     };
 
+    // Canonical disk solid for a cone — same math as the detailed renderer,
+    // file export, and slicer feed (see getContactDiskGeometrySpec). The bucket
+    // key already includes quantized thickness + penetration, so the shared
+    // cylinder height (diskThickness + penetration) matches every instance.
+    const resolveDiskSpec = (cone: InstancedContactCone) => {
+        const effectiveSurfaceNormal = cone.surfaceNormal ?? cone.normal;
+        return getContactDiskGeometrySpec({
+            pos: cone.pos,
+            surfaceNormal: effectiveSurfaceNormal,
+            coneAxis: cone.normal,
+            profile: cone.profile,
+            contactDiameterMm: cone.profile.contactDiameterMm,
+            overrideThickness: resolveDiskThickness(cone),
+        });
+    };
+
     useLayoutEffect(() => {
         const tempObject = new THREE.Object3D();
 
@@ -147,17 +163,10 @@ function ConeBucketMesh({
         });
 
         setInstanceMatrices(diskRef.current, (cone) => {
-            const effectiveSurfaceNormal = cone.surfaceNormal ?? cone.normal;
-            const thickness = resolveDiskThickness(cone);
-            const center = getDiskCenter(cone.pos, effectiveSurfaceNormal, thickness);
-            const penetration = Math.max(0, cone.profile.penetrationMm ?? 0);
+            const spec = resolveDiskSpec(cone);
             return {
-                position: new THREE.Vector3(
-                    center.x - effectiveSurfaceNormal.x * (penetration / 2),
-                    center.y - effectiveSurfaceNormal.y * (penetration / 2),
-                    center.z - effectiveSurfaceNormal.z * (penetration / 2),
-                ),
-                quaternion: getDiskRotation(effectiveSurfaceNormal),
+                position: new THREE.Vector3(spec.center.x, spec.center.y, spec.center.z),
+                quaternion: spec.rotation,
             };
         });
 
@@ -189,17 +198,10 @@ function ConeBucketMesh({
         });
 
         setInstanceMatrices(overlayDiskRef.current, (cone) => {
-            const effectiveSurfaceNormal = cone.surfaceNormal ?? cone.normal;
-            const thickness = resolveDiskThickness(cone);
-            const center = getDiskCenter(cone.pos, effectiveSurfaceNormal, thickness);
-            const penetration = Math.max(0, cone.profile.penetrationMm ?? 0);
+            const spec = resolveDiskSpec(cone);
             return {
-                position: new THREE.Vector3(
-                    center.x - effectiveSurfaceNormal.x * (penetration / 2),
-                    center.y - effectiveSurfaceNormal.y * (penetration / 2),
-                    center.z - effectiveSurfaceNormal.z * (penetration / 2),
-                ),
-                quaternion: getDiskRotation(effectiveSurfaceNormal),
+                position: new THREE.Vector3(spec.center.x, spec.center.y, spec.center.z),
+                quaternion: spec.rotation,
             };
         });
     }, [bucket, diskThicknessByCone, hasOverlay]);

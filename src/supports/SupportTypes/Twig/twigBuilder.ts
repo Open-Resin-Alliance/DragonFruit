@@ -50,6 +50,7 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
         diskThicknessMm: settings.tip.diskThicknessMm ?? 0.1,
         maxStandoffMm: settings.tip.maxStandoffMm ?? 1.5,
         standoffAngleThreshold: settings.tip.standoffAngleThreshold ?? Math.PI / 4,
+        penetrationMm: Math.max(0, settings.tip.penetrationMm ?? 0),
     };
 
     // Twig sizing rule: each disk drives its own joint, and the shaft tapers

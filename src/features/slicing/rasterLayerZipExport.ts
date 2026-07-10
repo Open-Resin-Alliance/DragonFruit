@@ -18,7 +18,7 @@ import { generateChamferedBeam } from '@/supports/Rafts/Crenelated/geometry/gene
 import { buildLineRaftEdgePairs } from '@/supports/Rafts/Crenelated/geometry/buildLineRaftEdgePairs';
 import type { ContactDisk } from '@/supports/types';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
-import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
+import { calculateDiskThickness, getContactDiskGeometrySpec } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
 import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints } from '@/supports/SupportPrimitives/Knot/knotUtils';
 import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
@@ -781,6 +781,55 @@ function appendSegmentPrimitive(
   geom.dispose();
 }
 
+/**
+ * Emit the contact-disk solid (cylinder + round tip) into the slice mesh.
+ *
+ * Geometry comes from getContactDiskGeometrySpec — the same single source of
+ * truth the viewport renderers and file export use — so the printed disk
+ * (including its penetration into the model) matches what the user sees.
+ * Overlapping the model/cone solids is fine: the slicer unions solids the
+ * same way joint spheres already overlap shafts.
+ */
+function appendContactDiskPrimitive(
+  sink: TriangleSink,
+  disk: {
+    pos: { x: number; y: number; z: number };
+    surfaceNormal: { x: number; y: number; z: number };
+    coneAxis: { x: number; y: number; z: number };
+    contactDiameterMm: number;
+    diskLengthOverride?: number;
+    profile: { type?: string; diskThicknessMm?: number; maxStandoffMm?: number; standoffAngleThreshold?: number; penetrationMm?: number };
+  },
+  radialSegments = 12,
+): void {
+  const spec = getContactDiskGeometrySpec({
+    pos: disk.pos,
+    surfaceNormal: disk.surfaceNormal,
+    coneAxis: disk.coneAxis,
+    profile: disk.profile,
+    contactDiameterMm: disk.contactDiameterMm,
+    overrideThickness: disk.diskLengthOverride,
+  });
+  const radius = Math.max(0.05, spec.radius);
+  const segments = Math.max(4, Math.floor(radialSegments));
+
+  const cylinder = new THREE.CylinderGeometry(radius, radius, Math.max(0.001, spec.height), segments);
+  const matrix = new THREE.Matrix4().compose(
+    new THREE.Vector3(spec.center.x, spec.center.y, spec.center.z),
+    spec.rotation,
+    new THREE.Vector3(1, 1, 1),
+  );
+  cylinder.applyMatrix4(matrix);
+  appendGeometryTriangles(sink, cylinder);
+  cylinder.dispose();
+
+  // Round tip blending the disk into the cone body (parity with the renderers).
+  const tip = new THREE.SphereGeometry(radius, segments, Math.max(3, Math.floor(segments * 0.75)));
+  tip.applyMatrix4(new THREE.Matrix4().makeTranslation(spec.tipCenter.x, spec.tipCenter.y, spec.tipCenter.z));
+  appendGeometryTriangles(sink, tip);
+  tip.dispose();
+}
+
 function appendContactConePrimitive(
   sink: TriangleSink,
   cone: {
@@ -788,7 +837,7 @@ function appendContactConePrimitive(
     normal: { x: number; y: number; z: number };
     surfaceNormal?: { x: number; y: number; z: number };
     diskLengthOverride?: number;
-    profile: { contactDiameterMm: number; bodyDiameterMm: number; type?: string; diskThicknessMm?: number; maxStandoffMm?: number; standoffAngleThreshold?: number };
+    profile: { contactDiameterMm: number; bodyDiameterMm: number; type?: string; diskThicknessMm?: number; maxStandoffMm?: number; standoffAngleThreshold?: number; penetrationMm?: number };
   },
   radialSegments = 12,
 ): void {
@@ -802,9 +851,28 @@ function appendContactConePrimitive(
     Math.max(0.05, cone.profile.bodyDiameterMm * 0.5),
     Math.max(4, Math.floor(radialSegments)),
   );
-  if (!g) return;
-  appendGeometryTriangles(sink, g);
-  g.dispose();
+  if (g) {
+    appendGeometryTriangles(sink, g);
+    g.dispose();
+  }
+
+  // Disk-tipped cones: emit the contact disk itself (with penetration) so the
+  // printed tip matches the viewport. Previously the sliced mesh contained
+  // only the bare cone frustum — no disk, no penetration.
+  if (cone.profile.type === 'disk') {
+    appendContactDiskPrimitive(
+      sink,
+      {
+        pos: cone.pos,
+        surfaceNormal: cone.surfaceNormal ?? cone.normal,
+        coneAxis: cone.normal,
+        contactDiameterMm: cone.profile.contactDiameterMm,
+        diskLengthOverride: cone.diskLengthOverride,
+        profile: cone.profile,
+      },
+      radialSegments,
+    );
+  }
 }
 
 function buildSupportAndRaftWorldTriangles(
@@ -1010,6 +1078,12 @@ function buildSupportAndRaftWorldTriangles(
         );
       }
     }
+
+    // Contact disks at both twig ends (with penetration). Previously twigs
+    // emitted no geometry at the model surface at all — the sliced twig
+    // stopped at the disk tip centers and never actually touched the model.
+    appendContactDiskPrimitive(sink, twig.contactDiskA, tessellation.contactConeRadialSegments);
+    appendContactDiskPrimitive(sink, twig.contactDiskB, tessellation.contactConeRadialSegments);
   }
 
   for (const stick of Object.values(supportState.sticks)) {

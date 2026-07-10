@@ -110,3 +110,87 @@ export function getDiskRotation(normal: Vec3): THREE.Quaternion {
     const defaultUp = new THREE.Vector3(0, 1, 0); // Cylinder default axis
     return new THREE.Quaternion().setFromUnitVectors(defaultUp, alignVector);
 }
+
+/**
+ * Resolve the penetration depth ("embed depth") for a contact disk.
+ * Resolution order: explicit value → profile.penetrationMm → 0. Never negative.
+ */
+export function resolveDiskPenetrationMm(
+    profile: { penetrationMm?: number } | undefined,
+    explicitPenetrationMm?: number,
+): number {
+    const raw = explicitPenetrationMm ?? profile?.penetrationMm ?? 0;
+    return Number.isFinite(raw) ? Math.max(0, raw) : 0;
+}
+
+export interface ContactDiskGeometrySpec {
+    radius: number;             // Contact radius (mm)
+    thickness: number;          // Resolved standoff thickness (excludes penetration)
+    penetrationMm: number;      // Resolved, clamped penetration depth
+    height: number;             // Full cylinder height = thickness + penetration
+    center: Vec3;               // World center of the cylinder (accounts for penetration)
+    tipCenter: Vec3;            // Cone-side tip sphere center — never moves with penetration
+    rotation: THREE.Quaternion; // Aligns cylinder Y-axis with the surface normal
+}
+
+/**
+ * Structural profile shape accepted by getContactDiskGeometrySpec, so both
+ * ContactDiskProfile and disk-typed SupportTipProfile (or partial profiles
+ * from export/slicing paths) can be passed without casts.
+ */
+export interface ContactDiskProfileLike {
+    type?: string;
+    diskThicknessMm?: number;
+    maxStandoffMm?: number;
+    standoffAngleThreshold?: number;
+    penetrationMm?: number;
+}
+
+/**
+ * Single source of truth for the contact-disk solid.
+ *
+ * The disk cylinder spans from (pos - normal·penetration) — embedded into the
+ * model — up to (pos + normal·thickness) where the round tip meets the cone.
+ * Penetration extends the disk INTO the model only; the cone-side connection
+ * (tipCenter) is unaffected, so sockets and joints never move with this setting.
+ *
+ * Every consumer that produces disk geometry (detailed renderer, instanced
+ * renderer, file export, slicer feed) must derive its dimensions from this
+ * spec so viewport and printed output stay in lockstep.
+ */
+export function getContactDiskGeometrySpec(params: {
+    pos: Vec3;
+    surfaceNormal: Vec3;
+    coneAxis: Vec3;
+    profile: ContactDiskProfileLike;
+    contactDiameterMm: number;
+    penetrationMm?: number;     // Explicit override; defaults to profile.penetrationMm
+    overrideThickness?: number; // Explicit thickness (e.g. from collision logic)
+}): ContactDiskGeometrySpec {
+    const { pos, surfaceNormal, coneAxis, profile, contactDiameterMm, penetrationMm, overrideThickness } = params;
+    const thickness = overrideThickness !== undefined
+        ? overrideThickness
+        // calculateDiskThickness reads the standoff fields with ?? fallbacks,
+        // so a partial profile is safe at runtime.
+        : calculateDiskThickness(surfaceNormal, coneAxis, profile as ContactDiskProfile);
+    const pen = resolveDiskPenetrationMm(profile, penetrationMm);
+    // Cylinder spans pos - n·pen → pos + n·thickness.
+    const centerOffset = (thickness - pen) / 2;
+    return {
+        radius: contactDiameterMm / 2,
+        thickness,
+        penetrationMm: pen,
+        height: thickness + pen,
+        center: {
+            x: pos.x + surfaceNormal.x * centerOffset,
+            y: pos.y + surfaceNormal.y * centerOffset,
+            z: pos.z + surfaceNormal.z * centerOffset,
+        },
+        tipCenter: {
+            x: pos.x + surfaceNormal.x * thickness,
+            y: pos.y + surfaceNormal.y * thickness,
+            z: pos.z + surfaceNormal.z * thickness,
+        },
+        rotation: getDiskRotation(surfaceNormal),
+    };
+}
