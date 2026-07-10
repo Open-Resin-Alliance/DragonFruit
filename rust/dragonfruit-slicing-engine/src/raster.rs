@@ -764,8 +764,22 @@ fn build_row_spans_nonzero_inner(
             build_row_spans_matched(active_edges, width, snap_to_integer, -1);
 
         let prev = prev_spans.unwrap_or(&[]);
-        let pos_overlap = spans_overlap_px(&pos_spans, prev);
-        let neg_overlap = spans_overlap_px(&neg_spans, prev);
+        // Vertical coherence by *symmetric difference*, not raw intersection.
+        // Raw intersection rewards an orientation that fills the neighbour's
+        // solids AND the gaps between them: a bridge/bar is a superset of the
+        // previous row's fill, so it always "overlaps" at least as much and the
+        // vote picks it, then it self-reinforces down the band. Symmetric
+        // difference charges for the extra fill the neighbour does NOT have, so
+        // a bloated bridging orientation loses to the tight one that matches.
+        // |A ⊕ prev| = |A| + |prev| − 2|A ∩ prev| (the |prev| term is constant
+        // across candidates but kept for clarity). Only applied when a previous
+        // row exists; with no history the pair-count / least-fill fallbacks
+        // decide exactly as before.
+        let prev_total = spans_total_px(prev) as i64;
+        let pos_symdiff = spans_total_px(&pos_spans) as i64 + prev_total
+            - 2 * spans_overlap_px(&pos_spans, prev) as i64;
+        let neg_symdiff = spans_total_px(&neg_spans) as i64 + prev_total
+            - 2 * spans_overlap_px(&neg_spans, prev) as i64;
 
         let (pos_oob, neg_oob) = match bounds {
             Some(rb) => (rb.oob_pixels(&pos_spans), rb.oob_pixels(&neg_spans)),
@@ -774,8 +788,8 @@ fn build_row_spans_nonzero_inner(
 
         let choose_pos = if pos_oob != neg_oob {
             pos_oob < neg_oob
-        } else if pos_overlap != neg_overlap {
-            pos_overlap > neg_overlap
+        } else if !prev.is_empty() && pos_symdiff != neg_symdiff {
+            pos_symdiff < neg_symdiff
         } else if pos_pairs != neg_pairs {
             pos_pairs > neg_pairs
         } else {
@@ -4945,6 +4959,38 @@ mod tests {
         // Cluster averages to x≈60.001, so the single wall lands on pixel 60.
         assert_eq!(spans.len(), 1);
         assert_eq!((spans[0].start, spans[0].end), (20, 60));
+    }
+
+    #[test]
+    fn superset_bridge_loses_to_tight_fill_under_symmetric_coherence() {
+        // Captured from a real bar (row 974): a sign-mixed row whose negative
+        // orientation bridges into a wide span that is a *superset* of the
+        // previous row's small object (the real middle wall at 50..60). Raw-
+        // intersection coherence rewarded the bar because it contains that
+        // object; symmetric-difference coherence charges for the ~90 px of
+        // extra fill and rejects it.
+        let prev = build_row_spans_nonzero(&[edge(50.0, 1), edge(60.0, -1)], 256, true);
+        let spans = super::build_row_spans_nonzero_ctx(
+            &[
+                edge(10.0, 1),
+                edge(12.0, -1),
+                edge(50.0, -1),
+                edge(60.0, 1),
+                edge(100.0, 1),
+                edge(102.0, -1),
+            ],
+            256,
+            true,
+            Some(&prev),
+        );
+        // The bridge interior (pixel 70) must stay empty — no bar.
+        assert!(
+            spans.iter().all(|s| !(s.start <= 70 && 70 <= s.end)),
+            "bridge/bar must not fill the gap, got {:?}",
+            spans.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>()
+        );
+        // No plate-crossing span survives; only tight walls.
+        assert!(spans.iter().all(|s| s.end - s.start + 1 < 40));
     }
 
     fn px_box(x0: f32, x1: f32) -> super::PxComponentBox {
