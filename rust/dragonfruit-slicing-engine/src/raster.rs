@@ -546,26 +546,17 @@ fn build_row_spans_nonzero_ctx_bounded(
     let (spans, repaired) =
         build_row_spans_nonzero_inner(edges, width, snap_to_integer, prev_spans, bounds);
 
-    if bar_debug_enabled() {
-        log_bar_row_diagnostic(
-            active_edges,
-            collapsed.as_deref(),
-            &spans,
-            prev_spans,
-            width,
-            bounds,
-            repaired,
-        );
-    }
+    log_bar_row_diagnostic(
+        active_edges,
+        collapsed.as_deref(),
+        &spans,
+        prev_spans,
+        width,
+        bounds,
+        repaired,
+    );
 
     spans
-}
-
-/// Opt-in (`DF_RASTER_BAR_DEBUG` env var) diagnostic for the horizontal-"bar"
-/// leak. Off by default — costs one atomic load per repaired row when unset.
-fn bar_debug_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var("DF_RASTER_BAR_DEBUG").is_ok())
 }
 
 /// Bounded log budget so a bar-heavy plate can't flood the log.
@@ -591,6 +582,13 @@ fn log_bar_row_diagnostic(
     bounds: Option<RowBounds>,
     repaired: bool,
 ) {
+    // One-shot proof that the diagnostic code path is actually reached (rules
+    // out "logging is broken" vs "detection found nothing").
+    static ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !ARMED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        log::info!("[raster-bar] diagnostic armed (coherence-based, budget=48)");
+    }
+
     let widest = spans
         .iter()
         .map(|s| s.end.saturating_sub(s.start) + 1)

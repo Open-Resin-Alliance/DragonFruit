@@ -1467,6 +1467,7 @@ dependencies = [
  "crc32fast",
  "crossbeam-channel",
  "libdeflater",
+ "log",
  "md-5",
  "png",
  "rayon",
