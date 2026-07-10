@@ -559,9 +559,6 @@ fn build_row_spans_nonzero_ctx_bounded(
     spans
 }
 
-/// Bounded log budget so a bar-heavy plate can't flood the log.
-static BAR_DEBUG_BUDGET: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(48);
-
 /// For any row whose fill is suspiciously wide — a candidate bar, whether it
 /// went through the repair (`repaired`) or the fast path — dump the raw
 /// pre-collapse crossing sequence and summary stats so the mechanism is
@@ -586,7 +583,7 @@ fn log_bar_row_diagnostic(
     // out "logging is broken" vs "detection found nothing").
     static ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !ARMED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        log::info!("[raster-bar] diagnostic armed (coherence-based, budget=48)");
+        log::info!("[raster-bar] diagnostic armed (coherence-based, all rows)");
     }
 
     let widest = spans
@@ -616,10 +613,6 @@ fn log_bar_row_diagnostic(
     if !interesting {
         return;
     }
-    if BAR_DEBUG_BUDGET.load(std::sync::atomic::Ordering::Relaxed) == 0 {
-        return;
-    }
-    BAR_DEBUG_BUDGET.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
 
     let finite: Vec<(f32, i32)> = original
         .iter()
@@ -763,37 +756,35 @@ fn build_row_spans_nonzero_inner(
         let (neg_spans, neg_pairs) =
             build_row_spans_matched(active_edges, width, snap_to_integer, -1);
 
-        let prev = prev_spans.unwrap_or(&[]);
-        // Vertical coherence by *symmetric difference*, not raw intersection.
-        // Raw intersection rewards an orientation that fills the neighbour's
-        // solids AND the gaps between them: a bridge/bar is a superset of the
-        // previous row's fill, so it always "overlaps" at least as much and the
-        // vote picks it, then it self-reinforces down the band. Symmetric
-        // difference charges for the extra fill the neighbour does NOT have, so
-        // a bloated bridging orientation loses to the tight one that matches.
-        // |A ⊕ prev| = |A| + |prev| − 2|A ∩ prev| (the |prev| term is constant
-        // across candidates but kept for clarity). Only applied when a previous
-        // row exists; with no history the pair-count / least-fill fallbacks
-        // decide exactly as before.
-        let prev_total = spans_total_px(prev) as i64;
-        let pos_symdiff = spans_total_px(&pos_spans) as i64 + prev_total
-            - 2 * spans_overlap_px(&pos_spans, prev) as i64;
-        let neg_symdiff = spans_total_px(&neg_spans) as i64 + prev_total
-            - 2 * spans_overlap_px(&neg_spans, prev) as i64;
-
+        // Cascade order matters. Previous-row coherence MUST come after
+        // least-fill, never before it: coherence rewards agreement with the
+        // prior row, but a bar is a superset of the prior row's fill, so once
+        // one row fills the bridging orientation, coherence keeps choosing that
+        // same superset and the bar propagates down the whole band. A bar is an
+        // orphan-crossing bridge — the strictly *larger* orientation — so
+        // least-fill removes it outright. Coherence is reserved for the genuine
+        // residual tie: two equal-size fills at different x (e.g. one fully
+        // flipped object), where within-row evidence cannot decide and only the
+        // previous row's location disambiguates.
         let (pos_oob, neg_oob) = match bounds {
             Some(rb) => (rb.oob_pixels(&pos_spans), rb.oob_pixels(&neg_spans)),
             None => (0, 0),
         };
+        let pos_total = spans_total_px(&pos_spans);
+        let neg_total = spans_total_px(&neg_spans);
 
         let choose_pos = if pos_oob != neg_oob {
             pos_oob < neg_oob
-        } else if !prev.is_empty() && pos_symdiff != neg_symdiff {
-            pos_symdiff < neg_symdiff
         } else if pos_pairs != neg_pairs {
             pos_pairs > neg_pairs
+        } else if pos_total != neg_total {
+            // Least fill: the bridging (bar) orientation is the larger one.
+            pos_total < neg_total
         } else {
-            spans_total_px(&pos_spans) <= spans_total_px(&neg_spans)
+            // Exact tie on pairs and fill: let the previous row's overlap pick
+            // which equal-size placement continues.
+            let prev = prev_spans.unwrap_or(&[]);
+            spans_overlap_px(&pos_spans, prev) >= spans_overlap_px(&neg_spans, prev)
         };
 
         return (if choose_pos { pos_spans } else { neg_spans }, true);
