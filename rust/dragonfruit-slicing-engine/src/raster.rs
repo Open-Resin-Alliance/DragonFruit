@@ -442,6 +442,66 @@ fn distinct_points_push(points: &mut [(f32, f32); 3], count: &mut usize, candida
     }
 }
 
+/// Sub-pixel threshold (in pixels) below which adjacent scanline crossings are
+/// treated as coincident. Overlapping / un-welded faces (non-manifold support
+/// soup) shed clusters of ±1 crossings within float-error of each other; well
+/// below this, genuine thin walls are far wider.
+const COINCIDENT_CROSSING_EPS_PX: f32 = 1e-2;
+
+/// Net runs of near-coincident crossings into one crossing carrying the run's
+/// summed winding (runs that cancel to zero vanish entirely). Returns `None`
+/// when nothing is near-coincident, so well-formed rows pay only an O(n) scan
+/// and no allocation.
+///
+/// This is the root-cause mitigation for the dense support-cage "bar" artifact:
+/// interpenetrating primitives produce clusters of alternating ±1 crossings at
+/// nearly the same x, which make the winding sequence inconsistent and tip the
+/// per-row orientation vote. Collapsing them first hands the winding logic a
+/// clean sequence. Operates on the x-sorted `active_edges`; the anchor-based
+/// window caps each cluster at `eps` so chained crossings can't runaway-merge.
+fn maybe_collapse_coincident(edges: &[ActiveEdge]) -> Option<Vec<ActiveEdge>> {
+    let mut has_cluster = false;
+    for pair in edges.windows(2) {
+        let (a, b) = (pair[0].x, pair[1].x);
+        if a.is_finite() && b.is_finite() && (b - a).abs() <= COINCIDENT_CROSSING_EPS_PX {
+            has_cluster = true;
+            break;
+        }
+    }
+    if !has_cluster {
+        return None;
+    }
+
+    let mut out: Vec<ActiveEdge> = Vec::with_capacity(edges.len());
+    let mut i = 0usize;
+    while i < edges.len() {
+        if !edges[i].x.is_finite() {
+            out.push(edges[i]); // preserve the non-finite terminator
+            i += 1;
+            continue;
+        }
+        let x0 = edges[i].x;
+        let (mut j, mut net, mut sum_x, mut n) = (i, 0i32, 0.0f32, 0.0f32);
+        while j < edges.len()
+            && edges[j].x.is_finite()
+            && edges[j].x - x0 <= COINCIDENT_CROSSING_EPS_PX
+        {
+            net += edges[j].wind;
+            sum_x += edges[j].x;
+            n += 1.0;
+            j += 1;
+        }
+        if net != 0 {
+            let mut rep = edges[i];
+            rep.x = sum_x / n;
+            rep.wind = net;
+            out.push(rep);
+        }
+        i = j;
+    }
+    Some(out)
+}
+
 /// Build filled spans for one scanline using non-zero winding.
 ///
 /// Iterates every consecutive edge pair. When `snap_to_integer` is
@@ -475,8 +535,16 @@ fn build_row_spans_nonzero_ctx_bounded(
     if active_edges.len() < 2 {
         return Vec::new();
     }
+    // Net out sub-pixel-coincident crossings (overlapping / un-welded faces)
+    // before winding so a cluster of ±1 soup can't tip the orientation vote.
+    // No-op (and no allocation) on well-formed rows.
+    let collapsed = maybe_collapse_coincident(active_edges);
+    let edges = collapsed.as_deref().unwrap_or(active_edges);
+    if edges.len() < 2 {
+        return Vec::new();
+    }
     let (spans, _repaired) =
-        build_row_spans_nonzero_inner(active_edges, width, snap_to_integer, prev_spans, bounds);
+        build_row_spans_nonzero_inner(edges, width, snap_to_integer, prev_spans, bounds);
     spans
 }
 
@@ -4746,6 +4814,44 @@ mod tests {
 
         assert_eq!(spans.len(), 1);
         assert_eq!((spans[0].start, spans[0].end), (100, 129));
+    }
+
+    #[test]
+    fn fully_cancelling_coincident_cluster_vanishes() {
+        // Two exactly-coincident opposite faces (un-welded overlap) net to zero
+        // and must not leave a stray sliver span. Uses the AA path (snap off),
+        // where the raw sequence would otherwise emit a 1-px span at x≈70.
+        let spans = build_row_spans_nonzero(
+            &[
+                edge(20.0, 1),
+                edge(40.0, -1),
+                edge(70.0000, 1),
+                edge(70.0005, -1),
+            ],
+            256,
+            false,
+        );
+        assert_eq!(spans.len(), 1, "the cancelling cluster must vanish, got {spans:?}");
+        assert_eq!((spans[0].start, spans[0].end), (20, 39));
+    }
+
+    #[test]
+    fn coincident_cluster_nets_to_a_single_wall() {
+        // A cluster of alternating ±1 crossings at x≈60 nets to one exit wall,
+        // so entry(20)…cluster fills one clean 20..60 span instead of a soup.
+        let spans = build_row_spans_nonzero(
+            &[
+                edge(20.0, 1),
+                edge(60.0000, -1),
+                edge(60.0010, 1),
+                edge(60.0020, -1),
+            ],
+            256,
+            true,
+        );
+        // Cluster averages to x≈60.001, so the single wall lands on pixel 60.
+        assert_eq!(spans.len(), 1);
+        assert_eq!((spans[0].start, spans[0].end), (20, 60));
     }
 
     fn px_box(x0: f32, x1: f32) -> super::PxComponentBox {
