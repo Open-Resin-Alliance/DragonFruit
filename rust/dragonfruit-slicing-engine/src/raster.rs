@@ -596,9 +596,26 @@ fn log_bar_row_diagnostic(
         .map(|s| s.end.saturating_sub(s.start) + 1)
         .max()
         .unwrap_or(0);
-    let total: usize = spans.iter().map(|s| s.end.saturating_sub(s.start) + 1).sum();
-    // A wide single span or a lot of total fill both look like a bar/inversion.
-    if widest * 3 < width && total * 2 < width {
+    let total: u64 = spans
+        .iter()
+        .map(|s| (s.end.saturating_sub(s.start) + 1) as u64)
+        .sum();
+    let prev = prev_spans.unwrap_or(&[]);
+    let prev_total: u64 = prev
+        .iter()
+        .map(|s| (s.end.saturating_sub(s.start) + 1) as u64)
+        .sum();
+    let prev_overlap = spans_overlap_px(spans, prev);
+
+    // A "flip candidate" is a substantial row that barely overlaps the row
+    // above it — the signature of a row that filled its neighbour's complement
+    // (an inversion). Independent of frame width. Also always surface repaired
+    // rows (the vote actually ran there). MIN_FILL rejects noise/support specks.
+    const MIN_FILL_PX: u64 = 64;
+    let smaller = total.min(prev_total);
+    let incoherent = smaller >= MIN_FILL_PX && prev_overlap * 2 < smaller;
+    let interesting = incoherent || (repaired && total >= MIN_FILL_PX);
+    if !interesting {
         return;
     }
     if BAR_DEBUG_BUDGET.load(std::sync::atomic::Ordering::Relaxed) == 0 {
@@ -617,14 +634,11 @@ fn log_bar_row_diagnostic(
         min_gap = min_gap.min((pair[1].0 - pair[0].0).abs());
     }
     let n_after_collapse = collapsed.map(|c| c.iter().take_while(|e| e.x.is_finite()).count());
-    let prev_overlap = prev_spans
-        .map(|prev| spans_overlap_px(spans, prev))
-        .unwrap_or(0);
     let row = bounds.map(|b| b.row);
     let head: Vec<(f32, i32)> = finite.iter().take(48).copied().collect();
 
     log::info!(
-        "[raster-bar] row={row:?} repaired={repaired} widest_span={widest}px total_fill={total}px width={width} prev_overlap={prev_overlap}px n_crossings={} n_after_collapse={n_after_collapse:?} closure={closure} min_adj_gap_px={min_gap:.4} crossings(first48)={head:?}",
+        "[raster-bar] row={row:?} repaired={repaired} incoherent={incoherent} widest_span={widest}px total_fill={total}px prev_fill={prev_total}px prev_overlap={prev_overlap}px width={width} n_crossings={} n_after_collapse={n_after_collapse:?} closure={closure} min_adj_gap_px={min_gap:.4} crossings(first48)={head:?}",
         finite.len(),
     );
 }
