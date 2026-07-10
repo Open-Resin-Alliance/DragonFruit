@@ -181,6 +181,7 @@ dependencies = [
  "crc32fast",
  "crossbeam-channel",
  "libdeflater",
+ "log",
  "md-5",
  "png",
  "rayon",
@@ -273,6 +274,12 @@ checksum = "d1ee41cf6fb1bb6030dfb59ffb7bc01ab26aade44142084c87f0fc7a1658fe71"
 dependencies = [
  "libdeflate-sys",
 ]
+
+[[package]]
+name = "log"
+version = "0.4.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "md-5"

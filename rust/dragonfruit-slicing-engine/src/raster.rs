@@ -543,9 +543,70 @@ fn build_row_spans_nonzero_ctx_bounded(
     if edges.len() < 2 {
         return Vec::new();
     }
-    let (spans, _repaired) =
+    let (spans, repaired) =
         build_row_spans_nonzero_inner(edges, width, snap_to_integer, prev_spans, bounds);
+
+    if repaired && bar_debug_enabled() {
+        log_bar_row_diagnostic(active_edges, collapsed.as_deref(), &spans, width, bounds);
+    }
+
     spans
+}
+
+/// Opt-in (`DF_RASTER_BAR_DEBUG` env var) diagnostic for the horizontal-"bar"
+/// leak. Off by default — costs one atomic load per repaired row when unset.
+fn bar_debug_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("DF_RASTER_BAR_DEBUG").is_ok())
+}
+
+/// Bounded log budget so a bar-heavy plate can't flood the log.
+static BAR_DEBUG_BUDGET: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(48);
+
+/// For a repaired row whose fill is suspiciously wide (a candidate bar), dump
+/// the raw pre-collapse crossing sequence and summary stats, so the mechanism
+/// is decidable from data: tightly-spaced ±1 crossings ⇒ raise the collapse
+/// ε; well-separated but sign-mixed / non-zero-closure ⇒ a vote/coherence
+/// failure instead.
+fn log_bar_row_diagnostic(
+    original: &[ActiveEdge],
+    collapsed: Option<&[ActiveEdge]>,
+    spans: &[RowSpan],
+    width: usize,
+    bounds: Option<RowBounds>,
+) {
+    let widest = spans
+        .iter()
+        .map(|s| s.end.saturating_sub(s.start) + 1)
+        .max()
+        .unwrap_or(0);
+    // Only a span covering a large fraction of the frame looks like a bar.
+    if widest * 3 < width {
+        return;
+    }
+    if BAR_DEBUG_BUDGET.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+        return;
+    }
+    BAR_DEBUG_BUDGET.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+
+    let finite: Vec<(f32, i32)> = original
+        .iter()
+        .take_while(|e| e.x.is_finite())
+        .map(|e| (e.x, e.wind))
+        .collect();
+    let closure: i32 = finite.iter().map(|(_, w)| *w).sum();
+    let mut min_gap = f32::INFINITY;
+    for pair in finite.windows(2) {
+        min_gap = min_gap.min((pair[1].0 - pair[0].0).abs());
+    }
+    let n_after_collapse = collapsed.map(|c| c.iter().take_while(|e| e.x.is_finite()).count());
+    let row = bounds.map(|b| b.row);
+    let head: Vec<(f32, i32)> = finite.iter().take(48).copied().collect();
+
+    log::info!(
+        "[raster-bar] row={row:?} widest_span={widest}px width={width} n_crossings={} n_after_collapse={n_after_collapse:?} closure={closure} min_adj_gap_px={min_gap:.4} crossings(first48)={head:?}",
+        finite.len(),
+    );
 }
 
 /// Context-free variant for callers (and tests) without row history.
