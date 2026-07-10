@@ -3,10 +3,158 @@
 //! Uses oriented segment winding to robustly union overlapping/intersecting
 //! solids and avoid spurious bridge/void artifacts.
 
-use crate::geometry::Triangle;
+use crate::geometry::{PixelTransform, Triangle};
 use crate::types::{LayerAreaStatsV3, SliceJobV3};
 use crate::zaa;
 use rayon::prelude::*;
+
+/// Extra pixels of tolerance around a component box when testing whether fill
+/// escapes it. Absorbs the ~1 px AA halo (`.floor()`/`.ceil()` span growth)
+/// and any looseness in the caller-supplied box so genuine edge fill never
+/// reads as an escape.
+const COMPONENT_BOX_DILATE_PX: f32 = 2.0;
+
+/// Minimum out-of-box fill (in pixels) on a row before it is treated as
+/// defective. Above the dilation slop so a real thin sliver grazing a box
+/// edge can't trip the repair; an actual bridge escapes by hundreds of pixels.
+const COMPONENT_OOB_TRIGGER_SLOP_PX: u64 = 4;
+
+/// One component's AABB projected into raster pixel space, retaining its mm
+/// z-slab for per-layer gating. `x0 <= x1`, `y0 <= y1` (mirror-normalized).
+#[derive(Debug, Clone, Copy)]
+struct PxComponentBox {
+    x0: f32,
+    x1: f32,
+    y0: f32,
+    y1: f32,
+    z_min: f32,
+    z_max: f32,
+}
+
+/// Project every component AABB (mm) into pixel space once per layer/slice,
+/// sorted by `x0` so row-coverage walks can early-out. Empty when the job
+/// carries no component AABBs (feature disabled).
+fn project_component_boxes(job: &SliceJobV3) -> Vec<PxComponentBox> {
+    if job.component_aabbs.is_empty() {
+        return Vec::new();
+    }
+    let t = PixelTransform::from_job(job);
+    let mut boxes: Vec<PxComponentBox> = job
+        .component_aabbs
+        .iter()
+        .map(|b| {
+            let (xa, xb) = (t.map_x(b.x_min), t.map_x(b.x_max));
+            let (ya, yb) = (t.map_y(b.y_min), t.map_y(b.y_max));
+            PxComponentBox {
+                x0: xa.min(xb),
+                x1: xa.max(xb),
+                y0: ya.min(yb),
+                y1: ya.max(yb),
+                z_min: b.z_min,
+                z_max: b.z_max,
+            }
+        })
+        .collect();
+    boxes.sort_by(|a, b| a.x0.total_cmp(&b.x0));
+    boxes
+}
+
+/// The subset of component boxes whose z-slab overlaps the layer slab
+/// `[z_lo, z_hi]` (mm). Preserves the `x0` ordering of the input.
+fn present_component_boxes(all: &[PxComponentBox], z_lo: f32, z_hi: f32) -> Vec<PxComponentBox> {
+    all.iter()
+        .copied()
+        .filter(|b| b.z_max >= z_lo && b.z_min <= z_hi)
+        .collect()
+}
+
+/// Project and z-gate the component boxes for one layer in a single call.
+/// Returns empty (feature off) when the job carries no component AABBs. The
+/// layer slab is `[layer_index, layer_index + 1) * layer_height`, so a box is
+/// kept if it touches the layer at any point within its thickness.
+fn present_boxes_for_layer(job: &SliceJobV3, layer_index: u32) -> Vec<PxComponentBox> {
+    let all = project_component_boxes(job);
+    if all.is_empty() {
+        return Vec::new();
+    }
+    let z_lo = layer_index as f32 * job.layer_height_mm;
+    let z_hi = (layer_index as f32 + 1.0) * job.layer_height_mm;
+    present_component_boxes(&all, z_lo, z_hi)
+}
+
+/// Build the per-row bounds view for `physical_y`, or `None` when no component
+/// occupies this layer (in which case the constraint is simply not applied).
+#[inline]
+fn row_bounds_for<'a>(boxes: &'a [PxComponentBox], physical_y: usize) -> Option<RowBounds<'a>> {
+    if boxes.is_empty() {
+        None
+    } else {
+        Some(RowBounds {
+            boxes,
+            row: physical_y as f32,
+        })
+    }
+}
+
+/// A per-row view of the component boxes present on the current layer, used to
+/// detect fill that escapes every box (an inter-object bridge). `boxes` is
+/// sorted by `x0`; `row` is the physical pixel row being built.
+#[derive(Clone, Copy)]
+struct RowBounds<'a> {
+    boxes: &'a [PxComponentBox],
+    row: f32,
+}
+
+impl RowBounds<'_> {
+    /// Count pixels of `spans` not covered by any component box on this row.
+    /// Boxes are dilated by [`COMPONENT_BOX_DILATE_PX`] before testing.
+    fn oob_pixels(&self, spans: &[RowSpan]) -> u64 {
+        if self.boxes.is_empty() {
+            // No component occupies this layer ⇒ impose no constraint rather
+            // than flag everything (e.g. raft-only or unlisted geometry).
+            return 0;
+        }
+        let mut total = 0u64;
+        for s in spans {
+            let hi = s.end as i64;
+            let mut cur = s.start as i64;
+            for b in self.boxes {
+                if self.row < b.y0 - COMPONENT_BOX_DILATE_PX
+                    || self.row > b.y1 + COMPONENT_BOX_DILATE_PX
+                {
+                    continue;
+                }
+                let bx0 = (b.x0 - COMPONENT_BOX_DILATE_PX).floor() as i64;
+                let bx1 = (b.x1 + COMPONENT_BOX_DILATE_PX).ceil() as i64;
+                if bx1 < cur {
+                    continue; // box entirely behind the cursor
+                }
+                if bx0 > hi {
+                    break; // sorted by x0 ⇒ nothing further can cover [cur, hi]
+                }
+                if bx0 > cur {
+                    total += (bx0 - cur) as u64; // uncovered gap before this box
+                }
+                cur = cur.max(bx1 + 1);
+                if cur > hi {
+                    break;
+                }
+            }
+            if cur <= hi {
+                total += (hi - cur + 1) as u64;
+            }
+        }
+        total
+    }
+
+    /// True when `spans` escape the component boxes by more than the trigger
+    /// slop — the signal that this row was reconstructed with the wrong
+    /// orientation and should be repaired.
+    #[inline]
+    fn escapes(&self, spans: &[RowSpan]) -> bool {
+        !self.boxes.is_empty() && self.oob_pixels(spans) > COMPONENT_OOB_TRIGGER_SLOP_PX
+    }
+}
 
 #[inline]
 fn edge_x_cmp(a: f32, b: f32) -> std::cmp::Ordering {
@@ -301,17 +449,34 @@ fn distinct_points_push(points: &mut [(f32, f32); 3], count: &mut usize, candida
 /// and skip the pair if both round to the same pixel,
 /// eliminating the 1-px bogus spans that near-coincident crossings on
 /// defective meshes used to produce.
+///
+/// Unbounded convenience wrapper (no component-box constraint); production
+/// callers use [`build_row_spans_nonzero_ctx_bounded`], so this is retained
+/// for the row-level unit tests.
+#[cfg(test)]
 fn build_row_spans_nonzero_ctx(
     active_edges: &[ActiveEdge],
     width: usize,
     snap_to_integer: bool,
     prev_spans: Option<&[RowSpan]>,
 ) -> Vec<RowSpan> {
+    build_row_spans_nonzero_ctx_bounded(active_edges, width, snap_to_integer, prev_spans, None)
+}
+
+/// As [`build_row_spans_nonzero_ctx`], but also given the component boxes for
+/// this row so escaping fill can trigger and steer the orientation repair.
+fn build_row_spans_nonzero_ctx_bounded(
+    active_edges: &[ActiveEdge],
+    width: usize,
+    snap_to_integer: bool,
+    prev_spans: Option<&[RowSpan]>,
+    bounds: Option<RowBounds>,
+) -> Vec<RowSpan> {
     if active_edges.len() < 2 {
         return Vec::new();
     }
     let (spans, _repaired) =
-        build_row_spans_nonzero_inner(active_edges, width, snap_to_integer, prev_spans);
+        build_row_spans_nonzero_inner(active_edges, width, snap_to_integer, prev_spans, bounds);
     spans
 }
 
@@ -356,6 +521,7 @@ fn build_row_spans_nonzero_inner(
     width: usize,
     snap_to_integer: bool,
     prev_spans: Option<&[RowSpan]>,
+    bounds: Option<RowBounds>,
 ) -> (Vec<RowSpan>, bool) {
     let mut spans = Vec::with_capacity(active_edges.len() / 2 + 1);
     let mut winding = 0i32;
@@ -407,15 +573,24 @@ fn build_row_spans_nonzero_inner(
     // A well-formed row closes back to winding zero and never mixes signs
     // (positive and negative winding regions in one row mean some crossings
     // have inverted orientation). Either symptom marks a mesh defect on this
-    // row; discard the naive spans and rebuild from matched crossing pairs
-    // so a stray crossing cannot leak fill across the row.
-    if closure_winding != 0 || (min_winding < 0 && max_winding > 0) {
+    // row. A third symptom, available only when the caller supplies component
+    // AABBs: the naive fill escapes every printed object's box — the signature
+    // of an inter-object "bridge" leak that can otherwise close to zero winding
+    // and slip through undetected. Any symptom discards the naive spans and
+    // rebuilds from matched crossing pairs so a stray crossing cannot leak fill
+    // across the row.
+    let winding_defective = closure_winding != 0 || (min_winding < 0 && max_winding > 0);
+    let aabb_defective = bounds.is_some_and(|rb| rb.escapes(&spans));
+    if winding_defective || aabb_defective {
         // Decide the row's true orientation by evidence, not by winding
         // extremes: a single flipped triangle can drive the winding lower
         // than the legitimate peak and would invert the whole row's
         // interpretation — and an alternating crossing sequence pairs
         // almost equally well in both directions, so within-row evidence
         // alone can tie. The cascade:
+        //   0. component boxes (external ground truth, when supplied) — the
+        //      orientation whose fill escapes the printed objects least is
+        //      correct; a bridge dumps a full span into inter-object space;
         //   1. vertical coherence — defects are single-row events, so the
         //      orientation whose fill agrees with the previous row's spans
         //      is the true one;
@@ -431,7 +606,14 @@ fn build_row_spans_nonzero_inner(
         let pos_overlap = spans_overlap_px(&pos_spans, prev);
         let neg_overlap = spans_overlap_px(&neg_spans, prev);
 
-        let choose_pos = if pos_overlap != neg_overlap {
+        let (pos_oob, neg_oob) = match bounds {
+            Some(rb) => (rb.oob_pixels(&pos_spans), rb.oob_pixels(&neg_spans)),
+            None => (0, 0),
+        };
+
+        let choose_pos = if pos_oob != neg_oob {
+            pos_oob < neg_oob
+        } else if pos_overlap != neg_overlap {
             pos_overlap > neg_overlap
         } else if pos_pairs != neg_pairs {
             pos_pairs > neg_pairs
@@ -2060,6 +2242,7 @@ fn rasterize_layer_with_stats_impl(
         0
     };
     let mut prev_spans: Vec<RowSpan> = Vec::new();
+    let component_boxes = present_boxes_for_layer(job, layer_index);
 
     for y in y_start..y_end_exclusive {
         let physical_y = y / aa_steps;
@@ -2130,8 +2313,13 @@ fn rasterize_layer_with_stats_impl(
 
         let row_start = physical_y * width;
 
-        let spans =
-            build_row_spans_nonzero_ctx(&active_edges, width, !aa_enabled, Some(&prev_spans));
+        let spans = build_row_spans_nonzero_ctx_bounded(
+            &active_edges,
+            width,
+            !aa_enabled,
+            Some(&prev_spans),
+            row_bounds_for(&component_boxes, physical_y),
+        );
 
         for span in spans.iter().copied() {
             if !aa_enabled {
@@ -2482,6 +2670,7 @@ pub fn rasterize_layer_rle(
     let height = job.source_height_px as usize;
     let mut rle = RleAccum::new();
     let mut stats = LayerAreaStatsV3::default();
+    let component_boxes = present_boxes_for_layer(job, layer_index);
 
     if layer_indices.is_empty() || width == 0 || height == 0 {
         emit_zero_rows(&mut rle, height, width);
@@ -2644,8 +2833,13 @@ pub fn rasterize_layer_rle(
                 continue;
             }
 
-            let spans =
-                build_row_spans_nonzero_ctx(&active_edges, width, false, Some(&prev_spans));
+            let spans = build_row_spans_nonzero_ctx_bounded(
+                &active_edges,
+                width,
+                false,
+                Some(&prev_spans),
+                row_bounds_for(&component_boxes, physical_y),
+            );
             for span in spans.iter().copied() {
                 let left_i = span.a.floor() as i32;
                 let right_i = span.b.ceil() as i32 - 1;
@@ -2822,7 +3016,13 @@ pub fn rasterize_layer_rle(
             continue;
         }
 
-        let spans = build_row_spans_nonzero_ctx(&active_edges, width, true, Some(&prev_spans));
+        let spans = build_row_spans_nonzero_ctx_bounded(
+            &active_edges,
+            width,
+            true,
+            Some(&prev_spans),
+            row_bounds_for(&component_boxes, physical_y),
+        );
 
         for span in spans.iter().copied() {
             row_buf[span.start..=span.end].fill(255);
@@ -2997,6 +3197,9 @@ pub fn rasterize_layer_rle_block(
 
     let mut rle = RleAccum::new();
     let mut stats = LayerAreaStatsV3::default();
+    // Boxes are in full-frame pixel space; span-building happens at full_width
+    // before window clamping, so this applies unchanged within a block.
+    let component_boxes = present_boxes_for_layer(job, layer_index);
 
     if wwidth == 0 || height == 0 {
         return (rle.finish(), stats);
@@ -3169,7 +3372,13 @@ pub fn rasterize_layer_rle_block(
                 continue;
             }
 
-            let spans = build_row_spans_nonzero_ctx(&active_edges, full_width, false, None);
+            let spans = build_row_spans_nonzero_ctx_bounded(
+                &active_edges,
+                full_width,
+                false,
+                None,
+                row_bounds_for(&component_boxes, physical_y),
+            );
             for span in spans {
                 // Clamp the fractional span to the window. The cut edge
                 // becomes a full-coverage boundary, so pixel values inside
@@ -3337,7 +3546,13 @@ pub fn rasterize_layer_rle_block(
             continue;
         }
 
-        let spans = build_row_spans_nonzero_ctx(&active_edges, full_width, true, None);
+        let spans = build_row_spans_nonzero_ctx_bounded(
+            &active_edges,
+            full_width,
+            true,
+            None,
+            row_bounds_for(&component_boxes, physical_y),
+        );
 
         for span in spans {
             let s = span.start.max(wstart);
@@ -4132,6 +4347,7 @@ mod tests {
             dither_device_gamma: 3.0,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
+            component_aabbs: Vec::new(),
             x_packing_mode: "none".to_string(),
         }
     }
@@ -4530,6 +4746,108 @@ mod tests {
 
         assert_eq!(spans.len(), 1);
         assert_eq!((spans[0].start, spans[0].end), (100, 129));
+    }
+
+    fn px_box(x0: f32, x1: f32) -> super::PxComponentBox {
+        super::PxComponentBox {
+            x0,
+            x1,
+            y0: 0.0,
+            y1: 10.0,
+            z_min: 0.0,
+            z_max: 1.0,
+        }
+    }
+
+    #[test]
+    fn row_bounds_escapes_detects_out_of_box_fill() {
+        let boxes = [px_box(100.0, 130.0)];
+        let bounds = super::RowBounds {
+            boxes: &boxes,
+            row: 5.0,
+        };
+        // Fill inside the box: no escape.
+        let inside = super::build_row_spans_nonzero(&[edge(100.0, 1), edge(130.0, -1)], 256, true);
+        assert_eq!(bounds.oob_pixels(&inside), 0);
+        assert!(!bounds.escapes(&inside));
+        // Fill entirely outside the box: every pixel is out of bounds.
+        let outside = super::build_row_spans_nonzero(&[edge(10.0, 1), edge(40.0, -1)], 256, true);
+        assert!(bounds.oob_pixels(&outside) >= 30);
+        assert!(bounds.escapes(&outside));
+        // No component present on the layer ⇒ no constraint imposed.
+        let empty = super::RowBounds {
+            boxes: &[],
+            row: 5.0,
+        };
+        assert_eq!(empty.oob_pixels(&outside), 0);
+        assert!(!empty.escapes(&outside));
+    }
+
+    #[test]
+    fn component_box_oracle_picks_the_in_box_orientation() {
+        // A correctly-wound junk object at 10..40 and a flipped real object at
+        // 100..130 tie on every within-row metric (one matched pair, 30 px of
+        // fill either way). With no history the default cascade would pick the
+        // 10..40 orientation on the least-fill tiebreak. A component box over
+        // the real object (100..130) must flip that decision: the 10..40 fill
+        // escapes every box, so the orientation that stays in-box wins.
+        let boxes = [px_box(100.0, 130.0)];
+        let bounds = super::RowBounds {
+            boxes: &boxes,
+            row: 5.0,
+        };
+        let (spans, repaired) = super::build_row_spans_nonzero_inner(
+            &[
+                edge(10.0, 1),
+                edge(40.0, -1),
+                edge(100.0, -1),
+                edge(130.0, 1),
+            ],
+            256,
+            true,
+            None,
+            Some(bounds),
+        );
+
+        assert!(repaired, "sign-mixed row must be rebuilt");
+        assert_eq!(spans.len(), 1);
+        assert_eq!(
+            (spans[0].start, spans[0].end),
+            (100, 129),
+            "the in-box orientation must win over the least-fill default"
+        );
+    }
+
+    #[test]
+    fn component_box_triggers_repair_on_a_fast_path_bridge() {
+        // A row that closes to zero winding with consistent sign — so the fast
+        // path trusts it — but whose fill bridges an inter-object gap. Without
+        // a box the bridge ships; a box over each real object flags the escape
+        // and the repair drops the bridged interval. Sequence: object A
+        // 10..40, then a dropped-then-doubled crossing pair that leaves winding
+        // running across the 40..200 gap into object B 200..230.
+        let edges = [
+            edge(10.0, 1),
+            edge(40.0, -1),
+            // orphaned same-sign wall pair inside the gap: even-odd fills 60..200
+            edge(60.0, 1),
+            edge(200.0, 1),
+            edge(230.0, -1),
+        ];
+        // Boxes over the two genuine objects only; the 60..200 span escapes.
+        let boxes = [px_box(10.0, 45.0), px_box(195.0, 235.0)];
+        let bounds = super::RowBounds {
+            boxes: &boxes,
+            row: 5.0,
+        };
+        let (spans, repaired) =
+            super::build_row_spans_nonzero_inner(&edges, 256, true, None, Some(bounds));
+        assert!(repaired, "out-of-box fill must trigger the repair");
+        assert!(
+            spans.iter().all(|s| bounds.oob_pixels(&[*s]) == 0),
+            "no repaired span may sit outside the component boxes: {:?}",
+            spans.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>()
+        );
     }
 
     #[test]

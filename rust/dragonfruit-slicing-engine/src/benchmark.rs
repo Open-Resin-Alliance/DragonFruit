@@ -176,6 +176,7 @@ pub fn run_benchmark_v3(cfg: BenchmarkConfigV3) -> Result<BenchmarkResultV3, Sli
         dither_device_gamma: 3.0,
         triangles_xyz: triangles,
         metadata_json: "{}".to_string(),
+        component_aabbs: Vec::new(),
         x_packing_mode: "none".to_string(),
     };
 

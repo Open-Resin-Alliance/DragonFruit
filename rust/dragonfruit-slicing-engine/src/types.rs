@@ -122,6 +122,30 @@ fn anti_aliasing_level_steps(level: &str) -> u8 {
     0
 }
 
+/// Axis-aligned bounding box of one printed **component** (a model mesh plus
+/// its own supports), in millimetres.
+///
+/// Supplied by the app layer, which is the only place that knows which
+/// triangles belong to which object. The rasteriser projects these into pixel
+/// space and uses them as an external ground-truth constraint: fill that lands
+/// outside every component's box on a layer is provably a winding/orientation
+/// defect — an inter-object "bridge" produced by non-manifold geometry — and
+/// triggers per-row repair. See the row-bounds hooks in `raster.rs`.
+///
+/// The list must be **complete** (cover every mesh that produces fill) or left
+/// empty to disable the feature; a partial list would flag fill from
+/// unlisted geometry as a false positive. Boxes may be loose — only the empty
+/// space *between* components needs to be excluded.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ComponentAabbMm {
+    pub x_min: f32,
+    pub y_min: f32,
+    pub z_min: f32,
+    pub x_max: f32,
+    pub y_max: f32,
+    pub z_max: f32,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SliceJobV3 {
     /// Target output extension selected from registered encoders.
@@ -201,6 +225,14 @@ pub struct SliceJobV3 {
     /// `0` means "unspecified" (no geometry split metadata).
     #[serde(default = "default_model_triangle_count")]
     pub model_triangle_count: u32,
+    /// Per-component AABBs (one per printed object: model + its own supports),
+    /// in millimetres. Optional resilience aid for imperfect/non-manifold
+    /// meshes: when present, the rasteriser flags and repairs any row whose
+    /// fill escapes every component's box — the signature of an inter-object
+    /// "bridge" leak. Empty (the default) disables the feature with no change
+    /// in behaviour. Must be complete when supplied; see [`ComponentAabbMm`].
+    #[serde(default)]
+    pub component_aabbs: Vec<ComponentAabbMm>,
     /// Minimum grayscale alpha (0-100%) for non-zero AA pixels.
     ///
     /// When no explicit custom cure LUT is provided, the engine turns this

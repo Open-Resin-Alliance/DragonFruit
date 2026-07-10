@@ -96,44 +96,75 @@ pub fn parse_triangles(flat: &[f32]) -> Vec<Triangle> {
 /// precomputes per-vertex pixel coordinates so `build_segments_for_layer()`
 /// can lerp directly in pixel space instead of calling mm_to_pixel_x/y per
 /// intersection (eliminating 2 divisions per edge crossing per triangle).
-pub fn project_triangles_inplace(triangles: &mut [Triangle], job: &SliceJobV3) {
-    let min_x_mm = -job.build_width_mm * 0.5;
-    let min_y_mm = -job.build_depth_mm * 0.5;
-    let max_px_x = job.effective_render_width_px().saturating_sub(1) as f32;
-    let max_px_y = job.source_height_px.saturating_sub(1) as f32;
+/// Affine mm→pixel transform (`px = mm * a + b` per axis).
+///
+/// Captures the exact projection used by [`project_triangles_inplace`] so that
+/// anything else derived in pixel space — notably per-component AABBs in the
+/// rasteriser — lands in the same coordinate frame as the projected vertices.
+#[derive(Debug, Clone, Copy)]
+pub struct PixelTransform {
+    pub ax: f32,
+    pub bx: f32,
+    pub ay: f32,
+    pub by: f32,
+}
 
-    // Precompute linear transform: mm → [0..max_px]
-    // Without mirror: px = (mm - min_mm) / build_mm * max_px
-    // With mirror_x:  px = (1 - (mm - min_mm) / build_mm) * max_px
-    // Rewrite as:     px = mm * ax + bx  (or ay/by for y)
-    let ax = if job.mirror_x {
-        -max_px_x / job.build_width_mm
-    } else {
-        max_px_x / job.build_width_mm
-    };
-    let bx = if job.mirror_x {
-        max_px_x + min_x_mm * max_px_x / job.build_width_mm
-    } else {
-        -min_x_mm * max_px_x / job.build_width_mm
-    };
-    // y axis is flipped: py = (1 - t) * max_px_y  where t = (y_mm - min_y_mm) / build_depth_mm
-    let ay = if job.mirror_y {
-        max_px_y / job.build_depth_mm
-    } else {
-        -max_px_y / job.build_depth_mm
-    };
-    let by = if job.mirror_y {
-        -min_y_mm * max_px_y / job.build_depth_mm
-    } else {
-        max_px_y + min_y_mm * max_px_y / job.build_depth_mm
-    };
+impl PixelTransform {
+    pub fn from_job(job: &SliceJobV3) -> Self {
+        let min_x_mm = -job.build_width_mm * 0.5;
+        let min_y_mm = -job.build_depth_mm * 0.5;
+        let max_px_x = job.effective_render_width_px().saturating_sub(1) as f32;
+        let max_px_y = job.source_height_px.saturating_sub(1) as f32;
+
+        // Precompute linear transform: mm → [0..max_px]
+        // Without mirror: px = (mm - min_mm) / build_mm * max_px
+        // With mirror_x:  px = (1 - (mm - min_mm) / build_mm) * max_px
+        // Rewrite as:     px = mm * ax + bx  (or ay/by for y)
+        let ax = if job.mirror_x {
+            -max_px_x / job.build_width_mm
+        } else {
+            max_px_x / job.build_width_mm
+        };
+        let bx = if job.mirror_x {
+            max_px_x + min_x_mm * max_px_x / job.build_width_mm
+        } else {
+            -min_x_mm * max_px_x / job.build_width_mm
+        };
+        // y axis is flipped: py = (1 - t) * max_px_y  where t = (y_mm - min_y_mm) / build_depth_mm
+        let ay = if job.mirror_y {
+            max_px_y / job.build_depth_mm
+        } else {
+            -max_px_y / job.build_depth_mm
+        };
+        let by = if job.mirror_y {
+            -min_y_mm * max_px_y / job.build_depth_mm
+        } else {
+            max_px_y + min_y_mm * max_px_y / job.build_depth_mm
+        };
+
+        Self { ax, bx, ay, by }
+    }
+
+    #[inline]
+    pub fn map_x(&self, x_mm: f32) -> f32 {
+        x_mm * self.ax + self.bx
+    }
+
+    #[inline]
+    pub fn map_y(&self, y_mm: f32) -> f32 {
+        y_mm * self.ay + self.by
+    }
+}
+
+pub fn project_triangles_inplace(triangles: &mut [Triangle], job: &SliceJobV3) {
+    let t = PixelTransform::from_job(job);
 
     for tri in triangles.iter_mut() {
-        tri.px_ax = tri.a.x * ax + bx;
-        tri.px_ay = tri.a.y * ay + by;
-        tri.px_bx = tri.b.x * ax + bx;
-        tri.px_by = tri.b.y * ay + by;
-        tri.px_cx = tri.c.x * ax + bx;
-        tri.px_cy = tri.c.y * ay + by;
+        tri.px_ax = t.map_x(tri.a.x);
+        tri.px_ay = t.map_y(tri.a.y);
+        tri.px_bx = t.map_x(tri.b.x);
+        tri.px_by = t.map_y(tri.b.y);
+        tri.px_cx = t.map_x(tri.c.x);
+        tri.px_cy = t.map_y(tri.c.y);
     }
 }

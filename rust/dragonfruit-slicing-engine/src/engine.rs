@@ -5111,6 +5111,7 @@ mod tests {
             dither_device_gamma: 3.0,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
+            component_aabbs: Vec::new(),
         }
     }
 
@@ -5316,6 +5317,7 @@ mod tests {
             dither_device_gamma: 3.0,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
+            component_aabbs: Vec::new(),
         };
 
         let mut flat = Vec::<f32>::new();
@@ -5393,6 +5395,7 @@ mod tests {
             dither_device_gamma: 3.0,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
+            component_aabbs: Vec::new(),
         };
 
         let mut flat = Vec::<f32>::new();
@@ -5470,6 +5473,7 @@ mod tests {
             dither_device_gamma: 3.0,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
+            component_aabbs: Vec::new(),
         };
 
         let mut flat = Vec::<f32>::new();
