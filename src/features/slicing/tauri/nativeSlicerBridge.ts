@@ -8,6 +8,40 @@ type TauriEventModule = {
 
 export type AntiAliasingLevel = 'Off' | `${number}x`;
 
+/** Per-component AABB (model + its supports), mm, camelCase envelope form. */
+export type NativeComponentAabbMm = {
+  xMin: number;
+  yMin: number;
+  zMin: number;
+  xMax: number;
+  yMax: number;
+  zMax: number;
+};
+
+/** snake_case form matching the Rust `ComponentAabbMm` serde contract. */
+type NativeComponentAabbSnake = {
+  x_min: number;
+  y_min: number;
+  z_min: number;
+  x_max: number;
+  y_max: number;
+  z_max: number;
+};
+
+function toNativeComponentAabbs(
+  boxes: readonly NativeComponentAabbMm[] | undefined,
+): NativeComponentAabbSnake[] {
+  if (!boxes || boxes.length === 0) return [];
+  return boxes.map((b) => ({
+    x_min: b.xMin,
+    y_min: b.yMin,
+    z_min: b.zMin,
+    x_max: b.xMax,
+    y_max: b.yMax,
+    z_max: b.zMax,
+  }));
+}
+
 export type NativeSolidSliceJobEnvelope = {
   outputFormat: string;
   formatVersion?: string | null;
@@ -51,6 +85,7 @@ export type NativeSolidSliceJobEnvelope = {
   totalLayers: number;
   exportThumbnailPngBase64?: string | null;
   trianglesXYZ: Float32Array;
+  componentAabbs?: NativeComponentAabbMm[];
   meshEncoding?: 'raw_f32' | 'quantized_u16';
   meshQuantization?: {
     minX: number;
@@ -107,6 +142,7 @@ type NativeSolidSlicePayload = {
   total_layers: number;
   export_thumbnail_png_base64?: string | null;
   triangles_xyz: number[];
+  component_aabbs: NativeComponentAabbSnake[];
   mesh_encoding?: 'raw_f32' | 'quantized_u16';
   mesh_quantization?: {
     min_x: number;
@@ -162,6 +198,7 @@ type NativeSolidSliceMetadataPayload = {
   layer_height_mm: number;
   total_layers: number;
   export_thumbnail_png_base64?: string | null;
+  component_aabbs: NativeComponentAabbSnake[];
   mesh_encoding?: 'raw_f32' | 'quantized_u16';
   mesh_quantization?: {
     min_x: number;
@@ -265,6 +302,7 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
     total_layers: job.totalLayers,
     export_thumbnail_png_base64: job.exportThumbnailPngBase64 ?? null,
     triangles_xyz: Array.from(job.trianglesXYZ),
+    component_aabbs: toNativeComponentAabbs(job.componentAabbs),
     mesh_encoding: job.meshEncoding ?? 'raw_f32',
     mesh_quantization: job.meshQuantization
       ? {
@@ -323,6 +361,7 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
     layer_height_mm: job.layerHeightMm,
     total_layers: job.totalLayers,
     export_thumbnail_png_base64: job.exportThumbnailPngBase64 ?? null,
+    component_aabbs: toNativeComponentAabbs(job.componentAabbs),
     mesh_encoding: job.meshEncoding ?? 'raw_f32',
     mesh_quantization: job.meshQuantization
       ? {

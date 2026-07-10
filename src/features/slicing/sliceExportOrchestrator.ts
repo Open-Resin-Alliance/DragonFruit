@@ -795,6 +795,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
             ? encodeBytesToBase64(options.exportThumbnailPng)
             : null,
         trianglesXYZ: solidMesh.trianglesXYZ,
+        componentAabbs: solidMesh.componentAabbs,
         meshEncoding: meshTransportEncoding,
         meshQuantization: meshTransportQuantization,
         outputPath: options.outputPath?.trim() || null,

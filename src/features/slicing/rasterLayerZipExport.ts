@@ -143,8 +143,30 @@ export type SolidSliceMeshForWasm = {
     maxY: number;
     maxZ: number;
   };
+  /**
+   * One AABB per printed component (a model plus its own supports), in the
+   * same mm world space as `trianglesXYZ`. Consumed by the slicer as an
+   * external constraint to detect inter-object "bridge" leaks on defective
+   * meshes. Always a complete superset of the geometry (every triangle is
+   * attributed to some box), so it can never erase valid fill.
+   */
+  componentAabbs: ComponentAabbMm[];
   metadataJson: string;
 };
+
+export type ComponentAabbMm = {
+  xMin: number;
+  yMin: number;
+  zMin: number;
+  xMax: number;
+  yMax: number;
+  zMax: number;
+};
+
+/** Collector component key for geometry not tied to a specific model (raft). */
+const RAFT_COMPONENT_KEY = '__raft__';
+/** Fallback key so no push is ever unattributed (keeps the box set complete). */
+const UNASSIGNED_COMPONENT_KEY = '__unassigned__';
 
 type RasterTriangle = {
   zMin: number;
@@ -378,7 +400,18 @@ class TriangleFloatCollector {
   private maxXValue = -Infinity;
 
   private maxYValue = -Infinity;
-  
+
+  // Per-component (per printed object) world-space bounds. Every pushed
+  // triangle is attributed to `activeComponentKey`, which defaults to a
+  // catch-all so the resulting box set is always a complete superset of the
+  // geometry — a slicer that clips to it can never erase valid fill.
+  private componentBoundsByKey = new Map<
+    string,
+    { minX: number; minY: number; minZ: number; maxX: number; maxY: number; maxZ: number }
+  >();
+
+  private activeComponentKey: string = UNASSIGNED_COMPONENT_KEY;
+
   private flushCallback?: (chunk: Uint8Array) => Promise<void>;
   
   private flushChain: Promise<void> = Promise.resolve();
@@ -422,6 +455,46 @@ class TriangleFloatCollector {
     };
   }
 
+  /**
+   * Direct subsequent `pushTriangle` calls to accumulate into the bounds of
+   * component `key` (a model id, or a synthetic key like the raft). Callers
+   * must set this before pushing each component's geometry.
+   */
+  setActiveComponent(key: string): void {
+    this.activeComponentKey = key;
+  }
+
+  /**
+   * One AABB per real (finite-bounds) component. Synthetic catch-all keys are
+   * included only when they actually received geometry; empty ones drop out.
+   */
+  get componentAabbs(): ComponentAabbMm[] {
+    const out: ComponentAabbMm[] = [];
+    for (const b of this.componentBoundsByKey.values()) {
+      if (
+        Number.isFinite(b.minX) &&
+        Number.isFinite(b.minY) &&
+        Number.isFinite(b.minZ) &&
+        Number.isFinite(b.maxX) &&
+        Number.isFinite(b.maxY) &&
+        Number.isFinite(b.maxZ) &&
+        b.maxX >= b.minX &&
+        b.maxY >= b.minY &&
+        b.maxZ >= b.minZ
+      ) {
+        out.push({
+          xMin: b.minX,
+          yMin: b.minY,
+          zMin: b.minZ,
+          xMax: b.maxX,
+          yMax: b.maxY,
+          zMax: b.maxZ,
+        });
+      }
+    }
+    return out;
+  }
+
   pushTriangle(
     ax: number,
     ay: number,
@@ -463,6 +536,25 @@ class TriangleFloatCollector {
     if (triMinZ < this.minZValue) this.minZValue = triMinZ;
     if (triMaxX > this.maxXValue) this.maxXValue = triMaxX;
     if (triMaxY > this.maxYValue) this.maxYValue = triMaxY;
+
+    let comp = this.componentBoundsByKey.get(this.activeComponentKey);
+    if (!comp) {
+      comp = {
+        minX: Infinity,
+        minY: Infinity,
+        minZ: Infinity,
+        maxX: -Infinity,
+        maxY: -Infinity,
+        maxZ: -Infinity,
+      };
+      this.componentBoundsByKey.set(this.activeComponentKey, comp);
+    }
+    if (triMinX < comp.minX) comp.minX = triMinX;
+    if (triMinY < comp.minY) comp.minY = triMinY;
+    if (triMinZ < comp.minZ) comp.minZ = triMinZ;
+    if (triMaxX > comp.maxX) comp.maxX = triMaxX;
+    if (triMaxY > comp.maxY) comp.maxY = triMaxY;
+    if (triMaxZ > comp.maxZ) comp.maxZ = triMaxZ;
   }
 
   appendWorldTriangles(triangles: WorldTriangle[]): void {
@@ -856,6 +948,7 @@ function buildSupportAndRaftWorldTriangles(
     const rootVisibleByModel = visibleModelIds.has(root.modelId);
     const rootVisibleByLink = visibleRootIds.has(root.id);
     if (!rootVisibleByModel && !rootVisibleByLink) continue;
+    collector?.setActiveComponent(rootModelKeyById.get(root.id) ?? root.modelId ?? UNASSIGNED_COMPONENT_KEY);
 
     // Mirror proxy hasSolidBottom logic: collapse disk height and shift root up so it
     // sits flush on top of the solid raft rather than extending through it.
@@ -886,6 +979,7 @@ function buildSupportAndRaftWorldTriangles(
 
   for (const trunk of Object.values(supportState.trunks)) {
     if (!visibleModelIds.has(trunk.modelId)) continue;
+    collector?.setActiveComponent(trunk.modelId);
     const root = supportState.roots[trunk.rootId];
     if (!root) continue;
 
@@ -930,6 +1024,7 @@ function buildSupportAndRaftWorldTriangles(
   for (const branch of Object.values(supportState.branches)) {
     const modelId = branch.modelId;
     if (!modelId || !visibleModelIds.has(modelId)) continue;
+    collector?.setActiveComponent(modelId);
     const parentKnot = supportState.knots[branch.parentKnotId];
     if (!parentKnot) continue;
 
@@ -973,6 +1068,7 @@ function buildSupportAndRaftWorldTriangles(
 
   for (const twig of Object.values(supportState.twigs)) {
     if (!visibleModelIds.has(twig.modelId)) continue;
+    collector?.setActiveComponent(twig.modelId);
     for (const seg of twig.segments) {
       const start = seg.bottomJoint
         ? new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z)
@@ -1005,6 +1101,7 @@ function buildSupportAndRaftWorldTriangles(
 
   for (const stick of Object.values(supportState.sticks)) {
     if (!visibleModelIds.has(stick.modelId)) continue;
+    collector?.setActiveComponent(stick.modelId);
     for (const seg of stick.segments) {
       const start = seg.bottomJoint
         ? new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z)
@@ -1049,6 +1146,7 @@ function buildSupportAndRaftWorldTriangles(
     const startHostDia = Math.max(0.05, (startKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
     const endHostDia = Math.max(0.05, (endKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
     const braceDiameter = (startHostDia + endHostDia) * 0.5;
+    collector?.setActiveComponent(modelId);
     appendSegmentPrimitive(
       sink,
       new THREE.Vector3(startKnot.pos.x, startKnot.pos.y, startKnot.pos.z),
@@ -1062,12 +1160,14 @@ function buildSupportAndRaftWorldTriangles(
   for (const leaf of Object.values(supportState.leaves)) {
     const modelId = leaf.modelId;
     if (!modelId || !visibleModelIds.has(modelId)) continue;
+    collector?.setActiveComponent(modelId);
     appendContactConePrimitive(sink, leaf.contactCone as any, tessellation.contactConeRadialSegments);
   }
 
   for (const kickstand of Object.values(kickstandState.kickstands)) {
     const modelId = kickstand.modelId;
     if (!modelId || !visibleModelIds.has(modelId)) continue;
+    collector?.setActiveComponent(modelId);
     const root = kickstandState.roots[kickstand.rootId];
     const hostKnot = kickstandState.knots[kickstand.hostKnotId];
     if (!root || !hostKnot) continue;
@@ -1133,8 +1233,13 @@ function buildSupportAndRaftWorldTriangles(
       rootsByModel.set(modelKey, arr);
     }
 
-    for (const circles of rootsByModel.values()) {
+    for (const [modelKey, circles] of rootsByModel.entries()) {
       if (circles.length === 0) continue;
+      // Attribute this model's raft footprint to its component box (falls back
+      // to a raft catch-all for orphan roots). Keeps the box set complete.
+      collector?.setActiveComponent(
+        modelKey.startsWith('__root_') ? RAFT_COMPONENT_KEY : modelKey,
+      );
       const clampedChamfer = Math.min(90, Math.max(45, raft.chamferAngle));
       const chamferInset = raft.bottomMode === 'line'
         ? Math.max(0, raft.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - clampedChamfer))
@@ -2309,6 +2414,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   for (const model of visibleModels) {
     const modelTriCount = effectiveModelTriangleCount(model);
     if (modelTriCount > 0) {
+      collector.setActiveComponent(model.id);
       appendModelTrianglesInRange(model, collector, 0, modelTriCount);
     }
   }
@@ -2316,6 +2422,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     const totalTris = getModelTriangleCount(model);
     const modelTriCount = effectiveModelTriangleCount(model);
     if (modelTriCount < totalTris) {
+      collector.setActiveComponent(model.id);
       appendModelTrianglesInRange(model, collector, modelTriCount, totalTris);
     }
   }
@@ -2454,6 +2561,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     tallestObjectHeightMm,
     trianglesXYZ,
     meshBounds: collector.meshBounds,
+    componentAabbs: collector.componentAabbs,
     metadataJson: JSON.stringify(manifest),
   };
 }

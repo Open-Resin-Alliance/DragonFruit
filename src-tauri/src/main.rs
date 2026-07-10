@@ -460,6 +460,8 @@ struct SliceJobMetadata {
     mesh_encoding: Option<String>,
     #[serde(default)]
     mesh_quantization: Option<MeshQuantizationMetadata>,
+    #[serde(default)]
+    component_aabbs: Vec<dragonfruit_slicing_engine::types::ComponentAabbMm>,
     metadata_json: String,
 }
 
@@ -1398,6 +1400,7 @@ async fn slice_solid_native_to_temp_path(
             total_layers: meta.total_layers,
             export_thumbnail_png_base64: meta.export_thumbnail_png_base64,
             triangles_xyz,
+            component_aabbs: meta.component_aabbs,
             metadata_json: meta.metadata_json,
         };
 
