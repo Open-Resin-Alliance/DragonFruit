@@ -628,8 +628,23 @@ fn log_bar_row_diagnostic(
     let row = bounds.map(|b| b.row);
     let head: Vec<(f32, i32)> = finite.iter().take(48).copied().collect();
 
+    // Re-derive the two orientation candidates the vote saw, so the log shows
+    // whether a tight option even existed (`pos_total` vs `neg_total`) and
+    // whether the component AABBs discriminate (`pos_oob` vs `neg_oob`). When
+    // both totals are large the bar is an intrinsic matched-pair bridge the vote
+    // cannot escape; when the oobs differ the boxes are the lever (clip/oracle).
+    let src = collapsed.unwrap_or(original);
+    let (pos_spans, _) = build_row_spans_matched(src, width, true, 1);
+    let (neg_spans, _) = build_row_spans_matched(src, width, true, -1);
+    let pos_total = spans_total_px(&pos_spans);
+    let neg_total = spans_total_px(&neg_spans);
+    let (pos_oob, neg_oob) = match bounds {
+        Some(rb) => (rb.oob_pixels(&pos_spans), rb.oob_pixels(&neg_spans)),
+        None => (0, 0),
+    };
+
     log::info!(
-        "[raster-bar] row={row:?} repaired={repaired} incoherent={incoherent} widest_span={widest}px total_fill={total}px prev_fill={prev_total}px prev_overlap={prev_overlap}px width={width} n_crossings={} n_after_collapse={n_after_collapse:?} closure={closure} min_adj_gap_px={min_gap:.4} crossings(first48)={head:?}",
+        "[raster-bar] row={row:?} repaired={repaired} incoherent={incoherent} widest_span={widest}px total_fill={total}px prev_fill={prev_total}px prev_overlap={prev_overlap}px pos_total={pos_total}px neg_total={neg_total}px pos_oob={pos_oob}px neg_oob={neg_oob}px width={width} n_crossings={} n_after_collapse={n_after_collapse:?} closure={closure} min_adj_gap_px={min_gap:.4} crossings(first48)={head:?}",
         finite.len(),
     );
 }
@@ -787,7 +802,30 @@ fn build_row_spans_nonzero_inner(
             spans_overlap_px(&pos_spans, prev) >= spans_overlap_px(&neg_spans, prev)
         };
 
-        return (if choose_pos { pos_spans } else { neg_spans }, true);
+        let (winner_spans, winner_total, winner_oob) = if choose_pos {
+            (pos_spans, pos_total, pos_oob)
+        } else {
+            (neg_spans, neg_total, neg_oob)
+        };
+
+        // The repair exists only to *remove* spurious bridge/inversion fill, so
+        // it must never emit MORE fill than the raw non-zero interpretation. When
+        // an object cluster's outer boundary is a back-face (sign-mix) but each
+        // cluster still closes to zero winding, the matched-pair rebuild's LIFO
+        // pairing lets an early entry pair with a distant exit and bridge the
+        // inter-object gap the naive walk left empty — so BOTH orientations
+        // balloon past the naive fill. Fall back to the tighter naive spans in
+        // that case, provided they don't escape the component boxes more than the
+        // repaired winner (respect the AABB oracle when boxes are supplied).
+        let naive_total = spans_total_px(&spans);
+        let naive_oob = match bounds {
+            Some(rb) => rb.oob_pixels(&spans),
+            None => 0,
+        };
+        if naive_total < winner_total && naive_oob <= winner_oob {
+            return (spans, true);
+        }
+        return (winner_spans, true);
     }
 
     (spans, false)
