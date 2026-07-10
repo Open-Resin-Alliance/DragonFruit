@@ -40,6 +40,7 @@ import { perfMark, perfMeasureWithSpike } from './pathfindingPerf';
 import {
     distanceXY,
     distance3D,
+    firstSegmentSatisfiesSocketElbowMaxAngle,
     segmentAngleFromVerticalDeg,
     segmentSatisfiesLengthAwareMaxAngleFromVertical,
     segmentSatisfiesMaxAngleFromVertical,
@@ -982,7 +983,10 @@ export function findMixedSocketRescueCandidate(args: {
                     if (segmentBlockedBetween(start, end)) {
                         return false;
                     }
-                    if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(start, end, args.maxAngleFromVerticalDeg)) {
+                    const rescueSegmentAngleOk = i === 0
+                        ? firstSegmentSatisfiesSocketElbowMaxAngle(start, end, args.maxAngleFromVerticalDeg)
+                        : segmentSatisfiesLengthAwareMaxAngleFromVertical(start, end, args.maxAngleFromVerticalDeg);
+                    if (!rescueSegmentAngleOk) {
                         return false;
                     }
                 }
@@ -2499,6 +2503,9 @@ export function calculateSmartPlacementV2(
             marginMm: settings.devTools.marginMm,
             stepMm: settings.devTools.stepMm,
             maxLateralMm: settings.devTools.maxLateralMm,
+            // The final chain validator enforces this angle on the resolved
+            // route; the march must not emit chords the validator rejects.
+            maxAngleFromVerticalDeg: maxSegmentAngleFromVerticalDeg,
         });
         result = {
             path: detResult.path,
@@ -3496,9 +3503,10 @@ export function calculateSmartPlacementV2(
 
                 if (rootsDiskBlockedAt(oc.baseXY.x, oc.baseXY.y)) continue;
 
-                // Check both segments: socket→joint and joint→rootTop
+                // Check both segments: socket→joint and joint→rootTop.
+                // socket→joint is a first segment: the socket-elbow rule applies.
                 const seg1Ok = !segmentBlockedBetween(socketPos, oc.joint)
-                    && segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, oc.joint, maxSegmentAngleFromVerticalDeg);
+                    && firstSegmentSatisfiesSocketElbowMaxAngle(socketPos, oc.joint, maxSegmentAngleFromVerticalDeg);
                 if (!seg1Ok) continue;
 
                 const seg2Ok = !segmentBlockedBetween(oc.joint, candRootTop)
@@ -3520,9 +3528,18 @@ export function calculateSmartPlacementV2(
 
     // 8. Quality gate: reject paths where routing joints are compressed into a
     //    tight Z band near the socket — signature of squeezing through a crack.
+    //    A legitimate detour around a small obstacle also has a tight Z span,
+    //    but it displaces the joints laterally by at least the obstacle
+    //    clearance; a genuine crack squeeze wiggles joints in place. Only the
+    //    combination (tight Z span AND no real lateral displacement) is
+    //    crack-like.
     if (finalJoints.length >= 2) {
         const routingZSpan = socketPos.z - finalJoints[finalJoints.length - 1].z;
-        if (routingZSpan < minRoutingZSpanMm) {
+        const maxJointLateralFromSocketMm = finalJoints.reduce(
+            (max, joint) => Math.max(max, distanceXY(joint, socketPos)),
+            0,
+        );
+        if (routingZSpan < minRoutingZSpanMm && maxJointLateralFromSocketMm < 2 * clearance) {
             const straightRescueFallback = buildStraightRescueFallback();
             if (straightRescueFallback) {
                 return straightRescueFallback;
@@ -3568,7 +3585,13 @@ export function calculateSmartPlacementV2(
             };
         }
 
-        if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(a, b, maxSegmentAngleFromVerticalDeg)) {
+        // The first segment below the socket may use the short steep
+        // socket-elbow allowance; the rest of the chain uses the regular
+        // length-aware rule.
+        const segmentAngleOk = i === 0
+            ? firstSegmentSatisfiesSocketElbowMaxAngle(a, b, maxSegmentAngleFromVerticalDeg)
+            : segmentSatisfiesLengthAwareMaxAngleFromVertical(a, b, maxSegmentAngleFromVerticalDeg);
+        if (!segmentAngleOk) {
             const straightRescueFallback = buildStraightRescueFallback();
             if (straightRescueFallback) {
                 return straightRescueFallback;
