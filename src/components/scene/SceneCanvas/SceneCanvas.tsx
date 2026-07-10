@@ -22,8 +22,6 @@ import { IslandIdLabels } from '@/components/scene/IslandIdLabels';
 import { ScreenSpaceGizmo as UnifiedGizmo } from '@/components/gizmo';
 import { warmTransformGizmoGeometryCache } from '@/components/gizmo/gizmoGeometryCache';
 import { PickingDebugOverlay } from '@/components/picking';
-// DEBUG: temporary twig disk B diameter override — see src/supports/__debug__/
-import { TwigDebugOverrideCard } from '@/supports/__debug__/TwigDebugOverrideCard';
 import { SelectionProvider, SelectionManager, SelectionOutlineRenderer, SelectionSpotlight } from '@/components/selection';
 import type { SelectionHighlightMode } from '@/components/selection';
 import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
@@ -6778,14 +6776,6 @@ export function SceneCanvas({
 
       {/* GPU Picking Debug Overlay - shows what's under cursor */}
       {gpuPickingTest && <PickingDebugOverlay position="top-right" />}
-
-      {/* DEBUG: twig disk B diameter override. Hidden in normal builds — the
-          default twig is the tapered-twig code path with disk B forced equal
-          to disk A (achieved by leaving the override null). Lychee importer
-          bypasses buildTwig and can still produce asymmetric A/B. Re-mount
-          this card to expose the override for dev testing. */}
-      {false && <TwigDebugOverrideCard />}
-
 
       {showCrossSectionCapDebugPanel && (
         <div

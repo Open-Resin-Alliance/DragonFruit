@@ -167,9 +167,12 @@ export interface TrunkBuildResult {
 const PLACEMENT_CACHE_QUANT = 0.1; // mm - keep hover cache tight near collision/cavity boundaries
 const NORMAL_CACHE_QUANT = 0.02;   // ~1.1 degree buckets
 const MAX_PLACEMENT_CACHE_ENTRIES = 24;
+export const PLACEMENT_ERROR_CACHE_TTL_MS = 300;
 
-// Map<modelId, Map<cacheKey, result>> — insertion-ordered for FIFO eviction
-type ModelPlacementCache = Map<string, TrunkPlacementResult>;
+type PlacementCacheEntry = { result: TrunkPlacementResult; cachedAt: number };
+
+// Map<modelId, Map<cacheKey, entry>> — insertion-ordered for FIFO eviction
+type ModelPlacementCache = Map<string, PlacementCacheEntry>;
 const placementCacheByModel = new Map<string, ModelPlacementCache>();
 
 function placementCacheKey(tipPos: Vec3, tipNormal: Vec3): string {
@@ -178,8 +181,25 @@ function placementCacheKey(tipPos: Vec3, tipNormal: Vec3): string {
     return `${Math.round(tipPos.x / Q)},${Math.round(tipPos.y / Q)},${Math.round(tipPos.z / Q)},${Math.round(tipNormal.x / NQ)},${Math.round(tipNormal.y / NQ)},${Math.round(tipNormal.z / NQ)}`;
 }
 
+/** Error verdicts can be transient (a stagnated march, a cone-gate near-miss,
+ *  shared caches warmed by earlier probes). Serving them past a short TTL pins
+ *  a stale "blocked" hover on the bucket even after conditions clear, while
+ *  click-time — which bypasses this cache — succeeds. Successful placements
+ *  stay reusable until evicted. */
+export function isCachedPlacementReusable(entry: PlacementCacheEntry, nowMs: number): boolean {
+    if (!entry.result.error) return true;
+    return nowMs - entry.cachedAt <= PLACEMENT_ERROR_CACHE_TTL_MS;
+}
+
 function getPlacementCache(modelId: string, key: string): TrunkPlacementResult | undefined {
-    return placementCacheByModel.get(modelId)?.get(key);
+    const cache = placementCacheByModel.get(modelId);
+    const entry = cache?.get(key);
+    if (!entry) return undefined;
+    if (!isCachedPlacementReusable(entry, Date.now())) {
+        cache!.delete(key);
+        return undefined;
+    }
+    return entry.result;
 }
 
 function setPlacementCache(modelId: string, key: string, result: TrunkPlacementResult): void {
@@ -195,7 +215,7 @@ function setPlacementCache(modelId: string, key: string, result: TrunkPlacementR
         // Evict oldest entry (first inserted)
         cache.delete(cache.keys().next().value!);
     }
-    cache.set(key, result);
+    cache.set(key, { result, cachedAt: Date.now() });
 }
 
 /** Clear cached placement for a specific model (call when model moves). */
