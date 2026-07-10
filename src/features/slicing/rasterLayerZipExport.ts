@@ -2451,6 +2451,15 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   const totalLayers = Math.max(1, Math.ceil(tallestObjectHeightMm / settings.layerHeightMm));
 
   const trianglesXYZ = await collector.finalize();
+  const componentAabbs = collector.componentAabbs;
+  console.warn('[component-aabb] collector produced boxes', {
+    componentBoxCount: componentAabbs.length,
+    boxes: componentAabbs.map((b) => ({
+      x: [Number(b.xMin.toFixed(2)), Number(b.xMax.toFixed(2))],
+      y: [Number(b.yMin.toFixed(2)), Number(b.yMax.toFixed(2))],
+      z: [Number(b.zMin.toFixed(2)), Number(b.zMax.toFixed(2))],
+    })),
+  });
   console.warn('[SupportAA] collector finalized', {
     modelTriangleCount,
     totalTriangleCount: collector.triangleCount,
@@ -2561,7 +2570,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     tallestObjectHeightMm,
     trianglesXYZ,
     meshBounds: collector.meshBounds,
-    componentAabbs: collector.componentAabbs,
+    componentAabbs,
     metadataJson: JSON.stringify(manifest),
   };
 }

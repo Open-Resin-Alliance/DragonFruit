@@ -1414,6 +1414,16 @@ async fn slice_solid_native_to_temp_path(
             job.anti_aliasing_level,
             meta.mesh_encoding.as_deref().unwrap_or("raw_f32"),
         );
+        log::info!(
+            "[component-aabb] {} component box(es) supplied for slice job",
+            job.component_aabbs.len(),
+        );
+        for (idx, b) in job.component_aabbs.iter().enumerate() {
+            log::debug!(
+                "[component-aabb] box {idx}: x[{:.2},{:.2}] y[{:.2},{:.2}] z[{:.2},{:.2}] mm",
+                b.x_min, b.x_max, b.y_min, b.y_max, b.z_min, b.z_max,
+            );
+        }
         let fingerprint = |start: usize, end: usize| {
             let mut hash = 0x811c9dc5u32;
             for value in &job.triangles_xyz[start.min(job.triangles_xyz.len())
