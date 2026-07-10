@@ -546,8 +546,16 @@ fn build_row_spans_nonzero_ctx_bounded(
     let (spans, repaired) =
         build_row_spans_nonzero_inner(edges, width, snap_to_integer, prev_spans, bounds);
 
-    if repaired && bar_debug_enabled() {
-        log_bar_row_diagnostic(active_edges, collapsed.as_deref(), &spans, width, bounds);
+    if bar_debug_enabled() {
+        log_bar_row_diagnostic(
+            active_edges,
+            collapsed.as_deref(),
+            &spans,
+            prev_spans,
+            width,
+            bounds,
+            repaired,
+        );
     }
 
     spans
@@ -563,25 +571,34 @@ fn bar_debug_enabled() -> bool {
 /// Bounded log budget so a bar-heavy plate can't flood the log.
 static BAR_DEBUG_BUDGET: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(48);
 
-/// For a repaired row whose fill is suspiciously wide (a candidate bar), dump
-/// the raw pre-collapse crossing sequence and summary stats, so the mechanism
-/// is decidable from data: tightly-spaced ±1 crossings ⇒ raise the collapse
-/// ε; well-separated but sign-mixed / non-zero-closure ⇒ a vote/coherence
-/// failure instead.
+/// For any row whose fill is suspiciously wide — a candidate bar, whether it
+/// went through the repair (`repaired`) or the fast path — dump the raw
+/// pre-collapse crossing sequence and summary stats so the mechanism is
+/// decidable from data:
+///   - tightly-spaced ±1 crossings ⇒ still-coincident soup ⇒ raise collapse ε;
+///   - well-separated but sign-mixed / non-zero closure ⇒ a vote failure;
+///   - `repaired=false` with near-zero `prev_overlap` ⇒ a fast-path *inversion*
+///     (the row filled its own complement — an enclosing-flip parity shift the
+///     winding logic never flags).
+/// `prev_overlap` is the pixel overlap with the previous row's fill; an
+/// inverted row barely overlaps its neighbour.
 fn log_bar_row_diagnostic(
     original: &[ActiveEdge],
     collapsed: Option<&[ActiveEdge]>,
     spans: &[RowSpan],
+    prev_spans: Option<&[RowSpan]>,
     width: usize,
     bounds: Option<RowBounds>,
+    repaired: bool,
 ) {
     let widest = spans
         .iter()
         .map(|s| s.end.saturating_sub(s.start) + 1)
         .max()
         .unwrap_or(0);
-    // Only a span covering a large fraction of the frame looks like a bar.
-    if widest * 3 < width {
+    let total: usize = spans.iter().map(|s| s.end.saturating_sub(s.start) + 1).sum();
+    // A wide single span or a lot of total fill both look like a bar/inversion.
+    if widest * 3 < width && total * 2 < width {
         return;
     }
     if BAR_DEBUG_BUDGET.load(std::sync::atomic::Ordering::Relaxed) == 0 {
@@ -600,11 +617,14 @@ fn log_bar_row_diagnostic(
         min_gap = min_gap.min((pair[1].0 - pair[0].0).abs());
     }
     let n_after_collapse = collapsed.map(|c| c.iter().take_while(|e| e.x.is_finite()).count());
+    let prev_overlap = prev_spans
+        .map(|prev| spans_overlap_px(spans, prev))
+        .unwrap_or(0);
     let row = bounds.map(|b| b.row);
     let head: Vec<(f32, i32)> = finite.iter().take(48).copied().collect();
 
     log::info!(
-        "[raster-bar] row={row:?} widest_span={widest}px width={width} n_crossings={} n_after_collapse={n_after_collapse:?} closure={closure} min_adj_gap_px={min_gap:.4} crossings(first48)={head:?}",
+        "[raster-bar] row={row:?} repaired={repaired} widest_span={widest}px total_fill={total}px width={width} prev_overlap={prev_overlap}px n_crossings={} n_after_collapse={n_after_collapse:?} closure={closure} min_adj_gap_px={min_gap:.4} crossings(first48)={head:?}",
         finite.len(),
     );
 }
