@@ -1224,19 +1224,50 @@ impl HollowSession {
     }
 }
 
+/// Returns true if the removed voxel at (x, y, z) is adjacent (6-connected)
+/// to at least one voxel that is not part of the removed cavity interior -
+/// i.e. it is kept material (shell) or genuinely outside the solid volume.
+/// Only these "boundary" removed voxels are ever visible in the rendered
+/// InstancedMesh preview, since interior removed voxels are fully occluded
+/// by the removed voxels surrounding them on all sides.
+#[inline]
+fn is_removed_voxel_boundary(
+    grid: &GridSpec,
+    solid: &[bool],
+    keep: &[bool],
+    x: usize,
+    y: usize,
+    z: usize,
+) -> bool {
+    for (dx, dy, dz) in N6 {
+        let (nx, ny, nz) = (x as isize + dx, y as isize + dy, z as isize + dz);
+        if !grid.in_bounds(nx, ny, nz) {
+            // Conservative: treat an out-of-grid neighbor as exposed too.
+            // Should not occur in practice given the 1-voxel construction
+            // margin, but never hides a genuinely exposed voxel if it did.
+            return true;
+        }
+        let n = grid.idx(nx as usize, ny as usize, nz as usize);
+        if !solid[n] || keep[n] {
+            // Neighbor is outside the solid mesh, or is kept (shell)
+            // material -> this removed voxel sits on the visible cavity wall.
+            return true;
+        }
+    }
+    false
+}
+
 fn collect_removed_voxel_centers(grid: &GridSpec, solid: &[bool], keep: &[bool]) -> Vec<f32> {
-    let removed_count = solid
-        .iter()
-        .zip(keep.iter())
-        .filter(|(is_solid, is_kept)| **is_solid && !**is_kept)
-        .count();
-    let mut centers = Vec::with_capacity(removed_count * 3);
+    let mut centers = Vec::new();
 
     for z in 0..grid.nz {
         for y in 0..grid.ny {
             for x in 0..grid.nx {
                 let index = grid.idx(x, y, z);
                 if !solid[index] || keep[index] {
+                    continue;
+                }
+                if !is_removed_voxel_boundary(grid, solid, keep, x, y, z) {
                     continue;
                 }
                 let center = grid.center_world(x, y, z);
@@ -1251,18 +1282,16 @@ fn collect_removed_voxel_centers(grid: &GridSpec, solid: &[bool], keep: &[bool])
 }
 
 fn collect_removed_voxel_indices(grid: &GridSpec, solid: &[bool], keep: &[bool]) -> Vec<u32> {
-    let removed_count = solid
-        .iter()
-        .zip(keep.iter())
-        .filter(|(is_solid, is_kept)| **is_solid && !**is_kept)
-        .count();
-    let mut indices = Vec::with_capacity(removed_count);
+    let mut indices = Vec::new();
 
     for z in 0..grid.nz {
         for y in 0..grid.ny {
             for x in 0..grid.nx {
                 let index = grid.idx(x, y, z);
                 if !solid[index] || keep[index] {
+                    continue;
+                }
+                if !is_removed_voxel_boundary(grid, solid, keep, x, y, z) {
                     continue;
                 }
                 indices.push(index as u32);
@@ -3930,6 +3959,61 @@ mod tests {
             !solid[cavity_index],
             "parity refinement should clear the enclosed cavity center"
         );
+    }
+
+    #[test]
+    fn removed_voxel_collectors_emit_boundary_only_not_full_interior() {
+        // 7x7x7 grid; a 5x5x5 solid block occupies indices 1..=5 on every
+        // axis. Its outer 1-voxel-thick layer is "kept" (the shell), leaving
+        // an inner 3x3x3 sub-block (indices 2..=4) as the removed cavity.
+        // Of those 27 removed voxels, only the very center one (3,3,3) has
+        // no face-adjacent kept neighbor - the other 26 sit on the visible
+        // cavity wall and must still be emitted.
+        let grid = GridSpec {
+            nx: 7,
+            ny: 7,
+            nz: 7,
+            voxel_mm: 1.0,
+            min: Vec3::new(0.0, 0.0, 0.0),
+        };
+
+        let mut solid = vec![false; grid.nx * grid.ny * grid.nz];
+        let mut keep = vec![false; solid.len()];
+
+        for z in 1..=5 {
+            for y in 1..=5 {
+                for x in 1..=5 {
+                    let i = grid.idx(x, y, z);
+                    solid[i] = true;
+                    if x == 1 || x == 5 || y == 1 || y == 5 || z == 1 || z == 5 {
+                        keep[i] = true;
+                    }
+                }
+            }
+        }
+
+        let center_index = grid.idx(3, 3, 3);
+        let boundary_index = grid.idx(2, 2, 2);
+        assert!(solid[center_index] && !keep[center_index]);
+        assert!(solid[boundary_index] && !keep[boundary_index]);
+
+        let indices = collect_removed_voxel_indices(&grid, &solid, &keep);
+        assert_eq!(
+            indices.len(),
+            26,
+            "expected only the 26 shell-adjacent removed voxels, not the full 27-voxel interior"
+        );
+        assert!(
+            !indices.contains(&(center_index as u32)),
+            "fully-occluded interior voxel should be excluded"
+        );
+        assert!(
+            indices.contains(&(boundary_index as u32)),
+            "cavity-wall-adjacent voxel should still be included"
+        );
+
+        let centers = collect_removed_voxel_centers(&grid, &solid, &keep);
+        assert_eq!(centers.len(), 26 * 3);
     }
 
     #[test]
