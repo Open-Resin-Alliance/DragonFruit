@@ -91,6 +91,13 @@ export interface GizmoConfig {
   constrainToPlane?: boolean;
   axisLock?: GizmoAxis | null;
 
+  // Per-operation axis filters. When set, only the listed axes render for
+  // that operation (axisLock only constrains move arrows). Lets a consumer
+  // mount e.g. a single rotation ring plus a single scale handle on
+  // different axes, which axisLock cannot express.
+  rotateAxes?: GizmoAxis[];
+  scaleAxes?: GizmoAxis[];
+
   // Per-axis visual animation flip for rotation rings.
   // Set a component to -1 to invert the ring handle animation direction
   // (e.g. when the gizmo local frame has an inverted axis convention such
@@ -99,6 +106,28 @@ export interface GizmoConfig {
 
   // Scale behavior
   uniformScaling?: boolean;
+
+  // Scale handle visual: the classic cube, or a double-pointed cone pair
+  // along the handle's axis (rotation-handle styling) for radial
+  // stretch/squish semantics.
+  scaleHandleVariant?: 'cube' | 'doubleCone';
+
+  // Render scale handles at BOTH ends of each axis instead of only the
+  // camera-facing end.
+  dualScaleHandles?: boolean;
+
+  // Distance of scale handles from the gizmo center (gizmo units).
+  // Defaults to GIZMO_SIZES.scaleLineLength.
+  scaleHandleDistance?: number;
+
+  // Render a mirrored second arrow handle 180° across each rotation ring.
+  dualRotationHandles?: boolean;
+
+  // Ring-local rest angle (radians) for rotation-ring arrow handles. Only
+  // meaningful with disableRingBillboard (otherwise the handle tracks the
+  // camera). Lets single-ring consumers park the handle at a meaningful spot
+  // in their frame.
+  rotationHandleRestAngle?: number;
 
   // Suppress face-camera behaviors
   disableArrowFlip?: boolean;

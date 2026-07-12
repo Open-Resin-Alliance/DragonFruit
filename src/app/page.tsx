@@ -45,6 +45,7 @@ import { ModelStatsCard } from '@/components/controls/ModelStatsCard';
 import { TransformToolbar } from '@/components/controls/TransformToolbar';
 import { SnapAngleReadout } from '@/components/gizmo/rotate/SnapAngleReadout';
 import { RotationHintTooltip } from '@/components/gizmo/rotate/RotationHintTooltip';
+import { ContactFaceRatioReadout } from '@/supports/SupportPrimitives/ContactDisk/ContactFaceRatioReadout';
 import { TransformControls } from '@/components/controls/TransformControls';
 import {
   ArrangePanel,
@@ -9559,14 +9560,21 @@ export default function Home() {
 
           {/* Transform Toolbar */}
           {scene.models.length > 0 && scene.mode === 'prepare' && (
+            <TransformToolbar
+              mode={transformMgr.transformMode}
+              onModeChange={setTransformModeWithMirrorFinalize}
+              onModeHover={handleTransformToolbarHover}
+            />
+          )}
+
+          {/* Gizmo drag readouts — event-driven, render null when idle. Mounted
+              for every mode: rotation rings exist in prepare (model transform)
+              and supports (contact-face gizmo) alike. */}
+          {scene.models.length > 0 && (
             <>
-              <TransformToolbar
-                mode={transformMgr.transformMode}
-                onModeChange={setTransformModeWithMirrorFinalize}
-                onModeHover={handleTransformToolbarHover}
-              />
               <SnapAngleReadout />
               <RotationHintTooltip />
+              <ContactFaceRatioReadout />
             </>
           )}
 

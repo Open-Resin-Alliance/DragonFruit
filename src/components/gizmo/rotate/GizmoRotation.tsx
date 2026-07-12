@@ -49,6 +49,15 @@ interface GizmoRotationProps {
    * convention like displayY = -cutterY in HolePunchGizmo).
    */
   axisVisualFlip?: number;
+  /**
+   * Ring-local rest angle for the arrow handle (radians). Defaults to the
+   * positive-axis midpoint used by the classic three-ring gizmo. Single-ring
+   * consumers set this to park the handle at a meaningful spot in their
+   * frame (e.g. the contact-face gizmo puts it on the oval's long axis).
+   */
+  handleRestAngle?: number;
+  /** Render a mirrored second arrow handle 180° across the ring. */
+  dualHandles?: boolean;
   onDragStart: () => boolean | void;
   onDrag: (angle: number) => void;
   onDragEnd: () => void;
@@ -90,6 +99,8 @@ export function GizmoRotation({
   handleScale = 1.0,
   worldAxisDir,
   axisVisualFlip = 1,
+  handleRestAngle,
+  dualHandles = false,
   onDragStart,
   onDrag,
   onDragEnd,
@@ -97,7 +108,7 @@ export function GizmoRotation({
   onPointerLeave,
 }: GizmoRotationProps) {
   const [isDragging, setIsDragging] = useState(false);
-  const positiveAxisMidpointAngle = getPositiveAxisMidpointAngle(axis);
+  const positiveAxisMidpointAngle = handleRestAngle ?? getPositiveAxisMidpointAngle(axis);
   const handleAngleRef = useRef<number>(positiveAxisMidpointAngle);
   const targetHandleAngleRef = useRef<number>(positiveAxisMidpointAngle);
   const billboardRotationRef = useRef<number>(0);
@@ -113,6 +124,9 @@ export function GizmoRotation({
   const rotatingArcRef = useRef<THREE.Group>(null);
   const handleRootRef = useRef<THREE.Group>(null);
   const billboardGroupRef = useRef<THREE.Group>(null);
+  const mirrorRotatingArcRef = useRef<THREE.Group>(null);
+  const mirrorHandleRootRef = useRef<THREE.Group>(null);
+  const mirrorBillboardGroupRef = useRef<THREE.Group>(null);
   const pointLightRef = useRef<THREE.PointLight>(null);
   const { camera, gl } = useThree();
 
@@ -151,22 +165,24 @@ export function GizmoRotation({
   // GPU Picking registration
   const pickMeshRef = useRef<THREE.Mesh>(null);
   const pickIdRef = useRef<number | null>(null);
+  const mirrorPickMeshRef = useRef<THREE.Mesh>(null);
+  const mirrorPickIdRef = useRef<number | null>(null);
   const { register, unregister, hit } = usePicking();
-  
+
   // Map axis to gizmo handle type
   const handleType: GizmoHandleType = `rotate-${axis}` as GizmoHandleType;
-  
+
   // Register with picking system
   useEffect(() => {
     if (!pickMeshRef.current) return;
-    
+
     pickIdRef.current = register({
       category: 'gizmo',
       objectId: null,
       gizmoHandle: handleType,
       object: pickMeshRef.current,
     });
-    
+
     return () => {
       if (pickIdRef.current !== null) {
         unregister(pickIdRef.current);
@@ -174,6 +190,24 @@ export function GizmoRotation({
       }
     };
   }, [register, unregister, handleType]);
+
+  useEffect(() => {
+    if (!dualHandles || !mirrorPickMeshRef.current) return;
+
+    mirrorPickIdRef.current = register({
+      category: 'gizmo',
+      objectId: null,
+      gizmoHandle: handleType,
+      object: mirrorPickMeshRef.current,
+    });
+
+    return () => {
+      if (mirrorPickIdRef.current !== null) {
+        unregister(mirrorPickIdRef.current);
+        mirrorPickIdRef.current = null;
+      }
+    };
+  }, [register, unregister, handleType, dualHandles]);
   
   // Check if this handle is hovered via GPU picking
   const isPickingHovered = !suppressHover && hit.category === 'gizmo' && 
@@ -240,6 +274,10 @@ export function GizmoRotation({
       rotatingArcRef.current.rotation.z = handleAngle;
     }
 
+    if (mirrorRotatingArcRef.current) {
+      mirrorRotatingArcRef.current.rotation.z = handleAngle + Math.PI;
+    }
+
     if (handleRootRef.current) {
       handleRootRef.current.position.set(hx, hy, 0);
       handleRootRef.current.rotation.set(0, 0, handleAngle + Math.PI / 2);
@@ -247,6 +285,15 @@ export function GizmoRotation({
 
     if (pickMeshRef.current) {
       pickMeshRef.current.position.set(hx, hy, 0);
+    }
+
+    if (mirrorHandleRootRef.current) {
+      mirrorHandleRootRef.current.position.set(-hx, -hy, 0);
+      mirrorHandleRootRef.current.rotation.set(0, 0, handleAngle + Math.PI / 2 + Math.PI);
+    }
+
+    if (mirrorPickMeshRef.current) {
+      mirrorPickMeshRef.current.position.set(-hx, -hy, 0);
     }
 
     if (pointLightRef.current) {
@@ -264,6 +311,9 @@ export function GizmoRotation({
       if (billboardGroupRef.current) {
         billboardGroupRef.current.rotation.x = billboardRotationRef.current;
       }
+      if (mirrorBillboardGroupRef.current) {
+        mirrorBillboardGroupRef.current.rotation.x = billboardRotationRef.current;
+      }
     }
   }, -1);
 
@@ -276,8 +326,13 @@ export function GizmoRotation({
     Math.sin(positiveAxisMidpointAngle) * GIZMO_SIZES.ringMajorRadius,
     0,
   ];
+  const mirrorInitialHandlePos: [number, number, number] = [
+    -initialHandlePos[0],
+    -initialHandlePos[1],
+    0,
+  ];
   
-  const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
+  const handlePointerDown = (e: ThreeEvent<PointerEvent>, mirrorGrab = false) => {
     // Ignore right-click to allow camera orbit controls
     if (e.button === 2) {
       return;
@@ -285,15 +340,23 @@ export function GizmoRotation({
     if (!interactionsEnabled) {
       return;
     }
-    
+
     e.stopPropagation();
     e.stopped = true; // Mark event as handled for OrbitControls
 
     shouldFlipRef.current = computeShouldFlip();
-    
+
+    // Grabbing the mirrored end: adopt it as the tracked handle so the arc
+    // and arrow animation follow the cursor side. The two ends are visually
+    // identical, so the identity swap is invisible.
+    if (mirrorGrab) {
+      handleAngleRef.current += Math.PI;
+      targetHandleAngleRef.current = handleAngleRef.current;
+    }
+
     // Calculate initial mouse angle
     lastMouseAngle.current = getMousePolar(e.clientX, e.clientY).angle;
-    
+
     const allowed = onDragStart();
     if (allowed === false) {
       return;
@@ -501,6 +564,20 @@ export function GizmoRotation({
         <meshBasicMaterial visible={false} />
       </mesh>
 
+      {dualHandles && (
+        <mesh
+          ref={mirrorPickMeshRef}
+          visible={!isHidden && interactionsEnabled}
+          position={mirrorInitialHandlePos}
+          onPointerDown={(e: ThreeEvent<PointerEvent>) => handlePointerDown(e, true)}
+          onPointerEnter={handlePointerEnterLocal}
+          onPointerLeave={handlePointerLeaveLocal}
+        >
+          <primitive object={pickGeometry} attach="geometry" />
+          <meshBasicMaterial visible={false} />
+        </mesh>
+      )}
+
       <Line
         points={backArcPoints}
         color={isDimmed ? dimmedColor : ringColor}
@@ -544,6 +621,42 @@ export function GizmoRotation({
           />
         )}
       </group>
+
+      {/* Mirrored colored arc tracking the second handle */}
+      {dualHandles && (
+        <group ref={mirrorRotatingArcRef} rotation={[0, 0, Math.PI]}>
+          <mesh geometry={arcGeometry} scale={ringIsActive ? 1.02 : 1.0}>
+            <meshBasicMaterial
+              vertexColors={!isDimmed}
+              color={isDimmed ? dimmedColor : ringColor}
+              opacity={opacity}
+              transparent
+              depthTest={false}
+              toneMapped={false}
+            />
+          </mesh>
+
+          <Line
+            points={frontArcPoints}
+            color={isDimmed ? dimmedColor : ringColor}
+            lineWidth={0.92}
+            transparent
+            opacity={Math.max(0, opacity * 0.38)}
+            depthTest={false}
+          />
+
+          {ringIsActive && !isDimmed && !isHidden && (
+            <Line
+              points={frontArcPoints}
+              color={new THREE.Color(ringColor).lerp(new THREE.Color('#ffffff'), 0.35).getStyle()}
+              lineWidth={1.34}
+              transparent
+              opacity={0.22}
+              depthTest={false}
+            />
+          )}
+        </group>
+      )}
 
       {/* Double-pointed arrow handle (two cones) */}
       <group
@@ -605,6 +718,61 @@ export function GizmoRotation({
           </group>
         </group>
       </group>
+
+      {/* Mirrored double-pointed arrow handle 180° across the ring */}
+      {dualHandles && (
+        <group
+          ref={mirrorHandleRootRef}
+          position={mirrorInitialHandlePos}
+          scale={(isHighlighted ? 1.08 : 1.0) * handleScale}
+          onPointerDown={interactionsEnabled ? ((e: ThreeEvent<PointerEvent>) => handlePointerDown(e, true)) : undefined}
+          onPointerEnter={interactionsEnabled ? handlePointerEnterLocal : undefined}
+          onPointerLeave={interactionsEnabled ? handlePointerLeaveLocal : undefined}
+        >
+          <group ref={mirrorBillboardGroupRef}>
+            <group position={[GIZMO_SIZES.ringDiamondRadius * 0.52, 0, 0]} rotation={[0, 0, -Math.PI / 2]}>
+              <mesh scale={1.08}>
+                <primitive object={diamondConeGeometry} attach="geometry" />
+                <meshBasicMaterial
+                  color={new THREE.Color(diamondPrimaryColor).multiplyScalar(0.3).getHex()}
+                  transparent
+                  opacity={opacity}
+                  depthTest={false}
+                />
+              </mesh>
+              <mesh>
+                <primitive object={diamondConeGeometry} attach="geometry" />
+                <meshBasicMaterial
+                  color={diamondPrimaryColor}
+                  transparent
+                  opacity={opacity}
+                  depthTest={false}
+                />
+              </mesh>
+            </group>
+            <group position={[-GIZMO_SIZES.ringDiamondRadius * 0.52, 0, 0]} rotation={[0, 0, Math.PI / 2]}>
+              <mesh scale={1.08}>
+                <primitive object={diamondConeGeometry} attach="geometry" />
+                <meshBasicMaterial
+                  color={new THREE.Color(diamondSecondaryColor).multiplyScalar(0.32).getHex()}
+                  transparent
+                  opacity={opacity}
+                  depthTest={false}
+                />
+              </mesh>
+              <mesh>
+                <primitive object={diamondConeGeometry} attach="geometry" />
+                <meshBasicMaterial
+                  color={diamondSecondaryColor}
+                  transparent
+                  opacity={opacity}
+                  depthTest={false}
+                />
+              </mesh>
+            </group>
+          </group>
+        </group>
+      )}
 
       {/* Point light at diamond handle to cast colored light on model */}
       {enableLighting && !isDimmed && (

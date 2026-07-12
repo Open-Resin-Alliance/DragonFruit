@@ -43,7 +43,7 @@ function isMeshCandidate(object: THREE.Object3D): object is THREE.Mesh {
     return object instanceof THREE.Mesh && !!object.geometry;
 }
 
-function collectModelMeshes(root: THREE.Object3D, targetModelId?: string | null): THREE.Mesh[] {
+export function collectModelMeshes(root: THREE.Object3D, targetModelId?: string | null): THREE.Mesh[] {
     const meshes: THREE.Mesh[] = [];
     root.traverse((child) => {
         if (!isMeshCandidate(child)) return;

@@ -163,6 +163,8 @@ export function TransformGizmo({
   constrainToSurface = DEFAULT_GIZMO_CONFIG.constrainToSurface,
   constrainToPlane = DEFAULT_GIZMO_CONFIG.constrainToPlane,
   axisLock = DEFAULT_GIZMO_CONFIG.axisLock,
+  rotateAxes,
+  scaleAxes,
   handleScale = 1.0,
   moveHandleBidirectional = false,
   moveHandleLengthScale = 1.0,
@@ -184,6 +186,11 @@ export function TransformGizmo({
   disableViewCull,
   axisVisualFlip,
   uniformScaling = true,
+  scaleHandleVariant = 'cube',
+  dualScaleHandles = false,
+  scaleHandleDistance,
+  dualRotationHandles = false,
+  rotationHandleRestAngle,
 }: TransformGizmoProps) {
   const { isDragging: isGlobalDragging } = usePicking();
   const { camera } = useThree();
@@ -425,6 +432,8 @@ export function TransformGizmo({
   };
 
   const isAxisAllowed = (axis: GizmoAxis) => !axisLock || axisLock === axis;
+  const isRotateAxisAllowed = (axis: GizmoAxis) => !rotateAxes || rotateAxes.includes(axis);
+  const isScaleAxisAllowed = (axis: GizmoAxis) => !scaleAxes || scaleAxes.includes(axis);
   const suppressHover = isGlobalDragging;
   const dragOpacityScale = isGlobalDragging ? 0.6 : 1;
 
@@ -600,7 +609,7 @@ export function TransformGizmo({
 
       {enableRotate && (
         <>
-          {shouldRenderPart('ring-x') && (
+          {isRotateAxisAllowed('x') && shouldRenderPart('ring-x') && (
             <GizmoRotation
               axis="x"
               worldAxisDir={worldAxisDirs.x}
@@ -616,6 +625,8 @@ export function TransformGizmo({
               disableRingBillboard={disableRingBillboard}
               gizmoPosition={posVec}
               handleScale={handleScale}
+              handleRestAngle={rotationHandleRestAngle}
+              dualHandles={dualRotationHandles}
               onDragStart={() => handleDragStart('ring-x')}
               onDrag={(angle: number) => handleRotate('x', angle)}
               onDragEnd={handleDragEnd}
@@ -623,7 +634,7 @@ export function TransformGizmo({
               onPointerLeave={handlePointerLeave}
             />
           )}
-          {shouldRenderPart('ring-y') && (
+          {isRotateAxisAllowed('y') && shouldRenderPart('ring-y') && (
             <GizmoRotation
               axis="y"
               worldAxisDir={worldAxisDirs.y}
@@ -639,6 +650,8 @@ export function TransformGizmo({
               disableRingBillboard={disableRingBillboard}
               gizmoPosition={posVec}
               handleScale={handleScale}
+              handleRestAngle={rotationHandleRestAngle}
+              dualHandles={dualRotationHandles}
               onDragStart={() => handleDragStart('ring-y')}
               onDrag={(angle: number) => handleRotate('y', angle)}
               onDragEnd={handleDragEnd}
@@ -646,7 +659,7 @@ export function TransformGizmo({
               onPointerLeave={handlePointerLeave}
             />
           )}
-          {shouldRenderPart('ring-z') && (
+          {isRotateAxisAllowed('z') && shouldRenderPart('ring-z') && (
             <GizmoRotation
               axis="z"
               worldAxisDir={worldAxisDirs.z}
@@ -662,6 +675,8 @@ export function TransformGizmo({
               disableRingBillboard={disableRingBillboard}
               gizmoPosition={posVec}
               handleScale={handleScale}
+              handleRestAngle={rotationHandleRestAngle}
+              dualHandles={dualRotationHandles}
               onDragStart={() => handleDragStart('ring-z')}
               onDrag={(angle: number) => handleRotate('z', angle)}
               onDragEnd={handleDragEnd}
@@ -674,7 +689,7 @@ export function TransformGizmo({
 
       {enableScale && (
         <>
-          {shouldRenderPart('scale-x') && (
+          {isScaleAxisAllowed('x') && shouldRenderPart('scale-x') && (
             <GizmoScale
               axis="x"
               isHovered={!suppressHover && hoveredPart === 'scale-x'}
@@ -685,6 +700,9 @@ export function TransformGizmo({
               opacityScale={partOpacityScale('scale-x')}
               interactionsEnabled={partIsInteractable('scale-x')}
               isUniform={uniformScaling}
+              handleVariant={scaleHandleVariant}
+              dualHandles={dualScaleHandles}
+              handleDistance={scaleHandleDistance}
               gizmoPosition={posVec}
               onDragStart={(isUniform: boolean) => handleDragStart('scale-x', isUniform)}
               onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('x', factor, isUniform)}
@@ -693,7 +711,7 @@ export function TransformGizmo({
               onPointerLeave={handlePointerLeave}
             />
           )}
-          {shouldRenderPart('scale-y') && (
+          {isScaleAxisAllowed('y') && shouldRenderPart('scale-y') && (
             <GizmoScale
               axis="y"
               isHovered={!suppressHover && hoveredPart === 'scale-y'}
@@ -704,6 +722,9 @@ export function TransformGizmo({
               opacityScale={partOpacityScale('scale-y')}
               interactionsEnabled={partIsInteractable('scale-y')}
               isUniform={uniformScaling}
+              handleVariant={scaleHandleVariant}
+              dualHandles={dualScaleHandles}
+              handleDistance={scaleHandleDistance}
               gizmoPosition={posVec}
               onDragStart={(isUniform: boolean) => handleDragStart('scale-y', isUniform)}
               onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('y', factor, isUniform)}
@@ -712,7 +733,7 @@ export function TransformGizmo({
               onPointerLeave={handlePointerLeave}
             />
           )}
-          {shouldRenderPart('scale-z') && (
+          {isScaleAxisAllowed('z') && shouldRenderPart('scale-z') && (
             <GizmoScale
               axis="z"
               isHovered={!suppressHover && hoveredPart === 'scale-z'}
@@ -723,6 +744,9 @@ export function TransformGizmo({
               opacityScale={partOpacityScale('scale-z')}
               interactionsEnabled={partIsInteractable('scale-z')}
               isUniform={uniformScaling}
+              handleVariant={scaleHandleVariant}
+              dualHandles={dualScaleHandles}
+              handleDistance={scaleHandleDistance}
               gizmoPosition={posVec}
               onDragStart={(isUniform: boolean) => handleDragStart('scale-z', isUniform)}
               onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('z', factor, isUniform)}
