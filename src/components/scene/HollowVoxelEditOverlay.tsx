@@ -1,5 +1,6 @@
 import React from 'react';
 import * as THREE from 'three';
+import { getVoxelPreviewBudget, tryAllocateFloat32Array, warnOnce } from './hollowVoxelPreviewLimits';
 
 type HollowVoxelEditOverlayProps = {
   voxelCenters: Float32Array;
@@ -37,13 +38,14 @@ function buildEdgePositions(
   offsetX: number,
   offsetY: number,
   offsetZ: number,
-): Float32Array {
+): Float32Array | null {
   const removedCount = Math.floor(voxelCenters.length / 3);
   const blockedCount = blockedVoxelCenters
     ? Math.floor(blockedVoxelCenters.length / 3)
     : 0;
   const total = removedCount + blockedCount;
-  const out = new Float32Array(total * 72);
+  const out = tryAllocateFloat32Array(total * 72);
+  if (!out) return null;
 
   const writeEdges = (i: number, cx: number, cy: number, cz: number) => {
     const vo = i * 72;
@@ -75,14 +77,15 @@ function buildInstanceData(
   offsetY: number,
   offsetZ: number,
   blockedVoxelIndexSet: Set<number>,
-): { matrices: Float32Array; colors: Float32Array } {
+): { matrices: Float32Array; colors: Float32Array } | null {
   const removedCount = Math.floor(voxelCenters.length / 3);
   const blockedCount = blockedVoxelCenters
     ? Math.floor(blockedVoxelCenters.length / 3)
     : 0;
   const total = removedCount + blockedCount;
-  const matrices = new Float32Array(total * 16);
-  const colors = new Float32Array(total * 3);
+  const matrices = tryAllocateFloat32Array(total * 16);
+  const colors = matrices ? tryAllocateFloat32Array(total * 3) : null;
+  if (!matrices || !colors) return null;
   const scale = voxelSizeMm;
 
   const writeInstance = (i: number, cx: number, cy: number, cz: number, isBlocked: boolean) => {
@@ -151,8 +154,34 @@ export function HollowVoxelEditOverlay({
     : 0;
   const totalCount = removedCount + blockedCount;
 
-  const { matrices, colors } = React.useMemo(
-    () => buildInstanceData(
+  const budget = getVoxelPreviewBudget();
+  // Edges degrade gracefully (skipped above budget, cheap to re-enable once
+  // the voxel count drops back down). The cube InstancedMesh itself has a
+  // much higher ceiling (64 bytes/voxel), and truncating it isn't safe here
+  // without also renumbering blockedVoxelIndexSet (computed by the caller
+  // against the *full*, untruncated removed/blocked counts) -- so on the
+  // rare chance even that generous ceiling is exceeded, skip rendering this
+  // overlay entirely rather than risk misaligned voxel-toggle indices.
+  const showEdges = totalCount <= budget.maxEdgeInstances;
+  const overCubeBudget = totalCount > budget.maxCubeInstances;
+
+  React.useEffect(() => {
+    if (overCubeBudget) {
+      warnOnce(
+        'hollow-voxel-edit-overlay-cube-cap',
+        `[HollowVoxelEditOverlay] voxel count ${totalCount} exceeds render budget (${budget.maxCubeInstances}); hiding the edit overlay to avoid an out-of-memory crash.`,
+      );
+    } else if (!showEdges) {
+      warnOnce(
+        'hollow-voxel-edit-overlay-edge-cap',
+        `[HollowVoxelEditOverlay] voxel count ${totalCount} exceeds edge-render budget (${budget.maxEdgeInstances}); showing cubes without edge outlines.`,
+      );
+    }
+  }, [totalCount, overCubeBudget, showEdges, budget.maxCubeInstances, budget.maxEdgeInstances]);
+
+  const instanceData = React.useMemo(() => {
+    if (overCubeBudget) return null;
+    return buildInstanceData(
       voxelCenters,
       blockedVoxelCenters,
       voxelRadiusMm,
@@ -160,11 +189,11 @@ export function HollowVoxelEditOverlay({
       meshOffset.y,
       meshOffset.z,
       blockedVoxelIndexSet,
-    ),
-    [voxelCenters, blockedVoxelCenters, voxelRadiusMm, meshOffset.x, meshOffset.y, meshOffset.z, blockedVoxelIndexSet],
-  );
+    );
+  }, [voxelCenters, blockedVoxelCenters, voxelRadiusMm, meshOffset.x, meshOffset.y, meshOffset.z, blockedVoxelIndexSet, overCubeBudget]);
 
   const edgeGeometry = React.useMemo(() => {
+    if (!showEdges || overCubeBudget) return null;
     const edgePos = buildEdgePositions(
       voxelCenters,
       blockedVoxelCenters,
@@ -173,14 +202,16 @@ export function HollowVoxelEditOverlay({
       meshOffset.y,
       meshOffset.z,
     );
+    if (!edgePos) return null;
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(edgePos, 3));
     return geom;
-  }, [voxelCenters, blockedVoxelCenters, voxelRadiusMm, meshOffset.x, meshOffset.y, meshOffset.z]);
+  }, [voxelCenters, blockedVoxelCenters, voxelRadiusMm, meshOffset.x, meshOffset.y, meshOffset.z, showEdges, overCubeBudget]);
 
   React.useEffect(() => {
     const mesh = meshRef.current;
-    if (!mesh) return;
+    if (!mesh || !instanceData) return;
+    const { matrices, colors } = instanceData;
     const dummy = new THREE.Object3D();
     for (let i = 0; i < totalCount; i += 1) {
       const base = i * 16;
@@ -193,9 +224,9 @@ export function HollowVoxelEditOverlay({
     }
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [matrices, colors, totalCount]);
+  }, [instanceData, totalCount]);
 
-  if (totalCount === 0) return null;
+  if (totalCount === 0 || !instanceData) return null;
 
   return (
     <group>
@@ -218,19 +249,21 @@ export function HollowVoxelEditOverlay({
           depthWrite={true}
         />
       </instancedMesh>
-      <lineSegments
-        geometry={edgeGeometry}
-        renderOrder={30002}
-        raycast={() => null}
-      >
-        <lineBasicMaterial
-          color={EDGE_COLOR}
-          transparent
-          opacity={0.45}
-          depthTest
-          depthWrite={false}
-        />
-      </lineSegments>
+      {edgeGeometry && (
+        <lineSegments
+          geometry={edgeGeometry}
+          renderOrder={30002}
+          raycast={() => null}
+        >
+          <lineBasicMaterial
+            color={EDGE_COLOR}
+            transparent
+            opacity={0.45}
+            depthTest
+            depthWrite={false}
+          />
+        </lineSegments>
+      )}
     </group>
   );
 }

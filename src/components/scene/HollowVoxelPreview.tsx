@@ -1,5 +1,6 @@
 import React from 'react';
 import * as THREE from 'three';
+import { getVoxelPreviewBudget, tryAllocateFloat32Array, warnOnce } from './hollowVoxelPreviewLimits';
 
 type HollowVoxelPreviewProps = {
   voxelCenters: Float32Array;
@@ -37,9 +38,10 @@ function buildInstanceMatrices(
   offsetZ: number,
 ): Float32Array {
   const count = Math.floor(voxelCenters.length / 3);
-  const matrices = new Float32Array(count * 16);
+  const matrices = tryAllocateFloat32Array(count * 16) ?? new Float32Array(0);
+  const usableCount = Math.floor(matrices.length / 16);
   const scale = voxelSizeMm;
-  for (let i = 0; i < count; i += 1) {
+  for (let i = 0; i < usableCount; i += 1) {
     const base = i * 3;
     const cx = voxelCenters[base] + offsetX;
     const cy = voxelCenters[base + 1] + offsetY;
@@ -71,10 +73,11 @@ function buildEdgePositions(
   offsetX: number,
   offsetY: number,
   offsetZ: number,
-): Float32Array {
+): Float32Array | null {
   const count = Math.floor(voxelCenters.length / 3);
   const half = voxelSizeMm * 0.5;
-  const out = new Float32Array(count * 24 * 3); // 24 vertices per cube
+  const out = tryAllocateFloat32Array(count * 24 * 3); // 24 vertices per cube
+  if (!out) return null;
   for (let i = 0; i < count; i += 1) {
     const base = i * 3;
     const cx = voxelCenters[base] + offsetX;
@@ -101,31 +104,63 @@ export function HollowVoxelPreview({
 }: HollowVoxelPreviewProps) {
   const meshRef = React.useRef<THREE.InstancedMesh>(null);
   const edgeRef = React.useRef<THREE.LineSegments>(null);
-  const count = Math.floor(voxelCenters.length / 3);
+  const fullCount = Math.floor(voxelCenters.length / 3);
+
+  const budget = getVoxelPreviewBudget();
+  const clampedCount = Math.min(fullCount, budget.maxCubeInstances);
+  const showEdges = fullCount <= budget.maxEdgeInstances;
+
+  // Cheap: subarray is a view over the same buffer, not a copy.
+  const clampedVoxelCenters = React.useMemo(
+    () => (clampedCount === fullCount ? voxelCenters : voxelCenters.subarray(0, clampedCount * 3)),
+    [voxelCenters, clampedCount, fullCount],
+  );
+
+  React.useEffect(() => {
+    if (fullCount > clampedCount) {
+      warnOnce(
+        'hollow-voxel-preview-cube-cap',
+        `[HollowVoxelPreview] voxel count ${fullCount} exceeds render budget (${budget.maxCubeInstances}); showing first ${clampedCount} voxels only.`,
+      );
+    } else if (!showEdges) {
+      warnOnce(
+        'hollow-voxel-preview-edge-cap',
+        `[HollowVoxelPreview] voxel count ${fullCount} exceeds edge-render budget (${budget.maxEdgeInstances}); showing cubes without edge outlines.`,
+      );
+    }
+  }, [fullCount, clampedCount, showEdges, budget.maxCubeInstances, budget.maxEdgeInstances]);
 
   const matrices = React.useMemo(() => {
     return buildInstanceMatrices(
-      voxelCenters,
+      clampedVoxelCenters,
       voxelSizeMm,
       meshOffset.x,
       meshOffset.y,
       meshOffset.z,
     );
-  }, [voxelCenters, voxelSizeMm, meshOffset.x, meshOffset.y, meshOffset.z]);
+  }, [clampedVoxelCenters, voxelSizeMm, meshOffset.x, meshOffset.y, meshOffset.z]);
+
+  // Actual usable instance count -- derived from the built buffer itself
+  // rather than trusting clampedCount blindly, in case the (already
+  // budget-limited) allocation still failed for some other reason.
+  const count = Math.floor(matrices.length / 16);
 
   // Edge geometry: single LineSegments with all cube edges baked in world space.
+  // Skipped entirely above the edge budget, or if the allocation fails.
   const edgeGeometry = React.useMemo(() => {
+    if (!showEdges) return null;
     const edgePos = buildEdgePositions(
-      voxelCenters,
+      clampedVoxelCenters,
       voxelSizeMm,
       meshOffset.x,
       meshOffset.y,
       meshOffset.z,
     );
+    if (!edgePos) return null;
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(edgePos, 3));
     return geom;
-  }, [voxelCenters, voxelSizeMm, meshOffset.x, meshOffset.y, meshOffset.z]);
+  }, [clampedVoxelCenters, voxelSizeMm, meshOffset.x, meshOffset.y, meshOffset.z, showEdges]);
 
   // Push instance matrices into the InstancedMesh on every change.
   React.useEffect(() => {
@@ -163,6 +198,7 @@ export function HollowVoxelPreview({
           depthWrite={true}
         />
       </instancedMesh>
+      {edgeGeometry && (
       <lineSegments
         ref={edgeRef}
         geometry={edgeGeometry}
@@ -177,6 +213,7 @@ export function HollowVoxelPreview({
           depthWrite={false}
         />
       </lineSegments>
+      )}
     </group>
   );
 }

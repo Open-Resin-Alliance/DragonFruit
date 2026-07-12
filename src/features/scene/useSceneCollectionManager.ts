@@ -89,6 +89,11 @@ const RECENT_FILES_DB_VERSION = 1;
 const RECENT_FILES_STORE_NAME = 'files';
 const SCENE_MODELS_SNAPSHOT_APPLY = 'scene_models_snapshot_apply';
 const SCENE_HISTORY_MAX_SNAPSHOTS = 200;
+// Belt-and-suspenders alongside the count cap above: a handful of
+// full-resolution geometry swaps (e.g. repeated hollowing on a large model)
+// can retain far more memory per snapshot than typical small edits, so the
+// flat count cap alone can leave a lot of stale geometry pinned alive.
+const SCENE_HISTORY_MAX_ESTIMATED_GEOMETRY_BYTES = 300 * 1024 * 1024;
 
 type SceneSnapshotPayload = { key: string };
 
@@ -254,12 +259,53 @@ function hasSupportsOrKickstandsForModel(
   return Object.values(kickstandState.kickstands).some((kickstand) => kickstand.modelId === modelId);
 }
 
+function estimateGeometryBytes(geometry: THREE.BufferGeometry): number {
+  let total = 0;
+  for (const key in geometry.attributes) {
+    const attribute = geometry.attributes[key];
+    if (attribute?.array) {
+      total += (attribute.array as ArrayBufferView).byteLength;
+    }
+  }
+  if (geometry.index?.array) {
+    total += (geometry.index.array as ArrayBufferView).byteLength;
+  }
+  return total;
+}
+
+// Deliberately not deduplicated across snapshots/models: many pairs will
+// reference the same unchanged geometry, so this over-counts rather than
+// under-counts. That's the right direction for a safety cap -- it can only
+// make eviction more eager than strictly necessary, never less.
+function estimateSceneSnapshotRegistryBytes(): number {
+  let total = 0;
+  for (const pair of sceneSnapshotRegistry.values()) {
+    for (const model of pair.before.models) {
+      total += estimateGeometryBytes(model.geometry.geometry);
+    }
+    for (const model of pair.after.models) {
+      total += estimateGeometryBytes(model.geometry.geometry);
+    }
+  }
+  return total;
+}
+
 function storeSceneSnapshotPair(pair: SceneSnapshotPair): string {
   const key = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   sceneSnapshotRegistry.set(key, pair);
   sceneSnapshotOrder.push(key);
 
   while (sceneSnapshotOrder.length > SCENE_HISTORY_MAX_SNAPSHOTS) {
+    const removed = sceneSnapshotOrder.shift();
+    if (removed) sceneSnapshotRegistry.delete(removed);
+  }
+
+  // Always keep at least one snapshot so undo of the most recent action
+  // still works, even if it alone exceeds the byte budget.
+  while (
+    sceneSnapshotOrder.length > 1
+    && estimateSceneSnapshotRegistryBytes() > SCENE_HISTORY_MAX_ESTIMATED_GEOMETRY_BYTES
+  ) {
     const removed = sceneSnapshotOrder.shift();
     if (removed) sceneSnapshotRegistry.delete(removed);
   }

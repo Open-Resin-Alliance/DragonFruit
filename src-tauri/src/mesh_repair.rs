@@ -89,6 +89,41 @@ fn punch_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
     PUNCH_RESULT_BYTES.get_or_init(|| Mutex::new(None))
 }
 
+/// Clears every hollow-preview buffer derived from the captured source mesh
+/// (session cache, all result/removed/blocked/cavity byte buffers). Called
+/// whenever a new source mesh is captured so stale data from a previous
+/// model/session can never be served alongside a fresh one.
+fn reset_hollow_preview_derived_state() -> Result<(), String> {
+    *hollow_preview_session()
+        .lock()
+        .map_err(|e| format!("hollow preview session lock poisoned: {e}"))? = None;
+    *hollow_preview_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview result lock poisoned: {e}"))? = None;
+    *hollow_preview_infill_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview infill result lock poisoned: {e}"))? = None;
+    *hollow_preview_removed_voxel_center_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview removed voxel center result lock poisoned: {e}"))? =
+        None;
+    *hollow_preview_removed_voxel_index_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview removed voxel index result lock poisoned: {e}"))? =
+        None;
+    *hollow_preview_blocked_voxel_center_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview blocked voxel center result lock poisoned: {e}"))? =
+        None;
+    *hollow_preview_cavity_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))? = None;
+    *hollow_staged_cavity_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow staged cavity result lock poisoned: {e}"))? = None;
+    Ok(())
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct RepairOptionsDto {
@@ -288,23 +323,7 @@ pub async fn mesh_hollow_preview_capture_staged_source() -> Result<(), String> {
         .lock()
         .map_err(|e| format!("hollow preview source lock poisoned: {e}"))? =
         Some(Arc::new(source_mesh));
-    *hollow_preview_session()
-        .lock()
-        .map_err(|e| format!("hollow preview session lock poisoned: {e}"))? = None;
-    *hollow_preview_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview result lock poisoned: {e}"))? = None;
-    *hollow_preview_infill_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview infill result lock poisoned: {e}"))? = None;
-    *hollow_preview_removed_voxel_center_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel center result lock poisoned: {e}"))? =
-        None;
-    *hollow_preview_removed_voxel_index_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel index result lock poisoned: {e}"))? =
-        None;
+    reset_hollow_preview_derived_state()?;
     Ok(())
 }
 
@@ -415,11 +434,9 @@ pub async fn mesh_hollow_preview_from_captured_source(
     *hollow_preview_result_bytes()
         .lock()
         .map_err(|e| format!("hollow preview result lock poisoned: {e}"))? = Some(positions_bytes);
-    if let Some(cb) = cavity_bytes {
-        *hollow_preview_cavity_result_bytes()
-            .lock()
-            .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))? = Some(cb);
-    }
+    *hollow_preview_cavity_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))? = cavity_bytes;
     *hollow_preview_infill_result_bytes()
         .lock()
         .map_err(|e| format!("hollow preview infill result lock poisoned: {e}"))? =
