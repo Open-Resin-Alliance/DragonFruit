@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { STLExporter } from 'three-stdlib';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
+import { resolveModelMeshModifiers } from '@/features/mesh-modifiers/meshModifierStore';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
 import { buildSupportExportFromStores, serializeVoxlDocumentV2 } from '@/features/scene/voxl';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
@@ -1194,7 +1195,11 @@ export class ExportManager {
                   z: model.transform.scale.z,
                 },
               },
-              meshModifiers: model.meshModifiers,
+              // Model objects in React state carry meshModifiers: undefined
+              // by design (externalized store) — resolve through the store or
+              // every saved VOXL silently loses hollowing/hole-punch
+              // re-editability (voxl-format-spec.md V2.1 requirement).
+              meshModifiers: resolveModelMeshModifiers(model),
               mesh: {
                 mode: 'embedded-file',
                 fileName: `${this.normalizeExportFilenameBase(model.name || 'model')}.stl`,

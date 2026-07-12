@@ -1889,6 +1889,14 @@ export default function Home() {
   const suppressHolePunchClickPlacementIdRef = React.useRef<string | null>(null);
   const suppressHolePunchGizmoReleaseClickUntilRef = React.useRef(0);
   const [isApplyingHollowing, setIsApplyingHollowing] = React.useState(false);
+  // Set when a modifier apply's BACKEND work has finished but the UI-side
+  // finalization (geometry build, React commit, GPU upload, deferred BVH /
+  // flattening-plane work) is still in flight. Keeps the blocking overlay up
+  // with a "loading mesh" message until the app is genuinely responsive —
+  // previously the overlay vanished at the end of the async handler while
+  // the main thread stayed frozen for seconds afterwards.
+  const [finalizingModifierApply, setFinalizingModifierApply] =
+    React.useState<null | 'hollowing' | 'holePunch'>(null);
   const [pendingModifierResetAction, setPendingModifierResetAction] = React.useState<PendingModifierResetAction | null>(null);
   const [pendingBlockerResetState, setPendingBlockerResetState] = React.useState<HollowingPanelState | null>(null);
   const hollowPreviewDebounceTimerRef = React.useRef<number | ReturnType<typeof setTimeout> | null>(null);
@@ -2708,7 +2716,7 @@ export default function Home() {
   const [duplicateTotalCopies, setDuplicateTotalCopies] = React.useState(1);
   const [duplicateSpacingMm, setDuplicateSpacingMm] = React.useState(0.5);
   const showArrangeBlockingOverlay = isAutoArranging;
-  const showModifierApplyBlockingOverlay = isApplyingHollowing || isApplyingHolePunch || isApplyingBlockersHollowing || pendingHolePunchAutoApplyModelId !== null;
+  const showModifierApplyBlockingOverlay = isApplyingHollowing || isApplyingHolePunch || isApplyingBlockersHollowing || pendingHolePunchAutoApplyModelId !== null || finalizingModifierApply !== null;
   const [modifierApplyOverlayElapsedSec, setModifierApplyOverlayElapsedSec] = React.useState(0);
 
   const arrangeOverlayContent = React.useMemo(() => {
@@ -2762,6 +2770,34 @@ export default function Home() {
       };
     }
 
+    // Backend finished; the UI is loading the new mesh (geometry build, GPU
+    // upload, pick-acceleration rebuild). Wins over the "Applying..." copy
+    // for the same operation, but yields to a queued hole-punch auto-apply
+    // chain, whose combined/punch messages stay accurate.
+    if (
+      finalizingModifierApply === 'hollowing'
+      && !isApplyingHolePunch
+      && pendingHolePunchAutoApplyModelId === null
+    ) {
+      return {
+        title: 'Hollowing complete — loading mesh…',
+        detailLines: [
+          'Uploading the new geometry to the viewport and rebuilding pick acceleration.',
+          'The app may pause briefly.',
+        ],
+      };
+    }
+
+    if (finalizingModifierApply === 'holePunch' && !isApplyingHollowing) {
+      return {
+        title: 'Hole punches complete — loading mesh…',
+        detailLines: [
+          'Uploading the new geometry to the viewport and rebuilding pick acceleration.',
+          'The app may pause briefly.',
+        ],
+      };
+    }
+
     if (isApplyingHollowing) {
       return {
         title: 'Applying Hollowing...',
@@ -2799,7 +2835,7 @@ export default function Home() {
         'Please wait a moment.',
       ],
     };
-  }, [isApplyingBlockersHollowing, isApplyingHolePunch, isApplyingHollowing, pendingHolePunchAutoApplyModelId]);
+  }, [finalizingModifierApply, isApplyingBlockersHollowing, isApplyingHolePunch, isApplyingHollowing, pendingHolePunchAutoApplyModelId]);
 
   React.useEffect(() => {
     if (!showArrangeBlockingOverlay) {
@@ -2828,6 +2864,36 @@ export default function Home() {
 
     return () => window.clearInterval(id);
   }, [showModifierApplyBlockingOverlay]);
+
+  // Clears the "finalizing" overlay state once the post-apply mesh swap has
+  // genuinely settled: two consecutive presented frames with the deferred
+  // geometry work (BVH builds, disposals, flattening planes) drained. rAF
+  // only fires between presented frames, so this inherently waits out the
+  // heavy commit + GPU-upload frame as well. A 20s cap prevents a wedged
+  // queue from pinning the overlay forever.
+  const hasPendingBackgroundGeometryWork = scene.hasPendingBackgroundGeometryWork;
+  React.useEffect(() => {
+    if (finalizingModifierApply === null) return;
+    let cancelled = false;
+    let rafId = 0;
+    const startedAt = performance.now();
+    let idleFrames = 0;
+    const tick = () => {
+      if (cancelled) return;
+      const busy = hasPendingBackgroundGeometryWork();
+      idleFrames = busy ? 0 : idleFrames + 1;
+      if (idleFrames >= 2 || performance.now() - startedAt > 20_000) {
+        setFinalizingModifierApply(null);
+        return;
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafId);
+    };
+  }, [finalizingModifierApply, hasPendingBackgroundGeometryWork]);
 
   const arrangeOverlayElapsedLabel = React.useMemo(() => {
     const total = Math.max(0, arrangeOverlayElapsedSec);
@@ -12790,6 +12856,16 @@ export default function Home() {
     window.setTimeout(resolve, ms);
   }), []);
 
+  // Resolves after the NEXT presented frame: the first rAF fires after the
+  // pending React commit but before paint, the second after that frame has
+  // actually been shown. Used to let an overlay message paint before a heavy
+  // synchronous main-thread block starts.
+  const nextPaint = React.useCallback(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  }), []);
+
   const buildHighPrecisionArrangeSupportLocalPoints = React.useCallback((
     modelTransformById: Map<string, (typeof scene.models)[number]['transform']>,
   ) => {
@@ -15534,6 +15610,14 @@ export default function Home() {
           return;
         }
 
+        // Backend work is done — everything below is main-thread mesh
+        // finalization. Switch the blocking overlay to the "loading mesh"
+        // message and give it one frame to paint before the heavy
+        // synchronous block starts; the drain-watcher effect clears the
+        // flag once the swap and its deferred work have settled.
+        setFinalizingModifierApply('hollowing');
+        await nextPaint();
+
         const nextGeometry = new THREE.BufferGeometry();
         nextGeometry.setAttribute('position', new THREE.BufferAttribute(result.positions, 3));
         nextGeometry.computeVertexNormals();
@@ -15572,6 +15656,7 @@ export default function Home() {
         );
         if (!replaced) {
           nextGeometry.dispose();
+          setFinalizingModifierApply(null);
           return;
         }
 
@@ -15664,12 +15749,13 @@ export default function Home() {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         showOperationError(`Hollowing failed: ${message}`);
+        setFinalizingModifierApply(null);
       } finally {
         setIsApplyingHollowing(false);
         setIsApplyingBlockersHollowing(false);
       }
     })();
-  }, [blockedHollowVoxelIndices, hollowingDraftEnabled, hollowingState, isShellOpenFaceSelected, persistActiveModelModifiers, scene]);
+  }, [blockedHollowVoxelIndices, hollowingDraftEnabled, hollowingState, isShellOpenFaceSelected, nextPaint, persistActiveModelModifiers, scene]);
 
   const handleResetHollowing = React.useCallback(() => {
     const activeModel = scene.activeModel;
@@ -17292,6 +17378,12 @@ export default function Home() {
           return;
         }
 
+        // Backend work is done — switch the blocking overlay to the
+        // "loading mesh" message and let it paint before the heavy
+        // synchronous finalization below (see handleApplyHollowing).
+        setFinalizingModifierApply('holePunch');
+        await nextPaint();
+
         const nextGeometry = new THREE.BufferGeometry();
         nextGeometry.setAttribute('position', new THREE.BufferAttribute(result.positions, 3));
         nextGeometry.computeVertexNormals();
@@ -17308,6 +17400,7 @@ export default function Home() {
             sourceGeometry.dispose();
           }
           nextGeometry.dispose();
+          setFinalizingModifierApply(null);
           return;
         }
 
@@ -17331,11 +17424,12 @@ export default function Home() {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         showOperationError(`Hole punching failed: ${message}`);
+        setFinalizingModifierApply(null);
       } finally {
         setIsApplyingHolePunch(false);
       }
     })();
-  }, [activeHolePunchPlacements, persistActiveModelModifiers, scene, sleep]);
+  }, [activeHolePunchPlacements, nextPaint, persistActiveModelModifiers, scene, sleep]);
 
   React.useEffect(() => {
     if (!pendingHolePunchAutoApplyModelId) return;

@@ -38,6 +38,11 @@ import {
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
+import {
+  deleteStoredMeshModifiers,
+  getStoredMeshModifiers,
+  storeModelMeshModifiers,
+} from '@/features/mesh-modifiers/meshModifierStore';
 import { splitClassifiedSupportGeometry } from '@/features/scene/splitClassifiedSupports';
 
 type PersistedMeshAppearance = {
@@ -177,29 +182,13 @@ function cloneMeshModifiersShallow(modifiers: ModelMeshModifiers): ModelMeshModi
 // ── External Mesh Modifier Store ─────────────────────────────────────────
 //
 // Model mesh modifiers (especially the MB-scale cavityPositionsBase64 /
-// sourcePositionsBase64 from LYS imports) are kept in this module-level Map
-// instead of on model objects. This prevents React's state reconciliation
-// from churning on large payloads during selection, copy, paste, and
-// duplicate operations.
-const meshModifierStoreRef: { current: Map<string, ModelMeshModifiers> } = {
-  current: new Map(),
-};
-
-function storeModelMeshModifiers(modelId: string, modifiers: ModelMeshModifiers | undefined | null): void {
-  if (modifiers) {
-    meshModifierStoreRef.current.set(modelId, modifiers);
-  } else {
-    meshModifierStoreRef.current.delete(modelId);
-  }
-}
-
-function getStoredMeshModifiers(modelId: string): ModelMeshModifiers | undefined {
-  return meshModifierStoreRef.current.get(modelId);
-}
-
-function deleteStoredMeshModifiers(modelId: string): void {
-  meshModifierStoreRef.current.delete(modelId);
-}
+// sourcePositionsBase64 from LYS imports) are kept in a module-level Map in
+// features/mesh-modifiers/meshModifierStore.ts instead of on model objects.
+// This prevents React's state reconciliation from churning on large payloads
+// during selection, copy, paste, and duplicate operations. Save/export/slice
+// boundaries must resolve modifiers through that store (see
+// resolveModelMeshModifiers) — model objects carry meshModifiers: undefined
+// by design.
 
 function schedulePostPaint(callback: () => void): void {
   if (typeof window === 'undefined') {
@@ -1074,6 +1063,9 @@ export function useSceneCollectionManager() {
   const deferredAccelerationPausedRef = useRef(false);
   const deferredDisposalQueueRef = useRef<THREE.BufferGeometry[]>([]);
   const deferredDisposalProcessingRef = useRef(false);
+  // Count of scheduled-but-unfinished flattening-plane computations (idle
+  // callbacks after geometry swaps). Part of hasPendingBackgroundGeometryWork.
+  const pendingFlatteningPlanesRef = useRef(0);
   const trackedGeometriesRef = useRef<Set<THREE.BufferGeometry>>(new Set());
 
   const tryRevokeObjectUrl = useCallback((url: string) => {
@@ -1838,6 +1830,21 @@ export function useSceneCollectionManager() {
     }
   }, [processDeferredAccelerationQueue]);
 
+  /**
+   * True while deferred post-swap geometry work (BVH acceleration builds,
+   * deferred geometry disposals, flattening-plane computation) is queued or
+   * running. Lets the UI keep a blocking "finalizing" indicator visible
+   * until the app is genuinely responsive again after a large geometry swap
+   * — the swap itself resolves long before this work drains.
+   */
+  const hasPendingBackgroundGeometryWork = useCallback(() => (
+    deferredAccelerationQueueRef.current.length > 0
+    || deferredAccelerationProcessingRef.current
+    || deferredDisposalQueueRef.current.length > 0
+    || deferredDisposalProcessingRef.current
+    || pendingFlatteningPlanesRef.current > 0
+  ), []);
+
   const processDeferredDisposalQueue = useCallback(() => {
     if (deferredDisposalProcessingRef.current) return;
     if (deferredDisposalQueueRef.current.length === 0) return;
@@ -2570,14 +2577,19 @@ export function useSceneCollectionManager() {
           setTimeout(cb, 16);
         }
       };
+      pendingFlatteningPlanesRef.current += 1;
       scheduleIdle(() => {
-        const planes = computeFlatteningPlanes(nextBufferGeometry);
-        nextGeometry.flatteningPlanes = planes;
-        setModels((prev) => prev.map((m) => (
-          m.id === id && m.geometry.geometry === nextBufferGeometry
-            ? { ...m, geometry: { ...m.geometry, flatteningPlanes: planes } }
-            : m
-        )));
+        try {
+          const planes = computeFlatteningPlanes(nextBufferGeometry);
+          nextGeometry.flatteningPlanes = planes;
+          setModels((prev) => prev.map((m) => (
+            m.id === id && m.geometry.geometry === nextBufferGeometry
+              ? { ...m, geometry: { ...m.geometry, flatteningPlanes: planes } }
+              : m
+          )));
+        } finally {
+          pendingFlatteningPlanesRef.current = Math.max(0, pendingFlatteningPlanesRef.current - 1);
+        }
       });
     }
 
@@ -2624,13 +2636,18 @@ export function useSceneCollectionManager() {
         setTimeout(cb, 16);
       }
     };
+    pendingFlatteningPlanesRef.current += 1;
     scheduleIdle(() => {
-      const planes = computeFlatteningPlanes(geom);
-      setModels((prev) => prev.map((m) => (
-        m.id === id && m.geometry.geometry === geom
-          ? { ...m, geometry: { ...m.geometry, flatteningPlanes: planes } }
-          : m
-      )));
+      try {
+        const planes = computeFlatteningPlanes(geom);
+        setModels((prev) => prev.map((m) => (
+          m.id === id && m.geometry.geometry === geom
+            ? { ...m, geometry: { ...m.geometry, flatteningPlanes: planes } }
+            : m
+        )));
+      } finally {
+        pendingFlatteningPlanesRef.current = Math.max(0, pendingFlatteningPlanesRef.current - 1);
+      }
     });
   }, [deferAccelerateGeometry]);
 
@@ -4834,6 +4851,7 @@ export function useSceneCollectionManager() {
     pasteCopiedModelsAutoArrange,
     duplicateModelWithTransforms,
     setBackgroundGeometryWorkPaused,
+    hasPendingBackgroundGeometryWork,
     canPasteModel: modelClipboard.length > 0,
 
     // Scene settings

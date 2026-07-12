@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { ModelHolePunchPlacement } from './types';
+import { resolveModelMeshModifiers } from './meshModifierStore';
 import { hollowFromGeometry, type HollowOptions } from '@/utils/meshHollowing';
 import { punchFromGeometry, type PunchOptions } from '@/utils/meshPunching';
 import { splitClassifiedSupportGeometry } from '@/features/scene/splitClassifiedSupports';
@@ -32,7 +33,7 @@ function computeGeometrySignature(geometry: THREE.BufferGeometry): string {
 }
 
 function buildModifierSignature(model: LoadedModel): string | null {
-  const modifiers = model.meshModifiers;
+  const modifiers = resolveModelMeshModifiers(model);
   const hollowing = modifiers?.hollowing?.enabled && !modifiers.hollowing.bakedIntoGeometry
     ? modifiers.hollowing
     : null;
@@ -205,7 +206,10 @@ export async function prepareModelGeometryForOutput(model: LoadedModel): Promise
     }
   }
 
-  const modifiers = model.meshModifiers;
+  // Model objects in React state deliberately carry meshModifiers: undefined
+  // (externalized store) — resolve through the store or unbaked hollowing is
+  // silently skipped at slice/export time.
+  const modifiers = resolveModelMeshModifiers(model);
   const hollowing = modifiers?.hollowing;
   const shouldApplyHollowing = Boolean(hollowing?.enabled && !hollowing.bakedIntoGeometry);
   // Hole punches are never auto-applied during slice/export — the user must
