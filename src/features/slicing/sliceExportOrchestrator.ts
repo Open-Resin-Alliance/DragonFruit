@@ -614,8 +614,28 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
   options.onProgress?.(0, 1, 'Baking Modifiers');
   const preparedModelsForOutput = await prepareLoadedModelsForOutput(visibleModels);
   const modifierBakeMs = performance.now() - modifierBakeStartMs;
+
+  const survivingCombinedModels = preparedModelsForOutput.models.filter((model) => {
+    const modelTriangleCount = model.geometry.meshDefects?.nativeRepairReport?.model_triangle_count;
+    if (!modelTriangleCount || modelTriangleCount <= 0) return false;
+    const position = model.geometry.geometry.getAttribute('position');
+    const totalTriangleCount = Math.floor(
+      (model.geometry.geometry.getIndex()?.count ?? position?.count ?? 0) / 3,
+    );
+    return modelTriangleCount < totalTriangleCount;
+  });
+  if (survivingCombinedModels.length > 0) {
+    preparedModelsForOutput.dispose();
+    throw new Error(
+      `Classified support geometry was not separated before slicing: ${survivingCombinedModels
+        .map((model) => model.name)
+        .join(', ')}`,
+    );
+  }
+
   logDebug('Prepared models for slice/export handoff', {
     visibleModelCount: visibleModels.length,
+    preparedModelCount: preparedModelsForOutput.models.length,
     modifiedModelCount: preparedModelsForOutput.modifiedModelCount,
     modifierBakeMs,
   });

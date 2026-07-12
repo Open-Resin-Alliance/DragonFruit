@@ -37,6 +37,28 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
+      - name: Install Apple Certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASS }}
+
+      - name: Fall back to ad-hoc signing if Developer ID cert is unavailable
+        shell: bash
+        run: |
+          if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer ID Application: Pascal Krumme (MHNF3GA2MM)"; then
+            echo "⚠️ Developer ID certificate not found in keychain — falling back to ad-hoc signing"
+            node -e "
+              const fs = require('fs');
+              const p = 'src-tauri/tauri.macos.conf.json';
+              const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+              cfg.bundle.macOS.signingIdentity = '-';
+              fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n');
+            "
+          else
+            echo "✅ Developer ID certificate available — using full codesigning"
+          fi
+
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
@@ -51,6 +73,15 @@ jobs:
         run: |
           echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
           echo "commit_hash=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Export Apple notarization credentials for nightly builds
+        if: contains(github.event.pull_request.labels.*.name, 'nightly-build')
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+        run: |
+          echo "APPLE_ID=$APPLE_ID" >> "$GITHUB_ENV"
+          echo "APPLE_PASSWORD=$APPLE_PASSWORD" >> "$GITHUB_ENV"
 
       - name: Build Tauri universal macOS bundle
         uses: tauri-apps/tauri-action@v0

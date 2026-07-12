@@ -507,6 +507,7 @@ export default function Home() {
 
   // 2. Transform Management (needs geom for bounds)
   const transformMgr = useTransformManager({ geom: scene.geom });
+  const [uniformScaling, setUniformScaling] = React.useState(true);
 
   // --- Hollowing manager: placed early so its state/setters are in scope for
   //     useHolePunchManager below. Late/cross deps supplied via a ref populated
@@ -1965,11 +1966,17 @@ export default function Home() {
       ];
     }
 
+    const activeModel = scene.activeModelId
+      ? scene.models.find((m) => m.id === scene.activeModelId)
+      : undefined;
+    const canSplitSupports = !!activeModel?.geometry.meshDefects?.nativeRepairReport?.model_triangle_count;
+
     return [
       ...(!scene.activeModelId ? (['delete', 'cut', 'copy', 'repair'] as const) : []),
       ...(!scene.canPasteModel ? (['paste'] as const) : []),
+      ...(!canSplitSupports ? (['split-supports'] as const) : []),
     ];
-  }, [scene.activeModelId, scene.canPasteModel, scene.mode, supportsCanAddJoint, supportsCanToggleCurve]);
+  }, [scene.activeModelId, scene.canPasteModel, scene.mode, scene.models, supportsCanAddJoint, supportsCanToggleCurve]);
 
   const clearPrintingLayerPreviewUrls = React.useCallback(() => {
     printingLayerPreviewLoadInFlightRef.current.clear();
@@ -5497,6 +5504,15 @@ export default function Home() {
         }
         break;
       }
+      case 'split-supports': {
+        const targetId = scene.activeModelId;
+        if (targetId) {
+          closeEditorContextMenu();
+          scene.splitSupports(targetId);
+          return;
+        }
+        break;
+      }
       case 'delete':
         if (scene.activeModelId) {
           scene.deleteModel(scene.activeModelId);
@@ -8958,6 +8974,8 @@ export default function Home() {
               handleRotationComplete: handleRotationComplete,
               handleAutoLiftChange: handleAutoLiftChange,
               scheduleCommitPendingTransformHistory: scheduleCommitPendingTransformHistory,
+              uniformScaling: uniformScaling,
+              setUniformScaling: setUniformScaling,
               isApplyingHolePunch: isApplyingHolePunch,
               interiorView: interiorView,
               hasCavityGeometry: hasCavityGeometry,
@@ -9183,6 +9201,7 @@ export default function Home() {
             voxelOpacity={islands.voxelOpacity}
             transformMode={transformMgr.transformMode}
             transform={transformMgr.transform}
+            uniformScaling={uniformScaling}
             autoLift={transformMgr.autoLift}
             liftDistance={transformMgr.liftDistance}
             autoSnapEnabled={transformMgr.autoSnapEnabled}

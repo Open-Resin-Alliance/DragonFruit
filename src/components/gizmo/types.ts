@@ -97,6 +97,9 @@ export interface GizmoConfig {
   // as displayY = -cutterY in HolePunchGizmo).
   axisVisualFlip?: { x?: number; y?: number; z?: number };
 
+  // Scale behavior
+  uniformScaling?: boolean;
+
   // Suppress face-camera behaviors
   disableArrowFlip?: boolean;
   disableRingBillboard?: boolean;

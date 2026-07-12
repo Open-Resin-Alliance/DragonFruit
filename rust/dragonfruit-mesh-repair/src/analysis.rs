@@ -94,75 +94,7 @@ pub fn analyze(mesh: &IndexedMesh) -> MeshAnalysis {
     let boundary_loops = boundary_loops_vec.len();
     let inconsistent_winding_edges = topo.inconsistent_edges();
 
-    // Non-manifold vertex: the one-ring fans break into ≥ 2 disconnected
-    // components around the vertex.
-    let non_manifold_vertices = {
-        let mut count = 0usize;
-        for (vi, faces) in topo.vertex_faces.iter().enumerate() {
-            if faces.len() < 2 {
-                continue;
-            }
-            let vi = vi as u32;
-            // Faces are connected if they share an edge containing `vi`.
-            let n = faces.len();
-            let mut parent: Vec<usize> = (0..n).collect();
-            fn find(p: &mut [usize], i: usize) -> usize {
-                let mut r = i;
-                while p[r] != r {
-                    r = p[r];
-                }
-                let mut cur = i;
-                while p[cur] != r {
-                    let next = p[cur];
-                    p[cur] = r;
-                    cur = next;
-                }
-                r
-            }
-            for i in 0..n {
-                for j in (i + 1)..n {
-                    let fa = mesh.triangles[faces[i] as usize];
-                    let fb = mesh.triangles[faces[j] as usize];
-                    // Other two verts in each.
-                    let oa: [u32; 2] = {
-                        let mut out = [0u32; 2];
-                        let mut k = 0;
-                        for &v in &fa {
-                            if v != vi && k < 2 {
-                                out[k] = v;
-                                k += 1;
-                            }
-                        }
-                        out
-                    };
-                    let ob: [u32; 2] = {
-                        let mut out = [0u32; 2];
-                        let mut k = 0;
-                        for &v in &fb {
-                            if v != vi && k < 2 {
-                                out[k] = v;
-                                k += 1;
-                            }
-                        }
-                        out
-                    };
-                    let shared = oa.iter().any(|a| ob.contains(a));
-                    if shared {
-                        let ri = find(&mut parent, i);
-                        let rj = find(&mut parent, j);
-                        if ri != rj {
-                            parent[ri] = rj;
-                        }
-                    }
-                }
-            }
-            let roots: ahash::AHashSet<usize> = (0..n).map(|i| find(&mut parent, i)).collect();
-            if roots.len() > 1 {
-                count += 1;
-            }
-        }
-        count
-    };
+    let non_manifold_vertices = count_non_manifold_vertices(mesh, &topo);
 
     let t_components = std::time::Instant::now();
     let connected_components = count_components(mesh);
@@ -211,6 +143,226 @@ pub fn analyze(mesh: &IndexedMesh) -> MeshAnalysis {
             total_ms,
         },
     }
+}
+
+/// Lightweight analysis that skips self-intersection detection (the most
+/// expensive phase). Suitable for classify-only paths where we only need
+/// basic topology stats to populate a report, not full defect diagnosis.
+pub fn analyze_lightweight(mesh: &IndexedMesh) -> MeshAnalysis {
+    let t_start = std::time::Instant::now();
+
+    let bbox = mesh.bbox();
+    let signed_volume = mesh.signed_volume();
+
+    let t_topo = std::time::Instant::now();
+    let topo = Topology::build(mesh);
+    let topology_ms = t_topo.elapsed().as_secs_f64() * 1000.0;
+
+    let mut degenerate_triangles = 0usize;
+    let mut duplicate_triangles = {
+        let mut set: ahash::AHashSet<(u32, u32, u32)> =
+            ahash::AHashSet::with_capacity(mesh.triangles.len());
+        let mut dups = 0usize;
+        for tri in &mesh.triangles {
+            let mut s = *tri;
+            s.sort();
+            let key = (s[0], s[1], s[2]);
+            if !set.insert(key) {
+                dups += 1;
+            }
+        }
+        dups
+    };
+    for tri in &mesh.triangles {
+        if tri[0] == tri[1] || tri[1] == tri[2] || tri[0] == tri[2] {
+            degenerate_triangles += 1;
+            continue;
+        }
+    }
+    if duplicate_triangles > mesh.triangles.len() {
+        duplicate_triangles = mesh.triangles.len();
+    }
+
+    let non_manifold_edges = topo.non_manifold_edges().len();
+    let boundary_edges_vec = topo.boundary_edges();
+    let boundary_edges = boundary_edges_vec.len();
+    let boundary_loops_vec = topo.boundary_loops();
+    let largest_boundary_loop = boundary_loops_vec
+        .iter()
+        .map(|l| l.len())
+        .max()
+        .unwrap_or(0);
+    let boundary_loops = boundary_loops_vec.len();
+    let inconsistent_winding_edges = topo.inconsistent_edges();
+
+    let non_manifold_vertices = count_non_manifold_vertices(mesh, &topo);
+
+    let t_components = std::time::Instant::now();
+    let connected_components = count_components(mesh);
+    let components_ms = t_components.elapsed().as_secs_f64() * 1000.0;
+
+    // Skip self-intersection detection — the expensive BVH-based pass.
+    let self_intersection_triangles = 0;
+    let self_intersections_ms = 0.0;
+
+    let is_watertight = boundary_edges == 0 && non_manifold_edges == 0;
+    let is_oriented = inconsistent_winding_edges == 0 && signed_volume >= 0.0;
+
+    let total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+
+    MeshAnalysis {
+        vertex_count: mesh.vertex_count(),
+        triangle_count: mesh.triangle_count(),
+        bbox_min: if bbox.min.x.is_finite() {
+            [bbox.min.x, bbox.min.y, bbox.min.z]
+        } else {
+            [0.0; 3]
+        },
+        bbox_max: if bbox.max.x.is_finite() {
+            [bbox.max.x, bbox.max.y, bbox.max.z]
+        } else {
+            [0.0; 3]
+        },
+        signed_volume,
+        duplicate_vertices: 0,
+        degenerate_triangles,
+        duplicate_triangles,
+        non_manifold_edges,
+        non_manifold_vertices,
+        boundary_edges,
+        boundary_loops,
+        largest_boundary_loop,
+        inconsistent_winding_edges,
+        self_intersection_triangles,
+        connected_components,
+        is_watertight,
+        is_oriented,
+        timings_ms: AnalysisTimings {
+            topology_ms,
+            self_intersections_ms,
+            components_ms,
+            total_ms,
+        },
+    }
+}
+
+/// Minimal analysis for classification-only paths. Only computes O(n) cheap
+/// stats (bbox, volume, vertex/triangle counts) and accepts the component
+/// count from the caller (already computed by the classifier's own
+/// `triangle_components` pass). Skips half-edge topology, self-intersection
+/// detection, duplicate/degenerate detection, and boundary-loop extraction.
+/// Runs in a single pass over positions + a single pass over triangles.
+pub fn minimal_analysis(mesh: &IndexedMesh, component_count: usize) -> MeshAnalysis {
+    let t_start = std::time::Instant::now();
+
+    let bbox = mesh.bbox();
+    let signed_volume = mesh.signed_volume();
+
+    let total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+
+    let is_watertight = false; // not computed
+    let is_oriented = signed_volume >= 0.0;
+
+    MeshAnalysis {
+        vertex_count: mesh.vertex_count(),
+        triangle_count: mesh.triangle_count(),
+        bbox_min: if bbox.min.x.is_finite() {
+            [bbox.min.x, bbox.min.y, bbox.min.z]
+        } else {
+            [0.0; 3]
+        },
+        bbox_max: if bbox.max.x.is_finite() {
+            [bbox.max.x, bbox.max.y, bbox.max.z]
+        } else {
+            [0.0; 3]
+        },
+        signed_volume,
+        duplicate_vertices: 0,
+        degenerate_triangles: 0,
+        duplicate_triangles: 0,
+        non_manifold_edges: 0,
+        non_manifold_vertices: 0,
+        boundary_edges: 0,
+        boundary_loops: 0,
+        largest_boundary_loop: 0,
+        inconsistent_winding_edges: 0,
+        self_intersection_triangles: 0,
+        connected_components: component_count,
+        is_watertight,
+        is_oriented,
+        timings_ms: AnalysisTimings {
+            topology_ms: 0.0,
+            self_intersections_ms: 0.0,
+            components_ms: 0.0,
+            total_ms,
+        },
+    }
+}
+
+fn count_non_manifold_vertices(mesh: &IndexedMesh, topo: &Topology) -> usize {
+    let mut count = 0usize;
+    for (vi, faces) in topo.vertex_faces.iter().enumerate() {
+        if faces.len() < 2 {
+            continue;
+        }
+        let vi = vi as u32;
+        let n = faces.len();
+        let mut parent: Vec<usize> = (0..n).collect();
+        fn find(p: &mut [usize], i: usize) -> usize {
+            let mut r = i;
+            while p[r] != r {
+                r = p[r];
+            }
+            let mut cur = i;
+            while p[cur] != r {
+                let next = p[cur];
+                p[cur] = r;
+                cur = next;
+            }
+            r
+        }
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let fa = mesh.triangles[faces[i] as usize];
+                let fb = mesh.triangles[faces[j] as usize];
+                let oa: [u32; 2] = {
+                    let mut out = [0u32; 2];
+                    let mut k = 0;
+                    for &v in &fa {
+                        if v != vi && k < 2 {
+                            out[k] = v;
+                            k += 1;
+                        }
+                    }
+                    out
+                };
+                let ob: [u32; 2] = {
+                    let mut out = [0u32; 2];
+                    let mut k = 0;
+                    for &v in &fb {
+                        if v != vi && k < 2 {
+                            out[k] = v;
+                            k += 1;
+                        }
+                    }
+                    out
+                };
+                let shared = oa.iter().any(|a| ob.contains(a));
+                if shared {
+                    let ri = find(&mut parent, i);
+                    let rj = find(&mut parent, j);
+                    if ri != rj {
+                        parent[ri] = rj;
+                    }
+                }
+            }
+        }
+        let roots: ahash::AHashSet<usize> = (0..n).map(|i| find(&mut parent, i)).collect();
+        if roots.len() > 1 {
+            count += 1;
+        }
+    }
+    count
 }
 
 fn count_components(mesh: &IndexedMesh) -> usize {
@@ -301,7 +453,11 @@ pub fn count_self_intersections(mesh: &IndexedMesh) -> usize {
                     hit = true;
                 }
             });
-            if hit { 1 } else { 0 }
+            if hit {
+                1
+            } else {
+                0
+            }
         })
         .collect();
 

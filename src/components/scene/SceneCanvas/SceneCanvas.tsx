@@ -134,6 +134,7 @@ import {
   toggleSupportPathfindingDebugEnabled,
   toggleSupportPathfindingDebugTuningEnabled,
 } from '@/supports/PlacementLogic/Pathfinding/pathfindingDebugState';
+import { applyScaleFactor } from '@/components/gizmo/scale/applyScaleFactor';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
@@ -343,6 +344,7 @@ export function SceneCanvas({
   voxelOpacity,
   transformMode,
   transform,
+  uniformScaling = true,
   autoLift = false,
   liftDistance = 5,
   autoSnapEnabled = true,
@@ -460,6 +462,7 @@ export function SceneCanvas({
   voxelOpacity?: number;
   transformMode?: TransformMode;
   transform?: ModelTransform;
+  uniformScaling?: boolean;
   autoLift?: boolean;
   liftDistance?: number;
   autoSnapEnabled?: boolean;
@@ -5984,6 +5987,7 @@ export function SceneCanvas({
                   enableMove
                   enableRotate={!isMultiGizmoSelection}
                   enableScale
+                  uniformScaling={uniformScaling}
                   enableLighting
                   onDragStateChange={setIsGizmoDragging}
                   onRetargetingChange={setIsGizmoRetargeting}
@@ -6317,11 +6321,10 @@ export function SceneCanvas({
                     }
                     return true;
                   }}
-                  onScale={(_axis, value) => {
+                  onScale={(axis, value) => {
                     if (activeGroupRef.current) {
-                      const scalarValue = Number(value);
-                      const safeScalar = Number.isFinite(scalarValue) ? scalarValue : 1;
-                      const nextScale = initialScaleRef.current.clone().multiplyScalar(Math.max(0.0001, safeScalar));
+                      const safeScalar = Number.isFinite(Number(value)) ? Number(value) : 1;
+                      const nextScale = applyScaleFactor(initialScaleRef.current, axis, safeScalar);
                       activeGroupRef.current.scale.copy(nextScale);
                       applySupportGroupDelta();
                       const live = captureActiveGroupTransform();

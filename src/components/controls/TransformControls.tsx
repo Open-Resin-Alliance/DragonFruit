@@ -35,6 +35,8 @@ interface TransformControlsProps {
   scale: THREE.Vector3;
   onScaleChange: (x: number, y: number, z: number) => void;
   onResetScale: () => void;
+  uniformScaling: boolean;
+  onUniformScalingChange: (value: boolean) => void;
   
   // Shared
   modelBBox: THREE.Box3 | null;
@@ -61,6 +63,8 @@ export function TransformControls({
   scale,
   onScaleChange,
   onResetScale,
+  uniformScaling,
+  onUniformScalingChange,
   modelBBox,
   autoLift,
   onAutoLiftChange,
@@ -71,7 +75,6 @@ export function TransformControls({
   onTransformCommit,
 }: TransformControlsProps) {
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
-  const [uniformScaling, setUniformScaling] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(() => {
     try { return localStorage.getItem(SNAP_STORAGE_KEY) === 'true'; } catch { return false; }
   });
@@ -407,7 +410,7 @@ export function TransformControls({
               <div className="flex-1 flex justify-end">
                 <button
                 type="button"
-                onClick={() => setUniformScaling(!uniformScaling)}
+                onClick={() => onUniformScalingChange(!uniformScaling)}
                 className="h-7 min-w-[64px] rounded-md border px-2 text-[10px] font-semibold uppercase tracking-wide transition-colors"
                 style={uniformScaling
                   ? {

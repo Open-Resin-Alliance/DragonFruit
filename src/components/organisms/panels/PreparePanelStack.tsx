@@ -44,6 +44,8 @@ export type PreparePanelStackProps = {
   handleRotationComplete: () => void;
   handleAutoLiftChange: (enabled: boolean) => void;
   scheduleCommitPendingTransformHistory: (frameDelay?: number) => void;
+  uniformScaling: boolean;
+  setUniformScaling: (value: boolean) => void;
 
   isApplyingHolePunch: boolean;
   interiorView: boolean;
@@ -82,6 +84,8 @@ export function PreparePanelStack({
   handleRotationComplete,
   handleAutoLiftChange,
   scheduleCommitPendingTransformHistory,
+  uniformScaling,
+  setUniformScaling,
   isApplyingHolePunch,
   interiorView,
   hasCavityGeometry,
@@ -252,6 +256,8 @@ export function PreparePanelStack({
             transformMgr.transformHook.setScale(x, y, z);
           }}
           onResetScale={transformMgr.transformHook.resetScale}
+          uniformScaling={uniformScaling}
+          onUniformScalingChange={setUniformScaling}
           modelBBox={scene.geom.bbox}
           autoLift={transformMgr.autoLift}
           onAutoLiftChange={handleAutoLiftChange}
