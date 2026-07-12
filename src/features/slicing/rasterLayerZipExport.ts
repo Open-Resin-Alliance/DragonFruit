@@ -23,6 +23,7 @@ import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
 import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints } from '@/supports/SupportPrimitives/Knot/knotUtils';
 import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { JOINT_DIAMETER_OFFSET_MM } from '@/supports/constants';
 
 const MAX_CANVAS_PIXELS = 24_000_000;
 const DEFAULT_MESH_CHUNK_TARGET_BYTES = 64 * 1024 * 1024;
@@ -639,6 +640,21 @@ function createFrustumGeometryBetween(
   return geom;
 }
 
+function appendJointSphere(
+  sink: TriangleSink,
+  pos: { x: number; y: number; z: number },
+  diameter: number,
+  radialSegments: number,
+): void {
+  const radius = Math.max(0.001, diameter * 0.5);
+  const heightSegments = Math.max(3, Math.floor(radialSegments * 0.75));
+  const geom = new THREE.SphereGeometry(radius, radialSegments, heightSegments);
+  const matrix = new THREE.Matrix4().makeTranslation(pos.x, pos.y, pos.z);
+  geom.applyMatrix4(matrix);
+  appendGeometryTriangles(sink, geom);
+  geom.dispose();
+}
+
 function getDiskTipCenter(disk: ContactDisk): THREE.Vector3 {
   const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
   return new THREE.Vector3(
@@ -654,6 +670,7 @@ type SupportSliceTessellation = {
   bezierSteps: number;
   rootRadialSegments: number;
   contactConeRadialSegments: number;
+  jointRadialSegments: number;
 };
 
 function resolveSupportSliceTessellation(
@@ -679,6 +696,7 @@ function resolveSupportSliceTessellation(
       bezierSteps: 4,
       rootRadialSegments: 4,
       contactConeRadialSegments: 4,
+      jointRadialSegments: 4,
     };
   }
 
@@ -689,6 +707,7 @@ function resolveSupportSliceTessellation(
       bezierSteps: 6,
       rootRadialSegments: 8,
       contactConeRadialSegments: 6,
+      jointRadialSegments: 6,
     };
   }
 
@@ -699,6 +718,7 @@ function resolveSupportSliceTessellation(
       bezierSteps: 8,
       rootRadialSegments: 10,
       contactConeRadialSegments: 8,
+      jointRadialSegments: 8,
     };
   }
 
@@ -708,6 +728,7 @@ function resolveSupportSliceTessellation(
     bezierSteps: 12,
     rootRadialSegments: 14,
     contactConeRadialSegments: 12,
+    jointRadialSegments: 12,
   };
 }
 
@@ -796,6 +817,8 @@ function buildSupportAndRaftWorldTriangles(
     bezierRadialSegments: tessellation.bezierRadialSegments,
     bezierSteps: tessellation.bezierSteps,
   };
+  const seenJointIds = new Set<string>();
+  const JOINT_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
   const visibleRootIds = new Set<string>();
   const rootModelKeyById = new Map<string, string>();
 
@@ -878,6 +901,25 @@ function buildSupportAndRaftWorldTriangles(
         seg as any,
         segmentTessellation,
       );
+
+      if (seg.bottomJoint && !seenJointIds.has(seg.bottomJoint.id)) {
+        seenJointIds.add(seg.bottomJoint.id);
+        appendJointSphere(
+          sink,
+          seg.bottomJoint.pos,
+          Math.max(0.001, seg.bottomJoint.diameter - JOINT_BLEND_MM),
+          tessellation.jointRadialSegments,
+        );
+      }
+      if (seg.topJoint && !seenJointIds.has(seg.topJoint.id)) {
+        seenJointIds.add(seg.topJoint.id);
+        appendJointSphere(
+          sink,
+          seg.topJoint.pos,
+          Math.max(0.001, seg.topJoint.diameter - JOINT_BLEND_MM),
+          tessellation.jointRadialSegments,
+        );
+      }
     }
 
     if (trunk.contactCone) {
@@ -903,6 +945,25 @@ function buildSupportAndRaftWorldTriangles(
         seg as any,
         segmentTessellation,
       );
+
+      if (seg.bottomJoint && !seenJointIds.has(seg.bottomJoint.id)) {
+        seenJointIds.add(seg.bottomJoint.id);
+        appendJointSphere(
+          sink,
+          seg.bottomJoint.pos,
+          Math.max(0.001, seg.bottomJoint.diameter - JOINT_BLEND_MM),
+          tessellation.jointRadialSegments,
+        );
+      }
+      if (seg.topJoint && !seenJointIds.has(seg.topJoint.id)) {
+        seenJointIds.add(seg.topJoint.id);
+        appendJointSphere(
+          sink,
+          seg.topJoint.pos,
+          Math.max(0.001, seg.topJoint.diameter - JOINT_BLEND_MM),
+          tessellation.jointRadialSegments,
+        );
+      }
     }
 
     if (branch.contactCone) {
@@ -920,6 +981,25 @@ function buildSupportAndRaftWorldTriangles(
         ? new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z)
         : getDiskTipCenter(twig.contactDiskB);
       appendSegmentPrimitive(sink, start, end, Math.max(0.05, seg.diameter), seg as any, segmentTessellation);
+
+      if (seg.bottomJoint && !seenJointIds.has(seg.bottomJoint.id)) {
+        seenJointIds.add(seg.bottomJoint.id);
+        appendJointSphere(
+          sink,
+          seg.bottomJoint.pos,
+          Math.max(0.001, seg.bottomJoint.diameter - JOINT_BLEND_MM),
+          tessellation.jointRadialSegments,
+        );
+      }
+      if (seg.topJoint && !seenJointIds.has(seg.topJoint.id)) {
+        seenJointIds.add(seg.topJoint.id);
+        appendJointSphere(
+          sink,
+          seg.topJoint.pos,
+          Math.max(0.001, seg.topJoint.diameter - JOINT_BLEND_MM),
+          tessellation.jointRadialSegments,
+        );
+      }
     }
   }
 
@@ -933,6 +1013,25 @@ function buildSupportAndRaftWorldTriangles(
         ? new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z)
         : new THREE.Vector3(...Object.values(getFinalSocketPosition(stick.contactConeB)) as [number, number, number]);
       appendSegmentPrimitive(sink, start, end, Math.max(0.05, seg.diameter), seg as any, segmentTessellation);
+
+      if (seg.bottomJoint && !seenJointIds.has(seg.bottomJoint.id)) {
+        seenJointIds.add(seg.bottomJoint.id);
+        appendJointSphere(
+          sink,
+          seg.bottomJoint.pos,
+          Math.max(0.001, seg.bottomJoint.diameter - JOINT_BLEND_MM),
+          tessellation.jointRadialSegments,
+        );
+      }
+      if (seg.topJoint && !seenJointIds.has(seg.topJoint.id)) {
+        seenJointIds.add(seg.topJoint.id);
+        appendJointSphere(
+          sink,
+          seg.topJoint.pos,
+          Math.max(0.001, seg.topJoint.diameter - JOINT_BLEND_MM),
+          tessellation.jointRadialSegments,
+        );
+      }
     }
 
     appendContactConePrimitive(sink, stick.contactConeA as any, tessellation.contactConeRadialSegments);
@@ -984,6 +1083,26 @@ function buildSupportAndRaftWorldTriangles(
         ? new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z)
         : new THREE.Vector3(hostKnot.pos.x, hostKnot.pos.y, hostKnot.pos.z);
       appendSegmentPrimitive(sink, currentStart, endPoint, Math.max(0.05, seg.diameter), seg as any, segmentTessellation);
+
+      if (seg.bottomJoint && !seenJointIds.has(seg.bottomJoint.id)) {
+        seenJointIds.add(seg.bottomJoint.id);
+        appendJointSphere(
+          sink,
+          seg.bottomJoint.pos,
+          Math.max(0.001, seg.bottomJoint.diameter - JOINT_BLEND_MM),
+          tessellation.jointRadialSegments,
+        );
+      }
+      if (seg.topJoint && !seenJointIds.has(seg.topJoint.id)) {
+        seenJointIds.add(seg.topJoint.id);
+        appendJointSphere(
+          sink,
+          seg.topJoint.pos,
+          Math.max(0.001, seg.topJoint.diameter - JOINT_BLEND_MM),
+          tessellation.jointRadialSegments,
+        );
+      }
+
       currentStart = endPoint;
     }
   }

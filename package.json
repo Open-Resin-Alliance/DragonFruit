@@ -1,6 +1,6 @@
 {
   "name": "dragonfruit",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "buildChannel": "beta",
   "private": true,
   "scripts": {

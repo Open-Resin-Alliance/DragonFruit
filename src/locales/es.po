@@ -37,7 +37,7 @@ msgstr "{deltaMin}m"
 #~ msgid "{deltaMin}m ago"
 #~ msgstr "hace {deltaMin}m"
 
-#: src/app/page.tsx:3529
+#: src/app/page.tsx:3548
 msgid "Add Joint"
 msgstr "Añadir unión"
 
@@ -53,15 +53,15 @@ msgstr "Añadir impresora"
 msgid "Anti-aliasing: nothing to anti-alias."
 msgstr "Antialiasing: nada que suavizar."
 
-#: src/components/controls/TransformToolbar.tsx:27
+#: src/components/controls/TransformToolbar.tsx:35
 msgid "Arrange"
 msgstr "Distribuir"
 
-#: src/components/layout/TopBar.tsx:610
+#: src/components/layout/TopBar.tsx:630
 msgid "Arrange model and transforms"
 msgstr "Colocar el modelo y aplicar transformaciones"
 
-#: src/components/controls/TransformToolbar.tsx:27
+#: src/components/controls/TransformToolbar.tsx:35
 msgid "Auto-arrange models on plate"
 msgstr "Distribuir modelos en la placa automáticamente"
 
@@ -74,7 +74,7 @@ msgstr "VERSIÓN BETA"
 msgid "Bring in a mesh or scene to start preparing, analyzing, supporting, and exporting your print."
 msgstr "Carga una malla o escena para empezar a preparar, analizar, añadir soportes y exportar tu impresión."
 
-#: src/components/layout/TopBar.tsx:617
+#: src/components/layout/TopBar.tsx:638
 msgid "Build and tune supports"
 msgstr "Crear y ajustar soportes"
 
@@ -83,7 +83,7 @@ msgstr "Crear y ajustar soportes"
 msgid "cached"
 msgstr "en caché"
 
-#: src/components/ui/EditorContextMenu.tsx:48
+#: src/components/ui/EditorContextMenu.tsx:50
 msgid "Copy"
 msgstr "Copiar"
 
@@ -92,7 +92,7 @@ msgstr "Copiar"
 msgid "Could not reopen this file from cache."
 msgstr "No se pudo reabrir este archivo desde la caché."
 
-#: src/components/controls/TransformToolbar.tsx:25
+#: src/components/controls/TransformToolbar.tsx:33
 msgid "Create cavity or open-face shell"
 msgstr "Crear cavidad o carcasa de cara abierta"
 
@@ -100,11 +100,11 @@ msgstr "Crear cavidad o carcasa de cara abierta"
 msgid "Currently displaying nothing at maximum fidelity."
 msgstr "Mostrando nada con la máxima fidelidad."
 
-#: src/components/ui/EditorContextMenu.tsx:47
+#: src/components/ui/EditorContextMenu.tsx:49
 msgid "Cut"
 msgstr "Cortar"
 
-#: src/components/ui/EditorContextMenu.tsx:46
+#: src/components/ui/EditorContextMenu.tsx:48
 msgid "Delete"
 msgstr "Eliminar"
 
@@ -121,12 +121,12 @@ msgstr "Arrastra un archivo. La plataforma te está juzgando."
 msgid "Drop supported files"
 msgstr "Suelta archivos compatibles"
 
-#: src/app/page.tsx:3535
-#: src/components/ui/EditorContextMenu.tsx:85
+#: src/app/page.tsx:3554
+#: src/components/ui/EditorContextMenu.tsx:88
 msgid "Editor"
 msgstr "Editor"
 
-#: src/components/ui/EditorContextMenu.tsx:82
+#: src/components/ui/EditorContextMenu.tsx:85
 msgid "Editor context menu"
 msgstr "Menú contextual del editor"
 
@@ -143,11 +143,11 @@ msgstr "Espacio de trabajo vacío"
 msgid "Every great print starts with an empty scene."
 msgstr "Toda gran impresión empieza con una escena vacía."
 
-#: src/components/layout/TopBar.tsx:622
+#: src/components/layout/TopBar.tsx:643
 msgid "Export"
 msgstr "Exportar"
 
-#: src/components/layout/TopBar.tsx:624
+#: src/components/layout/TopBar.tsx:646
 msgid "Finalize and export output"
 msgstr "Finalizar y exportar el resultado"
 
@@ -155,7 +155,7 @@ msgstr "Finalizar y exportar el resultado"
 msgid "Get started"
 msgstr "Empezar"
 
-#: src/components/controls/TransformToolbar.tsx:25
+#: src/components/controls/TransformToolbar.tsx:33
 msgid "Hollow"
 msgstr "Vaciar"
 
@@ -192,7 +192,7 @@ msgstr "Importando tu archivo…"
 msgid "In space, no one can hear you slice."
 msgstr "En el espacio, nadie puede oírte laminar."
 
-#: src/components/layout/TopBar.tsx:631
+#: src/components/layout/TopBar.tsx:654
 msgid "Inspect sliced layers before printing"
 msgstr "Inspeccionar las capas laminadas antes de imprimir"
 
@@ -249,19 +249,19 @@ msgstr "Malla"
 msgid "Mesh Files (.stl, .obj, .3mf)"
 msgstr "Archivos de malla (.stl, .obj, .3mf)"
 
-#: src/components/controls/TransformToolbar.tsx:24
+#: src/components/controls/TransformToolbar.tsx:32
 msgid "Mirror"
 msgstr "Reflejar"
 
-#: src/components/controls/TransformToolbar.tsx:24
+#: src/components/controls/TransformToolbar.tsx:32
 msgid "Mirror across X, Y, or Z"
 msgstr "Reflejar en X, Y o Z"
 
-#: src/components/controls/TransformToolbar.tsx:22
+#: src/components/controls/TransformToolbar.tsx:30
 msgid "Modify"
 msgstr "Modificar"
 
-#: src/components/controls/TransformToolbar.tsx:22
+#: src/components/controls/TransformToolbar.tsx:30
 msgid "Move, rotate, and scale"
 msgstr "Mover, rotar y escalar"
 
@@ -283,7 +283,7 @@ msgid "Nothing to see here. Yet."
 msgstr "Nada que ver aquí. Todavía."
 
 #. Toolbar button label. Short for "lay the model flat on a selected face"; keep it terse so the toolbar pill stays narrow.
-#: src/components/controls/TransformToolbar.tsx:23
+#: src/components/controls/TransformToolbar.tsx:31
 msgid "On-Face"
 msgstr "Sobre cara"
 
@@ -296,11 +296,11 @@ msgstr "No se importa una malla sin más... aunque en realidad sí, solo hay que
 msgid "Open printer library and add one now."
 msgstr "Abre la biblioteca de impresoras y añade una ahora."
 
-#: src/components/controls/TransformToolbar.tsx:23
+#: src/components/controls/TransformToolbar.tsx:31
 msgid "Orient flat against plate"
 msgstr "Orientar plano sobre la placa"
 
-#: src/components/ui/EditorContextMenu.tsx:49
+#: src/components/ui/EditorContextMenu.tsx:51
 msgid "Paste"
 msgstr "Pegar"
 
@@ -308,11 +308,11 @@ msgstr "Pegar"
 msgid "Please hang tight while we prepare your scene."
 msgstr "Espera un momento mientras preparamos tu escena."
 
-#: src/components/layout/TopBar.tsx:608
+#: src/components/layout/TopBar.tsx:627
 msgid "Prepare"
 msgstr "Preparar"
 
-#: src/components/layout/TopBar.tsx:629
+#: src/components/layout/TopBar.tsx:651
 msgid "Printing"
 msgstr "Imprimir"
 
@@ -329,7 +329,7 @@ msgstr "Archivos recientes"
 msgid "Reopen {0}"
 msgstr "Reabrir {0}"
 
-#: src/components/ui/EditorContextMenu.tsx:50
+#: src/components/ui/EditorContextMenu.tsx:52
 msgid "Repair"
 msgstr "Reparar"
 
@@ -347,27 +347,31 @@ msgstr "Escena"
 msgid "Scene Files (.voxl, .lys)"
 msgstr "Archivos de escena (.voxl, .lys)"
 
-#: src/components/controls/TransformToolbar.tsx:26
+#: src/components/controls/TransformToolbar.tsx:34
 msgid "Sculpt and smooth surface"
 msgstr "Esculpir y suavizar la superficie"
 
-#: src/components/controls/TransformToolbar.tsx:21
+#: src/components/controls/TransformToolbar.tsx:29
 msgid "Select"
 msgstr "Seleccionar"
 
-#: src/components/controls/TransformToolbar.tsx:21
+#: src/components/controls/TransformToolbar.tsx:29
 msgid "Select and inspect model"
 msgstr "Seleccionar e inspeccionar el modelo"
 
-#: src/components/controls/TransformToolbar.tsx:26
+#: src/components/controls/TransformToolbar.tsx:34
 msgid "Smooth"
 msgstr "Suavizar"
 
-#: src/components/layout/TopBar.tsx:615
+#: src/components/ui/EditorContextMenu.tsx:53
+msgid "Split Supports"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:635
 msgid "Support"
 msgstr "Soportes"
 
-#: src/app/page.tsx:3535
+#: src/app/page.tsx:3554
 msgid "Supports"
 msgstr "Soportes"
 
@@ -405,7 +409,7 @@ msgstr "Es hora de crear algo real."
 msgid "Tip: Start with <0>Load Mesh</0> for clean prints, or <1>Import Scene</1> to continue an existing setup."
 msgstr "Consejo: empieza con <0>Cargar malla</0> para impresiones limpias, o <1>Importar escena</1> para continuar con una configuración existente."
 
-#: src/app/page.tsx:3524
+#: src/app/page.tsx:3543
 msgid "Toggle Curve"
 msgstr "Alternar curva"
 

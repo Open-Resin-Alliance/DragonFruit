@@ -1810,16 +1810,22 @@ export function SettingsModal({
                       <div className="min-w-0 flex-1 space-y-2 text-center">
                         <div className="flex items-center justify-center gap-2 text-[12px]">
                           <Github className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--accent)' }} />
-                          <a
-                            href={DRAGONFRUIT_REPO_URL}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                          <button
+                            onClick={async () => {
+                              const url = DRAGONFRUIT_REPO_URL;
+                              try {
+                                const { invoke } = await import('@tauri-apps/api/core');
+                                await invoke('open_external_url', { url });
+                              } catch {
+                                window.open(url, '_blank');
+                              }
+                            }}
                             className="inline-flex items-center gap-1 underline underline-offset-2 font-mono tracking-tighter"
-                            style={{ color: 'var(--accent)' }}
+                            style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
                           >
                             Open-Resin-Alliance/DragonFruit
                             <ExternalLink className="h-3 w-3" />
-                          </a>
+                          </button>
                         </div>
 
                         <div className="flex items-center justify-center gap-2 text-[12px]" style={{ color: 'var(--text-strong)' }}>

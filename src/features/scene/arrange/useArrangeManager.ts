@@ -984,9 +984,11 @@ export function useArrangeManager({
     const countY = Math.max(1, Math.round(arrangeArrayCountY));
     const countZ = Math.max(1, Math.round(arrangeArrayCountZ));
 
-    const gapX = Math.max(0, arrangeArrayGapX);
-    const gapY = Math.max(0, arrangeArrayGapY);
-    const gapZ = Math.max(0, arrangeArrayGapZ);
+    // Gaps may be negative (nested arrays); the steps below keep a small
+    // positive floor so the array still advances.
+    const gapX = arrangeArrayGapX;
+    const gapY = arrangeArrayGapY;
+    const gapZ = arrangeArrayGapZ;
 
     const baseDims = visibleModels.map((model) => {
       const t = modelTransformById.get(model.id) ?? model.transform;
@@ -1004,9 +1006,9 @@ export function useArrangeManager({
     const maxDepth = Math.max(...baseDims.map((d) => d.depth));
     const maxHeight = Math.max(...baseDims.map((d) => d.height));
 
-    const stepX = maxWidth + gapX;
-    const stepY = maxDepth + gapY;
-    const stepZ = maxHeight + gapZ;
+    const stepX = Math.max(0.1, maxWidth + gapX);
+    const stepY = Math.max(0.1, maxDepth + gapY);
+    const stepZ = Math.max(0.1, maxHeight + gapZ);
 
     const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
     const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
@@ -1449,7 +1451,8 @@ export function useArrangeManager({
     const sourceDims = getModelSupportAwareDimensionsMm(model, undefined, model.transform);
     const width = sourceDims.width;
     const depth = sourceDims.depth;
-    const spacing = Math.max(0, duplicateSpacingMm);
+    // Spacing may be negative (nesting); clamp so a step never collapses.
+    const spacing = Math.max(-Math.min(width, depth) + 0.1, duplicateSpacingMm);
 
     const rawFillMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
     const rawFillMaxX = rawFillMinX + scene.view3dSettings.widthMm;

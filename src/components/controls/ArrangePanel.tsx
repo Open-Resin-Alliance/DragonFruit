@@ -144,11 +144,13 @@ export function ArrangePanel({
   const setClampedSpacing = React.useCallback((value: number) => {
     const next = sanitizeNumber(value, 0.5);
     const rounded = Number((Math.round(next * 10) / 10).toFixed(1));
-    onSpacingMmChange(Math.min(5, Math.max(0, rounded)));
+    // Allow negative spacing (down to -50mm) so parts can nest/interlock.
+    onSpacingMmChange(Math.min(5, Math.max(-50, rounded)));
   }, [onSpacingMmChange, sanitizeNumber]);
 
   const clampCount = React.useCallback((value: number) => Math.min(64, Math.max(1, Math.round(value))), []);
-  const clampGap = React.useCallback((value: number) => Math.min(120, Math.max(0, Math.round(value))), []);
+  // Negative gaps nest/overlap array copies (matches negative spacing above).
+  const clampGap = React.useCallback((value: number) => Math.min(120, Math.max(-120, Math.round(value))), []);
 
   return (
     <Card>
@@ -249,7 +251,7 @@ export function ArrangePanel({
               className="mt-1"
               value={spacingMm}
               onChange={setClampedSpacing}
-              min={0}
+              min={-50}
               max={5}
               step={0.1}
               unit="mm"
@@ -285,7 +287,7 @@ export function ArrangePanel({
                   <MiniStepperField
                     value={gapValue}
                     onChange={(next) => onGapChange(clampGap(next))}
-                    min={0}
+                    min={-120}
                     max={120}
                     disabled={isApplying}
                   />

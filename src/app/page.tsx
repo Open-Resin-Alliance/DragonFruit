@@ -79,6 +79,7 @@ import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPl
 import { IconButton, Toast, ToastViewport } from '@/components/atoms';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
@@ -4217,6 +4218,14 @@ export default function Home() {
     })();
   }, [queueTopBarSaveScene, resolveSceneSaveNativePath]);
 
+  const handleTopBarSaveSceneAs = React.useCallback(() => {
+    // Save As: always route through the native save dialog (a null override
+    // suppresses any remembered path), skipping the overwrite/save-as choice
+    // modal. A successful save re-points the scene's save target — and future
+    // Ctrl+S overwrites — at the newly chosen file.
+    queueTopBarSaveScene(null);
+  }, [queueTopBarSaveScene]);
+
   React.useEffect(() => {
     if (scene.models.length !== 0) return;
 
@@ -4411,7 +4420,13 @@ export default function Home() {
     // a short setTimeout gives the browser time to commit the first full frame.
     timerId = setTimeout(() => {
       if (!cancelled) {
-        void revealWindow();
+        // Signal the splashscreen to fade out gracefully before revealing.
+        import('@tauri-apps/api/event').then(({ emit }) => {
+          emit('splash-fade-out').catch(() => {});
+        });
+        setTimeout(() => {
+          if (!cancelled) void revealWindow();
+        }, 180);
       }
     }, 350);
 
@@ -6075,10 +6090,43 @@ export default function Home() {
 
   // For non-printing workflows, avoid expensive world-triangle projection work by default.
   // Keep layer floor at 0 when support/raft geometry exists so layer-1 alignment is correct.
+  //
+  // Compute an accurate max Z from actual geometry vertices to match the slicing
+  // engine's own max-Z computation.  The legacy sceneBounds path uses
+  // Box3.applyMatrix4 which overestimates the envelope for rotated models.
+  const accurateMaxZ = React.useMemo(() => {
+    let maxZ = 0;
+    for (const model of scene.models) {
+      if (!model.visible) continue;
+      const position = model.geometry.geometry.getAttribute('position');
+      if (!position) continue;
+      const center = model.geometry.center;
+      const t = model.transform;
+      const matrix = new THREE.Matrix4().compose(
+        t.position,
+        quaternionFromGlobalEuler(t.rotation),
+        t.scale,
+      );
+      const me = matrix.elements;
+      // worldZ = me[2]*vcx + me[6]*vcy + me[10]*vcz + me[14]
+      const a = me[2], b = me[6], c = me[10], d = me[14];
+      const src = position.array as Float32Array | number[];
+      const count = position.count;
+      for (let i = 0; i < count; i++) {
+        const vx = src[i * 3] - center.x;
+        const vy = src[i * 3 + 1] - center.y;
+        const vz = src[i * 3 + 2] - center.z;
+        const worldZ = a * vx + b * vy + c * vz + d;
+        if (worldZ > maxZ) maxZ = worldZ;
+      }
+    }
+    return maxZ;
+  }, [scene.models]);
+
   const fallbackZRange = React.useMemo(() => ({
     min: hasSupportOrRaftGeometry ? 0 : (scene.sceneBounds?.min.z ?? 0),
-    max: scene.sceneBounds?.max.z ?? 100,
-  }), [hasSupportOrRaftGeometry, scene.sceneBounds]);
+    max: accurateMaxZ > 0 ? accurateMaxZ : (scene.sceneBounds?.max.z ?? 100),
+  }), [hasSupportOrRaftGeometry, scene.sceneBounds, accurateMaxZ]);
 
   const normalizeToSlicerZRange = React.useCallback((range: { min: number; max: number }) => {
     const maxZMm = Math.max(0, Number(range.max) || 0);
@@ -8120,10 +8168,12 @@ export default function Home() {
   const copyActive = useActionActive('CANVAS', 'COPY');
   const pasteActive = useActionActive('CANVAS', 'PASTE');
   const saveActive = useActionActive('GLOBAL', 'SAVE');
+  const saveAsActive = useActionActive('GLOBAL', 'SAVE_AS');
   const wasSelectAllActive = React.useRef(false);
   const wasCopyActive = React.useRef(false);
   const wasPasteActive = React.useRef(false);
   const wasSaveActive = React.useRef(false);
+  const wasSaveAsActive = React.useRef(false);
 
   React.useEffect(() => {
     if (!selectAllActive || wasSelectAllActive.current) {
@@ -8206,6 +8256,17 @@ export default function Home() {
   }, [saveActive, scene.models.length, handleTopBarSaveScene]);
 
   React.useEffect(() => {
+    if (!saveAsActive || wasSaveAsActive.current) {
+      wasSaveAsActive.current = saveAsActive;
+      return;
+    }
+    wasSaveAsActive.current = true;
+
+    if (scene.models.length === 0) return;
+    handleTopBarSaveSceneAs();
+  }, [saveAsActive, scene.models.length, handleTopBarSaveSceneAs]);
+
+  React.useEffect(() => {
     let cancelled = false;
 
     if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'arrange') {
@@ -8245,9 +8306,10 @@ export default function Home() {
       const countX = Math.max(1, Math.round(duplicateArrayCountX));
       const countY = Math.max(1, Math.round(duplicateArrayCountY));
       const countZ = Math.max(1, Math.round(duplicateArrayCountZ));
-      const stepX = width + Math.max(0, duplicateArrayGapX);
-      const stepY = depth + Math.max(0, duplicateArrayGapY);
-      const stepZ = height + Math.max(0, duplicateArrayGapZ);
+      // Gaps may be negative (nested arrays); floor the step so it advances.
+      const stepX = Math.max(0.1, width + duplicateArrayGapX);
+      const stepY = Math.max(0.1, depth + duplicateArrayGapY);
+      const stepZ = Math.max(0.1, height + duplicateArrayGapZ);
 
       const originOffsetX = ((countX - 1) * stepX) * 0.5;
       const originOffsetY = ((countY - 1) * stepY) * 0.5;
@@ -8266,7 +8328,8 @@ export default function Home() {
       }
     } else {
       const totalCount = Math.max(1, duplicateTotalCopies);
-      const spacing = Math.max(0, duplicateSpacingMm);
+      // Spacing may be negative (nesting); clamp so a step never collapses.
+      const spacing = Math.max(-Math.min(width, depth) + 0.1, duplicateSpacingMm);
 
       const rawDupMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
       const rawDupMaxX = rawDupMinX + scene.view3dSettings.widthMm;
@@ -9053,6 +9116,7 @@ export default function Home() {
         onLoadMeshChange={handleLoadMeshChangeWithZip}
         onImportSceneChange={handleImportSceneChangeWithZip}
         onSaveScene={() => { void handleTopBarSaveScene(); }}
+        onSaveSceneAs={() => { handleTopBarSaveSceneAs(); }}
         onOpenScene={handleTopBarOpenScene}
         onCloseProgram={handleRequestProgramClose}
         showMonitorButton={showTopbarMonitorButton}
