@@ -27,10 +27,21 @@ export type DownloadProgress = {
 export type UpdateChannel = 'stable' | 'dev';
 
 // ---------------------------------------------------------------------------
+// Tauri availability check (gets rid of errors in pure frontend mode)
+// ---------------------------------------------------------------------------
+
+function isTauriAvailable(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+// ---------------------------------------------------------------------------
 // Channel preference (persisted in app data dir via Rust)
 // ---------------------------------------------------------------------------
 
 export async function getUpdateChannel(): Promise<UpdateChannel> {
+  if (!isTauriAvailable()) {
+    return 'stable';
+  }
   try {
     const ch = await invoke<UpdateChannel>('get_saved_update_channel');
     console.log('[updater] saved channel:', ch);
@@ -42,6 +53,9 @@ export async function getUpdateChannel(): Promise<UpdateChannel> {
 }
 
 export async function setUpdateChannel(channel: UpdateChannel): Promise<void> {
+  if (!isTauriAvailable()) {
+    return;
+  }
   try {
     await invoke('save_update_channel', { channel });
   } catch {
@@ -65,6 +79,9 @@ export async function setUpdateChannel(channel: UpdateChannel): Promise<void> {
 export async function fetchUpdateInfo(
   channel?: UpdateChannel,
 ): Promise<UpdateInfo | null> {
+  if (!isTauriAvailable()) {
+    return null;
+  }
   console.log('[updater] fetchUpdateInfo called, channel:', channel ?? 'null (Rust default)');
   try {
     const result = await invoke<{
