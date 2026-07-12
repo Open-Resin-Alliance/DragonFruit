@@ -285,10 +285,13 @@ export function ContactDiskRenderer({
                         isInteractable={true}
                         faceRatio={effectiveFaceShape.ratio}
                         faceAngleRad={effectiveFaceShape.angleRad}
-                        // Test: stroke ring hidden while evaluating the
-                        // surface-accurate intersection outline as the primary
-                        // shape indicator. Flip back to true to restore.
+                        // Test: stroke ring + fill tint hidden while
+                        // evaluating the surface-accurate intersection outline
+                        // as the primary shape indicator. Flip back to true to
+                        // restore. The fill mesh still handles hover
+                        // suppression and double-click reset while invisible.
                         showRing={false}
+                        showFill={false}
                         onRingDoubleClick={handleFaceResetDoubleClick}
                         onHoverChange={handleHudHoverChange}
                         onDragStateChange={handleHudDragStateChange}

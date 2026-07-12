@@ -15,6 +15,7 @@ interface ContactDiskHudProps {
     faceRatio?: number; // Contact-face squish ratio (1 = circle); the ring mirrors the oval
     faceAngleRad?: number; // Oval rotation about the disc normal
     showRing?: boolean; // Hide the stroke ring (fill + interactions stay)
+    showFill?: boolean; // Hide the fill tint (mesh stays for hover/double-click reset)
     onRingDoubleClick?: () => void; // Double-click the ring/fill: reset the face to a circle
     onPointerDown?: (e: ThreeEvent<PointerEvent>) => void;
     onPointerUp?: (e: ThreeEvent<PointerEvent> | null) => void;
@@ -47,6 +48,7 @@ export function ContactDiskHud({
     faceRatio = 1,
     faceAngleRad = 0,
     showRing = true,
+    showFill = true,
     onRingDoubleClick,
     onPointerDown,
     onPointerUp,
@@ -191,8 +193,10 @@ export function ContactDiskHud({
                     color={fillColor}
                     transparent
                     // Always-on soft tint of the contact footprint while the
-                    // disc is selected; brightens on hover.
-                    opacity={isHovered ? Math.min(1, fillOpacity * 1.8) : fillOpacity}
+                    // disc is selected; brightens on hover. showFill=false
+                    // keeps the mesh raycastable (hover suppression +
+                    // double-click reset) but draws nothing.
+                    opacity={showFill ? (isHovered ? Math.min(1, fillOpacity * 1.8) : fillOpacity) : 0}
                     depthWrite={false}
                     depthTest={false}
                     side={2}
