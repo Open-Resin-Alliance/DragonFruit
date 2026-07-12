@@ -36,6 +36,9 @@ jobs:
           workspaces: ./src-tauri -> target
           shared-key: tauri
 
+      - name: Generate plugin registry
+        run: node scripts/generate-plugin-registry.mjs
+
       - name: Compile Rust dependencies
         working-directory: src-tauri
         env:
