@@ -91,6 +91,9 @@ jobs:
           echo "APPLE_PASSWORD=$APPLE_PASSWORD" >> "$GITHUB_ENV"
           echo "APPLE_TEAM_ID=MHNF3GA2MM" >> "$GITHUB_ENV"
 
+      - name: Generate plugin registry
+        run: node scripts/generate-plugin-registry.mjs
+
       - name: Build Tauri universal macOS bundle
         uses: tauri-apps/tauri-action@v0
         env:
