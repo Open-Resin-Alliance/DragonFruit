@@ -456,12 +456,10 @@ function IslandSmoothMesh({
 }) {
   return (
     <mesh geometry={geometry}>
-      <meshStandardMaterial
+      <meshLambertMaterial
         color={color}
         transparent={opacity < 1}
         opacity={opacity}
-        metalness={0.0}
-        roughness={0.7}
         emissive={isSelected ? color : new THREE.Color(0x000000)}
         emissiveIntensity={isSelected ? 0.3 : 0}
         side={THREE.FrontSide}

@@ -15,3 +15,5 @@ pub mod rasterize;
 pub mod rle;
 pub mod scan;
 pub mod tracker;
+pub mod stream;
+

@@ -337,7 +337,7 @@ fn run_stage_tracker(fixture_dir: &Path, output_dir: &Path, input: &InputJson) {
         };
 
         let island_labels =
-            tracker.process_layer(l as u32, &lr.labels, &lr.components, prev_labels, &lr.solid_mask);
+            tracker.process_layer(l as u32, &lr.labels, &lr.components, prev_labels, &lr.solid_mask, false);
 
         let pad = format!("{:03}", l);
         fs::write(
@@ -407,6 +407,7 @@ fn run_stage_full(fixture_dir: &Path, output_dir: &Path, input: &InputJson) {
         num_layers: input.num_layers,
         min_overlap_px: input.min_overlap_px.unwrap_or(1),
         overlap_neighborhood_px: input.overlap_neighborhood_px.unwrap_or(1),
+        candidate_only: false,
     };
 
     let result = run_island_scan(&job, &masks, None);

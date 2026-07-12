@@ -168,6 +168,7 @@ function RootBucketMesh({
                 ref={diskRef}
                 args={[undefined, undefined, bucket.roots.length]}
                 frustumCulled={false}
+                renderOrder={100000}
                 onClick={onRootClick ? handleClick : undefined}
                 onPointerMove={onRootPointerMove ? handlePointerMove : undefined}
                 onPointerOut={onRootPointerOut ? handlePointerOut : undefined}
@@ -189,6 +190,7 @@ function RootBucketMesh({
                     ref={coneRef}
                     args={[undefined, undefined, bucket.roots.length]}
                     frustumCulled={false}
+                    renderOrder={100000}
                     onClick={onRootClick ? handleClick : undefined}
                     onPointerMove={onRootPointerMove ? handlePointerMove : undefined}
                     onPointerOut={onRootPointerOut ? handlePointerOut : undefined}
@@ -211,6 +213,7 @@ function RootBucketMesh({
                     ref={sphereRef}
                     args={[undefined, undefined, bucket.roots.length]}
                     frustumCulled={false}
+                    renderOrder={100000}
                     onClick={onRootClick ? handleClick : undefined}
                     onPointerMove={onRootPointerMove ? handlePointerMove : undefined}
                     onPointerOut={onRootPointerOut ? handlePointerOut : undefined}
@@ -235,7 +238,7 @@ function RootBucketMesh({
                         args={[undefined, undefined, bucket.roots.length]}
                         frustumCulled={false}
                         raycast={() => null}
-                        renderOrder={3}
+                        renderOrder={100000}
                         material={outOfBoundsMaterial}
                     >
                         <cylinderGeometry args={[bucket.diskRadius, bucket.diskRadius, bucket.diskHeight, 10]} />
@@ -246,7 +249,7 @@ function RootBucketMesh({
                             args={[undefined, undefined, bucket.roots.length]}
                             frustumCulled={false}
                             raycast={() => null}
-                            renderOrder={3}
+                            renderOrder={100000}
                             material={outOfBoundsMaterial}
                         >
                             <cylinderGeometry args={[bucket.coneTopRadius, bucket.coneBottomRadius, bucket.coneHeight, 10]} />
@@ -258,7 +261,7 @@ function RootBucketMesh({
                             args={[undefined, undefined, bucket.roots.length]}
                             frustumCulled={false}
                             raycast={() => null}
-                            renderOrder={3}
+                            renderOrder={100000}
                             material={outOfBoundsMaterial}
                         >
                             <sphereGeometry args={[bucket.sphereRadius, 10, 8]} />

@@ -761,9 +761,9 @@ export interface LoadedModel {
   groupId?: string;
   groupName?: string;
   fileUrl: string;
-  fileSizeBytes?: number;
   /** Original on-disk mesh retained when `geometry` is a reduced native preview. */
-  sourcePath?: string;
+  sourcePath?: string | null;
+  fileSizeBytes?: number;
   geometry: GeometryWithBounds;
   transform: ModelTransform;
   visible: boolean;
@@ -2748,7 +2748,10 @@ export function useSceneCollectionManager() {
       name: `${baseName} (Model)`,
       fileUrl: source.fileUrl,
       fileSizeBytes: source.fileSizeBytes ? Math.round(source.fileSizeBytes * (modelTriCount / totalTris)) : undefined,
-      sourcePath: source.sourcePath,
+      // The split geometry no longer matches the original file on disk, so
+      // clear sourcePath to prevent downstream consumers (e.g. island scanner)
+      // from sideloading stale data from the original file.
+      sourcePath: null,
       geometry: modelGeom,
       transform: {
         position: modelPosition,
@@ -2767,7 +2770,8 @@ export function useSceneCollectionManager() {
       name: `${baseName} (Supports)`,
       fileUrl: source.fileUrl,
       fileSizeBytes: source.fileSizeBytes ? Math.round(source.fileSizeBytes * (supportTriCount / totalTris)) : undefined,
-      sourcePath: source.sourcePath,
+      // The split geometry no longer matches the original file on disk.
+      sourcePath: null,
       geometry: supportGeom,
       transform: {
         position: supportPosition,
@@ -3522,7 +3526,8 @@ export function useSceneCollectionManager() {
         name: `${source.name} Copy ${index + 1}`,
         groupId: resolvedGroupId,
         groupName: resolvedGroupName,
-        fileUrl: '',
+        fileUrl: source.fileUrl,
+        sourcePath: source.sourcePath,
         fileSizeBytes: source.fileSizeBytes,
         geometry,
         transform: {
