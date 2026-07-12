@@ -1,26 +1,32 @@
 /** Display formatters and lenient input parsers for the printing monitor. */
 
-export function formatPrintingMonitorEstimatedTime(seconds: number | null): string {
+import { msg } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
+
+// {hours}/{minutes} are the whole-number quantities (e.g. "2h 05m", "8m") —
+// translators control abbreviation and spacing (e.g. "2 h 05 min") through their msgstr.
+export function formatPrintingMonitorEstimatedTime(seconds: number | null, translate: (descriptor: MessageDescriptor) => string): string {
   if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return '—';
 
   const rounded = Math.max(1, Math.round(seconds));
   const hours = Math.floor(rounded / 3600);
   const minutes = Math.floor((rounded % 3600) / 60);
+  const paddedMinutes = minutes.toString().padStart(2, '0');
 
   if (hours > 0) {
-    return `${hours}h ${minutes.toString().padStart(2, '0')}m`;
+    return translate(msg`${hours} h ${paddedMinutes} min`);
   }
 
   if (minutes > 0) {
-    return `${minutes}m`;
+    return translate(msg`${minutes} min`);
   }
 
-  return '<1m';
+  return translate(msg({ message: '< 1 min', comment: 'Shown when the estimated print time rounds down to under one minute. Keep the "<" comparison symbol.' }));
 }
 
 export function formatPrintingMonitorUsedMaterial(ml: number | null): string {
   if (ml == null || !Number.isFinite(ml) || ml <= 0) return '—';
-  return `${ml.toFixed(2)} mL`;
+  return `${ml.toFixed(2)} ml`;
 }
 
 export function formatPrintingMonitorAreaMm2(areaMm2: number | null): string {

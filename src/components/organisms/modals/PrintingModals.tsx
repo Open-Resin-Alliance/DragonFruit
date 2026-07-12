@@ -1,4 +1,6 @@
 import React from 'react';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
 import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Maximize2, Minimize2, Play, Printer, RefreshCw, Trash2, X } from 'lucide-react';
 import { IconButton } from '@/components/atoms';
 import { SliceCompletedModal } from '@/components/modals/SliceCompletedModal';
@@ -365,6 +367,7 @@ export function PrintingModals({
   triggerPrintingMonitorWebcamRetry,
   uvToolsLaunchingPath,
 }: PrintingModalsProps) {
+  const { _ } = useLingui();
   return (
     <>
       <SliceCompletedModal
@@ -1830,13 +1833,22 @@ export function PrintingModals({
                                             {`#${plate.plateId} • ${plate.name}`}
                                           </div>
                                           <div className="mt-0.5 block w-full max-w-full truncate text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                                            {plate.materialProfileName ?? 'Material profile unavailable'}
+                                            {plate.materialProfileName ?? _(msg`Material profile unavailable`)}
                                           </div>
                                           <div className="mt-0.5 block w-full max-w-full truncate text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                                            {`Est. ${formatPrintingMonitorEstimatedTime(plate.printTimeSec)} • ${formatPrintingMonitorUsedMaterial(plate.usedMaterialMl)}`}
+                                            {(() => {
+                                              const estimatedTimeLabel = formatPrintingMonitorEstimatedTime(plate.printTimeSec, _);
+                                              const usedMaterialLabel = formatPrintingMonitorUsedMaterial(plate.usedMaterialMl);
+                                              return _(msg({ message: `Est. ${estimatedTimeLabel} • ${usedMaterialLabel}`, comment: '"Est." abbreviates "Estimated", qualifying the print-time figure that follows it (e.g. "Est. 2h 05m • 12.50 ml"), not an abbreviation of anything else.' }));
+                                            })()}
                                           </div>
                                           <div className="mt-0.5 block w-full max-w-full truncate text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                                            {`Area Σ ${formatPrintingMonitorAreaMm2(plate.totalSolidAreaMm2)} • Min ${formatPrintingMonitorAreaMm2(plate.smallestAreaMm2)} • Max ${formatPrintingMonitorAreaMm2(plate.largestAreaMm2)}`}
+                                            {(() => {
+                                              const totalAreaLabel = formatPrintingMonitorAreaMm2(plate.totalSolidAreaMm2);
+                                              const minAreaLabel = formatPrintingMonitorAreaMm2(plate.smallestAreaMm2);
+                                              const maxAreaLabel = formatPrintingMonitorAreaMm2(plate.largestAreaMm2);
+                                              return _(msg({ message: `Area Σ ${totalAreaLabel} • Min ${minAreaLabel} • Max ${maxAreaLabel}`, comment: 'Cross-sectional area stats for the current print layer: "Area Σ" = total/summed solid area (Σ is the mathematical summation symbol, usually kept as-is); "Min"/"Max" = smallest/largest single contiguous area, abbreviating "Minimum"/"Maximum".' }));
+                                            })()}
                                           </div>
                                         </div>
 

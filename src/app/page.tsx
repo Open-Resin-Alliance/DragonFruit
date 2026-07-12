@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { msg } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
+import type { MessageDescriptor } from '@lingui/core';
 import { detectIsIOS } from '@/hooks/usePlatform';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
@@ -2969,7 +2970,7 @@ export default function Home() {
     if (visible.length === 0) return '—';
     if (isPrintingEstimatedResinBusy && printingEstimatedResinMl == null) return 'Calculating…';
     if (printingEstimatedResinMl == null) return '—';
-    return `${printingEstimatedResinMl.toFixed(2)} mL`;
+    return `${printingEstimatedResinMl.toFixed(2)} ml`;
   }, [isPrintingEstimatedResinBusy, printingEstimatedResinMl, scene.models]);
 
   const estimatedPrintTimeLabel = React.useMemo(() => {
@@ -2995,9 +2996,9 @@ export default function Home() {
     const minutes = Math.floor(totalSec / 60);
     const hours = Math.floor(minutes / 60);
     const mins = minutes % 60;
-    if (hours > 0) return `~${hours}h ${mins}m`;
-    return `~${mins}m`;
-  }, [activeMaterialProfile, printingPreviewTotalLayers]);
+    if (hours > 0) return _(msg({ message: `~${hours} h ${mins} min`, comment: 'Approximate estimated print time (the "~" marks it as a rough estimate). {hours}/{mins} are whole-number quantities.' }));
+    return _(msg({ message: `~${mins} min`, comment: 'Approximate estimated print time under an hour (the "~" marks it as a rough estimate).' }));
+  }, [_, activeMaterialProfile, printingPreviewTotalLayers]);
 
   const canDownloadPrintArtifact = Boolean(printingArtifact);
   const activeNetworkUiAdapter = React.useMemo(
@@ -3664,8 +3665,9 @@ export default function Home() {
     const total = Math.max(0, printingDeviceProcessingElapsedSec);
     const minutes = Math.floor(total / 60);
     const seconds = total % 60;
-    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
-  }, [printingDeviceProcessingElapsedSec]);
+    const paddedSeconds = seconds.toString().padStart(2, '0');
+    return _(msg`${minutes} min ${paddedSeconds} s`);
+  }, [_, printingDeviceProcessingElapsedSec]);
 
 
 
@@ -6320,10 +6322,11 @@ export default function Home() {
     const hours = Math.floor(wholeSeconds / 3600);
     const minutes = Math.floor((wholeSeconds % 3600) / 60);
     const seconds = wholeSeconds % 60;
+    const paddedSeconds = seconds.toString().padStart(2, '0');
 
-    if (hours > 0) return `${hours}h ${minutes}m`;
-    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
-  }, [activeMaterialProfile, estimatedSlicerLayerCount, scene.models]);
+    if (hours > 0) return _(msg`${hours} h ${minutes} min`);
+    return _(msg`${minutes} min ${paddedSeconds} s`);
+  }, [_, activeMaterialProfile, estimatedSlicerLayerCount, scene.models]);
 
   const printingCurrentHeightMm = React.useMemo(() => {
     if (scene.mode !== 'printing') return null;
