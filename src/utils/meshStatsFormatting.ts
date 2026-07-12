@@ -25,10 +25,10 @@ export function formatPolygonCountCompact(count: number): string {
 
 /**
  * Formats stats for display in UI
- * e.g., "1.37M polys • 3 shells" or just "1.37M polys"
+ * e.g., "1.37M triangles • 3 shells" or just "1.37M triangles"
  */
 export function formatMeshStatsForDisplay(stats: MeshStats): string {
-  const polyText = `${formatPolygonCountCompact(stats.polygonCount)} polys`;
+  const polyText = `${formatPolygonCountCompact(stats.polygonCount)} triangles`;
   
   // Only show shell count if > 1 (single continuous shells are the desired result)
   if (stats.componentCount != null && stats.componentCount > 1) {
