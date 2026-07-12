@@ -18209,26 +18209,19 @@ export default function Home() {
       return;
     }
 
-    const previewShellThicknessMm = quantizePreviewShellThicknessMm(hollowingState.shellThicknessMm);
-    const sourceGeometry = resolveHollowPreviewSourceGeometry(activeModel);
-    const sourceGeometryKey = buildGeometryVersionKey(sourceGeometry);
-    const bbox = sourceGeometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
-      sourceGeometry.getAttribute('position') as THREE.BufferAttribute,
-    );
-    const bboxSize = bbox.getSize(new THREE.Vector3());
-    const maxExtent = Math.max(bboxSize.x, bboxSize.y, bboxSize.z);
-
-    const debounceQuat = new THREE.Quaternion().setFromEuler(activeModel.transform.rotation);
-    const options: HollowOptions = {
-      ...buildHollowingOptions(activeModel.transform.scale, maxExtent, {
-        preview: true,
-        previewShellThicknessMm,
-      }),
-      previewCavityOnly: true,
-      rotationQuat: [debounceQuat.x, debounceQuat.y, debounceQuat.z, debounceQuat.w],
-    };
-    const optionsKey = JSON.stringify(options);
-    const previewKey = `${activeModel.id}::${sourceGeometryKey}::${optionsKey}`;
+    // Single source of truth for preview options and cache keys, shared with
+    // the toolbar-hover warmup path. Building options inline here previously
+    // omitted `previewVoxelSpheres: true` (and `drainHoles: []`), which made
+    // every debounced parameter change run the full cavity-mesh build — and,
+    // on manifold failure, the entire stabilization retry cascade — for a
+    // result the preview never renders, while also splitting the cache keys
+    // so warmup-primed entries could never serve the live preview.
+    const {
+      sourceGeometry,
+      sourceGeometryKey,
+      options,
+      previewKey,
+    } = buildHollowPreviewRequest(activeModel);
 
     if (hollowPreview && hollowPreview.modelId === activeModel.id && hollowPreview.previewKey === previewKey) {
       return;
@@ -18250,7 +18243,7 @@ export default function Home() {
       clearPendingHollowPreviewDebounce();
     };
   }, [
-    buildHollowingOptions,
+    buildHollowPreviewRequest,
     clearHollowPreview,
     clearPendingHollowPreviewDebounce,
     hollowPreview,
@@ -18258,7 +18251,6 @@ export default function Home() {
     isHollowingDirty,
     isApplyingHollowing,
     isShellFaceSelectionPending,
-    resolveHollowPreviewSourceGeometry,
     runHollowPreview,
     scene.activeModel,
     scene.mode,

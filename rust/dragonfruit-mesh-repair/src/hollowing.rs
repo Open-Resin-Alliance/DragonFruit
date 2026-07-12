@@ -643,7 +643,7 @@ pub fn hollow_voxel(mut mesh: IndexedMesh, options: &HollowOptions) -> HollowOut
         // The frontend will render spheres at removed_voxel_centers instead.
         (mesh.clone(), IndexedMesh::default())
     } else {
-        let (out, cavity) = build_hollow_output_mesh(
+        let (out, cavity, cavity_wall_score) = build_hollow_output_mesh(
             &mesh,
             &source_bbox,
             &grid,
@@ -654,6 +654,8 @@ pub fn hollow_voxel(mut mesh: IndexedMesh, options: &HollowOptions) -> HollowOut
             shell_voxels_f,
             smoothing_profile,
         );
+        #[cfg(not(feature = "manifold"))]
+        let _ = cavity_wall_score;
         #[cfg(feature = "manifold")]
         let (out, cavity) = finalize_hollow_output_mesh_for_manifold(
             &mesh,
@@ -667,6 +669,7 @@ pub fn hollow_voxel(mut mesh: IndexedMesh, options: &HollowOptions) -> HollowOut
             smoothing_profile,
             out,
             cavity,
+            cavity_wall_score,
         );
         (out, cavity)
     };
@@ -1098,7 +1101,7 @@ impl HollowSession {
             // Sphere preview: skip the expensive mesh building entirely.
             (self.source_mesh.clone(), IndexedMesh::default())
         } else {
-            let (out, cavity) = build_hollow_output_mesh(
+            let (out, cavity, cavity_wall_score) = build_hollow_output_mesh(
                 &self.source_mesh,
                 &self.source_bbox,
                 &self.grid,
@@ -1109,6 +1112,8 @@ impl HollowSession {
                 shell_voxels_f,
                 smoothing_profile,
             );
+            #[cfg(not(feature = "manifold"))]
+            let _ = cavity_wall_score;
             #[cfg(feature = "manifold")]
             let (out, cavity) = finalize_hollow_output_mesh_for_manifold(
                 &self.source_mesh,
@@ -1122,6 +1127,7 @@ impl HollowSession {
                 smoothing_profile,
                 out,
                 cavity,
+                cavity_wall_score,
             );
             (out, cavity)
         };
@@ -1449,8 +1455,6 @@ fn organic_boundary_mesh(
     for z in 0..grid.nz.saturating_sub(1) {
         for y in 0..grid.ny.saturating_sub(1) {
             for x in 0..grid.nx.saturating_sub(1) {
-                let mut has_kept = false;
-                let mut has_carved = false;
                 let mut has_scalar_positive = false;
                 let mut has_scalar_negative = false;
 
@@ -1463,8 +1467,6 @@ fn organic_boundary_mesh(
                     corner_pos[corner_i] = grid.center_world(vx, vy, vz);
                     corner_kept[corner_i] = positive[vi];
                     corner_carved[corner_i] = negative[vi];
-                    has_kept |= corner_kept[corner_i];
-                    has_carved |= corner_carved[corner_i];
                     corner_scalar[corner_i] = scalar_field[vi];
                     if corner_kept[corner_i] || corner_carved[corner_i] {
                         if corner_scalar[corner_i] >= 0.0 {
@@ -1475,7 +1477,11 @@ fn organic_boundary_mesh(
                     }
                 }
 
-                if !(has_kept && has_carved) && !(has_scalar_positive && has_scalar_negative) {
+                // Scalar-sign-only gate: cubes whose classified corners all
+                // share one scalar sign contain no isosurface. (Cubes with
+                // only a hard-label crossing were exactly the shard
+                // generators removed by the 2026-07-12 audit fix.)
+                if !(has_scalar_positive && has_scalar_negative) {
                     continue;
                 }
 
@@ -1620,6 +1626,41 @@ fn build_smoothed_cavity_scalar_field(
         std::mem::swap(&mut field, &mut scratch);
     }
 
+    // Outer-skin guard: blur must never flip a kept voxel that sits on the
+    // model's outer surface (6-adjacent to non-solid space or the grid
+    // border) negative — a flip there lets the cavity isosurface exit
+    // through the model's outer skin at thin features. Clamp those voxels
+    // back to the same positive epsilon floor used at initialization.
+    let skin_floor = 0.05 * shell_voxels_f.max(0.2);
+    for z in 0..grid.nz {
+        for y in 0..grid.ny {
+            for x in 0..grid.nx {
+                let i = grid.idx(x, y, z);
+                if !keep[i] || !solid[i] {
+                    continue;
+                }
+                let mut touches_outside = false;
+                for (dx, dy, dz) in N6 {
+                    let nx_i = x as isize + dx;
+                    let ny_i = y as isize + dy;
+                    let nz_i = z as isize + dz;
+                    if !grid.in_bounds(nx_i, ny_i, nz_i) {
+                        touches_outside = true;
+                        break;
+                    }
+                    let ni = grid.idx(nx_i as usize, ny_i as usize, nz_i as usize);
+                    if !solid[ni] {
+                        touches_outside = true;
+                        break;
+                    }
+                }
+                if touches_outside {
+                    field[i] = field[i].max(skin_floor);
+                }
+            }
+        }
+    }
+
     field
 }
 
@@ -1633,8 +1674,8 @@ fn build_hollow_output_mesh(
     options: &HollowOptions,
     shell_voxels_f: f32,
     smoothing_profile: InternalCavitySmoothingProfile,
-) -> (IndexedMesh, IndexedMesh) {
-    let cavity_mesh = build_cavity_inner_mesh(
+) -> (IndexedMesh, IndexedMesh, usize) {
+    let (cavity_mesh, cavity_wall_score) = build_cavity_inner_mesh(
         source_bbox,
         grid,
         solid,
@@ -1652,7 +1693,11 @@ fn build_hollow_output_mesh(
         merge_meshes(&filtered_source, &cavity_mesh)
     };
 
-    (normalize_mesh_for_boolean(out_mesh), cavity_mesh)
+    (
+        normalize_mesh_for_boolean(out_mesh),
+        cavity_mesh,
+        cavity_wall_score,
+    )
 }
 
 /// Build only the internal cavity (+ infill) mesh without the outer shell.
@@ -1667,7 +1712,7 @@ fn build_cavity_inner_mesh(
     options: &HollowOptions,
     shell_voxels_f: f32,
     smoothing_profile: InternalCavitySmoothingProfile,
-) -> IndexedMesh {
+) -> (IndexedMesh, usize) {
     let cavity_positive = keep.to_vec();
     let cavity_negative: Vec<bool> = solid
         .iter()
@@ -1683,14 +1728,16 @@ fn build_cavity_inner_mesh(
         shell_voxels_f,
         smoothing_profile.scalar_field_blur_iterations,
     );
-    let cavity_mesh = stabilize_cavity_mesh_for_boolean(
-        smooth_cavity_mesh(
-            organic_boundary_mesh(grid, &cavity_positive, &cavity_negative, &cavity_scalar),
+    let (cavity_mesh, wall_defect_score) = drop_open_cavity_fragments(
+        stabilize_cavity_mesh_for_boolean(
+            smooth_cavity_mesh(
+                organic_boundary_mesh(grid, &cavity_positive, &cavity_negative, &cavity_scalar),
+                grid.voxel_mm,
+                smoothing_profile.taubin_iterations,
+                smoothing_profile.taubin_max_step_scale,
+            ),
             grid.voxel_mm,
-            smoothing_profile.taubin_iterations,
-            smoothing_profile.taubin_max_step_scale,
         ),
-        grid.voxel_mm,
     );
 
     let infill_mesh = if matches!(options.mode, HollowMode::Infill) {
@@ -1707,13 +1754,16 @@ fn build_cavity_inner_mesh(
         IndexedMesh::default()
     };
 
-    if infill_mesh.triangles.is_empty() {
+    // The infill lattice beams are closed tubes by construction; the cavity
+    // wall's defect score is the meaningful manifold-failure predictor.
+    let combined = if infill_mesh.triangles.is_empty() {
         cavity_mesh
     } else if cavity_mesh.triangles.is_empty() {
         infill_mesh
     } else {
         merge_meshes(&cavity_mesh, &infill_mesh)
-    }
+    };
+    (combined, wall_defect_score)
 }
 
 fn polygonize_cavity_tetrahedron(
@@ -1745,22 +1795,19 @@ fn polygonize_cavity_tetrahedron(
         }
     }
 
-    // Prefer the blurred scalar field for contouring. The previous extractor
-    // only crossed hard kept/carved voxel labels, which let smoothing slide
-    // vertices along a blocky voxel edge network but not escape that network.
-    // If the scalar field is locally degenerate, fall back to hard labels so a
-    // disabled or numerically flat field still produces a closed cavity wall.
-    let use_scalar_sides = scalar_positive_count > 0 && scalar_negative_count > 0;
-    if !use_scalar_sides {
-        for (local_i, &corner_i) in tet.iter().enumerate() {
-            side[local_i] = if kept[corner_i] {
-                Some(true)
-            } else if carved[corner_i] {
-                Some(false)
-            } else {
-                None
-            };
-        }
+    // Contour strictly by the scalar field's sign. The field is initialized
+    // with signed epsilon floors that exactly match the hard kept/carved
+    // labels (see build_smoothed_cavity_scalar_field), so with blur disabled
+    // this is identical to hard-label contouring. With blur enabled the
+    // isosurface legitimately migrates off the hard-label boundary; a tet
+    // whose classified corners are all one scalar sign simply contains no
+    // isosurface and must emit nothing. The previous per-tetrahedron
+    // fallback to hard labels in that case emitted detached midpoint "shard"
+    // triangles whose borders matched nothing (adjacent tets contoured by
+    // the scalar criterion), making the cavity non-manifold by construction
+    // and corrupting cross-section stencil parity (2026-07-12 audit).
+    if scalar_positive_count == 0 || scalar_negative_count == 0 {
+        return;
     }
 
     for (ea, eb) in tet_edges {
@@ -1782,7 +1829,7 @@ fn polygonize_cavity_tetrahedron(
         let va = scalar[ia];
         let vb = scalar[ib];
         let denom = va - vb;
-        let t = if !use_scalar_sides || denom.abs() <= 1e-6 {
+        let t = if denom.abs() <= 1e-6 {
             0.5
         } else {
             (va / denom).clamp(0.0, 1.0)
@@ -2208,6 +2255,169 @@ fn reduced_internal_cavity_smoothing_profile(
     }
 }
 
+/// Drops vertices not referenced by any triangle and remaps indices in
+/// place. O(V + T), no hashing. Replaces the previous full triangle-soup
+/// re-weld whose only observable effect was this same compaction (the
+/// manifold backend tolerates unreferenced vertices, but downstream code
+/// historically assumed none remain after normalization).
+fn compact_unreferenced_vertices(mesh: &mut IndexedMesh) {
+    let mut used = vec![false; mesh.positions.len()];
+    for tri in &mesh.triangles {
+        used[tri[0] as usize] = true;
+        used[tri[1] as usize] = true;
+        used[tri[2] as usize] = true;
+    }
+    if used.iter().all(|&u| u) {
+        return;
+    }
+    let mut remap = vec![u32::MAX; mesh.positions.len()];
+    let mut next = 0u32;
+    let mut new_positions = Vec::with_capacity(mesh.positions.len());
+    for (i, &is_used) in used.iter().enumerate() {
+        if is_used {
+            remap[i] = next;
+            new_positions.push(mesh.positions[i]);
+            next += 1;
+        }
+    }
+    for tri in &mut mesh.triangles {
+        tri[0] = remap[tri[0] as usize];
+        tri[1] = remap[tri[1] as usize];
+        tri[2] = remap[tri[2] as usize];
+    }
+    mesh.positions = new_positions;
+}
+
+/// Removes detached "shard" fragments from a generated cavity wall mesh:
+/// edge-connected components, other than the largest (always kept --
+/// ShellOpenFace/drain-hole modes legitimately produce an open main wall),
+/// that contain boundary edges. Such fragments arise where the smoothed
+/// scalar isosurface and the hard voxel labels disagree locally; they are
+/// visually occluded, but their open borders make manifold conversion
+/// structurally impossible and corrupt cross-section stencil parity.
+///
+/// Returns the cleaned mesh plus its residual defect score
+/// (`boundary_edges + 4 * non_manifold_edges`), which manifold
+/// stabilization uses to skip provably futile attempts.
+fn drop_open_cavity_fragments(mesh: IndexedMesh) -> (IndexedMesh, usize) {
+    if mesh.triangles.is_empty() {
+        return (mesh, 0);
+    }
+
+    let topo = crate::core::halfedge::Topology::build(&mesh);
+    let boundary_edges = topo.boundary_edges();
+    let non_manifold_count = topo.non_manifold_edges().len();
+    if boundary_edges.is_empty() {
+        return (mesh, non_manifold_count * 4);
+    }
+
+    fn find(parent: &mut [u32], mut i: u32) -> u32 {
+        while parent[i as usize] != i {
+            parent[i as usize] = parent[parent[i as usize] as usize];
+            i = parent[i as usize];
+        }
+        i
+    }
+
+    // Union-find over faces sharing an edge (any multiplicity, so
+    // non-manifold edges still connect their components).
+    let face_count = mesh.triangles.len();
+    let mut parent: Vec<u32> = (0..face_count as u32).collect();
+    for info in topo.edges.values() {
+        let mut faces = info.faces.iter();
+        if let Some(&first) = faces.next() {
+            let root = find(&mut parent, first);
+            for &other in faces {
+                let other_root = find(&mut parent, other);
+                parent[other_root as usize] = root;
+            }
+        }
+    }
+
+    let mut component_size = vec![0usize; face_count];
+    for face in 0..face_count as u32 {
+        let root = find(&mut parent, face);
+        component_size[root as usize] += 1;
+    }
+    let mut component_open = vec![false; face_count];
+    for key in &boundary_edges {
+        if let Some(info) = topo.edges.get(key) {
+            for &face in &info.faces {
+                let root = find(&mut parent, face);
+                component_open[root as usize] = true;
+            }
+        }
+    }
+    let largest_root = (0..face_count)
+        .max_by_key(|&i| component_size[i])
+        .unwrap_or(0) as u32;
+
+    let retained: Vec<[u32; 3]> = mesh
+        .triangles
+        .iter()
+        .enumerate()
+        .filter(|(face, _)| {
+            let root = find(&mut parent, *face as u32);
+            root == largest_root || !component_open[root as usize]
+        })
+        .map(|(_, tri)| *tri)
+        .collect();
+
+    if retained.len() == mesh.triangles.len() {
+        return (mesh, boundary_edges.len() + non_manifold_count * 4);
+    }
+
+    let dropped = mesh.triangles.len() - retained.len();
+    let mut cleaned = IndexedMesh {
+        positions: mesh.positions,
+        triangles: retained,
+    };
+    compact_unreferenced_vertices(&mut cleaned);
+
+    let cleaned_topo = crate::core::halfedge::Topology::build(&cleaned);
+    let score =
+        cleaned_topo.boundary_edges().len() + cleaned_topo.non_manifold_edges().len() * 4;
+    eprintln!(
+        "[dragonfruit-mesh-repair] cavity fragment cleanup: dropped {dropped} shard triangles, residual defect score {score}"
+    );
+    (cleaned, score)
+}
+
+/// Cheap topology-level defect summary: a single hash pass over the edges,
+/// with none of the BVH self-intersection work `crate::analysis::analyze`
+/// performs. Used to classify manifold-conversion failures before deciding
+/// whether retries can possibly help.
+#[cfg_attr(not(feature = "manifold"), allow(dead_code))]
+#[derive(Debug, Clone, Copy)]
+struct MeshDefectSummary {
+    boundary_edges: usize,
+    non_manifold_edges: usize,
+    inconsistent_edges: usize,
+}
+
+#[cfg_attr(not(feature = "manifold"), allow(dead_code))]
+fn summarize_mesh_defects(mesh: &IndexedMesh) -> MeshDefectSummary {
+    let topo = crate::core::halfedge::Topology::build(mesh);
+    MeshDefectSummary {
+        boundary_edges: topo.boundary_edges().len(),
+        non_manifold_edges: topo.non_manifold_edges().len(),
+        inconsistent_edges: topo.inconsistent_edges(),
+    }
+}
+
+/// Vertex welding can only close hairline cracks — boundary edges whose
+/// counterparts sit within the weld epsilon. It cannot repair edges shared
+/// by more than two faces, and it never changes winding, so retrying the
+/// weld ladder against those defect classes is provably futile
+/// (2026-07-12 audit: the ladder's absolute weld range is single-digit
+/// micrometres, five orders of magnitude below voxel-scale defects).
+#[cfg_attr(not(feature = "manifold"), allow(dead_code))]
+fn weld_retries_worthwhile(defects: &MeshDefectSummary) -> bool {
+    defects.non_manifold_edges == 0
+        && defects.inconsistent_edges == 0
+        && defects.boundary_edges > 0
+}
+
 fn normalize_mesh_for_boolean(mesh: IndexedMesh) -> IndexedMesh {
     normalize_mesh_for_boolean_with_weld(mesh, 1e-6)
 }
@@ -2229,7 +2439,12 @@ fn normalize_mesh_for_boolean_with_weld(mesh: IndexedMesh, weld_epsilon: f32) ->
     });
 
     if normalized.triangles.len() != mesh.triangles.len() {
-        normalized = IndexedMesh::from_triangle_soup(&normalized.to_triangle_soup(), weld_epsilon);
+        // Degenerate-triangle removal can orphan vertices. The previous full
+        // triangle-soup re-weld here cost another O(T) soup materialization
+        // plus ~3T serial hash interns per call, and its only observable
+        // effect was orphan compaction (re-welding at the same epsilon
+        // re-quantizes onto the same grid). Compact directly instead.
+        compact_unreferenced_vertices(&mut normalized);
     }
 
     normalized
@@ -2306,45 +2521,48 @@ fn stabilize_hollow_mesh_for_manifold(mesh: IndexedMesh) -> HollowManifoldStabil
         }
     }
 
-    for weld_epsilon in [2e-6_f32, 5e-6_f32, 1e-5_f32] {
-        let candidate = normalize_mesh_for_boolean_with_weld(mesh.clone(), weld_epsilon);
-        eprintln!(
-            "[dragonfruit-mesh-repair] hollow manifold stabilization: retry weld_epsilon={weld_epsilon:.1e} tris={} verts={}",
-            candidate.triangle_count(),
-            candidate.vertex_count()
-        );
-        match try_roundtrip_manifold_mesh(candidate) {
-            Ok(roundtripped) => {
-                eprintln!(
-                    "[dragonfruit-mesh-repair] hollow manifold stabilization: retry succeeded weld_epsilon={weld_epsilon:.1e} tris={} verts={}",
-                    roundtripped.triangle_count(),
-                    roundtripped.vertex_count()
-                );
-                return HollowManifoldStabilization::Stabilized(roundtripped);
-            }
-            Err(reason) => {
-                eprintln!(
-                    "[dragonfruit-mesh-repair] hollow manifold stabilization: retry failed weld_epsilon={weld_epsilon:.1e} ({reason})"
-                );
+    // Classify the failure once, cheaply, before deciding whether weld
+    // retries can possibly help. (Previously a full crate::analysis::analyze
+    // — including a BVH self-intersection pass over every triangle — ran
+    // after ALL retries failed, purely to print a log line.)
+    let defects = summarize_mesh_defects(&mesh);
+    eprintln!(
+        "[dragonfruit-mesh-repair] hollow manifold stabilization: defect summary boundary={} non_manifold={} inconsistent_winding={}",
+        defects.boundary_edges, defects.non_manifold_edges, defects.inconsistent_edges
+    );
+
+    if weld_retries_worthwhile(&defects) {
+        for weld_epsilon in [2e-6_f32, 5e-6_f32, 1e-5_f32] {
+            let candidate = normalize_mesh_for_boolean_with_weld(mesh.clone(), weld_epsilon);
+            eprintln!(
+                "[dragonfruit-mesh-repair] hollow manifold stabilization: retry weld_epsilon={weld_epsilon:.1e} tris={} verts={}",
+                candidate.triangle_count(),
+                candidate.vertex_count()
+            );
+            match try_roundtrip_manifold_mesh(candidate) {
+                Ok(roundtripped) => {
+                    eprintln!(
+                        "[dragonfruit-mesh-repair] hollow manifold stabilization: retry succeeded weld_epsilon={weld_epsilon:.1e} tris={} verts={}",
+                        roundtripped.triangle_count(),
+                        roundtripped.vertex_count()
+                    );
+                    return HollowManifoldStabilization::Stabilized(roundtripped);
+                }
+                Err(reason) => {
+                    eprintln!(
+                        "[dragonfruit-mesh-repair] hollow manifold stabilization: retry failed weld_epsilon={weld_epsilon:.1e} ({reason})"
+                    );
+                }
             }
         }
+        eprintln!(
+            "[dragonfruit-mesh-repair] hollow manifold stabilization: all weld retries failed, returning normalized non-manifold mesh"
+        );
+    } else {
+        eprintln!(
+            "[dragonfruit-mesh-repair] hollow manifold stabilization: skipping weld retries — defect class cannot be fixed by vertex welding"
+        );
     }
-
-    eprintln!(
-        "[dragonfruit-mesh-repair] hollow manifold stabilization: all retries failed, returning normalized non-manifold mesh"
-    );
-
-    let analysis = crate::analysis::analyze(&mesh);
-    eprintln!(
-        "[dragonfruit-mesh-repair] hollow manifold stabilization: failure summary nme={} nmv={} boundary={} loops={} inconsistent={} self_int={} comps={}",
-        analysis.non_manifold_edges,
-        analysis.non_manifold_vertices,
-        analysis.boundary_edges,
-        analysis.boundary_loops,
-        analysis.inconsistent_winding_edges,
-        analysis.self_intersection_triangles,
-        analysis.connected_components,
-    );
 
     HollowManifoldStabilization::Failed(mesh)
 }
@@ -2362,8 +2580,22 @@ fn finalize_hollow_output_mesh_for_manifold(
     smoothing_profile: InternalCavitySmoothingProfile,
     out_mesh: IndexedMesh,
     cavity_mesh: IndexedMesh,
+    cavity_wall_score: usize,
 ) -> (IndexedMesh, IndexedMesh) {
-    match stabilize_hollow_mesh_for_manifold(out_mesh) {
+    // A nonzero cavity wall defect score guarantees the merged mesh cannot
+    // pass manifold conversion: merging is pure concatenation, and every
+    // downstream weld epsilon is finer than the cavity-phase welds already
+    // attempted (2026-07-12 audit). Skip provably futile attempts outright.
+    let initial = if cavity_wall_score == 0 {
+        stabilize_hollow_mesh_for_manifold(out_mesh)
+    } else {
+        eprintln!(
+            "[dragonfruit-mesh-repair] hollow manifold stabilization: skipping initial attempt — cavity wall defect score {cavity_wall_score}"
+        );
+        HollowManifoldStabilization::Failed(out_mesh)
+    };
+
+    match initial {
         HollowManifoldStabilization::Stabilized(mesh) => (mesh, cavity_mesh),
         HollowManifoldStabilization::Failed(original_mesh) => {
             if smoothing_profile.is_disabled() {
@@ -2387,7 +2619,7 @@ fn finalize_hollow_output_mesh_for_manifold(
                 );
 
                 // Only rebuild the cavity mesh — the outer shell is cached.
-                let retry_cavity_mesh = build_cavity_inner_mesh(
+                let (retry_cavity_mesh, retry_score) = build_cavity_inner_mesh(
                     source_bbox,
                     grid,
                     solid,
@@ -2397,6 +2629,12 @@ fn finalize_hollow_output_mesh_for_manifold(
                     shell_voxels_f,
                     retry_profile,
                 );
+                if retry_score != 0 {
+                    eprintln!(
+                        "[dragonfruit-mesh-repair] hollow manifold stabilization: skipping retry — cavity wall defect score {retry_score}"
+                    );
+                    continue;
+                }
                 let retry_mesh =
                     normalize_mesh_for_boolean(merge_meshes(&filtered_source, &retry_cavity_mesh));
 
@@ -2412,7 +2650,7 @@ fn finalize_hollow_output_mesh_for_manifold(
                     "[dragonfruit-mesh-repair] hollow manifold stabilization: retrying hollow build without internal smoothing"
                 );
 
-                let retry_cavity_mesh = build_cavity_inner_mesh(
+                let (retry_cavity_mesh, retry_score) = build_cavity_inner_mesh(
                     source_bbox,
                     grid,
                     solid,
@@ -2422,6 +2660,12 @@ fn finalize_hollow_output_mesh_for_manifold(
                     shell_voxels_f,
                     smoothing_profile.disabled(),
                 );
+                if retry_score != 0 {
+                    eprintln!(
+                        "[dragonfruit-mesh-repair] hollow manifold stabilization: skipping final retry — cavity wall defect score {retry_score}"
+                    );
+                    return (original_mesh, cavity_mesh);
+                }
                 let retry_mesh =
                     normalize_mesh_for_boolean(merge_meshes(&filtered_source, &retry_cavity_mesh));
 
@@ -3924,6 +4168,359 @@ fn vec3_normalize(v: Vec3) -> Option<Vec3> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Unit icosphere generator for cavity-quality integration tests
+    /// (methodology ported from the 2026-07-12 audit probe binary).
+    fn test_icosphere(radius: f32, subdivisions: u32) -> IndexedMesh {
+        let t = (1.0 + 5.0f32.sqrt()) / 2.0;
+        let mut verts: Vec<Vec3> = vec![
+            Vec3::new(-1.0, t, 0.0),
+            Vec3::new(1.0, t, 0.0),
+            Vec3::new(-1.0, -t, 0.0),
+            Vec3::new(1.0, -t, 0.0),
+            Vec3::new(0.0, -1.0, t),
+            Vec3::new(0.0, 1.0, t),
+            Vec3::new(0.0, -1.0, -t),
+            Vec3::new(0.0, 1.0, -t),
+            Vec3::new(t, 0.0, -1.0),
+            Vec3::new(t, 0.0, 1.0),
+            Vec3::new(-t, 0.0, -1.0),
+            Vec3::new(-t, 0.0, 1.0),
+        ];
+        let mut faces: Vec<[u32; 3]> = vec![
+            [0, 11, 5],
+            [0, 5, 1],
+            [0, 1, 7],
+            [0, 7, 10],
+            [0, 10, 11],
+            [1, 5, 9],
+            [5, 11, 4],
+            [11, 10, 2],
+            [10, 7, 6],
+            [7, 1, 8],
+            [3, 9, 4],
+            [3, 4, 2],
+            [3, 2, 6],
+            [3, 6, 8],
+            [3, 8, 9],
+            [4, 9, 5],
+            [2, 4, 11],
+            [6, 2, 10],
+            [8, 6, 7],
+            [9, 8, 1],
+        ];
+
+        for _ in 0..subdivisions {
+            let mut midpoint_cache: std::collections::HashMap<(u32, u32), u32> =
+                std::collections::HashMap::new();
+            let mut midpoint = |a: u32, b: u32, verts: &mut Vec<Vec3>| -> u32 {
+                let key = if a < b { (a, b) } else { (b, a) };
+                if let Some(&idx) = midpoint_cache.get(&key) {
+                    return idx;
+                }
+                let pa = verts[a as usize];
+                let pb = verts[b as usize];
+                let mid = Vec3::new(
+                    (pa.x + pb.x) * 0.5,
+                    (pa.y + pb.y) * 0.5,
+                    (pa.z + pb.z) * 0.5,
+                );
+                let idx = verts.len() as u32;
+                verts.push(mid);
+                midpoint_cache.insert(key, idx);
+                idx
+            };
+            let mut next_faces = Vec::with_capacity(faces.len() * 4);
+            for [a, b, c] in faces {
+                let ab = midpoint(a, b, &mut verts);
+                let bc = midpoint(b, c, &mut verts);
+                let ca = midpoint(c, a, &mut verts);
+                next_faces.push([a, ab, ca]);
+                next_faces.push([b, bc, ab]);
+                next_faces.push([c, ca, bc]);
+                next_faces.push([ab, bc, ca]);
+            }
+            faces = next_faces;
+        }
+
+        // Project all vertices onto the sphere.
+        for v in &mut verts {
+            let len = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt().max(1e-9);
+            let s = radius / len;
+            *v = Vec3::new(v.x * s, v.y * s, v.z * s);
+        }
+
+        IndexedMesh {
+            positions: verts,
+            triangles: faces,
+        }
+    }
+
+    fn count_edge_connected_components(mesh: &IndexedMesh) -> usize {
+        let topo = crate::core::halfedge::Topology::build(mesh);
+        let n = mesh.triangles.len();
+        let mut parent: Vec<usize> = (0..n).collect();
+        fn find(parent: &mut Vec<usize>, mut i: usize) -> usize {
+            while parent[i] != i {
+                parent[i] = parent[parent[i]];
+                i = parent[i];
+            }
+            i
+        }
+        for info in topo.edges.values() {
+            let mut faces = info.faces.iter();
+            if let Some(&first) = faces.next() {
+                let root = find(&mut parent, first as usize);
+                for &other in faces {
+                    let other_root = find(&mut parent, other as usize);
+                    parent[other_root] = root;
+                }
+            }
+        }
+        let mut roots = std::collections::HashSet::new();
+        for i in 0..n {
+            let root = find(&mut parent, i);
+            roots.insert(root);
+        }
+        roots.len()
+    }
+
+    /// P0 integration regression test (audit fix #2/#3/#3b): a smoothed
+    /// cavity generated from a clean closed source mesh must itself be a
+    /// single watertight surface. Before the P0 fixes, the per-tetrahedron
+    /// hard-label fallback in the polygonizer emitted thousands of small
+    /// open "shard" fragments (measured in the 2026-07-12 audit), whose
+    /// boundary edges made manifold conversion structurally impossible and
+    /// corrupted cross-section stencil rendering.
+    #[test]
+    fn smoothed_cavity_from_sphere_is_single_watertight_component() {
+        let sphere = test_icosphere(20.0, 3);
+        let options = HollowOptions {
+            mode: HollowMode::Cavity,
+            voxel_resolution: 64,
+            shell_thickness_mm: 1.2,
+            smooth_internal_surfaces: true,
+            preview_cavity_only: true,
+            ..HollowOptions::default()
+        };
+
+        let outcome = hollow_voxel(sphere, &options);
+        let cavity = &outcome.mesh; // preview_cavity_only: out mesh IS the cavity
+        assert!(
+            cavity.triangle_count() > 1000,
+            "expected a substantial cavity mesh, got {} triangles",
+            cavity.triangle_count()
+        );
+
+        let topo = crate::core::halfedge::Topology::build(cavity);
+        let boundary = topo.boundary_edges().len();
+        let components = count_edge_connected_components(cavity);
+        assert_eq!(
+            boundary, 0,
+            "smoothed cavity has {boundary} boundary edges (open shard fragments)"
+        );
+        assert_eq!(
+            components, 1,
+            "smoothed cavity split into {components} edge-connected components"
+        );
+    }
+
+    /// P0 unit regression tests (audit fix #4): the weld-retry gate must
+    /// only allow retries for defect classes vertex welding can actually
+    /// fix (hairline boundary cracks), and must skip provably futile
+    /// retries (non-manifold edges, inconsistent winding, or no defect).
+    #[test]
+    fn weld_gate_classifies_defect_classes() {
+        // Closed tetrahedron with consistent outward winding: no defects.
+        let tet = IndexedMesh {
+            positions: vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ],
+            triangles: vec![[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]],
+        };
+        let clean = summarize_mesh_defects(&tet);
+        assert_eq!(clean.boundary_edges, 0);
+        assert_eq!(clean.non_manifold_edges, 0);
+        assert_eq!(clean.inconsistent_edges, 0);
+        assert!(
+            !weld_retries_worthwhile(&clean),
+            "no defects -> nothing for welding to fix"
+        );
+
+        // Same tetrahedron with one face removed: boundary-only defect,
+        // the one class welding could conceivably repair.
+        let open = IndexedMesh {
+            positions: tet.positions.clone(),
+            triangles: vec![[0, 2, 1], [0, 1, 3], [1, 2, 3]],
+        };
+        let open_defects = summarize_mesh_defects(&open);
+        assert!(open_defects.boundary_edges > 0);
+        assert_eq!(open_defects.non_manifold_edges, 0);
+        assert!(
+            weld_retries_worthwhile(&open_defects),
+            "boundary-only defects are weld-worthy"
+        );
+
+        // Third face glued onto an existing edge: non-manifold edge —
+        // welding can never fix this, retries must be skipped.
+        let mut non_manifold = tet.clone();
+        non_manifold.positions.push(Vec3::new(1.0, 1.0, 1.0));
+        non_manifold.triangles.push([0, 1, 4]);
+        let nm_defects = summarize_mesh_defects(&non_manifold);
+        assert!(nm_defects.non_manifold_edges > 0);
+        assert!(
+            !weld_retries_worthwhile(&nm_defects),
+            "non-manifold edges are not fixable by welding"
+        );
+    }
+
+    /// P0 invariants guard (audit fix #5, behavior-preserving refactor):
+    /// after normalization removes degenerate triangles, the mesh must have
+    /// no unreferenced vertices, all indices in range, and all
+    /// non-degenerate input triangles preserved. Guards the replacement of
+    /// the second full triangle-soup re-weld with direct orphan compaction.
+    #[test]
+    fn normalize_with_weld_compacts_orphans_and_preserves_triangles() {
+        // Two well-separated valid triangles plus one degenerate (zero-area)
+        // triangle whose vertices appear nowhere else.
+        let positions = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(10.0, 0.0, 0.0),
+            Vec3::new(0.0, 10.0, 0.0),
+            Vec3::new(0.0, 0.0, 20.0),
+            Vec3::new(10.0, 0.0, 20.0),
+            Vec3::new(0.0, 10.0, 20.0),
+            // Degenerate triangle: three collinear points far from the rest.
+            Vec3::new(50.0, 50.0, 50.0),
+            Vec3::new(51.0, 50.0, 50.0),
+            Vec3::new(52.0, 50.0, 50.0),
+        ];
+        let triangles = vec![[0u32, 1, 2], [3, 4, 5], [6, 7, 8]];
+        let mesh = IndexedMesh {
+            positions,
+            triangles,
+        };
+
+        let normalized = normalize_mesh_for_boolean_with_weld(mesh, 1e-6);
+
+        assert_eq!(
+            normalized.triangles.len(),
+            2,
+            "degenerate triangle should be removed"
+        );
+        let mut used = vec![false; normalized.positions.len()];
+        for tri in &normalized.triangles {
+            for &v in tri {
+                assert!(
+                    (v as usize) < normalized.positions.len(),
+                    "index {v} out of range after compaction"
+                );
+                used[v as usize] = true;
+            }
+        }
+        assert!(
+            used.iter().all(|&u| u),
+            "normalization left unreferenced vertices behind"
+        );
+    }
+
+    /// P0 unit regression test (audit fix #2): a tetrahedron whose corners
+    /// straddle the hard kept/carved labels but NOT the scalar field's sign
+    /// must emit nothing — the isosurface does not pass through it. Before
+    /// the fix, the per-tet fallback emitted midpoint triangles here,
+    /// producing detached shard fragments.
+    #[test]
+    fn polygonizer_emits_nothing_for_label_only_crossings() {
+        let grid = GridSpec {
+            nx: 2,
+            ny: 2,
+            nz: 2,
+            voxel_mm: 1.0,
+            min: Vec3::new(0.0, 0.0, 0.0),
+        };
+        // All 8 corners classified; hard labels split 4/4 along x, but the
+        // blurred scalar field is uniformly positive (crossing moved away).
+        let mut positive = vec![false; 8];
+        let mut negative = vec![false; 8];
+        let scalar = vec![0.5f32; 8];
+        for z in 0..2 {
+            for y in 0..2 {
+                for x in 0..2 {
+                    let i = grid.idx(x, y, z);
+                    if x == 0 {
+                        positive[i] = true;
+                    } else {
+                        negative[i] = true;
+                    }
+                }
+            }
+        }
+
+        let mesh = organic_boundary_mesh(&grid, &positive, &negative, &scalar);
+        assert_eq!(
+            mesh.triangle_count(),
+            0,
+            "label-only crossing emitted {} shard triangles",
+            mesh.triangle_count()
+        );
+    }
+
+    /// P0 unit regression test (audit fix #3b): blur must never flip the
+    /// scalar sign of a kept voxel on the model's outer skin (6-adjacent to
+    /// non-solid space) — a flip there lets the cavity isosurface exit
+    /// through the model's outer surface at thin features.
+    #[test]
+    fn scalar_field_blur_cannot_flip_outer_skin_voxels() {
+        // 5x5x5 grid: a 1-voxel-thick solid kept wall at x=1 (adjacent to
+        // empty space at x=0), backed by a large carved mass at x=2..=3
+        // whose strongly negative values would otherwise blur the thin
+        // wall negative.
+        let grid = GridSpec {
+            nx: 5,
+            ny: 5,
+            nz: 5,
+            voxel_mm: 1.0,
+            min: Vec3::new(0.0, 0.0, 0.0),
+        };
+        let n = grid.nx * grid.ny * grid.nz;
+        let mut solid = vec![false; n];
+        let mut keep = vec![false; n];
+        let mut dist = vec![0.0f32; n];
+        for z in 0..5 {
+            for y in 0..5 {
+                for x in 1..=3 {
+                    let i = grid.idx(x, y, z);
+                    solid[i] = true;
+                    if x == 1 {
+                        keep[i] = true;
+                        dist[i] = 0.0;
+                    } else {
+                        // Deep carved voxels: large dist makes shell_signed
+                        // strongly negative.
+                        dist[i] = 25.0;
+                    }
+                }
+            }
+        }
+
+        let shell_voxels_f = 1.0;
+        let field =
+            build_smoothed_cavity_scalar_field(&grid, &solid, &keep, &dist, shell_voxels_f, 9);
+
+        for z in 0..5 {
+            for y in 0..5 {
+                let i = grid.idx(1, y, z);
+                assert!(
+                    field[i] >= 0.0,
+                    "outer-skin kept voxel (1,{y},{z}) blurred negative: {}",
+                    field[i]
+                );
+            }
+        }
+    }
 
     #[test]
     fn parity_refinement_clears_enclosed_non_surface_cavity_component() {
