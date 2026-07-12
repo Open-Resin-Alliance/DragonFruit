@@ -55,6 +55,7 @@ import {
   type CurvePoint,
   type SavedCurve,
 } from './LutCurveEditor';
+import { useKeyPressed } from '@/hotkeys/hotkeyStore';
 
 export type SliceIntent = 'file' | 'upload' | 'print' | 'preview' | 'uvtools';
 
@@ -1252,20 +1253,7 @@ export function SlicingPanel({
 
   const visibleModels = useMemo(() => models.filter((model) => model.visible), [models]);
   const activePrinterProfileId = (activePrinterProfile?.id ?? '').trim();
-  const [isShiftHeld, setIsShiftHeld] = useState(false);
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Shift') setIsShiftHeld(true); };
-    const onKeyUp = (e: KeyboardEvent) => { if (e.key === 'Shift') setIsShiftHeld(false); };
-    const onBlur = () => setIsShiftHeld(false);
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    window.addEventListener('blur', onBlur);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('blur', onBlur);
-    };
-  }, []);
+  const isShiftHeld = useKeyPressed('shift');
 
   const uvToolsSettings = useMemo(() => getSavedUvToolsSettings(), []);
   const canUvTools = uvToolsSettings.enabled;

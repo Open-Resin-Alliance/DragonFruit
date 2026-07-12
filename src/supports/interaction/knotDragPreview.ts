@@ -8,6 +8,7 @@ export interface KnotDragPreviewSnapshot {
   knotId: string;
   knot: Knot;
   branchSegmentsById: Record<string, Branch['segments']>;
+  coincidentKnots?: Knot[];
 }
 
 export function emitKnotDragPreview(snapshot: KnotDragPreviewSnapshot) {

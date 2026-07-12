@@ -98,9 +98,9 @@ export function GlobalUpdateIndicator() {
 
   // ── Dev shortcut: Ctrl+Shift+U ──────────────────────────────────────
   useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && e.key === 'U') {
-        e.preventDefault();
+    const handleKeyDown = (e: CustomEvent) => {
+      const { key, ctrlKey, shiftKey } = e.detail;
+      if (ctrlKey && shiftKey && key.toLowerCase() === 'u') {
         setState({
           status: 'available',
           info: {
@@ -112,8 +112,8 @@ export function GlobalUpdateIndicator() {
         });
       }
     };
-    window.addEventListener('keydown', down);
-    return () => window.removeEventListener('keydown', down);
+    window.addEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
+    return () => window.removeEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
   }, []);
 
   // ── Handlers ────────────────────────────────────────────────────────

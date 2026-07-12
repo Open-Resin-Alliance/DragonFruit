@@ -57,10 +57,6 @@ export function ContactDiskHud({
 
     const stopPointerEvent = React.useCallback((e: ThreeEvent<Event> | null) => {
         if (e?.stopPropagation) e.stopPropagation();
-        if (e?.nativeEvent) {
-            e.nativeEvent.stopPropagation?.();
-            e.nativeEvent.stopImmediatePropagation?.();
-        }
     }, []);
 
     React.useEffect(() => {

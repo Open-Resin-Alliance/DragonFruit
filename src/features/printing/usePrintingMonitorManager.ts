@@ -1,4 +1,5 @@
 import React from 'react';
+import { hotkeyStore } from '@/hotkeys/hotkeyStore';
 import {
   getPrinterReachabilitySnapshot,
   setPrinterReachabilityMap,
@@ -2610,17 +2611,21 @@ export function usePrintingMonitorManager(deps: PrintingMonitorManagerDeps) {
       setIsPrintingMonitorPrinterMenuOpen(false);
     };
 
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+    window.addEventListener('mousedown', handlePointerDown);
+
+    let wasEscapePressed = false;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
         setIsPrintingMonitorPrinterMenuOpen(false);
       }
-    };
+      wasEscapePressed = isEscapePressed;
+    });
 
-    window.addEventListener('mousedown', handlePointerDown);
-    window.addEventListener('keydown', handleEscape);
     return () => {
       window.removeEventListener('mousedown', handlePointerDown);
-      window.removeEventListener('keydown', handleEscape);
+      unsubscribe();
     };
   }, [isPrintingMonitorPrinterMenuOpen]);
 
@@ -3099,16 +3104,17 @@ export function usePrintingMonitorManager(deps: PrintingMonitorManagerDeps) {
   React.useEffect(() => {
     if (!printingMonitorPendingConfirmation) return;
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+    let wasEscapePressed = false;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
         setPrintingMonitorPendingConfirmation(null);
       }
-    };
+      wasEscapePressed = isEscapePressed;
+    });
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
+    return unsubscribe;
   }, [printingMonitorPendingConfirmation]);
 
   const printingMonitorDebugBundle = React.useMemo(() => {

@@ -1674,16 +1674,16 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
     if (!windowContextMenu) return;
 
     const handlePointerDown = () => closeWindowContextMenu();
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeWindowContextMenu();
+    const handleEscape = (e: CustomEvent) => {
+      if (e.detail.key === 'Escape') closeWindowContextMenu();
     };
 
     window.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('keydown', handleEscape);
+    window.addEventListener('app-hotkey-keydown', handleEscape as EventListener);
 
     return () => {
       window.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('keydown', handleEscape);
+      window.removeEventListener('app-hotkey-keydown', handleEscape as EventListener);
     };
   }, [windowContextMenu, closeWindowContextMenu]);
 

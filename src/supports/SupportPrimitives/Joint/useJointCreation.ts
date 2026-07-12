@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useSyncExternalStore } from 'react';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick } from '../../state';
 import { splitShaft, splitBranchShaft, splitTwigShaft, splitStickShaft } from './jointUtils';
@@ -12,6 +12,7 @@ import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 export function useJointCreation() {
+    const { gl } = useThree();
     // Consume global state driven by page.tsx
     const { isActive } = useJointCreationState();
     // Consume support data store
@@ -113,6 +114,7 @@ export function useJointCreation() {
         if (!isActive) return;
 
         const handleClick = (e: MouseEvent) => {
+            if (e.target !== gl.domElement) return;
             if (target && preview) {
                 const beforeSnapshot = captureSupportEditSnapshot();
                 const state = getSnapshot();
@@ -180,7 +182,7 @@ export function useJointCreation() {
         window.addEventListener('click', handleClick, true);
         return () => window.removeEventListener('click', handleClick, true);
 
-    }, [isActive, target, preview]);
+    }, [isActive, target, preview, gl]);
 
     return {
         isActive,

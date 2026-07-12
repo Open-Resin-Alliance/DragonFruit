@@ -1,4 +1,5 @@
 import React from 'react';
+import { hotkeyStore } from '@/hotkeys/hotkeyStore';
 import * as THREE from 'three';
 import type { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
 import type { useTransformManager } from '@/features/transform/useTransformManager';
@@ -689,28 +690,33 @@ export function useHollowingManager({
       return;
     }
 
-    const handleHollowVoxelEditHistoryHotkey = (event: KeyboardEvent) => {
-      if (isKeyboardTargetEditable(event.target)) return;
-      if (!(event.ctrlKey || event.metaKey)) return;
+    let wasZPressed = false;
+    let wasYPressed = false;
 
-      const key = event.key.toLowerCase();
-      const handled = key === 'y'
-        ? redoHollowVoxelEdit()
-        : key === 'z'
-          ? (event.shiftKey ? redoHollowVoxelEdit() : undoHollowVoxelEdit())
-          : false;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isCtrlOrMeta = active.has('ctrl') || active.has('meta') || active.has('control');
+      const isZPressed = active.has('z') && isCtrlOrMeta;
+      const isYPressed = active.has('y') && isCtrlOrMeta;
 
-      if (!handled) return;
+      const isZJustPressed = isZPressed && !wasZPressed;
+      const isYJustPressed = isYPressed && !wasYPressed;
 
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation?.();
-    };
+      if (isZJustPressed) {
+        if (active.has('shift')) {
+          redoHollowVoxelEdit();
+        } else {
+          undoHollowVoxelEdit();
+        }
+      } else if (isYJustPressed) {
+        redoHollowVoxelEdit();
+      }
 
-    window.addEventListener('keydown', handleHollowVoxelEditHistoryHotkey, true);
-    return () => {
-      window.removeEventListener('keydown', handleHollowVoxelEditHistoryHotkey, true);
-    };
+      wasZPressed = isZPressed;
+      wasYPressed = isYPressed;
+    });
+
+    return unsubscribe;
   }, [hollowingEditMode, redoHollowVoxelEdit, scene.mode, transformMgr.transformMode, undoHollowVoxelEdit]);
 
   const blockedPreviewVoxelInstanceIdSet = React.useMemo(() => {

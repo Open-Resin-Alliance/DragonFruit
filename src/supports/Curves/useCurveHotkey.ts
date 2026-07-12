@@ -1,30 +1,21 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { curveInteractionStore } from './curveInteractionState';
-import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
+import { useActionActive } from '@/hotkeys/hotkeyStore';
 import { getSnapshot, toggleSegmentCurve } from '../state';
 
 export function useCurveHotkey(mode: string) {
-    const { getHotkey } = useHotkeyConfig();
-    const binding = getHotkey('SUPPORTS', 'CURVE_MODE');
+    void mode;
+    const curveActive = useActionActive('SUPPORTS', 'CURVE_MODE');
+    const wasActiveRef = useRef(false);
+
     useEffect(() => {
-        // Only enable in support mode? Or globally?
-        // Presumably support mode.
-        // if (mode !== 'support') return; // Uncomment if restricted to support mode
-
-        const handleKeyDown = (e: KeyboardEvent) => {
-            const target = e.target as HTMLElement;
-            if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA') return;
-
-            if (e.key.toLowerCase() === binding.key.toLowerCase() && !e.repeat) {
-                curveInteractionStore.setIsActive(true);
-            }
-        };
-
-        const handleKeyUp = (e: KeyboardEvent) => {
-            if (e.key.toLowerCase() === binding.key.toLowerCase()) {
-                curveInteractionStore.setIsActive(false);
-
-                // Toggle Selected Segment on release
+        if (curveActive) {
+            curveInteractionStore.setIsActive(true);
+            wasActiveRef.current = true;
+        } else {
+            curveInteractionStore.setIsActive(false);
+            if (wasActiveRef.current) {
+                wasActiveRef.current = false;
                 const state = getSnapshot();
                 if (state.selectedCategory === 'segment' && state.selectedId) {
                     toggleSegmentCurve(state.selectedId);
@@ -32,15 +23,6 @@ export function useCurveHotkey(mode: string) {
                     toggleSegmentCurve(`braceSegment:${state.selectedId}`);
                 }
             }
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-        window.addEventListener('keyup', handleKeyUp);
-
-        return () => {
-            window.removeEventListener('keydown', handleKeyDown);
-            window.removeEventListener('keyup', handleKeyUp);
-            curveInteractionStore.setIsActive(false);
-        };
-    }, [mode, binding]);
+        }
+    }, [curveActive]);
 }

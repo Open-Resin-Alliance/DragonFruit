@@ -56,6 +56,7 @@ import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { LayerSlider } from '@/components/controls/LayerSlider';
 import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
 import { SupportSidebar } from '@/supports/Settings';
+import { useLeafPlacementState } from '@/supports/SupportTypes/Leaf/leafPlacementState';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { ExportManager } from '@/features/export/logic/ExportManager';
 import { resolveEntirePlateExportBaseName } from '@/features/export/logic/exportFileNaming';
@@ -214,6 +215,7 @@ import { IslandsPanel } from '@/components/controls/IslandsPanel';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { useSupportInteractionManager } from '@/features/supports/useSupportInteractionManager';
 import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
+import { hotkeyStore, useActionActive, isActionActiveSync } from '@/hotkeys/hotkeyStore';
 import { useDeleteHotkey } from '@/features/delete/useDeleteHotkey';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { useCameraProjectionHotkey } from '@/hotkeys/useCameraProjectionHotkey';
@@ -489,6 +491,7 @@ function createModelTransformKey(modelId: string, transform: ModelTransform): st
 
 export default function Home() {
   const { _ } = useLingui();
+  const { stage, sproutParentingLockHeld } = useLeafPlacementState();
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
   const importSceneFile = scene.importSceneFile;
@@ -826,7 +829,7 @@ export default function Home() {
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const [interiorView, setInteriorView] = React.useState(false);
-  const [isSupportSpotlightHoldActive, setIsSupportSpotlightHoldActive] = React.useState(false);
+  const isSupportSpotlightHoldActive = useActionActive('SUPPORTS', 'TEMP_SPOTLIGHT_HOLD');
   const [allowPrepareWithoutPrinter, setAllowPrepareWithoutPrinter] = React.useState(false);
   const [prepareSmoothingSettingsExpanded, setPrepareSmoothingSettingsExpanded] = React.useState(true);
   const [selectedHolePunchPlacementIds, setSelectedHolePunchPlacementIds] = React.useState<string[]>([]);
@@ -1053,16 +1056,18 @@ export default function Home() {
   React.useEffect(() => {
     if (!scene.sceneImportPlacementPrompt) return;
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+    let wasEscapePressed = false;
+
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
         scene.resolveSceneImportPlacementPrompt('load_as_is');
       }
-    };
+      wasEscapePressed = isEscapePressed;
+    });
 
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-    };
+    return unsubscribe;
   }, [scene.sceneImportPlacementPrompt, scene.resolveSceneImportPlacementPrompt]);
 
   const hasPluginSceneFile = React.useCallback((filesInput: FileList | File[]) => {
@@ -1142,16 +1147,18 @@ export default function Home() {
   React.useEffect(() => {
     if (!showSceneSaveChoiceModal) return;
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+    let wasEscapePressed = false;
+
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
         resolveSceneSaveChoice('cancel');
       }
-    };
+      wasEscapePressed = isEscapePressed;
+    });
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
+    return unsubscribe;
   }, [resolveSceneSaveChoice, showSceneSaveChoiceModal]);
 
   React.useEffect(() => {
@@ -4898,28 +4905,19 @@ export default function Home() {
       return;
     }
 
-    const handleEscToDeselectHolePunch = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-
-      const target = event.target;
-      if (
-        target instanceof HTMLElement
-        && target.closest('input, textarea, select, [contenteditable="true"]')
-      ) {
-        return;
+    let wasEscapePressed = false;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
+        setSelectedHolePunchPlacementIds([]);
+        setHoveredHolePunchPlacementId(null);
+        setHolePunchHoverPlacement(null);
       }
+      wasEscapePressed = isEscapePressed;
+    });
 
-      event.preventDefault();
-      event.stopPropagation();
-      setSelectedHolePunchPlacementIds([]);
-      setHoveredHolePunchPlacementId(null);
-      setHolePunchHoverPlacement(null);
-    };
-
-    window.addEventListener('keydown', handleEscToDeselectHolePunch, true);
-    return () => {
-      window.removeEventListener('keydown', handleEscToDeselectHolePunch, true);
-    };
+    return unsubscribe;
   }, [scene.mode, selectedHolePunchPlacementIds.length, transformMgr.transformMode]);
 
   const handleSceneMarqueeSelection = React.useCallback((ids: string[]) => {
@@ -5675,88 +5673,55 @@ export default function Home() {
   }, [jumpHistoryToCounts]);
 
   React.useEffect(() => {
-    const handleDiagnosticsHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftD = event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'd';
-      if (!isCtrlShiftD) return;
+    let wasDiagnostics = false;
+    let wasHistory = false;
+    let wasTransform = false;
+    let wasSliceMetrics = false;
+    let wasPrintMonitor = false;
+    let wasPrintRtsp = false;
 
-      // Important: block browser default (e.g. "Bookmark all tabs").
-      event.preventDefault();
-      event.stopPropagation();
-      setIsDiagnosticsOpen((prev) => !prev);
-    };
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const isDiagnosticsActive = isActionActiveSync('DEBUG', 'DIAGNOSTICS');
+      const isHistoryActive = isActionActiveSync('DEBUG', 'HISTORY');
+      const isTransformActive = isActionActiveSync('DEBUG', 'TRANSFORM');
+      const isSliceMetricsActive = isActionActiveSync('DEBUG', 'SLICE_METRICS');
+      const isPrintMonitorActive = isActionActiveSync('DEBUG', 'PRINT_MONITOR');
+      const isPrintRtspActive = isActionActiveSync('DEBUG', 'PRINT_RTSP');
 
-    const handleHistoryDebugHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftC = event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'c';
-      if (!isCtrlShiftC) return;
+      if (isDiagnosticsActive && !wasDiagnostics) {
+        setIsDiagnosticsOpen((prev) => !prev);
+      }
+      if (isHistoryActive && !wasHistory) {
+        setIsHistoryDebugOpen((prev) => !prev);
+      }
+      if (isTransformActive && !wasTransform) {
+        setIsTransformDebugOverlayOpen((prev) => !prev);
+      }
+      if (isSliceMetricsActive && !wasSliceMetrics) {
+        if (printingSlicingBenchmark) {
+          setIsSliceMetricsDebugOpen((prev) => !prev);
+        }
+      }
+      if (isPrintMonitorActive && !wasPrintMonitor) {
+        if (printingMonitorModalOpen) {
+          setIsPrintingMonitorDebugOpen((prev) => !prev);
+        }
+      }
+      if (isPrintRtspActive && !wasPrintRtsp) {
+        if (printingMonitorModalOpen) {
+          setIsPrintingMonitorRtspDebugOpen((prev) => !prev);
+        }
+      }
 
-      event.preventDefault();
-      event.stopPropagation();
-      setIsHistoryDebugOpen((prev) => !prev);
-    };
+      wasDiagnostics = isDiagnosticsActive;
+      wasHistory = isHistoryActive;
+      wasTransform = isTransformActive;
+      wasSliceMetrics = isSliceMetricsActive;
+      wasPrintMonitor = isPrintMonitorActive;
+      wasPrintRtsp = isPrintRtspActive;
+    });
 
-    const handleTransformDebugOverlayHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftX = event.ctrlKey
-        && event.shiftKey
-        && (event.code === 'KeyX' || event.key.toLowerCase() === 'x');
-      if (!isCtrlShiftX) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      setIsTransformDebugOverlayOpen((prev) => !prev);
-    };
-
-    const handleSliceMetricsDebugHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftA = event.ctrlKey
-        && event.shiftKey
-        && (event.code === 'KeyA' || event.key.toLowerCase() === 'a');
-      if (!isCtrlShiftA) return;
-
-      // Only toggle when we actually have slicing metrics from a completed run.
-      if (!printingSlicingBenchmark) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      setIsSliceMetricsDebugOpen((prev) => !prev);
-    };
-
-    const handlePrintingMonitorDebugHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftN = event.ctrlKey
-        && event.shiftKey
-        && (event.code === 'KeyN' || event.key.toLowerCase() === 'n');
-      if (!isCtrlShiftN) return;
-      if (!printingMonitorModalOpen) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      setIsPrintingMonitorDebugOpen((prev) => !prev);
-    };
-
-    const handlePrintingMonitorRtspDebugHotkey = (event: KeyboardEvent) => {
-      const isCtrlShiftM = event.ctrlKey
-        && event.shiftKey
-        && (event.code === 'KeyM' || event.key.toLowerCase() === 'm');
-      if (!isCtrlShiftM) return;
-      if (!printingMonitorModalOpen) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      setIsPrintingMonitorRtspDebugOpen((prev) => !prev);
-    };
-
-    window.addEventListener('keydown', handleDiagnosticsHotkey, true);
-    window.addEventListener('keydown', handleHistoryDebugHotkey, true);
-    window.addEventListener('keydown', handleTransformDebugOverlayHotkey, true);
-    window.addEventListener('keydown', handleSliceMetricsDebugHotkey, true);
-    window.addEventListener('keydown', handlePrintingMonitorDebugHotkey, true);
-    window.addEventListener('keydown', handlePrintingMonitorRtspDebugHotkey, true);
-    return () => {
-      window.removeEventListener('keydown', handleDiagnosticsHotkey, true);
-      window.removeEventListener('keydown', handleHistoryDebugHotkey, true);
-      window.removeEventListener('keydown', handleTransformDebugOverlayHotkey, true);
-      window.removeEventListener('keydown', handleSliceMetricsDebugHotkey, true);
-      window.removeEventListener('keydown', handlePrintingMonitorDebugHotkey, true);
-      window.removeEventListener('keydown', handlePrintingMonitorRtspDebugHotkey, true);
-    };
+    return unsubscribe;
   }, [printingMonitorModalOpen, printingSlicingBenchmark]);
 
 
@@ -5805,21 +5770,27 @@ export default function Home() {
     if (!editorContextMenuPos) return;
 
     const handlePointerDown = () => closeEditorContextMenu();
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeEditorContextMenu();
-    };
     const handleScrollOrResize = () => closeEditorContextMenu();
 
     window.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('keydown', handleEscape);
     window.addEventListener('resize', handleScrollOrResize);
     window.addEventListener('scroll', handleScrollOrResize, true);
 
+    let wasEscapePressed = false;
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isEscapePressed = active.has('escape');
+      if (isEscapePressed && !wasEscapePressed) {
+        closeEditorContextMenu();
+      }
+      wasEscapePressed = isEscapePressed;
+    });
+
     return () => {
       window.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('keydown', handleEscape);
       window.removeEventListener('resize', handleScrollOrResize);
       window.removeEventListener('scroll', handleScrollOrResize, true);
+      unsubscribe();
     };
   }, [editorContextMenuPos, closeEditorContextMenu]);
 
@@ -6316,24 +6287,14 @@ export default function Home() {
   }, [crossSectionLayerHeightMm, printingPreviewTotalLayers, printingSelectedLayer, scene.mode, slicing.heightMm]);
 
   React.useEffect(() => {
-    const isTypingTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
+    const handleLayerHotkeys = (event: CustomEvent) => {
+      const { key, altKey, ctrlKey, metaKey } = event.detail;
+      if (altKey || ctrlKey || metaKey) return;
 
-    const handleLayerHotkeys = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (event.altKey || event.ctrlKey || event.metaKey) return;
-      if (isTypingTarget(event.target)) return;
-
-      const key = event.key;
       const isPrinting = scene.mode === 'printing';
       const isUp = key === 'ArrowUp' || (isPrinting && (key === 'w' || key === 'W'));
       const isDown = key === 'ArrowDown' || (isPrinting && (key === 's' || key === 'S'));
       if (!isUp && !isDown) return;
-
-      event.preventDefault();
-      event.stopPropagation();
 
       const delta = isUp ? 1 : -1;
 
@@ -6348,9 +6309,9 @@ export default function Home() {
       slicing.setLayerIndex((previous) => previous + delta);
     };
 
-    window.addEventListener('keydown', handleLayerHotkeys, true);
+    window.addEventListener('app-hotkey-keydown', handleLayerHotkeys as EventListener);
     return () => {
-      window.removeEventListener('keydown', handleLayerHotkeys, true);
+      window.removeEventListener('app-hotkey-keydown', handleLayerHotkeys as EventListener);
     };
   }, [handlePrintingLayerChange, printingPreviewTotalLayers, scene.mode, slicing.layerIndex, slicing.numLayers, slicing.setLayerIndex]);
 
@@ -7247,7 +7208,7 @@ export default function Home() {
     transformMgr.setTransformMode(nextMode);
   }, [suppressTransformPersistenceCycles, transformMgr.transformMode, transformMgr.setTransformMode]);
 
-  useUndoRedoHotkeys();
+  useUndoRedoHotkeys({ disabled: hollowingEditMode });
   useDeleteHotkey();
   useCameraProjectionHotkey();
   const hasCavityGeometry = scene.activeModel
@@ -7350,39 +7311,7 @@ export default function Home() {
     // }
   }, [scene.mode, scene.selectionHighlightMode, scene.setSelectionHighlightMode]);
 
-  React.useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
 
-    const binding = { key: supportSpotlightHoldHotkey.key, modifier: supportSpotlightHoldHotkey.modifier };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (isEditableTarget(event.target)) return;
-      if (!matchesConfiguredHotkeyDown(event, binding)) return;
-      setIsSupportSpotlightHoldActive(true);
-    };
-
-    const handleKeyUp = (event: KeyboardEvent) => {
-      if (!matchesConfiguredHotkeyUp(event, binding)) return;
-      setIsSupportSpotlightHoldActive(false);
-    };
-
-    const handleBlur = () => {
-      setIsSupportSpotlightHoldActive(false);
-    };
-
-    window.addEventListener('keydown', handleKeyDown, true);
-    window.addEventListener('keyup', handleKeyUp, true);
-    window.addEventListener('blur', handleBlur);
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown, true);
-      window.removeEventListener('keyup', handleKeyUp, true);
-      window.removeEventListener('blur', handleBlur);
-    };
-  }, [scene.mode, supportSpotlightHoldHotkey.key, supportSpotlightHoldHotkey.modifier]);
 
   const effectiveSelectionHighlightMode = React.useMemo(() => {
     if (scene.mode === 'printing') return 'none';
@@ -8186,126 +8115,95 @@ export default function Home() {
     };
   }, [isSelectAllModelsActive]);
 
-  React.useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
 
-    const handleGlobalSelectAll = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey)) return;
-      if (event.key.toLowerCase() !== 'a') return;
-      if (isEditableTarget(event.target)) return;
-      if (scene.models.length === 0) return;
-
-      // Prevent browser-level "select all text in the app" behavior and arm model select-all.
-      event.preventDefault();
-      event.stopPropagation();
-      const visibleIds = scene.models.filter((model) => model.visible).map((model) => model.id);
-      if (visibleIds.length > 0) {
-        scene.setSelectedModelIds(visibleIds);
-        scene.setActiveModelId(visibleIds[0]);
-      }
-      setIsSelectAllModelsActive(true);
-    };
-
-    window.addEventListener('keydown', handleGlobalSelectAll, true);
-    return () => {
-      window.removeEventListener('keydown', handleGlobalSelectAll, true);
-    };
-  }, [scene]);
+  const selectAllActive = useActionActive('CANVAS', 'SELECT_ALL');
+  const copyActive = useActionActive('CANVAS', 'COPY');
+  const pasteActive = useActionActive('CANVAS', 'PASTE');
+  const saveActive = useActionActive('GLOBAL', 'SAVE');
+  const wasSelectAllActive = React.useRef(false);
+  const wasCopyActive = React.useRef(false);
+  const wasPasteActive = React.useRef(false);
+  const wasSaveActive = React.useRef(false);
 
   React.useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
+    if (!selectAllActive || wasSelectAllActive.current) {
+      wasSelectAllActive.current = selectAllActive;
+      return;
+    }
+    wasSelectAllActive.current = true;
 
-    const handleClipboardHotkeys = (event: KeyboardEvent) => {
-      if (event.repeat) return;
-      if (!(event.ctrlKey || event.metaKey)) return;
-      if (event.altKey) return;
-      if (isEditableTarget(event.target)) return;
-      if (scene.mode !== 'prepare') return;
+    if (scene.models.length === 0) return;
+    const visibleIds = scene.models.filter((model) => model.visible).map((model) => model.id);
+    if (visibleIds.length > 0) {
+      scene.setSelectedModelIds(visibleIds);
+      scene.setActiveModelId(visibleIds[0]);
+    }
+    setIsSelectAllModelsActive(true);
+  }, [selectAllActive, scene, setIsSelectAllModelsActive]);
 
-      const key = event.key.toLowerCase();
-      if (key === 'c') {
-        if (scene.selectedModelIds.length === 0 && !scene.activeModelId) return;
-        event.preventDefault();
-        event.stopPropagation();
+  React.useEffect(() => {
+    if (!copyActive || wasCopyActive.current) {
+      wasCopyActive.current = copyActive;
+      return;
+    }
+    wasCopyActive.current = true;
 
-        if (scene.selectedModelIds.length > 0) {
-          scene.copySelectedModels();
-        } else if (scene.activeModelId) {
-          scene.copyModel(scene.activeModelId);
-        }
-        return;
-      }
+    if (scene.mode !== 'prepare') return;
+    if (scene.selectedModelIds.length === 0 && !scene.activeModelId) return;
+    if (scene.selectedModelIds.length > 0) {
+      scene.copySelectedModels();
+    } else if (scene.activeModelId) {
+      scene.copyModel(scene.activeModelId);
+    }
+  }, [copyActive, scene]);
 
-      if (key === 'v') {
-        if (!scene.canPasteModel) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const pastedIds = scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
-        // Paste shares geometry with the source — add its cached volume directly
-        // instead of waiting for the async resin effect loop.
-        if (pastedIds.length > 0 && printingEstimatedResinMlRef.current != null) {
-          const pastedModel = scene.models.find((m) => pastedIds.includes(m.id));
-          if (pastedModel) {
-            const geom = pastedModel.geometry.geometry;
-            const pos = geom.getAttribute('position');
-            const idx = geom.getIndex();
-            const sourceKey = String(geom.userData?.resinVolumeSourceKey ?? geom.uuid);
-            const posVer = (pos as { version?: number; data?: { version?: number } }).version
-              ?? (pos as { version?: number; data?: { version?: number } }).data?.version ?? 0;
-            const idxVer = (idx as { version?: number } | null)?.version ?? 0;
-            const cacheKey = `${sourceKey}:${posVer}:${idxVer}`;
-            const cachedMl = printingBaseResinMlCacheRef.current.get(cacheKey) ?? null;
-            if (cachedMl != null) {
-              const sx = Math.abs(pastedModel.transform.scale.x || 1);
-              const sy = Math.abs(pastedModel.transform.scale.y || 1);
-              const sz = Math.abs(pastedModel.transform.scale.z || 1);
-              const addedMl = cachedMl * sx * sy * sz;
-              const nextTotal = (printingEstimatedResinMlRef.current - supportAndRaftResinMl) + addedMl + supportAndRaftResinMl;
-              printingEstimatedResinMlRef.current = nextTotal;
-              setPrintingEstimatedResinMl(nextTotal);
-            }
-          }
+  React.useEffect(() => {
+    if (!pasteActive || wasPasteActive.current) {
+      wasPasteActive.current = pasteActive;
+      return;
+    }
+    wasPasteActive.current = true;
+
+    if (scene.mode !== 'prepare') return;
+    if (!scene.canPasteModel) return;
+    const pastedIds = scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
+    // Paste shares geometry with the source — add its cached volume directly
+    // instead of waiting for the async resin effect loop.
+    if (pastedIds.length > 0 && printingEstimatedResinMlRef.current != null) {
+      const pastedModel = scene.models.find((m) => pastedIds.includes(m.id));
+      if (pastedModel) {
+        const geom = pastedModel.geometry.geometry;
+        const pos = geom.getAttribute('position');
+        const idx = geom.getIndex();
+        const sourceKey = String(geom.userData?.resinVolumeSourceKey ?? geom.uuid);
+        const posVer = (pos as { version?: number; data?: { version?: number } }).version
+          ?? (pos as { version?: number; data?: { version?: number } }).data?.version ?? 0;
+        const idxVer = (idx as { version?: number } | null)?.version ?? 0;
+        const cacheKey = `${sourceKey}:${posVer}:${idxVer}`;
+        const cachedMl = printingBaseResinMlCacheRef.current.get(cacheKey) ?? null;
+        if (cachedMl != null) {
+          const sx = Math.abs(pastedModel.transform.scale.x || 1);
+          const sy = Math.abs(pastedModel.transform.scale.y || 1);
+          const sz = Math.abs(pastedModel.transform.scale.z || 1);
+          const addedMl = cachedMl * sx * sy * sz;
+          const nextTotal = (printingEstimatedResinMlRef.current - supportAndRaftResinMl) + addedMl + supportAndRaftResinMl;
+          printingEstimatedResinMlRef.current = nextTotal;
+          setPrintingEstimatedResinMl(nextTotal);
         }
       }
-    };
-
-    window.addEventListener('keydown', handleClipboardHotkeys, true);
-    return () => {
-      window.removeEventListener('keydown', handleClipboardHotkeys, true);
-    };
-  }, [arrangeSpacingMm, scene]);
+    }
+  }, [pasteActive, scene, arrangeSpacingMm, printingEstimatedResinMlRef, supportAndRaftResinMl, printingBaseResinMlCacheRef, setPrintingEstimatedResinMl]);
 
   React.useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-    };
+    if (!saveActive || wasSaveActive.current) {
+      wasSaveActive.current = saveActive;
+      return;
+    }
+    wasSaveActive.current = true;
 
-    const handleSceneSaveHotkey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (event.repeat || event.isComposing) return;
-      if (event.altKey || event.shiftKey) return;
-      if (!(event.ctrlKey || event.metaKey)) return;
-      if (event.key.toLowerCase() !== 's') return;
-      if (isEditableTarget(event.target)) return;
-      if (scene.models.length === 0) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      void handleTopBarSaveScene();
-    };
-
-    window.addEventListener('keydown', handleSceneSaveHotkey, true);
-    return () => {
-      window.removeEventListener('keydown', handleSceneSaveHotkey, true);
-    };
-  }, [handleTopBarSaveScene, scene.models.length]);
+    if (scene.models.length === 0) return;
+    void handleTopBarSaveScene();
+  }, [saveActive, scene.models.length, handleTopBarSaveScene]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -8651,6 +8549,86 @@ export default function Home() {
     requestResetHolePunch,
     handleApplyHolePunch,
   } = holePunch;
+
+  // Hollowing-aware Ctrl/Cmd+A/C/V/S hotkeys (hotkey-store rewrite from #297).
+  React.useEffect(() => {
+    let wasAPressed = false;
+    let wasCPressed = false;
+    let wasVPressed = false;
+    let wasSPressed = false;
+
+    const unsubscribe = hotkeyStore.subscribe((state) => {
+      const active = state.activeKeys;
+      const isCtrlOrMeta = active.has('ctrl') || active.has('meta') || active.has('control');
+      const isAPressed = active.has('a') && isCtrlOrMeta;
+      const isCPressed = active.has('c') && isCtrlOrMeta;
+      const isVPressed = active.has('v') && isCtrlOrMeta;
+      const isSPressed = active.has('s') && isCtrlOrMeta;
+
+      const isAJustPressed = isAPressed && !wasAPressed;
+      const isCJustPressed = isCPressed && !wasCPressed;
+      const isVJustPressed = isVPressed && !wasVPressed;
+      const isSJustPressed = isSPressed && !wasSPressed;
+
+      if (isAJustPressed) {
+        if (scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing') {
+          if (activeHolePunchPlacements.length > 0) {
+            const nextIds = activeHolePunchPlacements.map((placement) => placement.id);
+            setSelectedHolePunchPlacementIds(nextIds);
+            syncHolePunchPanelFromSelection(nextIds, activeHolePunchPlacements, nextIds[nextIds.length - 1] ?? null);
+            setHoveredHolePunchPlacementId(null);
+            setHolePunchHoverPlacement(null);
+          }
+        } else if (scene.mode === 'prepare') {
+          if (scene.models.length > 0) {
+            const visibleIds = scene.models.filter((model) => model.visible).map((model) => model.id);
+            if (visibleIds.length > 0) {
+              scene.setSelectedModelIds(visibleIds);
+              scene.setActiveModelId(visibleIds[0]);
+            }
+            setIsSelectAllModelsActive(true);
+          }
+        }
+      }
+
+      if (isCJustPressed && !active.has('alt')) {
+        if (scene.mode === 'prepare') {
+          if (scene.selectedModelIds.length === 0 && !scene.activeModelId) return;
+          if (scene.selectedModelIds.length > 0) {
+            scene.copySelectedModels();
+          } else if (scene.activeModelId) {
+            scene.copyModel(scene.activeModelId);
+          }
+        }
+      }
+
+      if (isVJustPressed && !active.has('alt')) {
+        if (scene.mode === 'prepare' && scene.canPasteModel) {
+          scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
+        }
+      }
+
+      if (isSJustPressed && !active.has('alt') && !active.has('shift')) {
+        if (scene.models.length > 0) {
+          void handleTopBarSaveScene();
+        }
+      }
+
+      wasAPressed = isAPressed;
+      wasCPressed = isCPressed;
+      wasVPressed = isVPressed;
+      wasSPressed = isSPressed;
+    });
+
+    return unsubscribe;
+  }, [
+    scene,
+    transformMgr.transformMode,
+    activeHolePunchPlacements,
+    syncHolePunchPanelFromSelection,
+    arrangeSpacingMm,
+    handleTopBarSaveScene
+  ]);
 
   // Relocated from the early state block: depends on hollowPreview which is now
   // produced by useHollowingManager (declared above, after transformMgr).
@@ -9969,6 +9947,16 @@ export default function Home() {
             >
               Dismiss
             </button>
+          </Toast>
+        </ToastViewport>
+      )}
+
+      {sproutParentingLockHeld && (
+        <ToastViewport zIndex={125} offset="1.25rem">
+          <Toast tone="info" visible={true} className="flex items-center gap-2">
+            {stage === 'awaitingSproutTip'
+              ? "Leaf Fanning Active: Click model to sprout leaf"
+              : "Leaf Fanning: Click a support shaft to lock anchor knot"}
           </Toast>
         </ToastViewport>
       )}

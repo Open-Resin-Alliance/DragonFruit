@@ -2,6 +2,7 @@ import React, { useSyncExternalStore, useCallback, useRef, useEffect } from 'rea
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { ScreenSpaceGizmo } from '@/components/gizmo/ScreenSpaceGizmo';
+import { isKeyPressedSync } from '@/hotkeys/hotkeyStore';
 import {
     subscribe,
     getSnapshot,
@@ -69,6 +70,7 @@ export function KnotGizmo() {
     const previewBranchSegmentsByIdRef = useRef<Record<string, Branch['segments']>>({});
     const previewKnotRef = useRef<Knot | null>(null);
     const activePreviewKnotIdRef = useRef<string | null>(null);
+    const previewCoincidentKnotsRef = useRef<Knot[]>([]);
 
     const selectedPreviewKnot = selectedId && activeKnotDragPreview?.knotId === selectedId
         ? activeKnotDragPreview.knot
@@ -394,12 +396,30 @@ export function KnotGizmo() {
             previewBranchSegmentsByIdRef.current = nextPreviewBranchSegmentsById;
         }
 
+        const w = getKnotGizmoWindowState() as any;
+        const coincidentPreviewList: Knot[] = [];
+        if (w.__draggedKnotGroup && w.__draggedKnotGroup.length > 1) {
+            for (const kid of w.__draggedKnotGroup) {
+                if (kid === updated.id) continue;
+                const origKnot = getKnotById(kid);
+                if (origKnot) {
+                    coincidentPreviewList.push({
+                        ...origKnot,
+                        pos: finalKnotPos,
+                        t,
+                    });
+                }
+            }
+        }
+        previewCoincidentKnotsRef.current = coincidentPreviewList;
+
         previewKnotRef.current = updated;
         activePreviewKnotIdRef.current = updated.id;
         emitKnotDragPreview({
             knotId: updated.id,
             knot: updated,
             branchSegmentsById: previewBranchSegmentsByIdRef.current,
+            coincidentKnots: coincidentPreviewList,
         });
     });
 
@@ -432,9 +452,24 @@ export function KnotGizmo() {
         const projectedAtStart = projectOntoSegment(raycaster.ray, result.start, result.end);
         dragProjectionOffsetTRef.current = currentT - projectedAtStart.t;
 
+        const shiftHeld = isKeyPressedSync('shift');
+        const isGroup = !shiftHeld;
+
+        const w = getKnotGizmoWindowState() as any;
+        w.__knotDragIsGroup = isGroup;
+
+        // Find coincident knots (knots on same parentShaftId and same t)
+        const allKnots = Object.values(getSnapshot().knots);
+        const coincident = allKnots.filter(
+            k => k.parentShaftId === result.knot.parentShaftId &&
+                 k.t !== undefined && result.knot.t !== undefined &&
+                 Math.abs(k.t - result.knot.t) < 0.0001
+        );
+        w.__draggedKnotGroup = isGroup ? coincident.map(k => k.id) : [result.knot.id];
+
         // Capture elastic state for attached branches
         const allBranches = getBranches();
-        const attached = allBranches.filter(b => b.parentKnotId === result.knot.id);
+        const attached = allBranches.filter(b => w.__draggedKnotGroup.includes(b.parentKnotId));
         const nextState: Record<string, ElasticChainInitialState> = {};
 
         for (const branch of attached) {
@@ -493,12 +528,21 @@ export function KnotGizmo() {
             updateKnot(previewKnot);
         }
 
+        for (const coincKnot of previewCoincidentKnotsRef.current) {
+            updateKnot(coincKnot);
+        }
+
+        const w = getKnotGizmoWindowState() as any;
+        w.__knotDragIsGroup = undefined;
+        w.__draggedKnotGroup = undefined;
+
         if (activePreviewKnotIdRef.current) {
             clearKnotDragPreview();
         }
         activePreviewKnotIdRef.current = null;
         previewBranchSegmentsByIdRef.current = {};
         previewKnotRef.current = null;
+        previewCoincidentKnotsRef.current = [];
 
         // Prevent canvas click deselect on drag release
         getKnotGizmoWindowState().__gizmoDragEndedThisFrame = true;
@@ -538,6 +582,10 @@ export function KnotGizmo() {
             activePreviewKnotIdRef.current = null;
             previewBranchSegmentsByIdRef.current = {};
             previewKnotRef.current = null;
+            previewCoincidentKnotsRef.current = [];
+            const w = getKnotGizmoWindowState() as any;
+            w.__knotDragIsGroup = undefined;
+            w.__draggedKnotGroup = undefined;
             setKnotGizmoInteractionFlags(false, 0);
         };
     }, [setKnotGizmoInteractionFlags]);

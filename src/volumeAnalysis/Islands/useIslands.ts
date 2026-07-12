@@ -634,7 +634,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   }, [orderedIslands, selectedMarkerId]);
 
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const handleKeyDown = (e: CustomEvent) => {
       const activeElement = document.activeElement;
       if (activeElement) {
         const tagName = activeElement.tagName.toLowerCase();
@@ -648,18 +648,17 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         }
       }
 
-      if (e.key === 'n' || e.key === 'N') {
-        e.preventDefault();
+      const key = e.detail.key;
+      if (key === 'n' || key === 'N') {
         selectNext();
-      } else if (e.key === 'b' || e.key === 'B') {
-        e.preventDefault();
+      } else if (key === 'b' || key === 'B') {
         selectPrev();
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
     };
   }, [selectNext, selectPrev]);
 

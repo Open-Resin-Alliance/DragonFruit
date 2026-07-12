@@ -183,39 +183,6 @@ export function useHolePunchManager({
     return holePunchPlacements.filter((placement) => placement.modelId === activeModelId);
   }, [holePunchPlacements, scene.activeModel?.id]);
 
-  React.useEffect(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'hollowing') {
-      return;
-    }
-
-    const handleSelectAllHolePunches = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'a') return;
-
-      const target = event.target;
-      if (
-        target instanceof HTMLElement
-        && target.closest('input, textarea, select, [contenteditable="true"]')
-      ) {
-        return;
-      }
-
-      if (activeHolePunchPlacements.length === 0) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      const nextIds = activeHolePunchPlacements.map((placement) => placement.id);
-      setSelectedHolePunchPlacementIds(nextIds);
-      syncHolePunchPanelFromSelection(nextIds, activeHolePunchPlacements, nextIds[nextIds.length - 1] ?? null);
-      setHoveredHolePunchPlacementId(null);
-      setHolePunchHoverPlacement(null);
-    };
-
-    window.addEventListener('keydown', handleSelectAllHolePunches, true);
-    return () => {
-      window.removeEventListener('keydown', handleSelectAllHolePunches, true);
-    };
-  }, [activeHolePunchPlacements, scene.mode, syncHolePunchPanelFromSelection, transformMgr.transformMode]);
-
   const previousRecommendedHolePunchDepthRef = React.useRef<number>(recommendedHolePunchDepthMm);
 
   React.useEffect(() => {

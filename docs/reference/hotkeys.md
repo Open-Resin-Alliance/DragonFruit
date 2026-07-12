@@ -1,64 +1,24 @@
-# Hotkey Reference
+# Hotkey System Specification
 
-This page summarizes support-placement hotkey behavior.
+Centralized Zustand state store controls all key bindings.
 
-## Precedence
+## Architecture
 
-When modifiers overlap, more specific combinations win:
+- **Store**: `DragonFruit/src/hotkeys/hotkeyStore.ts`
+- **Config**: `DragonFruit/src/hotkeys/hotkeyConfig.ts`
+- **Listener Manager**: `DragonFruit/src/hotkeys/HotkeyRegistryManager.tsx`
 
-1. `Ctrl+Alt` → Leaf family
-2. `Alt` → Branch/Brace family
-3. `Ctrl` → Kickstand family
-4. No modifier → Default trunk placement
+## Developer Rules
 
-Key press order does not matter.
+1. **No direct listeners**: Never use `window.addEventListener('keydown' | 'keyup')` or `element.onkeydown`.
+2. **Hook usage**: React components read key state via `useActionActive(category, action)`.
+3. **Sync lookup**: Performance-critical loops (e.g. Three.js render frame) read key state via `isKeyPressedSync(key)`.
+4. **Modifying bindings**: Update `DEFAULT_KEYBINDINGS` in `hotkeyConfig.ts`.
 
-## Support placement rules
+## API Reference
 
-- `Alt` plus a model-first click enters the branch flow.
-- `Alt` plus a support-first click enters the brace flow.
-- `Ctrl` plus a support-first click enters kickstand placement.
-- `Ctrl+Alt` always owns the interaction for leaf placement when the first valid click is on the model.
+### `useActionActive(category: string, actionName: string): boolean`
+React hook. Reactive to modifier changes. Excludes overlapping modifiers.
 
-## Resolution matrix
-
-### No modifier
-
-- First click on model → default trunk/root placement.
-
-### Alt held
-
-- First click target decides the placement family:
-  - **First click on model** → branch-family flow.
-    - Second click on support shaft → **Branch**.
-    - Second click on model → **Twig** or **Stick**.
-  - **First click on support shaft** → brace-family flow.
-    - Second support click → **Brace**.
-
-### Ctrl held
-
-- First click on support shaft → Kickstand.
-
-### Ctrl+Alt held
-
-- First click on model → Leaf flow.
-  - Second click on support shaft → Leaf.
-
-## Cancellation rules
-
-- Releasing a required modifier key cancels the active placement family.
-- Canceling clears preview/snap/hover transient state.
-- Re-entering starts from a fresh state (no stale preview resurrection).
-
-## Explicitly forbidden outcomes
-
-- `Ctrl+Alt` should never fall through to kickstand or Alt-only branch behavior.
-- Key order must not change the final result when the held modifiers are the same.
-- Re-entering placement must not resurrect stale preview state.
-
-## Quick cheat sheet
-
-- `Alt` + model first → Branch/Twig/Stick
-- `Alt` + support first → Brace
-- `Ctrl` + support first → Kickstand
-- `Ctrl+Alt` + model first → Leaf
+### `isKeyPressedSync(key: string): boolean`
+Non-reactive getter. Direct Set lookup. Use in high-frequency requestAnimationFrame loops.
