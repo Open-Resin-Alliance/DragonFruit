@@ -6,7 +6,7 @@ import { useLingui } from '@lingui/react';
 import { detectIsIOS } from '@/hooks/usePlatform';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
-import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Plus, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Download, Gamepad2, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Plus, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { SceneOverlays } from '@/components/organisms/scene/SceneOverlays';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
@@ -709,6 +709,9 @@ export default function Home() {
     lastPushApplied: null,
     lastAt: null,
   });
+  const [newDeviceToast, setNewDeviceToast] = React.useState<string | null>(null);
+  const [isNewDeviceToastVisible, setIsNewDeviceToastVisible] = React.useState(false);
+  const newDeviceToastTimeoutRef = React.useRef<number | null>(null);
   const [isSceneSaveInProgress, setIsSceneSaveInProgress] = React.useState(false);
   const [isPreSliceSceneSaveInProgress, setIsPreSliceSceneSaveInProgress] = React.useState(false);
   const [showPluginImportWarningModal, setShowPluginImportWarningModal] = React.useState(false);
@@ -960,6 +963,7 @@ export default function Home() {
   const [printingArtifactIsInvalid, setPrintingArtifactIsInvalid] = React.useState(false);
   const slicedArtifactProfileFingerprintRef = React.useRef<string | null>(null);
   const [printingEstimatedResinMl, setPrintingEstimatedResinMl] = React.useState<number | null>(null);
+  const printingEstimatedResinMlRef = React.useRef<number | null>(null);
   const [isPrintingEstimatedResinBusy, setIsPrintingEstimatedResinBusy] = React.useState(false);
   const [resinEstimateRefreshTick, setResinEstimateRefreshTick] = React.useState(0);
   const printingBaseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
@@ -1250,6 +1254,7 @@ export default function Home() {
     handlePrepareDrop,
   } = importExport;
 
+  const [isExporting, setIsExporting] = React.useState(false);
   const showModifierApplyBlockingOverlay = isApplyingHollowing || isApplyingHolePunch || isApplyingBlockersHollowing || pendingHolePunchAutoApplyModelId !== null;
   const [modifierApplyOverlayElapsedSec, setModifierApplyOverlayElapsedSec] = React.useState(0);
 
@@ -2484,14 +2489,12 @@ export default function Home() {
     const inBoundsModelIds = new Set<string>();
 
     for (const model of visibleModels) {
-      const effectiveTransform =
-        (scene.activeModelId === model.id && displayActiveModelId === scene.activeModelId)
-          ? transformMgr.transform
-          : model.transform;
-
-      const approxBounds = computeApproxModelWorldBounds(model.geometry, effectiveTransform);
+      // Use stored transform — bounds don't change on selection.
+      // Previously depended on scene.activeModelId, causing recomputation
+      // (including computePreciseModelWorldBounds, O(vertices)) on every click.
+      const approxBounds = computeApproxModelWorldBounds(model.geometry, model.transform);
       const bounds = isBoundsOutsideVolume(approxBounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)
-        ? computePreciseModelWorldBounds(model.geometry, effectiveTransform)
+        ? computePreciseModelWorldBounds(model.geometry, model.transform)
         : approxBounds;
 
       if (!isBoundsOutsideVolume(bounds, resinBuildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)) {
@@ -2501,11 +2504,8 @@ export default function Home() {
 
     return inBoundsModelIds;
   }, [
-    displayActiveModelId,
     resinBuildVolumeBounds,
-    scene.activeModelId,
     scene.models,
-    transformMgr.transform,
   ]);
 
   const visibleResinModels = React.useMemo(() => {
@@ -2516,7 +2516,9 @@ export default function Home() {
 
   const resinEstimateComputationSignature = React.useMemo(() => {
     if (visibleResinModels.length === 0) return '';
-
+    // Stable signature — only changes when geometry or scale actually changes,
+    // NOT when selection changes. Prevents the resin estimate useEffect from
+    // firing extra state updates on every model click.
     const parts = visibleResinModels.map((model) => {
       const geometry = model.geometry.geometry;
       const positionAttr = geometry.getAttribute('position') as ({ version?: number; data?: { version?: number } } | null);
@@ -2897,6 +2899,7 @@ export default function Home() {
     if (!shouldEstimateResinInBackground) {
       if (visibleResinModels.length === 0) {
         lastCompletedResinEstimateSignatureRef.current = '';
+        printingEstimatedResinMlRef.current = null;
         setPrintingEstimatedResinMl(null);
       }
       setIsPrintingEstimatedResinBusy(false);
@@ -2908,7 +2911,8 @@ export default function Home() {
     const visibleModels = visibleResinModels;
     const compositeSignature = `${resinEstimateComputationSignature}::supports:${supportAndRaftResinMl.toFixed(6)}`;
     const hasChangedSinceLastSuccess = compositeSignature !== lastCompletedResinEstimateSignatureRef.current;
-    if (printingEstimatedResinMl == null || hasChangedSinceLastSuccess) {
+    const hadPriorValue = printingEstimatedResinMlRef.current != null;
+    if (hadPriorValue && hasChangedSinceLastSuccess) {
       setIsPrintingEstimatedResinBusy(true);
     }
 
@@ -2931,7 +2935,9 @@ export default function Home() {
 
       if (cancelled) return;
       const totalWithSupports = totalMl + supportAndRaftResinMl;
-      setPrintingEstimatedResinMl(found || totalWithSupports > 0 ? totalWithSupports : null);
+      const nextValue = found || totalWithSupports > 0 ? totalWithSupports : null;
+      printingEstimatedResinMlRef.current = nextValue;
+      setPrintingEstimatedResinMl(nextValue);
       lastCompletedResinEstimateSignatureRef.current = compositeSignature;
       setIsPrintingEstimatedResinBusy(false);
     };
@@ -2943,7 +2949,6 @@ export default function Home() {
     };
   }, [
     getOrComputeBaseResinMl,
-    printingEstimatedResinMl,
     resinEstimateComputationSignature,
     resinEstimateRefreshTick,
     shouldEstimateResinInBackground,
@@ -5192,6 +5197,25 @@ export default function Home() {
 
 
 
+  const handleNewDeviceDetected = React.useCallback((deviceId: string) => {
+    setNewDeviceToast(deviceId);
+    setIsNewDeviceToastVisible(true);
+    if (newDeviceToastTimeoutRef.current !== null) {
+      window.clearTimeout(newDeviceToastTimeoutRef.current);
+    }
+    newDeviceToastTimeoutRef.current = window.setTimeout(() => {
+      setIsNewDeviceToastVisible(false);
+      newDeviceToastTimeoutRef.current = null;
+    }, 9000);
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (newDeviceToastTimeoutRef.current !== null) {
+        window.clearTimeout(newDeviceToastTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const cancelPendingHistoryTransformResyncFrames = React.useCallback(() => {
     if (historyTransformResyncRafRef.current !== null) {
@@ -5535,9 +5559,33 @@ export default function Home() {
           scene.cutModel(scene.activeModelId);
         }
         break;
-      case 'paste':
-        scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
+      case 'paste': {
+        const pastedIds = scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
+        if (pastedIds.length > 0 && printingEstimatedResinMlRef.current != null) {
+          const pastedModel = scene.models.find((m) => pastedIds.includes(m.id));
+          if (pastedModel) {
+            const geom = pastedModel.geometry.geometry;
+            const pos = geom.getAttribute('position');
+            const idx = geom.getIndex();
+            const sourceKey = String(geom.userData?.resinVolumeSourceKey ?? geom.uuid);
+            const posVer = (pos as { version?: number; data?: { version?: number } }).version
+              ?? (pos as { version?: number; data?: { version?: number } }).data?.version ?? 0;
+            const idxVer = (idx as { version?: number } | null)?.version ?? 0;
+            const cacheKey = `${sourceKey}:${posVer}:${idxVer}`;
+            const cachedMl = printingBaseResinMlCacheRef.current.get(cacheKey) ?? null;
+            if (cachedMl != null) {
+              const sx = Math.abs(pastedModel.transform.scale.x || 1);
+              const sy = Math.abs(pastedModel.transform.scale.y || 1);
+              const sz = Math.abs(pastedModel.transform.scale.z || 1);
+              const addedMl = cachedMl * sx * sy * sz;
+              const nextTotal = (printingEstimatedResinMlRef.current - supportAndRaftResinMl) + addedMl + supportAndRaftResinMl;
+              printingEstimatedResinMlRef.current = nextTotal;
+              setPrintingEstimatedResinMl(nextTotal);
+            }
+          }
+        }
         break;
+      }
       case 'repair': {
         const targetId = scene.activeModelId;
         if (targetId) {
@@ -7235,8 +7283,9 @@ export default function Home() {
 
     // Check for unapplied hole punches and warn the user.
     const hasUnapplied = scene.models.some((model) => {
-      const p = model.meshModifiers?.holePunches;
-      return p && p.length > 0 && !model.meshModifiers?.holePunchesBakedIntoGeometry;
+      const mm = scene.getModelMeshModifiers(model.id);
+      const p = mm?.holePunches;
+      return p && p.length > 0 && !mm?.holePunchesBakedIntoGeometry;
     });
     if (hasUnapplied && unappliedHolePunchResolveRef.current === null) {
       setShowUnappliedHolePunchModal(true);
@@ -8197,7 +8246,32 @@ export default function Home() {
         if (!scene.canPasteModel) return;
         event.preventDefault();
         event.stopPropagation();
-        scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
+        const pastedIds = scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
+        // Paste shares geometry with the source — add its cached volume directly
+        // instead of waiting for the async resin effect loop.
+        if (pastedIds.length > 0 && printingEstimatedResinMlRef.current != null) {
+          const pastedModel = scene.models.find((m) => pastedIds.includes(m.id));
+          if (pastedModel) {
+            const geom = pastedModel.geometry.geometry;
+            const pos = geom.getAttribute('position');
+            const idx = geom.getIndex();
+            const sourceKey = String(geom.userData?.resinVolumeSourceKey ?? geom.uuid);
+            const posVer = (pos as { version?: number; data?: { version?: number } }).version
+              ?? (pos as { version?: number; data?: { version?: number } }).data?.version ?? 0;
+            const idxVer = (idx as { version?: number } | null)?.version ?? 0;
+            const cacheKey = `${sourceKey}:${posVer}:${idxVer}`;
+            const cachedMl = printingBaseResinMlCacheRef.current.get(cacheKey) ?? null;
+            if (cachedMl != null) {
+              const sx = Math.abs(pastedModel.transform.scale.x || 1);
+              const sy = Math.abs(pastedModel.transform.scale.y || 1);
+              const sz = Math.abs(pastedModel.transform.scale.z || 1);
+              const addedMl = cachedMl * sx * sy * sz;
+              const nextTotal = (printingEstimatedResinMlRef.current - supportAndRaftResinMl) + addedMl + supportAndRaftResinMl;
+              printingEstimatedResinMlRef.current = nextTotal;
+              setPrintingEstimatedResinMl(nextTotal);
+            }
+          }
+        }
       }
     };
 
@@ -9089,6 +9163,7 @@ export default function Home() {
               handleBeforeSliceStart: handleBeforeSliceStart,
               handlePreSliceSceneSave: handlePreSliceSceneSave,
               preSliceFileDestinationPathRef: preSliceFileDestinationPathRef,
+              setIsExporting: setIsExporting,
             })}
           </>
 
@@ -9412,6 +9487,7 @@ export default function Home() {
             freezeViewportActive={isSlicingBusy && scene.mode === 'export'}
             indicatorPlaneZ={scene.mode === 'printing' ? printingCurrentHeightMm : null}
             indicatorPlaneColor={scene.selectionColor || '#ec2a77'}
+            onNewDeviceDetected={handleNewDeviceDetected}
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (
               <MeshSmoothingBrushCursor />
@@ -9847,6 +9923,54 @@ export default function Home() {
             </div>
           </div>
         </div>
+      )}
+
+      {isExporting && (
+        <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
+          <div
+            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
+            style={{ background: 'color-mix(in srgb, var(--surface-0), black 10%)', borderColor: 'var(--border-subtle)' }}
+            role="dialog"
+            aria-modal="true"
+            aria-live="polite"
+          >
+            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Exporting…
+            </div>
+            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              <p>Writing mesh geometry and support data to file…</p>
+            </div>
+            <div className="ui-loading-track mt-3 h-2.5 w-full rounded-full" style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}>
+              <div className="ui-loading-indicator" style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {newDeviceToast && (
+        <ToastViewport zIndex={127} offset="1.25rem">
+          <Toast
+            tone="warning"
+            shape="rounded"
+            animated
+            visible={isNewDeviceToastVisible}
+            className="flex items-center gap-3 max-w-sm pointer-events-auto"
+          >
+            <Gamepad2 className="h-4 w-4 flex-shrink-0" />
+            <span className="flex-1 text-[12px] leading-snug">
+              New input device detected.<br />
+              <span style={{ fontWeight: 400, opacity: 0.8 }}>Go to Settings → 3D Mouse to configure or block it.</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsNewDeviceToastVisible(false)}
+              className="flex-shrink-0 rounded px-2 py-0.5 text-[11px] font-semibold"
+              style={{ background: 'color-mix(in srgb, #f59e0b, transparent 80%)', color: 'var(--text-strong)' }}
+            >
+              Dismiss
+            </button>
+          </Toast>
+        </ToastViewport>
       )}
 
     </EditorLayout>

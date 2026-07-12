@@ -18,6 +18,7 @@ interface ExportPanelProps {
   captureSceneThumbnailPng?: () => Promise<Uint8Array | null>;
   onExportSuccess?: (savedPath: string) => void;
   onExportError?: (message: string) => void;
+  onExportProgress?: (exporting: boolean) => void;
 }
 
 type ExportScope = 'entire_plate' | 'active_model';
@@ -38,6 +39,7 @@ export function ExportPanel({
   captureSceneThumbnailPng,
   onExportSuccess,
   onExportError,
+  onExportProgress,
 }: ExportPanelProps) {
   const [isExpanded, setIsExpanded] = useFloatingPanelCollapse(true);
   const [exportScope, setExportScope] = useState<ExportScope>('entire_plate');
@@ -136,6 +138,7 @@ export function ExportPanel({
     }
 
     setIsExporting(true);
+    onExportProgress?.(true);
 
     setTimeout(async () => {
       try {
@@ -186,6 +189,7 @@ export function ExportPanel({
         onExportError?.('Export failed. Check console for details.');
       } finally {
         setIsExporting(false);
+        onExportProgress?.(false);
       }
     }, 100);
   };
@@ -200,6 +204,7 @@ export function ExportPanel({
     }
 
     setIsExportingIndividually(true);
+    onExportProgress?.(true);
 
     try {
       const targetDirectory = (await pickDirectoryWithNativeDialog()).trim();
@@ -258,6 +263,7 @@ export function ExportPanel({
       onExportError?.('Batch export failed. Check console for details.');
     } finally {
       setIsExportingIndividually(false);
+      onExportProgress?.(false);
     }
   };
 

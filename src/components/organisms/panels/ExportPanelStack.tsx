@@ -14,6 +14,7 @@ export type ExportPanelStackProps = {
   captureExportThumbnailPng: React.ComponentProps<typeof ExportPanel>['captureSceneThumbnailPng'];
   handleExportSuccess: React.ComponentProps<typeof ExportPanel>['onExportSuccess'];
   showOperationError: React.ComponentProps<typeof ExportPanel>['onExportError'];
+  setIsExporting: (exporting: boolean) => void;
 
   estimatedSlicerLayerCount: number;
   crossSectionLayerHeightMm: number;
@@ -43,6 +44,7 @@ export function ExportPanelStack({
   captureExportThumbnailPng,
   handleExportSuccess,
   showOperationError,
+  setIsExporting,
   estimatedSlicerLayerCount,
   crossSectionLayerHeightMm,
   estimatedVolumeMlLabel,
@@ -77,6 +79,7 @@ export function ExportPanelStack({
         captureSceneThumbnailPng={captureExportThumbnailPng}
         onExportSuccess={handleExportSuccess}
         onExportError={showOperationError}
+        onExportProgress={setIsExporting}
       />
 
       <SlicingPanel

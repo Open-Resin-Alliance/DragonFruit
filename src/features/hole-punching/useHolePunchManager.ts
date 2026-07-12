@@ -425,8 +425,8 @@ export function useHolePunchManager({
     ) ? hollowPreview.geometry : null;
 
     const shouldUseActiveGeometry = Boolean(
-      activeModel.meshModifiers?.hollowing?.enabled
-      && activeModel.meshModifiers?.hollowing?.bakedIntoGeometry,
+      scene.getModelMeshModifiers(modelId)?.hollowing?.enabled
+      && scene.getModelMeshModifiers(modelId)?.hollowing?.bakedIntoGeometry,
     );
 
     const targetGeometry = previewGeometry ?? (shouldUseActiveGeometry ? activeModel.geometry.geometry : null);

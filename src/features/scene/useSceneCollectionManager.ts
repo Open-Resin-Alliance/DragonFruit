@@ -143,11 +143,73 @@ function cloneLoadedModel(model: LoadedModel): LoadedModel {
   return {
     ...model,
     transform: cloneTransform(model.transform),
-    meshModifiers: model.meshModifiers ? clonePlainObject(model.meshModifiers) : undefined,
+    // meshModifiers are stored externally in meshModifierStoreRef — never on the model object.
+    meshModifiers: undefined,
   };
 }
 
+/**
+ * Lightweight shallow clone — avoids JSON round-trip through MB-scale
+ * base64 strings (cavityPositionsBase64, holePunchSourcePositionsBase64)
+ * that LYS imports carry in meshModifiers.
+ *
+ * NOTE: Since meshModifiers are now stored externally in
+ * meshModifierStoreRef and stripped from model objects, this function is
+ * only used during import to sanitize the payload before storing it in
+ * the external store.
+ */
+function cloneMeshModifiersShallow(modifiers: ModelMeshModifiers): ModelMeshModifiers {
+  return {
+    ...modifiers,
+    hollowing: modifiers.hollowing ? { ...modifiers.hollowing } : undefined,
+    holePunches: modifiers.holePunches ? modifiers.holePunches.map((p) => ({ ...p })) : undefined,
+    holePunchAppliedPlacements: modifiers.holePunchAppliedPlacements
+      ? modifiers.holePunchAppliedPlacements.map((p) => ({ ...p }))
+      : undefined,
+  };
+}
+
+// ── External Mesh Modifier Store ─────────────────────────────────────────
+//
+// Model mesh modifiers (especially the MB-scale cavityPositionsBase64 /
+// sourcePositionsBase64 from LYS imports) are kept in this module-level Map
+// instead of on model objects. This prevents React's state reconciliation
+// from churning on large payloads during selection, copy, paste, and
+// duplicate operations.
+const meshModifierStoreRef: { current: Map<string, ModelMeshModifiers> } = {
+  current: new Map(),
+};
+
+function storeModelMeshModifiers(modelId: string, modifiers: ModelMeshModifiers | undefined | null): void {
+  if (modifiers) {
+    meshModifierStoreRef.current.set(modelId, modifiers);
+  } else {
+    meshModifierStoreRef.current.delete(modelId);
+  }
+}
+
+function getStoredMeshModifiers(modelId: string): ModelMeshModifiers | undefined {
+  return meshModifierStoreRef.current.get(modelId);
+}
+
+function deleteStoredMeshModifiers(modelId: string): void {
+  meshModifierStoreRef.current.delete(modelId);
+}
+
+function schedulePostPaint(callback: () => void): void {
+  if (typeof window === 'undefined') {
+    setTimeout(callback, 0);
+    return;
+  }
+  window.setTimeout(callback, 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+
 function clonePlainObject<T>(value: T): T {
+  if (typeof structuredClone === 'function') {
+    return structuredClone(value) as T;
+  }
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
@@ -1867,10 +1929,15 @@ export function useSceneCollectionManager() {
     });
   }, []);
 
-  // Active model derived state
-  const activeModel = useMemo(() =>
-    models.find(m => m.id === activeModelId) || null
-    , [models, activeModelId]);
+  // Active model derived state — meshModifiers are hydrated from the
+  // external store so model objects never carry the heavy base64 payloads.
+  const activeModel = useMemo(() => {
+    const model = models.find(m => m.id === activeModelId) || null;
+    if (!model) return null;
+    const storedModifiers = getStoredMeshModifiers(model.id);
+    if (!storedModifiers) return model;
+    return { ...model, meshModifiers: storedModifiers };
+  }, [models, activeModelId]);
 
   useEffect(() => {
     const modelIdSet = new Set(models.map((m) => m.id));
@@ -2528,9 +2595,13 @@ export function useSceneCollectionManager() {
   }, []);
 
   const setModelMeshModifiers = useCallback((id: string, meshModifiers: ModelMeshModifiers | undefined) => {
+    // Store externally — model objects never carry meshModifiers directly.
+    storeModelMeshModifiers(id, meshModifiers);
+    // Still trigger a shallow React update so consumers that derive from
+    // the store can re-render.
     setModels(prev => prev.map((model) => (
       model.id === id
-        ? { ...model, meshModifiers }
+        ? { ...model }
         : model
     )));
   }, []);
@@ -2912,6 +2983,9 @@ export function useSceneCollectionManager() {
     setActiveModelId(nextActiveModelId);
     setSelectedModelIds(nextSelectedModelIds);
 
+    // Clean up external mesh modifier store
+    ids.forEach((id) => deleteStoredMeshModifiers(id));
+
     // Clean up associated supports before capturing the "after" snapshot so undo/redo remains atomic.
     const supportState = getSnapshot();
     let totalRemovedSupports = 0;
@@ -3023,7 +3097,7 @@ export function useSceneCollectionManager() {
         },
         color: source.color,
         polygonCount: source.polygonCount,
-        meshModifiers: source.meshModifiers ? clonePlainObject(source.meshModifiers) : undefined,
+        meshModifiers: undefined,
         supportClipboard,
       },
     ]);
@@ -3052,7 +3126,7 @@ export function useSceneCollectionManager() {
         },
         color: source.color,
         polygonCount: source.polygonCount,
-        meshModifiers: source.meshModifiers ? clonePlainObject(source.meshModifiers) : undefined,
+        meshModifiers: undefined,
         supportClipboard,
       };
     }));
@@ -3070,7 +3144,11 @@ export function useSceneCollectionManager() {
   const pasteModel = useCallback(() => {
     if (modelClipboard.length === 0) return null;
 
-    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds, { includeSupportState: true });
+    const beforeModels = models;
+    const beforeActiveModelId = activeModelId;
+    const beforeSelectedModelIds = selectedModelIds;
+    const supportStateBefore = getSnapshot();
+    const kickstandStateBefore = getKickstandSnapshot();
 
     const first = modelClipboard[0];
 
@@ -3091,7 +3169,7 @@ export function useSceneCollectionManager() {
       visible: true,
       color: first.color,
       polygonCount: first.polygonCount,
-      meshModifiers: first.meshModifiers ? clonePlainObject(first.meshModifiers) : undefined,
+      meshModifiers: undefined,
     };
 
     const nextModels = [...models, pastedModel];
@@ -3099,16 +3177,30 @@ export function useSceneCollectionManager() {
     setActiveModelId(id);
     setSelectedModelIds([id]);
 
-    pasteModelSupportsFromClipboard(
-      first.supportClipboard,
-      id,
-      first.transform,
-      pastedModel.transform,
-      { recordHistory: false },
-    );
+    schedulePostPaint(() => {
+      beginSupportStateBatch();
+      beginKickstandStoreBatch();
+      try {
+        pasteModelSupportsFromClipboard(
+          first.supportClipboard,
+          id,
+          first.transform,
+          pastedModel.transform,
+          { recordHistory: false },
+        );
+      } finally {
+        endKickstandStoreBatch();
+        endSupportStateBatch();
+      }
 
-    const after = captureSceneSnapshot(nextModels, id, [id], { includeSupportState: true });
-    pushSceneSnapshotHistory(before, after, `Paste Model ${first.name}`);
+      const before = captureSceneSnapshot(beforeModels, beforeActiveModelId, beforeSelectedModelIds, {
+        includeSupportState: true,
+        supportStateOverride: supportStateBefore,
+        kickstandStateOverride: kickstandStateBefore,
+      });
+      const after = captureSceneSnapshot(nextModels, id, [id], { includeSupportState: true });
+      pushSceneSnapshotHistory(before, after, `Paste Model ${first.name}`);
+    });
 
     return id;
   }, [activeModelId, cloneGeometryWithBounds, generateId, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds]);
@@ -3116,7 +3208,11 @@ export function useSceneCollectionManager() {
   const pasteCopiedModelsAutoArrange = useCallback((spacingMm = 5) => {
     if (modelClipboard.length === 0) return [] as string[];
 
-    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds, { includeSupportState: true });
+    const beforeModels = models;
+    const beforeActiveModelId = activeModelId;
+    const beforeSelectedModelIds = selectedModelIds;
+    const supportStateBefore = getSnapshot();
+    const kickstandStateBefore = getKickstandSnapshot();
 
     const entries = modelClipboard;
 
@@ -3465,38 +3561,45 @@ export function useSceneCollectionManager() {
         visible: true,
         color: entry.color,
         polygonCount: entry.polygonCount,
-        meshModifiers: entry.meshModifiers ? clonePlainObject(entry.meshModifiers) : undefined,
+        meshModifiers: undefined,
       };
     });
 
     const nextModels = [...models, ...pastedModels];
     setModels(nextModels);
 
-    beginSupportStateBatch();
-    beginKickstandStoreBatch();
-    try {
-      pastedModels.forEach((pastedModel, index) => {
-        const sourceEntry = entries[index];
-        if (!sourceEntry) return;
-        pasteModelSupportsFromClipboard(
-          sourceEntry.supportClipboard,
-          pastedModel.id,
-          sourceEntry.transform,
-          pastedModel.transform,
-          { recordHistory: false },
-        );
-      });
-    } finally {
-      endKickstandStoreBatch();
-      endSupportStateBatch();
-    }
-
     if (createdIds.length > 0) {
       setActiveModelId(createdIds[0]);
       setSelectedModelIds(createdIds);
 
-      const after = captureSceneSnapshot(nextModels, createdIds[0], createdIds, { includeSupportState: true });
-      pushSceneSnapshotHistory(before, after, createdIds.length === 1 ? 'Paste Model' : `Paste ${createdIds.length} Models`);
+      schedulePostPaint(() => {
+        beginSupportStateBatch();
+        beginKickstandStoreBatch();
+        try {
+          pastedModels.forEach((pastedModel, index) => {
+            const sourceEntry = entries[index];
+            if (!sourceEntry) return;
+            pasteModelSupportsFromClipboard(
+              sourceEntry.supportClipboard,
+              pastedModel.id,
+              sourceEntry.transform,
+              pastedModel.transform,
+              { recordHistory: false },
+            );
+          });
+        } finally {
+          endKickstandStoreBatch();
+          endSupportStateBatch();
+        }
+
+        const before = captureSceneSnapshot(beforeModels, beforeActiveModelId, beforeSelectedModelIds, {
+          includeSupportState: true,
+          supportStateOverride: supportStateBefore,
+          kickstandStateOverride: kickstandStateBefore,
+        });
+        const after = captureSceneSnapshot(nextModels, createdIds[0], createdIds, { includeSupportState: true });
+        pushSceneSnapshotHistory(before, after, createdIds.length === 1 ? 'Paste Model' : `Paste ${createdIds.length} Models`);
+      });
     }
 
     return createdIds;
@@ -3538,7 +3641,7 @@ export function useSceneCollectionManager() {
         visible: source.visible,
         color: source.color,
         polygonCount: source.polygonCount,
-        meshModifiers: source.meshModifiers ? clonePlainObject(source.meshModifiers) : undefined,
+        meshModifiers: undefined,
       };
     });
 
@@ -3809,9 +3912,14 @@ export function useSceneCollectionManager() {
           color: '#a3a3a3',
           polygonCount: processed.geometry.getAttribute('position').count / 3,
           ignoreAutoLift: true,
-          meshModifiers: meshModifiers ? clonePlainObject(meshModifiers) : undefined,
+          meshModifiers: undefined,
           manualZMoveOverride: true,
         };
+
+        // Store meshModifiers externally so model objects stay lightweight
+        if (meshModifiers) {
+          storeModelMeshModifiers(model.id, cloneMeshModifiersShallow(meshModifiers));
+        }
 
         newModels.push(model);
         supportEntries.push({ model, sourceTransform, supportData });
@@ -4045,10 +4153,15 @@ export function useSceneCollectionManager() {
             visible: model.visible,
             color,
             polygonCount,
-            meshModifiers: model.meshModifiers ? clonePlainObject(model.meshModifiers) : undefined,
+            meshModifiers: undefined,
             ignoreAutoLift: true,
             manualZMoveOverride: true,
           });
+
+          // Store meshModifiers externally so model objects stay lightweight
+          if (model.meshModifiers) {
+            storeModelMeshModifiers(resolvedId, cloneMeshModifiersShallow(model.meshModifiers));
+          }
         } catch (error) {
           console.error(`[SceneCollection] Failed importing embedded VOXL mesh for model "${model.name}"`, error);
           skippedModels += 1;
@@ -4618,6 +4731,7 @@ export function useSceneCollectionManager() {
     setModelManualZMoveOverride,
     setModelVisibility,
     setModelMeshModifiers,
+    getModelMeshModifiers: useCallback((id: string) => getStoredMeshModifiers(id), []),
     renameModel,
     groupModels,
     ungroupModels,

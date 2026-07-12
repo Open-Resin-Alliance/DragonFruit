@@ -1239,7 +1239,7 @@ export function useHollowingManager({
   // Restore cavity geometry from persisted data for models with baked hollowing.
   React.useEffect(() => {
     for (const model of scene.models) {
-      const hollowing = model.meshModifiers?.hollowing;
+      const hollowing = scene.getModelMeshModifiers(model.id)?.hollowing;
       if (!hollowing?.enabled || !hollowing.cavityPositionsBase64 || !hollowing.cavityPositionCount) {
         continue;
       }
