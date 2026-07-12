@@ -623,6 +623,7 @@ export function TransformGizmo({
               interactionsEnabled={partIsInteractable('ring-x')}
               suppressAxisAnimations={suppressAxisAnimations}
               disableRingBillboard={disableRingBillboard}
+              enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
               handleRestAngle={rotationHandleRestAngle}
@@ -648,6 +649,7 @@ export function TransformGizmo({
               interactionsEnabled={partIsInteractable('ring-y')}
               suppressAxisAnimations={suppressAxisAnimations}
               disableRingBillboard={disableRingBillboard}
+              enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
               handleRestAngle={rotationHandleRestAngle}
@@ -673,6 +675,7 @@ export function TransformGizmo({
               interactionsEnabled={partIsInteractable('ring-z')}
               suppressAxisAnimations={suppressAxisAnimations}
               disableRingBillboard={disableRingBillboard}
+              enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
               handleRestAngle={rotationHandleRestAngle}
@@ -703,6 +706,7 @@ export function TransformGizmo({
               handleVariant={scaleHandleVariant}
               dualHandles={dualScaleHandles}
               handleDistance={scaleHandleDistance}
+              enableLighting={enableLighting}
               gizmoPosition={posVec}
               onDragStart={(isUniform: boolean) => handleDragStart('scale-x', isUniform)}
               onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('x', factor, isUniform)}
@@ -725,6 +729,7 @@ export function TransformGizmo({
               handleVariant={scaleHandleVariant}
               dualHandles={dualScaleHandles}
               handleDistance={scaleHandleDistance}
+              enableLighting={enableLighting}
               gizmoPosition={posVec}
               onDragStart={(isUniform: boolean) => handleDragStart('scale-y', isUniform)}
               onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('y', factor, isUniform)}
@@ -747,6 +752,7 @@ export function TransformGizmo({
               handleVariant={scaleHandleVariant}
               dualHandles={dualScaleHandles}
               handleDistance={scaleHandleDistance}
+              enableLighting={enableLighting}
               gizmoPosition={posVec}
               onDragStart={(isUniform: boolean) => handleDragStart('scale-z', isUniform)}
               onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('z', factor, isUniform)}

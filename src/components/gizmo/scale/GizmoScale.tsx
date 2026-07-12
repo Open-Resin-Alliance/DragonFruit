@@ -25,6 +25,8 @@ interface GizmoScaleProps {
   dualHandles?: boolean;
   /** Distance of the handle from the gizmo center (gizmo units). Defaults to GIZMO_SIZES.scaleLineLength. */
   handleDistance?: number;
+  /** Enable the colored point light at the handle (disable for flat overlay looks / performance). */
+  enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
   onDragStart: (isUniform: boolean) => boolean | void;
   onDrag: (factor: number, isUniform: boolean) => void;
@@ -49,6 +51,7 @@ export function GizmoScale({
   handleVariant = 'cube',
   dualHandles = false,
   handleDistance,
+  enableLighting = true,
   gizmoPosition,
   onDragStart,
   onDrag,
@@ -455,7 +458,7 @@ export function GizmoScale({
       {dualHandles && renderHandleVisual(mirrorPosition)}
 
       {/* Point light at hexagon to cast colored light on model */}
-      {!isDimmed && (
+      {enableLighting && !isDimmed && (
         <pointLight
           position={position}
           color={isActive ? GIZMO_COLORS.active : effectiveHovered ? GIZMO_COLORS.hover : axisColors.end}
