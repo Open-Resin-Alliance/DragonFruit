@@ -565,7 +565,7 @@ export function ModelStatsCard({
               <span>STL size:</span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model?.fileSizeBytes != null ? formatBytes(model.fileSizeBytes) : '-'}</span>
 
-              <span>Polygons:</span>
+              <span>Triangles:</span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? formatPolygonCountCompact(model.polygonCount) : '-'}</span>
 
               <span>Shells:</span>
