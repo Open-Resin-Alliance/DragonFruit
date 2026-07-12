@@ -1,6 +1,7 @@
 import React from 'react';
 import * as THREE from 'three';
 import { getVoxelPreviewBudget, tryAllocateFloat32Array, warnOnce } from './hollowVoxelPreviewLimits';
+import { INSTANCED_EDGE_FRAGMENT_SHADER, INSTANCED_EDGE_VERTEX_SHADER } from './instancedEdgeShader';
 
 type HollowVoxelEditOverlayProps = {
   voxelCenters: Float32Array;
@@ -14,6 +15,13 @@ type HollowVoxelEditOverlayProps = {
 const UNBLOCKED = new THREE.Color('#66ecff');
 const BLOCKED = new THREE.Color('#ffd928');
 const EDGE_COLOR = '#1a3340';
+const EDGE_OPACITY = 0.45;
+// Stable reference so the shaderMaterial's `uniforms` prop doesn't get a
+// fresh object (and re-upload to the GPU) on every render.
+const EDGE_UNIFORMS = {
+  uColor: { value: new THREE.Color(EDGE_COLOR) },
+  uOpacity: { value: EDGE_OPACITY },
+};
 
 /** 12 edges of a unit cube centred at origin, as 24 vertex positions. */
 const CUBE_EDGE_VERTICES = new Float32Array([
@@ -31,42 +39,20 @@ const CUBE_EDGE_VERTICES = new Float32Array([
   -0.5,  0.5, -0.5, -0.5,  0.5,  0.5,
 ]);
 
-function buildEdgePositions(
-  voxelCenters: Float32Array,
-  blockedVoxelCenters: Float32Array | undefined,
-  voxelSizeMm: number,
-  offsetX: number,
-  offsetY: number,
-  offsetZ: number,
-): Float32Array | null {
-  const removedCount = Math.floor(voxelCenters.length / 3);
-  const blockedCount = blockedVoxelCenters
-    ? Math.floor(blockedVoxelCenters.length / 3)
-    : 0;
-  const total = removedCount + blockedCount;
-  const out = tryAllocateFloat32Array(total * 72);
-  if (!out) return null;
-
-  const writeEdges = (i: number, cx: number, cy: number, cz: number) => {
-    const vo = i * 72;
-    for (let v = 0; v < 72; v += 3) {
-      out[vo + v]     = cx + CUBE_EDGE_VERTICES[v]     * voxelSizeMm;
-      out[vo + v + 1] = cy + CUBE_EDGE_VERTICES[v + 1] * voxelSizeMm;
-      out[vo + v + 2] = cz + CUBE_EDGE_VERTICES[v + 2] * voxelSizeMm;
-    }
-  };
-
-  for (let i = 0; i < removedCount; i += 1) {
-    const base = i * 3;
-    writeEdges(i, voxelCenters[base] + offsetX, voxelCenters[base + 1] + offsetY, voxelCenters[base + 2] + offsetZ);
-  }
-  if (blockedVoxelCenters) {
-    for (let i = 0; i < blockedCount; i += 1) {
-      const base = i * 3;
-      writeEdges(removedCount + i, blockedVoxelCenters[base] + offsetX, blockedVoxelCenters[base + 1] + offsetY, blockedVoxelCenters[base + 2] + offsetZ);
-    }
-  }
-  return out;
+/**
+ * Builds the GPU-instanced edge-wireframe geometry: a shared, non-instanced
+ * 24-vertex cube-edge template plus a per-instance transform attribute that
+ * reuses the exact same matrix buffer already built for the cube
+ * InstancedMesh (`instanceData.matrices` from `buildInstanceData`) -- zero
+ * additional per-voxel memory, unlike the previous fully-expanded
+ * world-space buffer.
+ */
+function buildInstancedEdgeGeometry(matrices: Float32Array): THREE.InstancedBufferGeometry {
+  const geom = new THREE.InstancedBufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(CUBE_EDGE_VERTICES, 3));
+  geom.setAttribute('instanceTransform', new THREE.InstancedBufferAttribute(matrices, 16));
+  geom.instanceCount = Math.floor(matrices.length / 16);
+  return geom;
 }
 
 function buildInstanceData(
@@ -192,21 +178,12 @@ export function HollowVoxelEditOverlay({
     );
   }, [voxelCenters, blockedVoxelCenters, voxelRadiusMm, meshOffset.x, meshOffset.y, meshOffset.z, blockedVoxelIndexSet, overCubeBudget]);
 
+  // Edge geometry: GPU-instanced, reusing the same per-voxel matrices
+  // already built for the cube InstancedMesh above (instanceData.matrices).
   const edgeGeometry = React.useMemo(() => {
-    if (!showEdges || overCubeBudget) return null;
-    const edgePos = buildEdgePositions(
-      voxelCenters,
-      blockedVoxelCenters,
-      voxelRadiusMm,
-      meshOffset.x,
-      meshOffset.y,
-      meshOffset.z,
-    );
-    if (!edgePos) return null;
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute('position', new THREE.BufferAttribute(edgePos, 3));
-    return geom;
-  }, [voxelCenters, blockedVoxelCenters, voxelRadiusMm, meshOffset.x, meshOffset.y, meshOffset.z, showEdges, overCubeBudget]);
+    if (!showEdges || !instanceData) return null;
+    return buildInstancedEdgeGeometry(instanceData.matrices);
+  }, [instanceData, showEdges]);
 
   React.useEffect(() => {
     const mesh = meshRef.current;
@@ -253,14 +230,16 @@ export function HollowVoxelEditOverlay({
         <lineSegments
           geometry={edgeGeometry}
           renderOrder={30002}
+          frustumCulled={false}
           raycast={() => null}
         >
-          <lineBasicMaterial
-            color={EDGE_COLOR}
+          <shaderMaterial
             transparent
-            opacity={0.45}
             depthTest
             depthWrite={false}
+            uniforms={EDGE_UNIFORMS}
+            vertexShader={INSTANCED_EDGE_VERTEX_SHADER}
+            fragmentShader={INSTANCED_EDGE_FRAGMENT_SHADER}
           />
         </lineSegments>
       )}

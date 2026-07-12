@@ -2,26 +2,32 @@
  * Resource-aware safety limits for the hollow-voxel preview renderers
  * (`HollowVoxelPreview.tsx`, `HollowVoxelEditOverlay.tsx`).
  *
- * The cube bodies are cheap (a shared `InstancedMesh`, 64 bytes/voxel for
- * the instance matrix). The cube-edge wireframe is not instanced -- it's a
- * fully expanded `LineSegments` position buffer, 288 bytes/voxel (24
- * vertices x 3 floats). On a large part with a fine voxel size (or after
- * repeated lasso-blocking re-exposes more of the cavity interior as
- * boundary), voxel counts can reach into the millions, and an unbounded
- * `new Float32Array(voxelCount * 72)` can throw
+ * The cube bodies are a shared `InstancedMesh`, 64 bytes/voxel for the
+ * instance matrix. The cube-edge wireframe used to be a separate, fully
+ * expanded `LineSegments` position buffer at 288 bytes/voxel (24 vertices x
+ * 3 floats) -- on a large part with a fine voxel size (or after repeated
+ * lasso-blocking re-exposes more of the cavity interior as boundary), voxel
+ * counts could reach into the millions, and an unbounded
+ * `new Float32Array(voxelCount * 72)` could throw
  * `RangeError: Array buffer allocation failed` and crash the render tree.
  *
- * Budgets below are sized from `performance.memory.jsHeapSizeLimit` when
+ * The edges are now GPU-instanced too (see `instancedEdgeShader.ts` /
+ * `buildInstancedEdgeGeometry` in both renderer files), reusing the exact
+ * same per-voxel matrix buffer already built for the cubes -- there is no
+ * longer any O(voxel count) allocation for edges at all, just one shared
+ * 288-byte template built once. So `maxEdgeInstances` is now simply equal
+ * to `maxCubeInstances`; it's kept as a distinct field (rather than removed)
+ * so neither renderer file needs to change its cap-checking logic, and so a
+ * future change to either cost model doesn't require touching call sites.
+ *
+ * The budget itself is sized from `performance.memory.jsHeapSizeLimit` when
  * available (Chromium/WebView2) so the cap scales with the actual runtime
- * rather than a single fixed number picked for one machine. Cubes and edges
- * get separate ceilings since edges are ~4.5x more expensive per voxel and
- * are a contrast aid, not the primary visual information.
+ * rather than a single fixed number picked for one machine.
  */
 
 const BUDGET_FRACTION_OF_HEAP_LIMIT = 0.12;
 const FALLBACK_BUDGET_BYTES = 150 * 1024 * 1024;
-const BYTES_PER_CUBE_INSTANCE = 64; // 4x4 f32 instance matrix
-const BYTES_PER_EDGE_INSTANCE = 288; // 24 vertices x 3 floats x 4 bytes, fully expanded (not instanced)
+const BYTES_PER_CUBE_INSTANCE = 64; // 4x4 f32 instance matrix -- the only real per-voxel cost left
 
 export type VoxelPreviewBudget = {
   maxCubeInstances: number;
@@ -46,9 +52,10 @@ let cachedBudget: VoxelPreviewBudget | null = null;
 export function getVoxelPreviewBudget(): VoxelPreviewBudget {
   if (!cachedBudget) {
     const budgetBytes = readMemoryBudgetBytes();
+    const maxCubeInstances = Math.max(1, Math.floor(budgetBytes / BYTES_PER_CUBE_INSTANCE));
     cachedBudget = {
-      maxCubeInstances: Math.max(1, Math.floor(budgetBytes / BYTES_PER_CUBE_INSTANCE)),
-      maxEdgeInstances: Math.max(1, Math.floor(budgetBytes / BYTES_PER_EDGE_INSTANCE)),
+      maxCubeInstances,
+      maxEdgeInstances: maxCubeInstances,
     };
   }
   return cachedBudget;
