@@ -160,6 +160,8 @@ export interface ContactDisk {
     placementSurface?: 'interior' | 'exterior';
     profile: ContactDiskProfile;
     contactDiameterMm: number;
+    contactFaceRatio?: number;    // Oval contact face: squished-axis fraction (1/absent = circle)
+    contactFaceAngleRad?: number; // Oval contact face: rotation about the disc normal
 }
 
 export interface Twig extends SupportEntity {

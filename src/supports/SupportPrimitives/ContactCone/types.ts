@@ -43,6 +43,8 @@ export interface ContactCone {
     normal: Vec3;               // Cone axis direction (points into model)
     surfaceNormal?: Vec3;       // ACTUAL surface normal (for disk alignment)
     diskLengthOverride?: number; // Override for disk thickness (e.g. from collision)
+    contactFaceRatio?: number;   // Oval contact face: squished-axis fraction (1/absent = circle)
+    contactFaceAngleRad?: number; // Oval contact face: rotation about the disc normal
     placementSurface?: 'interior' | 'exterior';
     profile: SupportTipProfile;
     socketJointId?: string;      // The Joint this cone connects to (optional for Leaf)

@@ -24,9 +24,10 @@ export function twigDiskJointStandoff(args: {
     coneAxis: Vec3;
     profile: ContactDiskProfile;
     jointDiameterMm: number;
+    contactDiameterMm?: number; // Feeds the tip-ball clearance floor (bare ContactDiskProfile lacks it)
 }): number {
-    const { surfaceNormal, coneAxis, profile, jointDiameterMm } = args;
-    const angleBased = calculateDiskThickness(surfaceNormal, coneAxis, profile);
+    const { surfaceNormal, coneAxis, profile, jointDiameterMm, contactDiameterMm } = args;
+    const angleBased = calculateDiskThickness(surfaceNormal, coneAxis, profile, contactDiameterMm);
     const radiusBased = jointDiameterMm / 2 + TWIG_JOINT_SURFACE_CLEARANCE_MM;
     return Math.max(angleBased, radiusBased);
 }

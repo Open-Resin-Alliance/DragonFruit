@@ -94,12 +94,14 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
         coneAxis: { x: _axisA.x, y: _axisA.y, z: _axisA.z },
         profile: diskProfile,
         jointDiameterMm: jointDiameterA,
+        contactDiameterMm: diskAContactDiameter,
     });
     const diskThicknessB = twigDiskJointStandoff({
         surfaceNormal: bNormal,
         coneAxis: { x: _axisB.x, y: _axisB.y, z: _axisB.z },
         profile: diskProfile,
         jointDiameterMm: jointDiameterB,
+        contactDiameterMm: diskBContactDiameter,
     });
 
     // Shaft connects to the center of the disk tip sphere at each end.

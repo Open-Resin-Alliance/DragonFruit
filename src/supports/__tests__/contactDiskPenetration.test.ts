@@ -6,6 +6,7 @@ import {
     calculateDiskThickness,
     getContactDiskGeometrySpec,
     resolveDiskPenetrationMm,
+    TIP_BALL_CLEARANCE_MM,
 } from '../SupportPrimitives/ContactDisk/contactDiskUtils';
 import type { ContactDiskProfile } from '../SupportPrimitives/ContactCone/types';
 import { SupportGeometryGenerator } from '@/features/export/logic/SupportGeometryGenerator';
@@ -35,6 +36,24 @@ test('resolveDiskPenetrationMm resolves explicit → profile → 0 and never ret
     assert.equal(resolveDiskPenetrationMm({ penetrationMm: Number.NaN }), 0);
 });
 
+test('standoff is floored so the tip ball clears the model', () => {
+    // Perpendicular contact: the angle-based standoff would be the 0.1mm
+    // minimum, but the tip ball (radius = contact radius) must stay clear of
+    // the model by TIP_BALL_CLEARANCE_MM.
+    assert.equal(calculateDiskThickness(UP, UP, DISK_PROFILE, 0.4), 0.2 + TIP_BALL_CLEARANCE_MM);
+    // Profiles that carry contactDiameterMm (SupportTipProfile) floor automatically.
+    const profileWithDiameter: ContactDiskProfile & { contactDiameterMm: number } = {
+        ...DISK_PROFILE,
+        contactDiameterMm: 1,
+    };
+    assert.equal(
+        calculateDiskThickness(UP, UP, profileWithDiameter),
+        0.5 + TIP_BALL_CLEARANCE_MM,
+    );
+    // Without a diameter from either source the ball floor is skipped (legacy).
+    assert.equal(calculateDiskThickness(UP, UP, DISK_PROFILE), 0.1);
+});
+
 test('spec with zero penetration matches the legacy disk layout', () => {
     const spec = getContactDiskGeometrySpec({
         pos: POS,
@@ -44,7 +63,9 @@ test('spec with zero penetration matches the legacy disk layout', () => {
         contactDiameterMm: 0.4,
     });
 
-    const thickness = calculateDiskThickness(UP, UP, DISK_PROFILE);
+    // The spec feeds its contactDiameterMm into the thickness calc (tip-ball
+    // clearance floor), so the reference value must do the same.
+    const thickness = calculateDiskThickness(UP, UP, DISK_PROFILE, 0.4);
     assert.equal(spec.thickness, thickness);
     assert.equal(spec.penetrationMm, 0);
     assert.equal(spec.height, thickness);
@@ -121,18 +142,19 @@ test('export disk mesh embeds by the penetration depth with a fixed tip sphere',
 
     diskGroup.updateMatrixWorld(true);
 
-    const cylinder = diskGroup.children.find(
-        (child) => (child as THREE.Mesh).geometry?.type === 'CylinderGeometry',
+    const shaft = diskGroup.children.find(
+        (child) => !!(child as THREE.Mesh).geometry && (child as THREE.Mesh).geometry.type !== 'SphereGeometry',
     ) as THREE.Mesh | undefined;
-    assert.ok(cylinder, 'expected a disk cylinder in the export group');
-    const cylinderParams = (cylinder!.geometry as THREE.CylinderGeometry).parameters;
+    assert.ok(shaft, 'expected a disk shaft (loft) in the export group');
+    shaft!.geometry.computeBoundingBox();
+    const bbox = shaft!.geometry.boundingBox!;
     // Height includes penetration: 0.5 thickness + 0.2 penetration.
-    assert.ok(almostEqual(cylinderParams.height, 0.7));
+    assert.ok(almostEqual(bbox.max.y - bbox.min.y, 0.7));
 
-    const cylinderWorld = new THREE.Vector3();
-    cylinder!.getWorldPosition(cylinderWorld);
+    const shaftWorld = new THREE.Vector3();
+    shaft!.getWorldPosition(shaftWorld);
     // Center shifts into the model: 10 - (0.5 - 0.2) / 2 = 9.85.
-    assert.ok(almostEqual(cylinderWorld.z, 9.85));
+    assert.ok(almostEqual(shaftWorld.z, 9.85));
 
     const sphere = diskGroup.children.find(
         (child) => (child as THREE.Mesh).geometry?.type === 'SphereGeometry',

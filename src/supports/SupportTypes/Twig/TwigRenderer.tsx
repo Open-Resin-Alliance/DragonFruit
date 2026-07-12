@@ -86,7 +86,7 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   };
 
   const getDiskTipCenter = React.useCallback((disk: ContactDisk) => {
-    const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
+    const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile, disk.contactDiameterMm);
     return {
       x: disk.pos.x + disk.surfaceNormal.x * thickness,
       y: disk.pos.y + disk.surfaceNormal.y * thickness,
@@ -465,6 +465,8 @@ export const TwigRenderer = React.memo(function TwigRenderer({
       profile={effectiveTwig.contactDiskA.profile}
       contactDiameterMm={effectiveTwig.contactDiskA.contactDiameterMm}
       overrideThickness={effectiveTwig.contactDiskA.diskLengthOverride}
+      contactFaceRatio={effectiveTwig.contactDiskA.contactFaceRatio}
+      contactFaceAngleRad={effectiveTwig.contactDiskA.contactFaceAngleRad}
       radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
       sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
       color={visuals.color}
@@ -485,6 +487,8 @@ export const TwigRenderer = React.memo(function TwigRenderer({
       profile={effectiveTwig.contactDiskB.profile}
       contactDiameterMm={effectiveTwig.contactDiskB.contactDiameterMm}
       overrideThickness={effectiveTwig.contactDiskB.diskLengthOverride}
+      contactFaceRatio={effectiveTwig.contactDiskB.contactFaceRatio}
+      contactFaceAngleRad={effectiveTwig.contactDiskB.contactFaceAngleRad}
       radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
       sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
       color={visuals.color}

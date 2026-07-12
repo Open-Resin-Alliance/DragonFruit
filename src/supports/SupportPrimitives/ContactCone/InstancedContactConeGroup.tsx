@@ -1,10 +1,20 @@
-import React, { useLayoutEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
 import type { Vec3 } from '../../types';
 import type { SupportTipProfile } from './types';
 import { getConeCenterPosition, getConeQuaternion } from './contactConeUtils';
-import { calculateDiskThickness, getContactDiskGeometrySpec } from '../ContactDisk/contactDiskUtils';
+import { calculateDiskThickness, createContactDiskLoftGeometry, getContactDiskGeometrySpec, resolveContactDiskRadialSegments, resolveContactFaceShape } from '../ContactDisk/contactDiskUtils';
+
+// Tip primitives (cone body, tip ball, disk loft) share one tessellation.
+// The disk/ball/cone junction is three nearly-tangent solids, so every
+// facet-scale tolerance there (crossing-seam zigzag, the loft's
+// ball-circumscribing inflation) is directly proportional to facet size —
+// at the old 10 segments those artifacts were visible pixels on deselected
+// supports next to the 24-segment detailed (selected) renderer. 16 keeps
+// them sub-pixel at normal zoom while staying cheap enough to instance in
+// bulk.
+const INSTANCED_TIP_RADIAL_SEGMENTS = 16;
 
 export interface InstancedContactCone {
     id: string;
@@ -14,6 +24,8 @@ export interface InstancedContactCone {
     normal: Vec3;
     surfaceNormal?: Vec3;
     diskLengthOverride?: number;
+    contactFaceRatio?: number;    // Oval contact face: squished-axis fraction (1/absent = circle)
+    contactFaceAngleRad?: number; // Oval contact face: rotation about the disc normal
     profile: SupportTipProfile;
 }
 
@@ -40,6 +52,7 @@ interface ConeBucket {
     length: number;
     diskThickness: number;
     penetration: number;
+    contactFaceRatio: number; // Oval squish — part of the bucket key (shape is baked into the geometry)
 }
 
 const quantize = (value: number) => Math.round(value * 1000) / 1000;
@@ -54,6 +67,18 @@ const getDiskThicknessForCone = (cone: InstancedContactCone): number => {
     if (cone.profile.type !== 'disk') return 0;
     const effectiveSurfaceNormal = cone.surfaceNormal ?? cone.normal;
     return cone.diskLengthOverride ?? calculateDiskThickness(effectiveSurfaceNormal, cone.normal, cone.profile);
+};
+
+// Compose the per-instance oval rotation (about local Y = the disc normal)
+// into the disk alignment quaternion. Scratch objects — consumed immediately
+// by setInstanceMatrices' tempObject.quaternion.copy().
+const _faceAngleAxis = new THREE.Vector3(0, 1, 0);
+const _faceAngleQuat = new THREE.Quaternion();
+const applyContactFaceAngle = (rotation: THREE.Quaternion, cone: InstancedContactCone): THREE.Quaternion => {
+    const { angleRad } = resolveContactFaceShape(cone);
+    if (angleRad === 0) return rotation;
+    _faceAngleQuat.setFromAxisAngle(_faceAngleAxis, angleRad);
+    return rotation.multiply(_faceAngleQuat);
 };
 
 function ConeBucketMesh({
@@ -92,6 +117,23 @@ function ConeBucketMesh({
     const lastHoveredRef = useRef<InstancedContactCone | null>(null);
 
     const hasOverlay = !!outOfBoundsMaterial;
+
+    // Shared per-bucket disk solid — two-stage oval loft (plain cylinder when
+    // ratio = 1). Shape is baked per bucket; oval angle is per-instance.
+    const diskGeometry = useMemo(() => (
+        bucket.profileType === 'disk'
+            ? createContactDiskLoftGeometry({
+                radius: bucket.contactRadius,
+                ratio: bucket.contactFaceRatio,
+                thickness: bucket.diskThickness,
+                penetrationMm: bucket.penetration,
+                // Oval buckets upgrade to the fine wall (24); circles stay cheap.
+                radialSegments: resolveContactDiskRadialSegments(INSTANCED_TIP_RADIAL_SEGMENTS, bucket.contactFaceRatio),
+            })
+            : null
+    ), [bucket]);
+
+    useEffect(() => () => { diskGeometry?.dispose(); }, [diskGeometry]);
 
     const resolveDiskThickness = (cone: InstancedContactCone) => {
         if (cone.profile.type !== 'disk') return 0;
@@ -166,7 +208,7 @@ function ConeBucketMesh({
             const spec = resolveDiskSpec(cone);
             return {
                 position: new THREE.Vector3(spec.center.x, spec.center.y, spec.center.z),
-                quaternion: spec.rotation,
+                quaternion: applyContactFaceAngle(spec.rotation, cone),
             };
         });
 
@@ -201,7 +243,7 @@ function ConeBucketMesh({
             const spec = resolveDiskSpec(cone);
             return {
                 position: new THREE.Vector3(spec.center.x, spec.center.y, spec.center.z),
-                quaternion: spec.rotation,
+                quaternion: applyContactFaceAngle(spec.rotation, cone),
             };
         });
     }, [bucket, diskThicknessByCone, hasOverlay]);
@@ -243,15 +285,15 @@ function ConeBucketMesh({
 
     return (
         <group>
-            {bucket.profileType === 'disk' && (
+            {bucket.profileType === 'disk' && diskGeometry && (
                 <instancedMesh
                     ref={diskRef}
                     args={[undefined, undefined, bucket.cones.length]}
+                    geometry={diskGeometry}
                     frustumCulled={false}
                     renderOrder={100000}
                     {...sharedHandlers}
                 >
-                    <cylinderGeometry args={[bucket.contactRadius, bucket.contactRadius, bucket.diskThickness + bucket.penetration, 10]} />
                     <meshStandardMaterial
                         color={color}
                         emissive={emissive}
@@ -274,7 +316,7 @@ function ConeBucketMesh({
                 renderOrder={100000}
                 {...sharedHandlers}
             >
-                <cylinderGeometry args={[bucket.contactRadius, bucket.bodyRadius, bucket.length, 10]} />
+                <cylinderGeometry args={[bucket.contactRadius, bucket.bodyRadius, bucket.length, INSTANCED_TIP_RADIAL_SEGMENTS]} />
                 <meshStandardMaterial
                     color={color}
                     emissive={emissive}
@@ -293,7 +335,7 @@ function ConeBucketMesh({
                 renderOrder={100000}
                 {...sharedHandlers}
             >
-                <sphereGeometry args={[bucket.contactRadius, 10, 8]} />
+                <sphereGeometry args={[bucket.contactRadius, INSTANCED_TIP_RADIAL_SEGMENTS, 12]} />
                 <meshStandardMaterial
                     color={color}
                     emissive={emissive}
@@ -315,7 +357,7 @@ function ConeBucketMesh({
                         renderOrder={100000}
                         material={outOfBoundsMaterial}
                     >
-                        <cylinderGeometry args={[bucket.contactRadius, bucket.bodyRadius, bucket.length, 10]} />
+                        <cylinderGeometry args={[bucket.contactRadius, bucket.bodyRadius, bucket.length, INSTANCED_TIP_RADIAL_SEGMENTS]} />
                     </instancedMesh>
                     <instancedMesh
                         ref={overlayTipSphereRef}
@@ -325,19 +367,18 @@ function ConeBucketMesh({
                         renderOrder={100000}
                         material={outOfBoundsMaterial}
                     >
-                        <sphereGeometry args={[bucket.contactRadius, 10, 8]} />
+                        <sphereGeometry args={[bucket.contactRadius, INSTANCED_TIP_RADIAL_SEGMENTS, 12]} />
                     </instancedMesh>
-                    {bucket.profileType === 'disk' && (
+                    {bucket.profileType === 'disk' && diskGeometry && (
                         <instancedMesh
                             ref={overlayDiskRef}
                             args={[undefined, undefined, bucket.cones.length]}
+                            geometry={diskGeometry}
                             frustumCulled={false}
                             raycast={() => null}
                             renderOrder={100000}
                             material={outOfBoundsMaterial}
-                        >
-                            <cylinderGeometry args={[bucket.contactRadius, bucket.contactRadius, bucket.diskThickness + bucket.penetration, 10]} />
-                        </instancedMesh>
+                        />
                     )}
                 </>
             )}
@@ -385,6 +426,9 @@ export function InstancedContactConeGroup({
             const bodyRadius = Math.max(0.001, cone.profile.bodyDiameterMm / 2);
             const length = Math.max(0.001, cone.profile.lengthMm);
             const penetration = Math.max(0, cone.profile.penetrationMm ?? 0);
+            // Oval ratio joins the bucket key (shape is baked into the shared
+            // geometry); the oval ANGLE stays per-instance via the quaternion.
+            const contactFaceRatio = profileType === 'disk' ? resolveContactFaceShape(cone).ratio : 1;
 
             const key = [
                 profileType,
@@ -393,6 +437,7 @@ export function InstancedContactConeGroup({
                 quantize(length),
                 quantize(diskThickness),
                 quantize(penetration),
+                quantize(contactFaceRatio),
             ].join(':');
 
             const existing = grouped.get(key);
@@ -410,6 +455,7 @@ export function InstancedContactConeGroup({
                 length,
                 diskThickness,
                 penetration,
+                contactFaceRatio,
             });
         }
 

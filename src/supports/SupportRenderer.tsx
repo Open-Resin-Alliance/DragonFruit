@@ -112,6 +112,8 @@ interface PlacementPreviewDisk {
     profile: ContactDiskProfile;
     contactDiameterMm: number;
     diskLengthOverride?: number;
+    contactFaceRatio?: number;
+    contactFaceAngleRad?: number;
 }
 
 interface PlacementPreviewBatch {
@@ -455,6 +457,8 @@ function buildSupportPlacementPreviewBatch(
                 profile: disk.profile,
                 contactDiameterMm: disk.contactDiameterMm,
                 diskLengthOverride: disk.diskLengthOverride,
+                contactFaceRatio: disk.contactFaceRatio,
+                contactFaceAngleRad: disk.contactFaceAngleRad,
             });
         }
     }
@@ -808,7 +812,7 @@ export function SupportPlacementPreviewLayer({
                         );
                     })}
                     {batch.disks.map((disk) => {
-                        const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
+                        const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile, disk.contactDiameterMm);
                         const center = getDiskCenter(disk.pos, disk.surfaceNormal, thickness);
                         const rotation = getDiskRotation(disk.surfaceNormal);
                         const radius = disk.contactDiameterMm / 2;
@@ -2545,7 +2549,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const result = new Map<string, SupportShaftSet>();
 
         const getDiskTipCenter = (disk: ContactDisk) => {
-            const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
+            const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile, disk.contactDiameterMm);
             return {
                 x: disk.pos.x + disk.surfaceNormal.x * thickness,
                 y: disk.pos.y + disk.surfaceNormal.y * thickness,
@@ -2821,6 +2825,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     normal: trunk.contactCone.normal,
                     surfaceNormal: trunk.contactCone.surfaceNormal,
                     diskLengthOverride: trunk.contactCone.diskLengthOverride,
+                    contactFaceRatio: trunk.contactCone.contactFaceRatio,
+                    contactFaceAngleRad: trunk.contactCone.contactFaceAngleRad,
                     profile: trunk.contactCone.profile,
                 }],
             });
@@ -2842,6 +2848,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     normal: branch.contactCone.normal,
                     surfaceNormal: branch.contactCone.surfaceNormal,
                     diskLengthOverride: branch.contactCone.diskLengthOverride,
+                    contactFaceRatio: branch.contactCone.contactFaceRatio,
+                    contactFaceAngleRad: branch.contactCone.contactFaceAngleRad,
                     profile: branch.contactCone.profile,
                 }],
             });
@@ -2863,6 +2871,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         normal: stick.contactConeA.normal,
                         surfaceNormal: stick.contactConeA.surfaceNormal,
                         diskLengthOverride: stick.contactConeA.diskLengthOverride,
+                        contactFaceRatio: stick.contactConeA.contactFaceRatio,
+                        contactFaceAngleRad: stick.contactConeA.contactFaceAngleRad,
                         profile: stick.contactConeA.profile,
                     },
                     {
@@ -2873,6 +2883,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         normal: stick.contactConeB.normal,
                         surfaceNormal: stick.contactConeB.surfaceNormal,
                         diskLengthOverride: stick.contactConeB.diskLengthOverride,
+                        contactFaceRatio: stick.contactConeB.contactFaceRatio,
+                        contactFaceAngleRad: stick.contactConeB.contactFaceAngleRad,
                         profile: stick.contactConeB.profile,
                     },
                 ],
@@ -2894,6 +2906,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     normal: previewLeaf.contactCone.normal,
                     surfaceNormal: previewLeaf.contactCone.surfaceNormal,
                     diskLengthOverride: previewLeaf.contactCone.diskLengthOverride,
+                    contactFaceRatio: previewLeaf.contactCone.contactFaceRatio,
+                    contactFaceAngleRad: previewLeaf.contactCone.contactFaceAngleRad,
                     profile: previewLeaf.contactCone.profile,
                 }],
             });
@@ -4457,7 +4471,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         );
                     })}
                     {batch.disks.map((disk) => {
-                        const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
+                        const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile, disk.contactDiameterMm);
                         const center = getDiskCenter(disk.pos, disk.surfaceNormal, thickness);
                         const rotation = getDiskRotation(disk.surfaceNormal);
                         const radius = disk.contactDiameterMm / 2;

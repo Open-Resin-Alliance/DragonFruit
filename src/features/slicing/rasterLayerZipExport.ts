@@ -18,7 +18,7 @@ import { generateChamferedBeam } from '@/supports/Rafts/Crenelated/geometry/gene
 import { buildLineRaftEdgePairs } from '@/supports/Rafts/Crenelated/geometry/buildLineRaftEdgePairs';
 import type { ContactDisk } from '@/supports/types';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
-import { calculateDiskThickness, getContactDiskGeometrySpec } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
+import { calculateDiskThickness, createContactDiskLoftGeometry, getContactDiskGeometrySpec, resolveContactDiskRadialSegments, resolveContactFaceShape } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
 import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints } from '@/supports/SupportPrimitives/Knot/knotUtils';
 import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
@@ -665,7 +665,7 @@ function appendJointSphere(
 }
 
 function getDiskTipCenter(disk: ContactDisk): THREE.Vector3 {
-  const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
+  const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile, disk.contactDiameterMm);
   return new THREE.Vector3(
     disk.pos.x + disk.surfaceNormal.x * thickness,
     disk.pos.y + disk.surfaceNormal.y * thickness,
@@ -798,6 +798,8 @@ function appendContactDiskPrimitive(
     coneAxis: { x: number; y: number; z: number };
     contactDiameterMm: number;
     diskLengthOverride?: number;
+    contactFaceRatio?: number;
+    contactFaceAngleRad?: number;
     profile: { type?: string; diskThicknessMm?: number; maxStandoffMm?: number; standoffAngleThreshold?: number; penetrationMm?: number };
   },
   radialSegments = 12,
@@ -811,17 +813,31 @@ function appendContactDiskPrimitive(
     overrideThickness: disk.diskLengthOverride,
   });
   const radius = Math.max(0.05, spec.radius);
-  const segments = Math.max(4, Math.floor(radialSegments));
 
-  const cylinder = new THREE.CylinderGeometry(radius, radius, Math.max(0.001, spec.height), segments);
+  // Two-stage oval loft: full oval through the penetration zone, blending to
+  // a circle at the cone-side tip. ratio 1 (or absent fields) = plain cylinder.
+  // Ovals slice fine-walled (24 segments); untouched circles keep the
+  // caller's tessellation.
+  const faceShape = resolveContactFaceShape(disk);
+  const segments = resolveContactDiskRadialSegments(Math.max(4, Math.floor(radialSegments)), faceShape.ratio);
+  const loft = createContactDiskLoftGeometry({
+    radius,
+    ratio: faceShape.ratio,
+    thickness: spec.thickness,
+    penetrationMm: spec.penetrationMm,
+    radialSegments: segments,
+  });
+  const rotation = faceShape.angleRad === 0
+    ? spec.rotation
+    : spec.rotation.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), faceShape.angleRad));
   const matrix = new THREE.Matrix4().compose(
     new THREE.Vector3(spec.center.x, spec.center.y, spec.center.z),
-    spec.rotation,
+    rotation,
     new THREE.Vector3(1, 1, 1),
   );
-  cylinder.applyMatrix4(matrix);
-  appendGeometryTriangles(sink, cylinder);
-  cylinder.dispose();
+  loft.applyMatrix4(matrix);
+  appendGeometryTriangles(sink, loft);
+  loft.dispose();
 
   // Round tip blending the disk into the cone body (parity with the renderers).
   const tip = new THREE.SphereGeometry(radius, segments, Math.max(3, Math.floor(segments * 0.75)));
@@ -837,6 +853,8 @@ function appendContactConePrimitive(
     normal: { x: number; y: number; z: number };
     surfaceNormal?: { x: number; y: number; z: number };
     diskLengthOverride?: number;
+    contactFaceRatio?: number;
+    contactFaceAngleRad?: number;
     profile: { contactDiameterMm: number; bodyDiameterMm: number; type?: string; diskThicknessMm?: number; maxStandoffMm?: number; standoffAngleThreshold?: number; penetrationMm?: number };
   },
   radialSegments = 12,
@@ -868,6 +886,8 @@ function appendContactConePrimitive(
         coneAxis: cone.normal,
         contactDiameterMm: cone.profile.contactDiameterMm,
         diskLengthOverride: cone.diskLengthOverride,
+        contactFaceRatio: cone.contactFaceRatio,
+        contactFaceAngleRad: cone.contactFaceAngleRad,
         profile: cone.profile,
       },
       radialSegments,

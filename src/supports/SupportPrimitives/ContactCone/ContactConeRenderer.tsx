@@ -21,6 +21,8 @@ interface ContactConeRendererProps {
     normal: Vec3;                       // Cone axis (points into model)
     surfaceNormal?: Vec3;               // Actual surface normal (for disk alignment)
     diskLengthOverride?: number;        // Explicit thickness from collision logic
+    contactFaceRatio?: number;          // Oval contact face: squished-axis fraction (1/absent = circle)
+    contactFaceAngleRad?: number;       // Oval contact face: rotation about the disc normal
     profile?: SupportTipProfile;        // Cone dimensions
     color?: string;
     diskColor?: string;                 // Explicit override for disk
@@ -58,6 +60,8 @@ export function ContactConeRenderer({
     normal,
     surfaceNormal,
     diskLengthOverride,
+    contactFaceRatio,
+    contactFaceAngleRad,
     profile = DEFAULT_TIP_PROFILE,
     color = '#c8752a',
     emissive = '#000000',
@@ -291,6 +295,8 @@ export function ContactConeRenderer({
                     contactDiameterMm={profile.contactDiameterMm}
                     overrideThickness={primitiveThickness} // Live drag keeps disk/socket perfectly aligned
                     penetrationMm={penetrationMm}
+                    contactFaceRatio={contactFaceRatio}
+                    contactFaceAngleRad={contactFaceAngleRad}
                     color={finalDiskColor}
                     transparent={transparent}
                     opacity={opacity}
@@ -328,7 +334,10 @@ export function ContactConeRenderer({
             </group>
 
             {/* --- Cone Tip Sphere (The Ball Joint at the Disk) --- */}
-            {/* Renders at coneStartPos, size = contactRadius */}
+            {/* Renders at coneStartPos, size = contactRadius. It fills the
+                elbow wedge when the cone meets the disk at an angle; the
+                standoff floor in calculateDiskThickness keeps it clear of
+                the model surface. */}
             <group position={[coneStartPos.x, coneStartPos.y, coneStartPos.z]}>
                 <mesh raycast={raycast} onClick={handleConeClick} onPointerMove={handleConePointerMove} onPointerOut={handleConePointerOut}>
                     <sphereGeometry args={[contactRadius, sphereSegments, Math.max(6, Math.floor(sphereSegments * 0.75))]} />

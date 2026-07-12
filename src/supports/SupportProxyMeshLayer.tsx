@@ -137,7 +137,7 @@ function fromModelKey(modelKey: string): string | undefined {
 }
 
 function getDiskTipCenter(disk: ContactDisk): Vec3 {
-  const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
+  const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile, disk.contactDiameterMm);
   return {
     x: disk.pos.x + (disk.surfaceNormal.x * thickness),
     y: disk.pos.y + (disk.surfaceNormal.y * thickness),
@@ -693,6 +693,8 @@ export function SupportProxyMeshLayer({
           normal: twig.contactDiskA.coneAxis,
           surfaceNormal: twig.contactDiskA.surfaceNormal,
           diskLengthOverride: twig.contactDiskA.diskLengthOverride,
+          contactFaceRatio: twig.contactDiskA.contactFaceRatio,
+          contactFaceAngleRad: twig.contactDiskA.contactFaceAngleRad,
           profile: {
             type: 'disk',
             contactDiameterMm: twig.contactDiskA.contactDiameterMm,
@@ -712,6 +714,8 @@ export function SupportProxyMeshLayer({
           normal: twig.contactDiskB.coneAxis,
           surfaceNormal: twig.contactDiskB.surfaceNormal,
           diskLengthOverride: twig.contactDiskB.diskLengthOverride,
+          contactFaceRatio: twig.contactDiskB.contactFaceRatio,
+          contactFaceAngleRad: twig.contactDiskB.contactFaceAngleRad,
           profile: {
             type: 'disk',
             contactDiameterMm: twig.contactDiskB.contactDiameterMm,

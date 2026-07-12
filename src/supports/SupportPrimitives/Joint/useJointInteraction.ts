@@ -155,7 +155,7 @@ export function useJointInteraction(enabled: boolean = true) {
     }, []);
 
     const getTwigDiskTipCenter = useCallback((disk: ContactDisk) => {
-        const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
+        const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile, disk.contactDiameterMm);
         return {
             x: disk.pos.x + disk.surfaceNormal.x * thickness,
             y: disk.pos.y + disk.surfaceNormal.y * thickness,
@@ -195,6 +195,7 @@ export function useJointInteraction(enabled: boolean = true) {
             { x: surfaceNormal.x, y: surfaceNormal.y, z: surfaceNormal.z },
             { x: axis.x, y: axis.y, z: axis.z },
             disk.profile,
+            disk.contactDiameterMm,
         );
         const thickness = Number.isFinite(desiredDistance) && desiredDistance > 0.000001
             ? Math.max(0.001, desiredDistance)

@@ -71,7 +71,18 @@ updateTipProfile({ penetrationMm: 0.25 });
    (`detail`, `structure`, `anchor`) inherit `DEFAULT_TIP_PENETRATION_MM`.
 4. **Geometry is single-sourced.** All disk geometry (viewport detailed +
    instanced renderers, STL/3MF/VOXL export, and the slicer feed) derives from
-   `getContactDiskGeometrySpec()` in
+   `getContactDiskGeometrySpec()` and `createContactDiskLoftGeometry()` in
    `src/supports/SupportPrimitives/ContactDisk/contactDiskUtils.ts`.
    Penetration extends the disk into the model only — the cone-side connection
    (tip center, socket, joints) never moves with this setting.
+
+## Not a setting: the oval contact face
+
+The oval contact-face shape (squish ratio + rotation) is **per-disc entity
+data**, not a global setting — there is nothing in the settings store for it.
+It lives as optional `contactFaceRatio` / `contactFaceAngleRad` fields on
+`ContactCone` and `ContactDisk` entities, is edited via the gizmo-ring handle,
+and is written through `commitContactFaceShape(contactId, ratio, angleRad)`
+in `src/supports/SupportPrimitives/ContactDisk/contactFaceActions.ts` (which
+resolves the owning support and records one undo entry). Do not add a global
+default for it without revisiting that design.

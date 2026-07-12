@@ -2613,7 +2613,7 @@ export default function Home() {
           maxStandoffMm: Math.max(0.01, Number((cone.profile as { maxStandoffMm?: number }).maxStandoffMm ?? 0.35)),
           standoffAngleThreshold: Number((cone.profile as { standoffAngleThreshold?: number }).standoffAngleThreshold ?? (Math.PI / 4)),
         };
-        const diskThickness = cone.diskLengthOverride ?? calculateDiskThickness(surfaceNormal, cone.normal, diskProfile);
+        const diskThickness = cone.diskLengthOverride ?? calculateDiskThickness(surfaceNormal, cone.normal, diskProfile, cone.profile.contactDiameterMm);
         diskMm3 = cylinderVolumeMm3(contactRadius, Math.max(0, diskThickness));
       }
 
@@ -2639,7 +2639,7 @@ export default function Home() {
         maxStandoffMm: Math.max(0.01, Number(disk.profile.maxStandoffMm ?? 0.35)),
         standoffAngleThreshold: Number(disk.profile.standoffAngleThreshold ?? (Math.PI / 4)),
       };
-      const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, diskProfile);
+      const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, diskProfile, disk.contactDiameterMm);
       return mm3ToMl(cylinderVolumeMm3(radius, Math.max(0, thickness)));
     };
 

@@ -3,7 +3,7 @@ import { Roots, Segment, Joint, Vec3 } from '@/supports/types';
 import { SupportData } from '@/supports/rendering/SupportBuilder';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone';
 import { getConeQuaternion } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
-import { calculateDiskThickness, getContactDiskGeometrySpec } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
+import { calculateDiskThickness, createContactDiskLoftGeometry, getContactDiskGeometrySpec, resolveContactDiskRadialSegments, resolveContactFaceShape } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { RaftSettings } from '@/supports/Rafts/Crenelated/RaftTypes';
 import { JOINT_DIAMETER_OFFSET_MM } from '@/supports/constants';
 
@@ -295,11 +295,21 @@ export class SupportGeometryGenerator {
       overrideThickness: coneData.diskLengthOverride,
     });
 
-    // Create the contact disk geometry (cylinder shaft + spherical tip)
-    // Shaft: From (Surface - Penetration) to Tip Center
-    const shaftGeometry = new THREE.CylinderGeometry(spec.radius, spec.radius, spec.height, 16);
+    // Create the contact disk geometry (oval loft shaft + spherical tip)
+    // Shaft: two-stage loft from (Surface - Penetration) to Tip Center —
+    // full oval through the penetration zone, blending to a circle at the tip.
+    const faceShape = resolveContactFaceShape(coneData);
+    const shaftGeometry = createContactDiskLoftGeometry({
+      radius: spec.radius,
+      ratio: faceShape.ratio,
+      thickness: spec.thickness,
+      penetrationMm: spec.penetrationMm,
+      // Ovals export fine-walled (24); untouched circles stay at 16.
+      radialSegments: resolveContactDiskRadialSegments(16, faceShape.ratio),
+    });
     const shaftMesh = new THREE.Mesh(shaftGeometry);
     shaftMesh.position.set(0, 0, 0); // Local origin in group
+    shaftMesh.rotation.y = faceShape.angleRad; // Oval orientation about the disc normal
 
     // Round Tip: fixed at the cone-side end (unaffected by penetration)
     const tipGeometry = new THREE.SphereGeometry(spec.radius, 16, 16);
