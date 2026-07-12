@@ -150,6 +150,14 @@ export function HollowVoxelPreview({
     return buildInstancedEdgeGeometry(matrices);
   }, [matrices, count, showEdges]);
 
+  // R3F only auto-disposes attached geometry on unmount. When the memo swaps
+  // in a fresh edge geometry mid-life (every preview update), the previous
+  // one's GL buffers would otherwise leak (~64 bytes per voxel per swap).
+  React.useEffect(() => {
+    if (!edgeGeometry) return;
+    return () => edgeGeometry.dispose();
+  }, [edgeGeometry]);
+
   // Push instance matrices into the InstancedMesh on every change.
   React.useEffect(() => {
     if (!meshRef.current) return;

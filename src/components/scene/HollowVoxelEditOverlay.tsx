@@ -185,6 +185,14 @@ export function HollowVoxelEditOverlay({
     return buildInstancedEdgeGeometry(instanceData.matrices);
   }, [instanceData, showEdges]);
 
+  // R3F only auto-disposes attached geometry on unmount. In edit mode
+  // instanceData changes on every blocker click, so without this the old
+  // edge geometry's GL buffers leak on each click (~64 bytes per voxel).
+  React.useEffect(() => {
+    if (!edgeGeometry) return;
+    return () => edgeGeometry.dispose();
+  }, [edgeGeometry]);
+
   React.useEffect(() => {
     const mesh = meshRef.current;
     if (!mesh || !instanceData) return;

@@ -167,29 +167,29 @@ impl From<RepairOptionsDto> for RepairOptions {
     }
 }
 
-fn parse_options(options_json: &str) -> RepairOptions {
+fn parse_options(options_json: &str) -> Result<RepairOptions, String> {
     if options_json.trim().is_empty() {
-        return RepairOptions::default();
+        return Ok(RepairOptions::default());
     }
     serde_json::from_str::<RepairOptionsDto>(options_json)
-        .unwrap_or_default()
-        .into()
+        .map(RepairOptions::from)
+        .map_err(|e| format!("invalid repair options JSON: {e}"))
 }
 
-fn parse_hollow_options(options_json: &str) -> HollowOptions {
+fn parse_hollow_options(options_json: &str) -> Result<HollowOptions, String> {
     if options_json.trim().is_empty() {
-        return HollowOptions::default();
+        return Ok(HollowOptions::default());
     }
-
-    serde_json::from_str::<HollowOptions>(options_json).unwrap_or_default()
+    serde_json::from_str::<HollowOptions>(options_json)
+        .map_err(|e| format!("invalid hollow options JSON: {e}"))
 }
 
-fn parse_hole_punch_options(options_json: &str) -> HolePunchOptions {
+fn parse_hole_punch_options(options_json: &str) -> Result<HolePunchOptions, String> {
     if options_json.trim().is_empty() {
-        return HolePunchOptions::default();
+        return Ok(HolePunchOptions::default());
     }
-
-    serde_json::from_str::<HolePunchOptions>(options_json).unwrap_or_default()
+    serde_json::from_str::<HolePunchOptions>(options_json)
+        .map_err(|e| format!("invalid hole punch options JSON: {e}"))
 }
 
 #[tauri::command]
@@ -222,7 +222,7 @@ pub async fn mesh_repair_from_path(
             path.display()
         ));
     }
-    let options = parse_options(&options_json);
+    let options = parse_options(&options_json)?;
     let source_path = file_path.clone();
     let (mesh, mut report) = tauri::async_runtime::spawn_blocking(move || {
         let mesh = io::load_mesh_from_path(&path).map_err(|e| e.to_string())?;
@@ -238,7 +238,7 @@ pub async fn mesh_repair_from_path(
 
 #[tauri::command]
 pub async fn mesh_repair_staged(options_json: String) -> Result<String, String> {
-    let options = parse_options(&options_json);
+    let options = parse_options(&options_json)?;
     let bytes = read_staging_bytes()?;
     let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
         let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
@@ -286,7 +286,7 @@ pub async fn mesh_analyze_staged() -> Result<String, String> {
 /// Replaces staged positions with the hollowed result and returns a JSON report.
 #[tauri::command]
 pub async fn mesh_hollow_staged(options_json: String) -> Result<String, String> {
-    let options = parse_hollow_options(&options_json);
+    let options = parse_hollow_options(&options_json)?;
     let bytes = read_staging_bytes()?;
     let (mesh, cavity_bytes, report) = tauri::async_runtime::spawn_blocking(move || {
         let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
@@ -333,7 +333,7 @@ pub async fn mesh_hollow_preview_capture_staged_source() -> Result<(), String> {
 pub async fn mesh_hollow_preview_from_captured_source(
     options_json: String,
 ) -> Result<String, String> {
-    let options = parse_hollow_options(&options_json);
+    let options = parse_hollow_options(&options_json)?;
     let source_mesh = hollow_preview_source_mesh()
         .lock()
         .map_err(|e| format!("hollow preview source lock poisoned: {e}"))?
@@ -461,7 +461,7 @@ pub async fn mesh_hollow_preview_from_captured_source(
 pub async fn mesh_hollow_apply_from_captured_source(
     options_json: String,
 ) -> Result<String, String> {
-    let options = parse_hollow_options(&options_json);
+    let options = parse_hollow_options(&options_json)?;
     let source_mesh = hollow_preview_source_mesh()
         .lock()
         .map_err(|e| format!("hollow preview source lock poisoned: {e}"))?
@@ -636,7 +636,7 @@ pub async fn mesh_hollow_staged_read_cavity_positions() -> Result<Response, Stri
 /// Applies manual cylindrical hole punches to the current staged mesh.
 #[tauri::command]
 pub async fn mesh_punch_staged(options_json: String) -> Result<String, String> {
-    let options = parse_hole_punch_options(&options_json);
+    let options = parse_hole_punch_options(&options_json)?;
     let bytes = read_staging_bytes()?;
     let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
         let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
@@ -668,7 +668,7 @@ pub async fn mesh_punch_capture_staged_source() -> Result<(), String> {
 /// regular staged mesh buffer.
 #[tauri::command]
 pub async fn mesh_punch_from_captured_source(options_json: String) -> Result<String, String> {
-    let options = parse_hole_punch_options(&options_json);
+    let options = parse_hole_punch_options(&options_json)?;
     let source_bytes = punch_source_bytes()
         .lock()
         .map_err(|e| format!("punch source lock poisoned: {e}"))?
@@ -1211,4 +1211,35 @@ fn replace_staging_with_mesh(mesh: &IndexedMesh) -> Result<(), String> {
         .lock()
         .map_err(|e| format!("staged mesh lock poisoned: {e}"))? = Some(bytes);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hollow_options_parsing_rejects_malformed_json_instead_of_defaulting() {
+        // Wrong type: previously produced HollowOptions::default() (resolution
+        // 64, 2mm shell) and the destructive hollow ran anyway.
+        assert!(parse_hollow_options(r#"{"voxelResolution": "192"}"#).is_err());
+        // Truncated JSON.
+        assert!(parse_hollow_options(r#"{"voxelResolution": 192"#).is_err());
+    }
+
+    #[test]
+    fn hollow_options_parsing_accepts_empty_and_valid_input() {
+        let defaults = parse_hollow_options("").expect("empty input falls back to defaults");
+        assert_eq!(defaults.voxel_resolution, HollowOptions::default().voxel_resolution);
+
+        let parsed = parse_hollow_options(r#"{"voxelResolution": 128, "shellThicknessMm": 1.5}"#)
+            .expect("well-formed JSON parses");
+        assert_eq!(parsed.voxel_resolution, 128);
+        assert!((parsed.shell_thickness_mm - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn repair_and_punch_options_parsing_reject_malformed_json() {
+        assert!(parse_options(r#"{"weldEpsilon": "tiny"}"#).is_err());
+        assert!(parse_hole_punch_options(r#"{"punches": {}}"#).is_err());
+    }
 }

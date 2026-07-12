@@ -17872,8 +17872,14 @@ export default function Home() {
   React.useEffect(() => {
     return () => {
       if (hollowPreview) {
-        hollowPreview.geometry.dispose();
-        hollowPreview.infillGeometry?.dispose();
+        disposeHollowPreviewGeometryIfUncached(
+          hollowPreview.geometry,
+          hollowPreviewResultCacheRef.current.values(),
+        );
+        disposeHollowPreviewGeometryIfUncached(
+          hollowPreview.infillGeometry ?? null,
+          hollowPreviewResultCacheRef.current.values(),
+        );
       }
     };
   }, [hollowPreview]);
