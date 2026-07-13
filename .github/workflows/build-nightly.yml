@@ -1,4 +1,4 @@
-name: Build Nightly
+name: Build nightly
 
 on:
   workflow_dispatch:
@@ -51,7 +51,7 @@ jobs:
     steps:
       - name: Check commenter has write access
         id: check_access
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           COMMENT_USER: ${{ github.event.comment.user.login }}
         with:
@@ -108,7 +108,7 @@ jobs:
       - name: Fetch PR branch info
         id: pr_info
         if: steps.check_access.outputs.result == 'granted'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           PR: ${{ github.event.issue.number }}
         with:
@@ -127,7 +127,7 @@ jobs:
       - name: Extract custom release name from comment
         id: extract_name
         if: steps.check_access.outputs.result == 'granted'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           result-encoding: string
           script: |
@@ -204,7 +204,7 @@ jobs:
 
       - name: Determine checkout ref
         id: checkout_ref
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           PR_NUMBER: ${{ inputs.pr_number }}
           BRANCH: ${{ steps.branch.outputs.branch }}
@@ -222,7 +222,7 @@ jobs:
             }
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.checkout_ref.outputs.ref }}
           submodules: recursive
@@ -290,7 +290,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download macOS DMG from PR check
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: macos-artifacts
           run-id: ${{ inputs.pr_run_id }}
@@ -314,7 +314,7 @@ jobs:
           fi
 
       - name: Upload renamed DMG
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dragonfruit-macos-universal
           path: macos-artifacts/*_DragonFruit_nightly.dmg
@@ -342,7 +342,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.derive.outputs.checkout_ref }}
           submodules: recursive
@@ -354,9 +354,9 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: "20.20.2"
+          node-version: "22.23.1"
           cache: npm
 
       - name: Install Rust stable
@@ -445,7 +445,7 @@ jobs:
 
       - name: Upload Windows installer
         if: matrix.build_kind == 'tauri'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: src-tauri/target/*/release/bundle/nsis/*_DragonFruit_nightly.exe
@@ -453,7 +453,7 @@ jobs:
 
       - name: Upload flatpak artifact
         if: matrix.build_kind == 'flatpak'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: src-tauri/target/release/bundle/flatpak/*_DragonFruit_nightly.flatpak
@@ -472,15 +472,15 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.derive.outputs.checkout_ref }}
           submodules: recursive
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: "20.20.2"
+          node-version: "22.23.1"
           cache: npm
 
       - name: Install Rust stable
@@ -489,7 +489,7 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Install Apple Certificate
-        uses: apple-actions/import-codesign-certs@v3
+        uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASS }}
@@ -536,7 +536,7 @@ jobs:
           done
 
       - name: Upload DMG artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dragonfruit-macos-universal
           path: src-tauri/target/*/release/bundle/dmg/*_DragonFruit_nightly.dmg
@@ -554,12 +554,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-assets
 
       - name: Remove old nightly release if exists
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           TAG: ${{ needs.derive.outputs.release_tag }}
         with:
@@ -589,7 +589,7 @@ jobs:
             }
 
       - name: Create tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           TAG_NAME: ${{ needs.derive.outputs.release_tag }}
           COMMIT_SHA: ${{ needs.derive.outputs.commit_sha }}
@@ -608,7 +608,7 @@ jobs:
             });
 
       - name: Publish nightly prerelease
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.derive.outputs.release_tag }}
           name: ${{ needs.derive.outputs.release_name }}
