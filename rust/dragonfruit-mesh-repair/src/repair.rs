@@ -743,6 +743,99 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
         elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
     });
 
+    // 9b. Final manifold check + voxel-remesh fallback.
+    //
+    // Ask manifold3d itself whether the repaired body is a valid closed
+    // 2-manifold. Its `MeshGL` import runs the library's own topology
+    // validation, so this catches defects the earlier heuristic passes left
+    // behind. When it rejects the body and the remesh fallback is enabled,
+    // voxel-remesh the model through OpenVDB and re-attach supports verbatim.
+    // A regression is rolled back by the same guard the other solidify paths
+    // use.
+    //
+    // The check and the remesh see **only the classified model body**, never
+    // the supports: supports are legitimately open / non-manifold at their
+    // contact points, so testing the whole mesh would fail on every supported
+    // model and trigger a needless remesh — and voxelizing supports would fuse
+    // them into the body.
+    //
+    // Skipped when an earlier self-intersection / manifold-union path already
+    // produced the result (`applied_self_intersection_path`): those paths
+    // deliberately tolerate a few residual non-manifold edges at
+    // support-attachment seams, which a remesh must not weld shut.
+    #[cfg(all(feature = "openvdb", feature = "manifold"))]
+    {
+        // Split up-front so the manifold test is scoped to the body alone.
+        let (model, support) = if options.remesh_fallback && !applied_self_intersection_path {
+            split_model_support(&mesh)
+        } else {
+            (IndexedMesh::new(), IndexedMesh::new())
+        };
+        if options.remesh_fallback
+            && !applied_self_intersection_path
+            && model.triangles.len() >= 4
+            && !is_manifold_via_manifold3d(&model)
+        {
+            let before = analyze(&mesh);
+            let t = std::time::Instant::now();
+            let remeshed = crate::remesh::try_remesh_via_openvdb(&model, &options.remesh_options);
+            let elapsed_ms = t.elapsed().as_secs_f64() * 1000.0;
+            match remeshed {
+                Some(remeshed_model) => {
+                    let model_tri_count = remeshed_model.triangles.len();
+                    let mut combined = remeshed_model;
+                    append_mesh(&mut combined, &support);
+                    let after = analyze(&combined);
+                    if let Some(reason) = solidify_regression_reason(&before, &after) {
+                        report.steps.push(RepairStepReport {
+                            name: "rollback_remesh_openvdb".into(),
+                            changed: 0,
+                            notes: Some(format!(
+                                "manifold3d rejected the repaired mesh, but the voxel remesh \
+                                 output was also rejected: {reason}"
+                            )),
+                            elapsed_ms,
+                        });
+                    } else {
+                        report.steps.push(RepairStepReport {
+                            name: "remesh_openvdb".into(),
+                            changed: (before.triangle_count as i64 - after.triangle_count as i64)
+                                .unsigned_abs() as u32,
+                            notes: Some(format!(
+                                "manifold3d check failed; remeshed model body. \
+                                 tris:{}->{} watertight:{}->{} nme:{}->{} support_tris={}",
+                                before.triangle_count,
+                                after.triangle_count,
+                                before.is_watertight,
+                                after.is_watertight,
+                                before.non_manifold_edges,
+                                after.non_manifold_edges,
+                                support.triangles.len(),
+                            )),
+                            elapsed_ms,
+                        });
+                        if model_tri_count < combined.triangles.len() {
+                            report.model_triangle_count = Some(model_tri_count);
+                        }
+                        mesh = combined;
+                        applied_self_intersection_path = true;
+                    }
+                }
+                None => {
+                    report.steps.push(RepairStepReport {
+                        name: "remesh_openvdb".into(),
+                        changed: 0,
+                        notes: Some(
+                            "manifold3d check failed but the voxel remesh produced no usable output"
+                                .into(),
+                        ),
+                        elapsed_ms,
+                    });
+                }
+            }
+        }
+    }
+
     // 10. Fallback model/support section split classification.
     //
     // Manifold batch-union already emits `model_triangle_count` for mixed
@@ -1058,6 +1151,32 @@ fn append_mesh(dst: &mut IndexedMesh, src: &IndexedMesh) {
     dst.positions.extend_from_slice(&src.positions);
     dst.triangles
         .extend(src.triangles.iter().map(|t| [t[0] + offset, t[1] + offset, t[2] + offset]));
+}
+
+/// Authoritative 2-manifold test via manifold3d.
+///
+/// Round-trips `mesh` through manifold3d's `MeshGL` import, which runs the
+/// library's own half-edge/winding validation (`manifold_status`). Any
+/// non-manifold edge, inconsistent winding or open boundary makes the import
+/// return an error, so this is a stricter check than our `analyze()`
+/// heuristics. Returns `true` only when manifold3d accepts the mesh as a
+/// non-empty closed solid.
+///
+/// Only used to gate the OpenVDB remesh fallback, hence the combined feature
+/// gate (avoids an unused-fn warning in `manifold`-only builds).
+#[cfg(all(feature = "openvdb", feature = "manifold"))]
+fn is_manifold_via_manifold3d(mesh: &IndexedMesh) -> bool {
+    use manifold_csg::Manifold;
+
+    if mesh.triangles.len() < 4 || mesh.positions.len() < 4 {
+        return false;
+    }
+    let verts: Vec<f32> = mesh.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
+    let tris: Vec<u32> = mesh.triangles.iter().flat_map(|t| *t).collect();
+    match Manifold::from_mesh_f32(&verts, 3, &tris) {
+        Ok(m) => !m.is_empty() && m.num_tri() > 0,
+        Err(_) => false,
+    }
 }
 
 fn compute_likely_support_geometry(
