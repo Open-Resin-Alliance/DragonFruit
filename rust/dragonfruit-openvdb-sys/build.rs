@@ -87,6 +87,11 @@ fn main() {
     let mut cc = cc::Build::new();
     cc.cpp(true)
         .file("cpp/df_vdb_shim.cpp")
+        // We statically link OpenVDB. Without this, its headers see `_DLL` (we
+        // build against the dynamic CRT) and default OPENVDB_API to
+        // __declspec(dllimport), so the shim would import symbols the static lib
+        // defines directly — MSVC LNK4217 + unresolved `__imp_` externals.
+        .define("OPENVDB_STATICLIB", None)
         .include(openvdb.join("include"))
         .include(tbb.join("include"))
         .include(imath.join("include"))
