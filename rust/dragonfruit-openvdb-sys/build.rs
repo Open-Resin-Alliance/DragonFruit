@@ -31,6 +31,9 @@ fn main() {
         }
     }
 
+    let target = std::env::var("TARGET").unwrap_or_default();
+    let is_msvc = target.contains("msvc");
+
     // 1. oneTBB (static)
     let tbb = cmake::Config::new(vendor.join("tbb"))
         .define("TBB_TEST", "OFF")
@@ -48,7 +51,8 @@ fn main() {
         .build();
 
     // 3. OpenVDB core (static), pointed at the two deps above.
-    let openvdb = cmake::Config::new(vendor.join("openvdb"))
+    let mut openvdb_cfg = cmake::Config::new(vendor.join("openvdb"));
+    openvdb_cfg
         .define("OPENVDB_BUILD_CORE", "ON")
         .define("OPENVDB_BUILD_BINARIES", "OFF")
         .define("OPENVDB_BUILD_PYTHON_MODULE", "OFF")
@@ -69,8 +73,15 @@ fn main() {
         )
         .define("TBB_ROOT", &tbb)
         .define("Imath_ROOT", &imath)
-        .define("CMAKE_POSITION_INDEPENDENT_CODE", "ON")
-        .build();
+        .define("CMAKE_POSITION_INDEPENDENT_CODE", "ON");
+    if is_msvc {
+        // Left to its own devices OpenVDB pins its static target to the static
+        // CRT (/MT); TBB, Imath and the Rust object files all use the dynamic
+        // CRT (/MD). Force /MD here so the final link doesn't hit a
+        // RuntimeLibrary mismatch.
+        openvdb_cfg.define("CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreadedDLL");
+    }
+    let openvdb = openvdb_cfg.build();
 
     // 4. Our shim, compiled against the freshly-built headers.
     let mut cc = cc::Build::new();
@@ -93,12 +104,17 @@ fn main() {
         // some platforms install into lib64
         println!("cargo:rustc-link-search=native={}", dir.join("lib64").display());
     }
-    println!("cargo:rustc-link-lib=static=openvdb");
+    // OpenVDB forces a `lib` prefix on its static lib under MSVC (libopenvdb.lib);
+    // elsewhere it's the usual libopenvdb.a, which rustc resolves from the bare name.
+    if is_msvc {
+        println!("cargo:rustc-link-lib=static=libopenvdb");
+    } else {
+        println!("cargo:rustc-link-lib=static=openvdb");
+    }
     println!("cargo:rustc-link-lib=static=Imath-3_1");
     println!("cargo:rustc-link-lib=static=tbb");
 
     // C++ standard library (platform-dependent).
-    let target = std::env::var("TARGET").unwrap_or_default();
     if target.contains("apple") {
         println!("cargo:rustc-link-lib=dylib=c++");
     } else if target.contains("linux") {
