@@ -68,7 +68,9 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: |
+            ./src-tauri -> target
+            ./rust/dragonfruit-voxl-thumbnail -> target
           shared-key: tauri
 
       - name: Install frontend dependencies

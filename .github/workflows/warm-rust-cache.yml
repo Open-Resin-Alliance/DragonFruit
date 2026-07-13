@@ -34,11 +34,30 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: |
+            ./src-tauri -> target
+            ./rust/dragonfruit-voxl-thumbnail -> target
           shared-key: tauri
+          # If a late compile step fails, still save everything built so far —
+          # the whole point of this workflow is warming the dependency cache.
+          cache-on-failure: true
 
       - name: Generate plugin registry
         run: node scripts/generate-plugin-registry.mjs
+
+      # tauri::generate_context!() embeds frontendDist assets when compiling
+      # dragonfruit-desktop and fails if the directory is missing. A stub is
+      # enough: desktop-crate artifacts are branch-specific and recompiled on
+      # every PR anyway; this workflow only warms the dependency cache.
+      - name: Stub frontend dist
+        run: |
+          mkdir -p src-tauri/frontend-dist
+          [ -f src-tauri/frontend-dist/index.html ] || echo '<!doctype html><title>warm-cache stub</title>' > src-tauri/frontend-dist/index.html
+
+      - name: Build thumbnail provider sidecars
+        env:
+          DF_BUILD_TARGET_TRIPLE: universal-apple-darwin
+        run: node scripts/build-thumbnail-providers.mjs
 
       - name: Compile Rust dependencies
         working-directory: src-tauri
