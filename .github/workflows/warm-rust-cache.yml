@@ -9,6 +9,7 @@ on:
       - src-tauri/**
       - rust/**
       - rust-toolchain.toml
+  workflow_dispatch:
 
 concurrency:
   group: warm-rust-cache-${{ github.ref_name }}
