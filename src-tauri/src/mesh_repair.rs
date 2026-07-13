@@ -128,6 +128,9 @@ impl From<RepairOptionsDto> for RepairOptions {
             solidify_self_intersection_threshold: dto
                 .solidify_self_intersection_threshold
                 .unwrap_or(defaults.solidify_self_intersection_threshold),
+            // remesh_fallback / remesh_options aren't exposed through the DTO;
+            // inherit their defaults (only meaningful with the `openvdb` feature).
+            ..defaults
         }
     }
 }
