@@ -65,6 +65,7 @@ export interface HollowResult {
   removedVoxelCenters?: Float32Array;
   removedVoxelIndices?: Uint32Array;
   blockedVoxelCenters?: Float32Array;
+  blockedVoxelIndices?: Uint32Array;
 }
 
 export function isTauriRuntime(): boolean {
@@ -145,7 +146,9 @@ async function readPositionsFromCommand(
 
 async function readUint32FromCommand(
   invoke: TauriInvoke,
-  command: 'mesh_hollow_preview_read_removed_voxel_indices',
+  command:
+    | 'mesh_hollow_preview_read_removed_voxel_indices'
+    | 'mesh_hollow_preview_read_blocked_voxel_indices',
 ): Promise<Uint32Array> {
   const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>(command);
   let u8: Uint8Array;
@@ -268,7 +271,13 @@ export async function hollowPreviewFromCapturedSource(
   } catch {
     blockedVoxelCenters = undefined;
   }
-  return { report, positions, cavityPositions, infillPositions, removedVoxelCenters, removedVoxelIndices, blockedVoxelCenters };
+  let blockedVoxelIndices: Uint32Array | undefined;
+  try {
+    blockedVoxelIndices = await readUint32FromCommand(core.invoke, 'mesh_hollow_preview_read_blocked_voxel_indices');
+  } catch {
+    blockedVoxelIndices = undefined;
+  }
+  return { report, positions, cavityPositions, infillPositions, removedVoxelCenters, removedVoxelIndices, blockedVoxelCenters, blockedVoxelIndices };
 }
 
 export async function hollowApplyFromCapturedSource(

@@ -3385,6 +3385,7 @@ fn main() {
             mesh_repair::mesh_hollow_preview_read_removed_voxel_centers,
             mesh_repair::mesh_hollow_preview_read_removed_voxel_indices,
             mesh_repair::mesh_hollow_preview_read_blocked_voxel_centers,
+            mesh_repair::mesh_hollow_preview_read_blocked_voxel_indices,
             mesh_repair::mesh_hollow_preview_read_cavity_positions,
             mesh_repair::mesh_hollow_staged_read_cavity_positions,
             mesh_repair::mesh_punch_staged,

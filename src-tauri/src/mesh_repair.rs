@@ -38,6 +38,7 @@ static HOLLOW_PREVIEW_REMOVED_VOXEL_CENTER_BYTES: OnceLock<Mutex<Option<Vec<u8>>
 static HOLLOW_PREVIEW_REMOVED_VOXEL_INDEX_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 static HOLLOW_PREVIEW_BLOCKED_VOXEL_CENTER_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> =
     OnceLock::new();
+static HOLLOW_PREVIEW_BLOCKED_VOXEL_INDEX_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// Cavity interior mesh from the staged hollow path.
 static HOLLOW_STAGED_CAVITY_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// Cavity interior mesh from the preview hollow path.
@@ -71,6 +72,10 @@ fn hollow_preview_removed_voxel_index_bytes() -> &'static Mutex<Option<Vec<u8>>>
 
 fn hollow_preview_blocked_voxel_center_bytes() -> &'static Mutex<Option<Vec<u8>>> {
     HOLLOW_PREVIEW_BLOCKED_VOXEL_CENTER_BYTES.get_or_init(|| Mutex::new(None))
+}
+
+fn hollow_preview_blocked_voxel_index_bytes() -> &'static Mutex<Option<Vec<u8>>> {
+    HOLLOW_PREVIEW_BLOCKED_VOXEL_INDEX_BYTES.get_or_init(|| Mutex::new(None))
 }
 
 fn hollow_staged_cavity_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
@@ -114,6 +119,10 @@ fn reset_hollow_preview_derived_state() -> Result<(), String> {
     *hollow_preview_blocked_voxel_center_bytes()
         .lock()
         .map_err(|e| format!("hollow preview blocked voxel center result lock poisoned: {e}"))? =
+        None;
+    *hollow_preview_blocked_voxel_index_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview blocked voxel index result lock poisoned: {e}"))? =
         None;
     *hollow_preview_cavity_result_bytes()
         .lock()
@@ -399,6 +408,7 @@ pub async fn mesh_hollow_preview_from_captured_source(
         removed_voxel_center_bytes,
         removed_voxel_index_bytes,
         blocked_voxel_center_bytes,
+        blocked_voxel_index_bytes,
         report,
     ) = tauri::async_runtime::spawn_blocking(move || {
         let outcome = session.run(&options);
@@ -418,6 +428,8 @@ pub async fn mesh_hollow_preview_from_captured_source(
             bytemuck::cast_slice::<u32, u8>(&outcome.removed_voxel_indices).to_vec();
         let blocked_voxel_center_bytes =
             bytemuck::cast_slice::<f32, u8>(&outcome.blocked_voxel_centers).to_vec();
+        let blocked_voxel_index_bytes =
+            bytemuck::cast_slice::<u32, u8>(&outcome.blocked_voxel_indices).to_vec();
         Ok::<_, String>((
             bytes,
             cavity_bytes,
@@ -425,6 +437,7 @@ pub async fn mesh_hollow_preview_from_captured_source(
             removed_voxel_center_bytes,
             removed_voxel_index_bytes,
             blocked_voxel_center_bytes,
+            blocked_voxel_index_bytes,
             outcome.report,
         ))
     })
@@ -453,6 +466,10 @@ pub async fn mesh_hollow_preview_from_captured_source(
         .lock()
         .map_err(|e| format!("hollow preview blocked voxel center result lock poisoned: {e}"))? =
         Some(blocked_voxel_center_bytes);
+    *hollow_preview_blocked_voxel_index_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview blocked voxel index result lock poisoned: {e}"))? =
+        Some(blocked_voxel_index_bytes);
 
     serde_json::to_string(&report).map_err(|e| format!("serialize hollow preview report: {e}"))
 }
@@ -601,6 +618,19 @@ pub async fn mesh_hollow_preview_read_blocked_voxel_centers() -> Result<Response
         .clone()
         .ok_or_else(|| {
             "No hollow preview blocked voxel center result — call mesh_hollow_preview_from_captured_source first"
+                .to_string()
+        })?;
+    Ok(Response::new(bytes))
+}
+
+#[tauri::command]
+pub async fn mesh_hollow_preview_read_blocked_voxel_indices() -> Result<Response, String> {
+    let bytes = hollow_preview_blocked_voxel_index_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview blocked voxel index result lock poisoned: {e}"))?
+        .clone()
+        .ok_or_else(|| {
+            "No hollow preview blocked voxel index result — call mesh_hollow_preview_from_captured_source first"
                 .to_string()
         })?;
     Ok(Response::new(bytes))

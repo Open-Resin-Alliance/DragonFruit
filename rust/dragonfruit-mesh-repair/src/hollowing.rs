@@ -700,8 +700,8 @@ pub fn hollow_voxel(mut mesh: IndexedMesh, options: &HollowOptions) -> HollowOut
         };
     let mut removed_voxel_centers = collect_removed_voxel_centers(&grid, &solid, &keep);
     let removed_voxel_indices = collect_removed_voxel_indices(&grid, &solid, &keep);
-    let mut blocked_voxel_centers =
-        collect_blocked_voxel_centers(&grid, &options.blocked_voxel_indices);
+    let (mut blocked_voxel_centers, accepted_blocked_voxel_indices) =
+        collect_blocked_voxel_data(&grid, &solid, &options.blocked_voxel_indices);
 
     // Unrotate all outputs so DragonFruit's own (unrotated) geometry stays in
     // sync with what Rust produces.
@@ -746,12 +746,7 @@ pub fn hollow_voxel(mut mesh: IndexedMesh, options: &HollowOptions) -> HollowOut
         removed_voxel_centers,
         removed_voxel_indices,
         blocked_voxel_centers,
-        blocked_voxel_indices: options
-            .blocked_voxel_indices
-            .clone()
-            .into_iter()
-            .map(|i| i as u32)
-            .collect(),
+        blocked_voxel_indices: accepted_blocked_voxel_indices,
         report: HollowReport {
             mode: options.mode,
             voxel_resolution: options.voxel_resolution,
@@ -1159,8 +1154,8 @@ impl HollowSession {
         let mut removed_voxel_centers =
             collect_removed_voxel_centers(&self.grid, &self.solid, &keep);
         let removed_voxel_indices = collect_removed_voxel_indices(&self.grid, &self.solid, &keep);
-        let mut blocked_voxel_centers =
-            collect_blocked_voxel_centers(&self.grid, &options.blocked_voxel_indices);
+        let (mut blocked_voxel_centers, accepted_blocked_voxel_indices) =
+            collect_blocked_voxel_data(&self.grid, &self.solid, &options.blocked_voxel_indices);
 
         // Unrotate all outputs so DragonFruit's own (unrotated) geometry
         // stays in sync with what Rust produces.
@@ -1208,12 +1203,7 @@ impl HollowSession {
             removed_voxel_centers,
             removed_voxel_indices,
             blocked_voxel_centers,
-            blocked_voxel_indices: options
-                .blocked_voxel_indices
-                .clone()
-                .into_iter()
-                .map(|i| i as u32)
-                .collect(),
+            blocked_voxel_indices: accepted_blocked_voxel_indices,
             report: HollowReport {
                 mode: options.mode,
                 voxel_resolution: self.voxel_resolution,
@@ -1308,24 +1298,34 @@ fn collect_removed_voxel_indices(grid: &GridSpec, solid: &[bool], keep: &[bool])
     indices
 }
 
-fn collect_blocked_voxel_centers(grid: &GridSpec, blocked_indices: &[usize]) -> Vec<f32> {
+/// Decodes committed blocked-voxel grid indices into world-space centers,
+/// mirroring the exact acceptance rule used when the blockers are applied to
+/// `keep` (`index` in bounds AND `solid[index]`). Returns centers and the
+/// accepted indices in lockstep - entry `i` of the centers always describes
+/// `accepted[i]` - so downstream positional mappings can never desync when a
+/// stale index is dropped.
+fn collect_blocked_voxel_data(
+    grid: &GridSpec,
+    solid: &[bool],
+    blocked_indices: &[usize],
+) -> (Vec<f32>, Vec<u32>) {
     let mut centers = Vec::with_capacity(blocked_indices.len() * 3);
+    let mut accepted = Vec::with_capacity(blocked_indices.len());
     for &index in blocked_indices {
-        let nz = grid.nz;
-        let ny = grid.ny;
-        let nx = grid.nx;
-        let z = index / (nx * ny);
-        let yz = index % (nx * ny);
-        let y = yz / nx;
-        let x = yz % nx;
-        if x < nx && y < ny && z < nz {
-            let c = grid.center_world(x, y, z);
-            centers.push(c.x);
-            centers.push(c.y);
-            centers.push(c.z);
+        if index >= solid.len() || !solid[index] {
+            continue;
         }
+        let z = index / (grid.nx * grid.ny);
+        let yz = index % (grid.nx * grid.ny);
+        let y = yz / grid.nx;
+        let x = yz % grid.nx;
+        let c = grid.center_world(x, y, z);
+        centers.push(c.x);
+        centers.push(c.y);
+        centers.push(c.z);
+        accepted.push(index as u32);
     }
-    centers
+    (centers, accepted)
 }
 
 #[cfg(not(feature = "manifold"))]
@@ -4611,6 +4611,40 @@ mod tests {
 
         let centers = collect_removed_voxel_centers(&grid, &solid, &keep);
         assert_eq!(centers.len(), 26 * 3);
+    }
+
+    #[test]
+    fn blocked_voxel_collector_drops_stale_indices_and_stays_positionally_aligned() {
+        let grid = GridSpec {
+            nx: 3,
+            ny: 3,
+            nz: 3,
+            voxel_mm: 1.0,
+            min: Vec3::new(0.0, 0.0, 0.0),
+        };
+
+        let mut solid = vec![false; grid.nx * grid.ny * grid.nz];
+        let first = grid.idx(1, 1, 1);
+        let second = grid.idx(2, 1, 1);
+        solid[first] = true;
+        solid[second] = true;
+
+        let not_solid = grid.idx(0, 0, 0);
+        let out_of_bounds = solid.len() + 4;
+        let blocked = vec![first, out_of_bounds, not_solid, second];
+
+        let (centers, accepted) = collect_blocked_voxel_data(&grid, &solid, &blocked);
+
+        // Acceptance must mirror the `keep[blocked_index] = true` rule
+        // exactly: in-bounds AND solid.
+        assert_eq!(accepted, vec![first as u32, second as u32]);
+        assert_eq!(centers.len(), accepted.len() * 3);
+
+        // Entry i of `centers` describes `accepted[i]` - after dropping the
+        // two stale entries the second center must be `second`'s, not
+        // `not_solid`'s.
+        let expected = grid.center_world(2, 1, 1);
+        assert_eq!(&centers[3..6], &[expected.x, expected.y, expected.z]);
     }
 
     #[test]

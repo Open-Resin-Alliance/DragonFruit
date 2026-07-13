@@ -12,6 +12,11 @@ export type ModelHollowingModifier = {
   /** Number of vertices in the cavity mesh (count × 3 = float count). */
   cavityPositionCount?: number;
   blockedVoxelIndices?: number[];
+  /** Scene rotation (unit quaternion [x, y, z, w]) captured when
+   *  blockedVoxelIndices were committed. Blocker indices address the
+   *  rotation-aligned voxel grid, so they are only meaningful while the
+   *  model's rotation still matches this stamp. */
+  blockedVoxelRotationQuat?: [number, number, number, number];
   mode: MeshModifierHollowMode;
   voxelSizeMm: number;
   shellThicknessMm: number;
