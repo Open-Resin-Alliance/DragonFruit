@@ -17,7 +17,7 @@ git submodule add -b v2021.13.0 https://github.com/oneapi-src/oneTBB.git \
     rust/dragonfruit-openvdb-sys/vendor/tbb
 git submodule add -b v3.1.12    https://github.com/AcademySoftwareFoundation/Imath.git \
     rust/dragonfruit-openvdb-sys/vendor/imath
-git submodule add -b v11.0.0    https://github.com/AcademySoftwareFoundation/openvdb.git \
+git submodule add -b v12.0.1    https://github.com/AcademySoftwareFoundation/openvdb.git \
     rust/dragonfruit-openvdb-sys/vendor/openvdb
 git submodule update --init --recursive
 ```

@@ -55,6 +55,10 @@ fn main() {
         .define("OPENVDB_BUILD_UNITTESTS", "OFF")
         .define("OPENVDB_CORE_SHARED", "OFF")
         .define("OPENVDB_CORE_STATIC", "ON")
+        // We only use in-memory grids (meshToVolume/volumeToMesh), never read
+        // `.vdb` files, so disable delayed loading. On OpenVDB v12 this drops the
+        // Boost dependency entirely (v11 still required Boost headers).
+        .define("OPENVDB_USE_DELAYED_LOADING", "OFF")
         .define("USE_BLOSC", "OFF")
         .define("USE_ZLIB", "OFF")
         .define("USE_EXR", "OFF")
