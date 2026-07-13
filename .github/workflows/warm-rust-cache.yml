@@ -34,11 +34,18 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: |
+            ./src-tauri -> target
+            ./rust/dragonfruit-voxl-thumbnail -> target
           shared-key: tauri
 
       - name: Generate plugin registry
         run: node scripts/generate-plugin-registry.mjs
+
+      - name: Build thumbnail provider sidecars
+        env:
+          DF_BUILD_TARGET_TRIPLE: universal-apple-darwin
+        run: node scripts/build-thumbnail-providers.mjs
 
       - name: Compile Rust dependencies
         working-directory: src-tauri
