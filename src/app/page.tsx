@@ -218,6 +218,7 @@ import {
   hollowApplyFromCapturedSource,
   hollowFromGeometry,
   hollowPreviewFromCapturedSource,
+  selectRemovedVoxelsInPolygon,
   stageHollowPreviewSource,
   type HollowOptions,
   type HollowReport,
@@ -18038,12 +18039,13 @@ export default function Home() {
     setEditingBlockedHollowVoxelIndices(blockedHollowVoxelIndices);
   }, [blockedHollowVoxelIndices, scene.mode, transformMgr.transformMode]);
 
-  const resolveBlockedHollowVoxelMarqueeSelection = React.useCallback((
+  const resolveBlockedHollowVoxelMarqueeSelection = React.useCallback(async (
     polygon: Array<{ x: number; y: number }>,
     helpers: {
       projectWorldPoint: (point: THREE.Vector3) => { x: number; y: number; z: number } | null;
+      getCameraProjection?: () => { viewProj: number[]; rectWidth: number; rectHeight: number } | null;
     },
-  ) => {
+  ): Promise<string[]> => {
     const preview = hollowPreview;
     const activeModel = scene.activeModel;
     if (!preview || !activeModel || polygon.length < 3) return [] as string[];
@@ -18065,23 +18067,58 @@ export default function Home() {
     const modelQuaternion = quaternionFromGlobalEuler(activeModel.transform.rotation);
     const selected: string[] = [];
 
-    for (let instanceIndex = 0; instanceIndex < preview.removedVoxelIndices.length; instanceIndex += 1) {
-      const offset = instanceIndex * 3;
-      const localPoint = new THREE.Vector3(
-        preview.removedVoxelCenters[offset] - activeModel.geometry.center.x,
-        preview.removedVoxelCenters[offset + 1] - activeModel.geometry.center.y,
-        preview.removedVoxelCenters[offset + 2] - activeModel.geometry.center.z,
-      );
-      localPoint.multiply(activeModel.transform.scale);
-      localPoint.applyQuaternion(modelQuaternion);
-      localPoint.add(activeModel.transform.position);
-      const projected = helpers.projectWorldPoint(localPoint);
-      if (!projected) continue;
-      if (!pointInPolygon(projected.x, projected.y)) continue;
-      selected.push(String(preview.removedVoxelIndices[instanceIndex]));
+    // Removed/cavity voxels are resolved in Rust against the full grid, so the
+    // whole through-depth column under the lasso is selected — not just the
+    // boundary-filtered / cap-limited shell that `preview.removedVoxelCenters`
+    // now holds after the 90a15d3d rendering filter. Rust reproduces this
+    // exact projection (unrotated center -> model transform -> viewProj ->
+    // container pixels -> point-in-polygon); see meshHollowing.ts / hollowing.rs.
+    const cameraProjection = helpers.getCameraProjection?.();
+    if (cameraProjection) {
+      const { options } = buildHollowPreviewRequest(activeModel);
+      try {
+        const removedIndices = await selectRemovedVoxelsInPolygon({
+          polygon: polygon.map((point) => [point.x, point.y] as [number, number]),
+          viewProj: cameraProjection.viewProj,
+          rectWidth: cameraProjection.rectWidth,
+          rectHeight: cameraProjection.rectHeight,
+          geometryCenter: [
+            activeModel.geometry.center.x,
+            activeModel.geometry.center.y,
+            activeModel.geometry.center.z,
+          ],
+          scale: [
+            activeModel.transform.scale.x,
+            activeModel.transform.scale.y,
+            activeModel.transform.scale.z,
+          ],
+          rotationQuat: [
+            modelQuaternion.x,
+            modelQuaternion.y,
+            modelQuaternion.z,
+            modelQuaternion.w,
+          ],
+          position: [
+            activeModel.transform.position.x,
+            activeModel.transform.position.y,
+            activeModel.transform.position.z,
+          ],
+          options,
+        });
+        if (removedIndices) {
+          for (let i = 0; i < removedIndices.length; i += 1) {
+            selected.push(String(removedIndices[i]));
+          }
+        }
+      } catch {
+        // Backend selection unavailable/failed: fall through with the blocked
+        // set only rather than throwing out of the lasso release handler.
+      }
     }
 
-    // Also test blocked-only voxel centers so lassoing over them works.
+    // Already-blocked voxels stay client-side: that center set is
+    // user-selection-bounded (never boundary-filtered), and Alt+lasso needs it
+    // to un-block. This loop is unchanged from the pre-regression resolver.
     if (preview.blockedVoxelCenters) {
       const blockedCount = Math.floor(preview.blockedVoxelCenters.length / 3);
       for (let blockedIndex = 0; blockedIndex < blockedCount; blockedIndex += 1) {
@@ -18104,7 +18141,7 @@ export default function Home() {
     }
 
     return selected;
-  }, [hollowPreview, scene.activeModel, blockedHollowVoxelIndices]);
+  }, [hollowPreview, scene.activeModel, blockedHollowVoxelIndices, buildHollowPreviewRequest]);
 
   const handleBlockedHollowVoxelMarqueeSelection = React.useCallback((ids: string[], altKey?: boolean) => {
     if (ids.length === 0) return;

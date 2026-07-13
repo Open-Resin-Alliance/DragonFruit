@@ -68,6 +68,24 @@ export interface HollowResult {
   blockedVoxelIndices?: Uint32Array;
 }
 
+/** Request for the Rust-side lasso voxel selection. Mirrors the model
+ *  transform + camera projection the frontend lasso resolver used before the
+ *  per-voxel projection moved into Rust. */
+export interface SelectRemovedVoxelsInPolygonRequest {
+  /** Lasso polygon in container-pixel space (same space as the resolver's
+   *  projectWorldPoint output): [[px, py], ...]. */
+  polygon: Array<[number, number]>;
+  /** Column-major camera.projectionMatrix * matrixWorldInverse (16 floats). */
+  viewProj: number[];
+  rectWidth: number;
+  rectHeight: number;
+  geometryCenter: [number, number, number];
+  scale: [number, number, number];
+  rotationQuat: [number, number, number, number];
+  position: [number, number, number];
+  options: HollowOptions;
+}
+
 export function isTauriRuntime(): boolean {
   if (typeof window === 'undefined') return false;
   return '__TAURI_INTERNALS__' in window;
@@ -297,6 +315,37 @@ export async function hollowApplyFromCapturedSource(
     cavityPositions = undefined;
   }
   return { report, positions, cavityPositions };
+}
+
+/** Rust-side lasso selection of the FULL through-depth cavity voxel column
+ *  under the polygon. Returns the selected grid indices, or null outside the
+ *  Tauri runtime. Decoupled from the boundary-filtered / capped rendered set,
+ *  which is why selection can no longer only reach the surface layer. */
+export async function selectRemovedVoxelsInPolygon(
+  request: SelectRemovedVoxelsInPolygonRequest,
+): Promise<Uint32Array | null> {
+  const core = await loadTauriCore();
+  if (!core) return null;
+
+  const requestJson = JSON.stringify(request);
+  const bytes = await core.invoke<ArrayBuffer | Uint8Array | number[]>(
+    'mesh_hollow_preview_select_removed_voxels_in_polygon',
+    { requestJson },
+  );
+  let u8: Uint8Array;
+  if (bytes instanceof ArrayBuffer) {
+    u8 = new Uint8Array(bytes);
+  } else if (bytes instanceof Uint8Array) {
+    u8 = bytes;
+  } else if (Array.isArray(bytes)) {
+    u8 = new Uint8Array(bytes);
+  } else {
+    throw new Error('mesh_hollow_preview_select_removed_voxels_in_polygon returned unexpected type');
+  }
+
+  const copy = new Uint8Array(u8.byteLength);
+  copy.set(u8);
+  return new Uint32Array(copy.buffer);
 }
 
 export function applyHollowedPositions(geometry: THREE.BufferGeometry, positions: Float32Array): void {

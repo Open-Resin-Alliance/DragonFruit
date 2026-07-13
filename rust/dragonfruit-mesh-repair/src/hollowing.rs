@@ -1001,15 +1001,19 @@ impl HollowSession {
         self.rotation_quat
     }
 
-    pub fn run(&self, options: &HollowOptions) -> HollowOutcome {
+    /// Recomputes the `keep` mask (which solid voxels remain material after
+    /// hollowing) for `options`, plus the count of voxels retained by the
+    /// initial shell-distance pass (`kept_shell`, reported as `shell_voxels`).
+    ///
+    /// This is the single source of truth for the keep mask: `run()` consumes
+    /// it to build the output mesh, and `select_removed_voxels_in_polygon`
+    /// consumes it so lasso selection sees the exact same cavity
+    /// (`removed = solid && !keep`) the preview was built from. Keeping one
+    /// implementation is what prevents projection/selection drift.
+    fn compute_keep_mask(&self, options: &HollowOptions) -> (Vec<bool>, usize) {
         let shell_voxels = (options.shell_thickness_mm.max(0.2) / self.grid.voxel_mm).ceil() as i32;
         let shell_voxels = shell_voxels.max(1);
         let shell_voxels_f = options.shell_thickness_mm.max(0.2) / self.grid.voxel_mm;
-        let smoothing_profile = effective_internal_cavity_smoothing_profile(
-            options.shell_thickness_mm,
-            options.smooth_internal_surfaces,
-            shell_voxels_f,
-        );
 
         let mut keep = vec![false; self.solid.len()];
         let mut kept_shell = 0usize;
@@ -1088,6 +1092,55 @@ impl HollowSession {
                 keep[blocked_index] = true;
             }
         }
+
+        (keep, kept_shell)
+    }
+
+    /// Lasso selection over the FULL through-depth cavity, computed Rust-side
+    /// so it is immune to the boundary filter and viewport cap that narrow the
+    /// exported/rendered voxel subset. Returns the grid indices of every
+    /// removed (cavity) voxel whose projected screen point falls inside
+    /// `polygon` (container-pixel space). See the free `select_removed_voxels_in_polygon`
+    /// for the projection math, which is a 1:1 port of the frontend loop.
+    #[allow(clippy::too_many_arguments)]
+    pub fn select_removed_voxels_in_polygon(
+        &self,
+        options: &HollowOptions,
+        polygon: &[[f32; 2]],
+        view_proj: &[f32; 16],
+        rect_w: f32,
+        rect_h: f32,
+        geom_center: Vec3,
+        scale: Vec3,
+        model_quat: [f32; 4],
+        position: Vec3,
+    ) -> Vec<u32> {
+        let (keep, _kept_shell) = self.compute_keep_mask(options);
+        select_removed_voxels_in_polygon(
+            &self.grid,
+            &self.solid,
+            &keep,
+            self.rotation_quat,
+            polygon,
+            view_proj,
+            rect_w,
+            rect_h,
+            geom_center,
+            scale,
+            model_quat,
+            position,
+        )
+    }
+
+    pub fn run(&self, options: &HollowOptions) -> HollowOutcome {
+        let shell_voxels_f = options.shell_thickness_mm.max(0.2) / self.grid.voxel_mm;
+        let smoothing_profile = effective_internal_cavity_smoothing_profile(
+            options.shell_thickness_mm,
+            options.smooth_internal_surfaces,
+            shell_voxels_f,
+        );
+
+        let (keep, kept_shell) = self.compute_keep_mask(options);
 
         let removed_voxels = self
             .occupied_voxels
@@ -1326,6 +1379,155 @@ fn collect_blocked_voxel_data(
         accepted.push(index as u32);
     }
     (centers, accepted)
+}
+
+/// Ray-casting (even-odd) point-in-polygon test. A 1:1 port of the frontend
+/// `pointInPolygon` in `page.tsx` (the lasso resolver), including its
+/// `((yj - yi) || 1e-6)` zero-slope guard, so Rust selects exactly the voxels
+/// the polygon covers on screen.
+#[inline]
+fn point_in_polygon(polygon: &[[f32; 2]], x: f32, y: f32) -> bool {
+    let mut inside = false;
+    let n = polygon.len();
+    if n == 0 {
+        return false;
+    }
+    let mut j = n - 1;
+    for i in 0..n {
+        let xi = polygon[i][0];
+        let yi = polygon[i][1];
+        let xj = polygon[j][0];
+        let yj = polygon[j][1];
+        let denom = if (yj - yi) != 0.0 { yj - yi } else { 1e-6 };
+        let intersects =
+            ((yi > y) != (yj > y)) && (x < ((xj - xi) * (y - yi)) / denom + xi);
+        if intersects {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// Projects a world point to container-relative pixels, a 1:1 port of
+/// `projectWorldPoint`/`projectPointToCanvas` in `SceneCanvas.tsx`.
+///
+/// `view_proj` is a column-major 4x4 (`camera.projectionMatrix * matrixWorldInverse`,
+/// exactly what `Matrix4.toArray()` produces). The clip-space multiply mirrors
+/// THREE's `Vector3.applyMatrix4` (which divides by `w`), then the same
+/// NDC-finite / `z ∈ [-1, 1]` rejection and pixel mapping
+/// (`(ndc.x+1)*0.5*w`, `(1-ndc.y)*0.5*h`) the frontend uses. Returns `None`
+/// for any voxel the frontend would have dropped.
+#[inline]
+fn project_world_to_pixel(
+    view_proj: &[f32; 16],
+    v: Vec3,
+    rect_w: f32,
+    rect_h: f32,
+) -> Option<(f32, f32)> {
+    let m = view_proj;
+    // Column-major mat4 * vec4(v, 1): clip[row] = sum_col m[col*4 + row] * v[col].
+    let clip_x = m[0] * v.x + m[4] * v.y + m[8] * v.z + m[12];
+    let clip_y = m[1] * v.x + m[5] * v.y + m[9] * v.z + m[13];
+    let clip_z = m[2] * v.x + m[6] * v.y + m[10] * v.z + m[14];
+    let clip_w = m[3] * v.x + m[7] * v.y + m[11] * v.z + m[15];
+    if clip_w == 0.0 {
+        return None;
+    }
+    let ndc_x = clip_x / clip_w;
+    let ndc_y = clip_y / clip_w;
+    let ndc_z = clip_z / clip_w;
+    if !ndc_x.is_finite() || !ndc_y.is_finite() || !ndc_z.is_finite() {
+        return None;
+    }
+    if ndc_z < -1.0 || ndc_z > 1.0 {
+        return None;
+    }
+    let px = (ndc_x + 1.0) * 0.5 * rect_w;
+    let py = (1.0 - ndc_y) * 0.5 * rect_h;
+    Some((px, py))
+}
+
+/// Faithful 1:1 Rust port of the frontend lasso loop
+/// (`resolveBlockedHollowVoxelMarqueeSelection` in `page.tsx`, per voxel):
+///   1. `center` = exported (UNROTATED) voxel center — grid center rotated by
+///      `inv(session_rotation_quat)`, matching what the collectors export and
+///      what the frontend consumed.
+///   2. `local = (center - geom_center) * scale` (component-wise).
+///   3. `local = model_quat * local` (`quaternionFromGlobalEuler(rotation)`).
+///   4. `world = local + position`.
+///   5. project → container pixels, then even-odd point-in-polygon.
+///
+/// It iterates EVERY removed (cavity) voxel — `solid && !keep` — with NO
+/// boundary gate, so the full through-depth column is returned, not just the
+/// visible cavity-wall shell. That is the whole point: selection is decoupled
+/// from the boundary-filtered / cap-limited rendered subset.
+#[allow(clippy::too_many_arguments)]
+fn select_removed_voxels_in_polygon(
+    grid: &GridSpec,
+    solid: &[bool],
+    keep: &[bool],
+    session_rotation_quat: [f32; 4],
+    polygon: &[[f32; 2]],
+    view_proj: &[f32; 16],
+    rect_w: f32,
+    rect_h: f32,
+    geom_center: Vec3,
+    scale: Vec3,
+    model_quat: [f32; 4],
+    position: Vec3,
+) -> Vec<u32> {
+    if polygon.len() < 3 {
+        return Vec::new();
+    }
+
+    let inv_rotation_quat = [
+        -session_rotation_quat[0],
+        -session_rotation_quat[1],
+        -session_rotation_quat[2],
+        session_rotation_quat[3],
+    ];
+    let rotation_is_identity = session_rotation_quat[0] == 0.0
+        && session_rotation_quat[1] == 0.0
+        && session_rotation_quat[2] == 0.0;
+
+    let mut selected = Vec::new();
+    for z in 0..grid.nz {
+        for y in 0..grid.ny {
+            for x in 0..grid.nx {
+                let index = grid.idx(x, y, z);
+                if !solid[index] || keep[index] {
+                    continue;
+                }
+
+                // (1) Exported-space (unrotated) center, matching the collectors.
+                let mut center = grid.center_world(x, y, z);
+                if !rotation_is_identity {
+                    center = center.rotate_by_quat(inv_rotation_quat);
+                }
+                // (2) local = (center - geom_center) * scale (component-wise).
+                let local = Vec3::new(
+                    (center.x - geom_center.x) * scale.x,
+                    (center.y - geom_center.y) * scale.y,
+                    (center.z - geom_center.z) * scale.z,
+                );
+                // (3) local = model_quat * local.
+                let local = local.rotate_by_quat(model_quat);
+                // (4) world = local + position.
+                let world = local.add(position);
+                // (5) project + point-in-polygon.
+                let Some((px, py)) = project_world_to_pixel(view_proj, world, rect_w, rect_h)
+                else {
+                    continue;
+                };
+                if point_in_polygon(polygon, px, py) {
+                    selected.push(index as u32);
+                }
+            }
+        }
+    }
+
+    selected
 }
 
 #[cfg(not(feature = "manifold"))]
@@ -4611,6 +4813,117 @@ mod tests {
 
         let centers = collect_removed_voxel_centers(&grid, &solid, &keep);
         assert_eq!(centers.len(), 26 * 3);
+    }
+
+    #[test]
+    fn lasso_selection_returns_full_through_depth_cavity_column_not_just_boundary() {
+        // 5x5x5 solid block; the outer 1-voxel shell (any coord in {0, 4}) is
+        // kept, leaving the inner 3x3x3 (coords 1..=3) as the removed cavity.
+        // The dead-center voxel (2,2,2) is fully occluded (all 6 face
+        // neighbours are also removed), so the boundary filter drops it from
+        // the rendered/exported set — that is exactly the surface-peel
+        // regression this Rust selection restores.
+        let grid = GridSpec {
+            nx: 5,
+            ny: 5,
+            nz: 5,
+            voxel_mm: 1.0,
+            min: Vec3::new(0.0, 0.0, 0.0),
+        };
+
+        let mut solid = vec![false; grid.nx * grid.ny * grid.nz];
+        let mut keep = vec![false; solid.len()];
+        for z in 0..5 {
+            for y in 0..5 {
+                for x in 0..5 {
+                    let i = grid.idx(x, y, z);
+                    solid[i] = true;
+                    let is_shell = x == 0 || x == 4 || y == 0 || y == 4 || z == 0 || z == 4;
+                    if is_shell {
+                        keep[i] = true;
+                    }
+                }
+            }
+        }
+
+        // Analytic top-down orthographic view_proj (looking down -Z), so every
+        // Z layer projects to the SAME screen x/y — a through-depth column.
+        // ndc = world * 0.4 - 1  (world in [0,5] -> ndc in [-1,1]); w = 1.
+        // Column-major (as Matrix4.toArray produces), matching THREE:
+        //   clip.x = 0.4*wx - 1, clip.y = 0.4*wy - 1, clip.z = 0.4*wz - 1, w = 1.
+        let view_proj: [f32; 16] = [
+            0.4, 0.0, 0.0, 0.0, // col 0
+            0.0, 0.4, 0.0, 0.0, // col 1
+            0.0, 0.0, 0.4, 0.0, // col 2
+            -1.0, -1.0, -1.0, 1.0, // col 3 (translation)
+        ];
+        let rect_w = 100.0_f32;
+        let rect_h = 100.0_f32;
+        // Identity model transform so projection is purely the analytic view.
+        let identity_quat = [0.0_f32, 0.0, 0.0, 1.0];
+        let geom_center = Vec3::ZERO;
+        let scale = Vec3::new(1.0, 1.0, 1.0);
+        let position = Vec3::ZERO;
+
+        // A voxel center (cx, cy) projects to pixel:
+        //   px = ((0.4*cx - 1) + 1) * 0.5 * 100 = 0.4*cx*50 = 20*cx
+        //   py = (1 - (0.4*cy - 1)) * 0.5 * 100 = (2 - 0.4*cy)*50 = 100 - 20*cy
+        // Center column x=y=2 -> center (2.5,2.5) -> px=50, py=50.
+        // Corner column x=y=1 -> center (1.5,1.5) -> px=30, py=70.
+        // A tight polygon around (50,50) selects ONLY the x=y=2 column and
+        // excludes the (1,1,*) column at (30,70).
+        let polygon: Vec<[f32; 2]> = vec![[45.0, 45.0], [55.0, 45.0], [55.0, 55.0], [45.0, 55.0]];
+
+        let selected = select_removed_voxels_in_polygon(
+            &grid,
+            &solid,
+            &keep,
+            identity_quat,
+            &polygon,
+            &view_proj,
+            rect_w,
+            rect_h,
+            geom_center,
+            scale,
+            identity_quat,
+            position,
+        );
+
+        // The full through-depth center column (z = 1, 2, 3) must be selected,
+        // INCLUDING the fully-occluded interior voxel (2,2,2).
+        let center_deep = grid.idx(2, 2, 2);
+        let center_near = grid.idx(2, 2, 1);
+        let center_far = grid.idx(2, 2, 3);
+        assert!(
+            selected.contains(&(center_deep as u32)),
+            "the fully-occluded interior voxel (2,2,2) must be selected (through-depth)"
+        );
+        assert!(
+            selected.contains(&(center_near as u32)),
+            "near-layer center voxel (2,2,1) must be selected"
+        );
+        assert!(
+            selected.contains(&(center_far as u32)),
+            "far-layer center voxel (2,2,3) must be selected"
+        );
+
+        // Exactly the three cavity voxels of the center column — nothing else.
+        assert_eq!(
+            selected.len(),
+            3,
+            "only the x=y=2 cavity column (3 removed voxels) should be selected"
+        );
+
+        // A removed voxel that projects OUTSIDE the polygon must be excluded.
+        let outside = grid.idx(1, 1, 2); // projects to (30, 70)
+        assert!(
+            solid[outside] && !keep[outside],
+            "(1,1,2) is a removed cavity voxel"
+        );
+        assert!(
+            !selected.contains(&(outside as u32)),
+            "a cavity voxel projecting outside the polygon must be excluded"
+        );
     }
 
     #[test]

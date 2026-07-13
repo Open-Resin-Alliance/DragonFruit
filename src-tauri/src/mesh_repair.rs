@@ -636,6 +636,72 @@ pub async fn mesh_hollow_preview_read_blocked_voxel_indices() -> Result<Response
     Ok(Response::new(bytes))
 }
 
+/// Request payload for `mesh_hollow_preview_select_removed_voxels_in_polygon`.
+/// All fields are in the same spaces the frontend lasso resolver used before
+/// the projection moved to Rust: `polygon` in container pixels, `view_proj` a
+/// column-major `projectionMatrix * matrixWorldInverse`, and the model
+/// transform (`geometry_center`/`scale`/`rotation_quat`/`position`) matching
+/// `resolveBlockedHollowVoxelMarqueeSelection`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SelectRemovedVoxelsRequest {
+    polygon: Vec<[f32; 2]>,
+    view_proj: [f32; 16],
+    rect_width: f32,
+    rect_height: f32,
+    geometry_center: [f32; 3],
+    scale: [f32; 3],
+    rotation_quat: [f32; 4],
+    position: [f32; 3],
+    options: HollowOptions,
+}
+
+/// Selects the full through-depth set of removed (cavity) voxels whose
+/// projected screen point falls inside the lasso polygon, operating on the
+/// cached hollow-preview session so the result is immune to the boundary
+/// filter and viewport cap that narrow the rendered/exported voxel subset.
+/// Returns the grid indices as raw little-endian `u32` bytes.
+#[tauri::command]
+pub async fn mesh_hollow_preview_select_removed_voxels_in_polygon(
+    request_json: String,
+) -> Result<Response, String> {
+    let request: SelectRemovedVoxelsRequest = serde_json::from_str(&request_json)
+        .map_err(|e| format!("invalid select-removed-voxels request JSON: {e}"))?;
+
+    let session = hollow_preview_session()
+        .lock()
+        .map_err(|e| format!("hollow preview session lock poisoned: {e}"))?
+        .clone()
+        .ok_or_else(|| {
+            "No hollow preview session — call mesh_hollow_preview_from_captured_source first"
+                .to_string()
+        })?;
+
+    let indices = tauri::async_runtime::spawn_blocking(move || {
+        let selected = session.select_removed_voxels_in_polygon(
+            &request.options,
+            &request.polygon,
+            &request.view_proj,
+            request.rect_width,
+            request.rect_height,
+            Vec3::new(
+                request.geometry_center[0],
+                request.geometry_center[1],
+                request.geometry_center[2],
+            ),
+            Vec3::new(request.scale[0], request.scale[1], request.scale[2]),
+            request.rotation_quat,
+            Vec3::new(request.position[0], request.position[1], request.position[2]),
+        );
+        Ok::<Vec<u32>, String>(selected)
+    })
+    .await
+    .map_err(|e| format!("hollow select task panicked: {e}"))??;
+
+    let bytes = bytemuck::cast_slice::<u32, u8>(&indices).to_vec();
+    Ok(Response::new(bytes))
+}
+
 /// Reads the cavity interior mesh positions from the last preview hollow operation.
 #[tauri::command]
 pub async fn mesh_hollow_preview_read_cavity_positions() -> Result<Response, String> {
