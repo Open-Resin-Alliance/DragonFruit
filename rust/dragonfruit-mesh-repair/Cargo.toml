@@ -18,6 +18,10 @@ path = "src/bin/cli.rs"
 # Requires git + cmake + a C++ compiler (MSVC on Windows, gcc/clang on Linux/macOS).
 # First build downloads and compiles manifold3d from source (~2 min).
 manifold = ["dep:manifold-csg"]
+# Enable the OpenVDB voxel-remesh fallback for non-manifold meshes.
+# Builds OpenVDB + TBB + Imath from vendored source via CMake (~several min
+# first build); see dragonfruit-openvdb-sys/README.md for the submodule pins.
+openvdb = ["dep:dragonfruit-openvdb-sys"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

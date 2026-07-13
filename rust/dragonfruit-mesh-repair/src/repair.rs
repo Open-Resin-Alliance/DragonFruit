@@ -56,6 +56,12 @@ pub struct RepairOptions {
     /// Minimum self-intersection-triangle count in the *pre* analysis required
     /// for `solidify_fragmented_components` to auto-trigger.
     pub solidify_self_intersection_threshold: usize,
+    /// Allow the OpenVDB voxel-remesh fallback to run when the mesh is still
+    /// non-manifold / non-watertight after the earlier passes. No effect unless
+    /// the `openvdb` Cargo feature is enabled. Default true.
+    pub remesh_fallback: bool,
+    /// Options for the voxel-remesh fallback (see [`VoxelRemeshOptions`]).
+    pub remesh_options: crate::remesh::VoxelRemeshOptions,
 }
 
 impl Default for RepairOptions {
@@ -73,6 +79,8 @@ impl Default for RepairOptions {
             solidify_fragmented_components: true,
             solidify_component_threshold: 256,
             solidify_self_intersection_threshold: 128,
+            remesh_fallback: true,
+            remesh_options: crate::remesh::VoxelRemeshOptions::default(),
         }
     }
 }
@@ -248,6 +256,78 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
                 None => {
                     // Keep the report clean in this common miss case; we just
                     // continue with the existing orientation + Phase-A/B path.
+                }
+            }
+        }
+
+        // OpenVDB voxel-remesh fallback. Robust for genuinely non-manifold input
+        // where the manifold union can't produce a watertight body: rasterize to
+        // a level set and re-extract. Only the classified *model* geometry is
+        // voxelized; supports are split off and re-attached verbatim so they are
+        // never fused into the body. Guarded by the same regression check as the
+        // manifold path — a worse result is rolled back.
+        #[cfg(feature = "openvdb")]
+        {
+            if options.remesh_fallback && !applied_self_intersection_path {
+                let before = analyze(&mesh);
+                if !before.is_watertight || before.non_manifold_edges > 0 {
+                    let t = std::time::Instant::now();
+                    let (model, support) = split_model_support(&mesh);
+                    let remeshed = if model.triangles.len() >= 4 {
+                        crate::remesh::try_remesh_via_openvdb(&model, &options.remesh_options)
+                    } else {
+                        None
+                    };
+                    let elapsed_ms = t.elapsed().as_secs_f64() * 1000.0;
+                    match remeshed {
+                        Some(remeshed_model) => {
+                            let model_tri_count = remeshed_model.triangles.len();
+                            let mut combined = remeshed_model;
+                            append_mesh(&mut combined, &support);
+                            let after = analyze(&combined);
+                            if let Some(reason) = solidify_regression_reason(&before, &after) {
+                                report.steps.push(RepairStepReport {
+                                    name: "rollback_remesh_openvdb".into(),
+                                    changed: 0,
+                                    notes: Some(format!("voxel remesh output rejected: {reason}")),
+                                    elapsed_ms,
+                                });
+                            } else {
+                                report.steps.push(RepairStepReport {
+                                    name: "remesh_openvdb".into(),
+                                    changed: (before.triangle_count as i64
+                                        - after.triangle_count as i64)
+                                        .unsigned_abs()
+                                        as u32,
+                                    notes: Some(format!(
+                                        "tris:{}->{} watertight:{}->{} nme:{}->{} support_tris={}",
+                                        before.triangle_count,
+                                        after.triangle_count,
+                                        before.is_watertight,
+                                        after.is_watertight,
+                                        before.non_manifold_edges,
+                                        after.non_manifold_edges,
+                                        support.triangles.len(),
+                                    )),
+                                    elapsed_ms,
+                                });
+                                if model_tri_count < combined.triangles.len() {
+                                    report.model_triangle_count = Some(model_tri_count);
+                                }
+                                mesh = combined;
+                                applied_self_intersection_path = true;
+                                skip_final_orientation = after.inconsistent_winding_edges == 0;
+                            }
+                        }
+                        None => {
+                            report.steps.push(RepairStepReport {
+                                name: "remesh_openvdb".into(),
+                                changed: 0,
+                                notes: Some("voxel remesh produced no usable output".into()),
+                                elapsed_ms,
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -873,6 +953,111 @@ fn classify_model_support_group(
     } else {
         GeometryGroup::Support
     }
+}
+
+/// Classify every connected component of `mesh` into Model / Support using the
+/// same raft-Z-cut + poly-count + top-band heuristic as the manifold union
+/// path. Shared so the voxel-remesh fallback never fuses supports into the body.
+#[cfg(feature = "openvdb")]
+fn classify_components(
+    mesh: &IndexedMesh,
+    components: &[u32],
+    n_comps: usize,
+) -> Vec<GeometryGroup> {
+    let global_min_z = mesh
+        .positions
+        .iter()
+        .map(|p| p.z)
+        .fold(f32::INFINITY, f32::min);
+    let raft_z_cut = global_min_z + RAFT_Z_CUTOFF_MM;
+
+    let mut comp_max_z = vec![f32::NEG_INFINITY; n_comps];
+    let mut comp_tri_count = vec![0usize; n_comps];
+    for (fi, tri) in mesh.triangles.iter().enumerate() {
+        let cid = components[fi] as usize;
+        comp_tri_count[cid] += 1;
+        let z0 = mesh.positions[tri[0] as usize].z;
+        let z1 = mesh.positions[tri[1] as usize].z;
+        let z2 = mesh.positions[tri[2] as usize].z;
+        comp_max_z[cid] = comp_max_z[cid].max(z0.max(z1).max(z2));
+    }
+
+    let model_seed = (0..n_comps)
+        .filter(|&cid| comp_tri_count[cid] >= 4 && comp_max_z[cid] > raft_z_cut)
+        .max_by(|&a, &b| {
+            comp_max_z[a]
+                .partial_cmp(&comp_max_z[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    let model_min_tris = model_seed
+        .map(|seed| (comp_tri_count[seed] / 8).max(MODEL_MIN_TRIS_FLOOR))
+        .unwrap_or(MODEL_MIN_TRIS_FLOOR);
+
+    (0..n_comps)
+        .map(|cid| {
+            classify_model_support_group(
+                cid,
+                raft_z_cut,
+                model_seed,
+                model_min_tris,
+                &comp_max_z,
+                &comp_tri_count,
+            )
+        })
+        .collect()
+}
+
+/// Split `mesh` into `(model, support)` submeshes by component classification.
+/// Support geometry is preserved verbatim so the remesh only ever sees the body.
+/// If there are no components (empty mesh) the whole mesh is returned as model.
+#[cfg(feature = "openvdb")]
+fn split_model_support(mesh: &IndexedMesh) -> (IndexedMesh, IndexedMesh) {
+    let components = triangle_components(mesh);
+    let n_comps = components
+        .iter()
+        .copied()
+        .max()
+        .map(|m| m as usize + 1)
+        .unwrap_or(0);
+    if n_comps == 0 {
+        return (mesh.clone(), IndexedMesh::new());
+    }
+    let groups = classify_components(mesh, &components, n_comps);
+
+    let mut model = IndexedMesh::new();
+    let mut support = IndexedMesh::new();
+    let mut model_remap = vec![u32::MAX; mesh.positions.len()];
+    let mut support_remap = vec![u32::MAX; mesh.positions.len()];
+
+    for (fi, tri) in mesh.triangles.iter().enumerate() {
+        let is_model = matches!(groups[components[fi] as usize], GeometryGroup::Model);
+        let (dst, remap) = if is_model {
+            (&mut model, &mut model_remap)
+        } else {
+            (&mut support, &mut support_remap)
+        };
+        let mut new_tri = [0u32; 3];
+        for (k, &v) in tri.iter().enumerate() {
+            let v = v as usize;
+            if remap[v] == u32::MAX {
+                remap[v] = dst.positions.len() as u32;
+                dst.positions.push(mesh.positions[v]);
+            }
+            new_tri[k] = remap[v];
+        }
+        dst.triangles.push(new_tri);
+    }
+    (model, support)
+}
+
+/// Append `src` onto `dst`, offsetting `src`'s triangle indices. Used to
+/// re-attach untouched support geometry after the model is remeshed.
+#[cfg(feature = "openvdb")]
+fn append_mesh(dst: &mut IndexedMesh, src: &IndexedMesh) {
+    let offset = dst.positions.len() as u32;
+    dst.positions.extend_from_slice(&src.positions);
+    dst.triangles
+        .extend(src.triangles.iter().map(|t| [t[0] + offset, t[1] + offset, t[2] + offset]));
 }
 
 fn compute_likely_support_geometry(

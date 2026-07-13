@@ -9,11 +9,15 @@ pub mod arrangement;
 pub mod core;
 pub mod hollowing;
 pub mod io;
+pub mod remesh;
 pub mod repair;
 pub mod report;
 
 pub use crate::analysis::{analyze, minimal_analysis, MeshAnalysis};
 pub use crate::core::mesh::{IndexedMesh, Vec3};
+pub use crate::remesh::{recover_features, VoxelRemeshOptions};
+#[cfg(feature = "openvdb")]
+pub use crate::remesh::try_remesh_via_openvdb;
 pub use crate::hollowing::{
     hollow_voxel, punch_cylinders, DrainHoleSpec, HolePunchOptions, HolePunchOutcome,
     HolePunchReport, HolePunchSpec, HollowMode, HollowOptions, HollowOutcome, HollowReport,

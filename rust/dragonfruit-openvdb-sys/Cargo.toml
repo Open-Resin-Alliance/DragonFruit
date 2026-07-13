@@ -1,0 +1,22 @@
+[package]
+name = "dragonfruit-openvdb-sys"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+description = "Minimal C-ABI wrapper over OpenVDB meshToVolume + volumeToMesh for DragonFruit mesh repair."
+links = "df_vdb_shim"
+build = "build.rs"
+
+[lib]
+name = "dragonfruit_openvdb_sys"
+path = "src/lib.rs"
+
+[build-dependencies]
+cmake = "0.1"
+cc = "1"
+
+# Vendored, statically-linked, built from source via CMake:
+#   vendor/tbb      -> oneTBB           (pin v2021.x)
+#   vendor/imath    -> Imath            (pin v3.1.x, provides Half)
+#   vendor/openvdb  -> OpenVDB          (pin v11.0.0, Boost-free core)
+# Added as git submodules; see README.md.

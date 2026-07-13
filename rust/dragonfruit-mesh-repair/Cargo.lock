@@ -253,6 +253,7 @@ dependencies = [
  "bytemuck",
  "cdt",
  "clap",
+ "dragonfruit-openvdb-sys",
  "manifold-csg",
  "proptest",
  "quick-xml",
@@ -262,6 +263,14 @@ dependencies = [
  "smallvec",
  "thiserror 1.0.69",
  "zip",
+]
+
+[[package]]
+name = "dragonfruit-openvdb-sys"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "cmake",
 ]
 
 [[package]]

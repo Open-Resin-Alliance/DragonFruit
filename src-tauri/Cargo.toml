@@ -37,7 +37,7 @@ futures-util = "0.3"
 dragonfruit-slicing-engine = { path = "../rust/dragonfruit-slicing-engine" }
 dragonfruit-rtsp-relay = { path = "../rust/dragonfruit-rtsp-relay" }
 dragonfruit-islands = { path = "../rust/dragonfruit-islands" }
-dragonfruit-mesh-repair = { path = "../rust/dragonfruit-mesh-repair", features = ["manifold"] }
+dragonfruit-mesh-repair = { path = "../rust/dragonfruit-mesh-repair", features = ["manifold", "openvdb"] }
 dragonfruit-sdf = { path = "../rust/dragonfruit-sdf" }
 dragonfruit-astar = { path = "../rust/dragonfruit-astar" }
 flate2 = "1.1.9"
