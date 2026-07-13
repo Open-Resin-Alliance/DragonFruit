@@ -62,9 +62,21 @@ export class SupportGeometryGenerator {
     let currentStart = this.getStartPosition(data, raftSettings);
     
     data.segments.forEach((seg: Segment) => {
+      // Shaft start: prefer the segment's own bottomJoint so segments whose
+      // joints are not a simple forward chain are drawn at full length. Sticks
+      // are the case that matters: their body spans bottomJoint -> topJoint
+      // between the two contact-cone sockets, and the provided startPos equals
+      // one socket, so chaining from currentStart to topJoint collapsed the
+      // shaft to zero length (dropping the stem and detaching parented
+      // branches). For trunks/branches the bottomJoint coincides with the
+      // chained start, so this is a no-op there.
+      const segStart = seg.bottomJoint
+        ? new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z)
+        : currentStart;
+
       // Calculate end point
       let endPoint: THREE.Vector3;
-      
+
       if (seg.topJoint) {
         endPoint = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
       } else if (data.contactCone) {
@@ -76,7 +88,7 @@ export class SupportGeometryGenerator {
       }
 
       // Generate Shaft
-      const shaftMesh = this.generateShaftMesh(currentStart, endPoint, seg.diameter);
+      const shaftMesh = this.generateShaftMesh(segStart, endPoint, seg.diameter);
       if (shaftMesh) group.add(shaftMesh);
 
       // Generate Joint (if present)
