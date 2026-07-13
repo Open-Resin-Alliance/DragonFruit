@@ -16,3 +16,12 @@
 [submodule "plugins/lys-import"]
 	path = plugins/lys-import
 	url = https://github.com/Open-Resin-Alliance/df-plugin-lys
+[submodule "rust/dragonfruit-openvdb-sys/vendor/tbb"]
+	path = rust/dragonfruit-openvdb-sys/vendor/tbb
+	url = https://github.com/oneapi-src/oneTBB.git
+[submodule "rust/dragonfruit-openvdb-sys/vendor/imath"]
+	path = rust/dragonfruit-openvdb-sys/vendor/imath
+	url = https://github.com/AcademySoftwareFoundation/Imath.git
+[submodule "rust/dragonfruit-openvdb-sys/vendor/openvdb"]
+	path = rust/dragonfruit-openvdb-sys/vendor/openvdb
+	url = https://github.com/AcademySoftwareFoundation/openvdb.git
