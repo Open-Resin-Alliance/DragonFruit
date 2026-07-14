@@ -19,7 +19,7 @@ import {
   Scissors,
 } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { Card, CardHeader, IconButton } from '@/components/atoms';
 import { formatMeshStatsForDisplay } from '@/utils/meshStatsFormatting';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 

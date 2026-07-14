@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { Trash2 } from 'lucide-react';
-import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 export type DebugPrimitiveType =

@@ -73,8 +73,10 @@
     "react-dom": "19.2.0",
     "react-markdown": "^10.1.0",
     "three": "^0.181.0",
+    "three-mesh-bvh": "^0.8.3",
     "three-stdlib": "^2.36.1",
-    "uuid": "^13.0.0"
+    "uuid": "^13.0.0",
+    "zustand": "^5.0.8"
   },
   "devDependencies": {
     "@lingui/cli": "^6.3.0",
@@ -86,6 +88,7 @@
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/three": "^0.181.0",
     "babel-plugin-react-compiler": "1.0.0",
     "baseline-browser-mapping": "^2.9.4",
     "eslint": "^9.39.3",

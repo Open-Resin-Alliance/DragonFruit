@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-// Use drei's bundled three-mesh-bvh to avoid version conflicts
-import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from '@react-three/drei/node_modules/three-mesh-bvh';
+// Pinned to three-mesh-bvh@0.8.3 (same version drei bundles) to avoid version conflicts
+import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 
 /**
  * Augment THREE.BufferGeometry with BVH acceleration methods.

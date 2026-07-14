@@ -1,7 +1,7 @@
 "use client";
 
 import React from 'react';
-import { Card, CardHeader, IconButton, Select } from '@/components/ui/primitives';
+import { Card, CardHeader, IconButton, Select } from '@/components/atoms';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 interface IslandVoxelControlsProps {

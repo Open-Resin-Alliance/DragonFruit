@@ -1,5 +1,5 @@
 import React from 'react';
-import { Toast } from '@/components/ui/primitives';
+import { Toast } from '@/components/atoms';
 
 export function SupportToasts({ message }: { message: string | null }) {
   if (!message) return null;

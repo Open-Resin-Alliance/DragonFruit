@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { Settings, RotateCcw } from 'lucide-react';
-import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';

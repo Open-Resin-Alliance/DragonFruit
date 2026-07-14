@@ -1,6 +1,6 @@
 import React from 'react';
 import { ChevronDown, Download, ExternalLink, FolderOpen, Loader2, Printer, RotateCcw, X } from 'lucide-react';
-import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 type PrintingPanelProps = {

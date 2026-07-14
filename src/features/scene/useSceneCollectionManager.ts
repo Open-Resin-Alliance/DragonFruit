@@ -875,9 +875,9 @@ type ImportProgressState = {
   progress: number | null;
 };
 
-type SceneImportReportTone = 'success' | 'warning' | 'error';
+export type SceneImportReportTone = 'success' | 'warning' | 'error';
 
-type SceneImportReport = {
+export type SceneImportReport = {
   id: number;
   text: string;
   tone: SceneImportReportTone;

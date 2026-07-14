@@ -4,7 +4,7 @@ import { AlertTriangle, ChevronDown, CircleHelp, Cpu, Download, Edit3, ExternalL
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
-import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';

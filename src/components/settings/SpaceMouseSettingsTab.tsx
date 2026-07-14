@@ -4,7 +4,7 @@ import React from 'react';
 import { ArrowLeftRight, Ban, CheckCircle2, Gamepad2, MousePointer2, SlidersHorizontal } from 'lucide-react';
 import type { SpaceMouseSettings } from '@/components/settings/spacemousePreferences';
 import { getCandidateGamepads, NAMED_3D_MOUSE } from '@/components/scene/camera/SpaceMouseController';
-import { Select } from '@/components/ui/primitives';
+import { Select } from '@/components/atoms';
 
 type SpaceMouseSettingsTabProps = {
   settings: SpaceMouseSettings;

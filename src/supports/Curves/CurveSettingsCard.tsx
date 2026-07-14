@@ -3,7 +3,7 @@ import type { SupportState } from '../types';
 import { subscribe, getSnapshot, updateTrunk } from '../state';
 import { updateCurveTension, removeCurveAtJoint, updateSegmentTension, removeSegmentCurve, updateSegmentBias } from './curveUtils';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../history/supportEditHistory';
-import { Button } from '@/components/ui/primitives';
+import { Button } from '@/components/atoms';
 
 type CurveSelectionState = {
     selectedId: string;

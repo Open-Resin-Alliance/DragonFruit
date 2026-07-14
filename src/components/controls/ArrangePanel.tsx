@@ -1,7 +1,7 @@
 import React from 'react';
 import { LayoutGrid, Loader2, RotateCw } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
-import { Button, Card, CardHeader, IconButton, Select } from '@/components/ui/primitives';
+import { Button, Card, CardHeader, IconButton, Select } from '@/components/atoms';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 

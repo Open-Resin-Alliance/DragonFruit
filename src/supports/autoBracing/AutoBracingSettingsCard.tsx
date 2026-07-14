@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { NumberInput } from '@/components/ui/NumberInput';
-import { Button } from '@/components/ui/primitives';
+import { Button } from '@/components/atoms';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import {
     AUTO_BRACING_PATTERN_OPTIONS,

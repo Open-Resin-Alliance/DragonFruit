@@ -2,7 +2,7 @@ import React from 'react';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Search, ScanLine, Cpu } from 'lucide-react';
-import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
 
 type ImportPhase = 'idle' | 'awaiting_stl' | 'processing';
 

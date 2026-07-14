@@ -1,6 +1,6 @@
 import React from 'react';
 import { CopyPlus, Loader2 } from 'lucide-react';
-import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import type { ArrangePrecisionMode } from '@/components/controls/ArrangePanel';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';

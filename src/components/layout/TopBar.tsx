@@ -9,7 +9,7 @@ import { ProfileSettingsModal } from '@/components/settings/ProfileSettingsModal
 import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import type { SelectionHighlightMode } from '@/components/selection';
-import { Button } from '@/components/ui/primitives';
+import { Button } from '@/components/atoms';
 import { Activity, AlertTriangle, Anchor, ChevronDown, FolderInput, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, SaveAll, Square, Upload, X } from 'lucide-react';
 import {
   applyThemeCustomColors,
