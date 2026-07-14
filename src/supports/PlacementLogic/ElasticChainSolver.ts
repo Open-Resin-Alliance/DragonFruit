@@ -19,8 +19,14 @@ export interface ElasticChainResult {
 
 const EPS = 1e-6;
 
+// Matches the callers' `settings.shaft.maxAngleDeg ?? 80` fallback. NaN/undefined
+// would otherwise pass through Math.min/Math.max and silently disable every
+// angle constraint (all NaN comparisons are false), not produce NaN output.
+const FALLBACK_MAX_ANGLE_DEG = 80;
+
 function toSafeTan(maxAngleDeg: number) {
-    const clamped = Math.min(89.999, Math.max(0.001, maxAngleDeg));
+    const angle = Number.isFinite(maxAngleDeg) ? maxAngleDeg : FALLBACK_MAX_ANGLE_DEG;
+    const clamped = Math.min(89.999, Math.max(0.001, angle));
     return Math.tan((clamped * Math.PI) / 180);
 }
 

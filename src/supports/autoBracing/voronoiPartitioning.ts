@@ -79,7 +79,13 @@ function buildAdjacency(nodes: VoronoiSupportNode[], maxNeighborDistanceMm: numb
 
     if (nodes.length === 0) return new Map<string, string[]>();
 
-    const cellSize = Math.max(maxNeighborDistanceMm, 0.1);
+    // Math.max passes NaN through: a NaN distance used to map every node into
+    // the single "NaN:NaN" bucket while the NaN maxDistSq filter never rejected
+    // a pair, connecting the whole model into one O(N^2) clique.
+    const safeMaxNeighborDistanceMm = Number.isFinite(maxNeighborDistanceMm)
+        ? Math.max(maxNeighborDistanceMm, 0.1)
+        : 0.1;
+    const cellSize = safeMaxNeighborDistanceMm;
     const buckets = new Map<string, VoronoiSupportNode[]>();
 
     for (const node of nodes) {
@@ -91,7 +97,7 @@ function buildAdjacency(nodes: VoronoiSupportNode[], maxNeighborDistanceMm: numb
         buckets.set(key, list);
     }
 
-    const maxDistSq = maxNeighborDistanceMm * maxNeighborDistanceMm;
+    const maxDistSq = safeMaxNeighborDistanceMm * safeMaxNeighborDistanceMm;
 
     for (const node of nodes) {
         const ix = Math.floor(node.point.x / cellSize);

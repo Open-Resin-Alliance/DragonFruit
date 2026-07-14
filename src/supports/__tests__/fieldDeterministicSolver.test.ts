@@ -3,6 +3,11 @@ import test from 'node:test';
 
 import type { SDFCache } from '../PlacementLogic/Pathfinding/SDFCache';
 import { solveDeterministicFieldPath } from '../PlacementLogic/Pathfinding/FieldDeterministicSolver';
+import {
+    firstSegmentSatisfiesSocketElbowMaxAngle,
+    getLengthAwareMaxAngleFromVerticalDeg,
+    segmentSatisfiesLengthAwareMaxAngleFromVertical,
+} from '../PlacementLogic/smartPlacementSearchUtils';
 
 function mockGradientForDistanceAt(distanceAt: (x: number, y: number, z: number) => number) {
     return (x: number, y: number, z: number) => {
@@ -164,4 +169,84 @@ test('FieldDeterministicSolver: smart placement honors fieldDeterministic settin
 
     assert.equal(result.error, undefined);
     assert.ok(result.joints && result.joints.length > 0, 'Should route around obstacle');
+});
+
+test('getLengthAwareMaxAngleFromVerticalDeg grants short-span detour slack and keeps long-span tightening', () => {
+    // Short spans may bend to the 60° detour budget even under a 40° base.
+    assert.equal(getLengthAwareMaxAngleFromVerticalDeg(1, 40), 60);
+    assert.equal(getLengthAwareMaxAngleFromVerticalDeg(3, 40), 60);
+    // Taper back to base between 3mm and 5mm.
+    assert.equal(getLengthAwareMaxAngleFromVerticalDeg(4, 40), 50);
+    assert.equal(getLengthAwareMaxAngleFromVerticalDeg(5, 40), 40);
+    // Long-span tightening unchanged.
+    assert.equal(getLengthAwareMaxAngleFromVerticalDeg(8, 40), 31);
+    // When the base is already at/above the detour budget the slack is a no-op.
+    assert.equal(getLengthAwareMaxAngleFromVerticalDeg(5, 60), 60);
+    assert.equal(getLengthAwareMaxAngleFromVerticalDeg(8, 60), 51);
+});
+
+test('FieldDeterministicSolver: maxAngleFromVerticalDeg keeps every path segment within the length-aware angle rule', () => {
+    // Mirror of the real regression scenario (sphere r=2 at z=5, socket just
+    // off-axis near the surface): the raw gradient at the start points mostly
+    // upward, which is exactly where the un-capped march used to emit
+    // near-horizontal chords that the final validator rejects as "max angle
+    // constraint" violations misreported as COLLISION_WITH_MODEL.
+    const obstacleCenter = { x: 0, y: 0, z: 5 };
+    const obstacleRadius = 2;
+    const clearance = 1.23;
+    const maxAngleFromVerticalDeg = 40;
+
+    const distanceAt = (x: number, y: number, z: number) => {
+        const dx = x - obstacleCenter.x;
+        const dy = y - obstacleCenter.y;
+        const dz = z - obstacleCenter.z;
+        return Math.sqrt(dx * dx + dy * dy + dz * dz) - obstacleRadius;
+    };
+
+    const mockSdf = {
+        cellSize: 0.5,
+        distanceAt,
+        distanceAtTrilinear: distanceAt,
+        distanceAndGradientAt: mockGradientForDistanceAt(distanceAt),
+        segmentBlocked: (ax: number, ay: number, az: number, bx: number, by: number, bz: number, cl: number) => {
+            const steps = 30;
+            for (let i = 0; i <= steps; i++) {
+                const t = i / steps;
+                const px = ax + (bx - ax) * t;
+                const py = ay + (by - ay) * t;
+                const pz = az + (bz - az) * t;
+                if (distanceAt(px, py, pz) < cl) return true;
+            }
+            return false;
+        },
+    } as unknown as SDFCache;
+
+    const startPos = { x: 0.5, y: 0.0, z: 8.7 };
+    const goalZ = 2;
+
+    const result = solveDeterministicFieldPath(mockSdf, startPos, goalZ, {
+        clearanceMm: clearance,
+        marginMm: 2.5,
+        stepMm: 1.0,
+        maxLateralMm: 30.0,
+        maxAngleFromVerticalDeg,
+    });
+
+    assert.equal(result.reached, true, 'Should still route around the obstacle with the angle cap');
+
+    for (let i = 0; i < result.path.length - 1; i++) {
+        const a = result.path[i];
+        const b = result.path[i + 1];
+        assert.ok(a.z >= b.z, `Segment ${i} must descend (${a.z} -> ${b.z})`);
+        // Segment 0 (leaving the socket) may use the short steep socket-elbow
+        // allowance; every other segment must satisfy the regular rule —
+        // matching exactly what the V2 final chain validator enforces.
+        const angleOk = i === 0
+            ? firstSegmentSatisfiesSocketElbowMaxAngle(a, b, maxAngleFromVerticalDeg)
+            : segmentSatisfiesLengthAwareMaxAngleFromVertical(a, b, maxAngleFromVerticalDeg);
+        assert.ok(
+            angleOk,
+            `Segment ${i} (${a.x.toFixed(2)},${a.y.toFixed(2)},${a.z.toFixed(2)}) -> (${b.x.toFixed(2)},${b.y.toFixed(2)},${b.z.toFixed(2)}) must satisfy the validator's angle rule`,
+        );
+    }
 });

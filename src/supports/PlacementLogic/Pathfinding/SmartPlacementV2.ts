@@ -23,7 +23,8 @@ import {
 import { getSettings } from '../../Settings';
 import { gridNodeKeyFromXY, gridSnappedXYFromKey } from '../Grid/gridMath';
 import { buildNearestCandidateNodeKeys } from '../Grid/nearestCandidateNodeKeys';
-import { SDFCache } from './SDFCache';
+import { onSDFMatrixDrift, SDFCache } from './SDFCache';
+import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
 import { gridAStar, type GridAStarDebugSnapshot, type WarmStartState } from './GridAStar';
 import { solvePotentialField } from './PotentialFieldSolver';
 import { solveDeterministicFieldPath } from './FieldDeterministicSolver';
@@ -40,6 +41,7 @@ import { perfMark, perfMeasureWithSpike } from './pathfindingPerf';
 import {
     distanceXY,
     distance3D,
+    firstSegmentSatisfiesSocketElbowMaxAngle,
     segmentAngleFromVerticalDeg,
     segmentSatisfiesLengthAwareMaxAngleFromVertical,
     segmentSatisfiesMaxAngleFromVertical,
@@ -645,7 +647,14 @@ function contactConeBlocked(args: {
         const py = start.y + dirY * t;
         const pz = start.z + dirZ * t;
         const radius = THREE.MathUtils.lerp(cone.coneStartRadiusMm, cone.coneEndRadiusMm, t) + CONTACT_CONE_COLLISION_SAFETY_MM;
-        if (args.sdf.isBlocked(px, py, pz, radius)) {
+        // Exact-point signed distance, NOT the quantized grid: the gate's
+        // safety margin (0.05mm) is far below the grid's cell-center
+        // substitution error (~cellSize·√3/2), which made nearby geometry the
+        // cone actually clears read as intersecting (user-confirmed via the
+        // 0.25mm-grid experiment, 2026-07-10). ~25 memoized samples per
+        // socket keep this cheap. Unbounded query so interior samples still
+        // sign negative (cone through solid must stay detected).
+        if (args.sdf.exactSignedDistanceAt(px, py, pz) < radius) {
             return true;
         }
     }
@@ -982,7 +991,10 @@ export function findMixedSocketRescueCandidate(args: {
                     if (segmentBlockedBetween(start, end)) {
                         return false;
                     }
-                    if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(start, end, args.maxAngleFromVerticalDeg)) {
+                    const rescueSegmentAngleOk = i === 0
+                        ? firstSegmentSatisfiesSocketElbowMaxAngle(start, end, args.maxAngleFromVerticalDeg)
+                        : segmentSatisfiesLengthAwareMaxAngleFromVertical(start, end, args.maxAngleFromVerticalDeg);
+                    if (!rescueSegmentAngleOk) {
                         return false;
                     }
                 }
@@ -1634,12 +1646,21 @@ const sdfCachePool = new Map<string, SDFCache>();
 /** Dedupes explicit precomputation requests for the same mesh. */
 const precomputationRequests = new Map<string, Promise<number>>();
 
-export function getOrCreateSDFCache(mesh: THREE.Mesh, cellSize?: number): SDFCache {
+// Single source of truth for the lazy SDF grid resolution. The pool is
+// first-caller-wins, so per-caller cellSize arguments created a resolution
+// race (a mesh's accuracy depended on which subsystem touched it first) —
+// the parameter was removed for that reason. Gates whose margins are finer
+// than the cell-center substitution error (~cellSize·√3/2) must use
+// SDFCache.exactSignedDistanceAt instead of relying on grid resolution;
+// the contact-cone gate does.
+const SDF_DEFAULT_CELL_SIZE_MM = 0.5;
+
+export function getOrCreateSDFCache(mesh: THREE.Mesh): SDFCache {
     const key = mesh.uuid;
     const existing = sdfCachePool.get(key);
     if (existing) return existing;
 
-    const cache = new SDFCache(mesh, { cellSize: cellSize ?? 0.5 });
+    const cache = new SDFCache(mesh, { cellSize: SDF_DEFAULT_CELL_SIZE_MM });
     sdfCachePool.set(key, cache);
     return cache;
 }
@@ -1780,6 +1801,19 @@ const stagnationCache = new Map<string, Vec3[]>();
  */
 const previewExhaustedCache = new Map<string, Vec3[]>();
 
+// Settings epoch for the failure caches: entries recorded under different
+// support settings (clearance, tip profile) are not comparable.
+let lastPlacementSettingsHex: string | null = null;
+
+// Stagnation / preview-exhausted points are recorded in WORLD space: when a
+// model's matrix drifts (Z-lift, rotation, scale, XY translate) the old points
+// hang where the model used to be and fast-fail perfectly valid placements.
+// The pooled SDF detects drift on refresh — clear alongside its distances.
+onSDFMatrixDrift((meshUuid) => {
+    stagnationCache.delete(meshUuid);
+    previewExhaustedCache.delete(meshUuid);
+});
+
 function isNearSpatialPoint(cache: Map<string, Vec3[]>, meshUuid: string, pos: Vec3, radiusSq: number): boolean {
     const points = cache.get(meshUuid);
     if (!points || points.length === 0) return false;
@@ -1914,9 +1948,20 @@ export function calculateSmartPlacementV2(
     }
 
     // 2. Get or create SDF cache; refresh matrix so stale cache from a previous
-    //    model position does not produce wrong distances.
+    //    model position does not produce wrong distances (drift also clears
+    //    the world-space failure caches via the onSDFMatrixDrift listener).
     const sdf = context?.sdfCache ?? getOrCreateSDFCache(mesh);
     sdf.refreshMatrix();
+
+    // Support-relevant settings changes (shaft diameter → clearance, tip
+    // profile, grid) also invalidate recorded failure points: they were
+    // computed under the old constraints.
+    const placementSettingsHex = encodeSupportSettingsHex(settings);
+    if (placementSettingsHex !== lastPlacementSettingsHex) {
+        stagnationCache.clear();
+        previewExhaustedCache.clear();
+        lastPlacementSettingsHex = placementSettingsHex;
+    }
 
     // 3. Quick check: is the straight-down path clear AND do the roots fit at the base?
     const rootTopZ = input.rootsTopZ;
@@ -2494,11 +2539,19 @@ export function calculateSmartPlacementV2(
     const fieldDeterministic = routingAlgorithm === 'potential'; // always true
 
     if (fieldDeterministic) {
+        // devTools values only apply when dev tools are enabled (mirrors the
+        // potential-field branch below). In particular maxLateralMm must
+        // otherwise follow the computed search envelope: a stale devTools cap
+        // (default 30mm) silently truncated every march and manufactured
+        // stagnation-cache entries at positions a full-envelope march routes.
         const detResult = solveDeterministicFieldPath(sdf, socketPos, rootTopZ, {
             clearanceMm: clearance,
-            marginMm: settings.devTools.marginMm,
-            stepMm: settings.devTools.stepMm,
-            maxLateralMm: settings.devTools.maxLateralMm,
+            marginMm: settings.devToolsEnabled && settings.devTools ? settings.devTools.marginMm : 2.5,
+            stepMm: settings.devToolsEnabled && settings.devTools ? settings.devTools.stepMm : 1.0,
+            maxLateralMm: settings.devToolsEnabled && settings.devTools ? settings.devTools.maxLateralMm : maxTotalLateralMm,
+            // The final chain validator enforces this angle on the resolved
+            // route; the march must not emit chords the validator rejects.
+            maxAngleFromVerticalDeg: maxSegmentAngleFromVerticalDeg,
         });
         result = {
             path: detResult.path,
@@ -3496,9 +3549,10 @@ export function calculateSmartPlacementV2(
 
                 if (rootsDiskBlockedAt(oc.baseXY.x, oc.baseXY.y)) continue;
 
-                // Check both segments: socket→joint and joint→rootTop
+                // Check both segments: socket→joint and joint→rootTop.
+                // socket→joint is a first segment: the socket-elbow rule applies.
                 const seg1Ok = !segmentBlockedBetween(socketPos, oc.joint)
-                    && segmentSatisfiesLengthAwareMaxAngleFromVertical(socketPos, oc.joint, maxSegmentAngleFromVerticalDeg);
+                    && firstSegmentSatisfiesSocketElbowMaxAngle(socketPos, oc.joint, maxSegmentAngleFromVerticalDeg);
                 if (!seg1Ok) continue;
 
                 const seg2Ok = !segmentBlockedBetween(oc.joint, candRootTop)
@@ -3520,9 +3574,18 @@ export function calculateSmartPlacementV2(
 
     // 8. Quality gate: reject paths where routing joints are compressed into a
     //    tight Z band near the socket — signature of squeezing through a crack.
+    //    A legitimate detour around a small obstacle also has a tight Z span,
+    //    but it displaces the joints laterally by at least the obstacle
+    //    clearance; a genuine crack squeeze wiggles joints in place. Only the
+    //    combination (tight Z span AND no real lateral displacement) is
+    //    crack-like.
     if (finalJoints.length >= 2) {
         const routingZSpan = socketPos.z - finalJoints[finalJoints.length - 1].z;
-        if (routingZSpan < minRoutingZSpanMm) {
+        const maxJointLateralFromSocketMm = finalJoints.reduce(
+            (max, joint) => Math.max(max, distanceXY(joint, socketPos)),
+            0,
+        );
+        if (routingZSpan < minRoutingZSpanMm && maxJointLateralFromSocketMm < 2 * clearance) {
             const straightRescueFallback = buildStraightRescueFallback();
             if (straightRescueFallback) {
                 return straightRescueFallback;
@@ -3568,7 +3631,13 @@ export function calculateSmartPlacementV2(
             };
         }
 
-        if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(a, b, maxSegmentAngleFromVerticalDeg)) {
+        // The first segment below the socket may use the short steep
+        // socket-elbow allowance; the rest of the chain uses the regular
+        // length-aware rule.
+        const segmentAngleOk = i === 0
+            ? firstSegmentSatisfiesSocketElbowMaxAngle(a, b, maxSegmentAngleFromVerticalDeg)
+            : segmentSatisfiesLengthAwareMaxAngleFromVertical(a, b, maxSegmentAngleFromVerticalDeg);
+        if (!segmentAngleOk) {
             const straightRescueFallback = buildStraightRescueFallback();
             if (straightRescueFallback) {
                 return straightRescueFallback;

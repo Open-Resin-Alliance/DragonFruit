@@ -19,7 +19,7 @@ function getOrCreateCollisionSdf(mesh: THREE.Mesh): SDFCache | null {
     // Use the shared pool — if a precomputed SDF grid has been loaded
     // (via tryLoadPrecomputedSDFForMesh), it will be injected into this
     // cache and all lookups become O(1) hash hits.
-    const sdf = getOrCreateSDFCache(mesh, 0.5);
+    const sdf = getOrCreateSDFCache(mesh);
     sdf.refreshMatrix();
     return sdf;
 }
