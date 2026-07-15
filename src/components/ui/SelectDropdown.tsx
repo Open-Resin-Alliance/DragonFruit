@@ -39,6 +39,9 @@ export type SelectDropdownProps<T extends string | number = string> = {
   /** Positioning class for the chevron, e.g. 'right-1.5' for narrow icon-only
    *  triggers where the default gap reads as wasted space. */
   chevronClassName?: string;
+  /** When true the chevron icon is not rendered. Useful for icon-only triggers
+   *  where the arrow wastes horizontal space. */
+  hideChevron?: boolean;
   optionClassName?: string;
   menuFooterAction?: {
     label: string;
@@ -78,6 +81,7 @@ export function SelectDropdown<T extends string | number = string>({
   menuClassName = '',
   menuAlign = 'left',
   chevronClassName = 'right-3',
+  hideChevron = false,
   optionClassName = '',
   menuFooterAction,
   menuFooterDivider = true,
@@ -305,10 +309,12 @@ export function SelectDropdown<T extends string | number = string>({
             {endAdornment}
           </span>
         )}
-        <ChevronDown
-          className={`pointer-events-none absolute ${chevronClassName} top-1/2 h-3.5 w-3.5 -translate-y-1/2 transition-transform ${isOpen ? 'rotate-180' : ''}`}
-          style={{ color: disabled ? 'var(--text-muted)' : 'var(--text-muted)' }}
-        />
+        {!hideChevron && (
+          <ChevronDown
+            className={`pointer-events-none absolute ${chevronClassName} top-1/2 h-3.5 w-3.5 -translate-y-1/2 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+            style={{ color: disabled ? 'var(--text-muted)' : 'var(--text-muted)' }}
+          />
+        )}
 
         </button>
 

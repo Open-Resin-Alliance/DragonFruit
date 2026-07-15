@@ -1132,7 +1132,7 @@ export function TopBar({
             onChange={onViewTypeOverrideChange}
             iconOnly
             title={_(msg`View mode`)}
-            className="[&>button]:!h-8 [&>button]:!w-[52px] [&>button]:!p-0"
+            className="[&>button]:!h-8 [&>button]:!w-8 [&>button]:!p-0"
           />
           <Button
             type="button"
