@@ -38,6 +38,7 @@ static HOLLOW_PREVIEW_REMOVED_VOXEL_CENTER_BYTES: OnceLock<Mutex<Option<Vec<u8>>
 static HOLLOW_PREVIEW_REMOVED_VOXEL_INDEX_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 static HOLLOW_PREVIEW_BLOCKED_VOXEL_CENTER_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> =
     OnceLock::new();
+static HOLLOW_PREVIEW_BLOCKED_VOXEL_INDEX_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// Cavity interior mesh from the staged hollow path.
 static HOLLOW_STAGED_CAVITY_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// Cavity interior mesh from the preview hollow path.
@@ -73,6 +74,10 @@ fn hollow_preview_blocked_voxel_center_bytes() -> &'static Mutex<Option<Vec<u8>>
     HOLLOW_PREVIEW_BLOCKED_VOXEL_CENTER_BYTES.get_or_init(|| Mutex::new(None))
 }
 
+fn hollow_preview_blocked_voxel_index_bytes() -> &'static Mutex<Option<Vec<u8>>> {
+    HOLLOW_PREVIEW_BLOCKED_VOXEL_INDEX_BYTES.get_or_init(|| Mutex::new(None))
+}
+
 fn hollow_staged_cavity_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
     HOLLOW_STAGED_CAVITY_RESULT_BYTES.get_or_init(|| Mutex::new(None))
 }
@@ -87,6 +92,45 @@ fn punch_source_bytes() -> &'static Mutex<Option<Vec<u8>>> {
 
 fn punch_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
     PUNCH_RESULT_BYTES.get_or_init(|| Mutex::new(None))
+}
+
+/// Clears every hollow-preview buffer derived from the captured source mesh
+/// (session cache, all result/removed/blocked/cavity byte buffers). Called
+/// whenever a new source mesh is captured so stale data from a previous
+/// model/session can never be served alongside a fresh one.
+fn reset_hollow_preview_derived_state() -> Result<(), String> {
+    *hollow_preview_session()
+        .lock()
+        .map_err(|e| format!("hollow preview session lock poisoned: {e}"))? = None;
+    *hollow_preview_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview result lock poisoned: {e}"))? = None;
+    *hollow_preview_infill_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview infill result lock poisoned: {e}"))? = None;
+    *hollow_preview_removed_voxel_center_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview removed voxel center result lock poisoned: {e}"))? =
+        None;
+    *hollow_preview_removed_voxel_index_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview removed voxel index result lock poisoned: {e}"))? =
+        None;
+    *hollow_preview_blocked_voxel_center_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview blocked voxel center result lock poisoned: {e}"))? =
+        None;
+    *hollow_preview_blocked_voxel_index_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview blocked voxel index result lock poisoned: {e}"))? =
+        None;
+    *hollow_preview_cavity_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))? = None;
+    *hollow_staged_cavity_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow staged cavity result lock poisoned: {e}"))? = None;
+    Ok(())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -132,29 +176,29 @@ impl From<RepairOptionsDto> for RepairOptions {
     }
 }
 
-fn parse_options(options_json: &str) -> RepairOptions {
+fn parse_options(options_json: &str) -> Result<RepairOptions, String> {
     if options_json.trim().is_empty() {
-        return RepairOptions::default();
+        return Ok(RepairOptions::default());
     }
     serde_json::from_str::<RepairOptionsDto>(options_json)
-        .unwrap_or_default()
-        .into()
+        .map(RepairOptions::from)
+        .map_err(|e| format!("invalid repair options JSON: {e}"))
 }
 
-fn parse_hollow_options(options_json: &str) -> HollowOptions {
+fn parse_hollow_options(options_json: &str) -> Result<HollowOptions, String> {
     if options_json.trim().is_empty() {
-        return HollowOptions::default();
+        return Ok(HollowOptions::default());
     }
-
-    serde_json::from_str::<HollowOptions>(options_json).unwrap_or_default()
+    serde_json::from_str::<HollowOptions>(options_json)
+        .map_err(|e| format!("invalid hollow options JSON: {e}"))
 }
 
-fn parse_hole_punch_options(options_json: &str) -> HolePunchOptions {
+fn parse_hole_punch_options(options_json: &str) -> Result<HolePunchOptions, String> {
     if options_json.trim().is_empty() {
-        return HolePunchOptions::default();
+        return Ok(HolePunchOptions::default());
     }
-
-    serde_json::from_str::<HolePunchOptions>(options_json).unwrap_or_default()
+    serde_json::from_str::<HolePunchOptions>(options_json)
+        .map_err(|e| format!("invalid hole punch options JSON: {e}"))
 }
 
 #[tauri::command]
@@ -187,7 +231,7 @@ pub async fn mesh_repair_from_path(
             path.display()
         ));
     }
-    let options = parse_options(&options_json);
+    let options = parse_options(&options_json)?;
     let source_path = file_path.clone();
     let (mesh, mut report) = tauri::async_runtime::spawn_blocking(move || {
         let mesh = io::load_mesh_from_path(&path).map_err(|e| e.to_string())?;
@@ -203,7 +247,7 @@ pub async fn mesh_repair_from_path(
 
 #[tauri::command]
 pub async fn mesh_repair_staged(options_json: String) -> Result<String, String> {
-    let options = parse_options(&options_json);
+    let options = parse_options(&options_json)?;
     let bytes = read_staging_bytes()?;
     let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
         let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
@@ -251,7 +295,7 @@ pub async fn mesh_analyze_staged() -> Result<String, String> {
 /// Replaces staged positions with the hollowed result and returns a JSON report.
 #[tauri::command]
 pub async fn mesh_hollow_staged(options_json: String) -> Result<String, String> {
-    let options = parse_hollow_options(&options_json);
+    let options = parse_hollow_options(&options_json)?;
     let bytes = read_staging_bytes()?;
     let (mesh, cavity_bytes, report) = tauri::async_runtime::spawn_blocking(move || {
         let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
@@ -288,23 +332,7 @@ pub async fn mesh_hollow_preview_capture_staged_source() -> Result<(), String> {
         .lock()
         .map_err(|e| format!("hollow preview source lock poisoned: {e}"))? =
         Some(Arc::new(source_mesh));
-    *hollow_preview_session()
-        .lock()
-        .map_err(|e| format!("hollow preview session lock poisoned: {e}"))? = None;
-    *hollow_preview_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview result lock poisoned: {e}"))? = None;
-    *hollow_preview_infill_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview infill result lock poisoned: {e}"))? = None;
-    *hollow_preview_removed_voxel_center_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel center result lock poisoned: {e}"))? =
-        None;
-    *hollow_preview_removed_voxel_index_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel index result lock poisoned: {e}"))? =
-        None;
+    reset_hollow_preview_derived_state()?;
     Ok(())
 }
 
@@ -314,7 +342,7 @@ pub async fn mesh_hollow_preview_capture_staged_source() -> Result<(), String> {
 pub async fn mesh_hollow_preview_from_captured_source(
     options_json: String,
 ) -> Result<String, String> {
-    let options = parse_hollow_options(&options_json);
+    let options = parse_hollow_options(&options_json)?;
     let source_mesh = hollow_preview_source_mesh()
         .lock()
         .map_err(|e| format!("hollow preview source lock poisoned: {e}"))?
@@ -380,6 +408,7 @@ pub async fn mesh_hollow_preview_from_captured_source(
         removed_voxel_center_bytes,
         removed_voxel_index_bytes,
         blocked_voxel_center_bytes,
+        blocked_voxel_index_bytes,
         report,
     ) = tauri::async_runtime::spawn_blocking(move || {
         let outcome = session.run(&options);
@@ -399,6 +428,8 @@ pub async fn mesh_hollow_preview_from_captured_source(
             bytemuck::cast_slice::<u32, u8>(&outcome.removed_voxel_indices).to_vec();
         let blocked_voxel_center_bytes =
             bytemuck::cast_slice::<f32, u8>(&outcome.blocked_voxel_centers).to_vec();
+        let blocked_voxel_index_bytes =
+            bytemuck::cast_slice::<u32, u8>(&outcome.blocked_voxel_indices).to_vec();
         Ok::<_, String>((
             bytes,
             cavity_bytes,
@@ -406,6 +437,7 @@ pub async fn mesh_hollow_preview_from_captured_source(
             removed_voxel_center_bytes,
             removed_voxel_index_bytes,
             blocked_voxel_center_bytes,
+            blocked_voxel_index_bytes,
             outcome.report,
         ))
     })
@@ -415,11 +447,9 @@ pub async fn mesh_hollow_preview_from_captured_source(
     *hollow_preview_result_bytes()
         .lock()
         .map_err(|e| format!("hollow preview result lock poisoned: {e}"))? = Some(positions_bytes);
-    if let Some(cb) = cavity_bytes {
-        *hollow_preview_cavity_result_bytes()
-            .lock()
-            .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))? = Some(cb);
-    }
+    *hollow_preview_cavity_result_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))? = cavity_bytes;
     *hollow_preview_infill_result_bytes()
         .lock()
         .map_err(|e| format!("hollow preview infill result lock poisoned: {e}"))? =
@@ -436,6 +466,10 @@ pub async fn mesh_hollow_preview_from_captured_source(
         .lock()
         .map_err(|e| format!("hollow preview blocked voxel center result lock poisoned: {e}"))? =
         Some(blocked_voxel_center_bytes);
+    *hollow_preview_blocked_voxel_index_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview blocked voxel index result lock poisoned: {e}"))? =
+        Some(blocked_voxel_index_bytes);
 
     serde_json::to_string(&report).map_err(|e| format!("serialize hollow preview report: {e}"))
 }
@@ -444,7 +478,7 @@ pub async fn mesh_hollow_preview_from_captured_source(
 pub async fn mesh_hollow_apply_from_captured_source(
     options_json: String,
 ) -> Result<String, String> {
-    let options = parse_hollow_options(&options_json);
+    let options = parse_hollow_options(&options_json)?;
     let source_mesh = hollow_preview_source_mesh()
         .lock()
         .map_err(|e| format!("hollow preview source lock poisoned: {e}"))?
@@ -589,6 +623,85 @@ pub async fn mesh_hollow_preview_read_blocked_voxel_centers() -> Result<Response
     Ok(Response::new(bytes))
 }
 
+#[tauri::command]
+pub async fn mesh_hollow_preview_read_blocked_voxel_indices() -> Result<Response, String> {
+    let bytes = hollow_preview_blocked_voxel_index_bytes()
+        .lock()
+        .map_err(|e| format!("hollow preview blocked voxel index result lock poisoned: {e}"))?
+        .clone()
+        .ok_or_else(|| {
+            "No hollow preview blocked voxel index result — call mesh_hollow_preview_from_captured_source first"
+                .to_string()
+        })?;
+    Ok(Response::new(bytes))
+}
+
+/// Request payload for `mesh_hollow_preview_select_removed_voxels_in_polygon`.
+/// All fields are in the same spaces the frontend lasso resolver used before
+/// the projection moved to Rust: `polygon` in container pixels, `view_proj` a
+/// column-major `projectionMatrix * matrixWorldInverse`, and the model
+/// transform (`geometry_center`/`scale`/`rotation_quat`/`position`) matching
+/// `resolveBlockedHollowVoxelMarqueeSelection`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SelectRemovedVoxelsRequest {
+    polygon: Vec<[f32; 2]>,
+    view_proj: [f32; 16],
+    rect_width: f32,
+    rect_height: f32,
+    geometry_center: [f32; 3],
+    scale: [f32; 3],
+    rotation_quat: [f32; 4],
+    position: [f32; 3],
+    options: HollowOptions,
+}
+
+/// Selects the full through-depth set of removed (cavity) voxels whose
+/// projected screen point falls inside the lasso polygon, operating on the
+/// cached hollow-preview session so the result is immune to the boundary
+/// filter and viewport cap that narrow the rendered/exported voxel subset.
+/// Returns the grid indices as raw little-endian `u32` bytes.
+#[tauri::command]
+pub async fn mesh_hollow_preview_select_removed_voxels_in_polygon(
+    request_json: String,
+) -> Result<Response, String> {
+    let request: SelectRemovedVoxelsRequest = serde_json::from_str(&request_json)
+        .map_err(|e| format!("invalid select-removed-voxels request JSON: {e}"))?;
+
+    let session = hollow_preview_session()
+        .lock()
+        .map_err(|e| format!("hollow preview session lock poisoned: {e}"))?
+        .clone()
+        .ok_or_else(|| {
+            "No hollow preview session — call mesh_hollow_preview_from_captured_source first"
+                .to_string()
+        })?;
+
+    let indices = tauri::async_runtime::spawn_blocking(move || {
+        let selected = session.select_removed_voxels_in_polygon(
+            &request.options,
+            &request.polygon,
+            &request.view_proj,
+            request.rect_width,
+            request.rect_height,
+            Vec3::new(
+                request.geometry_center[0],
+                request.geometry_center[1],
+                request.geometry_center[2],
+            ),
+            Vec3::new(request.scale[0], request.scale[1], request.scale[2]),
+            request.rotation_quat,
+            Vec3::new(request.position[0], request.position[1], request.position[2]),
+        );
+        Ok::<Vec<u32>, String>(selected)
+    })
+    .await
+    .map_err(|e| format!("hollow select task panicked: {e}"))??;
+
+    let bytes = bytemuck::cast_slice::<u32, u8>(&indices).to_vec();
+    Ok(Response::new(bytes))
+}
+
 /// Reads the cavity interior mesh positions from the last preview hollow operation.
 #[tauri::command]
 pub async fn mesh_hollow_preview_read_cavity_positions() -> Result<Response, String> {
@@ -619,7 +732,7 @@ pub async fn mesh_hollow_staged_read_cavity_positions() -> Result<Response, Stri
 /// Applies manual cylindrical hole punches to the current staged mesh.
 #[tauri::command]
 pub async fn mesh_punch_staged(options_json: String) -> Result<String, String> {
-    let options = parse_hole_punch_options(&options_json);
+    let options = parse_hole_punch_options(&options_json)?;
     let bytes = read_staging_bytes()?;
     let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
         let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
@@ -651,7 +764,7 @@ pub async fn mesh_punch_capture_staged_source() -> Result<(), String> {
 /// regular staged mesh buffer.
 #[tauri::command]
 pub async fn mesh_punch_from_captured_source(options_json: String) -> Result<String, String> {
-    let options = parse_hole_punch_options(&options_json);
+    let options = parse_hole_punch_options(&options_json)?;
     let source_bytes = punch_source_bytes()
         .lock()
         .map_err(|e| format!("punch source lock poisoned: {e}"))?
@@ -1194,4 +1307,35 @@ fn replace_staging_with_mesh(mesh: &IndexedMesh) -> Result<(), String> {
         .lock()
         .map_err(|e| format!("staged mesh lock poisoned: {e}"))? = Some(bytes);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hollow_options_parsing_rejects_malformed_json_instead_of_defaulting() {
+        // Wrong type: previously produced HollowOptions::default() (resolution
+        // 64, 2mm shell) and the destructive hollow ran anyway.
+        assert!(parse_hollow_options(r#"{"voxelResolution": "192"}"#).is_err());
+        // Truncated JSON.
+        assert!(parse_hollow_options(r#"{"voxelResolution": 192"#).is_err());
+    }
+
+    #[test]
+    fn hollow_options_parsing_accepts_empty_and_valid_input() {
+        let defaults = parse_hollow_options("").expect("empty input falls back to defaults");
+        assert_eq!(defaults.voxel_resolution, HollowOptions::default().voxel_resolution);
+
+        let parsed = parse_hollow_options(r#"{"voxelResolution": 128, "shellThicknessMm": 1.5}"#)
+            .expect("well-formed JSON parses");
+        assert_eq!(parsed.voxel_resolution, 128);
+        assert!((parsed.shell_thickness_mm - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn repair_and_punch_options_parsing_reject_malformed_json() {
+        assert!(parse_options(r#"{"weldEpsilon": "tiny"}"#).is_err());
+        assert!(parse_hole_punch_options(r#"{"punches": {}}"#).is_err());
+    }
 }
