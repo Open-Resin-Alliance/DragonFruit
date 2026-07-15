@@ -4470,7 +4470,7 @@ export function SceneCanvas({
       }
 
       benchmarkRunIdRef.current = requestId;
-      dispatchProgress({ requestId, status: 'started', message: `Preparing ${stressProfile} 3D orbit sweepsΓÇª` });
+      dispatchProgress({ requestId, status: 'started', message: `Preparing ${stressProfile} 3D orbit sweeps…` });
 
       const startedAt = performance.now();
       const startedAtIso = new Date().toISOString();
@@ -6736,7 +6736,7 @@ export function SceneCanvas({
           }}
         >
           <div className="rounded border border-neutral-700 bg-neutral-900/70 px-3 py-2 text-sm text-neutral-100">
-            Loading brushΓÇª
+            Loading brush…
           </div>
         </div>
       )}
@@ -6753,7 +6753,7 @@ export function SceneCanvas({
           }}
         >
           <div className="rounded border border-neutral-700 bg-neutral-900/70 px-3 py-2 text-sm text-neutral-100">
-            SmoothingΓÇª {Math.round((smoothingProcessing.progress ?? 0) * 100)}%
+            Smoothing… {Math.round((smoothingProcessing.progress ?? 0) * 100)}%
           </div>
         </div>
       )}

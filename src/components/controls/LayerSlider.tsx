@@ -50,6 +50,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
   // Thumb click-to-edit state
   const [editingThumb, setEditingThumb] = React.useState<'upper' | 'lower' | null>(null);
+  const [editPopoverSide, setEditPopoverSide] = React.useState<'left' | 'right'>('left');
   const [editMode, setEditMode] = React.useState<'layer' | 'mm'>('layer');
   const [editRawValue, setEditRawValue] = React.useState('');
   const editInputRef = React.useRef<HTMLInputElement>(null);
@@ -200,6 +201,14 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
   const openThumbEdit = React.useCallback((thumb: 'upper' | 'lower') => {
     const currentLayer = thumb === 'upper' ? valueRef.current : lowerValueRef.current;
+    // Open the popover towards whichever side of the rail actually has room —
+    // sliders docked at the right screen edge would otherwise clip it off-screen.
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (rect) {
+      const popoverSpace = 156; // min-width 136px + 10px offset + margin
+      const spaceRight = window.innerWidth - rect.right;
+      setEditPopoverSide(spaceRight >= popoverSpace || spaceRight >= rect.left ? 'right' : 'left');
+    }
     setEditMode('layer');
     setEditRawValue(String(Math.round(currentLayer)));
     setEditingThumb(thumb);
@@ -590,19 +599,22 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     ? 'inline-flex items-center rounded-md border px-0.5 py-0 text-[8px] font-semibold tabular-nums'
     : railBadgeClass;
   const shouldPlaceCurrentBadgeBelowThumb = isMinimalRail && percent >= 96;
-  const thumbEditPopoverClassName = isCompactMinimalRail
+  const thumbEditPopoverClassName = editPopoverSide === 'right'
     ? 'absolute left-full top-1/2 -translate-y-1/2 z-[200] flex flex-col gap-1.5 rounded-lg border p-2'
     : 'absolute right-full top-1/2 -translate-y-1/2 z-[200] flex flex-col gap-1.5 rounded-lg border p-2';
-  const thumbEditPopoverOffsetStyle: React.CSSProperties = isCompactMinimalRail
+  const thumbEditPopoverOffsetStyle: React.CSSProperties = editPopoverSide === 'right'
     ? { marginLeft: '10px' }
     : { marginRight: '10px' };
   const minimalRailTitle = React.useMemo(() => {
-    const mmLabel = typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : 'ΓÇö';
-    const rightClickAction = onCrossSectionModeChange
-      ? `Right-click to toggle ${crossSectionMode === 'smooth' ? 'rasterized' : 'smooth'}`
-      : 'Right-click thumb to edit';
-    return `Layer ${value} ΓÇó ${mmLabel} ΓÇó ${rightClickAction}`;
-  }, [crossSectionMode, currentHeightMm, formatMm, onCrossSectionModeChange, value]);
+    const mmLabel = typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : '—';
+    const modeHint = onCrossSectionModeChange
+      ? ` • Right-click track to switch to ${crossSectionMode === 'smooth' ? 'rasterized' : 'smooth'} cross-section`
+      : '';
+    const toggleHint = onToggleCrossSection
+      ? ` • Double-click to turn the cross-section ${crossSectionEnabled ? 'off' : 'back on'}`
+      : '';
+    return `Layer ${value} • ${mmLabel} • Right-click a handle to type an exact value${modeHint}${toggleHint}`;
+  }, [crossSectionEnabled, crossSectionMode, currentHeightMm, formatMm, onCrossSectionModeChange, onToggleCrossSection, value]);
 
   return (
     <div
@@ -645,7 +657,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                 background: 'color-mix(in srgb, var(--surface-1), transparent 12%)',
               }}
             >
-              {typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : 'ΓÇö'}
+              {typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : '—'}
             </div>
             {typeof maxHeightMm === 'number' && !embedded && (
               <div className="text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
