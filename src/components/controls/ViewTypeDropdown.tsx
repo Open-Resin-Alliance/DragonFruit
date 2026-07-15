@@ -91,11 +91,12 @@ export function ViewTypeDropdown({
         title={title ?? (iconOnly ? `Camera view mode: ${currentLabel}` : 'View type')}
         options={dropdownOptions}
         className="space-y-0"
-        selectClassName={`${iconOnly ? '!h-8 !w-8 !p-2 justify-center' : '!h-8 !px-2 !py-1.5 text-xs'} ${fullWidth ? 'w-full' : ''}`}
+        selectClassName={`${iconOnly ? '!h-8 !w-[52px] !p-0' : '!h-8 !px-2 !py-1.5 text-xs'} ${fullWidth ? 'w-full' : ''}`}
+        chevronClassName={iconOnly ? 'right-1.5' : undefined}
         menuAlign="right"
         menuClassName="!w-64"
         hideSelectedText={iconOnly}
-        selectedDisplayAlignment={iconOnly ? 'center' : 'left'}
+        selectedDisplayAlignment="left"
         selectedDisplay={iconOnly ? <Camera className="h-4 w-4" style={{ color: 'var(--text-strong)' }} /> : undefined}
         leadingDisplay={iconOnly ? undefined : <span style={{ color: 'var(--accent)' }}>{getViewTypeIcon(value)}</span>}
       />
