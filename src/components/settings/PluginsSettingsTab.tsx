@@ -357,9 +357,11 @@ export function PluginsSettingsTab() {
             </p>
           </div>
         </div>
-        <p className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-          Debug URLs: <code>df://debug_plugin_official</code> and <code>df://debug_plugin_3rd</code>
-        </p>
+        {isDevRuntime && (
+          <p className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+            Debug URLs: <code>df://debug_plugin_official</code> and <code>df://debug_plugin_3rd</code>
+          </p>
+        )}
 
         <div className="mt-2.5 grid grid-cols-[1fr_auto] gap-2">
           <input
