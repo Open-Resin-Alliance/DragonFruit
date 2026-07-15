@@ -78,6 +78,10 @@ function quantizePreviewShellThicknessMm(valueMm: number): number {
 export type HollowingManagerDeps = {
   showOperationError: (message: string) => void;
   setShowDamagedModelDialog: React.Dispatch<React.SetStateAction<boolean>>;
+  /** Modifier-apply overlay finalizing controls (useModifierApplyOverlay in Home). */
+  beginFinalizing: (kind: 'hollowing' | 'holePunch') => void;
+  clearFinalizing: () => void;
+  nextPaint: () => Promise<void>;
   persistActiveModelModifiers: (next: ModelMeshModifiers | undefined) => void;
   setPendingModifierResetAction: React.Dispatch<React.SetStateAction<'hollowing' | 'hole_punch' | 'clear_hollowing' | null>>;
   setInteriorView: React.Dispatch<React.SetStateAction<boolean>>;
@@ -240,6 +244,14 @@ export function useHollowingManager({
           return;
         }
 
+        // Backend work is done — everything below is main-thread mesh
+        // finalization. Switch the blocking overlay to the "loading mesh"
+        // message and give it one frame to paint before the heavy
+        // synchronous block starts; the drain-watcher effect clears the
+        // flag once the swap and its deferred work have settled.
+        deps.current.beginFinalizing('hollowing');
+        await deps.current.nextPaint();
+
         const nextGeometry = new THREE.BufferGeometry();
         nextGeometry.setAttribute('position', new THREE.BufferAttribute(result.positions, 3));
         nextGeometry.computeVertexNormals();
@@ -278,6 +290,7 @@ export function useHollowingManager({
         );
         if (!replaced) {
           nextGeometry.dispose();
+          deps.current.clearFinalizing();
           return;
         }
 
@@ -384,6 +397,7 @@ export function useHollowingManager({
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         deps.current.showOperationError(`Hollowing failed: ${message}`);
+        deps.current.clearFinalizing();
       } finally {
         setIsApplyingHollowing(false);
         setIsApplyingBlockersHollowing(false);
