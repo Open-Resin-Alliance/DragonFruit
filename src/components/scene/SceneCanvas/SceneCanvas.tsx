@@ -1033,13 +1033,24 @@ export function SceneCanvas({
     }, 180);
   }, [cancelPendingSupportDragResets, resetSupportDragGroupNow]);
 
+  // Live transforms consumed per-frame by the cross-section stencil caps so
+  // the cut surface follows the mesh during gizmo drags instead of snapping
+  // into place on release. Mirrors liveDragTransformRef (active model) plus
+  // the multi-selection preview transforms.
+  const crossSectionLiveTransformsRef = React.useRef<Map<string, ModelTransform>>(new Map());
+
   const queueLiveDragTransform = React.useCallback((next: ModelTransform | null) => {
     liveDragTransformRef.current = next;
+    if (next && activeModelId) {
+      crossSectionLiveTransformsRef.current.set(activeModelId, next);
+    } else if (!next) {
+      crossSectionLiveTransformsRef.current.clear();
+    }
     // During active drag, avoid per-frame React rerenders; scene objects are
     // moved imperatively and this ref remains the source of truth.
     if (isGizmoDragging) return;
     setLiveDragTransformVersion((value) => value + 1);
-  }, [isGizmoDragging]);
+  }, [activeModelId, isGizmoDragging]);
 
   const {
     effectiveHoldSupportDragDelta,
@@ -1085,6 +1096,7 @@ export function SceneCanvas({
     // This prevents stale live transforms from the previous model from being
     // reused after delete/import/undo flows.
     liveDragTransformRef.current = null;
+    crossSectionLiveTransformsRef.current.clear();
     setLiveDragTransformVersion((value) => value + 1);
     setIsGizmoDragging(false);
     setIsGizmoRetargeting(false);
@@ -1100,6 +1112,7 @@ export function SceneCanvas({
     // Clear all transient gizmo/live state so rendering falls back to store data.
     cancelPendingSupportDragResets();
     liveDragTransformRef.current = null;
+    crossSectionLiveTransformsRef.current.clear();
     setLiveDragTransformVersion((value) => value + 1);
     gizmoTransformStartSnapshotRef.current = null;
     setActiveGizmoDragDescriptor(null);
@@ -1114,8 +1127,10 @@ export function SceneCanvas({
   ]);
 
   React.useEffect(() => {
+    const liveTransforms = crossSectionLiveTransformsRef.current;
     return () => {
       liveDragTransformRef.current = null;
+      liveTransforms.clear();
     };
   }, []);
 
@@ -2478,6 +2493,9 @@ export function SceneCanvas({
   ) => {
     for (const [modelId, preview] of Object.entries(previewByModelId)) {
       if (modelId === snapshot.activeModelId) continue;
+
+      // Keep the cross-section caps following the previewed models too.
+      crossSectionLiveTransformsRef.current.set(modelId, preview);
 
       const meshGroup = meshRefs.current[modelId];
       if (meshGroup) {
@@ -5842,6 +5860,7 @@ export function SceneCanvas({
                 <CrossSectionStencilCap
                   key="cross-section-cap-top"
                   entries={crossSectionCapEntries}
+                  liveTransformsRef={crossSectionLiveTransformsRef}
                   sourceObject={supportDragGroupRef?.current ?? null}
                   sourceObjectVersion={clipUpper != null ? crossSectionStencilSourceVersion : undefined}
                   // During slider scrubbing, avoid expensive source z-bound
@@ -5867,6 +5886,7 @@ export function SceneCanvas({
                 <CrossSectionStencilCap
                   key="cross-section-cap-bottom"
                   entries={crossSectionCapEntries}
+                  liveTransformsRef={crossSectionLiveTransformsRef}
                   sourceObject={supportDragGroupRef?.current ?? null}
                   sourceObjectVersion={crossSectionStencilSourceVersion}
                   skipSourceZBounds={isLayerScrubbing}
