@@ -45,6 +45,7 @@ import {
   type SavedCustomThemeProfile,
 } from '@/components/settings/themeCustomizations';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { Tooltip } from '@/components/ui/Tooltip';
 import {
   DEFAULT_SPACEMOUSE_SETTINGS,
   getSavedSpaceMouseSettings,
@@ -1523,23 +1524,30 @@ export function SettingsModal({
 
                         <div className="mt-3 flex flex-col items-center gap-2">
                           <div className="flex flex-wrap items-center justify-center gap-2.5">
-                            <span
-                              role="button"
-                              tabIndex={0}
-                              onClick={handleCopyBuildInfo}
-                              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCopyBuildInfo(); } }}
-                              className="inline-flex cursor-pointer items-center rounded-full border px-2.5 py-0.5 text-[12px] font-semibold tabular-nums transition-colors"
-                              style={{
-                                color: copied ? '#2d8a4e' : 'var(--text-strong)',
-                                borderColor: copied ? '#2d8a4e' : 'color-mix(in srgb, var(--border-subtle), white 8%)',
-                                background: copied
-                                  ? 'rgba(45,138,78,0.1)'
-                                  : 'color-mix(in srgb, var(--surface-1), transparent 8%)',
-                              }}
-                              title={DRAGONFRUIT_GIT_BUILD_LABEL ? `Copy build info\n${DRAGONFRUIT_GIT_BUILD_LABEL}` : undefined}
+                            <Tooltip
+                              content={
+                                <span className="whitespace-pre-line">
+                                  Click to copy build info{DRAGONFRUIT_GIT_BUILD_LABEL ? `\n${DRAGONFRUIT_GIT_BUILD_LABEL}` : ''}
+                                </span>
+                              }
                             >
-                              {copied ? '✓ Copied!' : `Version ${DRAGONFRUIT_VERSION}`}
-                            </span>
+                              <span
+                                role="button"
+                                tabIndex={0}
+                                onClick={handleCopyBuildInfo}
+                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCopyBuildInfo(); } }}
+                                className="inline-flex cursor-pointer items-center rounded-full border px-2.5 py-0.5 text-[12px] font-semibold tabular-nums transition-colors"
+                                style={{
+                                  color: copied ? '#2d8a4e' : 'var(--text-strong)',
+                                  borderColor: copied ? '#2d8a4e' : 'color-mix(in srgb, var(--border-subtle), white 8%)',
+                                  background: copied
+                                    ? 'rgba(45,138,78,0.1)'
+                                    : 'color-mix(in srgb, var(--surface-1), transparent 8%)',
+                                }}
+                              >
+                                {copied ? '✓ Copied!' : `Version ${DRAGONFRUIT_VERSION}`}
+                              </span>
+                            </Tooltip>
                             <span
                               className="inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-semibold"
                               style={buildStatusStyle}
