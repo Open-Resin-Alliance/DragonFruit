@@ -17,7 +17,7 @@ import { UpdatesSettingsTab } from '@/features/updater/UpdatesSettingsTab';
 import { getUpdateChannel, type UpdateChannel } from '@/features/updater/updateBridge';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
 import { PerformanceSettingsTab, type SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
-import { AlertTriangle, Check, ClipboardCopy, CloudDownload, Edit3, ExternalLink, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Save, Settings2, Trash2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
+import { AlertTriangle, Check, CloudDownload, Edit3, ExternalLink, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Save, Settings2, Trash2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   applyThemeCustomColors,
@@ -244,14 +244,14 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTabKey>(initialTab ?? 'general');
 
-  const [buildInfoCopied, setBuildInfoCopied] = useState(false);
+  const [copied, setCopied] = useState(false);
   const handleCopyBuildInfo = React.useCallback(async () => {
     // Full build identity in one string — what a bug report needs.
     const buildInfo = `DragonFruit ${DRAGONFRUIT_VERSION} (${DRAGONFRUIT_BUILD_CHANNEL})${DRAGONFRUIT_GIT_BUILD_LABEL ? ` — ${DRAGONFRUIT_GIT_BUILD_LABEL}` : ''}`;
     try {
       await navigator.clipboard.writeText(buildInfo);
-      setBuildInfoCopied(true);
-      setTimeout(() => setBuildInfoCopied(false), 2000);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     } catch { /* clipboard unavailable */ }
   }, []);
 
@@ -1524,14 +1524,21 @@ export function SettingsModal({
                         <div className="mt-3 flex flex-col items-center gap-2">
                           <div className="flex flex-wrap items-center justify-center gap-2.5">
                             <span
-                              className="inline-flex rounded-full border px-2.5 py-0.5 text-[12px] font-semibold tabular-nums"
+                              role="button"
+                              tabIndex={0}
+                              onClick={handleCopyBuildInfo}
+                              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCopyBuildInfo(); } }}
+                              className="inline-flex cursor-pointer items-center rounded-full border px-2.5 py-0.5 text-[12px] font-semibold tabular-nums transition-colors"
                               style={{
-                                color: 'var(--text-strong)',
-                                borderColor: 'color-mix(in srgb, var(--border-subtle), white 8%)',
-                                background: 'color-mix(in srgb, var(--surface-1), transparent 8%)',
+                                color: copied ? '#2d8a4e' : 'var(--text-strong)',
+                                borderColor: copied ? '#2d8a4e' : 'color-mix(in srgb, var(--border-subtle), white 8%)',
+                                background: copied
+                                  ? 'rgba(45,138,78,0.1)'
+                                  : 'color-mix(in srgb, var(--surface-1), transparent 8%)',
                               }}
+                              title={DRAGONFRUIT_GIT_BUILD_LABEL ? `Copy build info\n${DRAGONFRUIT_GIT_BUILD_LABEL}` : undefined}
                             >
-                              Version {DRAGONFRUIT_VERSION}
+                              {copied ? '✓ Copied!' : `Version ${DRAGONFRUIT_VERSION}`}
                             </span>
                             <span
                               className="inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-semibold"
@@ -1540,24 +1547,6 @@ export function SettingsModal({
                               {buildStatusLabel}
                             </span>
                           </div>
-                          {DRAGONFRUIT_GIT_BUILD_LABEL && (
-                            <button
-                              type="button"
-                              onClick={handleCopyBuildInfo}
-                              className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-mono text-[11px] tabular-nums transition-colors"
-                              style={{
-                                color: buildInfoCopied ? 'var(--accent)' : 'var(--text-muted)',
-                                borderColor: 'color-mix(in srgb, var(--border-subtle), white 8%)',
-                                background: 'color-mix(in srgb, var(--surface-1), transparent 8%)',
-                              }}
-                              title="Copy build info (version, channel and git commit)"
-                            >
-                              <span className="select-text">{DRAGONFRUIT_GIT_BUILD_LABEL}</span>
-                              {buildInfoCopied
-                                ? <Check className="h-3 w-3 shrink-0" />
-                                : <ClipboardCopy className="h-3 w-3 shrink-0" />}
-                            </button>
-                          )}
                         </div>
                       </div>
 
