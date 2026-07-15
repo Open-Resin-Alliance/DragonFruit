@@ -1229,7 +1229,7 @@ export function SettingsModal({
             }}
           >
             <div className="h-full min-h-0 overflow-y-auto custom-scrollbar pr-1 flex flex-col">
-              <div className="space-y-1.5">
+              <div className="space-y-1">
                 {sidebarTopTabs.map((tab) => {
                   const meta = tabMeta[tab];
                   const Icon = meta.icon;
@@ -1241,7 +1241,7 @@ export function SettingsModal({
                       key={tab}
                       type="button"
                       onClick={() => setActiveTab(tab)}
-                      className="w-full rounded-lg border px-3 py-2.5 text-left transition-all duration-150"
+                      className="w-full rounded-lg border px-3 py-2 text-left transition-all duration-150"
                       style={active
                         ? {
                           borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
@@ -1253,9 +1253,9 @@ export function SettingsModal({
                           background: 'var(--surface-1)',
                         }}
                     >
-                      <div className="flex items-start gap-2.5">
+                      <div className="flex items-center gap-2">
                         <span
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border"
                           style={{
                             borderColor: active
                               ? `color-mix(in srgb, ${tabColor}, var(--border-subtle) 30%)`
@@ -1281,7 +1281,7 @@ export function SettingsModal({
                 })}
               </div>
 
-              <div className="mt-auto space-y-1.5 pt-3">
+              <div className="mt-auto space-y-1 pt-3">
                 {sidebarBottomTabs.map((tab) => {
                   const meta = tabMeta[tab];
                   const Icon = meta.icon;
@@ -1294,7 +1294,7 @@ export function SettingsModal({
                       type="button"
                       aria-disabled={false}
                       onClick={() => setActiveTab(tab)}
-                      className="w-full rounded-lg border px-3 py-2.5 text-left transition-all duration-150"
+                      className="w-full rounded-lg border px-3 py-2 text-left transition-all duration-150"
                       style={{
                         ...(active
                           ? {
@@ -1308,9 +1308,9 @@ export function SettingsModal({
                           }),
                       }}
                     >
-                      <div className="flex items-start gap-2.5">
+                      <div className="flex items-center gap-2">
                         <span
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border"
                           style={{
                             borderColor: active
                               ? `color-mix(in srgb, ${tabColor}, var(--border-subtle) 30%)`
@@ -1339,15 +1339,6 @@ export function SettingsModal({
           </div>
 
           <div className={usesInternalTabScrollLayout ? 'flex-1 min-h-0 flex flex-col p-4' : 'flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4'}>
-            {activeTab !== 'about' && activeTab !== 'updates' && (
-              <div className="mb-3 rounded-lg border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
-                <div className="flex items-center gap-2">
-                  <ActiveTabIcon className="h-4 w-4" style={{ color: activeTabColor }} />
-                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{tabMeta[activeTab].label}</h3>
-                </div>
-                <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>{tabMeta[activeTab].description}</p>
-              </div>
-            )}
 
             <div key={activeTab} className={usesInternalTabScrollLayout ? 'animate-[settingsTabIn_180ms_ease-out] flex-1 min-h-0 flex flex-col' : 'animate-[settingsTabIn_180ms_ease-out]'}>
               {activeTab === 'general' && (
