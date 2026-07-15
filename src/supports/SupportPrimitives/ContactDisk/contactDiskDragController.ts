@@ -178,10 +178,22 @@ export function startContactDiskDragSession(options: ContactDiskDragSessionOptio
             rafId = null;
         }
         window.removeEventListener('pointermove', handlePointerMove, true);
+        window.removeEventListener('pointerup', handlePointerRelease, true);
+        window.removeEventListener('pointercancel', handlePointerRelease, true);
         if (onEnd) onEnd();
     };
 
+    // Self-stop on release: consumers stop the session from component
+    // handlers, but those can unmount mid-drag (e.g. a live preview that
+    // replaces the entity the handler was mounted on). The session must end
+    // itself on the gesture's release or the commit in onEnd never runs.
+    const handlePointerRelease = () => {
+        stop();
+    };
+
     window.addEventListener('pointermove', handlePointerMove, true);
+    window.addEventListener('pointerup', handlePointerRelease, true);
+    window.addEventListener('pointercancel', handlePointerRelease, true);
     if (getPointerClientPosition(initialEvent)) {
         processPointerEvent(initialEvent);
     }

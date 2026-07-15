@@ -113,7 +113,16 @@ export const BranchRenderer = React.memo(function BranchRenderer({
           contactCone: rebuilt.contactCone
             ? {
                 ...rebuilt.contactCone,
+                // Keep the cone's identity: selection (and the HUD that owns
+                // this drag) is keyed on the cone id — a fresh uuid mid-drag
+                // unmounts the HUD, the pointer-up dies with it, and the drag
+                // never commits (tip snaps back).
+                id: latest.contactCone.id,
                 placementSurface: latest.contactCone.placementSurface,
+                // buildBranchData knows nothing of the oval face; carry it
+                // over so moving the tip doesn't reset the shape.
+                contactFaceRatio: latest.contactCone.contactFaceRatio,
+                contactFaceAngleRad: latest.contactCone.contactFaceAngleRad,
               }
             : rebuilt.contactCone,
           id: latest.id,
