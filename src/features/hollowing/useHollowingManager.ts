@@ -25,7 +25,7 @@ import {
   type HollowReport,
 } from '@/utils/meshHollowing';
 import { centerCavityPositions } from '@/features/hollowing/cavityCentering';
-import { getRotationQuatTuple } from '@/features/mesh-modifiers/hollowingGrid';
+import { getRotationQuatTuple, resolveBlockedVoxelValidity } from '@/features/mesh-modifiers/hollowingGrid';
 import { toPersistedHolePunchPlacements } from '@/features/hole-punching/holePunchPersistence';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { serializeHollowingModifier } from '@/features/hollowing/hollowingSerialize';
@@ -1333,6 +1333,76 @@ export function useHollowingManager({
       cavityGeometryByModelIdRef.current.set(model.id, { geometry: cavityGeometry });
     }
   }, [scene.models]);
+
+  // Rust echoes back which committed blockers it actually accepted (stale
+  // indices that fell off the grid or landed on non-solid voxels are
+  // dropped, preserving order). If the echo differs from the committed set,
+  // adopt it so the persisted modifier stays in lockstep with the preview.
+  React.useEffect(() => {
+    const preview = hollowPreview;
+    const echoed = preview?.blockedVoxelIndices;
+    const requested = preview?.requestedBlockedVoxelIndices;
+    if (!preview || !echoed || !requested) return;
+    // Only resync when this preview was computed FROM the current committed
+    // set — otherwise a newer request is already in flight and comparing
+    // against it would clobber fresh state.
+    if (requested.length !== blockedHollowVoxelIndices.length
+      || requested.some((value, i) => value !== blockedHollowVoxelIndices[i])) {
+      return;
+    }
+    // The accepted list is an order-preserving subsequence of the request:
+    // equal length means identical content.
+    if (echoed.length === blockedHollowVoxelIndices.length) return;
+    commitBlockedHollowVoxelIndices(Array.from(echoed));
+  }, [blockedHollowVoxelIndices, commitBlockedHollowVoxelIndices, hollowPreview]);
+
+  // Committed blockers index the rotation-aligned voxel grid. If the model is
+  // rotated after they were painted, the same linear indices land on entirely
+  // different voxels (or off the grid), so Rust would either silently ignore
+  // them or pin the wrong voxels (hollowing.rs keep-application). Clear them
+  // instead, mirroring the resolution-change invalidation in
+  // handleHollowingStateChange and the legacy-format clear above.
+  // NOTE: models in React state carry meshModifiers: undefined by design —
+  // modifiers must be read through the externalized store (getModelMeshModifiers),
+  // matching the cavity-restore effect above.
+  React.useEffect(() => {
+    for (const model of scene.models) {
+      const modifiers = scene.getModelMeshModifiers(model.id);
+      const hollowing = modifiers?.hollowing;
+      if (!hollowing?.enabled || hollowing.bakedIntoGeometry) continue;
+      if (!hollowing.blockedVoxelIndices?.length) continue;
+      const currentQuat = getRotationQuatTuple(model.transform.rotation);
+      const validity = resolveBlockedVoxelValidity(hollowing, currentQuat);
+      if (validity === 'valid') continue;
+
+      if (validity === 'stamp-legacy') {
+        // Blockers persisted before the rotation stamp existed: adopt the
+        // current rotation instead of destroying the user's selection on
+        // first launch after this change.
+        scene.setModelMeshModifiers(model.id, {
+          ...(modifiers ?? {}),
+          hollowing: { ...hollowing, blockedVoxelRotationQuat: currentQuat },
+        });
+        continue;
+      }
+
+      console.warn(
+        '[Hollowing] Cleared blocked voxels: model rotation changed since they were painted.',
+      );
+      scene.setModelMeshModifiers(model.id, {
+        ...(modifiers ?? {}),
+        hollowing: {
+          ...hollowing,
+          blockedVoxelIndices: [],
+          blockedVoxelRotationQuat: undefined,
+        },
+      });
+      if (model.id === scene.activeModelId) {
+        setBlockedHollowVoxelIndices([]);
+        setEditingBlockedHollowVoxelIndices([]);
+      }
+    }
+  }, [scene.models, scene.getModelMeshModifiers, scene.setModelMeshModifiers, scene.activeModelId, setBlockedHollowVoxelIndices, setEditingBlockedHollowVoxelIndices]);
 
   React.useEffect(() => {
     return () => {
