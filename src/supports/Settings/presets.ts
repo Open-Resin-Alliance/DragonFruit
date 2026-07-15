@@ -7,6 +7,7 @@
 import { SupportPreset, PresetCollection, SupportSettings, createDefaultSettings } from './types';
 import { getSettings, setSettings, saveSettingsToLocalStorage } from './state';
 import { createDefaultAutoBracingSettings } from '../autoBracing/settings';
+import { DEFAULT_TIP_PENETRATION_MM } from './defaults';
 
 function normalizePresetSettings(
     settings: Partial<SupportSettings> | undefined,
@@ -78,7 +79,7 @@ const DETAIL_PRESET: SupportPreset = {
             contactDiameterMm: 0.22,
             bodyDiameterMm: 0.8,
             lengthMm: 2.5,
-            penetrationMm: 0,
+            penetrationMm: DEFAULT_TIP_PENETRATION_MM,
             coneAngleMode: 'adaptive',
             adaptiveConeAngleOffsetDeg: 60,
             coneAngleDeg: 100,
@@ -168,7 +169,7 @@ const ANCHOR_PRESET: SupportPreset = {
             contactDiameterMm: 0.4,
             bodyDiameterMm: 1.2,
             lengthMm: 2.5,
-            penetrationMm: 0,
+            penetrationMm: DEFAULT_TIP_PENETRATION_MM,
             coneAngleMode: 'adaptive',
             adaptiveConeAngleOffsetDeg: 60,
             coneAngleDeg: 100,

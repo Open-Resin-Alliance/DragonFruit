@@ -3,9 +3,10 @@
 import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { ThreeEvent, useThree } from '@react-three/fiber';
+import { Line } from '@react-three/drei';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
 import type { GizmoAxis } from '../types';
-import { getCachedBoxGeometry, getCachedScaleCubeEdgeGeometry } from '../gizmoGeometryCache';
+import { getCachedBoxGeometry, getCachedConeGeometry, getCachedScaleCubeEdgeGeometry } from '../gizmoGeometryCache';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
 
@@ -19,6 +20,13 @@ interface GizmoScaleProps {
   opacityScale?: number;
   interactionsEnabled?: boolean;
   isUniform?: boolean;
+  handleVariant?: 'cube' | 'doubleCone';
+  /** Render the handle at both ends of the axis instead of the camera side only. */
+  dualHandles?: boolean;
+  /** Distance of the handle from the gizmo center (gizmo units). Defaults to GIZMO_SIZES.scaleLineLength. */
+  handleDistance?: number;
+  /** Enable the colored point light at the handle (disable for flat overlay looks / performance). */
+  enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
   onDragStart: (isUniform: boolean) => boolean | void;
   onDrag: (factor: number, isUniform: boolean) => void;
@@ -40,6 +48,10 @@ export function GizmoScale({
   opacityScale = 1,
   interactionsEnabled = true,
   isUniform: isUniformProp = true,
+  handleVariant = 'cube',
+  dualHandles = false,
+  handleDistance,
+  enableLighting = true,
   gizmoPosition,
   onDragStart,
   onDrag,
@@ -56,22 +68,24 @@ export function GizmoScale({
   // GPU Picking registration
   const pickMeshRef = useRef<THREE.Mesh>(null);
   const pickIdRef = useRef<number | null>(null);
+  const mirrorPickMeshRef = useRef<THREE.Mesh>(null);
+  const mirrorPickIdRef = useRef<number | null>(null);
   const { register, unregister, hit } = usePicking();
-  
+
   // Map axis to gizmo handle type
   const handleType: GizmoHandleType = `scale-${axis}` as GizmoHandleType;
-  
+
   // Register with picking system
   useEffect(() => {
     if (!pickMeshRef.current) return;
-    
+
     pickIdRef.current = register({
       category: 'gizmo',
       objectId: null,
       gizmoHandle: handleType,
       object: pickMeshRef.current,
     });
-    
+
     return () => {
       if (pickIdRef.current !== null) {
         unregister(pickIdRef.current);
@@ -79,6 +93,24 @@ export function GizmoScale({
       }
     };
   }, [register, unregister, handleType]);
+
+  useEffect(() => {
+    if (!dualHandles || !mirrorPickMeshRef.current) return;
+
+    mirrorPickIdRef.current = register({
+      category: 'gizmo',
+      objectId: null,
+      gizmoHandle: handleType,
+      object: mirrorPickMeshRef.current,
+    });
+
+    return () => {
+      if (mirrorPickIdRef.current !== null) {
+        unregister(mirrorPickIdRef.current);
+        mirrorPickIdRef.current = null;
+      }
+    };
+  }, [register, unregister, handleType, dualHandles]);
   
   // Check if this handle is hovered via GPU picking
   const isPickingHovered = !suppressHover && hit.category === 'gizmo' && 
@@ -93,13 +125,14 @@ export function GizmoScale({
   const shouldFlipZ = axis === 'z' && (camera.position.z - gizmoPosition.z > 0);
 
   // Position for each axis (at end of line) with camera-relative flipping
-  const length = GIZMO_SIZES.scaleLineLength;
+  const length = handleDistance ?? GIZMO_SIZES.scaleLineLength;
   const position: [number, number, number] =
     axis === 'x'
       ? [shouldFlipX ? length : -length, 0, 0]
       : axis === 'y'
       ? [0, shouldFlipY ? length : -length, 0]
       : [0, 0, shouldFlipZ ? length : -length];
+  const mirrorPosition: [number, number, number] = [-position[0], -position[1], -position[2]];
 
   // Rotate hexagon to face perpendicular to axis
   const rotation: [number, number, number] =
@@ -115,6 +148,33 @@ export function GizmoScale({
   );
   const handleBoxGeometry = useMemo(() => getCachedBoxGeometry(1, 1, 1), []);
   const cubeEdgeGeometry = useMemo(() => getCachedScaleCubeEdgeGeometry(), []);
+  // doubleCone variant: same cone stock as the rotation-ring handle, but the
+  // pair points along the scale axis (one apex toward the gizmo center, one
+  // away) to read as stretch/squish instead of grab-cube.
+  const coneGeometry = useMemo(
+    () => getCachedConeGeometry(GIZMO_SIZES.ringDiamondRadius * 0.36, GIZMO_SIZES.ringDiamondRadius, 16),
+    [],
+  );
+  // Cones sit split apart with a connector line spanning the gap between
+  // their bases, so the pair reads as a stretch glyph: ◄──►
+  const coneOffset = GIZMO_SIZES.ringDiamondRadius * 0.95;
+  const coneLineHalf = coneOffset - GIZMO_SIZES.ringDiamondRadius / 2 + 0.06; // tucks under the cone bases
+  // Cone geometry points +Y; orient each apex along ±axis.
+  const outwardConeRotation: [number, number, number] =
+    axis === 'x' ? [0, 0, -Math.PI / 2] : axis === 'y' ? [0, 0, 0] : [Math.PI / 2, 0, 0];
+  const inwardConeRotation: [number, number, number] =
+    axis === 'x' ? [0, 0, Math.PI / 2] : axis === 'y' ? [Math.PI, 0, 0] : [-Math.PI / 2, 0, 0];
+  const outwardConeOffset: [number, number, number] =
+    axis === 'x' ? [coneOffset, 0, 0] : axis === 'y' ? [0, coneOffset, 0] : [0, 0, coneOffset];
+  const inwardConeOffset: [number, number, number] =
+    axis === 'x' ? [-coneOffset, 0, 0] : axis === 'y' ? [0, -coneOffset, 0] : [0, 0, -coneOffset];
+  const coneLinePoints = useMemo((): [number, number, number][] => (
+    axis === 'x'
+      ? [[-coneLineHalf, 0, 0], [coneLineHalf, 0, 0]]
+      : axis === 'y'
+        ? [[0, -coneLineHalf, 0], [0, coneLineHalf, 0]]
+        : [[0, 0, -coneLineHalf], [0, 0, coneLineHalf]]
+  ), [axis, coneLineHalf]);
 
   const handlePointerEnter = (e: ThreeEvent<PointerEvent>) => {
     if (!interactionsEnabled) return;
@@ -240,6 +300,97 @@ export function GizmoScale({
     threeColor.multiplyScalar(0.3);
     return '#' + threeColor.getHexString();
   }, [handleColor]);
+  // Connector between the split cones: the axis' start (orange for X) so the
+  // glyph reads cone–line–cone against the brighter cone color.
+  const coneLineColor = isDimmed
+    ? dimmedColor
+    : isActive
+      ? GIZMO_COLORS.active
+      : effectiveHovered
+        ? GIZMO_COLORS.hover
+        : axisColors.start;
+
+  // Handle visual at one axis end — called once (camera side) or twice
+  // (dualHandles). Plain JSX factory, not a component: no refs inside, so no
+  // remount concerns.
+  const renderHandleVisual = (pos: [number, number, number]) => (
+    handleVariant === 'cube' ? (
+      <group position={pos}>
+        <mesh scale={GIZMO_SIZES.scaleHexagonRadius * highlightScale}>
+          <primitive object={handleBoxGeometry} attach="geometry" />
+          <meshBasicMaterial
+            color={handleColor}
+            transparent
+            opacity={opacity}
+            depthTest={false}
+          />
+        </mesh>
+        <lineSegments scale={GIZMO_SIZES.scaleHexagonRadius * highlightScale}>
+          <primitive object={cubeEdgeGeometry} attach="geometry" />
+          <lineBasicMaterial
+            color={edgeColor}
+            transparent
+            opacity={opacity}
+            depthTest={false}
+          />
+        </lineSegments>
+      </group>
+    ) : (
+      <group position={pos} scale={highlightScale}>
+        {/* Connector line through the gap between the cone bases */}
+        <Line
+          points={coneLinePoints}
+          color={coneLineColor}
+          lineWidth={2}
+          transparent
+          opacity={opacity}
+          depthTest={false}
+        />
+        {/* Outward-pointing cone (away from the gizmo center) */}
+        <group position={outwardConeOffset} rotation={outwardConeRotation}>
+          <mesh scale={1.08}>
+            <primitive object={coneGeometry} attach="geometry" />
+            <meshBasicMaterial
+              color={edgeColor}
+              transparent
+              opacity={opacity}
+              depthTest={false}
+            />
+          </mesh>
+          <mesh>
+            <primitive object={coneGeometry} attach="geometry" />
+            <meshBasicMaterial
+              color={handleColor}
+              transparent
+              opacity={opacity}
+              depthTest={false}
+            />
+          </mesh>
+        </group>
+        {/* Inward-pointing cone (toward the gizmo center) */}
+        <group position={inwardConeOffset} rotation={inwardConeRotation}>
+          <mesh scale={1.08}>
+            <primitive object={coneGeometry} attach="geometry" />
+            <meshBasicMaterial
+              color={edgeColor}
+              transparent
+              opacity={opacity}
+              depthTest={false}
+            />
+          </mesh>
+          <mesh>
+            <primitive object={coneGeometry} attach="geometry" />
+            <meshBasicMaterial
+              color={handleColor}
+              transparent
+              opacity={opacity}
+              depthTest={false}
+            />
+          </mesh>
+        </group>
+      </group>
+    )
+  );
 
   // Emissive intensity based on state (uses effectiveHovered for GPU picking support)
   const emissiveIntensity = isActive
@@ -273,6 +424,22 @@ export function GizmoScale({
         <primitive object={pickBoxGeometry} attach="geometry" />
         <meshBasicMaterial visible={false} depthTest={false} />
       </mesh>
+
+      {dualHandles && (
+        <mesh
+          ref={mirrorPickMeshRef}
+          visible={!isHidden && interactionsEnabled}
+          position={mirrorPosition}
+          renderOrder={1000}
+          onPointerDown={handlePointerDown}
+          onPointerEnter={handlePointerEnter}
+          onPointerLeave={handlePointerLeave}
+          onContextMenu={handleContextMenu}
+        >
+          <primitive object={pickBoxGeometry} attach="geometry" />
+          <meshBasicMaterial visible={false} depthTest={false} />
+        </mesh>
+      )}
       {/* Connection line from center - DISABLED to avoid overlap with move arrows */}
       {/* <group rotation={lineRotation}>
         <Line
@@ -286,30 +453,12 @@ export function GizmoScale({
         />
       </group> */}
 
-      {/* Cube handle */}
-      <group position={position}>
-        <mesh scale={GIZMO_SIZES.scaleHexagonRadius * highlightScale}>
-          <primitive object={handleBoxGeometry} attach="geometry" />
-          <meshBasicMaterial
-            color={handleColor}
-            transparent
-            opacity={opacity}
-            depthTest={false}
-          />
-        </mesh>
-        <lineSegments scale={GIZMO_SIZES.scaleHexagonRadius * highlightScale}>
-          <primitive object={cubeEdgeGeometry} attach="geometry" />
-          <lineBasicMaterial
-            color={edgeColor}
-            transparent
-            opacity={opacity}
-            depthTest={false}
-          />
-        </lineSegments>
-      </group>
+      {/* Handle: classic cube, or the double-cone stretch arrows */}
+      {renderHandleVisual(position)}
+      {dualHandles && renderHandleVisual(mirrorPosition)}
 
       {/* Point light at hexagon to cast colored light on model */}
-      {!isDimmed && (
+      {enableLighting && !isDimmed && (
         <pointLight
           position={position}
           color={isActive ? GIZMO_COLORS.active : effectiveHovered ? GIZMO_COLORS.hover : axisColors.end}

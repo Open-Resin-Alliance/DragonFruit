@@ -398,6 +398,8 @@ export function SupportBuilder({
                         profile={disk.profile}
                         contactDiameterMm={disk.contactDiameterMm}
                         overrideThickness={disk.diskLengthOverride}
+                        contactFaceRatio={disk.contactFaceRatio}
+                        contactFaceAngleRad={disk.contactFaceAngleRad}
                         color={anatomyOverrides?.tipDisk || color}
                         transparent={isPreview}
                         opacity={opacity}
@@ -415,6 +417,8 @@ export function SupportBuilder({
                         normal={cone.normal}
                         surfaceNormal={cone.surfaceNormal}
                         diskLengthOverride={cone.diskLengthOverride}
+                        contactFaceRatio={cone.contactFaceRatio}
+                        contactFaceAngleRad={cone.contactFaceAngleRad}
                         profile={cone.profile}
                         color={color}
                         diskColor={anatomyOverrides?.tipDisk}
@@ -433,6 +437,8 @@ export function SupportBuilder({
                         normal={data.contactCone.normal}
                         surfaceNormal={data.contactCone.surfaceNormal}
                         diskLengthOverride={data.contactCone.diskLengthOverride}
+                        contactFaceRatio={data.contactCone.contactFaceRatio}
+                        contactFaceAngleRad={data.contactCone.contactFaceAngleRad}
                         profile={data.contactCone.profile}
                         color={color}
                         diskColor={anatomyOverrides?.tipDisk}

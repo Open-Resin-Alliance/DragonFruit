@@ -45,6 +45,7 @@ import { ModelStatsCard } from '@/components/controls/ModelStatsCard';
 import { TransformToolbar } from '@/components/controls/TransformToolbar';
 import { SnapAngleReadout } from '@/components/gizmo/rotate/SnapAngleReadout';
 import { RotationHintTooltip } from '@/components/gizmo/rotate/RotationHintTooltip';
+import { ContactFaceRatioReadout } from '@/supports/SupportPrimitives/ContactDisk/ContactFaceRatioReadout';
 import { TransformControls } from '@/components/controls/TransformControls';
 import {
   ArrangePanel,
@@ -2613,7 +2614,7 @@ export default function Home() {
           maxStandoffMm: Math.max(0.01, Number((cone.profile as { maxStandoffMm?: number }).maxStandoffMm ?? 0.35)),
           standoffAngleThreshold: Number((cone.profile as { standoffAngleThreshold?: number }).standoffAngleThreshold ?? (Math.PI / 4)),
         };
-        const diskThickness = cone.diskLengthOverride ?? calculateDiskThickness(surfaceNormal, cone.normal, diskProfile);
+        const diskThickness = cone.diskLengthOverride ?? calculateDiskThickness(surfaceNormal, cone.normal, diskProfile, cone.profile.contactDiameterMm);
         diskMm3 = cylinderVolumeMm3(contactRadius, Math.max(0, diskThickness));
       }
 
@@ -2639,7 +2640,7 @@ export default function Home() {
         maxStandoffMm: Math.max(0.01, Number(disk.profile.maxStandoffMm ?? 0.35)),
         standoffAngleThreshold: Number(disk.profile.standoffAngleThreshold ?? (Math.PI / 4)),
       };
-      const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, diskProfile);
+      const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, diskProfile, disk.contactDiameterMm);
       return mm3ToMl(cylinderVolumeMm3(radius, Math.max(0, thickness)));
     };
 
@@ -9559,14 +9560,21 @@ export default function Home() {
 
           {/* Transform Toolbar */}
           {scene.models.length > 0 && scene.mode === 'prepare' && (
+            <TransformToolbar
+              mode={transformMgr.transformMode}
+              onModeChange={setTransformModeWithMirrorFinalize}
+              onModeHover={handleTransformToolbarHover}
+            />
+          )}
+
+          {/* Gizmo drag readouts — event-driven, render null when idle. Mounted
+              for every mode: rotation rings exist in prepare (model transform)
+              and supports (contact-face gizmo) alike. */}
+          {scene.models.length > 0 && (
             <>
-              <TransformToolbar
-                mode={transformMgr.transformMode}
-                onModeChange={setTransformModeWithMirrorFinalize}
-                onModeHover={handleTransformToolbarHover}
-              />
               <SnapAngleReadout />
               <RotationHintTooltip />
+              <ContactFaceRatioReadout />
             </>
           )}
 

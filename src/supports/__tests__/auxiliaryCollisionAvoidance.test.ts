@@ -7,6 +7,7 @@ import { buildStick } from '../SupportTypes/Stick/stickBuilder';
 import { buildTwig } from '../SupportTypes/Twig/twigBuilder';
 import { getFinalSocketPosition } from '../SupportPrimitives/ContactCone/contactConeUtils';
 import { recomputeContactConeForMovedDisk } from '../SupportPrimitives/ContactDisk/ContactDiskInteraction';
+import { TIP_BALL_CLEARANCE_MM } from '../SupportPrimitives/ContactDisk/contactDiskUtils';
 import type { ContactCone } from '../SupportPrimitives/ContactCone/types';
 import { setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
@@ -157,16 +158,21 @@ test('hybrid segmentBlockedMethod detects thin feature in standoff calculation',
         },
     };
 
-    // Place a very thin plate (0.1mm thickness) at z = 0.2, right in the way of the contact disk
-    const mesh = makeThinBlockingMesh(0.2);
+    // The unblocked standoff floors at (contact radius + ball clearance), so
+    // the blocking plate must sit above that floor to exercise detection —
+    // but low enough that the escape offset stays under maxStandoffMm (the
+    // sweep falls back to the floor when it cannot clear within the cap).
+    const flooredStandoff = cone.profile.contactDiameterMm / 2 + TIP_BALL_CLEARANCE_MM; // 0.7
+    // Place a very thin plate (0.1mm thickness) at z = 0.8, right in the way of the cone body
+    const mesh = makeThinBlockingMesh(0.8);
 
-    // Recompute contact cone without mesh -> standoff is minimal (diskThicknessMm = 0.1)
+    // Recompute contact cone without mesh -> standoff is the tip-ball clearance floor
     const withoutMesh = recomputeContactConeForMovedDisk(cone, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: 4 });
     assert.ok(withoutMesh.diskLengthOverride !== undefined);
-    assert.equal(withoutMesh.diskLengthOverride, 0.1);
+    assert.equal(withoutMesh.diskLengthOverride, flooredStandoff);
 
-    // Recompute contact cone with mesh -> standoff is pushed out past the thin plate (standoff > 0.2mm)
+    // Recompute contact cone with mesh -> standoff is pushed out past the thin plate (standoff > 0.8mm)
     const withMesh = recomputeContactConeForMovedDisk(cone, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: 4 }, mesh);
     assert.ok(withMesh.diskLengthOverride !== undefined);
-    assert.ok(withMesh.diskLengthOverride > 0.2);
+    assert.ok(withMesh.diskLengthOverride > 0.8);
 });

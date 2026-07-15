@@ -6,6 +6,7 @@ This section documents DragonFruit internals for contributors and maintainers.
 
 - Architectural conventions and domain boundaries
 - Support system contracts and interaction precedence
+- Support settings API (reading/writing settings from other panels)
 - Handoff guidance for domain-owned documentation
 - Grid, branching, and trunk replacement behavior
 - Raft geometry and generation pipeline

@@ -3,7 +3,7 @@ import { Roots, Segment, Joint, Vec3 } from '@/supports/types';
 import { SupportData } from '@/supports/rendering/SupportBuilder';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone';
 import { getConeQuaternion } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
-import { calculateDiskThickness, getDiskCenter, getDiskRotation } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
+import { calculateDiskThickness, createContactDiskLoftGeometry, getContactDiskGeometrySpec, resolveContactDiskRadialSegments, resolveContactFaceShape } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { RaftSettings } from '@/supports/Rafts/Crenelated/RaftTypes';
 import { JOINT_DIAMETER_OFFSET_MM } from '@/supports/constants';
 
@@ -283,38 +283,45 @@ export class SupportGeometryGenerator {
       return group; // Only generate for disk type profiles
     }
     
-    const pos = coneData.pos;
-    const surfaceNormal = coneData.surfaceNormal || coneData.normal; // Fallback to cone normal
-    const coneAxis = coneData.normal;
-    const contactDiameterMm = profile.contactDiameterMm;
-    const overrideThickness = coneData.diskLengthOverride;
-    
-    // Calculate geometry based on angle between Surface Normal and Cone Axis
-    const thickness = overrideThickness !== undefined 
-      ? overrideThickness 
-      : calculateDiskThickness(surfaceNormal, coneAxis, profile);
-    
-    const center = getDiskCenter(pos, surfaceNormal, thickness);
-    const rotation = getDiskRotation(surfaceNormal);
-    const radius = contactDiameterMm / 2;
-    
-    // Create the contact disk geometry (cylinder shaft + spherical tip)
-    // Shaft: From Surface to Tip Center
-    const shaftGeometry = new THREE.CylinderGeometry(radius, radius, thickness, 16);
+    // Canonical disk solid — same math as the renderers and the slicer feed
+    // (see getContactDiskGeometrySpec). Height includes the penetration depth,
+    // so exported meshes embed into the model exactly like the viewport shows.
+    const spec = getContactDiskGeometrySpec({
+      pos: coneData.pos,
+      surfaceNormal: coneData.surfaceNormal || coneData.normal, // Fallback to cone normal
+      coneAxis: coneData.normal,
+      profile,
+      contactDiameterMm: profile.contactDiameterMm,
+      overrideThickness: coneData.diskLengthOverride,
+    });
+
+    // Create the contact disk geometry (oval loft shaft + spherical tip)
+    // Shaft: two-stage loft from (Surface - Penetration) to Tip Center —
+    // full oval through the penetration zone, blending to a circle at the tip.
+    const faceShape = resolveContactFaceShape(coneData);
+    const shaftGeometry = createContactDiskLoftGeometry({
+      radius: spec.radius,
+      ratio: faceShape.ratio,
+      thickness: spec.thickness,
+      penetrationMm: spec.penetrationMm,
+      // Ovals export fine-walled (24); untouched circles stay at 16.
+      radialSegments: resolveContactDiskRadialSegments(16, faceShape.ratio),
+    });
     const shaftMesh = new THREE.Mesh(shaftGeometry);
     shaftMesh.position.set(0, 0, 0); // Local origin in group
-    
-    // Round Tip: Centered at the top of the shaft
-    const tipGeometry = new THREE.SphereGeometry(radius, 16, 16);
+    shaftMesh.rotation.y = faceShape.angleRad; // Oval orientation about the disc normal
+
+    // Round Tip: fixed at the cone-side end (unaffected by penetration)
+    const tipGeometry = new THREE.SphereGeometry(spec.radius, 16, 16);
     const tipMesh = new THREE.Mesh(tipGeometry);
-    tipMesh.position.set(0, thickness / 2, 0); // Position at top of shaft
-    
+    tipMesh.position.set(0, spec.height / 2, 0); // Position at top of shaft
+
     // Create group and apply transforms
     group.add(shaftMesh);
     group.add(tipMesh);
-    group.position.set(center.x, center.y, center.z);
-    group.setRotationFromQuaternion(rotation);
-    
+    group.position.set(spec.center.x, spec.center.y, spec.center.z);
+    group.setRotationFromQuaternion(spec.rotation);
+
     return group;
   }
 }

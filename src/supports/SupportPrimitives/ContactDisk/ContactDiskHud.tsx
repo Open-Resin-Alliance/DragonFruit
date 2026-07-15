@@ -1,4 +1,5 @@
 import React from 'react';
+import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
 
 interface ContactDiskHudProps {
@@ -11,6 +12,11 @@ interface ContactDiskHudProps {
     isInteractable?: boolean;
     fillColor?: string;
     fillOpacity?: number;
+    faceRatio?: number; // Contact-face squish ratio (1 = circle); the ring mirrors the oval
+    faceAngleRad?: number; // Oval rotation about the disc normal
+    showRing?: boolean; // Hide the stroke ring (fill + interactions stay)
+    showFill?: boolean; // Hide the fill tint (mesh stays for hover/double-click reset)
+    onRingDoubleClick?: () => void; // Double-click the ring/fill: reset the face to a circle
     onPointerDown?: (e: ThreeEvent<PointerEvent>) => void;
     onPointerUp?: (e: ThreeEvent<PointerEvent> | null) => void;
     onHoverChange?: (hovered: boolean) => void;
@@ -23,6 +29,12 @@ type PointerCaptureTarget = EventTarget & {
     releasePointerCapture?: (pointerId: number) => void;
 };
 
+/**
+ * Pure shape indicator for the selected contact disc: an elliptical ring plus
+ * a soft fill that live-mirror the oval contact face. Reshaping happens on
+ * the ContactFaceGizmo (rotation ring + squish cube); the HUD's only own
+ * interaction is double-click-to-reset.
+ */
 export function ContactDiskHud({
     radius,
     gap = 0.18,
@@ -33,6 +45,11 @@ export function ContactDiskHud({
     isInteractable = true,
     fillColor = '#c11f61',
     fillOpacity = 0.18,
+    faceRatio = 1,
+    faceAngleRad = 0,
+    showRing = true,
+    showFill = true,
+    onRingDoubleClick,
     onPointerDown,
     onPointerUp,
     onHoverChange,
@@ -42,8 +59,24 @@ export function ContactDiskHud({
     const [isDragging, setIsDragging] = React.useState(false);
     const activePointerIdRef = React.useRef<number | null>(null);
     const innerRadius = Math.max(0.001, radius + gap);
-    const outerRadius = Math.max(innerRadius + 0.001, innerRadius + ringThickness);
-    const hitRadius = innerRadius;
+    const strokeWidth = Math.max(0.001, ringThickness);
+    // The HUD mirrors the contact face: same squish ratio along the same axis,
+    // so the ring is a live preview of the oval tip. HUD-local squish direction
+    // for angle a is (cos a, -sin a) — a -a rotation about Z aligns it with
+    // local X. The ring is built as an elliptical shape (not a scaled circle)
+    // so its stroke width stays constant instead of thinning on the squished
+    // side.
+    const squishRatio = Math.max(0.01, Math.min(1, faceRatio));
+    const innerRadiusX = innerRadius * squishRatio;
+    const ringGeometry = React.useMemo(() => {
+        const shape = new THREE.Shape();
+        shape.absellipse(0, 0, innerRadiusX + strokeWidth, innerRadius + strokeWidth, 0, Math.PI * 2, false, 0);
+        const hole = new THREE.Path();
+        hole.absellipse(0, 0, innerRadiusX, innerRadius, 0, Math.PI * 2, true, 0);
+        shape.holes.push(hole);
+        return new THREE.ShapeGeometry(shape, 64);
+    }, [innerRadiusX, innerRadius, strokeWidth]);
+    React.useEffect(() => () => ringGeometry.dispose(), [ringGeometry]);
 
     const setHovered = React.useCallback((hovered: boolean) => {
         setIsHovered(hovered);
@@ -115,6 +148,11 @@ export function ContactDiskHud({
         stopPointerEvent(e);
     }, [stopPointerEvent]);
 
+    const handleDoubleClickInternal = React.useCallback((e: ThreeEvent<MouseEvent>) => {
+        stopPointerEvent(e);
+        if (onRingDoubleClick) onRingDoubleClick();
+    }, [onRingDoubleClick, stopPointerEvent]);
+
     const handlePointerEnterInternal = React.useCallback((e: ThreeEvent<PointerEvent>) => {
         if (!isInteractable) return;
         setHovered(true);
@@ -140,41 +178,52 @@ export function ContactDiskHud({
     return (
         <group rotation={[Math.PI / 2, 0, 0]} renderOrder={100000}>
             <mesh
+                rotation={[0, 0, -faceAngleRad]}
+                scale={[innerRadiusX, innerRadius, 1]}
                 onPointerEnter={handlePointerEnterInternal}
                 onPointerMove={handlePointerMoveInternal}
                 onPointerLeave={handlePointerLeaveInternal}
                 onPointerDown={handlePointerDownInternal}
                 onPointerUp={handlePointerUpInternal}
                 onClick={handleClickInternal}
+                onDoubleClick={handleDoubleClickInternal}
             >
-                <circleGeometry args={[hitRadius, 64]} />
+                <circleGeometry args={[1, 64]} />
                 <meshBasicMaterial
                     color={fillColor}
                     transparent
-                    opacity={isHovered ? fillOpacity : 0}
+                    // Always-on soft tint of the contact footprint while the
+                    // disc is selected; brightens on hover. showFill=false
+                    // keeps the mesh raycastable (hover suppression +
+                    // double-click reset) but draws nothing.
+                    opacity={showFill ? (isHovered ? Math.min(1, fillOpacity * 1.8) : fillOpacity) : 0}
                     depthWrite={false}
                     depthTest={false}
                     side={2}
                 />
             </mesh>
-            <mesh
-                onPointerEnter={handlePointerEnterInternal}
-                onPointerMove={handlePointerMoveInternal}
-                onPointerLeave={handlePointerLeaveInternal}
-                onPointerDown={handlePointerDownInternal}
-                onPointerUp={handlePointerUpInternal}
-                onClick={handleClickInternal}
-            >
-                <ringGeometry args={[innerRadius, outerRadius, 64]} />
-                <meshBasicMaterial
-                    color={isHovered ? hoveredColor : color}
-                    transparent
-                    opacity={isHovered ? 1 : opacity}
-                    depthWrite={false}
-                    depthTest={false}
-                    side={2}
-                />
-            </mesh>
+            {showRing && (
+                <mesh
+                    rotation={[0, 0, -faceAngleRad]}
+                    geometry={ringGeometry}
+                    onPointerEnter={handlePointerEnterInternal}
+                    onPointerMove={handlePointerMoveInternal}
+                    onPointerLeave={handlePointerLeaveInternal}
+                    onPointerDown={handlePointerDownInternal}
+                    onPointerUp={handlePointerUpInternal}
+                    onClick={handleClickInternal}
+                    onDoubleClick={handleDoubleClickInternal}
+                >
+                    <meshBasicMaterial
+                        color={isHovered ? hoveredColor : color}
+                        transparent
+                        opacity={isHovered ? 1 : opacity}
+                        depthWrite={false}
+                        depthTest={false}
+                        side={2}
+                    />
+                </mesh>
+            )}
         </group>
     );
 }

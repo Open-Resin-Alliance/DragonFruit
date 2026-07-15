@@ -12,6 +12,9 @@ import {
     loadSettingsFromLocalStorage,
     setSettings,
     updateTipProfile,
+    setTipPenetrationMm,
+    TIP_PENETRATION_MIN_MM,
+    TIP_PENETRATION_MAX_MM,
     updateShaftProfile,
     updateRootsProfile,
     updateGridSettings,
@@ -844,6 +847,22 @@ export function SupportSidebar() {
                         step={0.1}
                         showStepper={false}
                         {...getInputProps('tip.contactDiameterMm', compactInputClass)}
+                    />
+                    {unitHint('mm')}
+                </div>
+            </div>
+
+            <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.penetrationMm')}>
+                <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Penetration (embed depth into the model)">Penetration</div>
+                <div className="relative">
+                    <NumberInput
+                        value={settings.tip.penetrationMm}
+                        onChange={(val) => setTipPenetrationMm(val)}
+                        step={0.05}
+                        min={TIP_PENETRATION_MIN_MM}
+                        max={TIP_PENETRATION_MAX_MM}
+                        showStepper={false}
+                        {...getInputProps('tip.penetrationMm', compactInputClass)}
                     />
                     {unitHint('mm')}
                 </div>

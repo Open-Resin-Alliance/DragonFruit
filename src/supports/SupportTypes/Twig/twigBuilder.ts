@@ -50,6 +50,7 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
         diskThicknessMm: settings.tip.diskThicknessMm ?? 0.1,
         maxStandoffMm: settings.tip.maxStandoffMm ?? 1.5,
         standoffAngleThreshold: settings.tip.standoffAngleThreshold ?? Math.PI / 4,
+        penetrationMm: Math.max(0, settings.tip.penetrationMm ?? 0),
     };
 
     // Twig sizing rule: each disk drives its own joint, and the shaft tapers
@@ -93,12 +94,14 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
         coneAxis: { x: _axisA.x, y: _axisA.y, z: _axisA.z },
         profile: diskProfile,
         jointDiameterMm: jointDiameterA,
+        contactDiameterMm: diskAContactDiameter,
     });
     const diskThicknessB = twigDiskJointStandoff({
         surfaceNormal: bNormal,
         coneAxis: { x: _axisB.x, y: _axisB.y, z: _axisB.z },
         profile: diskProfile,
         jointDiameterMm: jointDiameterB,
+        contactDiameterMm: diskBContactDiameter,
     });
 
     // Shaft connects to the center of the disk tip sphere at each end.

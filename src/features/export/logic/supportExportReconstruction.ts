@@ -89,7 +89,7 @@ function resolveKickstandModelId(kickstand: Kickstand, allowedModelIds: Readonly
 }
 
 function buildTwigDiskTipCenter(disk: Twig['contactDiskA']): Vec3 {
-  const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
+  const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile, disk.contactDiameterMm);
   return {
     x: disk.pos.x + (disk.surfaceNormal.x * thickness),
     y: disk.pos.y + (disk.surfaceNormal.y * thickness),
