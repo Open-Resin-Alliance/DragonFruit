@@ -458,9 +458,8 @@ export function TransformControls({
                           if (uniformScaling) onScaleChange(newScale, newScale, newScale);
                           else onScaleChange(scale.x, newScale, scale.z);
                         }}
-                        disabled={uniformScaling}
                         onBlur={() => onTransformCommit?.()}
-                        className={`${valueInputClass} disabled:opacity-50`}
+                        className={valueInputClass}
                         showStepper={false}
                       />
                       <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>%</span>
@@ -476,9 +475,8 @@ export function TransformControls({
                           if (uniformScaling) onScaleChange(newScale, newScale, newScale);
                           else onScaleChange(scale.x, scale.y, newScale);
                         }}
-                        disabled={uniformScaling}
                         onBlur={() => onTransformCommit?.()}
-                        className={`${valueInputClass} disabled:opacity-50`}
+                        className={valueInputClass}
                         showStepper={false}
                       />
                       <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>%</span>
@@ -514,9 +512,8 @@ export function TransformControls({
                           if (uniformScaling) onScaleChange(newScale, newScale, newScale);
                           else onScaleChange(scale.x, newScale, scale.z);
                         }}
-                        disabled={uniformScaling}
                         onBlur={() => onTransformCommit?.()}
-                        className={`${valueInputClass} disabled:opacity-50`}
+                        className={valueInputClass}
                         showStepper={false}
                       />
                       <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>mm</span>
@@ -532,9 +529,8 @@ export function TransformControls({
                           if (uniformScaling) onScaleChange(newScale, newScale, newScale);
                           else onScaleChange(scale.x, scale.y, newScale);
                         }}
-                        disabled={uniformScaling}
                         onBlur={() => onTransformCommit?.()}
-                        className={`${valueInputClass} disabled:opacity-50`}
+                        className={valueInputClass}
                         showStepper={false}
                       />
                       <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>mm</span>
