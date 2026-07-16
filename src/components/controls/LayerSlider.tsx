@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import React from 'react';
+import { Tooltip } from '@/components/ui/Tooltip';
 
 type LayerSliderProps = {
   min: number;
@@ -615,6 +616,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
       : '';
     return `Layer ${value} • ${mmLabel} • Right-click a handle to type an exact value${modeHint}${toggleHint}`;
   }, [crossSectionEnabled, crossSectionMode, currentHeightMm, formatMm, onCrossSectionModeChange, onToggleCrossSection, value]);
+  const railClassName = `relative mx-auto ${embedded ? (expandToContainer ? 'flex-1 h-full min-h-[300px]' : 'h-[46vh]') : 'h-[56vh]'} ${embedded ? (isMinimalRail ? (isCompactMinimalRail ? 'w-4' : 'w-5') : 'w-7') : 'w-10'} cursor-pointer`;
 
   return (
     <div
@@ -675,9 +677,13 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
           </div>
         )}
 
+        <Tooltip
+          content={isMinimalRail ? <span className="whitespace-pre-line">{minimalRailTitle}</span> : undefined}
+          wrapperClassName={railClassName}
+        >
         <div
           data-no-drag="true"
-          className={`relative mx-auto ${embedded ? (expandToContainer ? (isMinimalRail ? 'flex-1 h-full min-h-[300px]' : 'flex-1 h-full min-h-[300px]') : 'h-[46vh]') : 'h-[56vh]'} ${embedded ? (isMinimalRail ? (isCompactMinimalRail ? 'w-4' : 'w-5') : 'w-7') : 'w-10'} cursor-pointer`}
+          className={railClassName}
           onMouseDown={onPointerDown}
           onDoubleClick={(e) => {
             if (!onToggleCrossSection) return;
@@ -693,9 +699,6 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
           }}
           tabIndex={0}
           onKeyDown={onKeyDown}
-          title={isMinimalRail
-            ? minimalRailTitle
-            : undefined}
         >
           {!isMinimalRail && (
             <div
@@ -1036,6 +1039,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
             </div>
           </div>
         </div>
+        </Tooltip>
 
         {!isMinimalRail && (
           <div className="mt-1 text-center text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
@@ -1052,13 +1056,14 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
               {min}
             </div>
             {showModeIndicator && (
-              <div
-                className={minimalRailBadgeClass}
-                style={railBadgeStyle}
-                title={`Current cross-section mode: ${crossSectionMode}. Right-click slider to toggle.`}
-              >
-                {crossSectionMode === 'smooth' ? 'S' : 'R'}
-              </div>
+              <Tooltip content={`Current cross-section mode: ${crossSectionMode}. Right-click slider to toggle.`}>
+                <div
+                  className={minimalRailBadgeClass}
+                  style={railBadgeStyle}
+                >
+                  {crossSectionMode === 'smooth' ? 'S' : 'R'}
+                </div>
+              </Tooltip>
             )}
           </div>
         )}

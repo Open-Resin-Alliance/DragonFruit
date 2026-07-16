@@ -3,12 +3,14 @@
 import React, { useRef, useState } from 'react';
 
 interface TooltipProps {
-  /** Content to show inside the tooltip popover. */
+  /** Content to show inside the tooltip popover. Falsy content skips the tooltip entirely (children render unwrapped). */
   content: React.ReactNode;
   /** Vertical offset from the cursor (default 28). */
   offsetY?: number;
   /** Max width of the tooltip box (default 260). */
   maxWidth?: number;
+  /** Extra classes for the wrapping span, e.g. to pass through flex sizing (flex-1, h-full) from the trigger. */
+  wrapperClassName?: string;
   /** Children must be a single React element (the trigger). */
   children: React.ReactElement;
 }
@@ -28,7 +30,7 @@ interface TooltipProps {
  *     <button>Label</button>
  *   </Tooltip>
  */
-export function Tooltip({ content, offsetY = 28, maxWidth = 260, children }: TooltipProps) {
+export function Tooltip({ content, offsetY = 28, maxWidth = 260, wrapperClassName, children }: TooltipProps) {
   const [hovered, setHovered] = useState(false);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -48,13 +50,17 @@ export function Tooltip({ content, offsetY = 28, maxWidth = 260, children }: Too
     setPos(null);
   };
 
+  if (!content) return children;
+
   const show = hovered && pos;
 
   // Compute clamped position (only after ref is available)
   let left = 0;
   let top = 0;
   if (show) {
-    left = pos.x;
+    // Before the popover has ever measured itself, assume worst-case (maxWidth) so it
+    // can't render past the right edge on the first frame of a hover near the edge.
+    left = Math.max(4, Math.min(window.innerWidth - maxWidth - 4, pos.x));
     top = pos.y + offsetY;
     const el = popoverRef.current;
     if (el) {
@@ -73,7 +79,7 @@ export function Tooltip({ content, offsetY = 28, maxWidth = 260, children }: Too
 
   return (
     <span
-      className="inline-flex"
+      className={wrapperClassName ? `inline-flex ${wrapperClassName}` : 'inline-flex'}
       onMouseEnter={handleMouseEnter}
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
@@ -92,6 +98,7 @@ export function Tooltip({ content, offsetY = 28, maxWidth = 260, children }: Too
             background: 'rgba(24, 24, 24, 0.98)',
             color: 'var(--text-strong, #e0e0e0)',
             border: '1px solid var(--accent, #baf72e)',
+            width: 'max-content',
             maxWidth,
             whiteSpace: 'normal',
             textAlign: 'left',
