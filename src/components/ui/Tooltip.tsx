@@ -11,6 +11,13 @@ interface TooltipProps {
   maxWidth?: number;
   /** Extra classes for the wrapping span, e.g. to pass through flex sizing (flex-1, h-full) from the trigger. */
   wrapperClassName?: string;
+  /**
+   * Make the wrapping span a block-level, full-width flex container instead of the
+   * default shrink-to-fit inline-flex. Needed when the trigger is a truncating text
+   * row: an inline-flex wrapper sizes to the trigger's untruncated content width,
+   * which defeats `truncate`. The trigger still needs its own `min-w-0` to shrink.
+   */
+  fullWidth?: boolean;
   /** Children must be a single React element (the trigger). */
   children: React.ReactElement;
 }
@@ -30,7 +37,7 @@ interface TooltipProps {
  *     <button>Label</button>
  *   </Tooltip>
  */
-export function Tooltip({ content, offsetY = 28, maxWidth = 260, wrapperClassName, children }: TooltipProps) {
+export function Tooltip({ content, offsetY = 28, maxWidth = 260, wrapperClassName, fullWidth, children }: TooltipProps) {
   const [hovered, setHovered] = useState(false);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -80,6 +87,7 @@ export function Tooltip({ content, offsetY = 28, maxWidth = 260, wrapperClassNam
   return (
     <span
       className={wrapperClassName ? `inline-flex ${wrapperClassName}` : 'inline-flex'}
+      style={fullWidth ? { display: 'flex', width: '100%', minWidth: 0 } : undefined}
       onMouseEnter={handleMouseEnter}
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
