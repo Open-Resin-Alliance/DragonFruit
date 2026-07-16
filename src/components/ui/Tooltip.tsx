@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState } from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 
 interface TooltipProps {
   /** Content to show inside the tooltip popover. Falsy content skips the tooltip entirely (children render unwrapped). */
@@ -40,11 +40,16 @@ interface TooltipProps {
 export function Tooltip({ content, offsetY = 28, maxWidth = 260, wrapperClassName, fullWidth, children }: TooltipProps) {
   const [hovered, setHovered] = useState(false);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  // Real position, filled in once the popover has been measured. Kept separate from
+  // `pos` (raw cursor position) so the very first mount can stay hidden instead of
+  // flashing at a guessed spot before snapping to its centered, clamped position.
+  const [coords, setCoords] = useState<{ left: number; top: number } | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
   const handleMouseEnter = (e: React.MouseEvent) => {
     setHovered(true);
     setPos({ x: e.clientX, y: e.clientY });
+    setCoords(null);
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
@@ -55,33 +60,40 @@ export function Tooltip({ content, offsetY = 28, maxWidth = 260, wrapperClassNam
   const handleMouseLeave = () => {
     setHovered(false);
     setPos(null);
+    setCoords(null);
   };
-
-  if (!content) return children;
 
   const show = hovered && pos;
 
-  // Compute clamped position (only after ref is available)
+  // Runs synchronously after DOM mutation but before the browser paints, so the
+  // guessed-position frame below is never actually shown on screen.
+  useLayoutEffect(() => {
+    if (!show || !pos) return;
+    const el = popoverRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const halfW = rect.width / 2;
+    // Horizontal clamping: prefer centered under cursor, but keep on-screen
+    const left = Math.max(4, Math.min(window.innerWidth - rect.width - 4, pos.x - halfW));
+    let top = pos.y + offsetY;
+    // Vertical clamping: if below viewport, flip above cursor
+    if (top + rect.height > window.innerHeight - 4) {
+      top = pos.y - offsetY - rect.height;
+    }
+    // If still off-screen top, clamp to 4px from top
+    if (top < 4) top = 4;
+    setCoords({ left, top });
+  }, [show, pos, offsetY, content]);
+
+  if (!content) return children;
+
+  // Before the first measurement, fall back to a raw guess; the popover stays
+  // invisible until `coords` is set, so this guess is never actually painted.
   let left = 0;
   let top = 0;
   if (show) {
-    // Before the popover has ever measured itself, assume worst-case (maxWidth) so it
-    // can't render past the right edge on the first frame of a hover near the edge.
-    left = Math.max(4, Math.min(window.innerWidth - maxWidth - 4, pos.x));
-    top = pos.y + offsetY;
-    const el = popoverRef.current;
-    if (el) {
-      const rect = el.getBoundingClientRect();
-      // Horizontal clamping: prefer centered under cursor, but keep on-screen
-      const halfW = rect.width / 2;
-      left = Math.max(4, Math.min(window.innerWidth - rect.width - 4, pos.x - halfW));
-      // Vertical clamping: if below viewport, flip above cursor
-      if (top + rect.height > window.innerHeight - 4) {
-        top = pos.y - offsetY - rect.height;
-      }
-      // If still off-screen top, clamp to 4px from top
-      if (top < 4) top = 4;
-    }
+    left = coords ? coords.left : pos.x;
+    top = coords ? coords.top : pos.y + offsetY;
   }
 
   return (
@@ -103,6 +115,7 @@ export function Tooltip({ content, offsetY = 28, maxWidth = 260, wrapperClassNam
           style={{
             left,
             top,
+            visibility: coords ? 'visible' : 'hidden',
             background: 'rgba(24, 24, 24, 0.98)',
             color: 'var(--text-strong, #e0e0e0)',
             border: '1px solid var(--accent, #baf72e)',
