@@ -4,6 +4,7 @@ import "./globals.css";
 import { HotkeyProvider } from "@/hotkeys/HotkeyContext";
 import { HotkeyRegistryManager } from "@/hotkeys/HotkeyRegistryManager";
 import { RendererCrashDiagnostics } from "@/components/debug/RendererCrashDiagnostics";
+import { DevIndicatorPosition } from "@/components/debug/DevIndicatorPosition";
 import { AppLogger } from "@/components/AppLogger";
 import { I18nClientProvider } from "@/components/I18nClientProvider";
 
@@ -49,6 +50,7 @@ export default function RootLayout({
             <HotkeyRegistryManager />
             <AppLogger />
             <RendererCrashDiagnostics />
+            <DevIndicatorPosition />
             {children}
           </HotkeyProvider>
         </I18nClientProvider>

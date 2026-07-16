@@ -1,9 +1,15 @@
 "use client";
 
 import React from 'react';
+import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+
+/** Per-model transforms mutated imperatively while a gizmo drag is active.
+ *  The stencil passes follow these per-frame (like the meshes themselves do)
+ *  so the cap doesn't lag behind until the drag commits through React. */
+export type CrossSectionLiveTransforms = ReadonlyMap<string, ModelTransform>;
 
 export type CrossSectionStencilCapEntry = {
   id: string;
@@ -16,6 +22,9 @@ export type CrossSectionStencilCapEntry = {
 
 type CrossSectionStencilCapProps = {
   entries: CrossSectionStencilCapEntry[];
+  /** Live per-model transforms during gizmo drags; stencil passes follow them
+   *  per-frame so the cap moves with the mesh instead of snapping on release. */
+  liveTransformsRef?: React.RefObject<CrossSectionLiveTransforms | null>;
   sourceObject?: THREE.Object3D | null;
   sourceObjectVersion?: unknown;
   skipSourceZBounds?: boolean;
@@ -171,20 +180,43 @@ StaticInstancedStencilPassMemo.displayName = 'StaticInstancedStencilPassMemo';
 
 function ModelStencilPass({
   entry,
+  liveTransformsRef,
   backMaterial,
   frontMaterial,
   backRenderOrder,
   frontRenderOrder,
 }: {
   entry: ModelStencilPassEntry;
+  liveTransformsRef?: React.RefObject<CrossSectionLiveTransforms | null>;
   backMaterial: THREE.Material;
   frontMaterial: THREE.Material;
   backRenderOrder: number;
   frontRenderOrder: number;
 }) {
+  const groupRef = React.useRef<THREE.Group>(null);
+  const followingLiveRef = React.useRef(false);
+
+  // Gizmo drags move meshes imperatively without React renders, so the
+  // committed entry.matrix goes stale mid-drag. Follow the live transform
+  // per-frame, and restore the committed matrix once the drag ends.
+  useFrame(() => {
+    const group = groupRef.current;
+    if (!group) return;
+    const live = liveTransformsRef?.current?.get(entry.id) ?? null;
+    if (live) {
+      group.matrix.compose(live.position, quaternionFromGlobalEuler(live.rotation), live.scale);
+      group.matrixWorldNeedsUpdate = true;
+      followingLiveRef.current = true;
+    } else if (followingLiveRef.current) {
+      group.matrix.copy(entry.matrix);
+      group.matrixWorldNeedsUpdate = true;
+      followingLiveRef.current = false;
+    }
+  });
+
   return (
     <group key={`stencil-cap-${entry.id}`}>
-      <group matrix={entry.matrix} matrixAutoUpdate={false}>
+      <group ref={groupRef} matrix={entry.matrix} matrixAutoUpdate={false}>
         <mesh
           geometry={entry.geometry}
           position={entry.offset}
@@ -210,6 +242,7 @@ const ModelStencilPassMemo = React.memo(
   ModelStencilPass,
   (prev, next) => (
     prev.entry === next.entry
+    && prev.liveTransformsRef === next.liveTransformsRef
     && prev.backMaterial === next.backMaterial
     && prev.frontMaterial === next.frontMaterial
     && prev.backRenderOrder === next.backRenderOrder
@@ -330,6 +363,7 @@ const STENCIL_CAP_ORDER = STENCIL_RENDER_ORDER_BASE + 0.45;
 
 function CrossSectionStencilCapInner({
   entries,
+  liveTransformsRef,
   sourceObject,
   sourceObjectVersion,
   skipSourceZBounds = false,
@@ -820,13 +854,14 @@ function CrossSectionStencilCapInner({
       <ModelStencilPassMemo
         key={`stencil-cap-${entry.id}`}
         entry={entry}
+        liveTransformsRef={liveTransformsRef}
         backMaterial={stencilBack}
         frontMaterial={stencilFront}
         backRenderOrder={MODEL_BACK_ORDER}
         frontRenderOrder={MODEL_FRONT_ORDER}
       />
     ));
-  }, [stencilBack, stencilFront, visibleModelStencilEntries, MODEL_BACK_ORDER, MODEL_FRONT_ORDER]);
+  }, [liveTransformsRef, stencilBack, stencilFront, visibleModelStencilEntries, MODEL_BACK_ORDER, MODEL_FRONT_ORDER]);
 
   const staticSingleStencilPassNodes = React.useMemo(() => {
     return visibleStaticSingleEntries.map((entry) => (
@@ -909,6 +944,7 @@ const areCrossSectionStencilCapPropsEqual = (
 ) => {
   return (
     prev.entries === next.entries
+    && prev.liveTransformsRef === next.liveTransformsRef
     && prev.sourceObject === next.sourceObject
     && prev.sourceObjectVersion === next.sourceObjectVersion
     && prev.skipSourceZBounds === next.skipSourceZBounds

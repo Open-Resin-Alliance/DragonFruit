@@ -157,15 +157,29 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
         SNAP_COARSE: {
             key: 'drag',
             modifier: 'meta',
-            description: 'Snap rotation to 45° increments (Cmd/Ctrl + drag)'
+            description: 'Rotation Snap (45°)'
         },
         SNAP_FINE: {
             key: 'drag',
             modifier: 'meta+shift',
-            description: 'Snap rotation to 15° increments (Cmd/Ctrl + Shift + drag)'
+            description: 'Rotation Snap (15°)'
         }
     },
     GLOBAL: {
+        DELETE: {
+            key: 'Delete',
+            description: 'Delete selected item'
+        },
+        UNDO: {
+            key: 'z',
+            modifier: 'ctrl',
+            description: 'Undo last action'
+        },
+        REDO: {
+            key: 'z',
+            modifier: 'ctrl+shift',
+            description: 'Redo last action'
+        },
         SAVE: {
             key: 's',
             modifier: 'ctrl',

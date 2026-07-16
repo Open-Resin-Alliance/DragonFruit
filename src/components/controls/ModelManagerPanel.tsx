@@ -22,6 +22,7 @@ import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Card, CardHeader, IconButton } from '@/components/atoms';
 import { formatMeshStatsForDisplay } from '@/utils/meshStatsFormatting';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
+import { Tooltip } from '@/components/ui/Tooltip';
 
 type SelectMode = 'single' | 'toggle' | 'add';
 
@@ -605,9 +606,11 @@ export function ModelManagerPanel({
                                 )}
                               </div>
                             ) : (
-                              <div className="text-xs font-medium truncate" style={{ color: 'var(--text-strong)' }}>
-                                {model.name}
-                              </div>
+                              <Tooltip content={model.name} fullWidth>
+                                <div className="min-w-0 text-xs font-medium truncate" style={{ color: 'var(--text-strong)' }}>
+                                  {model.name}
+                                </div>
+                              </Tooltip>
                             )}
                             <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                               {formatMeshStatsForDisplay({

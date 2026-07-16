@@ -5332,7 +5332,9 @@ export default function Home() {
     const gesture = rightClickGestureRef.current;
     const moved = Boolean(gesture?.moved);
     const shouldSuppress = performance.now() < suppressEditorContextMenuUntilRef.current;
-    if (!moved && !shouldSuppress) {
+    // No editor menu on the empty-scene welcome screen — there is nothing to act
+    // on (unless the clipboard holds a cut/copied model that could be pasted).
+    if (!moved && !shouldSuppress && (scene.models.length > 0 || scene.canPasteModel)) {
       if (scene.mode === 'support' && supportShaftHoverDebug.segmentId && supportShaftHoverDebug.point) {
         setEditorContextMenuSupportTarget({
           segmentId: supportShaftHoverDebug.segmentId,
@@ -5348,7 +5350,7 @@ export default function Home() {
     window.setTimeout(() => {
       rightClickGestureRef.current = null;
     }, 0);
-  }, [scene.mode, supportShaftHoverDebug.point, supportShaftHoverDebug.segmentId]);
+  }, [scene.mode, scene.models.length, scene.canPasteModel, supportShaftHoverDebug.point, supportShaftHoverDebug.segmentId]);
 
   React.useEffect(() => {
     const markSuppressed = (durationMs: number) => {

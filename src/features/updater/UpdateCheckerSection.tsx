@@ -50,27 +50,27 @@ function IdleState({ onCheck }: { onCheck: () => void }) {
     <button
       type="button"
       onClick={onCheck}
-      className="w-full rounded-lg border px-3 py-2.5 text-left transition-all duration-150 hover:brightness-110"
+      className="w-full rounded-md border p-2.5 text-left transition-all duration-150 hover:brightness-110"
       style={{
         borderColor: 'var(--border-subtle)',
-        background: 'color-mix(in srgb, var(--surface-1), transparent 8%)',
+        background: 'var(--surface-0)',
       }}
     >
       <div className="flex items-center gap-2.5">
         <span
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border"
           style={{
             borderColor: 'var(--border-subtle)',
-            background: 'var(--surface-2)',
+            background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
           }}
         >
-          <CloudDownload className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
+          <CloudDownload className="h-4 w-4" style={{ color: 'var(--accent)' }} />
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
             Check for Updates
           </span>
-          <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
+          <span className="block text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
             See if a newer version of DragonFruit is available
           </span>
         </span>
@@ -82,27 +82,27 @@ function IdleState({ onCheck }: { onCheck: () => void }) {
 function CheckingState() {
   return (
     <div
-      className="w-full rounded-lg border px-3 py-2.5"
+      className="w-full rounded-md border p-2.5"
       style={{
         borderColor: 'var(--border-subtle)',
-        background: 'color-mix(in srgb, var(--surface-1), transparent 8%)',
+        background: 'var(--surface-0)',
       }}
     >
       <div className="flex items-center gap-2.5">
         <span
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border"
           style={{
             borderColor: 'var(--border-subtle)',
-            background: 'var(--surface-2)',
+            background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
           }}
         >
-          <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: 'var(--accent)' }} />
+          <Loader2 className="h-4 w-4 animate-spin" style={{ color: 'var(--accent)' }} />
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
             Checking for updates…
           </span>
-          <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
+          <span className="block text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
             Querying GitHub releases
           </span>
         </span>
@@ -114,7 +114,7 @@ function CheckingState() {
 function UpToDateState({ onCheck }: { onCheck: () => void }) {
   return (
     <div
-      className="w-full rounded-lg border px-3 py-2.5"
+      className="w-full rounded-md border p-2.5"
       style={{
         borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 50%)',
         background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 92%)',
@@ -122,33 +122,33 @@ function UpToDateState({ onCheck }: { onCheck: () => void }) {
     >
       <div className="flex items-center gap-2.5">
         <span
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border"
           style={{
             borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
             background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 85%)',
           }}
         >
-          <Check className="h-3.5 w-3.5" style={{ color: 'var(--accent-secondary)' }} />
+          <Check className="h-4 w-4" style={{ color: 'var(--accent-secondary)' }} />
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
             Up To Date!
           </span>
-          <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
+          <span className="block text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
             You're running the latest version of DragonFruit.
           </span>
         </span>
         <button
           type="button"
           onClick={onCheck}
-          className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-all duration-150"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs transition-all duration-150"
           style={{
-            color: 'var(--text-muted)',
-            borderColor: 'var(--border-subtle)',
-            background: 'var(--surface-2)',
+            color: 'var(--accent-secondary-action-color)',
+            borderColor: 'var(--accent-secondary-action-border)',
+            background: 'var(--accent-secondary-action-bg-92)',
           }}
         >
-          <RotateCcw className="h-3 w-3" />
+          <RotateCcw className="h-3.5 w-3.5" />
           Check Again
         </button>
       </div>
@@ -169,28 +169,28 @@ function AvailableState({
 
   return (
     <div
-      className="w-full rounded-lg border overflow-hidden"
+      className="w-full rounded-md border overflow-hidden"
       style={{
         borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
         background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
       }}
     >
       {/* Header */}
-      <div className="flex items-center gap-2.5 px-3 py-2.5">
+      <div className="flex items-center gap-2.5 p-2.5">
         <span
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border"
           style={{
             borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
             background: 'color-mix(in srgb, var(--accent), var(--surface-1) 82%)',
           }}
         >
-          <Download className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />
+          <Download className="h-4 w-4" style={{ color: 'var(--accent)' }} />
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
             Update Available
           </span>
-          <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
+          <span className="block text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
             DragonFruit v{info.version} is available (you have v{info.currentVersion})
           </span>
         </span>
@@ -199,7 +199,7 @@ function AvailableState({
       {/* Release notes */}
       {info.body && (
         <div
-          className="mx-3 mb-2 max-h-28 overflow-y-auto custom-scrollbar rounded-md border px-2.5 py-2 text-[11px] leading-relaxed"
+          className="mx-0 mb-2 max-h-28 overflow-y-auto custom-scrollbar rounded-md border px-2.5 py-2 text-[11px] leading-relaxed"
           style={{
             borderColor: 'var(--border-subtle)',
             background: 'color-mix(in srgb, var(--surface-1), transparent 30%)',
@@ -213,7 +213,7 @@ function AvailableState({
       )}
 
       {/* Actions — single "Download & Install" button using the plugin */}
-      <div className="flex items-center gap-2 px-3 pb-2.5">
+      <div className="flex items-center gap-2 px-0 pb-0">
         <button
           type="button"
           onClick={onDownload}
@@ -279,7 +279,7 @@ function DownloadingState({
 
   return (
     <div
-      className="w-full rounded-lg border px-3 py-2.5"
+      className="w-full rounded-md border p-2.5"
       style={{
         borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
         background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
@@ -287,19 +287,19 @@ function DownloadingState({
     >
       <div className="flex items-center gap-2.5 mb-2">
         <span
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border"
           style={{
             borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
             background: 'color-mix(in srgb, var(--accent), var(--surface-1) 82%)',
           }}
         >
-          <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: 'var(--accent)' }} />
+          <Loader2 className="h-4 w-4 animate-spin" style={{ color: 'var(--accent)' }} />
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
             Downloading Update
           </span>
-          <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
+          <span className="block text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
             {formatBytes(downloaded)} / {formatBytes(contentLength)} ({pct}%)
           </span>
         </span>
@@ -312,7 +312,7 @@ function DownloadingState({
 function InstallingState() {
   return (
     <div
-      className="w-full rounded-lg border px-3 py-2.5"
+      className="w-full rounded-md border p-2.5"
       style={{
         borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
         background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
@@ -320,19 +320,19 @@ function InstallingState() {
     >
       <div className="flex items-center gap-2.5">
         <span
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border"
           style={{
             borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
             background: 'color-mix(in srgb, var(--accent), var(--surface-1) 82%)',
           }}
         >
-          <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: 'var(--accent)' }} />
+          <Loader2 className="h-4 w-4 animate-spin" style={{ color: 'var(--accent)' }} />
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
             Installing Update…
           </span>
-          <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
+          <span className="block text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
             The update is being installed. DragonFruit will restart automatically.
           </span>
         </span>
@@ -344,7 +344,7 @@ function InstallingState() {
 function InstalledState() {
   return (
     <div
-      className="w-full rounded-lg border px-3 py-2.5"
+      className="w-full rounded-md border p-2.5"
       style={{
         borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 50%)',
         background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 92%)',
@@ -352,13 +352,13 @@ function InstalledState() {
     >
       <div className="flex items-center gap-2.5">
         <span
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border"
           style={{
             borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
             background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 85%)',
           }}
         >
-          <CloudOff className="h-3.5 w-3.5" style={{ color: 'var(--accent-secondary)' }} />
+          <CloudOff className="h-4 w-4" style={{ color: 'var(--accent-secondary)' }} />
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
@@ -379,7 +379,7 @@ function ErrorState({
 }) {
   return (
     <div
-      className="w-full rounded-lg border px-3 py-2.5"
+      className="w-full rounded-md border p-2.5"
       style={{
         borderColor: 'color-mix(in srgb, #b91c1c, var(--border-subtle) 50%)',
         background: 'color-mix(in srgb, #b91c1c, var(--surface-0) 92%)',
@@ -387,19 +387,19 @@ function ErrorState({
     >
       <div className="flex items-center gap-2.5">
         <span
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border"
           style={{
             borderColor: 'color-mix(in srgb, #b91c1c, var(--border-subtle) 38%)',
             background: 'color-mix(in srgb, #b91c1c, var(--surface-1) 85%)',
           }}
         >
-          <CloudOff className="h-3.5 w-3.5" style={{ color: '#ef4444' }} />
+          <CloudOff className="h-4 w-4" style={{ color: '#ef4444' }} />
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
             Update Failed
           </span>
-          <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
+          <span className="block text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
             {message}
           </span>
         </span>

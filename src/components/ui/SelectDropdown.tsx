@@ -36,6 +36,12 @@ export type SelectDropdownProps<T extends string | number = string> = {
   selectedDisplayOffsetX?: number;
   menuClassName?: string;
   menuAlign?: 'left' | 'right';
+  /** Positioning class for the chevron, e.g. 'right-1.5' for narrow icon-only
+   *  triggers where the default gap reads as wasted space. */
+  chevronClassName?: string;
+  /** When true the chevron icon is not rendered. Useful for icon-only triggers
+   *  where the arrow wastes horizontal space. */
+  hideChevron?: boolean;
   optionClassName?: string;
   menuFooterAction?: {
     label: string;
@@ -74,6 +80,8 @@ export function SelectDropdown<T extends string | number = string>({
   selectedDisplayOffsetX = 0,
   menuClassName = '',
   menuAlign = 'left',
+  chevronClassName = 'right-3',
+  hideChevron = false,
   optionClassName = '',
   menuFooterAction,
   menuFooterDivider = true,
@@ -138,14 +146,19 @@ export function SelectDropdown<T extends string | number = string>({
     const margin = 8;
     const gap = 6;
 
-    // The menu is always forced to the trigger's width (minWidth/width below),
-    // so position from rect.width directly. Measuring offsetWidth instead was
-    // wrong on the first pass — before the width style applied — which left the
-    // menu mispositioned until a later pass corrected it (the visible reflow).
-    const measuredMenuWidth = rect.width;
-    const measuredMenuHeight = measureMenu && menuRef.current
-      ? menuRef.current.offsetHeight
-      : 0;
+    // The menu is normally forced to the trigger's width (minWidth/width
+    // below), but menuClassName can override it with !important (e.g. !w-64).
+    // Apply the trigger width before measuring so the measurement reflects
+    // exactly what will render: the override if present, rect.width otherwise.
+    // Measuring without the inline width was wrong on the first pass — the
+    // content-sized menu left align-right menus mispositioned/clipped.
+    let measuredMenuWidth = rect.width;
+    let measuredMenuHeight = 0;
+    if (measureMenu && menuRef.current) {
+      menuRef.current.style.width = `${rect.width}px`;
+      measuredMenuWidth = menuRef.current.offsetWidth;
+      measuredMenuHeight = menuRef.current.offsetHeight;
+    }
 
     let left = rect.left;
     if (menuAlign === 'right') {
@@ -296,10 +309,12 @@ export function SelectDropdown<T extends string | number = string>({
             {endAdornment}
           </span>
         )}
-        <ChevronDown
-          className={`pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 transition-transform ${isOpen ? 'rotate-180' : ''}`}
-          style={{ color: disabled ? 'var(--text-muted)' : 'var(--text-muted)' }}
-        />
+        {!hideChevron && (
+          <ChevronDown
+            className={`pointer-events-none absolute ${chevronClassName} top-1/2 h-3.5 w-3.5 -translate-y-1/2 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+            style={{ color: disabled ? 'var(--text-muted)' : 'var(--text-muted)' }}
+          />
+        )}
 
         </button>
 
