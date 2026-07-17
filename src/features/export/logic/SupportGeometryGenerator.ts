@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Roots, Segment, Joint, Vec3 } from '@/supports/types';
+import { bezierToLineSegments } from '@/supports/Curves/BezierUtils';
 import { SupportData } from '@/supports/rendering/SupportBuilder';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone';
 import { getConeQuaternion } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
@@ -99,9 +100,10 @@ export class SupportGeometryGenerator {
         endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 10));
       }
 
-      // Generate Shaft
-      const shaftMesh = this.generateShaftMesh(segStart, endPoint, seg.diameter);
-      if (shaftMesh) group.add(shaftMesh);
+      // Generate Shaft (curved segments tessellate into piecewise cylinders)
+      for (const shaftMesh of this.generateSegmentShaftMeshes(seg, segStart, endPoint)) {
+        group.add(shaftMesh);
+      }
 
       // Generate Joints ("balls") at both ends (deduplicated across segments)
       addJointSphere(seg.bottomJoint);
@@ -191,6 +193,36 @@ export class SupportGeometryGenerator {
     group.add(sphereMesh);
 
     return group;
+  }
+
+  /**
+   * Generates the shaft mesh(es) for a segment: one cylinder for a straight
+   * segment, or a piecewise-cylinder approximation of the curve for a bezier
+   * segment (matching the live renderers and the raster slicing path).
+   */
+  public static generateSegmentShaftMeshes(segment: Segment, start: THREE.Vector3, end: THREE.Vector3): THREE.Mesh[] {
+    if (segment.type === 'bezier') {
+      const points = bezierToLineSegments(
+        { x: start.x, y: start.y, z: start.z },
+        segment.controlPoint1,
+        segment.controlPoint2,
+        { x: end.x, y: end.y, z: end.z },
+        segment.resolution,
+      );
+      const meshes: THREE.Mesh[] = [];
+      for (let i = 0; i < points.length - 1; i += 1) {
+        const mesh = this.generateShaftMesh(
+          new THREE.Vector3(points[i].x, points[i].y, points[i].z),
+          new THREE.Vector3(points[i + 1].x, points[i + 1].y, points[i + 1].z),
+          segment.diameter,
+        );
+        if (mesh) meshes.push(mesh);
+      }
+      return meshes;
+    }
+
+    const mesh = this.generateShaftMesh(start, end, segment.diameter);
+    return mesh ? [mesh] : [];
   }
 
   public static generateShaftMesh(start: THREE.Vector3, end: THREE.Vector3, diameter: number): THREE.Mesh | null {
