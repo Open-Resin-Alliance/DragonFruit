@@ -3,9 +3,23 @@ import * as THREE from 'three';
 import { Vec3 } from '../types';
 import { toVector3 } from '../Curves/BezierUtils';
 import { useBracePlacementState } from '../SupportTypes/Brace/bracePlacementState';
+import { useKickstandPlacementState } from '../SupportTypes/Kickstand/kickstandPlacementState';
+import { useLeafPlacementState } from '../SupportTypes/Leaf/leafPlacementState';
+import { curveInteractionStore } from '../Curves/curveInteractionState';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../interaction/pointerOcclusion';
 
 const NOOP_RAYCAST: THREE.Object3D['raycast'] = () => {};
+
+// A live bezier handle drag moves the curve under the cursor; placement tools must
+// not treat it as a hover/snap anchor until the drag (and its post-drag guard
+// window) is over.
+function isBezierHandleDragLive(): boolean {
+    if (curveInteractionStore.getSnapshot().isDraggingHandle) return true;
+    if (typeof window === 'undefined') return false;
+    const w = window as unknown as { __bezierGizmoDragging?: boolean; __bezierGizmoGuardUntil?: number };
+    if (w.__bezierGizmoDragging) return true;
+    return typeof w.__bezierGizmoGuardUntil === 'number' && Date.now() < w.__bezierGizmoGuardUntil;
+}
 
 interface BezierRendererProps {
     id: string;
@@ -77,7 +91,16 @@ export function BezierRenderer({
     const visualEndRadius = endRadius * selectedVisualScale;
     const pickRadius = Math.max(Math.max(visualStartRadius, visualEndRadius) * PICK_RADIUS_MULTIPLIER, MIN_PICK_RADIUS_MM);
     const { altActive: braceAltActive } = useBracePlacementState();
-    const enableSegmentInteraction = !!isInteractable && (isParentSelected || (!suppressPlacementInteraction && braceAltActive)) === true;
+    const { hotkeyActive: kickstandHotkeyActive } = useKickstandPlacementState();
+    const { hotkeyActive: leafHotkeyActive, stage: leafStage, sproutParentingLockHeld } = useLeafPlacementState();
+    const leafPlacementActive = leafHotkeyActive || leafStage === 'awaitingBase' || leafStage === 'awaitingSproutTip' || sproutParentingLockHeld;
+    // Placement modes suppress general support interaction (isInteractable goes
+    // false), so placement must override BOTH clauses — mirrors the ShaftRenderer
+    // gate so curved and straight segments accept placement hover/clicks identically.
+    // Branch placement shares the Alt hotkey action with brace placement, so
+    // braceAltActive also covers branch/twig/stick placement.
+    const placementInteractionActive = !suppressPlacementInteraction && (braceAltActive || kickstandHotkeyActive || leafPlacementActive);
+    const enableSegmentInteraction = !!((isParentSelected || placementInteractionActive) && (isInteractable || placementInteractionActive));
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
     const [pointerHoverActive, setPointerHoverActive] = useState(false);
     const pickRef = useRef<THREE.Mesh>(null);
@@ -220,6 +243,7 @@ export function BezierRenderer({
 
     const handlePointerMove = (e: any) => {
         if (!enableSegmentInteraction) return;
+        if (isBezierHandleDragLive()) return;
 
         const topIntersectionObject = Array.isArray(e?.intersections)
             ? ((e.intersections[0] as { object?: THREE.Object3D | null } | undefined)?.object ?? null)
