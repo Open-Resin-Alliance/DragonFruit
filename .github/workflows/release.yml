@@ -32,7 +32,9 @@ jobs:
       release_name: ${{ steps.version.outputs.release_name }}
       release_body: ${{ steps.version.outputs.release_body }}
       is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+      has_prerelease_suffix: ${{ steps.version.outputs.has_prerelease_suffix }}
       updater_json: ${{ steps.version.outputs.updater_json }}
+      publish_updater_json: ${{ steps.version.outputs.publish_updater_json }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -44,28 +46,66 @@ jobs:
         shell: bash
         run: |
           current_version="$(node -p "require('./package.json').version")"
+          branch="${{ github.ref_name }}"
+          tag_name="v${current_version}"
 
-          if [[ "${{ github.ref_name }}" == "dev" ]]; then
-            tag_prefix="dev_"
-            is_prerelease="true"
-            updater_json="latest-dev.json"
+          # A version carries a prerelease identifier (-rc.1, -beta, ...) when
+          # it has a hyphen, per SemVer grammar (MAJOR.MINOR.PATCH-prerelease).
+          if [[ "${current_version}" == *-* ]]; then
+            has_prerelease_suffix="true"
           else
-            tag_prefix="v"
-            is_prerelease="false"
-            updater_json="latest.json"
+            has_prerelease_suffix="false"
           fi
 
+          # GitHub's prerelease flag means "not the stable/production channel",
+          # not "not yet finished". Only a final (no prerelease id) version on
+          # main is the stable channel — every dev-branch build (final or
+          # RC/beta of the dev line) and every RC/beta on main is a
+          # GitHub prerelease.
+          if [[ "$branch" == "main" && "$has_prerelease_suffix" == "false" ]]; then
+            is_prerelease="false"
+          else
+            is_prerelease="true"
+          fi
+
+          # Updater feed selection: dev only updates the dev feed on final releases
+          # (but it's very unlikely that we ever make those). main only updates the
+          # stable feed for a final release — an RC on main is downloadable for
+          # testing but never wired to the auto-updater, so stable users can't land on it.
+          if [[ "$branch" == "dev" && "$has_prerelease_suffix" == "false" ]]; then
+            updater_json="latest-dev.json"
+            publish_updater_json="true"
+          elif [[ "$branch" == "main" && "$has_prerelease_suffix" == "false" ]]; then
+            updater_json="latest.json"
+            publish_updater_json="true"
+          else
+            updater_json=""
+            publish_updater_json="false"
+          fi
+
+          if [[ "$branch" == "main" ]]; then
+            if [[ "$has_prerelease_suffix" == "true" ]]; then
+              release_label="Release candidate ${tag_name}"
+            else
+              release_label="DragonFruit ${tag_name}"
+            fi
+          else
+            release_label="Dev build ${tag_name}"
+          fi
+
+          echo "has_prerelease_suffix=${has_prerelease_suffix}" >> "$GITHUB_OUTPUT"
           echo "is_prerelease=${is_prerelease}" >> "$GITHUB_OUTPUT"
           echo "updater_json=${updater_json}" >> "$GITHUB_OUTPUT"
+          echo "publish_updater_json=${publish_updater_json}" >> "$GITHUB_OUTPUT"
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "should_release=true" >> "$GITHUB_OUTPUT"
-            echo "version=$current_version" >> "$GITHUB_OUTPUT"
-            echo "tag_name=${tag_prefix}${current_version}" >> "$GITHUB_OUTPUT"
-            echo "release_name=Pre-Release ${tag_prefix}${current_version}" >> "$GITHUB_OUTPUT"
+            echo "version=${current_version}" >> "$GITHUB_OUTPUT"
+            echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
+            echo "release_name=${release_label}" >> "$GITHUB_OUTPUT"
             {
               echo "release_body<<EOF"
-              echo "Manually triggered release for version ${current_version} from the ${{ github.ref_name }} branch."
+              echo "Manually triggered release for version ${current_version} from the ${branch} branch."
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
             exit 0
@@ -77,18 +117,18 @@ jobs:
             previous_version=""
           fi
 
-          if [[ -n "$previous_version" && "$previous_version" == "$current_version" ]]; then
+          if [[ -n "$previous_version" && "$previous_version" == "${current_version}" ]]; then
             echo "should_release=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "should_release=true" >> "$GITHUB_OUTPUT"
-          echo "version=$current_version" >> "$GITHUB_OUTPUT"
-          echo "tag_name=${tag_prefix}${current_version}" >> "$GITHUB_OUTPUT"
-          echo "release_name=Pre-Release ${tag_prefix}${current_version}" >> "$GITHUB_OUTPUT"
+          echo "version=${current_version}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
+          echo "release_name=${release_label}" >> "$GITHUB_OUTPUT"
           {
             echo "release_body<<EOF"
-            echo "Automated release for version ${current_version} from the ${{ github.ref_name }} branch."
+            echo "Automated release for version ${current_version} from the ${branch} branch."
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -258,6 +298,7 @@ jobs:
           path: release-assets
 
       - name: Generate updater JSON
+        if: needs.detect-version-bump.outputs.publish_updater_json == 'true'
         uses: actions/github-script@v9
         env:
           VERSION: ${{ needs.detect-version-bump.outputs.version }}
@@ -322,9 +363,9 @@ jobs:
               await github.rest.git.createRef({ owner, repo, ref, sha: context.sha });
             }
 
-      - name: Resolve release notes from matching dev prerelease
+      - name: Resolve release notes from matching prerelease
         id: release_notes
-        if: needs.detect-version-bump.outputs.is_prerelease == 'false'
+        if: needs.detect-version-bump.outputs.has_prerelease_suffix == 'false'
         uses: actions/github-script@v9
         env:
           VERSION: ${{ needs.detect-version-bump.outputs.version }}
@@ -334,23 +375,24 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const version = process.env.VERSION;
-            const devTag = `dev_${version}`;
+            // Same X.Y.Z, any prerelease identifier: v0.2.0-rc.1, v0.2.0-rc.2, v0.2.0-beta...
+            const prefix = `v${version}-`;
             let body = process.env.FALLBACK_BODY || "";
 
             try {
-              const { data } = await github.rest.repos.getReleaseByTag({ owner, repo, tag: devTag });
-              if (data?.body?.trim()) {
-                body = data.body;
-                core.info(`Using hand-written notes from prerelease ${devTag}`);
+              const releases = await github.paginate(github.rest.repos.listReleases, { owner, repo, per_page: 100 });
+              const candidates = releases
+                .filter((r) => r.tag_name.startsWith(prefix) && r.body?.trim())
+                .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+              if (candidates.length > 0) {
+                body = candidates[0].body;
+                core.info(`Using hand-written notes from prerelease ${candidates[0].tag_name}`);
               } else {
-                core.warning(`Prerelease ${devTag} has no body; using fallback notes.`);
+                core.warning(`No prerelease found matching ${prefix}*; using fallback notes.`);
               }
             } catch (error) {
-              if (error.status === 404) {
-                core.warning(`Prerelease ${devTag} not found; using fallback notes.`);
-              } else {
-                core.warning(`Failed fetching ${devTag}: ${error.message}; using fallback notes.`);
-              }
+              core.warning(`Failed listing releases: ${error.message}; using fallback notes.`);
             }
 
             core.setOutput("body", body);
@@ -366,4 +408,4 @@ jobs:
           target_commitish: ${{ github.sha }}
           files: |
             release-assets/**/*
-            ${{ needs.detect-version-bump.outputs.updater_json }}
+            ${{ needs.detect-version-bump.outputs.publish_updater_json == 'true' && needs.detect-version-bump.outputs.updater_json || '' }}

@@ -91,4 +91,5 @@ nav:
       - VOXL Format Spec: dev/voxl-format-spec.md
       - LYS Mesh Extraction Spec: dev/lys-mesh-extraction-spec.md
       - RTSP Relay: dev/rtsp-relay.md
+      - Release Process: dev/releases.md
       - Contributing: dev/contributing.md

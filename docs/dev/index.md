@@ -15,6 +15,7 @@ This section documents DragonFruit internals for contributors and maintainers.
 - Plugin framework contracts (simple vs complex)
 - Complex plugin contribution workflow
 - RTSP relay reclaim API behavior
+- Release process: branching, versioning, and channels
 
 ## Source-of-truth intent
 
