@@ -4,7 +4,7 @@ import { HolePunchPreviewCylinder } from '@/features/hole-punching/HolePunchPrev
 import { HolePunchGizmo } from '@/features/hole-punching/HolePunchGizmo';
 import { HollowVoxelEditOverlay } from '@/components/scene/HollowVoxelEditOverlay';
 import { HollowVoxelPreview } from '@/components/scene/HollowVoxelPreview';
-import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { getUniformScaleFactorForThickness } from '@/utils/geometryScaling';
 import type { HolePunchPlacementState } from '@/features/hole-punching/holePunchGeometry';
 import type { HolePunchPanelState } from '@/features/hole-punching/HolePunchPanel';
 import type { HollowPreviewState } from '@/features/hollowing/hollowingPreviewTypes';
@@ -65,10 +65,14 @@ function WorldSpaceVoxelPreview({
     () => transformVoxelCentersToWorld(voxelCenters, geometryCenter, scale, quaternion, position),
     [voxelCenters, geometryCenter, scale, quaternion, position],
   );
+  // report.voxelSizeMm is the grid's LOCAL voxel size (worldSize / scale);
+  // the centers above are world-space, so the render size must be world-space
+  // too or scaled models draw voxels 1/scale of their spacing.
+  const worldVoxelSizeMm = voxelSizeMm * getUniformScaleFactorForThickness(scale);
   return (
     <HollowVoxelPreview
       voxelCenters={worldCenters}
-      voxelSizeMm={voxelSizeMm}
+      voxelSizeMm={worldVoxelSizeMm}
       meshOffset={new THREE.Vector3(0, 0, 0)}
     />
   );
@@ -104,11 +108,13 @@ function WorldSpaceVoxelEditOverlay({
       : undefined,
     [blockedVoxelCenters, geometryCenter, scale, quaternion, position],
   );
+  // Same local→world size conversion as WorldSpaceVoxelPreview above.
+  const worldVoxelRadiusMm = voxelRadiusMm * getUniformScaleFactorForThickness(scale);
   return (
     <HollowVoxelEditOverlay
       voxelCenters={worldCenters}
       blockedVoxelCenters={worldBlockedCenters}
-      voxelRadiusMm={voxelRadiusMm}
+      voxelRadiusMm={worldVoxelRadiusMm}
       blockedVoxelIndexSet={blockedVoxelIndexSet}
       meshOffset={new THREE.Vector3(0, 0, 0)}
       onToggleVoxel={onToggleVoxel}
@@ -322,7 +328,7 @@ export function SceneOverlays({
           blockedVoxelIndexSet={blockedPreviewVoxelInstanceIdSet}
           modelTransform={{
             position: previewModel.transform.position,
-            quaternion: quaternionFromGlobalEuler(previewModel.transform.rotation),
+            quaternion: new THREE.Quaternion().setFromEuler(previewModel.transform.rotation),
             scale: previewModel.transform.scale,
           }}
           geometryCenter={previewModel.geometry.center}
@@ -338,7 +344,7 @@ export function SceneOverlays({
               voxelSizeMm={hollowPreview.report.voxelSizeMm}
               modelTransform={{
                 position: previewModel.transform.position,
-                quaternion: quaternionFromGlobalEuler(previewModel.transform.rotation),
+                quaternion: new THREE.Quaternion().setFromEuler(previewModel.transform.rotation),
                 scale: previewModel.transform.scale,
               }}
               geometryCenter={previewModel.geometry.center}
@@ -346,7 +352,7 @@ export function SceneOverlays({
           )}
           <group
             position={previewModel.transform.position}
-            quaternion={quaternionFromGlobalEuler(previewModel.transform.rotation)}
+            quaternion={new THREE.Quaternion().setFromEuler(previewModel.transform.rotation)}
             scale={previewModel.transform.scale}
           >
             {!hollowPreview.previewVoxelSpheres && (

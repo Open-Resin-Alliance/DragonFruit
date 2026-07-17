@@ -8,7 +8,6 @@ import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import type { MeshShaderType } from '@/features/shaders/mesh';
 import type { HolePunchPanelState } from '@/features/hole-punching/HolePunchPanel';
 import type { HolePunchPlacementState } from '@/features/hole-punching/holePunchGeometry';
-import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { snapshotGeometryPositions, geometryFromSnapshot } from '@/utils/geometrySnapshot';
 import { bytesToBase64, base64ToBytes } from '@/utils/base64';
 import {
@@ -20,10 +19,13 @@ import {
   hollowApplyFromCapturedSource,
   hollowFromGeometry,
   hollowPreviewFromCapturedSource,
+  selectRemovedVoxelsInPolygon,
   stageHollowPreviewSource,
   type HollowOptions,
   type HollowReport,
 } from '@/utils/meshHollowing';
+import { centerCavityPositions } from '@/features/hollowing/cavityCentering';
+import { getRotationQuatTuple, resolveBlockedVoxelValidity } from '@/features/mesh-modifiers/hollowingGrid';
 import { toPersistedHolePunchPlacements } from '@/features/hole-punching/holePunchPersistence';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { serializeHollowingModifier } from '@/features/hollowing/hollowingSerialize';
@@ -76,6 +78,10 @@ function quantizePreviewShellThicknessMm(valueMm: number): number {
 export type HollowingManagerDeps = {
   showOperationError: (message: string) => void;
   setShowDamagedModelDialog: React.Dispatch<React.SetStateAction<boolean>>;
+  /** Modifier-apply overlay finalizing controls (useModifierApplyOverlay in Home). */
+  beginFinalizing: (kind: 'hollowing' | 'holePunch') => void;
+  clearFinalizing: () => void;
+  nextPaint: () => Promise<void>;
   persistActiveModelModifiers: (next: ModelMeshModifiers | undefined) => void;
   setPendingModifierResetAction: React.Dispatch<React.SetStateAction<'hollowing' | 'hole_punch' | 'clear_hollowing' | null>>;
   setInteriorView: React.Dispatch<React.SetStateAction<boolean>>;
@@ -238,6 +244,14 @@ export function useHollowingManager({
           return;
         }
 
+        // Backend work is done — everything below is main-thread mesh
+        // finalization. Switch the blocking overlay to the "loading mesh"
+        // message and give it one frame to paint before the heavy
+        // synchronous block starts; the drain-watcher effect clears the
+        // flag once the swap and its deferred work have settled.
+        deps.current.beginFinalizing('hollowing');
+        await deps.current.nextPaint();
+
         const nextGeometry = new THREE.BufferGeometry();
         nextGeometry.setAttribute('position', new THREE.BufferAttribute(result.positions, 3));
         nextGeometry.computeVertexNormals();
@@ -276,6 +290,7 @@ export function useHollowingManager({
         );
         if (!replaced) {
           nextGeometry.dispose();
+          deps.current.clearFinalizing();
           return;
         }
 
@@ -288,10 +303,21 @@ export function useHollowingManager({
         let cavityPositionsBase64: string | undefined;
         let cavityPositionCount: number | undefined;
         if (result.cavityPositions) {
+          // Recenter the PERSISTED cavity by the same −center ExportManager
+          // bakes into the model STL on save (model.geometry.center, which
+          // replaceModelGeometry derives from nextGeometry's bounding box).
+          // On reload the cavity is rebuilt verbatim, so the on-disk cavity
+          // must share the model's centered frame or it renders displaced by
+          // ~half the model height. The in-session cavity geometry (built above
+          // from the raw result.cavityPositions) is intentionally left untouched.
+          if (!nextGeometry.boundingBox) nextGeometry.computeBoundingBox();
+          const modelCenter = new THREE.Vector3();
+          nextGeometry.boundingBox?.getCenter(modelCenter);
+          const centeredCavity = centerCavityPositions(result.cavityPositions, modelCenter);
           const cavityBytes = new Uint8Array(
-            result.cavityPositions.buffer,
-            result.cavityPositions.byteOffset,
-            result.cavityPositions.byteLength,
+            centeredCavity.buffer,
+            centeredCavity.byteOffset,
+            centeredCavity.byteLength,
           );
           cavityPositionsBase64 = bytesToBase64(cavityBytes);
           cavityPositionCount = result.cavityPositions.length / 3;
@@ -340,6 +366,9 @@ export function useHollowingManager({
             cavityPositionsBase64,
             cavityPositionCount,
             blockedVoxelIndices: blockedHollowVoxelIndices,
+            blockedVoxelRotationQuat: blockedHollowVoxelIndices.length > 0
+              ? getRotationQuatTuple(activeModel.transform.rotation)
+              : undefined,
             mode: effectiveHollowMode,
             voxelSizeMm: hollowingState.voxelSizeMm,
             shellThicknessMm: hollowingState.shellThicknessMm,
@@ -368,6 +397,7 @@ export function useHollowingManager({
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         deps.current.showOperationError(`Hollowing failed: ${message}`);
+        deps.current.clearFinalizing();
       } finally {
         setIsApplyingHollowing(false);
         setIsApplyingBlockersHollowing(false);
@@ -420,6 +450,7 @@ export function useHollowingManager({
         sourcePositionsBase64: undefined,
         sourcePositionCount: undefined,
         blockedVoxelIndices: [],
+        blockedVoxelRotationQuat: undefined,
         mode: defaultHollowingState.mode,
         voxelSizeMm: defaultHollowingState.voxelSizeMm,
         shellThicknessMm: defaultHollowingState.shellThicknessMm,
@@ -480,6 +511,7 @@ export function useHollowingManager({
         sourcePositionsBase64: undefined,
         sourcePositionCount: undefined,
         blockedVoxelIndices: [],
+        blockedVoxelRotationQuat: undefined,
         // Keep current settings — don't reset to defaults.
         mode: hollowingState.mode,
         voxelSizeMm: hollowingState.voxelSizeMm,
@@ -739,7 +771,9 @@ export function useHollowingManager({
     if (preview.blockedVoxelCenters) {
       const blockedCount = Math.floor(preview.blockedVoxelCenters.length / 3);
       for (let blockedIndex = 0; blockedIndex < blockedCount; blockedIndex += 1) {
-        const gridIndex = blockedHollowVoxelIndices[blockedIndex];
+        const gridIndex = preview.blockedVoxelIndices
+          ? preview.blockedVoxelIndices[blockedIndex]
+          : blockedHollowVoxelIndices[blockedIndex];
         if (activeBlockedIndexSet.has(gridIndex)) {
           next.add(preview.removedVoxelIndices.length + blockedIndex);
         }
@@ -762,6 +796,9 @@ export function useHollowingManager({
         sourcePositionsBase64: activeModel.meshModifiers?.hollowing?.sourcePositionsBase64,
         sourcePositionCount: activeModel.meshModifiers?.hollowing?.sourcePositionCount,
         blockedVoxelIndices: nextIndices,
+        blockedVoxelRotationQuat: nextIndices.length > 0
+          ? getRotationQuatTuple(activeModel.transform.rotation)
+          : undefined,
         mode: hollowingState.mode,
         voxelSizeMm: hollowingState.voxelSizeMm,
         shellThicknessMm: hollowingState.shellThicknessMm,
@@ -787,10 +824,13 @@ export function useHollowingManager({
       // Instance in the removed voxel array — look up grid index directly.
       gridVoxelIndex = currentPreview.removedVoxelIndices[voxelIndex];
     } else {
-      // Instance in the appended blocked-only array — look up via
-      // blockedHollowVoxelIndices (committed set, same order as blocked centers).
+      // Instance in the appended blocked-only array — look up via the echoed
+      // accepted indices (in lockstep with the blocked centers), falling back
+      // to the committed set when the echo is unavailable.
       const blockedOffset = voxelIndex - removedCount;
-      gridVoxelIndex = blockedHollowVoxelIndices[blockedOffset];
+      gridVoxelIndex = currentPreview.blockedVoxelIndices
+        ? currentPreview.blockedVoxelIndices[blockedOffset]
+        : blockedHollowVoxelIndices[blockedOffset];
     }
 
     if (!Number.isFinite(gridVoxelIndex)) return;
@@ -945,6 +985,8 @@ export function useHollowingManager({
     removedVoxelCenters: Float32Array | undefined,
     removedVoxelIndices: Uint32Array | undefined,
     blockedVoxelCenters: Float32Array | undefined,
+    blockedVoxelIndices: Uint32Array | undefined,
+    requestedBlockedVoxelIndices: number[],
     previewKey: string,
   ) => {
     const cachedPositions = new Float32Array(positions.length);
@@ -958,6 +1000,9 @@ export function useHollowingManager({
     const cachedBlockedVoxelCenters = blockedVoxelCenters
       ? new Float32Array(blockedVoxelCenters)
       : undefined;
+    const cachedBlockedVoxelIndices = blockedVoxelIndices
+      ? new Uint32Array(blockedVoxelIndices)
+      : undefined;
 
     hollowPreviewResultCacheRef.current.set(previewKey, {
       modelId: activeModelId,
@@ -967,6 +1012,8 @@ export function useHollowingManager({
       removedVoxelCenters: cachedRemovedVoxelCenters,
       removedVoxelIndices: cachedRemovedVoxelIndices,
       blockedVoxelCenters: cachedBlockedVoxelCenters,
+      blockedVoxelIndices: cachedBlockedVoxelIndices,
+      requestedBlockedVoxelIndices: [...requestedBlockedVoxelIndices],
       previewGeometry: null,
       infillGeometry: null,
     });
@@ -1033,6 +1080,8 @@ export function useHollowingManager({
         result.removedVoxelCenters,
         result.removedVoxelIndices,
         result.blockedVoxelCenters,
+        result.blockedVoxelIndices,
+        options.blockedVoxelIndices ?? [],
         previewKey,
       );
 
@@ -1100,6 +1149,8 @@ export function useHollowingManager({
             removedVoxelCenters: cached.removedVoxelCenters ?? new Float32Array(0),
             removedVoxelIndices: cached.removedVoxelIndices ?? new Uint32Array(0),
             blockedVoxelCenters: cached.blockedVoxelCenters,
+            blockedVoxelIndices: cached.blockedVoxelIndices,
+            requestedBlockedVoxelIndices: cached.requestedBlockedVoxelIndices,
             report: cached.report,
             previewKey,
             previewVoxelSpheres: true,
@@ -1135,6 +1186,8 @@ export function useHollowingManager({
         result.removedVoxelCenters,
         result.removedVoxelIndices,
         result.blockedVoxelCenters,
+        result.blockedVoxelIndices,
+        options.blockedVoxelIndices ?? [],
         previewKey,
       );
       const materialized = materializeHollowPreviewCacheEntry(previewKey);
@@ -1164,6 +1217,8 @@ export function useHollowingManager({
           removedVoxelCenters: result.removedVoxelCenters ?? new Float32Array(0),
           removedVoxelIndices: result.removedVoxelIndices ?? new Uint32Array(0),
           blockedVoxelCenters: result.blockedVoxelCenters,
+          blockedVoxelIndices: result.blockedVoxelIndices,
+          requestedBlockedVoxelIndices: options.blockedVoxelIndices ?? [],
           report: result.report,
           previewKey,
           previewVoxelSpheres: true,
@@ -1200,8 +1255,14 @@ export function useHollowingManager({
   React.useEffect(() => {
     return () => {
       if (hollowPreview) {
-        hollowPreview.geometry.dispose();
-        hollowPreview.infillGeometry?.dispose();
+        disposeHollowPreviewGeometryIfUncached(
+          hollowPreview.geometry,
+          hollowPreviewResultCacheRef.current.values(),
+        );
+        disposeHollowPreviewGeometryIfUncached(
+          hollowPreview.infillGeometry ?? null,
+          hollowPreviewResultCacheRef.current.values(),
+        );
       }
     };
   }, [hollowPreview]);
@@ -1273,6 +1334,76 @@ export function useHollowingManager({
     }
   }, [scene.models]);
 
+  // Rust echoes back which committed blockers it actually accepted (stale
+  // indices that fell off the grid or landed on non-solid voxels are
+  // dropped, preserving order). If the echo differs from the committed set,
+  // adopt it so the persisted modifier stays in lockstep with the preview.
+  React.useEffect(() => {
+    const preview = hollowPreview;
+    const echoed = preview?.blockedVoxelIndices;
+    const requested = preview?.requestedBlockedVoxelIndices;
+    if (!preview || !echoed || !requested) return;
+    // Only resync when this preview was computed FROM the current committed
+    // set — otherwise a newer request is already in flight and comparing
+    // against it would clobber fresh state.
+    if (requested.length !== blockedHollowVoxelIndices.length
+      || requested.some((value, i) => value !== blockedHollowVoxelIndices[i])) {
+      return;
+    }
+    // The accepted list is an order-preserving subsequence of the request:
+    // equal length means identical content.
+    if (echoed.length === blockedHollowVoxelIndices.length) return;
+    commitBlockedHollowVoxelIndices(Array.from(echoed));
+  }, [blockedHollowVoxelIndices, commitBlockedHollowVoxelIndices, hollowPreview]);
+
+  // Committed blockers index the rotation-aligned voxel grid. If the model is
+  // rotated after they were painted, the same linear indices land on entirely
+  // different voxels (or off the grid), so Rust would either silently ignore
+  // them or pin the wrong voxels (hollowing.rs keep-application). Clear them
+  // instead, mirroring the resolution-change invalidation in
+  // handleHollowingStateChange and the legacy-format clear above.
+  // NOTE: models in React state carry meshModifiers: undefined by design —
+  // modifiers must be read through the externalized store (getModelMeshModifiers),
+  // matching the cavity-restore effect above.
+  React.useEffect(() => {
+    for (const model of scene.models) {
+      const modifiers = scene.getModelMeshModifiers(model.id);
+      const hollowing = modifiers?.hollowing;
+      if (!hollowing?.enabled || hollowing.bakedIntoGeometry) continue;
+      if (!hollowing.blockedVoxelIndices?.length) continue;
+      const currentQuat = getRotationQuatTuple(model.transform.rotation);
+      const validity = resolveBlockedVoxelValidity(hollowing, currentQuat);
+      if (validity === 'valid') continue;
+
+      if (validity === 'stamp-legacy') {
+        // Blockers persisted before the rotation stamp existed: adopt the
+        // current rotation instead of destroying the user's selection on
+        // first launch after this change.
+        scene.setModelMeshModifiers(model.id, {
+          ...(modifiers ?? {}),
+          hollowing: { ...hollowing, blockedVoxelRotationQuat: currentQuat },
+        });
+        continue;
+      }
+
+      console.warn(
+        '[Hollowing] Cleared blocked voxels: model rotation changed since they were painted.',
+      );
+      scene.setModelMeshModifiers(model.id, {
+        ...(modifiers ?? {}),
+        hollowing: {
+          ...hollowing,
+          blockedVoxelIndices: [],
+          blockedVoxelRotationQuat: undefined,
+        },
+      });
+      if (model.id === scene.activeModelId) {
+        setBlockedHollowVoxelIndices([]);
+        setEditingBlockedHollowVoxelIndices([]);
+      }
+    }
+  }, [scene.models, scene.getModelMeshModifiers, scene.setModelMeshModifiers, scene.activeModelId, setBlockedHollowVoxelIndices, setEditingBlockedHollowVoxelIndices]);
+
   React.useEffect(() => {
     return () => {
       for (const entry of hollowingSourceByModelIdRef.current.values()) {
@@ -1310,12 +1441,13 @@ export function useHollowingManager({
     setEditingBlockedHollowVoxelIndices(blockedHollowVoxelIndices);
   }, [blockedHollowVoxelIndices, scene.mode, transformMgr.transformMode]);
 
-  const resolveBlockedHollowVoxelMarqueeSelection = React.useCallback((
+  const resolveBlockedHollowVoxelMarqueeSelection = React.useCallback(async (
     polygon: Array<{ x: number; y: number }>,
     helpers: {
       projectWorldPoint: (point: THREE.Vector3) => { x: number; y: number; z: number } | null;
+      getCameraProjection?: () => { viewProj: number[]; rectWidth: number; rectHeight: number } | null;
     },
-  ) => {
+  ): Promise<string[]> => {
     const preview = hollowPreview;
     const activeModel = scene.activeModel;
     if (!preview || !activeModel || polygon.length < 3) return [] as string[];
@@ -1334,26 +1466,61 @@ export function useHollowingManager({
       return inside;
     };
 
-    const modelQuaternion = quaternionFromGlobalEuler(activeModel.transform.rotation);
+    const modelQuaternion = new THREE.Quaternion().setFromEuler(activeModel.transform.rotation);
     const selected: string[] = [];
 
-    for (let instanceIndex = 0; instanceIndex < preview.removedVoxelIndices.length; instanceIndex += 1) {
-      const offset = instanceIndex * 3;
-      const localPoint = new THREE.Vector3(
-        preview.removedVoxelCenters[offset] - activeModel.geometry.center.x,
-        preview.removedVoxelCenters[offset + 1] - activeModel.geometry.center.y,
-        preview.removedVoxelCenters[offset + 2] - activeModel.geometry.center.z,
-      );
-      localPoint.multiply(activeModel.transform.scale);
-      localPoint.applyQuaternion(modelQuaternion);
-      localPoint.add(activeModel.transform.position);
-      const projected = helpers.projectWorldPoint(localPoint);
-      if (!projected) continue;
-      if (!pointInPolygon(projected.x, projected.y)) continue;
-      selected.push(String(preview.removedVoxelIndices[instanceIndex]));
+    // Removed/cavity voxels are resolved in Rust against the full grid, so the
+    // whole through-depth column under the lasso is selected — not just the
+    // boundary-filtered / cap-limited shell that `preview.removedVoxelCenters`
+    // now holds after the 90a15d3d rendering filter. Rust reproduces this
+    // exact projection (unrotated center -> model transform -> viewProj ->
+    // container pixels -> point-in-polygon); see meshHollowing.ts / hollowing.rs.
+    const cameraProjection = helpers.getCameraProjection?.();
+    if (cameraProjection) {
+      const { options } = buildHollowPreviewRequest(activeModel);
+      try {
+        const removedIndices = await selectRemovedVoxelsInPolygon({
+          polygon: polygon.map((point) => [point.x, point.y] as [number, number]),
+          viewProj: cameraProjection.viewProj,
+          rectWidth: cameraProjection.rectWidth,
+          rectHeight: cameraProjection.rectHeight,
+          geometryCenter: [
+            activeModel.geometry.center.x,
+            activeModel.geometry.center.y,
+            activeModel.geometry.center.z,
+          ],
+          scale: [
+            activeModel.transform.scale.x,
+            activeModel.transform.scale.y,
+            activeModel.transform.scale.z,
+          ],
+          rotationQuat: [
+            modelQuaternion.x,
+            modelQuaternion.y,
+            modelQuaternion.z,
+            modelQuaternion.w,
+          ],
+          position: [
+            activeModel.transform.position.x,
+            activeModel.transform.position.y,
+            activeModel.transform.position.z,
+          ],
+          options,
+        });
+        if (removedIndices) {
+          for (let i = 0; i < removedIndices.length; i += 1) {
+            selected.push(String(removedIndices[i]));
+          }
+        }
+      } catch {
+        // Backend selection unavailable/failed: fall through with the blocked
+        // set only rather than throwing out of the lasso release handler.
+      }
     }
 
-    // Also test blocked-only voxel centers so lassoing over them works.
+    // Already-blocked voxels stay client-side: that center set is
+    // user-selection-bounded (never boundary-filtered), and Alt+lasso needs it
+    // to un-block. This loop is unchanged from the pre-regression resolver.
     if (preview.blockedVoxelCenters) {
       const blockedCount = Math.floor(preview.blockedVoxelCenters.length / 3);
       for (let blockedIndex = 0; blockedIndex < blockedCount; blockedIndex += 1) {
@@ -1369,12 +1536,14 @@ export function useHollowingManager({
         const projected = helpers.projectWorldPoint(localPoint);
         if (!projected) continue;
         if (!pointInPolygon(projected.x, projected.y)) continue;
-        selected.push(String(blockedHollowVoxelIndices[blockedIndex]));
+        selected.push(String(preview.blockedVoxelIndices
+          ? preview.blockedVoxelIndices[blockedIndex]
+          : blockedHollowVoxelIndices[blockedIndex]));
       }
     }
 
     return selected;
-  }, [hollowPreview, scene.activeModel, blockedHollowVoxelIndices]);
+  }, [hollowPreview, scene.activeModel, blockedHollowVoxelIndices, buildHollowPreviewRequest]);
 
   const handleBlockedHollowVoxelMarqueeSelection = React.useCallback((ids: string[], altKey?: boolean) => {
     if (ids.length === 0) return;

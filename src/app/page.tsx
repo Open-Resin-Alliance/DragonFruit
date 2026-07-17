@@ -30,6 +30,7 @@ import { useArrangeManager } from '@/features/scene/arrange/useArrangeManager';
 import { useHolePunchManager } from '@/features/hole-punching/useHolePunchManager';
 import { useHollowingManager } from '@/features/hollowing/useHollowingManager';
 import type { HollowingManagerDeps } from '@/features/hollowing/useHollowingManager';
+import { useModifierApplyOverlay } from '@/features/hollowing/useModifierApplyOverlay';
 import { useImportExportManager } from '@/features/import-export/useImportExportManager';
 import type { ImportExportManagerDeps } from '@/features/import-export/useImportExportManager';
 import { GlobalUpdateIndicator } from '@/features/updater/GlobalUpdateIndicator';
@@ -133,7 +134,6 @@ import {
   serializeSingleHolePunchPlacement,
 } from '@/features/hole-punching/holePunchPersistence';
 import {
-  buildGeometryVersionKey,
   createGeometryFromPreviewPositions,
   disposeHollowPreviewCacheEntry,
   disposeHollowPreviewGeometryIfUncached,
@@ -330,7 +330,6 @@ import {
   hollowFromGeometry,
   hollowPreviewFromCapturedSource,
   stageHollowPreviewSource,
-  type HollowOptions,
   type HollowReport,
 } from '@/utils/meshHollowing';
 import {
@@ -386,12 +385,6 @@ const HOLE_PUNCH_DEPTH_OFFSET_FROM_SHELL_MM = 1;
 const HOLE_PUNCH_AUTO_DEPTH_RAY_START_OFFSET_MM = 0.3;
 const HOLE_PUNCH_AUTO_DEPTH_MIN_INSIDE_MM = 1;
 const HOLLOW_PREVIEW_DEBOUNCE_MS = 90;
-const HOLLOW_PREVIEW_THICKNESS_QUANTUM_MM = 0.2;
-
-function quantizePreviewShellThicknessMm(valueMm: number): number {
-  const clamped = Math.max(0.1, valueMm);
-  return Number((Math.round(clamped / HOLLOW_PREVIEW_THICKNESS_QUANTUM_MM) * HOLLOW_PREVIEW_THICKNESS_QUANTUM_MM).toFixed(3));
-}
 
 function getDefaultHolePunchDepthMm(shellThicknessMm: number): number {
   return Number(
@@ -525,6 +518,9 @@ export default function Home() {
   const hollowingDepsRef = React.useRef<HollowingManagerDeps>({
     showOperationError: () => {},
     setShowDamagedModelDialog: () => {},
+    beginFinalizing: () => {},
+    clearFinalizing: () => {},
+    nextPaint: async () => {},
     persistActiveModelModifiers: () => {},
     setPendingModifierResetAction: () => {},
     setInteriorView: () => {},
@@ -599,8 +595,6 @@ export default function Home() {
     requestResetHollowing,
     requestClearAppliedHollowing,
     clearPendingHollowPreviewDebounce,
-    resolveHollowPreviewSourceGeometry,
-    buildHollowingOptions,
     buildHollowPreviewRequest,
     cacheHollowPreviewResult,
     materializeHollowPreviewCacheEntry,
@@ -839,6 +833,18 @@ export default function Home() {
   const [holePunchHoverPlacement, setHolePunchHoverPlacement] = React.useState<HolePunchPlacementState | null>(null);
   const [isApplyingHolePunch, setIsApplyingHolePunch] = React.useState(false);
   const [pendingHolePunchAutoApplyModelId, setPendingHolePunchAutoApplyModelId] = React.useState<string | null>(null);
+  const {
+    isFinalizing,
+    beginFinalizing,
+    clearFinalizing,
+    finalizingOverlayContent,
+    nextPaint,
+  } = useModifierApplyOverlay({
+    hasPendingBackgroundGeometryWork: scene.hasPendingBackgroundGeometryWork,
+    isApplyingHollowing,
+    isApplyingHolePunch,
+    pendingHolePunchAutoApplyModelId,
+  });
   const [pendingModifierResetAction, setPendingModifierResetAction] = React.useState<PendingModifierResetAction | null>(null);
   const [pendingBlockerResetState, setPendingBlockerResetState] = React.useState<HollowingPanelState | null>(null);
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(false);
@@ -1264,7 +1270,7 @@ export default function Home() {
   } = importExport;
 
   const [isExporting, setIsExporting] = React.useState(false);
-  const showModifierApplyBlockingOverlay = isApplyingHollowing || isApplyingHolePunch || isApplyingBlockersHollowing || pendingHolePunchAutoApplyModelId !== null;
+  const showModifierApplyBlockingOverlay = isApplyingHollowing || isApplyingHolePunch || isApplyingBlockersHollowing || pendingHolePunchAutoApplyModelId !== null || isFinalizing;
   const [modifierApplyOverlayElapsedSec, setModifierApplyOverlayElapsedSec] = React.useState(0);
 
 
@@ -1278,6 +1284,8 @@ export default function Home() {
         ],
       };
     }
+
+    if (finalizingOverlayContent) return finalizingOverlayContent;
 
     if (isApplyingHollowing) {
       return {
@@ -1316,7 +1324,7 @@ export default function Home() {
         'Please wait a moment.',
       ],
     };
-  }, [isApplyingBlockersHollowing, isApplyingHolePunch, isApplyingHollowing, pendingHolePunchAutoApplyModelId]);
+  }, [finalizingOverlayContent, isApplyingBlockersHollowing, isApplyingHolePunch, isApplyingHollowing, pendingHolePunchAutoApplyModelId]);
 
 
   React.useEffect(() => {
@@ -8479,6 +8487,9 @@ export default function Home() {
     setHolePunchHoverPlacement,
     showOperationError,
     setShowDamagedModelDialog,
+    beginFinalizing,
+    clearFinalizing,
+    nextPaint,
   });
   const {
     holePunchState,
@@ -8653,6 +8664,9 @@ export default function Home() {
   hollowingDepsRef.current = {
     showOperationError,
     setShowDamagedModelDialog,
+    beginFinalizing,
+    clearFinalizing,
+    nextPaint,
     persistActiveModelModifiers,
     setPendingModifierResetAction,
     setInteriorView,
@@ -8707,6 +8721,7 @@ export default function Home() {
         enabled: true,
         bakedIntoGeometry: false,
         blockedVoxelIndices,
+        blockedVoxelRotationQuat: undefined,
         mode: next.mode,
         voxelSizeMm: next.voxelSizeMm,
         shellThicknessMm: next.shellThicknessMm,
@@ -8917,26 +8932,19 @@ export default function Home() {
       return;
     }
 
-    const previewShellThicknessMm = quantizePreviewShellThicknessMm(hollowingState.shellThicknessMm);
-    const sourceGeometry = resolveHollowPreviewSourceGeometry(activeModel);
-    const sourceGeometryKey = buildGeometryVersionKey(sourceGeometry);
-    const bbox = sourceGeometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
-      sourceGeometry.getAttribute('position') as THREE.BufferAttribute,
-    );
-    const bboxSize = bbox.getSize(new THREE.Vector3());
-    const maxExtent = Math.max(bboxSize.x, bboxSize.y, bboxSize.z);
-
-    const debounceQuat = new THREE.Quaternion().setFromEuler(activeModel.transform.rotation);
-    const options: HollowOptions = {
-      ...buildHollowingOptions(activeModel.transform.scale, maxExtent, {
-        preview: true,
-        previewShellThicknessMm,
-      }),
-      previewCavityOnly: true,
-      rotationQuat: [debounceQuat.x, debounceQuat.y, debounceQuat.z, debounceQuat.w],
-    };
-    const optionsKey = JSON.stringify(options);
-    const previewKey = `${activeModel.id}::${sourceGeometryKey}::${optionsKey}`;
+    // Single source of truth for preview options and cache keys, shared with
+    // the toolbar-hover warmup path. Building options inline here previously
+    // omitted `previewVoxelSpheres: true` (and `drainHoles: []`), which made
+    // every debounced parameter change run the full cavity-mesh build — and,
+    // on manifold failure, the entire stabilization retry cascade — for a
+    // result the preview never renders, while also splitting the cache keys
+    // so warmup-primed entries could never serve the live preview.
+    const {
+      sourceGeometry,
+      sourceGeometryKey,
+      options,
+      previewKey,
+    } = buildHollowPreviewRequest(activeModel);
 
     if (hollowPreview && hollowPreview.modelId === activeModel.id && hollowPreview.previewKey === previewKey) {
       return;
@@ -8958,7 +8966,7 @@ export default function Home() {
       clearPendingHollowPreviewDebounce();
     };
   }, [
-    buildHollowingOptions,
+    buildHollowPreviewRequest,
     clearHollowPreview,
     clearPendingHollowPreviewDebounce,
     hollowPreview,
@@ -8966,7 +8974,6 @@ export default function Home() {
     isHollowingDirty,
     isApplyingHollowing,
     isShellFaceSelectionPending,
-    resolveHollowPreviewSourceGeometry,
     runHollowPreview,
     scene.activeModel,
     scene.mode,

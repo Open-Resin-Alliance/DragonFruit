@@ -76,6 +76,10 @@ export type UseHolePunchManagerOptions = {
   // Misc shared sinks.
   showOperationError: (message: string) => void;
   setShowDamagedModelDialog: React.Dispatch<React.SetStateAction<boolean>>;
+  // Modifier-apply overlay finalizing controls (useModifierApplyOverlay in Home).
+  beginFinalizing: (kind: 'hollowing' | 'holePunch') => void;
+  clearFinalizing: () => void;
+  nextPaint: () => Promise<void>;
 };
 
 export function useHolePunchManager({
@@ -106,6 +110,9 @@ export function useHolePunchManager({
   setHolePunchHoverPlacement,
   showOperationError,
   setShowDamagedModelDialog,
+  beginFinalizing,
+  clearFinalizing,
+  nextPaint,
 }: UseHolePunchManagerOptions) {
   const [holePunchState, setHolePunchState] = React.useState<HolePunchPanelState>({
     radiusMm: 2.0,
@@ -1196,6 +1203,12 @@ export function useHolePunchManager({
           return;
         }
 
+        // Backend work is done — switch the blocking overlay to the
+        // "loading mesh" message and let it paint before the heavy
+        // synchronous finalization below (see handleApplyHollowing).
+        beginFinalizing('holePunch');
+        await nextPaint();
+
         const nextGeometry = new THREE.BufferGeometry();
         nextGeometry.setAttribute('position', new THREE.BufferAttribute(result.positions, 3));
         nextGeometry.computeVertexNormals();
@@ -1212,6 +1225,7 @@ export function useHolePunchManager({
             sourceGeometry.dispose();
           }
           nextGeometry.dispose();
+          clearFinalizing();
           return;
         }
 
@@ -1235,11 +1249,12 @@ export function useHolePunchManager({
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         showOperationError(`Hole punching failed: ${message}`);
+        clearFinalizing();
       } finally {
         setIsApplyingHolePunch(false);
       }
     })();
-  }, [activeHolePunchPlacements, persistActiveModelModifiers, scene, sleep]);
+  }, [activeHolePunchPlacements, beginFinalizing, clearFinalizing, nextPaint, persistActiveModelModifiers, scene, sleep]);
 
   React.useEffect(() => {
     if (!pendingHolePunchAutoApplyModelId) return;

@@ -544,8 +544,15 @@ export function SceneCanvas({
       polygon: Array<{ x: number; y: number }>,
       helpers: {
         projectWorldPoint: (point: THREE.Vector3) => { x: number; y: number; z: number } | null;
+        /** Snapshot of the camera projection + container size at pointer-up,
+         *  so a resolver can hand projection off to a backend (e.g. Rust-side
+         *  voxel selection) instead of projecting per-voxel on the client.
+         *  viewProj is column-major projectionMatrix * matrixWorldInverse. */
+        getCameraProjection: () =>
+          | { viewProj: number[]; rectWidth: number; rectHeight: number }
+          | null;
       },
-    ) => string[];
+    ) => string[] | Promise<string[]>;
     /** altKey is true when the Alt modifier was held at pointer-up. */
     onSelectionChange: (ids: string[], altKey?: boolean) => void;
   };
@@ -2903,12 +2910,38 @@ export function SceneCanvas({
       // ignore release failures
     }
 
-    customPrepareLassoSelection.onSelectionChange(
+    // Snapshot altKey now — the resolver may be async (Rust round-trip on
+    // release) and the pointer event must not be read after it settles.
+    const altKey = e.altKey;
+    const getCameraProjection = () => {
+      const projectionRect = containerRef.current?.getBoundingClientRect();
+      const projectionCamera = cameraRef.current;
+      if (!projectionRect || !projectionCamera) return null;
+      projectionCamera.updateMatrixWorld();
+      const viewProj = projectionCamera.projectionMatrix
+        .clone()
+        .multiply(projectionCamera.matrixWorldInverse)
+        .toArray();
+      return {
+        viewProj,
+        rectWidth: projectionRect.width,
+        rectHeight: projectionRect.height,
+      };
+    };
+
+    Promise.resolve(
       customPrepareLassoSelection.resolveSelection(path, {
         projectWorldPoint: projectPointToCanvas,
+        getCameraProjection,
       }),
-      e.altKey,
-    );
+    )
+      .then((ids) => {
+        customPrepareLassoSelection.onSelectionChange(ids, altKey);
+      })
+      .catch(() => {
+        // Selection resolution failed (e.g. backend unavailable); leave the
+        // blocked set unchanged rather than throwing from a pointer handler.
+      });
 
     suppressNextCanvasClickRef.current = true;
     e.preventDefault();

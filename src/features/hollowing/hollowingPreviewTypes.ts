@@ -8,6 +8,13 @@ export type HollowPreviewState = {
   removedVoxelCenters: Float32Array;
   removedVoxelIndices: Uint32Array;
   blockedVoxelCenters?: Float32Array;
+  /** Grid indices Rust actually accepted for the blocked centers, in lockstep
+   *  with blockedVoxelCenters. Downstream positional mappings consume this
+   *  instead of the committed array, so a stale/dropped index never desyncs. */
+  blockedVoxelIndices?: Uint32Array;
+  /** The committed blocked set this preview was computed FROM — used to gate
+   *  the quiet resync so a newer in-flight request can't be clobbered. */
+  requestedBlockedVoxelIndices?: readonly number[];
   report: HollowReport;
   previewKey: string;
   /** When true, the geometry is the original source mesh and the cavity
@@ -23,6 +30,8 @@ export type HollowPreviewCacheEntry = {
   removedVoxelCenters?: Float32Array;
   removedVoxelIndices?: Uint32Array;
   blockedVoxelCenters?: Float32Array;
+  blockedVoxelIndices?: Uint32Array;
+  requestedBlockedVoxelIndices?: readonly number[];
   previewGeometry?: THREE.BufferGeometry | null;
   infillGeometry?: THREE.BufferGeometry | null;
 };
