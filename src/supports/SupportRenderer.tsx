@@ -31,7 +31,7 @@ import { KnotGizmo } from './SupportPrimitives/Knot/KnotGizmo';
 import { BezierGizmoManager } from './Curves/BezierGizmo/BezierGizmoManager';
 import { ContactDisk, SupportMode, BezierSegment, type Brace, type Knot, type Leaf, type Twig } from './types';
 import { resolveTwigDiameterAtSegmentT } from './SupportTypes/Twig/twigTaper';
-import { bezierToLineSegments, calculateAdaptiveBezierResolution } from './Curves/BezierUtils';
+import { bezierSegmentToBatchedShaft, braceBezierToBatchedShaft } from './Curves/batchedBezierShaft';
 import type { SupportData } from './rendering';
 import type { BracePreviewData } from './SupportTypes/Brace/bracePlacementState';
 import { useJointCreationState } from './SupportPrimitives/Joint/jointCreationState';
@@ -134,125 +134,6 @@ type InteriorContactPoint = {
     placementSurface?: PlacementSurface;
 };
 type InteriorContactFilter = (contact: InteriorContactPoint | null | undefined, modelId?: string) => boolean;
-
-function applyBatchedBezierSeamOverlap(
-    points: Array<{ x: number; y: number; z: number }>,
-    index: number,
-    diameter: number,
-) {
-    const start = points[index];
-    const end = points[index + 1];
-    const dx = end.x - start.x;
-    const dy = end.y - start.y;
-    const dz = end.z - start.z;
-    const length = Math.sqrt((dx * dx) + (dy * dy) + (dz * dz));
-
-    if (length < 1e-6) {
-        return { start, end };
-    }
-
-    const invLen = 1 / length;
-    const ux = dx * invLen;
-    const uy = dy * invLen;
-    const uz = dz * invLen;
-
-    const baseOverlap = Math.max(0.015, Math.min(0.45, diameter * 0.22));
-    const overlap = Math.min(baseOverlap, Math.max(0, length * 0.45));
-    const isFirst = index === 0;
-    const isLast = index === points.length - 2;
-    const startShift = isFirst ? 0 : overlap;
-    const endShift = isLast ? 0 : overlap;
-
-    return {
-        start: {
-            x: start.x - (ux * startShift),
-            y: start.y - (uy * startShift),
-            z: start.z - (uz * startShift),
-        },
-        end: {
-            x: end.x + (ux * endShift),
-            y: end.y + (uy * endShift),
-            z: end.z + (uz * endShift),
-        },
-    };
-}
-
-/** Tessellate a bezier segment into multiple straight InstancedShaft entries for batched rendering. */
-function tesselllateBezierToShafts(
-    segment: BezierSegment,
-    startPos: { x: number; y: number; z: number },
-    endPos: { x: number; y: number; z: number },
-    supportId: string,
-    modelId?: string,
-): InstancedShaft[] {
-    const BATCHED_BEZIER_MIN_RESOLUTION = 4;
-    const BATCHED_BEZIER_MAX_RESOLUTION = 24;
-    const adaptiveResolution = calculateAdaptiveBezierResolution(
-        startPos,
-        segment.controlPoint1,
-        segment.controlPoint2,
-        endPos,
-        {
-            minResolution: BATCHED_BEZIER_MIN_RESOLUTION,
-            maxResolution: BATCHED_BEZIER_MAX_RESOLUTION,
-            targetChordLengthMm: 2.5,
-            curvatureWeight: 2.0,
-        },
-    );
-    const res = Math.max(2, segment.resolution ?? adaptiveResolution);
-    const points = bezierToLineSegments(startPos, segment.controlPoint1, segment.controlPoint2, endPos, res);
-    const shafts: InstancedShaft[] = [];
-    for (let i = 0; i < points.length - 1; i++) {
-        const overlapped = applyBatchedBezierSeamOverlap(points, i, segment.diameter);
-        shafts.push({
-            id: segment.id,
-            start: overlapped.start,
-            end: overlapped.end,
-            diameter: segment.diameter,
-            supportId,
-            modelId,
-        });
-    }
-    return shafts;
-}
-
-function tessellateBraceBezierToShafts(
-    segmentId: string,
-    startPos: { x: number; y: number; z: number },
-    endPos: { x: number; y: number; z: number },
-    controlPoint1: { x: number; y: number; z: number },
-    controlPoint2: { x: number; y: number; z: number },
-    diameter: number,
-    supportId: string,
-    modelId?: string,
-): InstancedShaft[] {
-    const adaptiveResolution = calculateAdaptiveBezierResolution(
-        startPos,
-        controlPoint1,
-        controlPoint2,
-        endPos,
-        {
-            minResolution: 4,
-            maxResolution: 24,
-            targetChordLengthMm: 2.5,
-            curvatureWeight: 2.0,
-        },
-    );
-    const points = bezierToLineSegments(startPos, controlPoint1, controlPoint2, endPos, adaptiveResolution);
-    const shafts: InstancedShaft[] = [];
-    for (let i = 0; i < points.length - 1; i++) {
-        const overlapped = applyBatchedBezierSeamOverlap(points, i, diameter);
-        shafts.push({
-            id: segmentId,
-            start: overlapped.start,
-            end: overlapped.end,
-            diameter,
-            supportId,
-            modelId,
-        });
-    }
-    return shafts;
-}
 
 function recomputeLeafPreviewContactCone(
     leaf: Leaf,
@@ -582,7 +463,7 @@ function buildSupportPlacementPreviewBatch(
 
         if (segment.type === 'bezier') {
             shafts.push(
-                ...tesselllateBezierToShafts(
+                bezierSegmentToBatchedShaft(
                     segment as BezierSegment,
                     { x: currentStart.x, y: currentStart.y, z: currentStart.z },
                     { x: endPoint.x, y: endPoint.y, z: endPoint.z },
@@ -1789,6 +1670,19 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         };
     }, [resolveModelDropOffsetZ]);
 
+    // Curved batched shafts carry bezier control points; the drop offset must
+    // move them together with the endpoints or the curve deforms.
+    const applyDropToInstancedShaft = React.useCallback((shaft: InstancedShaft): InstancedShaft => {
+        const dropped: InstancedShaft = {
+            ...shaft,
+            start: applyDropToVec3Like(shaft.start, shaft.modelId),
+            end: applyDropToVec3Like(shaft.end, shaft.modelId),
+        };
+        if (shaft.controlPoint1) dropped.controlPoint1 = applyDropToVec3Like(shaft.controlPoint1, shaft.modelId);
+        if (shaft.controlPoint2) dropped.controlPoint2 = applyDropToVec3Like(shaft.controlPoint2, shaft.modelId);
+        return dropped;
+    }, [applyDropToVec3Like]);
+
     const trunkIdByRootIdForSelection = useMemo(() => {
         const map = new Map<string, string>();
         for (const trunk of trunkList) {
@@ -2387,7 +2281,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 }
 
                 if (segment.type === 'bezier') {
-                    shafts.push(...tesselllateBezierToShafts(segment, currentStart, endPoint, trunk.id, trunk.modelId));
+                    shafts.push(bezierSegmentToBatchedShaft(segment, currentStart, endPoint, trunk.id, trunk.modelId));
                     currentStart = endPoint;
                     continue;
                 }
@@ -2439,7 +2333,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 }
 
                 if (segment.type === 'bezier') {
-                    shafts.push(...tesselllateBezierToShafts(segment, currentStart, endPoint, branch.id, branch.modelId));
+                    shafts.push(bezierSegmentToBatchedShaft(segment, currentStart, endPoint, branch.id, branch.modelId));
                     currentStart = endPoint;
                     continue;
                 }
@@ -2508,16 +2402,17 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const diameter = (startHostDiameter + endHostDiameter) * 0.5;
             const segmentId = `braceSegment:${brace.id}`;
             const shafts = brace.curve?.type === 'bezier'
-                ? tessellateBraceBezierToShafts(
+                ? [braceBezierToBatchedShaft(
                     segmentId,
                     startKnot.pos,
                     endKnot.pos,
                     brace.curve.controlPoint1,
                     brace.curve.controlPoint2,
                     diameter,
+                    brace.curve.resolution,
                     brace.id,
                     brace.modelId,
-                )
+                )]
                 : [{
                     id: segmentId,
                     start: startKnot.pos,
@@ -2588,7 +2483,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 }
 
                 if (segment.type === 'bezier') {
-                    shafts.push(...tesselllateBezierToShafts(segment, startPoint, endPoint, twig.id, twig.modelId));
+                    shafts.push(bezierSegmentToBatchedShaft(segment, startPoint, endPoint, twig.id, twig.modelId));
                 } else if (isUniformDiameter) {
                     shafts.push({
                         id: segment.id,
@@ -2637,7 +2532,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     })();
 
                 if (segment.type === 'bezier') {
-                    shafts.push(...tesselllateBezierToShafts(segment, startPoint, endPoint, stick.id, stick.modelId));
+                    shafts.push(bezierSegmentToBatchedShaft(segment, startPoint, endPoint, stick.id, stick.modelId));
                 } else {
                     shafts.push({
                         id: segment.id,
@@ -2699,7 +2594,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 }
 
                 if (segment.type === 'bezier') {
-                    shafts.push(...tesselllateBezierToShafts(segment, currentStart, endPoint, kickstand.id, kickstand.modelId));
+                    shafts.push(bezierSegmentToBatchedShaft(segment, currentStart, endPoint, kickstand.id, kickstand.modelId));
                 } else if (isUniformDiameter) {
                     shafts.push({
                         id: segment.id,
@@ -3203,16 +3098,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const modelKey = shaftSet.modelId ?? '__unassigned__';
             const groupKey = `${modelKey}:${color}`;
             const existing = grouped.get(groupKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
-            existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
-                ...shaft,
-                start: applyDropToVec3Like(shaft.start, shaft.modelId),
-                end: applyDropToVec3Like(shaft.end, shaft.modelId),
-            })));
+            existing.shafts.push(...shaftSet.shafts.map(applyDropToInstancedShaft));
             if (existing.shafts.length > 0) grouped.set(groupKey, existing);
         }
 
         return Array.from(grouped.values());
-    }, [renderTwigList, twigShaftsBySupport, selectedTwigIds, isModelVisible, applyDropToVec3Like, enableTwigSceneBatching, resolveSceneSupportColor]);
+    }, [renderTwigList, twigShaftsBySupport, selectedTwigIds, isModelVisible, applyDropToInstancedShaft, enableTwigSceneBatching, resolveSceneSupportColor]);
 
     const sceneBatchedStickShaftGroups = useMemo(() => {
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
@@ -3227,16 +3118,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const modelKey = shaftSet.modelId ?? '__unassigned__';
             const groupKey = `${modelKey}:${color}`;
             const existing = grouped.get(groupKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
-            existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
-                ...shaft,
-                start: applyDropToVec3Like(shaft.start, shaft.modelId),
-                end: applyDropToVec3Like(shaft.end, shaft.modelId),
-            })));
+            existing.shafts.push(...shaftSet.shafts.map(applyDropToInstancedShaft));
             if (existing.shafts.length > 0) grouped.set(groupKey, existing);
         }
 
         return Array.from(grouped.values());
-    }, [renderStickList, stickShaftsBySupport, selectedStickIds, isModelVisible, applyDropToVec3Like, resolveSceneSupportColor]);
+    }, [renderStickList, stickShaftsBySupport, selectedStickIds, isModelVisible, applyDropToInstancedShaft, resolveSceneSupportColor]);
 
     const sceneBatchedKickstandShaftGroups = useMemo(() => {
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
@@ -3251,16 +3138,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const modelKey = shaftSet.modelId ?? '__unassigned__';
             const groupKey = `${modelKey}:${color}`;
             const existing = grouped.get(groupKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
-            existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
-                ...shaft,
-                start: applyDropToVec3Like(shaft.start, shaft.modelId),
-                end: applyDropToVec3Like(shaft.end, shaft.modelId),
-            })));
+            existing.shafts.push(...shaftSet.shafts.map(applyDropToInstancedShaft));
             if (existing.shafts.length > 0) grouped.set(groupKey, existing);
         }
 
         return Array.from(grouped.values());
-    }, [renderKickstandList, kickstandShaftsBySupport, selectedKickstandIds, isModelVisible, applyDropToVec3Like, resolveSceneSupportColor]);
+    }, [renderKickstandList, kickstandShaftsBySupport, selectedKickstandIds, isModelVisible, applyDropToInstancedShaft, resolveSceneSupportColor]);
 
     const sceneBatchedBraceShaftGroups = useMemo(() => {
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
@@ -3286,26 +3169,18 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             const existing = grouped.get(groupKey);
             if (existing) {
-                existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
-                    ...shaft,
-                    start: applyDropToVec3Like(shaft.start, shaft.modelId),
-                    end: applyDropToVec3Like(shaft.end, shaft.modelId),
-                })));
+                existing.shafts.push(...shaftSet.shafts.map(applyDropToInstancedShaft));
             } else {
                 grouped.set(groupKey, {
                     modelId: shaftSet.modelId,
                     color,
-                    shafts: shaftSet.shafts.map((shaft) => ({
-                        ...shaft,
-                        start: applyDropToVec3Like(shaft.start, shaft.modelId),
-                        end: applyDropToVec3Like(shaft.end, shaft.modelId),
-                    })),
+                    shafts: shaftSet.shafts.map(applyDropToInstancedShaft),
                 });
             }
         }
 
         return Array.from(grouped.values());
-    }, [renderBraceList, braceShaftsBySupport, selectedBraceIds, ghostedBraceIdSet, isModelVisible, applyDropToVec3Like, settings.autoBracing.debugSectionColorsEnabled, dimNonSelected, resolveSceneSupportColor]);
+    }, [renderBraceList, braceShaftsBySupport, selectedBraceIds, ghostedBraceIdSet, isModelVisible, applyDropToInstancedShaft, settings.autoBracing.debugSectionColorsEnabled, dimNonSelected, resolveSceneSupportColor]);
 
     const sceneBatchedTrunkShaftGroups = useMemo(() => {
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
@@ -3321,17 +3196,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const modelKey = shaftSet.modelId ?? '__unassigned__';
             const groupKey = `${modelKey}:${color}`;
             const existing = grouped.get(groupKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
-            existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
-                ...shaft,
-                start: applyDropToVec3Like(shaft.start, shaft.modelId),
-                end: applyDropToVec3Like(shaft.end, shaft.modelId),
-            })));
+            existing.shafts.push(...shaftSet.shafts.map(applyDropToInstancedShaft));
 
             if (existing.shafts.length > 0) grouped.set(groupKey, existing);
         }
 
         return Array.from(grouped.values());
-    }, [renderTrunkList, trunkShaftsBySupport, selectedTrunkIds, isModelVisible, applyDropToVec3Like, resolveSceneSupportColor]);
+    }, [renderTrunkList, trunkShaftsBySupport, selectedTrunkIds, isModelVisible, applyDropToInstancedShaft, resolveSceneSupportColor]);
 
     const sceneBatchedBranchShaftGroups = useMemo(() => {
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
@@ -3347,11 +3218,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const modelKey = shaftSet.modelId ?? '__unassigned__';
             const groupKey = `${modelKey}:${color}`;
             const existing = grouped.get(groupKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
-            existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
-                ...shaft,
-                start: applyDropToVec3Like(shaft.start, shaft.modelId),
-                end: applyDropToVec3Like(shaft.end, shaft.modelId),
-            })));
+            existing.shafts.push(...shaftSet.shafts.map(applyDropToInstancedShaft));
 
             if (existing.shafts.length > 0) {
                 grouped.set(groupKey, existing);
@@ -3359,7 +3226,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [renderBranchList, branchShaftsBySupport, selectedBranchIds, isModelVisible, applyDropToVec3Like, resolveSceneSupportColor]);
+    }, [renderBranchList, branchShaftsBySupport, selectedBranchIds, isModelVisible, applyDropToInstancedShaft, resolveSceneSupportColor]);
 
     const sceneBatchedTrunkRootGroups = useMemo(() => {
         if (hidePlateContactPrimitivesEffective) return [] as Array<{ modelId: string | null; color: string; roots: InstancedRoot[] }>;
@@ -3663,12 +3530,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         if (!hoveredSupportShaftSet) return [] as InstancedShaft[];
 
         return hoveredSupportShaftSet.shafts.map((shaft) => ({
-            ...shaft,
-            start: applyDropToVec3Like(shaft.start, shaft.modelId),
-            end: applyDropToVec3Like(shaft.end, shaft.modelId),
+            ...applyDropToInstancedShaft(shaft),
             diameter: shaft.diameter * 1.02,
         }));
-    }, [hoveredSupportShaftSet, applyDropToVec3Like]);
+    }, [hoveredSupportShaftSet, applyDropToInstancedShaft]);
 
     const hoveredSupportConeSet = useMemo(() => {
         if (!isInteractable) return null;
@@ -3839,14 +3704,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 ?? null;
             if (!shaftSet) continue;
             overlays.push(...shaftSet.shafts.map((shaft) => ({
-                ...shaft,
-                start: applyDropToVec3Like(shaft.start, shaft.modelId),
-                end: applyDropToVec3Like(shaft.end, shaft.modelId),
+                ...applyDropToInstancedShaft(shaft),
                 diameter: shaft.diameter * 1.02,
             })));
         }
         return overlays;
-    }, [additionalMarqueeHoveredSupportIds, trunkShaftsBySupport, branchShaftsBySupport, braceShaftsBySupport, twigShaftsBySupport, stickShaftsBySupport, kickstandShaftsBySupport, applyDropToVec3Like]);
+    }, [additionalMarqueeHoveredSupportIds, trunkShaftsBySupport, branchShaftsBySupport, braceShaftsBySupport, twigShaftsBySupport, stickShaftsBySupport, kickstandShaftsBySupport, applyDropToInstancedShaft]);
 
     const marqueeHoveredOverlayCones = useMemo(() => {
         if (additionalMarqueeHoveredSupportIds.length === 0) return [] as InstancedContactCone[];
