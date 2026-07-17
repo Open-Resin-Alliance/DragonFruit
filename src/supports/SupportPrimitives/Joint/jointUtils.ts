@@ -6,12 +6,35 @@ import { getJointDiameter } from '../../constants';
 import { getBezierPointAtT, toVector3, subdivideCubicBezier, toVec3 } from '../../Curves/BezierUtils';
 import { getKnotById } from '../../state';
 import { solveJointConstraint } from '../../PlacementLogic/JointConstraintSolver';
+import { remapKnotAcrossSplit, KnotSplitRemap } from '../Knot/knotUtils';
 
 function uuid() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
         const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
         return v.toString(16);
     });
+}
+
+/**
+ * Compute knot re-anchor patches for a segment split. The bottom segment keeps
+ * the original id, the top segment gets `topSegmentId`, and every knot attached
+ * to the original segment is rescaled onto whichever half now contains it so it
+ * does not slide when the joint is inserted (issue #204). Returns an empty array
+ * when no knots are supplied or none are affected.
+ */
+function remapKnotsForSplit(
+    knots: Record<string, Knot> | undefined,
+    originalSegmentId: string,
+    topSegmentId: string,
+    splitT: number | undefined
+): KnotSplitRemap[] {
+    if (!knots || splitT === undefined) return [];
+    const remaps: KnotSplitRemap[] = [];
+    for (const knot of Object.values(knots)) {
+        const remap = remapKnotAcrossSplit(knot, originalSegmentId, originalSegmentId, topSegmentId, splitT);
+        if (remap) remaps.push(remap);
+    }
+    return remaps;
 }
 
 /**
@@ -22,20 +45,22 @@ function uuid() {
  * @param splitPoint The 3D position where the joint should be created
  * @param splitT The parameter t along the curve where the split occurs (required for Bezier preservation)
  * @param root The root of the trunk (required to determine start position)
- * @returns A new Trunk object with the split segment
+ * @param knots Optional knot map; attached knots are re-anchored across the split so branches/leaves don't slide (issue #204)
+ * @returns The new Trunk plus knot re-anchor patches to apply before the store recomputes knot positions
  */
 export function splitShaft(
     trunk: Trunk,
     segmentId: string,
     splitPoint: Vec3,
     splitT?: number,
-    root?: Roots
-): Trunk {
+    root?: Roots,
+    knots?: Record<string, Knot>
+): { trunk: Trunk; knotRemaps: KnotSplitRemap[] } {
     // 1. Find segment index
     const segIndex = trunk.segments.findIndex(s => s.id === segmentId);
     if (segIndex === -1) {
         console.warn('[JointUtils] Segment not found:', segmentId);
-        return trunk;
+        return { trunk, knotRemaps: [] };
     }
 
     const originalSegment = trunk.segments[segIndex];
@@ -144,9 +169,14 @@ export function splitShaft(
         ...trunk.segments.slice(segIndex + 1)
     ];
 
+    const knotRemaps = remapKnotsForSplit(knots, originalSegment.id, topSegment.id, splitT);
+
     return {
-        ...trunk,
-        segments: newSegments
+        trunk: {
+            ...trunk,
+            segments: newSegments
+        },
+        knotRemaps
     };
 }
 
@@ -160,13 +190,14 @@ export function splitBranchShaft(
     segmentId: string,
     splitPoint: Vec3,
     splitT?: number,
-    parentKnot?: Knot
-): Branch {
+    parentKnot?: Knot,
+    knots?: Record<string, Knot>
+): { branch: Branch; knotRemaps: KnotSplitRemap[] } {
     // 1. Find segment index
     const segIndex = branch.segments.findIndex(s => s.id === segmentId);
     if (segIndex === -1) {
         console.warn('[JointUtils] Segment not found in branch:', segmentId);
-        return branch;
+        return { branch, knotRemaps: [] };
     }
 
     const originalSegment = branch.segments[segIndex];
@@ -252,9 +283,14 @@ export function splitBranchShaft(
         ...branch.segments.slice(segIndex + 1)
     ];
 
+    const knotRemaps = remapKnotsForSplit(knots, originalSegment.id, topSegment.id, splitT);
+
     return {
-        ...branch,
-        segments: newSegments
+        branch: {
+            ...branch,
+            segments: newSegments
+        },
+        knotRemaps
     };
 }
 
@@ -263,11 +299,12 @@ export function splitBranchShaft(
      segmentId: string,
      splitPoint: Vec3,
      splitT?: number,
- ): Twig {
+     knots?: Record<string, Knot>
+ ): { twig: Twig; knotRemaps: KnotSplitRemap[] } {
      const segIndex = twig.segments.findIndex((s: Segment) => s.id === segmentId);
      if (segIndex === -1) {
          console.warn('[JointUtils] Segment not found in twig:', segmentId);
-         return twig;
+         return { twig, knotRemaps: [] };
      }
 
      const originalSegment = twig.segments[segIndex];
@@ -338,9 +375,14 @@ export function splitBranchShaft(
          ...twig.segments.slice(segIndex + 1)
      ];
 
+     const knotRemaps = remapKnotsForSplit(knots, originalSegment.id, topSegment.id, splitT);
+
      return {
-         ...twig,
-         segments: newSegments
+         twig: {
+             ...twig,
+             segments: newSegments
+         },
+         knotRemaps
      };
  }
 
@@ -349,11 +391,12 @@ export function splitBranchShaft(
      segmentId: string,
      splitPoint: Vec3,
      splitT?: number,
- ): Stick {
+     knots?: Record<string, Knot>
+ ): { stick: Stick; knotRemaps: KnotSplitRemap[] } {
      const segIndex = stick.segments.findIndex((s: Segment) => s.id === segmentId);
      if (segIndex === -1) {
          console.warn('[JointUtils] Segment not found in stick:', segmentId);
-         return stick;
+         return { stick, knotRemaps: [] };
      }
 
      const originalSegment = stick.segments[segIndex];
@@ -424,9 +467,14 @@ export function splitBranchShaft(
          ...stick.segments.slice(segIndex + 1)
      ];
 
+     const knotRemaps = remapKnotsForSplit(knots, originalSegment.id, topSegment.id, splitT);
+
      return {
-         ...stick,
-         segments: newSegments
+         stick: {
+             ...stick,
+             segments: newSegments
+         },
+         knotRemaps
      };
  }
 

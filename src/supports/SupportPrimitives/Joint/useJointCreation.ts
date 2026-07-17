@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick } from '../../state';
+import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick, updateKnot } from '../../state';
 import { splitShaft, splitBranchShaft, splitTwigShaft, splitStickShaft } from './jointUtils';
+import type { KnotSplitRemap } from '../Knot/knotUtils';
 import { SnapTarget } from '../../interaction/SnappingManager';
 import { Vec3 } from '../../types';
 import { useJointCreationState } from './jointCreationState';
@@ -10,6 +11,25 @@ import { getJointDiameter } from '../../constants';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
 import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
+
+/**
+ * Apply knot re-anchor patches from a segment split BEFORE the host update runs.
+ * The host update (updateTrunk/updateBranch/etc.) re-derives every attached
+ * knot's world position from its `t` against the new, shorter segment span, so
+ * the corrected `t` / `parentShaftId` must already be in the store when it runs.
+ * Otherwise attached branches/leaves slide down below the inserted joint (#204).
+ */
+function applyKnotSplitRemaps(remaps: KnotSplitRemap[]) {
+    if (remaps.length === 0) return;
+    const knots = getSnapshot().knots;
+    for (const remap of remaps) {
+        const knot = knots[remap.knotId];
+        if (!knot) continue;
+        // pos is intentionally left as-is; the host update recomputes it from the
+        // corrected t on the correct segment in the same click handler.
+        updateKnot({ ...knot, parentShaftId: remap.parentShaftId, t: remap.t });
+    }
+}
 
 export function useJointCreation() {
     const { gl } = useThree();
@@ -124,7 +144,8 @@ export function useJointCreation() {
                 const trunk = trunks.find(t => t.id === target.trunkId);
                 if (trunk) {
                     const root = state.roots[trunk.rootId];
-                    const newTrunk = splitShaft(trunk, target.segmentId, preview.pos, target.t, root);
+                    const { trunk: newTrunk, knotRemaps } = splitShaft(trunk, target.segmentId, preview.pos, target.t, root, state.knots);
+                    applyKnotSplitRemaps(knotRemaps);
                     updateTrunk(newTrunk);
                     pushSupportEditHistory('Create trunk joint', beforeSnapshot, captureSupportEditSnapshot());
                     console.log('[V2] Joint created on trunk:', trunk.id);
@@ -140,7 +161,8 @@ export function useJointCreation() {
                 if (branch) {
                     const knots = Object.values(state.knots);
                     const parentKnot = knots.find(k => k.id === branch.parentKnotId);
-                    const newBranch = splitBranchShaft(branch, target.segmentId, preview.pos, target.t, parentKnot);
+                    const { branch: newBranch, knotRemaps } = splitBranchShaft(branch, target.segmentId, preview.pos, target.t, parentKnot, state.knots);
+                    applyKnotSplitRemaps(knotRemaps);
                     updateBranch(newBranch);
                     pushSupportEditHistory('Create branch joint', beforeSnapshot, captureSupportEditSnapshot());
                     console.log('[V2] Joint created on branch:', branch.id);
@@ -154,7 +176,8 @@ export function useJointCreation() {
                 const twigs = Object.values(state.twigs);
                 const twig = twigs.find(tg => tg.id === target.trunkId);
                 if (twig) {
-                    const newTwig = splitTwigShaft(twig, target.segmentId, preview.pos, target.t);
+                    const { twig: newTwig, knotRemaps } = splitTwigShaft(twig, target.segmentId, preview.pos, target.t, state.knots);
+                    applyKnotSplitRemaps(knotRemaps);
                     updateTwig(newTwig);
                     pushSupportEditHistory('Create twig joint', beforeSnapshot, captureSupportEditSnapshot());
                     console.log('[V2] Joint created on twig:', twig.id);
@@ -168,7 +191,8 @@ export function useJointCreation() {
                 const sticks = Object.values(state.sticks);
                 const stick = sticks.find(st => st.id === target.trunkId);
                 if (stick) {
-                    const newStick = splitStickShaft(stick, target.segmentId, preview.pos, target.t);
+                    const { stick: newStick, knotRemaps } = splitStickShaft(stick, target.segmentId, preview.pos, target.t, state.knots);
+                    applyKnotSplitRemaps(knotRemaps);
                     updateStick(newStick);
                     pushSupportEditHistory('Create stick joint', beforeSnapshot, captureSupportEditSnapshot());
                     console.log('[V2] Joint created on stick:', stick.id);
