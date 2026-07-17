@@ -4,8 +4,8 @@ import * as THREE from 'three';
 import type { KickstandState } from '@/supports/SupportTypes/Kickstand/types';
 import type { SupportState } from '@/supports/types';
 import { JOINT_DIAMETER_OFFSET_MM } from '@/supports/constants';
-import { SupportGeometryGenerator } from './SupportGeometryGenerator';
-import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from './supportExportReconstruction';
+import { SupportGeometryGenerator } from '../SupportGeometryGenerator';
+import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '../supportExportReconstruction';
 
 function makeSupportState(): SupportState {
   return {
@@ -248,6 +248,48 @@ test('export cone mesh uses the visible contact-side sphere instead of a socket 
   const sphereMeshes = coneGroup.children.filter((child) => (child as THREE.Mesh).geometry?.type === 'SphereGeometry');
   assert.equal(sphereMeshes.length, 1);
   assert.equal(sphereMeshes[0]?.position.z, 9.5);
+});
+
+test('curved (bezier) segments export as piecewise cylinders that follow the curve', () => {
+  const chordEnd = { x: 0, y: 0, z: 10 };
+  const group = SupportGeometryGenerator.generateSupportGroup({
+    id: 'curved-support',
+    startPos: { x: 0, y: 0, z: 0 },
+    segments: [{
+      id: 'curved-seg',
+      diameter: 1,
+      type: 'bezier',
+      controlPoint1: { x: 6, y: 0, z: 3 },
+      controlPoint2: { x: 6, y: 0, z: 7 },
+      startTangent: { x: 0, y: 0, z: 1 },
+      endTangent: { x: 0, y: 0, z: 1 },
+      tension: 0.5,
+      bias: 0.5,
+      resolution: 12,
+      topJoint: { id: 'curved-top-joint', pos: chordEnd, diameter: 1.2 },
+    }],
+  });
+
+  const cylinders: THREE.Mesh[] = [];
+  group.traverse((node) => {
+    if ((node as THREE.Mesh).geometry?.type === 'CylinderGeometry') {
+      cylinders.push(node as THREE.Mesh);
+    }
+  });
+
+  // A straight chord would be a single cylinder; the curve must tessellate.
+  assert.equal(cylinders.length, 12);
+
+  // The control points bow the curve toward +X (peak ~4.5mm off the chord at
+  // t=0.5). If the curve were exported as its chord, every piece midpoint
+  // would sit on the x=0 axis.
+  const maxMidpointX = Math.max(...cylinders.map((mesh) => mesh.position.x));
+  assert.ok(maxMidpointX > 2, `expected curved pieces off the chord axis, got max x ${maxMidpointX}`);
+
+  // Piecewise pieces must chain into a connected polyline from start to end.
+  const firstPiece = cylinders[0];
+  const lastPiece = cylinders[cylinders.length - 1];
+  assert.ok(firstPiece.position.z < lastPiece.position.z);
 });
 
 test('kickstand export does not add a host-knot sphere affordance', () => {
