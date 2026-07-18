@@ -6,6 +6,12 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "X-Generator: @lingui/cli\n"
 "Language: sk\n"
+"Project-Id-Version: \n"
+"Report-Msgid-Bugs-To: \n"
+"PO-Revision-Date: \n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Plural-Forms: \n"
 
 #: src/components/layout/EmptySceneState.tsx:52
 msgid "{deltaDays} d"
@@ -19,35 +25,35 @@ msgstr ""
 msgid "{deltaMin} min"
 msgstr ""
 
-#: src/app/page.tsx:11895
+#: src/app/page.tsx:6337
 msgid "{hours} h {minutes} min"
 msgstr ""
 
-#: src/app/page.tsx:1385
+#: src/features/printing/printingMonitorFormat.ts:17
 msgid "{hours} h {paddedMinutes} min"
 msgstr ""
 
-#: src/app/page.tsx:1389
+#: src/features/printing/printingMonitorFormat.ts:21
 msgid "{minutes} min"
 msgstr ""
 
-#: src/app/page.tsx:5471
-#: src/app/page.tsx:11896
+#: src/app/page.tsx:3677
+#: src/app/page.tsx:6338
 msgid "{minutes} min {paddedSeconds} s"
 msgstr ""
 
 #. Shown when the estimated print time rounds down to under one minute. Keep the "<" comparison symbol.
-#: src/app/page.tsx:1392
+#: src/features/printing/printingMonitorFormat.ts:24
 msgid "< 1 min"
 msgstr ""
 
 #. Approximate estimated print time (the "~" marks it as a rough estimate). {hours}/{mins} are whole-number quantities.
-#: src/app/page.tsx:4936
+#: src/app/page.tsx:3007
 msgid "~{hours} h {mins} min"
 msgstr ""
 
 #. Approximate estimated print time under an hour (the "~" marks it as a rough estimate).
-#: src/app/page.tsx:4937
+#: src/app/page.tsx:3008
 msgid "~{mins} min"
 msgstr ""
 
@@ -56,7 +62,7 @@ msgstr ""
 msgid "Active"
 msgstr ""
 
-#: src/app/page.tsx:3552
+#: src/app/page.tsx:1980
 msgid "Add Joint"
 msgstr ""
 
@@ -73,7 +79,7 @@ msgid "Anti-aliasing: nothing to anti-alias."
 msgstr ""
 
 #. Cross-sectional area stats for the current print layer: "Area Σ" = total/summed solid area (Σ is the mathematical summation symbol, usually kept as-is); "Min"/"Max" = smallest/largest single contiguous area, abbreviating "Minimum"/"Maximum".
-#: src/app/page.tsx:22286
+#: src/components/organisms/modals/PrintingModals.tsx:1850
 msgid "Area Σ {totalAreaLabel} • Min {minAreaLabel} • Max {maxAreaLabel}"
 msgstr ""
 
@@ -184,7 +190,7 @@ msgstr ""
 msgid "Drop supported files"
 msgstr ""
 
-#: src/app/page.tsx:3558
+#: src/app/page.tsx:1986
 #: src/components/ui/EditorContextMenu.tsx:88
 msgid "Editor"
 msgstr ""
@@ -203,7 +209,7 @@ msgid "Empty workspace"
 msgstr ""
 
 #. "Est." abbreviates "Estimated", qualifying the print-time figure that follows it (e.g. "Est. 2h 05m • 12.50 ml"), not an abbreviation of anything else.
-#: src/app/page.tsx:22278
+#: src/components/organisms/modals/PrintingModals.tsx:1842
 msgid "Est. {estimatedTimeLabel} • {usedMaterialLabel}"
 msgstr ""
 
@@ -344,7 +350,7 @@ msgstr ""
 msgid "loading…"
 msgstr ""
 
-#: src/app/page.tsx:22272
+#: src/components/organisms/modals/PrintingModals.tsx:1836
 msgid "Material profile unavailable"
 msgstr ""
 
@@ -624,7 +630,7 @@ msgstr ""
 msgid "Support"
 msgstr ""
 
-#: src/app/page.tsx:3558
+#: src/app/page.tsx:1986
 msgid "Supports"
 msgstr ""
 
@@ -662,7 +668,7 @@ msgstr ""
 msgid "Tip: Start with <0>Load mesh</0> for clean prints, or <1>Import scene</1> to continue an existing setup."
 msgstr ""
 
-#: src/app/page.tsx:3547
+#: src/app/page.tsx:1975
 msgid "Toggle Curve"
 msgstr ""
 
