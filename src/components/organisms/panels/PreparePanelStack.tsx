@@ -55,6 +55,8 @@ export type PreparePanelStackProps = {
   setArrangeSpacingMm: (value: number) => void;
   onDropSelectionToPlatform: () => void;
   onLiftSelection: () => void;
+  onResetRotationSelection: () => void;
+  onResetScaleSelection: () => void;
 };
 
 /** PREPARE-mode floating panel group: model manager, transform/smoothing/hollowing/arrange tools. */
@@ -95,6 +97,8 @@ export function PreparePanelStack({
   setArrangeSpacingMm,
   onDropSelectionToPlatform,
   onLiftSelection,
+  onResetRotationSelection,
+  onResetScaleSelection,
 }: PreparePanelStackProps) {
   // Invoked inline by Home (not as <JSX/>) so FloatingPanelStack can flatten these keyed panels as direct children for its layout-profile positioning. 'use no memo' keeps React Compiler from injecting a useMemoCache hook (the conditional inline call must stay hook-free).
   'use no memo';
@@ -238,7 +242,7 @@ export function PreparePanelStack({
 
             transformMgr.transformHook.setRotation(x, y, z);
           }}
-          onResetRotation={transformMgr.transformHook.resetRotation}
+          onResetRotation={onResetRotationSelection}
           onRotationComplete={handleRotationComplete}
           scale={transformMgr.transform.scale}
           onScaleChange={(x, y, z) => {
@@ -259,7 +263,7 @@ export function PreparePanelStack({
 
             transformMgr.transformHook.setScale(x, y, z);
           }}
-          onResetScale={transformMgr.transformHook.resetScale}
+          onResetScale={onResetScaleSelection}
           uniformScaling={uniformScaling}
           onUniformScalingChange={setUniformScaling}
           modelBBox={scene.geom.bbox}

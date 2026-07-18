@@ -162,5 +162,55 @@ export function useSelectionTransforms({
     if (requestDestructiveTransformSupportDeletionWithContinuation('Lift', apply)) apply();
   }, [buildSelectionSnapEntries, handleGizmoTransformGroupCommit, requestDestructiveTransformSupportDeletionWithContinuation, transformMgr.liftDistance]);
 
-  return { handleDropSelectionToPlatform, handleLiftSelection, applyPanelTransformToSelection };
+  // Reset Rotation / Reset Scale across the whole selection (absolute: identity
+  // rotation / unit scale). One-shot buttons with no separate active path, so
+  // every selected model (including active) goes in one group commit → one undo
+  // step. Destructive, like drop/lift, since reset invalidates supports (§4d).
+  const buildSelectionResetEntries = useCallback((kind: 'rotation' | 'scale'): GroupCommitEntry[] => {
+    const ids = scene.selectedModelIds.length > 0
+      ? scene.selectedModelIds
+      : (scene.activeModelId ? [scene.activeModelId] : []);
+
+    const entries: GroupCommitEntry[] = [];
+    for (const id of ids) {
+      const model = scene.models.find((m) => m.id === id);
+      if (!model) continue;
+      const before = model.transform;
+      const after: ModelTransform = kind === 'rotation'
+        ? { position: before.position.clone(), rotation: new THREE.Euler(0, 0, 0), scale: before.scale.clone() }
+        : { position: before.position.clone(), rotation: before.rotation.clone(), scale: new THREE.Vector3(1, 1, 1) };
+      entries.push({
+        modelId: id,
+        before: { position: before.position.clone(), rotation: before.rotation.clone(), scale: before.scale.clone() },
+        after,
+      });
+    }
+    return entries;
+  }, [scene]);
+
+  const handleResetRotationSelection = useCallback(() => {
+    const apply = () => {
+      const entries = buildSelectionResetEntries('rotation');
+      if (entries.length === 0) return;
+      handleGizmoTransformGroupCommit({ operation: 'rotate', entries });
+    };
+    if (requestDestructiveTransformSupportDeletionWithContinuation('Reset Rotation', apply)) apply();
+  }, [buildSelectionResetEntries, handleGizmoTransformGroupCommit, requestDestructiveTransformSupportDeletionWithContinuation]);
+
+  const handleResetScaleSelection = useCallback(() => {
+    const apply = () => {
+      const entries = buildSelectionResetEntries('scale');
+      if (entries.length === 0) return;
+      handleGizmoTransformGroupCommit({ operation: 'scale', entries });
+    };
+    if (requestDestructiveTransformSupportDeletionWithContinuation('Reset Scale', apply)) apply();
+  }, [buildSelectionResetEntries, handleGizmoTransformGroupCommit, requestDestructiveTransformSupportDeletionWithContinuation]);
+
+  return {
+    handleDropSelectionToPlatform,
+    handleLiftSelection,
+    applyPanelTransformToSelection,
+    handleResetRotationSelection,
+    handleResetScaleSelection,
+  };
 }

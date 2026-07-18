@@ -7979,6 +7979,8 @@ export default function Home() {
     handleDropSelectionToPlatform,
     handleLiftSelection,
     applyPanelTransformToSelection,
+    handleResetRotationSelection,
+    handleResetScaleSelection,
   } = useSelectionTransforms({
     scene,
     transformMgr,
@@ -9185,6 +9187,8 @@ export default function Home() {
               setArrangeSpacingMm: setArrangeSpacingMm,
               onDropSelectionToPlatform: handleDropSelectionToPlatform,
               onLiftSelection: handleLiftSelection,
+              onResetRotationSelection: handleResetRotationSelection,
+              onResetScaleSelection: handleResetScaleSelection,
             })}
           </>
         ) : scene.mode === 'analysis' ? (
