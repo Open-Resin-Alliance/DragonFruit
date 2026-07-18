@@ -7978,12 +7978,35 @@ export default function Home() {
   const {
     handleDropSelectionToPlatform,
     handleLiftSelection,
+    applyPanelTransformToSelection,
   } = useSelectionTransforms({
     scene,
     transformMgr,
     handleGizmoTransformGroupCommit,
     requestDestructiveTransformSupportDeletionWithContinuation,
   });
+
+  // Wrap the panel's commit so a scale change fans out to the whole selection.
+  // (Rotate fans out from handleRotationComplete, which fires first and clears
+  // the pending entry; position/move is handled separately.) See §4c.
+  const handlePanelTransformCommit = React.useCallback((frameDelay?: number) => {
+    const pending = pendingTransformHistoryRef.current;
+    const isScale = pending?.description?.startsWith('transform:scale') ?? false;
+    const activeBefore = pending
+      ? { position: pending.before.position.clone(), rotation: pending.before.rotation.clone(), scale: pending.before.scale.clone() }
+      : null;
+
+    scheduleCommitPendingTransformHistory(frameDelay);
+
+    if (isScale && activeBefore && scene.activeModelId && isFiniteTransform(transformMgr.transform)) {
+      const activeAfter: ModelTransform = {
+        position: transformMgr.transform.position.clone(),
+        rotation: transformMgr.transform.rotation.clone(),
+        scale: transformMgr.transform.scale.clone(),
+      };
+      applyPanelTransformToSelection('scale', activeBefore, activeAfter);
+    }
+  }, [applyPanelTransformToSelection, isFiniteTransform, scene.activeModelId, scheduleCommitPendingTransformHistory, transformMgr.transform]);
 
   const handleAutoLiftChange = React.useCallback((enabled: boolean) => {
     if (scene.activeModelId) {
@@ -8122,9 +8145,24 @@ export default function Home() {
       return;
     }
 
+    // Capture the active model's before/after BEFORE commit clears pending, so
+    // the same world-space rotation delta can fan out to the rest of the
+    // selection about each model's own center (§4c).
+    const pending = pendingTransformHistoryRef.current;
+    const activeBefore: ModelTransform | null = pending
+      ? { position: pending.before.position.clone(), rotation: pending.before.rotation.clone(), scale: pending.before.scale.clone() }
+      : null;
+    const activeAfter: ModelTransform | null = pending?.after
+      ? { position: pending.after.position.clone(), rotation: pending.after.rotation.clone(), scale: pending.after.scale.clone() }
+      : null;
+
     islands.clearScanData();
     applyPostRotateLift();
     commitPendingTransformHistory();
+
+    if (activeBefore && activeAfter) {
+      applyPanelTransformToSelection('rotate', activeBefore, activeAfter);
+    }
   };
 
   const handleCameraChange = React.useCallback(() => {
@@ -9137,7 +9175,7 @@ export default function Home() {
               requestDestructiveTransformSupportDeletion: requestDestructiveTransformSupportDeletion,
               handleRotationComplete: handleRotationComplete,
               handleAutoLiftChange: handleAutoLiftChange,
-              scheduleCommitPendingTransformHistory: scheduleCommitPendingTransformHistory,
+              scheduleCommitPendingTransformHistory: handlePanelTransformCommit,
               uniformScaling: uniformScaling,
               setUniformScaling: setUniformScaling,
               isApplyingHolePunch: isApplyingHolePunch,

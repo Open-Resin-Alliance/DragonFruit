@@ -89,6 +89,61 @@ export function useSelectionTransforms({
     return entries;
   }, [scene]);
 
+  // Fan a panel rotate/scale out to the rest of the selection (active model is
+  // committed by its own single-model path, so it is excluded here — issue #305).
+  //   rotate = RELATIVE: apply the active model's world-space rotation delta to
+  //            each other model about its OWN center (position unchanged).
+  //   scale  = ABSOLUTE: every other model gets the active model's new scale.
+  // Rotation convention: DragonFruit uses extrinsic/global XYZ
+  // (quaternionFromGlobalEuler = qz·qy·qx); the inverse round-trip is
+  // setFromQuaternion(q, 'ZYX') (intrinsic ZYX ≡ our extrinsic XYZ). Do NOT use 'XYZ'.
+  const applyPanelTransformToSelection = useCallback((
+    operation: 'rotate' | 'scale',
+    activeBefore: ModelTransform,
+    activeAfter: ModelTransform,
+  ) => {
+    const activeId = scene.activeModelId;
+    const ids = scene.selectedModelIds.filter((id) => id !== activeId);
+    if (ids.length === 0) return;
+
+    const qDelta = operation === 'rotate'
+      ? quaternionFromGlobalEuler(activeAfter.rotation)
+          .multiply(quaternionFromGlobalEuler(activeBefore.rotation).invert())
+      : null;
+
+    const entries: GroupCommitEntry[] = [];
+    for (const id of ids) {
+      const model = scene.models.find((m) => m.id === id);
+      if (!model) continue;
+      const before = model.transform;
+
+      let after: ModelTransform;
+      if (operation === 'rotate' && qDelta) {
+        const qNext = qDelta.clone().multiply(quaternionFromGlobalEuler(before.rotation));
+        after = {
+          position: before.position.clone(),
+          rotation: new THREE.Euler().setFromQuaternion(qNext, 'ZYX'),
+          scale: before.scale.clone(),
+        };
+      } else {
+        after = {
+          position: before.position.clone(),
+          rotation: before.rotation.clone(),
+          scale: activeAfter.scale.clone(),
+        };
+      }
+
+      entries.push({
+        modelId: id,
+        before: { position: before.position.clone(), rotation: before.rotation.clone(), scale: before.scale.clone() },
+        after,
+      });
+    }
+
+    if (entries.length === 0) return;
+    handleGizmoTransformGroupCommit({ operation, entries });
+  }, [scene, handleGizmoTransformGroupCommit]);
+
   const handleDropSelectionToPlatform = useCallback(() => {
     const apply = () => {
       const entries = buildSelectionSnapEntries(PLATFORM_SNAP_CLEARANCE_MM);
@@ -107,5 +162,5 @@ export function useSelectionTransforms({
     if (requestDestructiveTransformSupportDeletionWithContinuation('Lift', apply)) apply();
   }, [buildSelectionSnapEntries, handleGizmoTransformGroupCommit, requestDestructiveTransformSupportDeletionWithContinuation, transformMgr.liftDistance]);
 
-  return { handleDropSelectionToPlatform, handleLiftSelection };
+  return { handleDropSelectionToPlatform, handleLiftSelection, applyPanelTransformToSelection };
 }
