@@ -5,7 +5,7 @@ import { getSocketPosition } from '../../SupportPrimitives/ContactCone/contactCo
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getSettings } from '../../Settings';
 import { getJointDiameter } from '../../constants';
-import { isShaftBlocked, isCollisionFrustumBlocked } from '../../PlacementLogic/CollisionAvoidance';
+import { calculateSafeOffset, isShaftBlocked, isCollisionFrustumBlocked } from '../../PlacementLogic/CollisionAvoidance';
 import { clampConeAxisDeviationFromSurfaceNormal } from '../../PlacementLogic/ConeAxisPolicy';
 
 function uuid() {
@@ -22,6 +22,12 @@ export interface StickBuildInput {
     bPos: Vec3;
     bNormal: Vec3;
     mesh?: THREE.Mesh;
+    overrides?: {
+        shaftDiameterMm?: number;
+        tipContactDiameterMm?: number;
+        tipBodyDiameterMm?: number;
+        tipLengthMm?: number;
+    };
 }
 
 export interface StickBuildResult {
@@ -36,15 +42,15 @@ function toVec3(vector: THREE.Vector3): Vec3 {
 }
 
 export function buildStick(input: StickBuildInput): StickBuildResult {
-    const { modelId, aPos, aNormal, bPos, bNormal, mesh } = input;
+    const { modelId, aPos, aNormal, bPos, bNormal, mesh, overrides } = input;
 
     const settings = getSettings();
 
     const tipProfile: SupportTipProfile = {
         type: 'disk',
-        contactDiameterMm: settings.tip.contactDiameterMm,
-        bodyDiameterMm: settings.tip.bodyDiameterMm,
-        lengthMm: settings.tip.lengthMm,
+        contactDiameterMm: overrides?.tipContactDiameterMm ?? settings.tip.contactDiameterMm,
+        bodyDiameterMm: overrides?.tipBodyDiameterMm ?? settings.tip.bodyDiameterMm,
+        lengthMm: overrides?.tipLengthMm ?? settings.tip.lengthMm,
         penetrationMm: settings.tip.penetrationMm,
         diskThicknessMm: settings.tip.diskThicknessMm ?? 0.1,
         maxStandoffMm: settings.tip.maxStandoffMm ?? 1.5,
@@ -52,7 +58,7 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
     };
 
     // Stick rule: use regular support shaft diameter logic
-    const shaftDiameter = settings.shaft.diameterMm;
+    const shaftDiameter = overrides?.shaftDiameterMm ?? settings.shaft.diameterMm;
     const jointDiameter = getJointDiameter(shaftDiameter);
 
     const surfaceNormalA = new THREE.Vector3(aNormal.x, aNormal.y, aNormal.z);
@@ -124,6 +130,32 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
     );
     coneAxisB.set(finalClampedAxisB.x, finalClampedAxisB.y, finalClampedAxisB.z);
 
+    // On curved geometry a cone rooted at the default disk thickness often
+    // grazes the surface it sits on. Slide each cone out along its surface
+    // normal to the nearest clearing standoff (capped by maxStandoffMm),
+    // carried on the contact cone as diskLengthOverride — same rescue the
+    // trunk placement pipeline applies.
+    if (mesh) {
+        const contactRadius = tipProfile.contactDiameterMm / 2;
+        const bodyRadius = tipProfile.bodyDiameterMm / 2;
+        const maxStandoff = Math.max(tipProfile.maxStandoffMm ?? 1.5, diskThicknessA, diskThicknessB);
+        const frustum = { startRadius: contactRadius, endRadius: bodyRadius };
+
+        diskThicknessA = calculateSafeOffset(
+            aPos, toVec3(surfaceNormalA),
+            getSocketPosition(toVec3(coneStartA), toVec3(coneAxisA), tipProfile),
+            bodyRadius, mesh, diskThicknessA, maxStandoff, 0.2, frustum,
+        );
+        coneStartA.set(aPos.x, aPos.y, aPos.z).addScaledVector(surfaceNormalA, diskThicknessA);
+
+        diskThicknessB = calculateSafeOffset(
+            bPos, toVec3(surfaceNormalB),
+            getSocketPosition(toVec3(coneStartB), toVec3(coneAxisB), tipProfile),
+            bodyRadius, mesh, diskThicknessB, maxStandoff, 0.2, frustum,
+        );
+        coneStartB.set(bPos.x, bPos.y, bPos.z).addScaledVector(surfaceNormalB, diskThicknessB);
+    }
+
     const socketA = getSocketPosition(toVec3(coneStartA), toVec3(coneAxisA), tipProfile);
     const socketB = getSocketPosition(toVec3(coneStartB), toVec3(coneAxisB), tipProfile);
 
@@ -190,12 +222,15 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
         //    overhead when precomputed SDF grid is loaded)
         const segmentBlocked = isShaftBlocked(socketA, socketB, shaftRadius, mesh);
 
-        // 2. Check both contact cones as tapered frustums
+        // 2. Check both contact cones as tapered frustums. Like branch cones,
+        //    the check starts at the disk-offset cone start rather than the
+        //    surface point itself — a frustum rooted on the surface always
+        //    grazes the geometry it is seated on.
         const coneABlocked = isCollisionFrustumBlocked(
-            aPos, socketA, contactRadius, bodyRadius, mesh,
+            toVec3(coneStartA), socketA, contactRadius, bodyRadius, mesh,
         );
         const coneBBlocked = isCollisionFrustumBlocked(
-            bPos, socketB, contactRadius, bodyRadius, mesh,
+            toVec3(coneStartB), socketB, contactRadius, bodyRadius, mesh,
         );
 
         if (segmentBlocked || coneABlocked || coneBBlocked) {
