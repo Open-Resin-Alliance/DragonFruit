@@ -3891,7 +3891,7 @@ pub fn slice_and_rasterize_rle_blocks_v3(
 /// The rasterizer emits Z-perturbed grayscale RLE directly.  This function then
 /// applies the Aaron-style ordering while staying RLE/row-streamed:
 /// per-layer XY blur → bounded symmetric Z blur → LUT/remap → support merge.
-// DIAG386: monotonic max update on an atomic.
+// 3DAA Stats: monotonic max update on an atomic.
 fn atomic_max(cell: &AtomicUsize, val: usize) {
     let mut cur = cell.load(Ordering::Relaxed);
     while val > cur {
@@ -3902,7 +3902,7 @@ fn atomic_max(cell: &AtomicUsize, val: usize) {
     }
 }
 
-// DIAG386: process resident set size in MB from /proc/self/statm (field 2).
+// 3DAA Stats: process resident set size in MB from /proc/self/statm (field 2).
 fn diag_read_rss_mb() -> f64 {
     std::fs::read_to_string("/proc/self/statm")
         .ok()
@@ -4072,7 +4072,7 @@ impl PostTaskGate {
         drop(s);
         // Log every real cap change so a future debugger can see when RAM
         // pressure resized the in-flight queue and by how much (issue #386).
-        eprintln!("[386] post-task in-flight cap {old_max} -> {new_max}");
+        eprintln!("[In-flight Cap] post-task in-flight cap {old_max} -> {new_max}");
         if grew {
             self.cv.notify_all();
         }
@@ -4194,9 +4194,9 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     let post_max_inflight = cap_override.map(|o| o.max(1)).unwrap_or(default_cap);
     let post_gate = Arc::new(PostTaskGate::new(post_max_inflight));
     // #386 adaptive: worst model-layer window bytes observed so far (production,
-    // survives DIAG386 removal). Drives the RAM-aware cap in `dispatch_ready`.
+    // survives 3DAA Stats removal). Drives the RAM-aware cap in `dispatch_ready`.
     let post_worst_layer_bytes = Arc::new(AtomicUsize::new(0));
-    // DIAG386: live accounting of in-flight post-task memory. Each dispatched
+    // 3DAA Stats: live accounting of in-flight post-task memory. Each dispatched
     // task deep-clones its z-blur window (history+future+model) as RLE runs;
     // this measures how much that costs and whether it's the OOM driver.
     let diag_inflight_tasks = Arc::new(AtomicUsize::new(0));
@@ -4205,7 +4205,7 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     let diag_max_layer_run_bytes = Arc::new(AtomicUsize::new(0));
     let diag_max_out_run_bytes = Arc::new(AtomicUsize::new(0));
     eprintln!(
-        "[DIAG386] width={width} height={height} z_blur_radius={z_blur_radius} \
+        "[3DAA Stats] width={width} height={height} z_blur_radius={z_blur_radius} \
          blur_radius={blur_radius} post_worker_count={post_worker_count} \
          post_buffer={post_buffer} max_inflight={post_max_inflight} \
          default_cap={default_cap} gate_floor={gate_floor} \
@@ -4226,7 +4226,7 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
             let post_gate_w = Arc::clone(&post_gate);
             // #386 adaptive: worst-layer tracker for the RAM-aware cap.
             let post_worst_layer_bytes_w = Arc::clone(&post_worst_layer_bytes);
-            // DIAG386: counters moved into the post_worker closure.
+            // 3DAA Stats: counters moved into the post_worker closure.
             let diag_inflight_tasks_w = Arc::clone(&diag_inflight_tasks);
             let diag_inflight_bytes_w = Arc::clone(&diag_inflight_bytes);
             let diag_peak_inflight_bytes_w = Arc::clone(&diag_peak_inflight_bytes);
@@ -4267,7 +4267,7 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                             future: pending.iter().map(|p| Arc::clone(&p.model)).collect(),
                         };
 
-                        // DIAG386: LOGICAL z-blur window bytes this task references.
+                        // 3DAA Stats: LOGICAL z-blur window bytes this task references.
                         // With the Arc window these are SHARED across tasks, so this
                         // over-counts true resident memory — trust RSS for the real
                         // figure; this still shows the logical window is bounded by K.
@@ -4340,7 +4340,7 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                                 &support_merge_ns_worker,
                             );
 
-                            // DIAG386: post-blur/dither output run-vector size, and
+                            // 3DAA Stats: post-blur/dither output run-vector size, and
                             // release this task's in-flight window accounting.
                             let rr = std::mem::size_of::<crate::rle::RleRun>();
                             if let Some(ref out_runs) = output.runs {
@@ -4433,11 +4433,11 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                         on_rle_layer(output.layer_idx, runs)?;
                     }
                     emitted_progress_layers = emitted_progress_layers.saturating_add(1);
-                    // DIAG386: periodic memory attribution (every 32 emitted layers).
+                    // 3DAA Stats: periodic memory attribution (every 32 emitted layers).
                     if emitted_progress_layers % 32 == 0 {
                         let mb = 1_048_576.0;
                         eprintln!(
-                            "[DIAG386] emitted={} RSS={:.0}MB | inflight_tasks={} \
+                            "[3DAA Stats] emitted={} RSS={:.0}MB | inflight_tasks={} \
                              inflight_window={:.0}MB peak_window={:.0}MB | \
                              max_layer_runs={:.0}MB max_out_runs={:.0}MB",
                             emitted_progress_layers,
