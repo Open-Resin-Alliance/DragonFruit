@@ -189,7 +189,9 @@ struct PerturbRleModelLayer {
 #[derive(Clone)]
 struct PendingPerturbRleLayer {
     layer_idx: u32,
-    model: PerturbRleModelLayer,
+    // #386 fix (Arc window): shared so the z-blur window is not deep-cloned into
+    // every dispatched post-task. Read-only downstream in the blur.
+    model: Arc<PerturbRleModelLayer>,
     support_runs: Option<Vec<crate::rle::RleRun>>,
 }
 
@@ -210,10 +212,13 @@ struct PerturbRlePostOutput {
 
 struct PerturbRlePostReadyTask {
     layer_idx: u32,
-    model: PerturbRleModelLayer,
+    // #386 fix (Arc window): the center layer plus its Z-blur neighbor window are
+    // shared (Arc) instead of deep-cloned. `future` carries only the model layers
+    // (the blur reads model runs/bounds only), so it no longer clones support runs.
+    model: Arc<PerturbRleModelLayer>,
     support_runs: Option<Vec<crate::rle::RleRun>>,
-    history: Vec<PerturbRleModelLayer>,
-    future: Vec<PendingPerturbRleLayer>,
+    history: Vec<Arc<PerturbRleModelLayer>>,
+    future: Vec<Arc<PerturbRleModelLayer>>,
 }
 
 impl<'a> RleRowDecoder<'a> {
@@ -352,8 +357,8 @@ fn merge_nonzero_bounds(current: &mut RleNonzeroBounds, next: RleNonzeroBounds) 
 
 fn apply_z_weighted_blur_to_rle_layer(
     center: &PerturbRleModelLayer,
-    history: &VecDeque<PerturbRleModelLayer>,
-    future: &VecDeque<PendingPerturbRleLayer>,
+    history: &[Arc<PerturbRleModelLayer>],
+    future: &[Arc<PerturbRleModelLayer>],
     radius: usize,
     weights: &[u32],
     width: usize,
@@ -375,11 +380,7 @@ fn apply_z_weighted_blur_to_rle_layer(
             sources.push((weight, prior.runs.as_slice(), prior.bounds));
         }
         if let Some(next_layer) = future.get(dist - 1) {
-            sources.push((
-                weight,
-                next_layer.model.runs.as_slice(),
-                next_layer.model.bounds,
-            ));
+            sources.push((weight, next_layer.runs.as_slice(), next_layer.bounds));
         }
     }
 
@@ -465,14 +466,12 @@ fn finalize_perturb_rle_post_layer(
     post_blur_ns: &AtomicU64,
     support_merge_ns: &AtomicU64,
 ) -> PerturbRlePostOutput {
-    let history: VecDeque<PerturbRleModelLayer> = task.history.into();
-    let future: VecDeque<PendingPerturbRleLayer> = task.future.into();
-
+    // #386 fix (Arc window): neighbors are shared Arc slices; no per-task deep copy.
     let z_blur_start = std::time::Instant::now();
     let mut final_runs = apply_z_weighted_blur_to_rle_layer(
         &task.model,
-        &history,
-        &future,
+        &task.history,
+        &task.future,
         z_blur_radius,
         z_blur_weights,
         width,
@@ -4078,14 +4077,14 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
             let diag_max_out_run_bytes_w = Arc::clone(&diag_max_out_run_bytes);
 
             let post_worker = scope.spawn(move || -> Result<(), SlicerV3Error> {
-                let mut history: VecDeque<PerturbRleModelLayer> =
+                let mut history: VecDeque<Arc<PerturbRleModelLayer>> =
                     VecDeque::with_capacity(z_blur_radius.saturating_add(1));
                 let mut pending: VecDeque<PendingPerturbRleLayer> =
                     VecDeque::with_capacity(z_blur_radius.saturating_add(2));
 
                 let dispatch_ready =
                     |pending: &mut VecDeque<PendingPerturbRleLayer>,
-                     history: &mut VecDeque<PerturbRleModelLayer>,
+                     history: &mut VecDeque<Arc<PerturbRleModelLayer>>,
                      scope: &rayon::Scope<'_>| {
                         // #386 fix: block here until an in-flight slot frees. This
                         // is the single dispatch thread, so blocking it backpressures
@@ -4104,13 +4103,17 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
 
                         let task = PerturbRlePostReadyTask {
                             layer_idx,
-                            model: model.clone(),
+                            // #386 fix (Arc window): refcount bumps, not deep copies.
+                            model: Arc::clone(&model),
                             support_runs,
                             history: history.iter().cloned().collect(),
-                            future: pending.iter().cloned().collect(),
+                            future: pending.iter().map(|p| Arc::clone(&p.model)).collect(),
                         };
 
-                        // DIAG386: bytes this task's cloned z-blur window holds.
+                        // DIAG386: LOGICAL z-blur window bytes this task references.
+                        // With the Arc window these are SHARED across tasks, so this
+                        // over-counts true resident memory — trust RSS for the real
+                        // figure; this still shows the logical window is bounded by K.
                         let rr = std::mem::size_of::<crate::rle::RleRun>();
                         let model_run_bytes = task.model.runs.len() * rr;
                         let task_bytes = model_run_bytes
@@ -4118,7 +4121,7 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                             + task
                                 .future
                                 .iter()
-                                .map(|l| l.model.runs.len() * rr)
+                                .map(|l| l.runs.len() * rr)
                                 .sum::<usize>()
                             + task
                                 .support_runs
@@ -4207,10 +4210,12 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
 
                         pending.push_back(PendingPerturbRleLayer {
                             layer_idx: input.layer_idx,
-                            model: PerturbRleModelLayer {
+                            // #386 fix (Arc window): one allocation, shared into the
+                            // window and every task that references this layer.
+                            model: Arc::new(PerturbRleModelLayer {
                                 runs: model_runs,
                                 bounds: model_bounds,
-                            },
+                            }),
                             support_runs: input.support_runs,
                         });
                         while pending.len() > z_blur_radius {
