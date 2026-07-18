@@ -156,6 +156,37 @@ but worth knowing. Folding the bump into the first real feature commit of the
 new cycle avoids the empty release, at the cost of a less clean "here's where
 0.3.x began" marker in history.
 
+## Issue tracking across the "train" (`label-dev-fixes` in `release.yml`)
+
+GitHub only auto-closes an issue for a commit's closing keyword (`Closes #X`,
+`Fixes #X`, `Resolves #X`, ...) when that commit lands on the repo's
+**default branch**. `dev` isn't the default branch (`main` is), so those
+commits would otherwise never mark anything as done — the issue would sit
+open even after the fix has shipped in a dev build.
+
+To compensate, every time a **final** version (no `-rc`/`-beta`/etc. suffix)
+is pushed on `dev`, the `label-dev-fixes` job in `release.yml`:
+
+1. Finds the previous `v*` tag reachable in `dev`'s history (i.e. the last
+   dev release, of any kind).
+2. Scans every commit message in that range for GitHub's closing-keyword
+   grammar (`close(s/d)`, `fix(es/ed)`, `resolve(s/d)` followed by one or
+   more `#NNN`, comma/`and`-separated).
+3. Applies the `fixed in dev` label to each referenced issue — it does
+   **not** close it, since the fix hasn't reached the stable line yet — and
+   posts a comment pointing at the dev build (with the usual "no guarantees"
+   caveat) and naming the tentative next stable version (current dev MINOR
+   + 1, patch `.0`; a guess, not a promise, since promotion timing isn't
+   fixed). If the issue is already labeled, the job skips it — no repeat
+   comments across multiple final dev releases.
+
+This mirrors the Mozilla-style "train" model: an issue accumulates the
+`fixed in dev` label as soon as its fix rides a dev release, and stays open
+(for tracking "is this in `main` yet") until whoever promotes `dev` → `main`
+closes it as part of that release, or closes it by hand. RC builds on `dev`
+or `main` don't trigger this job — only a final version bump does, so labels
+land once per train stop rather than once per commit.
+
 ## Branch preview builds (`build-nightly.yml`)
 
 We are dropping the `nightly` codeword in favor of `preview` or
