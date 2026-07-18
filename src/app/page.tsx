@@ -179,7 +179,7 @@ import {
   getSavedUvToolsSettings,
   resolveUvToolsExecutablePath,
 } from '@/components/settings/uvToolsPreferences';
-import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, toggleSegmentCurve, transformSupportsForModel, updateTrunk, updateBranch, updateTwig, updateStick } from '@/supports/state';
+import { addRoot, addTrunk, beginSupportStateBatch, endSupportStateBatch, subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, toggleSegmentCurve, transformSupportsForModel, updateTrunk, updateBranch, updateTwig, updateStick } from '@/supports/state';
 import {
   getKickstandSnapshot,
   subscribeToKickstandStore,
@@ -198,6 +198,13 @@ import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
 import { getSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
 import { buildProjectedCrossSectionZRange } from '@/features/slicing/rasterLayerZipExport';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
+import { clearSDFCacheForMesh } from '@/supports/PlacementLogic/Pathfinding';
+import {
+  createIslandSupportMesh,
+  disposeIslandSupportMesh,
+} from '@/supports/autoSupport/islandSupportSurface';
+import { runAutoSupportPlan } from '@/supports/autoSupport/autoSupportRunner';
+import type { AutoSupportPlanPreview, AutoSupportPreset, AutoSupportProgress } from '@/supports/autoSupport/types';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
 import type { ModelTransform, TransformMode } from '@/hooks/useModelTransform';
@@ -12295,6 +12302,84 @@ export default function Home() {
     activeTab: scene.mode,
   });
 
+  const [autoSupportPreview, setAutoSupportPreview] = React.useState<AutoSupportPlanPreview | null>(null);
+  const autoSupportAbortRef = React.useRef<AbortController | null>(null);
+
+  const handlePlanAutoSupports = React.useCallback(async (
+    preset: AutoSupportPreset,
+    onProgress: (progress: AutoSupportProgress) => void,
+  ): Promise<AutoSupportPlanPreview | null> => {
+    const geom = scene.geom;
+    const modelId = scene.activeModel?.id;
+    if (!geom || !modelId) return null;
+
+    setAutoSupportPreview(null);
+    autoSupportAbortRef.current?.abort();
+    const abortController = new AbortController();
+    autoSupportAbortRef.current = abortController;
+
+    let scanData = islands.scanData;
+    let scanBBox = islands.scanBBox;
+    if (!scanData || !scanBBox) {
+      onProgress({ phase: 'scan', completed: 0, total: 1 });
+      const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+      const scanned = isTauriRuntime
+        ? await islands.onRunNativeIslandScan()
+        : await islands.onRunIslandScan();
+      if (!scanned || abortController.signal.aborted) return null;
+      scanData = scanned.scanData;
+      scanBBox = scanned.scanBBox;
+      onProgress({ phase: 'scan', completed: 1, total: 1 });
+    }
+
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    const mesh = createIslandSupportMesh(geom, transformMgr.transform, modelId);
+    try {
+      const preview = await runAutoSupportPlan({
+        scan: scanData,
+        scanMinZ: scanBBox.min.z,
+        layerHeightMm: slicing.layerHeightMm,
+        preset,
+        modelId,
+        mesh,
+        existingTipPoints: supportTips.map((tip) => ({ x: tip.x, y: tip.y, z: tip.z })),
+        signal: abortController.signal,
+        onProgress,
+      });
+      setAutoSupportPreview(preview.supports.length > 0 ? preview : null);
+      return preview;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return null;
+      throw error;
+    } finally {
+      clearSDFCacheForMesh(mesh.uuid);
+      disposeIslandSupportMesh(mesh);
+      if (autoSupportAbortRef.current === abortController) autoSupportAbortRef.current = null;
+    }
+  }, [islands, scene.activeModel?.id, scene.geom, slicing.layerHeightMm, supportTips, transformMgr.transform]);
+
+  const handleAbortAutoSupportRun = React.useCallback(() => {
+    autoSupportAbortRef.current?.abort();
+  }, []);
+
+  const handleAcceptAutoSupports = React.useCallback(() => {
+    if (!autoSupportPreview || autoSupportPreview.supports.length === 0) return;
+    const before = captureSupportEditSnapshot();
+    beginSupportStateBatch();
+    try {
+      for (const support of autoSupportPreview.supports) {
+        addRoot(support.root);
+        addTrunk(support.trunk);
+      }
+    } finally {
+      endSupportStateBatch();
+    }
+    pushSupportEditHistory('Generate auto supports', before, captureSupportEditSnapshot());
+    setAutoSupportPreview(null);
+  }, [autoSupportPreview]);
+
+  const handleCancelAutoSupports = React.useCallback(() => setAutoSupportPreview(null), []);
+
   // 5. Supports
   const supports = useSupportInteractionManager({ mode: scene.mode });
 
@@ -19069,6 +19154,11 @@ export default function Home() {
               islands={islandsPoc}
               hasGeometry={!!scene.geom}
               bottomClearancePx={modelStatsBottomClearancePx}
+              autoSupportPreview={autoSupportPreview}
+              onPlanAutoSupports={handlePlanAutoSupports}
+              onAbortAutoSupportRun={handleAbortAutoSupportRun}
+              onAcceptAutoSupports={handleAcceptAutoSupports}
+              onCancelAutoSupports={handleCancelAutoSupports}
             />
           </>
         ) : scene.mode === 'printing' ? (
@@ -19496,6 +19586,7 @@ export default function Home() {
             onActiveModelChange={handleSceneModelSelection}
             onMarqueeSelectionChange={handleSceneMarqueeSelection}
             trunkPlacementPreview={supports.trunkPlacementV2.previewData}
+            autoSupportPreviews={autoSupportPreview?.supports.map((support) => support.supportData) ?? []}
             branchPlacementPreview={supports.branchPlacement.previewData}
             leafPlacementPreview={supports.leafPlacement.previewData}
             bracePlacementPreview={supports.bracePreview}

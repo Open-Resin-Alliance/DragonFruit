@@ -81,6 +81,7 @@ nav:
       - Complex Plugin Contributing: dev/plugins-complex-contributing.md
       - Support System: dev/support-system.md
       - Support Pathfinding V3: dev/support-pathfinding-v3.md
+      - Auto-Support Planning Handoff: dev/auto-support-planning-handoff.md
       - Branch Supports: dev/branch-supports.md
       - Grid and Branching: dev/grid-and-branching.md
       - Raft Geometry: dev/raft-geometry.md

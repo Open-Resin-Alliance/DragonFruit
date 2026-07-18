@@ -80,6 +80,21 @@ function toRleLabels(native: NativeRleLabels): RleLabels {
   };
 }
 
+function labelsToMask(labels: RleLabels): RleMask {
+  return {
+    rows: labels.rows.map((row) => {
+      const spans = new Int32Array((row.length / 3) * 2);
+      for (let sourceIndex = 0, targetIndex = 0; sourceIndex < row.length; sourceIndex += 3, targetIndex += 2) {
+        spans[targetIndex] = row[sourceIndex];
+        spans[targetIndex + 1] = row[sourceIndex + 1];
+      }
+      return spans;
+    }),
+    width: labels.width,
+    height: labels.height,
+  };
+}
+
 function toIsland(native: NativeIsland): Island {
   const perLayerAreaMm2 = new Map<number, number>();
   for (const [k, v] of Object.entries(native.perLayerAreaMm2)) {
@@ -183,7 +198,7 @@ export async function runIslandScanNative(
 
     // Build per-layer results (overlay painter reads islandLabels from layers[])
     const layers: ScanLayerResult[] = islandLabelsPerLayer.map((labels) => ({
-      islandMaskRle: { rows: [], width: grid.width, height: grid.height } as RleMask,
+      islandMaskRle: labelsToMask(labels),
       islandCount: 0,
       islandLabels: labels,
     }));

@@ -92,9 +92,9 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
   }, [geom, transform]);
 
   const onRunIslandScan = useCallback(async () => {
-    if (!geom) return;
+    if (!geom) return null;
     const transformedGeom = prepareTransformedGeom();
-    if (!transformedGeom) return;
+    if (!transformedGeom) return null;
 
     setScanning(true);
     const transformedBBox = transformedGeom.boundingBox!;
@@ -118,6 +118,7 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
         (done, total) => setScanProgress({ done, total })
       );
       setScanData(res);
+      return { scanData: res, scanBBox: transformedBBox };
     } finally {
       setScanning(false);
     }
@@ -159,9 +160,9 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
   }, [geom, prepareTransformedGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minIslandAreaMm2, minOverlapPx, overlapNeighborhoodPx, useSurfaceContiguity]);
 
   const onRunNativeIslandScan = useCallback(async () => {
-    if (!geom) return;
+    if (!geom) return null;
     const transformedGeom = prepareTransformedGeom();
-    if (!transformedGeom) return;
+    if (!transformedGeom) return null;
 
     setScanning(true);
     const transformedBBox = transformedGeom.boundingBox!;
@@ -188,19 +189,20 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
       const endTime = performance.now();
       console.log(`Native Island Scan took ${(endTime - startTime).toFixed(2)}ms`);
       setScanData(res);
+      return { scanData: res, scanBBox: transformedBBox };
     } finally {
       setScanning(false);
     }
   }, [geom, prepareTransformedGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minIslandAreaMm2, minOverlapPx, overlapNeighborhoodPx]);
 
   // Compute markers
-  const islandMarkers = useMemo<IslandMarker[]>(() => {
+  const islandMarkers = useMemo<Array<IslandMarker & { type: number; islandId: number }>>(() => {
     if (!scanData || !scanBBox) return [];
     const raw = computeIslandMarkers(scanData, scanBBox, layerHeightMm, overlayTaper);
     return raw.map(m => {
       const area = m.pixelCount * pxMm * pxMm;
       const radius = area > 0 ? Math.max(0.1, Math.sqrt(area / Math.PI)) : 0.1;
-      return { ...m, radius, type: 0, islandId: m.id } as any;
+      return { ...m, radius, type: 0, islandId: m.id };
     });
   }, [scanData, scanBBox, layerHeightMm, overlayTaper, pxMm]);
 
