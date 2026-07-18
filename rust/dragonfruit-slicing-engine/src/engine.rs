@@ -3892,6 +3892,63 @@ pub fn slice_and_rasterize_rle_blocks_v3(
 /// The rasterizer emits Z-perturbed grayscale RLE directly.  This function then
 /// applies the Aaron-style ordering while staying RLE/row-streamed:
 /// per-layer XY blur → bounded symmetric Z blur → LUT/remap → support merge.
+// DIAG386: monotonic max update on an atomic.
+fn atomic_max(cell: &AtomicUsize, val: usize) {
+    let mut cur = cell.load(Ordering::Relaxed);
+    while val > cur {
+        match cell.compare_exchange_weak(cur, val, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(prev) => cur = prev,
+        }
+    }
+}
+
+// DIAG386: process resident set size in MB from /proc/self/statm (field 2).
+fn diag_read_rss_mb() -> f64 {
+    std::fs::read_to_string("/proc/self/statm")
+        .ok()
+        .and_then(|s| s.split_whitespace().nth(1).map(|v| v.to_string()))
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|pages| (pages * 4096) as f64 / 1_048_576.0)
+        .unwrap_or(0.0)
+}
+
+/// Counting semaphore bounding the number of outstanding (dispatched-but-unfinished)
+/// perturbation-3DAA post/z-blur tasks. Each outstanding task holds a `(2·radius+1)`
+/// layer RLE window, so an unbounded spawn count is the #386 OOM driver. Acquiring
+/// here blocks the single `post_worker` dispatch thread, which propagates backpressure
+/// through `post_rx`/`post_tx` up to the rasterizer (issue #386).
+struct PostTaskGate {
+    slots: std::sync::Mutex<usize>,
+    cv: std::sync::Condvar,
+    max: usize,
+}
+
+impl PostTaskGate {
+    fn new(max: usize) -> Self {
+        Self {
+            slots: std::sync::Mutex::new(0),
+            cv: std::sync::Condvar::new(),
+            max: max.max(1),
+        }
+    }
+
+    fn acquire(&self) {
+        let mut n = self.slots.lock().unwrap();
+        while *n >= self.max {
+            n = self.cv.wait(n).unwrap();
+        }
+        *n += 1;
+    }
+
+    fn release(&self) {
+        let mut n = self.slots.lock().unwrap();
+        *n = n.saturating_sub(1);
+        drop(n);
+        self.cv.notify_one();
+    }
+}
+
 pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     job: &SliceJobV3,
     compute_area_stats: bool,
@@ -3981,6 +4038,29 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
         .saturating_mul(2)
         .saturating_add(post_worker_count.saturating_mul(2))
         .clamp(4, 128);
+    // #386 fix: bound outstanding post/z-blur tasks so their per-task RLE window
+    // clones can't accumulate without limit. Sized >= post_worker_count so the
+    // post pool stays fully fed (all cores on z-blur) while capping memory.
+    // Override with DF_3DAA_POST_MAX_INFLIGHT.
+    let post_max_inflight = env_override_usize("DF_3DAA_POST_MAX_INFLIGHT")
+        .unwrap_or_else(|| post_worker_count.saturating_add(z_blur_radius.saturating_mul(2)))
+        .max(post_worker_count.max(1));
+    let post_gate = Arc::new(PostTaskGate::new(post_max_inflight));
+    // DIAG386: live accounting of in-flight post-task memory. Each dispatched
+    // task deep-clones its z-blur window (history+future+model) as RLE runs;
+    // this measures how much that costs and whether it's the OOM driver.
+    let diag_inflight_tasks = Arc::new(AtomicUsize::new(0));
+    let diag_inflight_bytes = Arc::new(AtomicUsize::new(0));
+    let diag_peak_inflight_bytes = Arc::new(AtomicUsize::new(0));
+    let diag_max_layer_run_bytes = Arc::new(AtomicUsize::new(0));
+    let diag_max_out_run_bytes = Arc::new(AtomicUsize::new(0));
+    eprintln!(
+        "[DIAG386] width={width} height={height} z_blur_radius={z_blur_radius} \
+         blur_radius={blur_radius} post_worker_count={post_worker_count} \
+         post_buffer={post_buffer} max_inflight={post_max_inflight} dither={} run_bytes={}",
+        dither_palette.is_some(),
+        std::mem::size_of::<crate::rle::RleRun>(),
+    );
     let (rendered_layers, layer_area_stats, mut perf) = std::thread::scope(
         |scope| -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
             let (post_tx, post_rx) = mpsc::sync_channel::<PerturbRlePostInput>(post_buffer);
@@ -3988,6 +4068,14 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                 mpsc::sync_channel::<PerturbRlePostOutput>(post_buffer);
             let post_blur_ns_worker = Arc::clone(&post_blur_ns_accum);
             let support_merge_ns_worker = Arc::clone(&support_merge_ns_accum);
+            // #386 fix: gate moved into the post_worker closure.
+            let post_gate_w = Arc::clone(&post_gate);
+            // DIAG386: counters moved into the post_worker closure.
+            let diag_inflight_tasks_w = Arc::clone(&diag_inflight_tasks);
+            let diag_inflight_bytes_w = Arc::clone(&diag_inflight_bytes);
+            let diag_peak_inflight_bytes_w = Arc::clone(&diag_peak_inflight_bytes);
+            let diag_max_layer_run_bytes_w = Arc::clone(&diag_max_layer_run_bytes);
+            let diag_max_out_run_bytes_w = Arc::clone(&diag_max_out_run_bytes);
 
             let post_worker = scope.spawn(move || -> Result<(), SlicerV3Error> {
                 let mut history: VecDeque<PerturbRleModelLayer> =
@@ -3999,6 +4087,13 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                     |pending: &mut VecDeque<PendingPerturbRleLayer>,
                      history: &mut VecDeque<PerturbRleModelLayer>,
                      scope: &rayon::Scope<'_>| {
+                        // #386 fix: block here until an in-flight slot frees. This
+                        // is the single dispatch thread, so blocking it backpressures
+                        // post_rx -> post_tx -> the rasterizer. Acquire before the
+                        // window clone below so the clone only happens with a slot.
+                        post_gate_w.acquire();
+                        let post_gate_t = Arc::clone(&post_gate_w);
+
                         let PendingPerturbRleLayer {
                             layer_idx,
                             model,
@@ -4014,6 +4109,30 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                             history: history.iter().cloned().collect(),
                             future: pending.iter().cloned().collect(),
                         };
+
+                        // DIAG386: bytes this task's cloned z-blur window holds.
+                        let rr = std::mem::size_of::<crate::rle::RleRun>();
+                        let model_run_bytes = task.model.runs.len() * rr;
+                        let task_bytes = model_run_bytes
+                            + task.history.iter().map(|l| l.runs.len() * rr).sum::<usize>()
+                            + task
+                                .future
+                                .iter()
+                                .map(|l| l.model.runs.len() * rr)
+                                .sum::<usize>()
+                            + task
+                                .support_runs
+                                .as_ref()
+                                .map(|r| r.len() * rr)
+                                .unwrap_or(0);
+                        atomic_max(&diag_max_layer_run_bytes_w, model_run_bytes);
+                        let now = diag_inflight_bytes_w.fetch_add(task_bytes, Ordering::Relaxed)
+                            + task_bytes;
+                        diag_inflight_tasks_w.fetch_add(1, Ordering::Relaxed);
+                        atomic_max(&diag_peak_inflight_bytes_w, now);
+                        let diag_inflight_tasks_t = Arc::clone(&diag_inflight_tasks_w);
+                        let diag_inflight_bytes_t = Arc::clone(&diag_inflight_bytes_w);
+                        let diag_max_out_run_bytes_t = Arc::clone(&diag_max_out_run_bytes_w);
 
                         history.push_back(model);
                         while history.len() > z_blur_radius {
@@ -4039,6 +4158,18 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                                 &post_blur_ns_worker,
                                 &support_merge_ns_worker,
                             );
+
+                            // DIAG386: post-blur/dither output run-vector size, and
+                            // release this task's in-flight window accounting.
+                            let rr = std::mem::size_of::<crate::rle::RleRun>();
+                            if let Some(ref out_runs) = output.runs {
+                                atomic_max(&diag_max_out_run_bytes_t, out_runs.len() * rr);
+                            }
+                            diag_inflight_bytes_t.fetch_sub(task_bytes, Ordering::Relaxed);
+                            diag_inflight_tasks_t.fetch_sub(1, Ordering::Relaxed);
+                            // #386 fix: free the in-flight slot. The window (the big
+                            // memory) was already dropped when finalize consumed `task`.
+                            post_gate_t.release();
 
                             let mut encoded_bytes = None;
                             let runs = output.runs.take().expect("runs must exist");
@@ -4119,6 +4250,22 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                         on_rle_layer(output.layer_idx, runs)?;
                     }
                     emitted_progress_layers = emitted_progress_layers.saturating_add(1);
+                    // DIAG386: periodic memory attribution (every 32 emitted layers).
+                    if emitted_progress_layers % 32 == 0 {
+                        let mb = 1_048_576.0;
+                        eprintln!(
+                            "[DIAG386] emitted={} RSS={:.0}MB | inflight_tasks={} \
+                             inflight_window={:.0}MB peak_window={:.0}MB | \
+                             max_layer_runs={:.0}MB max_out_runs={:.0}MB",
+                            emitted_progress_layers,
+                            diag_read_rss_mb(),
+                            diag_inflight_tasks.load(Ordering::Relaxed),
+                            diag_inflight_bytes.load(Ordering::Relaxed) as f64 / mb,
+                            diag_peak_inflight_bytes.load(Ordering::Relaxed) as f64 / mb,
+                            diag_max_layer_run_bytes.load(Ordering::Relaxed) as f64 / mb,
+                            diag_max_out_run_bytes.load(Ordering::Relaxed) as f64 / mb,
+                        );
+                    }
                     if let Some(cb) = on_progress.as_ref() {
                         cb(SliceProgressUpdateV3 {
                             done: emitted_progress_layers.min(job.total_layers),
