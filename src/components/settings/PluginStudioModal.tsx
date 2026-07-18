@@ -332,14 +332,18 @@ function buildPrinterPresetSplitFiles(printerPresets: PrinterPresetDraft[]): Pri
   if (printerPresets.length === 0) return [];
 
   const grouped = new Map<string, PrinterPresetDraft[]>();
+  const familyOrder = new Map<string, number>();
   printerPresets.forEach((preset) => {
     const family = preset.family.trim() || preset.manufacturer.trim() || 'ungrouped';
-    if (!grouped.has(family)) grouped.set(family, []);
+    if (!grouped.has(family)) {
+      grouped.set(family, []);
+      familyOrder.set(family, familyOrder.size);
+    }
     grouped.get(family)?.push(preset);
   });
 
   return Array.from(grouped.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
+    .sort(([a], [b]) => (familyOrder.get(a) ?? 999) - (familyOrder.get(b) ?? 999))
     .map(([family, members]) => {
       const relativePath = `printers/${slugifyPathSegment(family)}-series.json`;
       const orderedMembers = [...members].sort((a, b) => {
@@ -1986,9 +1990,13 @@ function StepPrinters({ presets, onChange }: StepPrintersProps) {
 
   const groupedPresets = React.useMemo(() => {
     const groups = new Map<string, { index: number; preset: PrinterPresetDraft }[]>();
+    const familyOrder = new Map<string, number>();
     presets.forEach((preset, index) => {
       const family = preset.family?.trim() || preset.manufacturer?.trim() || 'Ungrouped';
-      if (!groups.has(family)) groups.set(family, []);
+      if (!groups.has(family)) {
+        groups.set(family, []);
+        familyOrder.set(family, familyOrder.size);
+      }
       groups.get(family)?.push({ index, preset });
     });
 
@@ -2001,7 +2009,7 @@ function StepPrinters({ presets, onChange }: StepPrintersProps) {
           return aLabel.localeCompare(bLabel);
         }),
       }))
-      .sort((a, b) => a.family.localeCompare(b.family));
+      .sort((a, b) => (familyOrder.get(a.family) ?? 999) - (familyOrder.get(b.family) ?? 999));
   }, [presets]);
 
   const selectedPreset = clampedIndex >= 0 ? presets[clampedIndex] : null;

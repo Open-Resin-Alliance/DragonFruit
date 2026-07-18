@@ -277,6 +277,7 @@ import {
   subscribeToPrinterReachability,
 } from '@/features/network/printerReachabilityStore';
 import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
+import { resolveOutputFileExtension } from '@/features/slicing/formats/registry';
 import {
   cleanupStalePrintTempArtifacts,
   deletePrintTempArtifactPath,
@@ -3538,12 +3539,12 @@ export default function Home() {
       .replace(/\.[^.]+$/, '')
       .replace(/[<>:"/\\|?*]+/g, '_')
       .replace(/\s+/g, '_');
-    const outputFormat = (activePrinterProfile?.display.outputFormat ?? '').trim();
-    const ext = outputFormat.length > 0
-      ? (outputFormat.startsWith('.') ? outputFormat : `.${outputFormat}`)
-      : '.print';
-    return `${base || 'slice_export'}${ext}`;
-  }, [activePrinterProfile?.display.outputFormat, activePrinterProfile?.name, scene.activeModel?.name, scene.models]);
+    const ext = resolveOutputFileExtension(
+      activePrinterProfile?.display.outputFormat,
+      activePrinterProfile?.display.formatVersion,
+    );
+    return `${base || 'slice_export'}.${ext}`;
+  }, [activePrinterProfile?.display.outputFormat, activePrinterProfile?.display.formatVersion, activePrinterProfile?.name, scene.activeModel?.name, scene.models]);
   const canPrintNow = Boolean(
     printingReadyPlateId
     && printingTargetDevice?.connected === true,
