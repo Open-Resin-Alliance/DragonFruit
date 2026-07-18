@@ -7967,7 +7967,12 @@ export default function Home() {
   const {
     handleDropSelectionToPlatform,
     handleLiftSelection,
-  } = useSelectionTransforms({ scene, transformMgr, handleGizmoTransformGroupCommit });
+  } = useSelectionTransforms({
+    scene,
+    transformMgr,
+    handleGizmoTransformGroupCommit,
+    requestDestructiveTransformSupportDeletionWithContinuation,
+  });
 
   const handleAutoLiftChange = React.useCallback((enabled: boolean) => {
     if (scene.activeModelId) {

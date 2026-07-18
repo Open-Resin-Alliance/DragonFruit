@@ -25,10 +25,17 @@ export function useSelectionTransforms({
   scene,
   transformMgr,
   handleGizmoTransformGroupCommit,
+  requestDestructiveTransformSupportDeletionWithContinuation,
 }: {
   scene: ReturnType<typeof useSceneCollectionManager>;
   transformMgr: ReturnType<typeof useTransformManager>;
   handleGizmoTransformGroupCommit: GroupTransformCommit;
+  // Drop/lift move each model relative to its plate-anchored supports, so they
+  // prompt to clear supports first (returns true when it can proceed at once).
+  requestDestructiveTransformSupportDeletionWithContinuation: (
+    operationLabel: string,
+    onContinue: () => void,
+  ) => boolean;
 }) {
   // Snap each selected model to a target build-plate height INDEPENDENTLY:
   // every model computes its OWN lowest world-Z, so a group drop lands each
@@ -83,16 +90,22 @@ export function useSelectionTransforms({
   }, [scene]);
 
   const handleDropSelectionToPlatform = useCallback(() => {
-    const entries = buildSelectionSnapEntries(PLATFORM_SNAP_CLEARANCE_MM);
-    if (entries.length === 0) return;
-    handleGizmoTransformGroupCommit({ operation: 'move', entries });
-  }, [buildSelectionSnapEntries, handleGizmoTransformGroupCommit]);
+    const apply = () => {
+      const entries = buildSelectionSnapEntries(PLATFORM_SNAP_CLEARANCE_MM);
+      if (entries.length === 0) return;
+      handleGizmoTransformGroupCommit({ operation: 'move', entries });
+    };
+    if (requestDestructiveTransformSupportDeletionWithContinuation('Drop', apply)) apply();
+  }, [buildSelectionSnapEntries, handleGizmoTransformGroupCommit, requestDestructiveTransformSupportDeletionWithContinuation]);
 
   const handleLiftSelection = useCallback(() => {
-    const entries = buildSelectionSnapEntries(transformMgr.liftDistance);
-    if (entries.length === 0) return;
-    handleGizmoTransformGroupCommit({ operation: 'move', entries });
-  }, [buildSelectionSnapEntries, handleGizmoTransformGroupCommit, transformMgr.liftDistance]);
+    const apply = () => {
+      const entries = buildSelectionSnapEntries(transformMgr.liftDistance);
+      if (entries.length === 0) return;
+      handleGizmoTransformGroupCommit({ operation: 'move', entries });
+    };
+    if (requestDestructiveTransformSupportDeletionWithContinuation('Lift', apply)) apply();
+  }, [buildSelectionSnapEntries, handleGizmoTransformGroupCommit, requestDestructiveTransformSupportDeletionWithContinuation, transformMgr.liftDistance]);
 
   return { handleDropSelectionToPlatform, handleLiftSelection };
 }
