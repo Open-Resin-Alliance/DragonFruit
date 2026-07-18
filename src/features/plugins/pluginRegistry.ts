@@ -13,6 +13,7 @@ import type {
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 import { BUILTIN_SIMPLE_PLUGIN_MANIFESTS } from '@/features/plugins/builtinSimplePlugins';
 import { normalizeOutputFormat, normalizeFormatVersion, normalizeSettingsMode, normalizeWebcamRotationDeg, DEFAULT_WEBCAM_ROTATION_DEG } from '@/features/profiles/outputFormatUtils';
+import { sanitizePrinterFormatVersionOptions } from '@/features/profiles/printerFormatVersionOptions';
 
 export type PluginSource = 'builtin' | 'github';
 export type PluginInstallTrust = 'allowlisted' | 'unverified-user-approved';
@@ -402,6 +403,7 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
       resolutionY,
       outputFormat: sanitizeOutputFormat((value as any).display?.outputFormat),
       formatVersion: normalizeFormatVersion((value as any).display?.formatVersion),
+      formatVersionOptions: sanitizePrinterFormatVersionOptions((value as any).display?.formatVersionOptions),
       settingsMode: normalizeSettingsMode((value as any).display?.settingsMode),
       webcamRotationDeg: normalizeWebcamRotationDeg(
         (value as any).display?.webcamRotationDeg ?? (value as any).display?.webcamOrientation,

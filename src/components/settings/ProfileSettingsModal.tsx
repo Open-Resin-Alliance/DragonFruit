@@ -56,6 +56,10 @@ import {
   resolveOutputSettingsMode,
 } from '@/features/slicing/formats/registry';
 import {
+  resolveFormatVersionFromOptions,
+  resolvePrinterFormatVersionOptions,
+} from '@/features/profiles/printerFormatVersionOptions';
+import {
   getPrinterReachabilityServerSnapshot,
   getPrinterReachabilitySnapshot,
   subscribeToPrinterReachability,
@@ -543,16 +547,26 @@ export function ProfileSettingsModal({
 
   const selectedFormatVersionOptions = React.useMemo(() => {
     if (!selectedPrinter) return [] as Array<{ value: string; label: string; isDefault?: boolean }>;
-    return getAvailableFormatVersionOptions(selectedPrinter.display.outputFormat);
-  }, [selectedPrinter]);
+    const availableOptions = getAvailableFormatVersionOptions(selectedPrinter.display.outputFormat);
+    const presetId = selectedPrinter.officialPresetId?.trim();
+    const preset = presetId
+      ? availablePrinterPresets.find((candidate) => candidate.presetId === presetId)
+      : undefined;
+    return resolvePrinterFormatVersionOptions(availableOptions, preset?.display.formatVersionOptions);
+  }, [availablePrinterPresets, selectedPrinter]);
 
   const selectedResolvedFormatVersion = React.useMemo(() => {
     if (!selectedPrinter) return undefined;
-    return resolveOutputFormatVersion(
-      selectedPrinter.display.outputFormat,
+    const presetId = selectedPrinter.officialPresetId?.trim();
+    const preset = presetId
+      ? availablePrinterPresets.find((candidate) => candidate.presetId === presetId)
+      : undefined;
+    return resolveFormatVersionFromOptions(
       selectedPrinter.display.formatVersion,
+      preset?.display.formatVersion,
+      selectedFormatVersionOptions,
     );
-  }, [selectedPrinter]);
+  }, [availablePrinterPresets, selectedFormatVersionOptions, selectedPrinter]);
 
   const selectedSettingsModeOptions = React.useMemo(() => {
     if (!selectedPrinter) return [] as Array<{ value: string; label: string; isDefault?: boolean }>;

@@ -19,6 +19,11 @@ import {
     DEFAULT_OUTPUT_FORMAT,
     DEFAULT_WEBCAM_ROTATION_DEG,
 } from '@/features/profiles/outputFormatUtils';
+import {
+    resolveFormatVersionFromOptions,
+    sanitizePrinterFormatVersionOptions,
+    type PrinterFormatVersionOption,
+} from '@/features/profiles/printerFormatVersionOptions';
 
 export type PrinterOutputFormat = string;
 export type PrinterNetworkSupport = string;
@@ -99,6 +104,7 @@ export type PrinterPreset = {
         resolutionY: number;
         outputFormat: PrinterOutputFormat;
         formatVersion?: string;
+        formatVersionOptions?: PrinterFormatVersionOption[];
         settingsMode?: string;
         webcamRotationDeg?: PrinterWebcamRotationDeg;
         mirrorX?: boolean;
@@ -837,6 +843,9 @@ const BUILTIN_PRINTER_PRESETS: PrinterPreset[] = (printerPresetsData as PrinterP
         ...preset.display,
         outputFormat: normalizeOutputFormat(preset.display?.outputFormat),
         formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown } | undefined)?.formatVersion),
+        formatVersionOptions: sanitizePrinterFormatVersionOptions(
+            (preset.display as { formatVersionOptions?: unknown } | undefined)?.formatVersionOptions,
+        ),
         settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown } | undefined)?.settingsMode),
         webcamRotationDeg: normalizeWebcamRotationDeg(
             (preset.display as { webcamRotationDeg?: unknown; webcamOrientation?: unknown } | undefined)?.webcamRotationDeg
@@ -2668,7 +2677,11 @@ export function applyOfficialPrinterProfileUpdate(printerProfileId: string): App
                         resolutionX: preset.display.resolutionX,
                         resolutionY: preset.display.resolutionY,
                         outputFormat: normalizeOutputFormat(preset.display.outputFormat),
-                        formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown }).formatVersion),
+                        formatVersion: resolveFormatVersionFromOptions(
+                            item.display.formatVersion,
+                            preset.display.formatVersion,
+                            preset.display.formatVersionOptions,
+                        ),
                         settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown }).settingsMode),
                         mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown }).mirrorX, false),
                         mirrorY: normalizeMirrorFlag((preset.display as { mirrorY?: unknown }).mirrorY, false),
