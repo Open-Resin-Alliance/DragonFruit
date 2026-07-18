@@ -1,4 +1,4 @@
-import type { LimitationCode, Roots, Trunk } from '@/supports/types';
+import type { LimitationCode, Roots, Stick, Trunk } from '@/supports/types';
 import type { SupportData } from '@/supports/rendering/SupportBuilder';
 
 export type AutoSupportPreset = 'light' | 'normal' | 'heavy';
@@ -12,6 +12,9 @@ export interface AutoSupportPlannerSettings {
   maxTotalContacts: number;
   surfaceSearchRadiusMm: number;
   routeAttemptsPerContact: number;
+  /** Faces with world normal z at or below this get surface-fill supports. */
+  overhangNormalZMax: number;
+  maxSurfaceContacts: number;
 }
 
 export interface UnsupportedVolume {
@@ -45,12 +48,20 @@ export interface AutoSupportContactPlan {
   coveredVolumeIds: number[];
 }
 
-export interface PlannedAutoSupport {
-  contact: AutoSupportContactCandidate;
-  root: Roots;
-  trunk: Trunk;
-  supportData: SupportData;
-}
+export type PlannedAutoSupport =
+  | {
+    kind: 'trunk';
+    contact: AutoSupportContactCandidate;
+    root: Roots;
+    trunk: Trunk;
+    supportData: SupportData;
+  }
+  | {
+    kind: 'stick';
+    contact: AutoSupportContactCandidate;
+    stick: Stick;
+    supportData: SupportData;
+  };
 
 export type AutoSupportRouteFailureReason = 'no_surface' | 'tip_spacing' | LimitationCode;
 

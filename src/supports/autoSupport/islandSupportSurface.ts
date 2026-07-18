@@ -108,6 +108,43 @@ export function resolveIslandSupportSurface(
   return best;
 }
 
+// Steeper landings than this make the anchor cone dive into the surface.
+const MIN_ANCHOR_NORMAL_Z = 0.25;
+const SURFACE_BELOW_CLEARANCE_MM = 0.2;
+
+export function resolveAnchorSurfaceAlong(
+  mesh: THREE.Mesh,
+  origin: THREE.Vector3,
+  direction: THREE.Vector3,
+  maxDistanceMm: number,
+): IslandSupportSurface | null {
+  const raycaster = new THREE.Raycaster();
+  raycaster.near = SURFACE_BELOW_CLEARANCE_MM;
+  raycaster.far = maxDistanceMm;
+  raycaster.set(
+    origin.clone().addScaledVector(direction, SURFACE_BELOW_CLEARANCE_MM),
+    direction,
+  );
+
+  for (const hit of raycaster.intersectObject(mesh, false)) {
+    if (!hit.face) continue;
+    const normalLike = calculateSmoothedNormal(hit);
+    const normal = new THREE.Vector3(normalLike.x, normalLike.y, normalLike.z).normalize();
+    if (normal.z < MIN_ANCHOR_NORMAL_Z) continue;
+    return { mesh, point: hit.point.clone(), normal };
+  }
+
+  return null;
+}
+
+export function resolveSurfaceBelow(
+  mesh: THREE.Mesh,
+  origin: THREE.Vector3,
+  maxDistanceMm: number,
+): IslandSupportSurface | null {
+  return resolveAnchorSurfaceAlong(mesh, origin, new THREE.Vector3(0, 0, -1), maxDistanceMm);
+}
+
 export function resolveIslandSupportSurfaces(
   mesh: THREE.Mesh,
   island: DetectedIsland,

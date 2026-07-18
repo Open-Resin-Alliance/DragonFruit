@@ -10,6 +10,8 @@ export const AUTO_SUPPORT_PRESETS: Record<AutoSupportPreset, AutoSupportPlannerS
     maxTotalContacts: 55,
     surfaceSearchRadiusMm: 1.2,
     routeAttemptsPerContact: 5,
+    overhangNormalZMax: -0.82,
+    maxSurfaceContacts: 90,
   },
   normal: {
     contactSpacingMm: 7,
@@ -20,6 +22,8 @@ export const AUTO_SUPPORT_PRESETS: Record<AutoSupportPreset, AutoSupportPlannerS
     maxTotalContacts: 90,
     surfaceSearchRadiusMm: 1.5,
     routeAttemptsPerContact: 7,
+    overhangNormalZMax: -0.71,
+    maxSurfaceContacts: 180,
   },
   heavy: {
     contactSpacingMm: 5,
@@ -30,5 +34,7 @@ export const AUTO_SUPPORT_PRESETS: Record<AutoSupportPreset, AutoSupportPlannerS
     maxTotalContacts: 150,
     surfaceSearchRadiusMm: 2,
     routeAttemptsPerContact: 9,
+    overhangNormalZMax: -0.57,
+    maxSurfaceContacts: 380,
   },
 };

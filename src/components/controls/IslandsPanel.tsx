@@ -34,7 +34,12 @@ const AUTO_SUPPORT_FAILURE_LABELS: Record<string, string> = {
 };
 
 function describeAutoSupportPreview(preview: AutoSupportPlanPreview): string {
-  const parts = [`Previewing ${preview.supports.length} supports across ${preview.eligibleVolumeCount} regions.`];
+  const stickCount = preview.supports.filter((support) => support.kind === 'stick').length;
+  const parts = [
+    stickCount > 0
+      ? `Previewing ${preview.supports.length} supports (${stickCount} on-model struts) across ${preview.eligibleVolumeCount} regions.`
+      : `Previewing ${preview.supports.length} supports across ${preview.eligibleVolumeCount} regions.`,
+  ];
   if (preview.coveredVolumeCount > 0) parts.push(`${preview.coveredVolumeCount} already covered.`);
   const unresolved = preview.unresolvedVolumeIds.length;
   if (unresolved > 0) {
@@ -42,7 +47,7 @@ function describeAutoSupportPreview(preview: AutoSupportPlanPreview): string {
       .sort((left, right) => right[1] - left[1])
       .map(([reason, count]) => `${count}× ${AUTO_SUPPORT_FAILURE_LABELS[reason] ?? reason.toLowerCase()}`)
       .join(', ');
-    parts.push(`${unresolved} regions need manual work${reasons ? ` (${reasons})` : ''}.`);
+    parts.push(`${unresolved} ${unresolved === 1 ? 'region needs' : 'regions need'} manual work${reasons ? ` (${reasons})` : ''}.`);
   }
   return parts.join(' ');
 }

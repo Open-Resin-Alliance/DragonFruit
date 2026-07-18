@@ -144,8 +144,13 @@ export function planAutoSupportContacts(args: {
 }): AutoSupportContactPlan {
   const { scan, scanMinZ, layerHeightMm, settings, exclusions = [], volumeIdFilter } = args;
   const volumes = buildUnsupportedVolumes(scan, layerHeightMm, args.hierarchy);
+  // A volume whose base prints within the first layer above the build plate
+  // adheres to the plate — it is not an island, whatever the scan mask says.
+  const isPlateSupported = (volume: UnsupportedVolume) =>
+    scanMinZ + (volume.firstLayer + 0.5) * layerHeightMm <= layerHeightMm * 1.5;
   const eligible = volumes.filter((volume) => (
     (!volumeIdFilter || volumeIdFilter.has(volume.id))
+    && !isPlateSupported(volume)
     && volume.baseAreaMm2 >= settings.minBaseAreaMm2
     && volume.volumeMm3 >= settings.minVolumeMm3
     && volume.heightMm >= settings.minHeightMm

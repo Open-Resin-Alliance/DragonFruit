@@ -80,12 +80,12 @@ test('reports a volume as covered when existing tips exclude every base pixel', 
     minVolumeMm3: 0,
     minHeightMm: 0,
   };
-  const uncovered = planAutoSupportContacts({ scan, scanMinZ: 0, layerHeightMm: 1, settings });
+  const uncovered = planAutoSupportContacts({ scan, scanMinZ: 10, layerHeightMm: 1, settings });
   assert.equal(uncovered.contacts.length, 1);
 
   const plan = planAutoSupportContacts({
     scan,
-    scanMinZ: 0,
+    scanMinZ: 10,
     layerHeightMm: 1,
     settings,
     exclusions: [{ ...uncovered.contacts[0].position, radiusMm: 5 }],
@@ -109,12 +109,12 @@ test('keeps planning contacts on pixels outside exclusion zones', () => {
     maxContactsPerVolume: 8,
     maxTotalContacts: 8,
   };
-  const uncovered = planAutoSupportContacts({ scan, scanMinZ: 0, layerHeightMm: 1, settings });
+  const uncovered = planAutoSupportContacts({ scan, scanMinZ: 10, layerHeightMm: 1, settings });
   const excludedContact = uncovered.contacts[0];
 
   const plan = planAutoSupportContacts({
     scan,
-    scanMinZ: 0,
+    scanMinZ: 10,
     layerHeightMm: 1,
     settings,
     exclusions: [{ ...excludedContact.position, radiusMm: 1.2 }],
@@ -137,13 +137,13 @@ test('volume filter restricts planning and tags retry contact ids', () => {
     minVolumeMm3: 0,
     minHeightMm: 0,
   };
-  const full = planAutoSupportContacts({ scan, scanMinZ: 0, layerHeightMm: 1, settings });
+  const full = planAutoSupportContacts({ scan, scanMinZ: 10, layerHeightMm: 1, settings });
   assert.equal(full.contacts.length, 2);
   const keptVolumeId = full.contacts[0].volumeId;
 
   const filtered = planAutoSupportContacts({
     scan,
-    scanMinZ: 0,
+    scanMinZ: 10,
     layerHeightMm: 1,
     settings,
     volumeIdFilter: new Set([keptVolumeId]),
@@ -153,6 +153,23 @@ test('volume filter restricts planning and tags retry contact ids', () => {
   assert.equal(filtered.contacts.length, 1);
   assert.equal(filtered.contacts[0].volumeId, keptVolumeId);
   assert.ok(filtered.contacts[0].id.endsWith(':retry'));
+});
+
+test('treats volumes printing in the first layer as plate-supported', () => {
+  const scan = scanFromLayers([[1, 1]], 2, 1);
+  const settings = {
+    ...AUTO_SUPPORT_PRESETS.normal,
+    minBaseAreaMm2: 0,
+    minVolumeMm3: 0,
+    minHeightMm: 0,
+  };
+
+  const onPlate = planAutoSupportContacts({ scan, scanMinZ: 0, layerHeightMm: 1, settings });
+  assert.equal(onPlate.contacts.length, 0);
+  assert.equal(onPlate.ignoredVolumeIds.length, 1);
+
+  const floating = planAutoSupportContacts({ scan, scanMinZ: 5, layerHeightMm: 1, settings });
+  assert.equal(floating.contacts.length, 1);
 });
 
 test('filters insignificant volumes before allocating contacts', () => {

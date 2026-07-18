@@ -125,6 +125,9 @@ export interface TrunkBuildInput {
     /** When true, uses a fast first-pass preview search and then parity-checks
      *  collision outcomes against click-time tolerances before surfacing errors. */
     isPreview?: boolean;
+    /** Override the A* expansion budget for click-time placement (default 2000).
+     *  Ignored for previews, which always use the reduced preview budget. */
+    maxExpansions?: number;
     overrides?: {
         rootsDiameterMm?: number;
         rootsDiskHeightMm?: number;
@@ -231,7 +234,11 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
         // V2 grid A* pathfinder (SDF-backed).
         // Both preview and click use FULL collision checks to ensure consistent safety.
         // Preview uses lower budget (800 expansions) for responsiveness.
-        const v2Context = isPreview ? { maxExpansions: 800 } : undefined;
+        const v2Context = isPreview
+            ? { maxExpansions: 800 }
+            : input.maxExpansions !== undefined
+                ? { maxExpansions: input.maxExpansions }
+                : undefined;
 
         // Cache key: position + normal quantised at 0.5mm / 0.05 normal.
         // Only used for preview → preview reuse; click-time bypasses cache

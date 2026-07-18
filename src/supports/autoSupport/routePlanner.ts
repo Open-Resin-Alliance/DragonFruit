@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { buildTrunkData } from '@/supports/SupportTypes/Trunk/trunkBuilder';
+import { buildTrunkData, type TrunkBuildInput } from '@/supports/SupportTypes/Trunk/trunkBuilder';
 import { resolveIslandSupportSurface } from './islandSupportSurface';
 import type {
   AutoSupportContactCandidate,
@@ -10,7 +10,7 @@ import type {
   PlannedAutoSupport,
 } from './types';
 
-function buildSearchTargets(
+export function buildSearchTargets(
   contact: AutoSupportContactCandidate,
   settings: AutoSupportPlannerSettings,
 ): THREE.Vector3[] {
@@ -40,6 +40,8 @@ export async function routeAutoSupportContacts(args: {
   signal?: AbortSignal;
   onProgress?: (progress: AutoSupportProgress) => void;
   progressPhase?: AutoSupportProgress['phase'];
+  maxExpansions?: number;
+  overrides?: TrunkBuildInput['overrides'];
 }): Promise<RouteAutoSupportResult> {
   const supports: PlannedAutoSupport[] = [];
   const failures: AutoSupportRouteFailure[] = [];
@@ -65,12 +67,15 @@ export async function routeAutoSupportContacts(args: {
         tipNormal: surface.normal,
         modelId: args.modelId,
         mesh: args.mesh,
+        maxExpansions: args.maxExpansions,
+        overrides: args.overrides,
       });
       if (built.error) {
         failureReason = built.error;
         continue;
       }
       planned = {
+        kind: 'trunk',
         contact,
         root: built.root,
         trunk: built.trunk,

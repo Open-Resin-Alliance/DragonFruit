@@ -179,7 +179,7 @@ import {
   getSavedUvToolsSettings,
   resolveUvToolsExecutablePath,
 } from '@/components/settings/uvToolsPreferences';
-import { addRoot, addTrunk, beginSupportStateBatch, endSupportStateBatch, subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, toggleSegmentCurve, transformSupportsForModel, updateTrunk, updateBranch, updateTwig, updateStick } from '@/supports/state';
+import { addRoot, addStick, addTrunk, beginSupportStateBatch, endSupportStateBatch, subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, toggleSegmentCurve, transformSupportsForModel, updateTrunk, updateBranch, updateTwig, updateStick } from '@/supports/state';
 import {
   getKickstandSnapshot,
   subscribeToKickstandStore,
@@ -12305,6 +12305,15 @@ export default function Home() {
   const [autoSupportPreview, setAutoSupportPreview] = React.useState<AutoSupportPlanPreview | null>(null);
   const autoSupportAbortRef = React.useRef<AbortController | null>(null);
 
+  // Scan data and any pending plan describe one specific model; both are stale
+  // the moment the active model changes (switch, delete, reload).
+  const clearIslandScanData = islands.clearScanData;
+  React.useEffect(() => {
+    clearIslandScanData();
+    autoSupportAbortRef.current?.abort();
+    setAutoSupportPreview(null);
+  }, [clearIslandScanData, scene.activeModel?.id]);
+
   const handlePlanAutoSupports = React.useCallback(async (
     preset: AutoSupportPreset,
     onProgress: (progress: AutoSupportProgress) => void,
@@ -12368,8 +12377,12 @@ export default function Home() {
     beginSupportStateBatch();
     try {
       for (const support of autoSupportPreview.supports) {
-        addRoot(support.root);
-        addTrunk(support.trunk);
+        if (support.kind === 'trunk') {
+          addRoot(support.root);
+          addTrunk(support.trunk);
+        } else {
+          addStick(support.stick);
+        }
       }
     } finally {
       endSupportStateBatch();

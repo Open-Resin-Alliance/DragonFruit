@@ -6,6 +6,7 @@ import type { ScanResults } from '@/volumeAnalysis/IslandScan/ScanOrchestrator';
 import { runAutoSupportPlan } from '../autoSupportRunner';
 import { AUTO_SUPPORT_PRESETS } from '../presets';
 import type { routeAutoSupportContacts } from '../routePlanner';
+import type { routeStickFallback } from '../stickFallback';
 import type { AutoSupportContactCandidate, PlannedAutoSupport } from '../types';
 
 function scanFromLayers(layers: number[][], width: number, height: number): ScanResults {
@@ -27,21 +28,44 @@ function scanFromLayers(layers: number[][], width: number, height: number): Scan
   };
 }
 
+type PlannedTrunk = Extract<PlannedAutoSupport, { kind: 'trunk' }>;
+type PlannedStick = Extract<PlannedAutoSupport, { kind: 'stick' }>;
+
 function plannedSupport(contact: AutoSupportContactCandidate): PlannedAutoSupport {
   return {
+    kind: 'trunk',
     contact,
-    root: { id: `root-${contact.id}` } as PlannedAutoSupport['root'],
+    root: { id: `root-${contact.id}` } as PlannedTrunk['root'],
     trunk: {
       id: `trunk-${contact.id}`,
       contactCone: { pos: { ...contact.position } },
-    } as PlannedAutoSupport['trunk'],
-    supportData: {} as PlannedAutoSupport['supportData'],
+    } as PlannedTrunk['trunk'],
+    supportData: {} as PlannedTrunk['supportData'],
+  };
+}
+
+function plannedStick(contact: AutoSupportContactCandidate): PlannedAutoSupport {
+  return {
+    kind: 'stick',
+    contact,
+    stick: {
+      id: `stick-${contact.id}`,
+      contactConeA: { pos: { ...contact.position } },
+      contactConeB: { pos: { ...contact.position, z: contact.position.z - 3 } },
+    } as PlannedStick['stick'],
+    supportData: {} as PlannedStick['supportData'],
   };
 }
 
 type RouteContacts = typeof routeAutoSupportContacts;
+type RouteSticks = typeof routeStickFallback;
 
 const FAKE_MESH = {} as THREE.Mesh;
+
+const failSticks: RouteSticks = async ({ contacts }) => ({
+  supports: [],
+  failures: contacts.map((contact) => ({ contactId: contact.id, volumeId: contact.volumeId, reason: 'no_surface' as const })),
+});
 
 const SETTINGS = {
   ...AUTO_SUPPORT_PRESETS.normal,
@@ -76,13 +100,14 @@ test('retries unresolved volumes with fresh contacts and merges both waves', asy
 
   const preview = await runAutoSupportPlan({
     scan,
-    scanMinZ: 0,
+    scanMinZ: 10,
     layerHeightMm: 1,
     preset: 'normal',
     settings: SETTINGS,
     modelId: 'model',
     mesh: FAKE_MESH,
     routeContacts,
+    routeSticks: failSticks,
   });
 
   assert.equal(routedWaves.length, 2);
@@ -91,7 +116,7 @@ test('retries unresolved volumes with fresh contacts and merges both waves', asy
   assert.ok(routedWaves[1].every((contact) => contact.id.includes(':retry')));
   assert.equal(preview.unresolvedVolumeIds.length, 0);
   assert.equal(preview.supports.length, routedWaves[0].length / 2 + routedWaves[1].length);
-  assert.equal(preview.failureReasonCounts.COLLISION_WITH_MODEL, routedWaves[0].length / 2);
+  assert.deepEqual(preview.failureReasonCounts, {});
 });
 
 test('reports volumes as unresolved when both waves fail', async () => {
@@ -103,13 +128,14 @@ test('reports volumes as unresolved when both waves fail', async () => {
 
   const preview = await runAutoSupportPlan({
     scan,
-    scanMinZ: 0,
+    scanMinZ: 10,
     layerHeightMm: 1,
     preset: 'normal',
     settings: SETTINGS,
     modelId: 'model',
     mesh: FAKE_MESH,
     routeContacts,
+    routeSticks: failSticks,
   });
 
   assert.equal(preview.supports.length, 0);
@@ -119,9 +145,9 @@ test('reports volumes as unresolved when both waves fail', async () => {
 
 test('skips the retry wave when the contact budget is exhausted', async () => {
   const scan = scanFromLayers([[1, 1]], 2, 1);
-  let calls = 0;
+  const waves: AutoSupportContactCandidate[][] = [];
   const routeContacts: RouteContacts = async ({ contacts }) => {
-    calls += 1;
+    waves.push(contacts);
     return {
       supports: [],
       failures: contacts.map((contact) => ({ contactId: contact.id, volumeId: contact.volumeId, reason: 'no_surface' as const })),
@@ -130,16 +156,20 @@ test('skips the retry wave when the contact budget is exhausted', async () => {
 
   const preview = await runAutoSupportPlan({
     scan,
-    scanMinZ: 0,
+    scanMinZ: 10,
     layerHeightMm: 1,
     preset: 'normal',
     settings: { ...SETTINGS, maxTotalContacts: 1 },
     modelId: 'model',
     mesh: FAKE_MESH,
     routeContacts,
+    routeSticks: failSticks,
   });
 
-  assert.equal(calls, 1);
+  // Wave 1 plus the detail rescue re-attempt of the same contact — but no
+  // ':retry' second wave, since the contact budget is exhausted.
+  assert.equal(waves.length, 2);
+  assert.ok(waves.flat().every((contact) => !contact.id.includes(':retry')));
   assert.equal(preview.attemptedContactCount, 1);
   assert.equal(preview.unresolvedVolumeIds.length, 1);
 });
@@ -154,20 +184,204 @@ test('counts volumes fully covered by existing tips without routing them', async
 
   const preview = await runAutoSupportPlan({
     scan,
-    scanMinZ: 0,
+    scanMinZ: 10,
     layerHeightMm: 1,
     preset: 'normal',
     settings: SETTINGS,
     modelId: 'model',
     mesh: FAKE_MESH,
-    existingTipPoints: [{ x: 1, y: -0.5, z: 0.5 }],
+    existingTipPoints: [{ x: 1, y: -0.5, z: 10.5 }],
     routeContacts,
+    routeSticks: failSticks,
   });
 
   assert.equal(routedContactCount, 0);
   assert.equal(preview.coveredVolumeCount, 1);
   assert.equal(preview.eligibleVolumeCount, 0);
   assert.equal(preview.supports.length, 0);
+});
+
+test('falls back to on-model sticks for volumes trunks cannot route', async () => {
+  const scan = scanFromLayers([[1, 1]], 2, 1);
+  const failTrunks: RouteContacts = async ({ contacts }) => ({
+    supports: [],
+    failures: contacts.map((contact) => ({ contactId: contact.id, volumeId: contact.volumeId, reason: 'COLLISION_WITH_MODEL' as const })),
+  });
+  const stickWaves: AutoSupportContactCandidate[][] = [];
+  const routeSticks: RouteSticks = async ({ contacts }) => {
+    stickWaves.push(contacts);
+    return { supports: contacts.map(plannedStick), failures: [] };
+  };
+
+  const preview = await runAutoSupportPlan({
+    scan,
+    scanMinZ: 10,
+    layerHeightMm: 1,
+    preset: 'normal',
+    settings: SETTINGS,
+    modelId: 'model',
+    mesh: FAKE_MESH,
+    routeContacts: failTrunks,
+    routeSticks,
+  });
+
+  assert.equal(stickWaves.length, 1);
+  assert.equal(preview.unresolvedVolumeIds.length, 0);
+  assert.ok(preview.supports.length > 0);
+  assert.ok(preview.supports.every((support) => support.kind === 'stick'));
+  assert.deepEqual(preview.failureReasonCounts, {});
+});
+
+test('does not attempt sticks for volumes trunks already resolved', async () => {
+  const scan = scanFromLayers([[1, 1]], 2, 1);
+  let stickCalls = 0;
+  const routeSticks: RouteSticks = async ({ contacts }) => {
+    stickCalls += 1;
+    return { supports: [], failures: contacts.map((contact) => ({ contactId: contact.id, volumeId: contact.volumeId, reason: 'no_surface' as const })) };
+  };
+
+  const preview = await runAutoSupportPlan({
+    scan,
+    scanMinZ: 10,
+    layerHeightMm: 1,
+    preset: 'normal',
+    settings: SETTINGS,
+    modelId: 'model',
+    mesh: FAKE_MESH,
+    routeContacts: async ({ contacts }) => ({ supports: contacts.map(plannedSupport), failures: [] }),
+    routeSticks,
+  });
+
+  assert.equal(stickCalls, 0);
+  assert.equal(preview.unresolvedVolumeIds.length, 0);
+});
+
+test('rescues detail volumes with slim overrides after full-size stages fail', async () => {
+  const scan = scanFromLayers([[1, 1]], 2, 1);
+  const trunkOverrides: Array<object | undefined> = [];
+  const stickOverrides: Array<object | undefined> = [];
+  const routeContacts: RouteContacts = async ({ contacts, overrides }) => {
+    trunkOverrides.push(overrides);
+    return {
+      supports: [],
+      failures: contacts.map((contact) => ({ contactId: contact.id, volumeId: contact.volumeId, reason: 'COLLISION_WITH_MODEL' as const })),
+    };
+  };
+  const routeSticks: RouteSticks = async ({ contacts, overrides }) => {
+    stickOverrides.push(overrides);
+    if (!overrides) {
+      return {
+        supports: [],
+        failures: contacts.map((contact) => ({ contactId: contact.id, volumeId: contact.volumeId, reason: 'COLLISION_WITH_MODEL' as const })),
+      };
+    }
+    return { supports: contacts.map(plannedStick), failures: [] };
+  };
+
+  const preview = await runAutoSupportPlan({
+    scan,
+    scanMinZ: 10,
+    layerHeightMm: 1,
+    preset: 'normal',
+    settings: SETTINGS,
+    modelId: 'model',
+    mesh: FAKE_MESH,
+    routeContacts,
+    routeSticks,
+  });
+
+  assert.deepEqual(trunkOverrides.map((entry) => entry !== undefined), [false, false, true]);
+  assert.deepEqual(stickOverrides.map((entry) => entry !== undefined), [false, true]);
+  assert.equal(preview.unresolvedVolumeIds.length, 0);
+  assert.ok(preview.supports.every((support) => support.kind === 'stick'));
+  assert.deepEqual(preview.failureReasonCounts, {});
+});
+
+test('classifies volumes rejected only by tip spacing as covered, not unresolved', async () => {
+  const scan = scanFromLayers([[1, 1]], 2, 1);
+  const crowd: RouteContacts = async ({ contacts }) => ({
+    supports: [],
+    failures: contacts.map((contact) => ({ contactId: contact.id, volumeId: contact.volumeId, reason: 'tip_spacing' as const })),
+  });
+
+  const preview = await runAutoSupportPlan({
+    scan,
+    scanMinZ: 10,
+    layerHeightMm: 1,
+    preset: 'normal',
+    settings: SETTINGS,
+    modelId: 'model',
+    mesh: FAKE_MESH,
+    routeContacts: crowd,
+    routeSticks: async ({ contacts }) => ({
+      supports: [],
+      failures: contacts.map((contact) => ({ contactId: contact.id, volumeId: contact.volumeId, reason: 'tip_spacing' as const })),
+    }),
+  });
+
+  assert.equal(preview.unresolvedVolumeIds.length, 0);
+  assert.equal(preview.coveredVolumeCount, 1);
+  assert.deepEqual(preview.failureReasonCounts, {});
+});
+
+test('routes surface-fill samples without affecting region reporting', async () => {
+  const scan = scanFromLayers([[1, 1]], 2, 1);
+  const surfaceContacts: AutoSupportContactCandidate[] = [
+    { id: 'surface:0', volumeId: -1, position: { x: 5, y: 5, z: 14 } },
+    { id: 'surface:1', volumeId: -1, position: { x: 9, y: 5, z: 14 } },
+  ];
+
+  const preview = await runAutoSupportPlan({
+    scan,
+    scanMinZ: 10,
+    layerHeightMm: 1,
+    preset: 'normal',
+    settings: SETTINGS,
+    modelId: 'model',
+    mesh: FAKE_MESH,
+    routeContacts: async ({ contacts }) => ({ supports: contacts.map(plannedSupport), failures: [] }),
+    routeSticks: failSticks,
+    sampleSurface: () => surfaceContacts,
+  });
+
+  assert.equal(preview.supports.length, 1 + surfaceContacts.length);
+  assert.equal(preview.eligibleVolumeCount, 1);
+  assert.equal(preview.unresolvedVolumeIds.length, 0);
+  assert.deepEqual(preview.failureReasonCounts, {});
+});
+
+test('surface-fill failures fall back to sticks and stay non-blocking', async () => {
+  const scan = scanFromLayers([[1, 1]], 2, 1);
+  const surfaceContacts: AutoSupportContactCandidate[] = [
+    { id: 'surface:0', volumeId: -1, position: { x: 5, y: 5, z: 14 } },
+  ];
+  let stickContactsSeen: AutoSupportContactCandidate[] = [];
+
+  const preview = await runAutoSupportPlan({
+    scan,
+    scanMinZ: 10,
+    layerHeightMm: 1,
+    preset: 'normal',
+    settings: SETTINGS,
+    modelId: 'model',
+    mesh: FAKE_MESH,
+    routeContacts: async ({ contacts }) => ({
+      supports: contacts.filter((contact) => contact.volumeId !== -1).map(plannedSupport),
+      failures: contacts
+        .filter((contact) => contact.volumeId === -1)
+        .map((contact) => ({ contactId: contact.id, volumeId: contact.volumeId, reason: 'COLLISION_WITH_MODEL' as const })),
+    }),
+    routeSticks: async ({ contacts }) => {
+      stickContactsSeen = contacts;
+      return { supports: contacts.map(plannedStick), failures: [] };
+    },
+    sampleSurface: () => surfaceContacts,
+  });
+
+  assert.deepEqual(stickContactsSeen.map((contact) => contact.id), ['surface:0']);
+  assert.equal(preview.supports.length, 2);
+  assert.equal(preview.unresolvedVolumeIds.length, 0);
+  assert.deepEqual(preview.failureReasonCounts, {});
 });
 
 test('produces identical previews for identical inputs', async () => {
@@ -184,13 +398,14 @@ test('produces identical previews for identical inputs', async () => {
 
   const run = () => runAutoSupportPlan({
     scan,
-    scanMinZ: 0,
+    scanMinZ: 10,
     layerHeightMm: 1,
     preset: 'normal',
     settings: SETTINGS,
     modelId: 'model',
     mesh: FAKE_MESH,
     routeContacts,
+    routeSticks: failSticks,
   });
 
   const [first, second] = [await run(), await run()];
