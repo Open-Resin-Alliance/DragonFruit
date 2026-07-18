@@ -74,7 +74,7 @@
     "react-markdown": "^10.1.0",
     "three": "^0.181.0",
     "three-stdlib": "^2.36.1",
-    "uuid": "^13.0.0"
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@lingui/cli": "^6.3.0",
