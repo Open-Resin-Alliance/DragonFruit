@@ -320,6 +320,7 @@ dependencies = [
  "clap",
  "dragonfruit-slicing-engine",
  "indexmap",
+ "log",
  "rayon",
  "serde",
  "serde_json",
@@ -327,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-slicing-engine"
-version = "3.2.0"
+version = "3.2.1"
 dependencies = [
  "aes",
  "base64",
@@ -335,6 +336,7 @@ dependencies = [
  "crc32fast",
  "crossbeam-channel",
  "libdeflater",
+ "md-5",
  "png",
  "rayon",
  "serde",
@@ -548,6 +550,16 @@ name = "log"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
+
+[[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest",
+]
 
 [[package]]
 name = "memchr"
