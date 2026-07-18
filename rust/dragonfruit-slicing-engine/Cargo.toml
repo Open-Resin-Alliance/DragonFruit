@@ -25,5 +25,6 @@ time-core = "=0.1.8"
 crossbeam-channel = "0.5.15"
 
 md-5 = "0.10"
+tempfile = "3"
 [dev-dependencies]
 
