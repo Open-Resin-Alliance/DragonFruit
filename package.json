@@ -75,7 +75,7 @@
     "three": "^0.181.0",
     "three-mesh-bvh": "^0.8.3",
     "three-stdlib": "^2.36.1",
-    "uuid": "^13.0.0",
+    "uuid": "^14.0.0",
     "zustand": "^5.0.8"
   },
   "devDependencies": {
