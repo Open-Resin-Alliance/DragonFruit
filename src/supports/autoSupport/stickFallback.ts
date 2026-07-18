@@ -100,7 +100,7 @@ export async function routeStickFallback(args: {
     if (planned) supports.push(planned);
     else failures.push({ contactId: contact.id, volumeId: contact.volumeId, reason: failureReason });
     args.onProgress?.({ phase: 'verify', completed: contactIndex + 1, total: args.contacts.length });
-    if (contactIndex % 4 === 3) await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
 
   return { supports, failures };

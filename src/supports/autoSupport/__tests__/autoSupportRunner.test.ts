@@ -3,7 +3,7 @@ import test from 'node:test';
 import type * as THREE from 'three';
 import { rleEncode, rleEncodeLabels } from '@/volumeAnalysis/IslandScan/rle';
 import type { ScanResults } from '@/volumeAnalysis/IslandScan/ScanOrchestrator';
-import { runAutoSupportPlan } from '../autoSupportRunner';
+import { routeRepairSupports, runAutoSupportPlan } from '../autoSupportRunner';
 import { AUTO_SUPPORT_PRESETS } from '../presets';
 import type { routeAutoSupportContacts } from '../routePlanner';
 import type { routeStickFallback } from '../stickFallback';
@@ -382,6 +382,46 @@ test('surface-fill failures fall back to sticks and stay non-blocking', async ()
   assert.equal(preview.supports.length, 2);
   assert.equal(preview.unresolvedVolumeIds.length, 0);
   assert.deepEqual(preview.failureReasonCounts, {});
+});
+
+test('repair routing walks the rescue ladder and keeps only real failures pending', async () => {
+  const contacts: AutoSupportContactCandidate[] = [
+    { id: 'repair:1:0', volumeId: 1, position: { x: 0, y: 0, z: 5 } },
+    { id: 'repair:2:0', volumeId: 2, position: { x: 9, y: 0, z: 5 } },
+    { id: 'repair:3:0', volumeId: 3, position: { x: 0, y: 9, z: 5 } },
+  ];
+  const trunkWaves: string[][] = [];
+  const stickWaves: string[][] = [];
+
+  const supports = await routeRepairSupports({
+    contacts,
+    settings: SETTINGS,
+    modelId: 'model',
+    mesh: FAKE_MESH,
+    routeContacts: async ({ contacts: waveContacts }) => {
+      trunkWaves.push(waveContacts.map((contact) => contact.id));
+      return {
+        // First trunk stage: only volume 1 routes; volume 2 is crowded, volume 3 collides.
+        supports: waveContacts.filter((contact) => contact.volumeId === 1).map(plannedSupport),
+        failures: waveContacts
+          .filter((contact) => contact.volumeId !== 1)
+          .map((contact) => ({
+            contactId: contact.id,
+            volumeId: contact.volumeId,
+            reason: contact.volumeId === 2 ? 'tip_spacing' as const : 'COLLISION_WITH_MODEL' as const,
+          })),
+      };
+    },
+    routeSticks: async ({ contacts: waveContacts }) => {
+      stickWaves.push(waveContacts.map((contact) => contact.id));
+      return { supports: waveContacts.map(plannedStick), failures: [] };
+    },
+  });
+
+  assert.deepEqual(trunkWaves[0], ['repair:1:0', 'repair:2:0', 'repair:3:0']);
+  // tip_spacing (volume 2) is adjacent coverage — only the collision (volume 3) advances.
+  assert.deepEqual(stickWaves[0], ['repair:3:0']);
+  assert.equal(supports.length, 2);
 });
 
 test('produces identical previews for identical inputs', async () => {

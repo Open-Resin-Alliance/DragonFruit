@@ -68,6 +68,75 @@ function countFailureReasons(failures: AutoSupportRouteFailure[]): AutoSupportPl
   return counts;
 }
 
+/**
+ * Route a fixed contact set through the full rescue ladder: plate trunks,
+ * on-model sticks, then both again at detail size. Used for verification
+ * repair rounds, where contacts come from a re-scan rather than volumes.
+ */
+export async function routeRepairSupports(args: {
+  contacts: AutoSupportContactCandidate[];
+  settings: AutoSupportPlannerSettings;
+  modelId: string;
+  mesh: THREE.Mesh;
+  existingTipPoints?: Point[];
+  signal?: AbortSignal;
+  onProgress?: (progress: AutoSupportProgress) => void;
+  routeContacts?: typeof routeAutoSupportContacts;
+  routeSticks?: typeof routeStickFallback;
+}): Promise<PlannedAutoSupport[]> {
+  const routeContacts = args.routeContacts ?? routeAutoSupportContacts;
+  const routeSticks = args.routeSticks ?? routeStickFallback;
+  const supports: PlannedAutoSupport[] = [];
+  let pending = args.contacts;
+  // Verification has already proven nearby tips are not covering these
+  // regions, so repair routes with a much tighter spacing floor than the
+  // preset's aesthetic spacing, and casts a wider net for usable surface.
+  const settings = {
+    ...args.settings,
+    contactSpacingMm: Math.min(args.settings.contactSpacingMm, 2),
+    surfaceSearchRadiusMm: args.settings.surfaceSearchRadiusMm * 2,
+  };
+  const tipVectors = () => [
+    ...(args.existingTipPoints ?? []),
+    ...supports.flatMap(plannedTipPoints),
+  ].map((point) => new THREE.Vector3(point.x, point.y, point.z));
+  const stages: Array<(contacts: AutoSupportContactCandidate[]) => Promise<{ supports: PlannedAutoSupport[]; failures: AutoSupportRouteFailure[] }>> = [
+    (contacts) => routeContacts({
+      contacts, settings, modelId: args.modelId, mesh: args.mesh,
+      existingTipPoints: tipVectors(), signal: args.signal, onProgress: args.onProgress,
+      progressPhase: 'verify', maxExpansions: RETRY_MAX_EXPANSIONS,
+    }),
+    (contacts) => routeSticks({
+      contacts, settings, modelId: args.modelId, mesh: args.mesh,
+      existingTipPoints: tipVectors(), signal: args.signal, onProgress: args.onProgress,
+    }),
+    (contacts) => routeContacts({
+      contacts, settings, modelId: args.modelId, mesh: args.mesh,
+      existingTipPoints: tipVectors(), signal: args.signal, onProgress: args.onProgress,
+      progressPhase: 'verify', maxExpansions: RETRY_MAX_EXPANSIONS, overrides: DETAIL_OVERRIDES,
+    }),
+    (contacts) => routeSticks({
+      contacts, settings, modelId: args.modelId, mesh: args.mesh,
+      existingTipPoints: tipVectors(), signal: args.signal, onProgress: args.onProgress,
+      overrides: DETAIL_OVERRIDES,
+    }),
+  ];
+  const outcomes = new Map<string, string>();
+  for (let stageIndex = 0; stageIndex < stages.length; stageIndex++) {
+    if (pending.length === 0) break;
+    const wave = await stages[stageIndex](pending);
+    supports.push(...wave.supports);
+    for (const support of wave.supports) outcomes.set(support.contact.id, `${support.kind}@${stageIndex}`);
+    for (const failure of wave.failures) outcomes.set(failure.contactId, `${failure.reason}@${stageIndex}`);
+    const failedIds = new Set(wave.failures
+      .filter((failure) => failure.reason !== 'tip_spacing')
+      .map((failure) => failure.contactId));
+    pending = pending.filter((contact) => failedIds.has(contact.id));
+  }
+  console.warn('[auto-support] repair outcomes', JSON.stringify(Object.fromEntries(outcomes)));
+  return supports;
+}
+
 export async function runAutoSupportPlan(args: AutoSupportRunArgs): Promise<AutoSupportPlanPreview> {
   const settings = args.settings ?? AUTO_SUPPORT_PRESETS[args.preset];
   const routeContacts = args.routeContacts ?? routeAutoSupportContacts;

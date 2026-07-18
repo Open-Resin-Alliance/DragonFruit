@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { runIslandScan, runScanlineScan, type ScanResults } from './ScanOrchestrator';
 import { runIslandScanNative } from './nativeIslandScan';
 import { computeIslandMarkers, type IslandMarker } from './islandOverlayLogic';
@@ -195,6 +196,41 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
     }
   }, [geom, prepareTransformedGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minIslandAreaMm2, minOverlapPx, overlapNeighborhoodPx]);
 
+  // Scan the model merged with extra geometry (e.g. planned supports) without
+  // touching the panel's scan state — used for coverage verification.
+  const onRunCoverageScan = useCallback(async (
+    extraGeometry: THREE.BufferGeometry,
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<{ scanData: ScanResults; scanBBox: THREE.Box3 } | null> => {
+    if (!geom) return null;
+    const transformedGeom = prepareTransformedGeom();
+    if (!transformedGeom) return null;
+
+    const modelOnly = transformedGeom.index ? transformedGeom.toNonIndexed() : transformedGeom;
+    for (const name of Object.keys(modelOnly.attributes)) {
+      if (name !== 'position') modelOnly.deleteAttribute(name);
+    }
+    const merged = mergeGeometries([modelOnly, extraGeometry], false);
+    if (!merged) return null;
+    merged.computeBoundingBox();
+    const mergedBBox = merged.boundingBox!;
+
+    const params = {
+      px_mm: pxMm,
+      support_buffer_mm: supportBufMm,
+      connectivity,
+      min_island_area_mm2: minIslandAreaMm2,
+      min_overlap_px: minOverlapPx,
+      overlap_neighborhood_px: overlapNeighborhoodPx,
+    };
+    const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+    const res = isTauriRuntime
+      ? await runIslandScanNative({ geometry: merged, bbox: mergedBBox }, layerHeightMm, params, onProgress)
+      : await runIslandScan({ geometry: merged, bbox: mergedBBox }, layerHeightMm, params, onProgress);
+    merged.dispose();
+    return { scanData: res, scanBBox: mergedBBox };
+  }, [geom, prepareTransformedGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minIslandAreaMm2, minOverlapPx, overlapNeighborhoodPx]);
+
   // Compute markers
   const islandMarkers = useMemo<Array<IslandMarker & { type: number; islandId: number }>>(() => {
     if (!scanData || !scanBBox) return [];
@@ -245,6 +281,7 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
     onRunIslandScan,
     onRunScanlineScan,
     onRunNativeIslandScan,
+    onRunCoverageScan,
     useNativeScan, setUseNativeScan,
     clearScanData
   };

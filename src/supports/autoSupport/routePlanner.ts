@@ -88,7 +88,9 @@ export async function routeAutoSupportContacts(args: {
     if (planned) supports.push(planned);
     else failures.push({ contactId: contact.id, volumeId: contact.volumeId, reason: failureReason });
     args.onProgress?.({ phase, completed: contactIndex + 1, total: args.contacts.length });
-    if (contactIndex % 4 === 3) await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    // Every A* attempt can block for tens to hundreds of milliseconds on
+    // dense meshes; yield after each contact so the viewport stays usable.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
 
   return { supports, failures };

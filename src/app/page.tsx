@@ -203,7 +203,10 @@ import {
   createIslandSupportMesh,
   disposeIslandSupportMesh,
 } from '@/supports/autoSupport/islandSupportSurface';
-import { runAutoSupportPlan } from '@/supports/autoSupport/autoSupportRunner';
+import { routeRepairSupports, runAutoSupportPlan } from '@/supports/autoSupport/autoSupportRunner';
+import { AUTO_SUPPORT_PRESETS } from '@/supports/autoSupport/presets';
+import { collectSupportGeometry, contactWeldGroup, evaluateCoverageScan, plannedContactPoints, plannedSupportGroup } from '@/supports/autoSupport/verifyCoverage';
+import { buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
 import type { AutoSupportPlanPreview, AutoSupportPreset, AutoSupportProgress } from '@/supports/autoSupport/types';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
@@ -12355,6 +12358,83 @@ export default function Home() {
         signal: abortController.signal,
         onProgress,
       });
+
+      // Verify empirically: re-scan the model merged with the planned and
+      // committed supports; any volume still passing the significance
+      // thresholds is genuinely unsupported. One repair round routes supports
+      // for whatever the first verification still sees, then re-verifies.
+      if (preview.supports.length > 0 && !abortController.signal.aborted) {
+        const runVerificationScan = async () => {
+          const plannedGroups = preview.supports.map(plannedSupportGroup);
+          const committedGroup = buildScopedSupportGeometryGroup(getSupportSnapshot(), getKickstandSnapshot(), [modelId]);
+          const weldGroup = contactWeldGroup([
+            ...plannedContactPoints(preview.supports),
+            ...supportTips.map((tip) => ({ x: tip.x, y: tip.y, z: tip.z })),
+          ]);
+          const supportGeometry = collectSupportGeometry([...plannedGroups, committedGroup, weldGroup]);
+          if (!supportGeometry) return null;
+          try {
+            const verificationScan = await islands.onRunCoverageScan(supportGeometry);
+            if (!verificationScan || abortController.signal.aborted) return null;
+            return evaluateCoverageScan({
+              scan: verificationScan.scanData,
+              scanMinZ: verificationScan.scanBBox.min.z,
+              layerHeightMm: slicing.layerHeightMm,
+              settings: AUTO_SUPPORT_PRESETS[preset],
+            });
+          } finally {
+            supportGeometry.dispose();
+          }
+        };
+
+        onProgress({ phase: 'verify', completed: 0, total: 2 });
+        let verification = await runVerificationScan();
+        onProgress({ phase: 'verify', completed: 1, total: 2 });
+        if (verification && verification.repairContacts.length > 0 && !abortController.signal.aborted) {
+          const repairs = await routeRepairSupports({
+            contacts: verification.repairContacts,
+            settings: AUTO_SUPPORT_PRESETS[preset],
+            modelId,
+            mesh,
+            existingTipPoints: supportTips.map((tip) => ({ x: tip.x, y: tip.y, z: tip.z })),
+            signal: abortController.signal,
+            onProgress,
+          });
+          if (repairs.length > 0) {
+            preview.supports.push(...repairs);
+            verification = (await runVerificationScan()) ?? verification;
+          }
+        }
+        onProgress({ phase: 'verify', completed: 2, total: 2 });
+        if (verification) {
+          // Flagged spots with a support tip fused within reach are scan
+          // artifacts (voxel linkage, self-intersecting source geometry), not
+          // missing supports — the repair round demonstrably placed tips on
+          // them and the scan still cannot always link sub-pixel contacts.
+          const fusedRadiusSq = 3 * 3;
+          const allTips = [
+            ...plannedContactPoints(preview.supports),
+            ...supportTips.map((tip) => ({ x: tip.x, y: tip.y, z: tip.z })),
+          ];
+          const realRemainders = verification.repairContacts.filter((contact) => !allTips.some((tip) => {
+            const dx = tip.x - contact.position.x;
+            const dy = tip.y - contact.position.y;
+            const dz = tip.z - contact.position.z;
+            return dx * dx + dy * dy + dz * dz < fusedRadiusSq;
+          }));
+          preview.verification = { remainingVolumeCount: realRemainders.length };
+          if (verification.repairContacts.length > 0) {
+            console.warn('[auto-support] verification remainders', JSON.stringify(verification.repairContacts.map((contact) => ({
+              volumeId: contact.volumeId,
+              x: Number(contact.position.x.toFixed(2)),
+              y: Number(contact.position.y.toFixed(2)),
+              z: Number(contact.position.z.toFixed(2)),
+              fusedNearby: !realRemainders.includes(contact),
+            }))));
+          }
+        }
+      }
+
       setAutoSupportPreview(preview.supports.length > 0 ? preview : null);
       return preview;
     } catch (error) {

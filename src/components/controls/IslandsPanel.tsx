@@ -49,6 +49,11 @@ function describeAutoSupportPreview(preview: AutoSupportPlanPreview): string {
       .join(', ');
     parts.push(`${unresolved} ${unresolved === 1 ? 'region needs' : 'regions need'} manual work${reasons ? ` (${reasons})` : ''}.`);
   }
+  if (preview.verification) {
+    parts.push(preview.verification.remainingVolumeCount === 0
+      ? 'Verified: no unsupported regions remain.'
+      : `Verification still sees ${preview.verification.remainingVolumeCount} unsupported ${preview.verification.remainingVolumeCount === 1 ? 'region' : 'regions'}.`);
+  }
   return parts.join(' ');
 }
 

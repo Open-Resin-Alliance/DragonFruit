@@ -80,6 +80,10 @@ export interface AutoSupportPlanPreview {
   unresolvedVolumeIds: number[];
   attemptedContactCount: number;
   failureReasonCounts: Partial<Record<AutoSupportRouteFailureReason, number>>;
+  /** Result of re-scanning the model merged with the planned supports. */
+  verification?: {
+    remainingVolumeCount: number;
+  };
 }
 
 export interface AutoSupportProgress {
