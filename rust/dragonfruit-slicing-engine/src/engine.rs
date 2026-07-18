@@ -3912,39 +3912,170 @@ fn diag_read_rss_mb() -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Best-effort currently-available physical RAM, in bytes. `None` when the
+/// platform can't be queried, so callers fall back to a fixed cap (issue #386).
+fn available_ram_bytes() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+        let line = text.lines().find(|l| l.starts_with("MemAvailable:"))?;
+        let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+        Some(kb.saturating_mul(1024))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // GlobalMemoryStatusEx via a tiny FFI shim so we pull in no new crate.
+        #[repr(C)]
+        struct MemStatusEx {
+            length: u32,
+            mem_load: u32,
+            total_phys: u64,
+            avail_phys: u64,
+            total_page: u64,
+            avail_page: u64,
+            total_virtual: u64,
+            avail_virtual: u64,
+            avail_extended_virtual: u64,
+        }
+        extern "system" {
+            fn GlobalMemoryStatusEx(buffer: *mut MemStatusEx) -> i32;
+        }
+        let mut s: MemStatusEx = unsafe { std::mem::zeroed() };
+        s.length = std::mem::size_of::<MemStatusEx>() as u32;
+        if unsafe { GlobalMemoryStatusEx(&mut s) } != 0 {
+            Some(s.avail_phys)
+        } else {
+            None
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // No single "available" field on macOS: approximate it as (free +
+        // inactive) pages, matching Activity Monitor's notion of reclaimable RAM.
+        // Pull page count from the mach VM stats and page size from sysctl; both
+        // live in libSystem so we need no extra crate or link flags.
+        use std::os::raw::{c_char, c_int, c_uint, c_void};
+        extern "C" {
+            fn sysctlbyname(
+                name: *const c_char,
+                oldp: *mut c_void,
+                oldlenp: *mut usize,
+                newp: *mut c_void,
+                newlen: usize,
+            ) -> c_int;
+            fn mach_host_self() -> c_uint;
+            fn host_statistics64(
+                host: c_uint,
+                flavor: c_int,
+                info: *mut c_int,
+                count: *mut c_uint,
+            ) -> c_int;
+        }
+        const HOST_VM_INFO64: c_int = 4;
+
+        let mut page_size: c_int = 0;
+        let mut plen = std::mem::size_of::<c_int>();
+        let rc_page = unsafe {
+            sysctlbyname(
+                b"hw.pagesize\0".as_ptr() as *const c_char,
+                &mut page_size as *mut c_int as *mut c_void,
+                &mut plen,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if rc_page != 0 || page_size <= 0 {
+            return None;
+        }
+
+        // vm_statistics64 starts with natural_t (u32) counts; free_count is field
+        // 0 and inactive_count is field 2, so reading a prefix buffer is safe
+        // regardless of the trailing fields' layout.
+        let mut info = [0i32; 64];
+        let mut count = info.len() as c_uint;
+        let rc_vm = unsafe {
+            host_statistics64(mach_host_self(), HOST_VM_INFO64, info.as_mut_ptr(), &mut count)
+        };
+        if rc_vm != 0 || count < 3 {
+            return None;
+        }
+        let free = info[0] as u32 as u64;
+        let inactive = info[2] as u32 as u64;
+        Some((free + inactive).saturating_mul(page_size as u64))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    {
+        None
+    }
+}
+
 /// Counting semaphore bounding the number of outstanding (dispatched-but-unfinished)
-/// perturbation-3DAA post/z-blur tasks. Each outstanding task holds a `(2·radius+1)`
-/// layer RLE window, so an unbounded spawn count is the #386 OOM driver. Acquiring
-/// here blocks the single `post_worker` dispatch thread, which propagates backpressure
-/// through `post_rx`/`post_tx` up to the rasterizer (issue #386).
-struct PostTaskGate {
-    slots: std::sync::Mutex<usize>,
-    cv: std::sync::Condvar,
+/// perturbation-3DAA post/z-blur tasks. Each outstanding task pins ~one more model
+/// layer resident (the z-blur window is Arc-shared across neighbours), so an
+/// unbounded spawn count is the #386 OOM driver. Acquiring here blocks the single
+/// `post_worker` dispatch thread, which propagates backpressure through
+/// `post_rx`/`post_tx` up to the rasterizer.
+///
+/// `max` is adjustable at runtime via [`PostTaskGate::retune`] so the cap can track
+/// whichever resource is scarcer: `post_worker_count` sets the floor (keep the post
+/// pool fed) while available RAM sets the ceiling. It lives inside the same mutex as
+/// the count so cap changes and the acquire predicate can't race (issue #386).
+struct GateState {
+    count: usize,
     max: usize,
+}
+
+struct PostTaskGate {
+    state: std::sync::Mutex<GateState>,
+    cv: std::sync::Condvar,
 }
 
 impl PostTaskGate {
     fn new(max: usize) -> Self {
         Self {
-            slots: std::sync::Mutex::new(0),
+            state: std::sync::Mutex::new(GateState {
+                count: 0,
+                max: max.max(1),
+            }),
             cv: std::sync::Condvar::new(),
-            max: max.max(1),
         }
     }
 
     fn acquire(&self) {
-        let mut n = self.slots.lock().unwrap();
-        while *n >= self.max {
-            n = self.cv.wait(n).unwrap();
+        let mut s = self.state.lock().unwrap();
+        while s.count >= s.max {
+            s = self.cv.wait(s).unwrap();
         }
-        *n += 1;
+        s.count += 1;
     }
 
     fn release(&self) {
-        let mut n = self.slots.lock().unwrap();
-        *n = n.saturating_sub(1);
-        drop(n);
+        let mut s = self.state.lock().unwrap();
+        s.count = s.count.saturating_sub(1);
+        drop(s);
         self.cv.notify_one();
+    }
+
+    /// #386 adaptive: resize the in-flight cap while slicing. Raising it wakes any
+    /// blocked dispatch; lowering it just makes the next `acquire` block sooner.
+    /// No-op when the cap is unchanged, so a monotonically-shrinking cap won't
+    /// spam wakeups.
+    fn retune(&self, new_max: usize) {
+        let new_max = new_max.max(1);
+        let mut s = self.state.lock().unwrap();
+        if s.max == new_max {
+            return;
+        }
+        let old_max = s.max;
+        let grew = new_max > old_max;
+        s.max = new_max;
+        drop(s);
+        // Log every real cap change so a future debugger can see when RAM
+        // pressure resized the in-flight queue and by how much (issue #386).
+        eprintln!("[386] post-task in-flight cap {old_max} -> {new_max}");
+        if grew {
+            self.cv.notify_all();
+        }
     }
 }
 
@@ -4037,14 +4168,34 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
         .saturating_mul(2)
         .saturating_add(post_worker_count.saturating_mul(2))
         .clamp(4, 128);
-    // #386 fix: bound outstanding post/z-blur tasks so their per-task RLE window
-    // clones can't accumulate without limit. Sized >= post_worker_count so the
-    // post pool stays fully fed (all cores on z-blur) while capping memory.
-    // Override with DF_3DAA_POST_MAX_INFLIGHT.
-    let post_max_inflight = env_override_usize("DF_3DAA_POST_MAX_INFLIGHT")
-        .unwrap_or_else(|| post_worker_count.saturating_add(z_blur_radius.saturating_mul(2)))
-        .max(post_worker_count.max(1));
+    // #386 fix: bound outstanding post/z-blur tasks so their RLE windows can't
+    // accumulate without limit. The cap tracks whichever resource is scarcer:
+    // `post_worker_count` is the throughput-optimal depth (extra queue beyond it
+    // buys no parallelism, only buffering), and available RAM is the ceiling.
+    //   - DF_3DAA_POST_MAX_INFLIGHT pins the cap and disables adaptation.
+    //   - DF_3DAA_RAM_BUDGET_MB forces the RAM budget (emulate a low-RAM box).
+    // We start at `default_cap` and shrink toward `budget / max_layer_cost` as the
+    // real per-layer window sizes arrive. Divisor is the worst MODEL LAYER seen,
+    // not the whole window: with the Arc-shared window, one more in-flight task
+    // pins ~one extra model layer resident, not (2·radius+1) of them.
+    let gate_floor = post_worker_count.max(1);
+    let default_cap = post_worker_count
+        .saturating_add(z_blur_radius.saturating_mul(2))
+        .max(gate_floor);
+    let cap_override = env_override_usize("DF_3DAA_POST_MAX_INFLIGHT");
+    let ram_budget_bytes: u64 = if cap_override.is_some() {
+        0 // pinned cap => no adaptation
+    } else if let Some(mb) = env_override_usize("DF_3DAA_RAM_BUDGET_MB") {
+        (mb as u64).saturating_mul(1024 * 1024)
+    } else {
+        // Spend at most ~half of currently-free RAM on in-flight z-blur windows.
+        available_ram_bytes().map(|a| a / 2).unwrap_or(0)
+    };
+    let post_max_inflight = cap_override.map(|o| o.max(1)).unwrap_or(default_cap);
     let post_gate = Arc::new(PostTaskGate::new(post_max_inflight));
+    // #386 adaptive: worst model-layer window bytes observed so far (production,
+    // survives DIAG386 removal). Drives the RAM-aware cap in `dispatch_ready`.
+    let post_worst_layer_bytes = Arc::new(AtomicUsize::new(0));
     // DIAG386: live accounting of in-flight post-task memory. Each dispatched
     // task deep-clones its z-blur window (history+future+model) as RLE runs;
     // this measures how much that costs and whether it's the OOM driver.
@@ -4056,7 +4207,11 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     eprintln!(
         "[DIAG386] width={width} height={height} z_blur_radius={z_blur_radius} \
          blur_radius={blur_radius} post_worker_count={post_worker_count} \
-         post_buffer={post_buffer} max_inflight={post_max_inflight} dither={} run_bytes={}",
+         post_buffer={post_buffer} max_inflight={post_max_inflight} \
+         default_cap={default_cap} gate_floor={gate_floor} \
+         ram_budget_mb={} adaptive={} dither={} run_bytes={}",
+        ram_budget_bytes / (1024 * 1024),
+        ram_budget_bytes > 0,
         dither_palette.is_some(),
         std::mem::size_of::<crate::rle::RleRun>(),
     );
@@ -4069,6 +4224,8 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
             let support_merge_ns_worker = Arc::clone(&support_merge_ns_accum);
             // #386 fix: gate moved into the post_worker closure.
             let post_gate_w = Arc::clone(&post_gate);
+            // #386 adaptive: worst-layer tracker for the RAM-aware cap.
+            let post_worst_layer_bytes_w = Arc::clone(&post_worst_layer_bytes);
             // DIAG386: counters moved into the post_worker closure.
             let diag_inflight_tasks_w = Arc::clone(&diag_inflight_tasks);
             let diag_inflight_bytes_w = Arc::clone(&diag_inflight_bytes);
@@ -4129,6 +4286,27 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                                 .map(|r| r.len() * rr)
                                 .unwrap_or(0);
                         atomic_max(&diag_max_layer_run_bytes_w, model_run_bytes);
+
+                        // #386 adaptive: shrink the in-flight cap toward what RAM
+                        // can hold. Each extra in-flight task pins ~one worst-case
+                        // model layer resident (the window is Arc-shared), plus a
+                        // fixed (2·radius+1)-layer frontier the dispatcher holds.
+                        // Solve (K + window)·worst_layer ≤ budget for K, clamp to
+                        // [1, default_cap]. Runs on the single dispatch thread, so
+                        // the cap reflects the worst layer seen before the next
+                        // acquire. RAM is allowed to pull K below post_worker_count
+                        // (issue #386: on a starved box, not-OOMing wins over depth).
+                        if ram_budget_bytes > 0 {
+                            atomic_max(&post_worst_layer_bytes_w, model_run_bytes.max(1));
+                            let worst =
+                                post_worst_layer_bytes_w.load(Ordering::Relaxed).max(1) as u64;
+                            let window_layers = (z_blur_radius as u64) * 2 + 1;
+                            let ram_cap = (ram_budget_bytes / worst)
+                                .saturating_sub(window_layers)
+                                .max(1) as usize;
+                            post_gate_w.retune(ram_cap.min(default_cap));
+                        }
+
                         let now = diag_inflight_bytes_w.fetch_add(task_bytes, Ordering::Relaxed)
                             + task_bytes;
                         diag_inflight_tasks_w.fetch_add(1, Ordering::Relaxed);
