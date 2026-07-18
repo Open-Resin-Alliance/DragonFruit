@@ -6,21 +6,21 @@ import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionMa
 
 export type MeshRepairModalsProps = {
   isManualRepairing: boolean;
-  manualRepairModelId: string | null;
+  manualRepairModelIds: string[];
   scene: ReturnType<typeof useSceneCollectionManager>;
   setIsManualRepairing: React.Dispatch<React.SetStateAction<boolean>>;
-  setManualRepairModelId: React.Dispatch<React.SetStateAction<string | null>>;
+  setManualRepairModelIds: React.Dispatch<React.SetStateAction<string[]>>;
   setShowDamagedModelDialog: React.Dispatch<React.SetStateAction<boolean>>;
   showDamagedModelDialog: boolean;
 };
 
-/** Editor modal organism: StructuredDialog_damagedModel, meshRepairConfirmPrompt, manualRepairModelId, meshRepairReports. */
+/** Editor modal organism: StructuredDialog_damagedModel, meshRepairConfirmPrompt, manualRepairModelIds, meshRepairReports. */
 export function MeshRepairModals({
   isManualRepairing,
-  manualRepairModelId,
+  manualRepairModelIds,
   scene,
   setIsManualRepairing,
-  setManualRepairModelId,
+  setManualRepairModelIds,
   setShowDamagedModelDialog,
   showDamagedModelDialog,
 }: MeshRepairModalsProps) {
@@ -69,15 +69,19 @@ export function MeshRepairModals({
         />
       )}
 
-      {manualRepairModelId && (() => {
-        const repairModel = scene.models.find(m => m.id === manualRepairModelId);
-        if (!repairModel) return null;
+      {manualRepairModelIds.length > 0 && (() => {
+        const repairModels = manualRepairModelIds
+          .map((id) => scene.models.find((m) => m.id === id))
+          .filter((m): m is NonNullable<typeof m> => Boolean(m));
+        if (repairModels.length === 0) return null;
+        const repairCount = repairModels.length;
+        const isMulti = repairCount > 1;
         return (
           <div
             className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
             onMouseDown={(event) => {
               if (event.target === event.currentTarget && !isManualRepairing) {
-                setManualRepairModelId(null);
+                setManualRepairModelIds([]);
               }
             }}
           >
@@ -107,7 +111,7 @@ export function MeshRepairModals({
 
                   <div className="min-w-0 pr-2">
                     <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                      Repair this mesh?
+                      {isMulti ? `Repair ${repairCount} meshes?` : 'Repair this mesh?'}
                     </h2>
                     <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
                       DragonFruit will try to fix common geometry issues before you keep working.
@@ -125,7 +129,7 @@ export function MeshRepairModals({
                   }}
                   aria-label="Close repair mesh dialog"
                   disabled={isManualRepairing}
-                  onClick={() => setManualRepairModelId(null)}
+                  onClick={() => setManualRepairModelIds([])}
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -133,10 +137,27 @@ export function MeshRepairModals({
 
               <div className="space-y-4 p-5">
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Model</div>
-                  <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={repairModel.name}>
-                    {repairModel.name}
+                  <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                    {isMulti ? `Models (${repairCount})` : 'Model'}
                   </div>
+                  {isMulti ? (
+                    <div className="mt-1 max-h-40 overflow-y-auto pr-1">
+                      {repairModels.map((model) => (
+                        <div
+                          key={model.id}
+                          className="text-sm font-semibold truncate"
+                          style={{ color: 'var(--text-strong)' }}
+                          title={model.name}
+                        >
+                          {model.name}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={repairModels[0].name}>
+                      {repairModels[0].name}
+                    </div>
+                  )}
                 </div>
 
                 <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
@@ -163,7 +184,7 @@ export function MeshRepairModals({
                     type="button"
                     className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
                     disabled={isManualRepairing}
-                    onClick={() => setManualRepairModelId(null)}
+                    onClick={() => setManualRepairModelIds([])}
                   >
                     Keep Original
                   </button>
@@ -171,18 +192,23 @@ export function MeshRepairModals({
                     type="button"
                     className="ui-button ui-button-accent !h-9 w-full px-3 text-xs flex items-center justify-center gap-1.5 disabled:opacity-60"
                     disabled={isManualRepairing}
-                    onClick={() => {
-                      const id = manualRepairModelId;
+                    onClick={async () => {
+                      const ids = repairModels.map((model) => model.id);
                       setIsManualRepairing(true);
-                      void scene.repairModelInPlace(id).finally(() => {
+                      try {
+                        // Repair each model sequentially (repeated single-model calls).
+                        for (const id of ids) {
+                          await scene.repairModelInPlace(id);
+                        }
+                      } finally {
                         setIsManualRepairing(false);
-                        setManualRepairModelId(null);
-                      });
+                        setManualRepairModelIds([]);
+                      }
                     }}
                   >
                     {isManualRepairing
                       ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Repairing…</>
-                      : <><Wrench className="h-3.5 w-3.5" />Repair</>
+                      : <><Wrench className="h-3.5 w-3.5" />{isMulti ? 'Repair All' : 'Repair'}</>
                     }
                   </button>
                 </div>

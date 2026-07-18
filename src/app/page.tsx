@@ -854,7 +854,7 @@ export default function Home() {
     segmentId: string;
     point: { x: number; y: number; z: number };
   } | null>(null);
-  const [manualRepairModelId, setManualRepairModelId] = React.useState<string | null>(null);
+  const [manualRepairModelIds, setManualRepairModelIds] = React.useState<string[]>([]);
   const [isManualRepairing, setIsManualRepairing] = React.useState(false);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
   const [isSliceMetricsDebugOpen, setIsSliceMetricsDebugOpen] = React.useState(false);
@@ -4865,7 +4865,7 @@ export default function Home() {
   }, [scene]);
 
   const handleRepairModel = React.useCallback((modelId: string) => {
-    setManualRepairModelId(modelId);
+    setManualRepairModelIds([modelId]);
   }, []);
 
   const handleOpenModelSupportsInfo = React.useCallback((modelId: string) => {
@@ -5580,7 +5580,9 @@ export default function Home() {
         break;
       }
       case 'delete':
-        if (scene.activeModelId) {
+        if (scene.selectedModelIds.length > 0) {
+          scene.deleteModels(scene.selectedModelIds);
+        } else if (scene.activeModelId) {
           scene.deleteModel(scene.activeModelId);
         }
         break;
@@ -5592,7 +5594,13 @@ export default function Home() {
         }
         break;
       case 'cut':
-        if (scene.activeModelId) {
+        if (scene.selectedModelIds.length > 0) {
+          // Snapshot ids before delete mutates the selection (copy then delete,
+          // exactly what single-model cutModel does).
+          const ids = [...scene.selectedModelIds];
+          scene.copySelectedModels();
+          scene.deleteModels(ids);
+        } else if (scene.activeModelId) {
           scene.cutModel(scene.activeModelId);
         }
         break;
@@ -5624,10 +5632,12 @@ export default function Home() {
         break;
       }
       case 'repair': {
-        const targetId = scene.activeModelId;
-        if (targetId) {
+        const ids = scene.selectedModelIds.length > 0
+          ? [...scene.selectedModelIds]
+          : (scene.activeModelId ? [scene.activeModelId] : []);
+        if (ids.length > 0) {
           closeEditorContextMenu();
-          setManualRepairModelId(targetId);
+          setManualRepairModelIds(ids);
           return;
         }
         break;
@@ -9919,10 +9929,10 @@ export default function Home() {
 
       <MeshRepairModals
         isManualRepairing={isManualRepairing}
-        manualRepairModelId={manualRepairModelId}
+        manualRepairModelIds={manualRepairModelIds}
         scene={scene}
         setIsManualRepairing={setIsManualRepairing}
-        setManualRepairModelId={setManualRepairModelId}
+        setManualRepairModelIds={setManualRepairModelIds}
         setShowDamagedModelDialog={setShowDamagedModelDialog}
         showDamagedModelDialog={showDamagedModelDialog}
       />
