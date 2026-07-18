@@ -106,7 +106,7 @@ interface IslandsPanelProps {
     onProgress: (progress: AutoSupportProgress) => void,
   ) => Promise<AutoSupportPlanPreview | null>;
   onAbortAutoSupportRun?: () => void;
-  onAcceptAutoSupports?: () => void;
+  onAcceptAutoSupports?: (options?: { brace?: boolean }) => void;
   onCancelAutoSupports?: () => void;
 }
 
@@ -124,6 +124,7 @@ export function IslandsPanel({
   const [showSettings, setShowSettings] = React.useState(false);
   const [autoSupporting, setAutoSupporting] = React.useState(false);
   const [autoSupportPreset, setAutoSupportPreset] = React.useState<AutoSupportPreset>('normal');
+  const [braceAfterApply, setBraceAfterApply] = React.useState(true);
   const [autoSupportProgress, setAutoSupportProgress] = React.useState<AutoSupportProgress | null>(null);
   const [supportStatus, setSupportStatus] = React.useState<{ ok: boolean; message: string } | null>(null);
 
@@ -380,12 +381,23 @@ export function IslandsPanel({
                   </button>
                   <button
                     type="button"
-                    onClick={onAcceptAutoSupports}
+                    onClick={() => onAcceptAutoSupports?.({ brace: braceAfterApply })}
                     disabled={autoSupportPreview.supports.length === 0}
                     className="ui-button h-8 text-[11px] disabled:opacity-50"
                   >
                     Apply {autoSupportPreview.supports.length}
                   </button>
+                  <label
+                    className="col-span-2 flex cursor-pointer items-center gap-1.5 text-[10px]"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={braceAfterApply}
+                      onChange={(event) => setBraceAfterApply(event.target.checked)}
+                    />
+                    Auto-brace after apply
+                  </label>
                 </div>
               )}
               {supportStatus && (

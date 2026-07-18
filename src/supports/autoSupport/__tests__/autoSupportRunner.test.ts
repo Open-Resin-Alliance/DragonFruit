@@ -77,6 +77,39 @@ const SETTINGS = {
   maxTotalContacts: 10,
 };
 
+test('routes heavy volumes with structural overrides', async () => {
+  // Left strip: 3 layers × 8 px = 24 mm³ (structural at threshold 20).
+  // Right cell: 1 px on one layer = 1 mm³ (standard).
+  const scan = scanFromLayers([
+    [1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0],
+    [1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0],
+  ], 11, 1);
+  const waves: Array<{ volumeIds: number[]; hasOverrides: boolean }> = [];
+
+  const preview = await runAutoSupportPlan({
+    scan,
+    scanMinZ: 10,
+    layerHeightMm: 1,
+    preset: 'normal',
+    settings: { ...SETTINGS, structuralVolumeMm3: 20 },
+    modelId: 'model',
+    mesh: FAKE_MESH,
+    routeContacts: async ({ contacts, overrides }) => {
+      waves.push({ volumeIds: [...new Set(contacts.map((contact) => contact.volumeId))], hasOverrides: overrides !== undefined });
+      return { supports: contacts.map(plannedSupport), failures: [] };
+    },
+    routeSticks: failSticks,
+  });
+
+  assert.equal(preview.unresolvedVolumeIds.length, 0);
+  assert.equal(waves.length, 2);
+  assert.equal(waves[0].hasOverrides, false);
+  assert.equal(waves[1].hasOverrides, true);
+  assert.equal(waves[1].volumeIds.length, 1);
+  assert.ok(!waves[0].volumeIds.includes(waves[1].volumeIds[0]));
+});
+
 test('retries unresolved volumes with fresh contacts and merges both waves', async () => {
   const scan = scanFromLayers([
     [1, 1, 1, 1, 0, 0, 1, 1, 1, 1],

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getSettings as getSupportSettings } from '@/supports/Settings/state';
 import type { ScanResults } from '@/volumeAnalysis/IslandScan/ScanOrchestrator';
 import { buildVolumeHierarchy } from '@/volumeAnalysis/IslandVolumes/buildVolumeHierarchy';
 import type { BuildVolumeHierarchyResult } from '@/volumeAnalysis/IslandVolumes/types';
@@ -31,6 +32,19 @@ const DETAIL_OVERRIDES = {
   tipBodyDiameterMm: 0.6,
   tipLengthMm: 1.2,
 };
+
+// Heavy volumes (a gun, a torso overhang) load their supports far more than a
+// claw tip does; scale up from the user's configured sizes rather than
+// replacing them.
+function structuralOverrides() {
+  const settings = getSupportSettings();
+  return {
+    shaftDiameterMm: settings.shaft.diameterMm * 1.5,
+    rootsDiameterMm: settings.roots.diameterMm * 1.25,
+    tipContactDiameterMm: settings.tip.contactDiameterMm * 1.5,
+    tipBodyDiameterMm: settings.tip.bodyDiameterMm * 1.25,
+  };
+}
 
 export interface AutoSupportRunArgs {
   scan: ScanResults;
@@ -157,8 +171,14 @@ export async function runAutoSupportPlan(args: AutoSupportRunArgs): Promise<Auto
   args.onProgress?.({ phase: 'plan', completed: 1, total: 1 });
 
   const existingTipVectors = existingTips.map((point) => new THREE.Vector3(point.x, point.y, point.z));
+  const structuralVolumeIds = new Set(plan.volumes
+    .filter((volume) => volume.volumeMm3 >= settings.structuralVolumeMm3)
+    .map((volume) => volume.id));
+  const standardContacts = plan.contacts.filter((contact) => !structuralVolumeIds.has(contact.volumeId));
+  const structuralContacts = plan.contacts.filter((contact) => structuralVolumeIds.has(contact.volumeId));
+
   const firstWave = await routeContacts({
-    contacts: plan.contacts,
+    contacts: standardContacts,
     settings,
     modelId: args.modelId,
     mesh: args.mesh,
@@ -167,9 +187,25 @@ export async function runAutoSupportPlan(args: AutoSupportRunArgs): Promise<Auto
     onProgress: args.onProgress,
     progressPhase: 'route',
   });
-
   const supports = [...firstWave.supports];
   const failures = [...firstWave.failures];
+
+  if (structuralContacts.length > 0) {
+    const structuralWave = await routeContacts({
+      contacts: structuralContacts,
+      settings,
+      modelId: args.modelId,
+      mesh: args.mesh,
+      existingTipPoints: [...existingTipVectors, ...supports.flatMap(plannedTipPoints)
+        .map((point) => new THREE.Vector3(point.x, point.y, point.z))],
+      signal: args.signal,
+      onProgress: args.onProgress,
+      progressPhase: 'route',
+      overrides: structuralOverrides(),
+    });
+    supports.push(...structuralWave.supports);
+    failures.push(...structuralWave.failures);
+  }
   let attemptedContactCount = plan.contacts.length;
 
   const routedVolumeIds = new Set(supports.map((support) => support.contact.volumeId));

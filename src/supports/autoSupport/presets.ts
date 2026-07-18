@@ -12,6 +12,7 @@ export const AUTO_SUPPORT_PRESETS: Record<AutoSupportPreset, AutoSupportPlannerS
     routeAttemptsPerContact: 5,
     overhangNormalZMax: -0.82,
     maxSurfaceContacts: 90,
+    structuralVolumeMm3: 300,
   },
   normal: {
     contactSpacingMm: 7,
@@ -24,6 +25,7 @@ export const AUTO_SUPPORT_PRESETS: Record<AutoSupportPreset, AutoSupportPlannerS
     routeAttemptsPerContact: 7,
     overhangNormalZMax: -0.71,
     maxSurfaceContacts: 180,
+    structuralVolumeMm3: 180,
   },
   heavy: {
     contactSpacingMm: 5,
@@ -36,5 +38,6 @@ export const AUTO_SUPPORT_PRESETS: Record<AutoSupportPreset, AutoSupportPlannerS
     routeAttemptsPerContact: 9,
     overhangNormalZMax: -0.57,
     maxSurfaceContacts: 380,
+    structuralVolumeMm3: 120,
   },
 };

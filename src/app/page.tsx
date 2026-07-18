@@ -179,7 +179,9 @@ import {
   getSavedUvToolsSettings,
   resolveUvToolsExecutablePath,
 } from '@/components/settings/uvToolsPreferences';
-import { addRoot, addStick, addTrunk, beginSupportStateBatch, endSupportStateBatch, subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, toggleSegmentCurve, transformSupportsForModel, updateTrunk, updateBranch, updateTwig, updateStick } from '@/supports/state';
+import { addRoot, addStick, addTrunk, beginSupportStateBatch, endSupportStateBatch, subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, setSnapshot as setSupportSnapshot, toggleSegmentCurve, transformSupportsForModel, updateTrunk, updateBranch, updateTwig, updateStick } from '@/supports/state';
+import { buildAutoBracedSnapshot } from '@/supports/autoBracing/autoBrace';
+import { getSettings as getSupportSettings } from '@/supports/Settings/state';
 import {
   getKickstandSnapshot,
   subscribeToKickstandStore,
@@ -12451,7 +12453,7 @@ export default function Home() {
     autoSupportAbortRef.current?.abort();
   }, []);
 
-  const handleAcceptAutoSupports = React.useCallback(() => {
+  const handleAcceptAutoSupports = React.useCallback((options?: { brace?: boolean }) => {
     if (!autoSupportPreview || autoSupportPreview.supports.length === 0) return;
     const before = captureSupportEditSnapshot();
     beginSupportStateBatch();
@@ -12463,6 +12465,12 @@ export default function Home() {
         } else {
           addStick(support.stick);
         }
+      }
+      if (options?.brace) {
+        // Fold bracing into the same commit so one undo removes the whole
+        // generated structure, supports and braces alike.
+        const braced = buildAutoBracedSnapshot(getSupportSnapshot(), getSupportSettings().autoBracing);
+        if (braced.changed) setSupportSnapshot(braced.snapshot);
       }
     } finally {
       endSupportStateBatch();

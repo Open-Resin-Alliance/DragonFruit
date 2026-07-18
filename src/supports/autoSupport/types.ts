@@ -15,6 +15,8 @@ export interface AutoSupportPlannerSettings {
   /** Faces with world normal z at or below this get surface-fill supports. */
   overhangNormalZMax: number;
   maxSurfaceContacts: number;
+  /** Volumes at or above this mass get beefed-up structural supports. */
+  structuralVolumeMm3: number;
 }
 
 export interface UnsupportedVolume {
