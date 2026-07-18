@@ -7989,6 +7989,7 @@ export default function Home() {
     handleDropSelectionToPlatform,
     handleLiftSelection,
     applyPanelTransformToSelection,
+    handleCenterSelection,
     handleResetRotationSelection,
     handleResetScaleSelection,
   } = useSelectionTransforms({
@@ -7998,25 +7999,27 @@ export default function Home() {
     requestDestructiveTransformSupportDeletionWithContinuation,
   });
 
-  // Wrap the panel's commit so a scale change fans out to the whole selection.
-  // (Rotate fans out from handleRotationComplete, which fires first and clears
-  // the pending entry; position/move is handled separately.) See §4c.
+  // Wrap the panel's commit so a scale OR position change fans out to the whole
+  // selection. (Rotate fans out from handleRotationComplete, which fires first
+  // and clears the pending entry.) Scale is ABSOLUTE; move is a SHARED DELTA.
+  // See §4c / §4f.
   const handlePanelTransformCommit = React.useCallback((frameDelay?: number) => {
     const pending = pendingTransformHistoryRef.current;
     const isScale = pending?.description?.startsWith('transform:scale') ?? false;
+    const isMove = pending?.description?.startsWith('transform:move') ?? false;
     const activeBefore = pending
       ? { position: pending.before.position.clone(), rotation: pending.before.rotation.clone(), scale: pending.before.scale.clone() }
       : null;
 
     scheduleCommitPendingTransformHistory(frameDelay);
 
-    if (isScale && activeBefore && scene.activeModelId && isFiniteTransform(transformMgr.transform)) {
+    if ((isScale || isMove) && activeBefore && scene.activeModelId && isFiniteTransform(transformMgr.transform)) {
       const activeAfter: ModelTransform = {
         position: transformMgr.transform.position.clone(),
         rotation: transformMgr.transform.rotation.clone(),
         scale: transformMgr.transform.scale.clone(),
       };
-      applyPanelTransformToSelection('scale', activeBefore, activeAfter);
+      applyPanelTransformToSelection(isScale ? 'scale' : 'move', activeBefore, activeAfter);
     }
   }, [applyPanelTransformToSelection, isFiniteTransform, scene.activeModelId, scheduleCommitPendingTransformHistory, transformMgr.transform]);
 
@@ -9197,6 +9200,7 @@ export default function Home() {
               setArrangeSpacingMm: setArrangeSpacingMm,
               onDropSelectionToPlatform: handleDropSelectionToPlatform,
               onLiftSelection: handleLiftSelection,
+              onCenterSelection: handleCenterSelection,
               onResetRotationSelection: handleResetRotationSelection,
               onResetScaleSelection: handleResetScaleSelection,
             })}

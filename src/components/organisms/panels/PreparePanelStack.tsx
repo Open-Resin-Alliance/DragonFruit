@@ -55,6 +55,7 @@ export type PreparePanelStackProps = {
   setArrangeSpacingMm: (value: number) => void;
   onDropSelectionToPlatform: () => void;
   onLiftSelection: () => void;
+  onCenterSelection: () => void;
   onResetRotationSelection: () => void;
   onResetScaleSelection: () => void;
 };
@@ -97,6 +98,7 @@ export function PreparePanelStack({
   setArrangeSpacingMm,
   onDropSelectionToPlatform,
   onLiftSelection,
+  onCenterSelection,
   onResetRotationSelection,
   onResetScaleSelection,
 }: PreparePanelStackProps) {
@@ -220,8 +222,20 @@ export function PreparePanelStack({
         <TransformControls
           key="prepare-transform-controls"
           position={transformMgr.transform.position}
-          onPositionChange={transformMgr.transformHook.setPosition}
-          onCenter={transformMgr.transformHook.centerXY}
+          onPositionChange={(x, y, z) => {
+            const current = transformMgr.transform.position;
+            const EPS = 1e-6;
+            const hasMoveDelta = Math.abs(x - current.x) > EPS
+              || Math.abs(y - current.y) > EPS
+              || Math.abs(z - current.z) > EPS;
+            // Stage a pending 'move' entry so the commit has a `before` to delta
+            // from — the whole selection then fans out by that shared delta (§4f).
+            if (hasMoveDelta) {
+              ensurePendingTransformHistoryForActiveModel('move');
+            }
+            transformMgr.transformHook.setPosition(x, y, z);
+          }}
+          onCenter={onCenterSelection}
           onPlatform={transformMgr.transformHook.setPlatformZ}
           rotation={transformMgr.transform.rotation}
           onRotationChange={(x, y, z) => {

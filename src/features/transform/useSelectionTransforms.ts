@@ -89,8 +89,10 @@ export function useSelectionTransforms({
     return entries;
   }, [scene]);
 
-  // Fan a panel rotate/scale out to the rest of the selection (active model is
-  // committed by its own single-model path, so it is excluded here — issue #305).
+  // Fan a panel move/rotate/scale out to the rest of the selection (active model
+  // is committed by its own single-model path, so it is excluded here — #305).
+  //   move   = SHARED DELTA: apply the active model's position delta to each
+  //            other model (they translate together, not to one absolute point).
   //   rotate = RELATIVE: apply the active model's world-space rotation delta to
   //            each other model about its OWN center (position unchanged).
   //   scale  = ABSOLUTE: every other model gets the active model's new scale.
@@ -98,7 +100,7 @@ export function useSelectionTransforms({
   // (quaternionFromGlobalEuler = qz·qy·qx); the inverse round-trip is
   // setFromQuaternion(q, 'ZYX') (intrinsic ZYX ≡ our extrinsic XYZ). Do NOT use 'XYZ'.
   const applyPanelTransformToSelection = useCallback((
-    operation: 'rotate' | 'scale',
+    operation: 'move' | 'rotate' | 'scale',
     activeBefore: ModelTransform,
     activeAfter: ModelTransform,
   ) => {
@@ -111,6 +113,15 @@ export function useSelectionTransforms({
           .multiply(quaternionFromGlobalEuler(activeBefore.rotation).invert())
       : null;
 
+    // Shared translation delta for 'move' (added to each other model's position).
+    const moveDelta = operation === 'move'
+      ? new THREE.Vector3(
+          activeAfter.position.x - activeBefore.position.x,
+          activeAfter.position.y - activeBefore.position.y,
+          activeAfter.position.z - activeBefore.position.z,
+        )
+      : null;
+
     const entries: GroupCommitEntry[] = [];
     for (const id of ids) {
       const model = scene.models.find((m) => m.id === id);
@@ -118,7 +129,17 @@ export function useSelectionTransforms({
       const before = model.transform;
 
       let after: ModelTransform;
-      if (operation === 'rotate' && qDelta) {
+      if (operation === 'move' && moveDelta) {
+        after = {
+          position: new THREE.Vector3(
+            before.position.x + moveDelta.x,
+            before.position.y + moveDelta.y,
+            before.position.z + moveDelta.z,
+          ),
+          rotation: before.rotation.clone(),
+          scale: before.scale.clone(),
+        };
+      } else if (operation === 'rotate' && qDelta) {
         const qNext = qDelta.clone().multiply(quaternionFromGlobalEuler(before.rotation));
         after = {
           position: before.position.clone(),
@@ -142,6 +163,50 @@ export function useSelectionTransforms({
 
     if (entries.length === 0) return;
     handleGizmoTransformGroupCommit({ operation, entries });
+  }, [scene, handleGizmoTransformGroupCommit]);
+
+  // Center the whole selection on the build-plate origin (X/Y). One-shot button
+  // with no separate active path, so every selected model (including active) goes
+  // in one group commit → one undo step. SHARED shift: move all models by the
+  // negative of the selection's X/Y centroid (average of positions), preserving
+  // their relative layout. Single-model = identical to centerXY. Non-destructive:
+  // an XY translation keeps each model's plate-relative Z, so supports translate
+  // with the model via the group-commit's support sync (no deletion prompt).
+  const handleCenterSelection = useCallback(() => {
+    const ids = scene.selectedModelIds.length > 0
+      ? scene.selectedModelIds
+      : (scene.activeModelId ? [scene.activeModelId] : []);
+
+    const models = ids
+      .map((id) => scene.models.find((m) => m.id === id))
+      .filter((m): m is NonNullable<typeof m> => Boolean(m));
+    if (models.length === 0) return;
+
+    let cx = 0;
+    let cy = 0;
+    for (const model of models) {
+      cx += model.transform.position.x;
+      cy += model.transform.position.y;
+    }
+    cx /= models.length;
+    cy /= models.length;
+
+    const entries: GroupCommitEntry[] = [];
+    for (const model of models) {
+      const before = model.transform;
+      entries.push({
+        modelId: model.id,
+        before: { position: before.position.clone(), rotation: before.rotation.clone(), scale: before.scale.clone() },
+        after: {
+          position: new THREE.Vector3(before.position.x - cx, before.position.y - cy, before.position.z),
+          rotation: before.rotation.clone(),
+          scale: before.scale.clone(),
+        },
+      });
+    }
+
+    if (entries.length === 0) return;
+    handleGizmoTransformGroupCommit({ operation: 'move', entries });
   }, [scene, handleGizmoTransformGroupCommit]);
 
   const handleDropSelectionToPlatform = useCallback(() => {
@@ -210,6 +275,7 @@ export function useSelectionTransforms({
     handleDropSelectionToPlatform,
     handleLiftSelection,
     applyPanelTransformToSelection,
+    handleCenterSelection,
     handleResetRotationSelection,
     handleResetScaleSelection,
   };
