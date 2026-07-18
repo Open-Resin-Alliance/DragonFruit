@@ -209,6 +209,7 @@ import {
 import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
 import { useSlicingManager } from '@/features/slicing/useSlicingManager';
 import { useTransformManager } from '@/features/transform/useTransformManager';
+import { useSelectionTransforms } from '@/features/transform/useSelectionTransforms';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 // Islands PoC (Support-tab unified islands panel). Tab-agnostic + modular — see
 // agents/Claude/20260613-1404-Implementation-dev-islands-islands-panel-...md.
@@ -7961,6 +7962,13 @@ export default function Home() {
     skipNextTransformEndCommitRef.current = null;
   }, [beginSupportDragSyncTransaction, isFiniteTransform, scene, transformMgr.transformHook]);
 
+  // Selection-aware drop/lift (issue #305) — bodies extracted to a hook to keep
+  // page.tsx thin; they fan out over selectedModelIds via the group-commit path.
+  const {
+    handleDropSelectionToPlatform,
+    handleLiftSelection,
+  } = useSelectionTransforms({ scene, transformMgr, handleGizmoTransformGroupCommit });
+
   const handleAutoLiftChange = React.useCallback((enabled: boolean) => {
     if (scene.activeModelId) {
       scene.setModelManualZMoveOverride(scene.activeModelId, false);
@@ -9121,6 +9129,8 @@ export default function Home() {
               hasCavityGeometry: hasCavityGeometry,
               arrangeSpacingMm: arrangeSpacingMm,
               setArrangeSpacingMm: setArrangeSpacingMm,
+              onDropSelectionToPlatform: handleDropSelectionToPlatform,
+              onLiftSelection: handleLiftSelection,
             })}
           </>
         ) : scene.mode === 'analysis' ? (

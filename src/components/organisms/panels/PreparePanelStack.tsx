@@ -53,6 +53,8 @@ export type PreparePanelStackProps = {
 
   arrangeSpacingMm: number;
   setArrangeSpacingMm: (value: number) => void;
+  onDropSelectionToPlatform: () => void;
+  onLiftSelection: () => void;
 };
 
 /** PREPARE-mode floating panel group: model manager, transform/smoothing/hollowing/arrange tools. */
@@ -91,6 +93,8 @@ export function PreparePanelStack({
   hasCavityGeometry,
   arrangeSpacingMm,
   setArrangeSpacingMm,
+  onDropSelectionToPlatform,
+  onLiftSelection,
 }: PreparePanelStackProps) {
   // Invoked inline by Home (not as <JSX/>) so FloatingPanelStack can flatten these keyed panels as direct children for its layout-profile positioning. 'use no memo' keeps React Compiler from injecting a useMemoCache hook (the conditional inline call must stay hook-free).
   'use no memo';
@@ -263,14 +267,8 @@ export function PreparePanelStack({
           onAutoLiftChange={handleAutoLiftChange}
           liftDistance={transformMgr.liftDistance}
           onLiftDistanceChange={transformMgr.setLiftDistance}
-          onLift={() => {
-            const lowestWorldZ = transformMgr.getLowestWorldZ();
-            if (lowestWorldZ !== null) transformMgr.transformHook.snapToLift(lowestWorldZ, transformMgr.liftDistance);
-          }}
-          onDrop={() => {
-            const lowestWorldZ = transformMgr.getLowestWorldZ();
-            if (lowestWorldZ !== null) transformMgr.transformHook.snapToPlatform(lowestWorldZ);
-          }}
+          onLift={onLiftSelection}
+          onDrop={onDropSelectionToPlatform}
           onTransformCommit={scheduleCommitPendingTransformHistory}
         />
       )}
