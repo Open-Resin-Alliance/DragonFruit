@@ -2,8 +2,9 @@
 
 [![GitHub release](https://img.shields.io/github/release/Open-Resin-Alliance/DragonFruit.svg?style=for-the-badge)](https://github.com/Open-Resin-Alliance/DragonFruit/releases)
 [![GitHub issues](https://img.shields.io/github/issues/Open-Resin-Alliance/DragonFruit.svg?style=for-the-badge)](https://github.com/Open-Resin-Alliance/DragonFruit/issues)
-[![Discord Link](https://img.shields.io/discord/1281738817417777204?style=for-the-badge&logo=discord&logoColor=white&color=%235865F2)](https://discord.gg/beFeTaPH6v)
-[![Crowdin Translations](https://img.shields.io/badge/crowdin-translations-blue?style=for-the-badge&logo=crowdin)](https://translate.dragonfruit-slicer.com)
+[![Discord](https://img.shields.io/discord/1281738817417777204?style=for-the-badge&logo=discord&logoColor=white&color=%235865F2)](https://discord.gg/beFeTaPH6v)
+[![Crowdin translations](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fbadges.crowdin.net%2Fdragonfruit%2Flocalized.svg&search=%22%3E(%5B0-9%5D%2B%25)%3C%2Ftext%3E%20%20%20%20%3C%2Fg&replace=%241&style=for-the-badge&logo=crowdin&label=Crowdin%20translations&link=https%3A%2F%2Ftranslate.dragonfruit-slicer.com)](https://translate.dragonfruit-slicer.com)
+
 
 DragonFruit is an open-source resin slicer and support-generation environment built by the Open Resin Alliance. It combines a modern Next.js + React frontend with native Rust slicing backends and a Tauri desktop runtime.
 
@@ -15,12 +16,12 @@ Unless a subdirectory or submodule states otherwise, DragonFruit content in this
 
 - [About DragonFruit](#about-dragonfruit)
 - [Features](#features)
-- [Getting Started](#getting-started)
-  - [Variant 1: Frontend Development (Next.js)](#variant-1-frontend-development-nextjs)
-  - [Variant 2: Desktop Development (Tauri + Rust)](#variant-2-desktop-development-tauri--rust)
-  - [Variant 3: Production Build & Bundling](#variant-3-production-build--bundling)
+- [Getting started](#getting-started)
+  - [Variant 1: Frontend development (Next.js)](#variant-1-frontend-development-nextjs)
+  - [Variant 2: Desktop development (Tauri + Rust)](#variant-2-desktop-development-tauri--rust)
+  - [Variant 3: Production build & bundling](#variant-3-production-build--bundling)
 - [Localization (i18n)](LOCALE.md)
-- [Project Structure](#project-structure)
+- [Project structure](#project-structure)
 - [Contributing](#contributing)
 - [License](#license)
 - [Contact](#contact)
@@ -40,7 +41,7 @@ DragonFruit currently includes a growing set of capabilities for resin 3D printi
 - **Desktop Runtime via Tauri:** Native desktop app pipeline with Rust backend integration.
 - **Extensible Architecture:** Plugin and profile systems for materials, printers, and ecosystem integrations.
 
-## Getting Started
+## Getting started
 
 To get started with DragonFruit, follow one of these variants depending on your workflow.
 
@@ -50,31 +51,31 @@ DragonFruit supports plugins that can be sourced as Git submodules (for example 
 If your local clone is missing plugin folders, generation/build will continue with available plugins only (missing submodules are skipped with warnings).
 Initialize/update submodules when you need to develop or validate those specific plugin integrations.
 
-### Variant 1: Frontend Development (Next.js)
+### Variant 1: Frontend development (Next.js)
 
 For UI and interaction development only (without full desktop packaging):
 
 1. **Prerequisites:** Install Node.js (LTS recommended) and npm.
-2. **Install Dependencies:** From the repository root, install packages with `npm install`.
-3. **Run Dev Server:** Start the app with `npm run dev`.
-4. **Open in Browser:** Visit `http://localhost:3005`.
+2. **Install dependencies:** From the repository root, install packages with `npm install`.
+3. **Run dev server:** Start the app with `npm run dev`.
+4. **Open in browser:** Visit `http://localhost:3005`.
 
-### Variant 2: Desktop Development (Tauri + Rust)
+### Variant 2: Desktop development (Tauri + Rust)
 
 For full desktop development with native backend wiring:
 
 1. **Prerequisites:** Install Node.js, Rust toolchain, and Tauri system dependencies for your platform.
-2. **Install JS Dependencies:** Run `npm install` in the project root.
-3. **Run Desktop Dev Mode:** Launch with `npm run tauri:dev`.
-4. **Iterate Across Stacks:** Frontend and Rust backend changes can be tested through the same Tauri dev workflow.
+2. **Install JS dependencies:** Run `npm install` in the project root.
+3. **Run desktop dev mode:** Launch with `npm run tauri:dev`.
+4. **Iterate across stacks:** Frontend and Rust backend changes can be tested through the same Tauri dev workflow.
 
-### Variant 3: Production Build & Bundling
+### Variant 3: Production build & bundling
 
 For release-style builds and bundles:
 
-1. **Frontend Build:** Run `npm run build` (or `npm run build:tauri` for prepared Tauri frontend artifacts).
-2. **Desktop Build:** Build desktop binaries with `npm run tauri:build`.
-3. **Bundle Targets:** Use `npm run tauri:bundle` (builds Windows, Linux, and a
+1. **Frontend build:** Run `npm run build` (or `npm run build:tauri` for prepared Tauri frontend artifacts).
+2. **Desktop build:** Build desktop binaries with `npm run tauri:build`.
+3. **Bundle targets:** Use `npm run tauri:bundle` (builds Windows, Linux, and a
    universal macOS DMG) or platform-specific scripts:
    - `npm run tauri:bundle:windows`
    - `npm run tauri:bundle:linux`
@@ -96,7 +97,7 @@ runtime language selection.
 
 Help translate DragonFruit at **[translate.dragonfruit-slicer.com](https://translate.dragonfruit-slicer.com/)**.
 
-## Project Structure
+## Project structure
 
 High-level layout of key project areas:
 
