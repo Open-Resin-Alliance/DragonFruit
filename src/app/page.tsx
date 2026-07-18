@@ -1351,9 +1351,9 @@ export default function Home() {
   const [supportRenderRefreshNonce, setSupportRenderRefreshNonce] = React.useState(0);
   const [gizmoResetNonce, setGizmoResetNonce] = React.useState(0);
   const [pendingDestructiveTransform, setPendingDestructiveTransform] = React.useState<{
-    modelId: string;
-    modelName: string;
-    supportCount: number;
+    modelIds: string[];
+    modelName: string;      // display summary: single model's name, or "N models"
+    supportCount: number;   // aggregate across all affected models
     operationLabel: string;
   } | null>(null);
   const pendingDestructiveTransformContinueRef = React.useRef<(() => void) | null>(null);
@@ -1842,16 +1842,27 @@ export default function Home() {
 
   const requestDestructiveTransformSupportDeletion = React.useCallback((operationLabel: string) => {
     if (scene.mode !== 'prepare') return true;
-    if (!scene.activeModelId) return true;
     if (pendingDestructiveTransform) return false;
 
-    const supportCount = getSupportPrimitiveCountForModel(scene.activeModelId);
-    if (supportCount <= 0) return true;
+    const candidateIds = scene.selectedModelIds.length > 0
+      ? scene.selectedModelIds
+      : (scene.activeModelId ? [scene.activeModelId] : []);
+    if (candidateIds.length === 0) return true;
+
+    const affected = candidateIds
+      .map((id) => ({ id, count: getSupportPrimitiveCountForModel(id) }))
+      .filter((entry) => entry.count > 0);
+    if (affected.length === 0) return true;
+
+    const totalSupportCount = affected.reduce((sum, entry) => sum + entry.count, 0);
+    const modelName = affected.length === 1
+      ? (scene.models.find((m) => m.id === affected[0].id)?.name ?? affected[0].id).trim()
+      : `${affected.length} models`;
 
     setPendingDestructiveTransform({
-      modelId: scene.activeModelId,
-      modelName: (scene.activeModel?.name ?? scene.activeModelId).trim(),
-      supportCount,
+      modelIds: affected.map((entry) => entry.id),
+      modelName,
+      supportCount: totalSupportCount,
       operationLabel,
     });
     return false;
@@ -1876,7 +1887,7 @@ export default function Home() {
     if (!pending) return;
 
     scene.deleteSupportsForModels(
-      [pending.modelId],
+      pending.modelIds,
       `Delete Supports Before ${pending.operationLabel} ${pending.modelName}`,
     );
 
