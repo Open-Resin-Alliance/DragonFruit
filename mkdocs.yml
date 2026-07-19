@@ -61,6 +61,7 @@ nav:
       - Arrange Models: workflows/arrange-models.md
       - Duplicate Models: workflows/duplicate-models.md
       - Support Placement: workflows/support-placement.md
+      - Auto Supports: workflows/auto-supports.md
       - Island Analysis Workflow: workflows/island-analysis-workflow.md
       - Raft and Export: workflows/raft-and-export.md
       - Printing Preview and Send: workflows/printing-preview-and-send.md
@@ -81,7 +82,7 @@ nav:
       - Complex Plugin Contributing: dev/plugins-complex-contributing.md
       - Support System: dev/support-system.md
       - Support Pathfinding V3: dev/support-pathfinding-v3.md
-      - Auto-Support Planning Handoff: dev/auto-support-planning-handoff.md
+      - Auto Supports Architecture: dev/auto-supports-architecture.md
       - Branch Supports: dev/branch-supports.md
       - Grid and Branching: dev/grid-and-branching.md
       - Raft Geometry: dev/raft-geometry.md
