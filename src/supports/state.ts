@@ -551,6 +551,48 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
         };
     };
 
+    // Kickstand hosts: a brace knot can attach to a kickstand segment. Kickstands
+    // live in a separate store (KickstandState), not in SupportState, so we read
+    // them from the kickstand snapshot here. Endpoint math mirrors the runtime
+    // contract in useKnotInteraction.resolveEndpoints (the 'kickstand' branch):
+    // segment 0 starts at the root top (transform + diskHeight + coneHeight),
+    // later segments start at the previous segment's top joint; a segment ends at
+    // its own top joint, or at the kickstand's host knot for the terminal segment.
+    const kickstandSegmentMap = new Map<string, { kickstand: Kickstand; root: Roots | undefined; hostKnot: Knot | undefined; segmentIndex: number }>();
+    {
+        const kickstandState = getKickstandSnapshot();
+        for (const kickstand of Object.values(kickstandState.kickstands)) {
+            const root = kickstandState.roots[kickstand.rootId];
+            const hostKnot = kickstandState.knots[kickstand.hostKnotId];
+            kickstand.segments.forEach((segment, segmentIndex) => {
+                kickstandSegmentMap.set(segment.id, { kickstand, root, hostKnot, segmentIndex });
+            });
+        }
+    }
+    const getKickstandSegmentEndpoints = (
+        ref: { kickstand: Kickstand; root: Roots | undefined; hostKnot: Knot | undefined; segmentIndex: number },
+    ): { start: Vec3; end: Vec3 } | null => {
+        const { kickstand, root, hostKnot, segmentIndex } = ref;
+        if (!root) return null;
+        const seg = kickstand.segments[segmentIndex];
+        if (!seg) return null;
+
+        let startPos: Vec3;
+        if (segmentIndex === 0) {
+            const rootTopZ = root.transform.pos.z + root.diskHeight + root.coneHeight;
+            startPos = { x: root.transform.pos.x, y: root.transform.pos.y, z: rootTopZ };
+        } else {
+            const prevSeg = kickstand.segments[segmentIndex - 1];
+            if (!prevSeg.topJoint) return null;
+            startPos = { ...prevSeg.topJoint.pos };
+        }
+
+        const endPos = seg.topJoint?.pos ?? hostKnot?.pos;
+        if (!endPos) return null;
+
+        return { start: startPos, end: { ...endPos } };
+    };
+
     // Track branch parent knots that currently host descendants.
     // If a branch parent knot is hosting descendants, keep it projected to ensure
     // downstream branch/leaf attachments stay segment-legal and connected.
@@ -640,6 +682,17 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
                     if (twigEndpoints) {
                         segment = twigRef.segment;
                         endpoints = twigEndpoints;
+                    }
+                }
+            }
+
+            if (!segment || !endpoints) {
+                const kickstandRef = kickstandSegmentMap.get(knot.parentShaftId);
+                if (kickstandRef) {
+                    const kickstandEndpoints = getKickstandSegmentEndpoints(kickstandRef);
+                    if (kickstandEndpoints) {
+                        segment = kickstandRef.kickstand.segments[kickstandRef.segmentIndex];
+                        endpoints = kickstandEndpoints;
                     }
                 }
             }
@@ -2738,6 +2791,19 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
         };
     });
 
+    // Pre-register kickstand segment ids into segmentIdMap BEFORE remapping knots.
+    // A brace knot may host on a kickstand segment (parentShaftId === kickstand
+    // segment id). Knots are remapped just below via getOrCreateMappedId(...,
+    // segmentIdMap); without this pre-pass the kickstand segments aren't in the
+    // map yet (they're processed afterwards), so getOrCreateMappedId would mint a
+    // fresh, dangling id and orphan the brace knot. Seeding the map here makes the
+    // knot remap and the kickstand remap agree on the same new segment id.
+    for (const build of cloned.kickstands ?? []) {
+        for (const segment of build.kickstand.segments) {
+            getOrCreateMappedId(segment.id, segmentIdMap);
+        }
+    }
+
     cloned.knots = cloned.knots.map((knot) => {
         let parentShaftId = knot.parentShaftId;
         if (parentShaftId.startsWith('leafCone:')) {
@@ -2765,8 +2831,9 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
         kickstandKnotIdMap.set(build.hostKnot.id, nextHostKnotId);
 
         const nextKickstandSegments = build.kickstand.segments.map((segment) => {
-            const nextSegmentId = generateUuid();
-            segmentIdMap.set(segment.id, nextSegmentId);
+            // Reuse the id pre-registered above (so brace knots hosted on this
+            // segment resolve to the same new id); fall back to minting if absent.
+            const nextSegmentId = getOrCreateMappedId(segment.id, segmentIdMap);
             return {
                 ...segment,
                 id: nextSegmentId,
