@@ -287,11 +287,12 @@ function placeOneCandidate(
             let bestKnotSegmentId = '';
 
             if (hostTrunk) {
-                // Walk segments looking for a joint below the tip.
+                // Walk segments looking for the lowest joint below the tip.
+                // Lower attachment = more natural-looking branch angle.
                 for (const seg of hostTrunk.segments) {
                     const jp = seg.bottomJoint?.pos ?? seg.topJoint?.pos;
                     if (jp && jp.z < tipPos.z) {
-                        if (!bestKnotPos || jp.z > bestKnotPos.z) {
+                        if (!bestKnotPos || jp.z < bestKnotPos.z) {
                             bestKnotPos = jp;
                             bestKnotSegmentId = seg.id;
                         }
@@ -318,12 +319,18 @@ function placeOneCandidate(
                 (tipPos.y - knotPos.y) ** 2 +
                 (tipPos.z - knotPos.z) ** 2,
             );
+            // Require a clean upward angle: the branch/leaf must go
+            // upward from knot to tip, not horizontally or downward.
             const MAX_AUTO_LEAF_SPAN_MM = 2.5;
-            const MAX_MERGE_SPAN_MM = GRIDLESS_MERGE_RADIUS_MM * 1.5;
-
-            // Reject if the branch would be too long (nearly horizontal).
-            if (spanMm > MAX_MERGE_SPAN_MM) {
-                // Fall through to trunk path — span too large for a branch.
+            const hDist = Math.sqrt(
+                (tipPos.x - knotPos.x) ** 2 + (tipPos.y - knotPos.y) ** 2,
+            );
+            const vDist = tipPos.z - knotPos.z;
+            // Angle check: must go upward from knot to tip.
+            const mergeAngleDeg = (Math.atan2(hDist, vDist) * 180) / Math.PI;
+            if (vDist <= 0 || mergeAngleDeg > 50) {
+                // Knot is above the tip — can't branch upward.
+                // Fall through to trunk path.
             } else if (spanMm <= MAX_AUTO_LEAF_SPAN_MM) {
                 // Close enough for a CTRL-ALT style leaf — just a cone.
                 try {
