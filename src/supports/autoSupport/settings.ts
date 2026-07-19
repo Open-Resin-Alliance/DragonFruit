@@ -9,6 +9,7 @@ export interface AutoSupportSettings {
     tipInfluenceRadiusMm: number;
     prioritizeIntersection: boolean;
     debugClusterColorsEnabled: boolean;
+    debugSkipAutoBracing: boolean;
 }
 
 type NumericConstraint = {
@@ -86,6 +87,7 @@ export function createDefaultAutoSupportSettings(): AutoSupportSettings {
         tipInfluenceRadiusMm: AUTO_SUPPORT_CONSTRAINTS.tipInfluenceRadiusMm.defaultValue,
         prioritizeIntersection: false,
         debugClusterColorsEnabled: false,
+        debugSkipAutoBracing: false,
     };
 }
 
@@ -104,6 +106,7 @@ export function normalizeAutoSupportSettings(input?: Partial<AutoSupportSettings
         tipInfluenceRadiusMm: clampNumeric(source.tipInfluenceRadiusMm, AUTO_SUPPORT_CONSTRAINTS.tipInfluenceRadiusMm),
         prioritizeIntersection: normalizeBoolean(source.prioritizeIntersection, defaults.prioritizeIntersection),
         debugClusterColorsEnabled: normalizeBoolean(source.debugClusterColorsEnabled, defaults.debugClusterColorsEnabled),
+        debugSkipAutoBracing: normalizeBoolean(source.debugSkipAutoBracing, defaults.debugSkipAutoBracing),
     };
 }
 

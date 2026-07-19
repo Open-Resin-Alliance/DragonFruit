@@ -429,6 +429,34 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
             </div>
           </div>
 
+          {/* Debug */}
+          <div className="rounded-md border p-2.5" style={SECTION_CARD}>
+            <SectionHeader title="Debug" />
+            <div className="grid grid-cols-2 gap-2">
+              {([
+                { key: 'debugSkipAutoBracing' as const, label: 'Skip Auto-Brace', hint: 'Skip auto-bracing after placement (faster iteration)' },
+                { key: 'debugClusterColorsEnabled' as const, label: 'Cluster Colors', hint: 'Color-code supports by cluster group' },
+              ]).map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => setDraft((d) => ({ ...d, [t.key]: !(d as any)[t.key] }))}
+                  className="min-h-[36px] w-full rounded-md border px-2 text-[11px] font-semibold uppercase tracking-wide transition-colors flex items-center justify-center gap-1.5"
+                  style={(draft as any)[t.key]
+                    ? {
+                        borderColor: 'color-mix(in srgb, var(--accent-secondary), white 10%)',
+                        background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 84%)',
+                        color: 'color-mix(in srgb, var(--accent-secondary), var(--text-strong) 25%)',
+                      }
+                    : { borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+                  title={t.hint}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Numeric knobs */}
           <div className="rounded-md border p-2.5" style={SECTION_CARD}>
             <SectionHeader title="Placement" />

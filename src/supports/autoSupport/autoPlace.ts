@@ -806,13 +806,17 @@ export function runAutoPlace(
     // ------------------------------------------------------------------
 
     if (changed) {
-        console.log(LOG_PREFIX, 'Running auto-brace...');
-        try {
-            const braceResult = runAutoBracing();
-            console.log(LOG_PREFIX, `Auto-brace: ${braceResult.message}`);
-        } catch (e) {
-            console.warn(LOG_PREFIX,
-                `Auto-brace failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+        if (!autoSettings.debugSkipAutoBracing) {
+            console.log(LOG_PREFIX, 'Running auto-brace...');
+            try {
+                const braceResult = runAutoBracing();
+                console.log(LOG_PREFIX, `Auto-brace: ${braceResult.message}`);
+            } catch (e) {
+                console.warn(LOG_PREFIX,
+                    `Auto-brace failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+            }
+        } else {
+            console.log(LOG_PREFIX, 'Auto-brace skipped (debug setting).');
         }
 
         try {
