@@ -5,11 +5,12 @@ import { normalizeAutoSupportSettings } from './settings';
 import { generateCandidates, deduplicateCandidates } from './candidateGeneration';
 import { sizeParameters } from './parameterSizing';
 import { getSettings } from '../Settings/state';
-import { getSnapshot, addRoot, addTrunk, addBranch, addLeaf, addKnot, addAnchor } from '../state';
+import { getSnapshot, addRoot, addTrunk, addBranch, addLeaf, addKnot, addAnchor, addStick } from '../state';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import { buildTrunkData } from '../SupportTypes/Trunk/trunkBuilder';
 import { buildBranchData } from '../SupportTypes/Branch/branchBuilder';
 import { buildLeafData } from '../SupportTypes/Leaf/leafBuilder';
+import { buildStick } from '../SupportTypes/Stick/stickBuilder';
 import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
 import { calculateSmoothedNormal } from '../PlacementLogic/PlacementUtils';
 import { runAutoBracing } from '../autoBracing/autoBrace';
@@ -33,6 +34,7 @@ function makeResult(
     anchors: number,
     branches: number,
     leaves: number,
+    sticks: number,
     rejected: number,
     changed: boolean,
     message: string,
@@ -42,6 +44,7 @@ function makeResult(
         placedAnchors: anchors,
         placedBranches: branches,
         placedLeaves: leaves,
+        placedSticks: sticks,
         rejectedCandidates: rejected,
         changed,
         message,
@@ -166,6 +169,59 @@ const LEAF_FAN_RADIUS_MM = 5.0;
 const LEAF_FAN_MAX_ANGLE_DEG = 60;
 
 // ---------------------------------------------------------------------------
+// Cavity stick fallback
+// ---------------------------------------------------------------------------
+
+/** Raycast downward from a tip to find a floor to bridge to with a Stick. */
+function tryCavityStick(
+    tipPos: { x: number; y: number; z: number },
+    tipNormal: { x: number; y: number; z: number },
+    modelId: string,
+    mesh: THREE.Mesh,
+): { stick: ReturnType<typeof buildStick>['stick']; floorZ: number } | null {
+    const raycaster = new THREE.Raycaster();
+    const origin = new THREE.Vector3(tipPos.x, tipPos.y, tipPos.z);
+    // Offset inward along the normal so we don't self-hit.
+    origin.addScaledVector(
+        new THREE.Vector3(tipNormal.x, tipNormal.y, tipNormal.z),
+        0.5,
+    );
+    origin.z -= 0.05;
+    raycaster.set(origin, new THREE.Vector3(0, 0, -1));
+
+    const hits = raycaster.intersectObject(mesh, false);
+    if (hits.length === 0) return null;
+
+    // Find the first hit below the tip.
+    for (const hit of hits) {
+        if (hit.point.z >= tipPos.z - 0.1) continue;
+        const floorZ = hit.point.z;
+        const floorNormal = hit.face?.normal.clone().applyMatrix3(
+            new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld),
+        ).normalize();
+
+        try {
+            const result = buildStick({
+                modelId,
+                aPos: tipPos,
+                aNormal: tipNormal,
+                bPos: { x: hit.point.x, y: hit.point.y, z: floorZ },
+                bNormal: floorNormal
+                    ? { x: floorNormal.x, y: floorNormal.y, z: floorNormal.z }
+                    : { x: 0, y: 0, z: 1 },
+                mesh,
+            });
+            if (!result.error) {
+                return { stick: result.stick, floorZ };
+            }
+        } catch (_) {
+            // Try next hit.
+        }
+    }
+    return null;
+}
+
+// ---------------------------------------------------------------------------
 // Nearby-trunk merge
 // ---------------------------------------------------------------------------
 
@@ -235,7 +291,7 @@ function findMergeHost(
 function placeOneCandidate(
     candidate: CandidatePoint,
     settingsOverride: Partial<AutoSupportSettings> | undefined,
-): { kind: string; rejectedReason?: RejectReason; preset?: 'detail' | 'structure' | 'anchor'; entityId?: string } {
+): { kind: string; rejectedReason?: RejectReason; preset?: 'detail' | 'structure' | 'anchor'; entityId?: string; stickCount?: number } {
     const supportSettings = getSettings();
     const autoSettings = normalizeAutoSupportSettings(settingsOverride ?? undefined);
     const snapshot = getSnapshot();
@@ -319,6 +375,18 @@ function placeOneCandidate(
     });
 
     if (trunkResult.error) {
+        // Cavity fallback: if the trunk can't reach the build plate, try
+        // bridging to a lower surface with a Stick (model-to-model).
+        if (trunkResult.error === 'COLLISION_WITH_MODEL' && mesh) {
+            const stickResult = tryCavityStick(tipPos, tipNormal, candidate.modelId, mesh);
+            if (stickResult) {
+                addStick(stickResult.stick);
+                console.log(LOG_PREFIX,
+                    `Stick (cavity) ${candidate.id} Z=${candidate.zHeight.toFixed(1)}mm ` +
+                    `→ floor at Z=${stickResult.floorZ.toFixed(1)}mm`);
+                return { kind: 'stick', preset };
+            }
+        }
         console.log(LOG_PREFIX, `Rejected ${candidate.id}: trunk build error \"${trunkResult.error}\"`);
         return { kind: 'reject', rejectedReason: 'trunk_build_error', preset };
     }
@@ -422,7 +490,7 @@ export function runAutoPlace(
     const autoSettings = normalizeAutoSupportSettings(settingsOverride ?? undefined);
 
     if (!autoSettings.enabled) {
-        return makeResult(0, 0, 0, 0, 0, false, 'Auto-support is disabled.');
+        return makeResult(0, 0, 0, 0, 0, 0, false, 'Auto-support is disabled.');
     }
 
     const beforeSnapshot = getSnapshot();
@@ -441,7 +509,7 @@ export function runAutoPlace(
         `(filtered from ${islands.length} islands, min area ${autoSettings.minIslandAreaMm2}mm²)`);
 
     if (candidates.length === 0) {
-        return makeResult(0, 0, 0, 0, 0, false, 'No viable support candidates found.');
+        return makeResult(0, 0, 0, 0, 0, 0, false, 'No viable support candidates found.');
     }
 
     // ------------------------------------------------------------------
@@ -456,7 +524,7 @@ export function runAutoPlace(
         `(removed ${beforeDedup - candidates.length} within ${autoSettings.tipInfluenceRadiusMm}mm radius)`);
 
     if (candidates.length === 0) {
-        return makeResult(0, 0, 0, 0, 0, false, 'All candidates deduplicated — nothing to place.');
+        return makeResult(0, 0, 0, 0, 0, 0, false, 'All candidates deduplicated — nothing to place.');
     }
 
     // ------------------------------------------------------------------
@@ -470,7 +538,7 @@ export function runAutoPlace(
         `(removed ${beforeSupportFilter - candidates.length} already supported within ${ALREADY_SUPPORTED_RADIUS_MM}mm)`);
 
     if (candidates.length === 0) {
-        return makeResult(0, 0, 0, 0, 0, false,
+        return makeResult(0, 0, 0, 0, 0, 0, false,
             'All candidate positions already have supports.');
     }
 
@@ -494,6 +562,7 @@ export function runAutoPlace(
     let placedAnchors = 0;
     let placedBranches = 0;
     let placedLeaves = 0;
+    let placedSticks = 0;
     let rejectedCount = 0;
 
     // Analytics accumulators
@@ -508,6 +577,7 @@ export function runAutoPlace(
                 case 'anchor':  placedAnchors++; break;
                 case 'branch':  placedBranches++; break;
                 case 'leaf':    placedLeaves++; break;
+                case 'stick':   placedSticks++; break;
                 case 'reject':
                     rejectedCount++;
                     if (result.rejectedReason) {
@@ -528,10 +598,11 @@ export function runAutoPlace(
         placedTrunks > 0 ||
         placedAnchors > 0 ||
         placedBranches > 0 ||
-        placedLeaves > 0;
+        placedLeaves > 0 ||
+        placedSticks > 0;
 
     console.log(LOG_PREFIX,
-        `Step 3/3: ${placedTrunks}T ${placedAnchors}A ${placedBranches}B ${placedLeaves}L — ${rejectedCount} rejected ` +
+        `Step 3/3: ${placedTrunks}T ${placedAnchors}A ${placedBranches}B ${placedLeaves}L ${placedSticks}S — ${rejectedCount} rejected ` +
         `| presets: detail=${presets.detail} structure=${presets.structure} anchor=${presets.anchor}`);
 
     // ── Coverage analytics ────────────────────────────────────────
@@ -752,9 +823,10 @@ export function runAutoPlace(
             placedAnchors,
             placedBranches,
             placedLeaves,
+            placedSticks,
             rejectedCount,
             changed,
-            `Placed ${placedTrunks} trunks, ${placedAnchors} anchors, ${placedBranches} branches, ${placedLeaves} leaves. ` +
+            `Placed ${placedTrunks} trunks, ${placedAnchors} anchors, ${placedBranches} branches, ${placedLeaves} leaves, ${placedSticks} sticks. ` +
             `${rejectedCount} rejected. Coverage: ${analytics.islandsCovered}/${islands.length} islands (${(analytics.areaCoverage * 100).toFixed(0)}%).`,
         ),
         analytics,

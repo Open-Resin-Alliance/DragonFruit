@@ -77,6 +77,7 @@ export interface AutoPlaceResult {
     placedAnchors: number;
     placedBranches: number;
     placedLeaves: number;
+    placedSticks: number;
     rejectedCandidates: number;
     /** Whether any supports were actually added/removed. */
     changed: boolean;
