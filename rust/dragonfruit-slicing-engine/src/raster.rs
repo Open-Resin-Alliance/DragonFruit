@@ -432,7 +432,8 @@ fn build_row_spans_nonzero_inner(
         let pos_score = 2 * (pos_overlap as i64) - (spans_total_px(&pos_spans) as i64);
         let neg_score = 2 * (neg_overlap as i64) - (spans_total_px(&neg_spans) as i64);
 
-        let choose_pos = if pos_score != neg_score {
+        let has_overlap = pos_overlap > 0 || neg_overlap > 0;
+        let choose_pos = if has_overlap && pos_score != neg_score {
             pos_score > neg_score
         } else if pos_pairs != neg_pairs {
             pos_pairs > neg_pairs
