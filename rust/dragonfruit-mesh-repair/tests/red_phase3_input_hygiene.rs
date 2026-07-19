@@ -2,12 +2,9 @@
 //! `agents/Claude/STL-import-perf/20260718-Implementation-Plan-stl-import-decimation-remediation.md`,
 //! Phase 0 step 5 / Phase 3).
 //!
-//! Both tests are `#[ignore]`d because they FAIL on current code by design
-//! (red-first discipline, plan §D1). Run them with:
-//!
-//! ```text
-//! cargo test --test red_phase3_input_hygiene -- --ignored
-//! ```
+//! These were `#[ignore]`d red tests (red-first discipline, plan §D1); Phase 3
+//! (finite filter + weld-ε clamp, `core/mesh.rs`) turned them GREEN and they now
+//! run in the default suite.
 //!
 //! They express the Phase-3 contract for `IndexedMesh::from_triangle_soup`
 //! (`src/core/mesh.rs`, soup-entry weld):
@@ -80,7 +77,6 @@ fn has_position_within(mesh: &IndexedMesh, p: [f32; 3], tol_mm: f32) -> bool {
 /// dropped (and counted); the 10 mm cube survives with its 8 corners and a
 /// finite, cube-sized bbox.
 #[test]
-#[ignore = "red until Phase 3 (finite filter + weld clamp)"]
 fn r3a_nonfinite_vertex_must_not_collapse_mesh_to_a_point() {
     // A sane 10 mm cube (12 triangles, 36 soup vertices, 8 unique corners)...
     let mut soup = Vec::new();
@@ -134,7 +130,6 @@ fn r3a_nonfinite_vertex_must_not_collapse_mesh_to_a_point() {
 /// can never share a rounding cell (60/50 = 1.2 > 1 cell), so both probe
 /// positions survive verbatim regardless of grid alignment.
 #[test]
-#[ignore = "red until Phase 3 (finite filter + weld clamp)"]
 fn r3b_outlier_vertex_must_not_inflate_weld_step_past_50_microns() {
     let probe_a = [2.05_f32, 3.0, 4.0];
     let probe_b = [2.11_f32, 3.0, 4.0]; // 60 µm from probe_a along x

@@ -6,6 +6,7 @@
 //! before indexing).
 
 use bytemuck::{Pod, Zeroable};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[repr(C)]
@@ -133,6 +134,50 @@ impl Aabb {
     }
 }
 
+/// Absolute upper bound (millimetres) on the vertex-weld quantization step used
+/// by [`IndexedMesh::from_triangle_soup`].
+///
+/// The weld step is `merge_epsilon × bbox_diagonal`, which normally lands in the
+/// low-µm range (≈2.8 µm for a plate at the production 1e-5 epsilon) — far below
+/// any feature the slicer must resolve. But the bbox diagonal is data-dependent:
+/// a single junk vertex a few metres off the part inflates the diagonal, and
+/// without a cap the "coincident-vertex" weld grows to hundreds of µm and starts
+/// merging genuinely distinct geometry (the reported far-apart-merge signature).
+///
+/// 50 µm ≈ ¼ of the smallest support-tip gap the slicer must preserve
+/// (support-tip spacing bottoms out around 0.2 mm), so a step at this ceiling
+/// still cannot bridge a real tip gap while it does neutralise outlier-inflated
+/// diagonals. Doc discipline mirrors `src/components/scene/hollowVoxelPreviewLimits.ts`
+/// (in-repo precedent for a documented, rationale-carrying resource constant).
+pub const WELD_STEP_CEILING_MM: f32 = 0.050;
+
+/// Triangle-count threshold at/above which [`IndexedMesh::from_triangle_soup`]
+/// runs its bbox pass as a rayon reduction instead of a serial fold (CP5
+/// rider). Below it, rayon's fork/join overhead outweighs the gain, so small
+/// meshes — which is every mesh the crate's own test suite builds — take the
+/// identical serial path they always did.
+const PARALLEL_WELD_MIN_TRIS: usize = 50_000;
+
+/// Clamp a raw `merge_epsilon × bbox_diagonal` weld step into the safe range:
+/// an absolute ceiling of [`WELD_STEP_CEILING_MM`] (so an outlier-inflated bbox
+/// cannot over-weld) and the historical `1e-7 mm` floor (so a degenerate tiny
+/// mesh never yields a zero step → division by zero).
+#[inline]
+pub fn clamp_weld_step(raw_step: f32) -> f32 {
+    raw_step.min(WELD_STEP_CEILING_MM).max(1e-7)
+}
+
+/// Input-hygiene diagnostics from
+/// [`IndexedMesh::from_triangle_soup_reported`]. Surfaced so callers can report
+/// dropped geometry instead of silently swallowing malformed input (plan
+/// Phase 3, CP2).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriangleSoupStats {
+    /// Triangles dropped at intake because at least one vertex coordinate was
+    /// non-finite (NaN or ±Inf). Reported, never silently discarded.
+    pub dropped_nonfinite_triangles: usize,
+}
+
 /// Indexed triangle mesh. `positions` are unique vertices; `triangles` are
 /// triples of indices into `positions`. For unindexed input (raw STL), use
 /// [`IndexedMesh::from_triangle_soup`] which auto-welds coincident vertices.
@@ -150,20 +195,95 @@ impl IndexedMesh {
     /// Build from a flat `f32` position buffer (9 floats per triangle, raw
     /// soup as used by the existing staging buffers). Auto-welds by quantizing
     /// to `merge_epsilon` relative to the bbox diagonal.
+    ///
+    /// Input-hygiene (plan Phase 3): triangles carrying a non-finite (NaN/±Inf)
+    /// vertex coordinate are dropped before anything is measured, and the weld
+    /// step is clamped to an absolute ceiling — see
+    /// [`from_triangle_soup_reported`](Self::from_triangle_soup_reported) for
+    /// the diagnostics counters. This wrapper preserves the historical
+    /// `-> Self` signature for existing callers; the dropped-triangle count is
+    /// available via the reporting variant.
     pub fn from_triangle_soup(positions: &[f32], merge_epsilon: f32) -> Self {
+        Self::from_triangle_soup_reported(positions, merge_epsilon).0
+    }
+
+    /// Like [`from_triangle_soup`](Self::from_triangle_soup) but additionally
+    /// returns [`TriangleSoupStats`] input-hygiene diagnostics.
+    ///
+    /// Correctness (plan Phase 3, CP2/CP3):
+    ///  * Any triangle with a non-finite (NaN or ±Inf) vertex coordinate is
+    ///    dropped and counted (`dropped_nonfinite_triangles`) — NOT silently
+    ///    swallowed. This happens BEFORE the bbox pass, so a single junk
+    ///    coordinate can never make the bbox diagonal infinite/NaN and thereby
+    ///    collapse the whole weld to one grid cell.
+    ///  * The weld step is clamped to `WELD_STEP_CEILING_MM` so a far outlier
+    ///    vertex (which inflates the bbox diagonal) cannot push the
+    ///    bbox-relative step past a physically meaningful weld distance.
+    pub fn from_triangle_soup_reported(
+        positions: &[f32],
+        merge_epsilon: f32,
+    ) -> (Self, TriangleSoupStats) {
         let tri_count = positions.len() / 9;
         let mut out = IndexedMesh {
             positions: Vec::with_capacity(tri_count * 3 / 2),
             triangles: Vec::with_capacity(tri_count),
         };
+        let mut stats = TriangleSoupStats::default();
 
-        // First pass: bbox to derive quantization scale.
-        let mut bbox = Aabb::empty();
-        for chunk in positions.chunks_exact(3) {
-            bbox.expand(Vec3::new(chunk[0], chunk[1], chunk[2]));
-        }
+        // Read triangle `tri`'s three corners from the flat soup.
+        let read_tri = |tri: usize| -> [Vec3; 3] {
+            let base = tri * 9;
+            [
+                Vec3::new(positions[base], positions[base + 1], positions[base + 2]),
+                Vec3::new(positions[base + 3], positions[base + 4], positions[base + 5]),
+                Vec3::new(positions[base + 6], positions[base + 7], positions[base + 8]),
+            ]
+        };
+        let tri_finite = |t: &[Vec3; 3]| t[0].finite() && t[1].finite() && t[2].finite();
+
+        // First pass: bbox over ONLY finite triangles, so a non-finite
+        // coordinate can never inflate (Inf) or NaN-poison the quant scale.
+        //
+        // CP5 rider (deterministic parallelization): min/max is associative and
+        // commutative and — over finite floats — EXACT (no rounding), so a
+        // rayon reduction yields a byte-identical diagonal to the serial fold
+        // regardless of chunk split. The interning pass below stays serial to
+        // preserve the first-seen vertex ordering that downstream consumers
+        // (hollowing voxelization, the P1 index-staged splice) depend on. Small
+        // meshes skip rayon to avoid its fork/join overhead. See the AAR for
+        // why the dedup-map parallelization is deferred.
+        let bbox = if tri_count >= PARALLEL_WELD_MIN_TRIS {
+            positions
+                .par_chunks_exact(9)
+                .fold(Aabb::empty, |mut acc, t| {
+                    let v0 = Vec3::new(t[0], t[1], t[2]);
+                    let v1 = Vec3::new(t[3], t[4], t[5]);
+                    let v2 = Vec3::new(t[6], t[7], t[8]);
+                    if v0.finite() && v1.finite() && v2.finite() {
+                        acc.expand(v0);
+                        acc.expand(v1);
+                        acc.expand(v2);
+                    }
+                    acc
+                })
+                .reduce(Aabb::empty, |mut a, b| {
+                    a.union(&b);
+                    a
+                })
+        } else {
+            let mut bbox = Aabb::empty();
+            for tri in 0..tri_count {
+                let corners = read_tri(tri);
+                if tri_finite(&corners) {
+                    bbox.expand(corners[0]);
+                    bbox.expand(corners[1]);
+                    bbox.expand(corners[2]);
+                }
+            }
+            bbox
+        };
         let diag = bbox.diag().max(1e-6);
-        let step = (merge_epsilon * diag).max(1e-7);
+        let step = clamp_weld_step(merge_epsilon * diag);
         let inv_step = 1.0 / step;
 
         let mut map: ahash::AHashMap<(i32, i32, i32), u32> =
@@ -183,24 +303,19 @@ impl IndexedMesh {
         };
 
         for tri in 0..tri_count {
-            let base = tri * 9;
-            let v0 = Vec3::new(positions[base], positions[base + 1], positions[base + 2]);
-            let v1 = Vec3::new(
-                positions[base + 3],
-                positions[base + 4],
-                positions[base + 5],
-            );
-            let v2 = Vec3::new(
-                positions[base + 6],
-                positions[base + 7],
-                positions[base + 8],
-            );
-            let i0 = intern(v0, &mut out);
-            let i1 = intern(v1, &mut out);
-            let i2 = intern(v2, &mut out);
+            let corners = read_tri(tri);
+            if !tri_finite(&corners) {
+                // Quarantine: a non-finite corner would map to key (0,0,0) and
+                // poison every near-origin vertex. Drop the triangle, count it.
+                stats.dropped_nonfinite_triangles += 1;
+                continue;
+            }
+            let i0 = intern(corners[0], &mut out);
+            let i1 = intern(corners[1], &mut out);
+            let i2 = intern(corners[2], &mut out);
             out.triangles.push([i0, i1, i2]);
         }
-        out
+        (out, stats)
     }
 
     /// Unindex into a flat soup (9 floats per triangle). Used for exporting.
