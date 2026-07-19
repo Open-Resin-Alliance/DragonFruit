@@ -5,12 +5,12 @@ import { normalizeAutoSupportSettings } from './settings';
 import { generateCandidates, deduplicateCandidates } from './candidateGeneration';
 import { sizeParameters } from './parameterSizing';
 import { getSettings } from '../Settings/state';
-import { getSnapshot, addRoot, addTrunk, addBranch, addLeaf, addKnot, addAnchor, addStick } from '../state';
+import { getSnapshot, addRoot, addTrunk, addBranch, addLeaf, addKnot, addAnchor, addStick, addTwig } from '../state';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import { buildTrunkData } from '../SupportTypes/Trunk/trunkBuilder';
+import { buildCavityStick } from '../SupportTypes/Trunk/useTrunkPlacement';
 import { buildBranchData } from '../SupportTypes/Branch/branchBuilder';
 import { buildLeafData } from '../SupportTypes/Leaf/leafBuilder';
-import { buildStick } from '../SupportTypes/Stick/stickBuilder';
 import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
 import { calculateSmoothedNormal } from '../PlacementLogic/PlacementUtils';
 import { runAutoBracing } from '../autoBracing/autoBrace';
@@ -169,59 +169,6 @@ const LEAF_FAN_RADIUS_MM = 5.0;
 const LEAF_FAN_MAX_ANGLE_DEG = 60;
 
 // ---------------------------------------------------------------------------
-// Cavity stick fallback
-// ---------------------------------------------------------------------------
-
-/** Raycast downward from a tip to find a floor to bridge to with a Stick. */
-function tryCavityStick(
-    tipPos: { x: number; y: number; z: number },
-    tipNormal: { x: number; y: number; z: number },
-    modelId: string,
-    mesh: THREE.Mesh,
-): { stick: ReturnType<typeof buildStick>['stick']; floorZ: number } | null {
-    const raycaster = new THREE.Raycaster();
-    const origin = new THREE.Vector3(tipPos.x, tipPos.y, tipPos.z);
-    // Offset inward along the normal so we don't self-hit.
-    origin.addScaledVector(
-        new THREE.Vector3(tipNormal.x, tipNormal.y, tipNormal.z),
-        0.5,
-    );
-    origin.z -= 0.05;
-    raycaster.set(origin, new THREE.Vector3(0, 0, -1));
-
-    const hits = raycaster.intersectObject(mesh, false);
-    if (hits.length === 0) return null;
-
-    // Find the first hit below the tip.
-    for (const hit of hits) {
-        if (hit.point.z >= tipPos.z - 0.1) continue;
-        const floorZ = hit.point.z;
-        const floorNormal = hit.face?.normal.clone().applyMatrix3(
-            new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld),
-        ).normalize();
-
-        try {
-            const result = buildStick({
-                modelId,
-                aPos: tipPos,
-                aNormal: tipNormal,
-                bPos: { x: hit.point.x, y: hit.point.y, z: floorZ },
-                bNormal: floorNormal
-                    ? { x: floorNormal.x, y: floorNormal.y, z: floorNormal.z }
-                    : { x: 0, y: 0, z: 1 },
-                mesh,
-            });
-            if (!result.error) {
-                return { stick: result.stick, floorZ };
-            }
-        } catch (_) {
-            // Try next hit.
-        }
-    }
-    return null;
-}
-
-// ---------------------------------------------------------------------------
 // Nearby-trunk merge
 // ---------------------------------------------------------------------------
 
@@ -340,20 +287,25 @@ function placeOneCandidate(
                 pos: knotPos,
             };
             try {
-                const { branch, supportData: _sd } = buildBranchData({
+                const { branch, supportData: sd } = buildBranchData({
                     tipPos,
                     tipNormal,
                     modelId: candidate.modelId,
                     parentKnot,
                     mesh,
                 });
-                addKnot(parentKnot);
-                addBranch(branch);
-                console.log(LOG_PREFIX,
-                    `Branch (merge) ${candidate.id} → host ${host.trunkId} ` +
-                    `(grid off, within ${GRIDLESS_MERGE_RADIUS_MM}mm, ` +
-                    `knotZ=${knotPos.z.toFixed(1)}mm)`);
-                return { kind: 'branch', preset };
+                if (sd.error) {
+                    console.log(LOG_PREFIX,
+                        `Branch (merge) ${candidate.id}: collision \"${sd.error}\", falling back`);
+                    // Fall through to trunk path.
+                } else {
+                    addKnot(parentKnot);
+                    addBranch(branch);
+                    console.log(LOG_PREFIX,
+                        `Branch (merge) ${candidate.id} → host ${host.trunkId} ` +
+                        `knotZ=${knotPos.z.toFixed(1)}mm`);
+                    return { kind: 'branch', preset };
+                }
             } catch (e) {
                 console.log(LOG_PREFIX,
                     `Merge branch failed for ${candidate.id}, falling back to trunk: ` +
@@ -378,16 +330,27 @@ function placeOneCandidate(
         // Cavity fallback: if the trunk can't reach the build plate, try
         // bridging to a lower surface with a Stick (model-to-model).
         if (trunkResult.error === 'COLLISION_WITH_MODEL' && mesh) {
-            const stickResult = tryCavityStick(tipPos, tipNormal, candidate.modelId, mesh);
-            if (stickResult) {
-                addStick(stickResult.stick);
-                console.log(LOG_PREFIX,
-                    `Stick (cavity) ${candidate.id} Z=${candidate.zHeight.toFixed(1)}mm ` +
-                    `→ floor at Z=${stickResult.floorZ.toFixed(1)}mm`);
-                return { kind: 'stick', preset };
+            const cavityResult = buildCavityStick(tipPos, tipNormal, candidate.modelId, mesh);
+            if (cavityResult) {
+                if (cavityResult.kind === 'stick') {
+                    addStick(cavityResult.stick);
+                    console.log(LOG_PREFIX,
+                        `Stick (cavity) ${candidate.id} Z=${candidate.zHeight.toFixed(1)}mm`);
+                    return { kind: 'stick', preset };
+                } else {
+                    addTwig(cavityResult.twig);
+                    console.log(LOG_PREFIX,
+                        `Twig (cavity) ${candidate.id} Z=${candidate.zHeight.toFixed(1)}mm`);
+                    return { kind: 'twig', preset };
+                }
             }
         }
-        console.log(LOG_PREFIX, `Rejected ${candidate.id}: trunk build error \"${trunkResult.error}\"`);
+        const bbox = mesh ? new THREE.Box3().setFromObject(mesh) : null;
+        console.log(LOG_PREFIX,
+            `Rejected ${candidate.id}: trunk build error \"${trunkResult.error}\" ` +
+            `tip=(${tipPos.x.toFixed(1)},${tipPos.y.toFixed(1)},${tipPos.z.toFixed(1)}) ` +
+            `mesh=${mesh ? 'yes' : 'no'} ` +
+            `bbox=${bbox ? `(${bbox.min.x.toFixed(0)},${bbox.min.y.toFixed(0)},${bbox.min.z.toFixed(0)})-(${bbox.max.x.toFixed(0)},${bbox.max.y.toFixed(0)},${bbox.max.z.toFixed(0)})` : 'none'}`);
         return { kind: 'reject', rejectedReason: 'trunk_build_error', preset };
     }
 
@@ -551,6 +514,7 @@ export function runAutoPlace(
     // tree fan-out via grid occupancy).
 
     const mesh = getModelMesh(modelId);
+    if (mesh) mesh.updateMatrixWorld();
     console.log(LOG_PREFIX,
         `Mesh for ${modelId}: ${mesh ? 'available (pathfinding + SDF active)' : 'UNAVAILABLE (supports route straight, no collision avoidance)'}`);
 

@@ -121,7 +121,7 @@ function markTwigPlacementSurface(twig: Twig, surface?: PlacementSurface): Twig 
  * cavity floor by raycasting straight down.  Returns a buildStick result +
  * a SupportData preview object, or null if no lower surface is found.
  */
-function buildCavityStick(
+export function buildCavityStick(
     tipPos: { x: number; y: number; z: number },
     tipNormal: { x: number; y: number; z: number },
     modelId: string,
