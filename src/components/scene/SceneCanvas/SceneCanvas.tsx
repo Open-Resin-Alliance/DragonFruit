@@ -87,6 +87,7 @@ import { PickingProviderWrapper, SelectionSync, useInteractionWarning } from './
 import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers, Lights, SceneMoodOverlay } from './SceneEnvironment';
 import { StlMesh } from './StlMesh';
 import { setClipBounds } from './clipBoundsStore';
+import { setModelMesh } from '@/supports/autoSupport/meshStore';
 import { useIsLinux } from '@/hooks/usePlatform';
 import {
   DEFAULT_CAMERA_PROJECTION_SETTINGS,
@@ -5397,6 +5398,7 @@ export function SceneCanvas({
                 const actualMeshRefCallback = actualMeshRefCallbacks.current[model.id]
                   ?? ((node: THREE.Mesh | null) => {
                     actualMeshRefs.current[model.id] = node;
+                    setModelMesh(model.id, node);
                   });
                 if (!actualMeshRefCallbacks.current[model.id]) {
                   actualMeshRefCallbacks.current[model.id] = actualMeshRefCallback;

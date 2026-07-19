@@ -82,7 +82,6 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
       const result = runAutoPlace(
         islandList,
         activeModelId,
-        undefined,
         settings.autoSupport,
       );
 

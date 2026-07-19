@@ -33,3 +33,4 @@ export type { SizeOverrides } from "./parameterSizing";
 
 export { runAutoPlace } from "./autoPlace";
 export { AutoSupportSettingsCard } from "./AutoSupportSettingsCard";
+export { setModelMesh, getModelMesh } from "./meshStore";

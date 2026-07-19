@@ -1,59 +1,30 @@
 import * as THREE from 'three';
-import type { CandidatePoint, SupportPlan, AutoPlaceResult } from './types';
+import type { CandidatePoint, AutoPlaceResult } from './types';
 import type { AutoSupportSettings } from './settings';
 import { normalizeAutoSupportSettings } from './settings';
 import { generateCandidates, deduplicateCandidates } from './candidateGeneration';
-import { planSupportTree } from './treeFanOut';
 import { sizeParameters } from './parameterSizing';
-import type { SizeOverrides } from './parameterSizing';
 import { getSettings } from '../Settings/state';
 import { getSnapshot, addRoot, addTrunk, addBranch, addLeaf, addKnot, addAnchor } from '../state';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import { buildTrunkData } from '../SupportTypes/Trunk/trunkBuilder';
-import type { TrunkBuildResult } from '../SupportTypes/Trunk/trunkBuilder';
-import { buildBranchData } from '../SupportTypes/Branch/branchBuilder';
-import { buildLeafData } from '../SupportTypes/Leaf/leafBuilder';
-import { buildAnchorData } from '../SupportTypes/Anchor/anchorBuilder';
+import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
+import { calculateSmoothedNormal } from '../PlacementLogic/PlacementUtils';
 import { runAutoBracing } from '../autoBracing/autoBrace';
 import { pushHistory } from '@/history/historyStore';
+import { getModelMesh } from './meshStore';
 
 const LOG_PREFIX = '[AutoSupport]';
 
-/**
- * History action type for auto-place operations.
- *
- * Defined inline here until it is permanently added to
- * {@link src/supports/history/actionTypes.ts}.  Follows the existing
- * `'support:<verb>' as const` convention used by the other action types
- * (e.g. `SUPPORT_AUTO_BRACE_REPLACE`).
- */
+// ---------------------------------------------------------------------------
+// History action type
+// ---------------------------------------------------------------------------
+
 const SUPPORT_AUTO_PLACE = 'support:auto-place' as const;
-
-// ---------------------------------------------------------------------------
-// Internal return type — carries computed geometry for the state-commit
-// caller in addition to the public AutoPlaceResult summary.
-// ---------------------------------------------------------------------------
-
-export interface AutoPlaceInternalResult extends AutoPlaceResult {
-    /** Computed trunk results, keyed by candidate id.  The caller commits
-     *  each trunk's root + shaft to state and records knots for branch/leaf
-     *  attachment. */
-    _trunkResults: Map<string, TrunkBuildResult>;
-    /** The full support plan so the caller can iterate branches/leaves and
-     *  resolve their placeholder knots against real trunk shaft positions. */
-    _plan: SupportPlan;
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function distance(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number {
-    const dx = a.x - b.x;
-    const dy = a.y - b.y;
-    const dz = a.z - b.z;
-    return Math.sqrt(dx * dx + dy * dy + dz * dz);
-}
 
 function makeResult(
     trunks: number,
@@ -76,60 +47,203 @@ function makeResult(
 }
 
 // ---------------------------------------------------------------------------
+// Normal resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the real surface normal at a candidate's tip position by
+ * raycasting against the model mesh — exactly the same way manual
+ * placement obtains a surface normal from a click intersection.
+ *
+ * Falls back to the candidate's existing tipNormal when the mesh is
+ * unavailable or the raycast misses.
+ */
+function resolveSurfaceNormal(
+    tipPos: CandidatePoint['tipPos'],
+    mesh: THREE.Mesh | undefined,
+): { point: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number } } {
+    if (!mesh) {
+        return { point: tipPos, normal: { x: 0, y: 0, z: -1 } };
+    }
+
+    const raycaster = new THREE.Raycaster();
+    // Shoot a ray from slightly above the candidate toward it.
+    const origin = new THREE.Vector3(tipPos.x, tipPos.y, tipPos.z + 2);
+    const direction = new THREE.Vector3(0, 0, -1);
+    raycaster.set(origin, direction);
+
+    // Also try shooting upward in case the surface faces down.
+    const hitsUp: THREE.Intersection[] = [];
+    raycaster.set(new THREE.Vector3(tipPos.x, tipPos.y, tipPos.z - 2), new THREE.Vector3(0, 0, 1));
+    hitsUp.push(...raycaster.intersectObject(mesh, false));
+
+    const hits = raycaster.intersectObject(mesh, false);
+    if (hits.length > 0) {
+        const hit = hits[0];
+        const smoothed = calculateSmoothedNormal(hit);
+        return {
+            point: { x: hit.point.x, y: hit.point.y, z: hit.point.z },
+            normal: smoothed,
+        };
+    }
+
+    // Try the upward ray.
+    if (hitsUp.length > 0) {
+        const hit = hitsUp[0];
+        const smoothed = calculateSmoothedNormal(hit);
+        return {
+            point: { x: hit.point.x, y: hit.point.y, z: hit.point.z },
+            normal: { x: -smoothed.x, y: -smoothed.y, z: -smoothed.z },
+        };
+    }
+
+    // Fallback: keep the existing normal.
+    return { point: tipPos, normal: { x: 0, y: 0, z: -1 } };
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Run a single candidate through the standard placement pipeline:
+ * resolve surface normal → buildTrunkData → decideGridPlacement → commit.
+ *
+ * This is the same sequence used by manual placement clicks.
+ * Returns the decision kind so the orchestrator can tally.
+ */
+function placeOneCandidate(
+    candidate: CandidatePoint,
+    settingsOverride: Partial<AutoSupportSettings> | undefined,
+): { kind: string; rejectedReason?: string } {
+    const supportSettings = getSettings();
+    const autoSettings = normalizeAutoSupportSettings(settingsOverride ?? undefined);
+    const snapshot = getSnapshot();
+    const mesh = getModelMesh(candidate.modelId) ?? undefined;
+
+    // Resolve the real surface normal by raycasting against the mesh.
+    // candidateFromIsland sets tipNormal to {0,0,-1} as a placeholder.
+    const resolved = resolveSurfaceNormal(candidate.tipPos, mesh);
+    const tipPos = resolved.point;
+    const tipNormal = resolved.normal;
+
+    // Size parameters from island geometry.
+    const overrides = sizeParameters(
+        candidate,
+        candidate.islandAreaMm2,
+        candidate.zHeight,
+        supportSettings,
+    );
+
+    const trunkResult = buildTrunkData({
+        tipPos,
+        tipNormal,
+        modelId: candidate.modelId,
+        mesh,
+        overrides,
+        isPreview: false,
+    });
+
+    if (trunkResult.error) {
+        console.log(LOG_PREFIX, `Rejected ${candidate.id}: trunk build error \"${trunkResult.error}\"`);
+        return { kind: 'reject', rejectedReason: `Trunk build error: ${trunkResult.error}` };
+    }
+
+    // Route through the standard grid placement engine.
+    // This handles grid snapping, SDF collision checks, host-trunk
+    // attachment (branch/leaf), anchor short-circuit, and rejection.
+    const decision = decideGridPlacement({
+        settings: supportSettings,
+        snapshot,
+        candidate: trunkResult,
+        tipPos,
+        tipNormal,
+        modelId: candidate.modelId,
+        mesh,
+    });
+
+    switch (decision.kind) {
+        case 'place_trunk':
+            addRoot(decision.trunkBuild.root);
+            addTrunk(decision.trunkBuild.trunk);
+            console.log(LOG_PREFIX,
+                `Trunk ${candidate.id} @ grid ${decision.nodeKey} ` +
+                `area=${candidate.islandAreaMm2.toFixed(2)}mm² Z=${candidate.zHeight.toFixed(1)}mm`);
+            return { kind: 'trunk' };
+
+        case 'place_anchor':
+            addAnchor(decision.anchor);
+            console.log(LOG_PREFIX, `Anchor ${candidate.id} Z=${candidate.zHeight.toFixed(1)}mm`);
+            return { kind: 'anchor' };
+
+        case 'place_branch':
+            addKnot(decision.knot);
+            addBranch(decision.branch);
+            console.log(LOG_PREFIX,
+                `Branch ${candidate.id} → host ${decision.hostTrunkId} ` +
+                `grid ${decision.nodeKey}`);
+            return { kind: 'branch' };
+
+        case 'place_leaf':
+            addKnot(decision.knot);
+            addLeaf(decision.leaf);
+            console.log(LOG_PREFIX,
+                `Leaf ${candidate.id} → host ${decision.hostTrunkId} ` +
+                `grid ${decision.nodeKey}`);
+            return { kind: 'leaf' };
+
+        case 'replace_trunk':
+            // The old trunk gets removed by the caller (or we accept overwrite).
+            // For now: add the new trunk and root.  The old trunk's root is
+            // implicitly replaced because we overwrite the grid node.
+            addRoot(decision.trunkBuild.root);
+            addTrunk(decision.trunkBuild.trunk);
+            console.log(LOG_PREFIX,
+                `Replace trunk @ ${decision.nodeKey}: ` +
+                `${candidate.id} (Z=${candidate.zHeight.toFixed(1)}) → host ${decision.hostTrunkId}`);
+            return { kind: 'trunk' };
+
+        case 'reject':
+            console.log(LOG_PREFIX, `Rejected ${candidate.id}: ${decision.reason} (grid ${decision.nodeKey})`);
+            return { kind: 'reject', rejectedReason: decision.reason };
+    }
+}
+
+// ---------------------------------------------------------------------------
 // runAutoPlace
 // ---------------------------------------------------------------------------
 
 /**
- * Run the complete auto-support pipeline:
+ * Run the complete auto-support pipeline using the standard placement engine.
  *
- * 1. Generate candidate points from detected islands
- * 2. Deduplicate candidates spatially
- * 3. Plan a support tree (clusters, core trunks, branch/leaf fan-out)
- * 4. Build support geometry for each planned element
- * 5. Return the results (state commit is done by the caller)
+ * Each candidate is individually routed through
+ * {@link decideGridPlacement}, the same function used by manual support
+ * placement.  This guarantees that SDF collision checks, grid snapping,
+ * host-trunk attachment rules, and anchor/branch/leaf auto-selection are
+ * identical to the manual workflow.
  *
- * This function is PURE — it does not mutate global state.
- * The caller is responsible for committing results to SupportState
- * and running auto-bracing afterward.
- *
- * @param islands  - Detected islands from the combined island/minima scan.
- * @param modelId  - The model to place supports for.
- * @param mesh     - Optional THREE.js mesh for surface normal queries and
- *                   collision-aware pathfinding.  When omitted, trunks fall
- *                   back to standard (non-collision) placement.
- * @param settingsOverride - Partial auto-support settings that are merged
- *                           on top of the module defaults.  (The full
- *                           {@link SupportSettings} from the settings store
- *                           are also read internally for support sizing.)
- * @returns A summary of what was placed / rejected, plus internal geometry
- *          data (`_trunkResults`, `_plan`) for the state-commit caller.
+ * Candidates are processed in priority order (largest / lowest islands
+ * first).  Because the state snapshot is refreshed after every commit,
+ * later candidates see the supports placed by earlier ones, enabling
+ * organic tree fan-out via grid occupancy — a subsequent candidate whose
+ * preferred grid node is already occupied will automatically become a
+ * branch or leaf of the existing trunk.
  */
 export function runAutoPlace(
     islands: DetectedIsland[],
     modelId: string,
-    mesh?: THREE.Mesh,
     settingsOverride?: Partial<AutoSupportSettings>,
-): AutoPlaceInternalResult {
+): AutoPlaceResult {
     // ------------------------------------------------------------------
     // 0. Settings
     // ------------------------------------------------------------------
 
-    const supportSettings = getSettings();
-
-    // AutoSupportSettings are not yet stored inside SupportSettings, so
-    // we merge the caller's override on top of the module defaults.
     const autoSettings = normalizeAutoSupportSettings(settingsOverride ?? undefined);
 
     if (!autoSettings.enabled) {
-        return {
-            ...makeResult(0, 0, 0, 0, 0, false, 'Auto-support is disabled.'),
-            _trunkResults: new Map(),
-            _plan: { trunks: [], anchors: [], branches: [], leaves: [], rejectedCandidates: [] },
-        };
+        return makeResult(0, 0, 0, 0, 0, false, 'Auto-support is disabled.');
     }
 
-    // Capture the before-snapshot for the eventual history entry.
-    // (Not pushed to history yet — see TODO at the bottom.)
     const beforeSnapshot = getSnapshot();
 
     // ------------------------------------------------------------------
@@ -139,18 +253,14 @@ export function runAutoPlace(
     console.log(LOG_PREFIX, `Input: ${islands.length} islands from scan`);
 
     let candidates = generateCandidates(islands, autoSettings);
-    console.log(LOG_PREFIX, `Step 1/4: ${candidates.length} candidates generated (filtered from ${islands.length} islands, min area ${autoSettings.minIslandAreaMm2}mm²)`);
-
-    // Attach the target modelId (generateCandidates leaves it empty).
     candidates = candidates.map((c): CandidatePoint => ({ ...c, modelId }));
 
+    console.log(LOG_PREFIX,
+        `Step 1/3: ${candidates.length} candidates generated ` +
+        `(filtered from ${islands.length} islands, min area ${autoSettings.minIslandAreaMm2}mm²)`);
+
     if (candidates.length === 0) {
-        void beforeSnapshot;
-        return {
-            ...makeResult(0, 0, 0, 0, 0, false, 'No viable support candidates found.'),
-            _trunkResults: new Map(),
-            _plan: { trunks: [], anchors: [], branches: [], leaves: [], rejectedCandidates: [] },
-        };
+        return makeResult(0, 0, 0, 0, 0, false, 'No viable support candidates found.');
     }
 
     // ------------------------------------------------------------------
@@ -159,204 +269,77 @@ export function runAutoPlace(
 
     const beforeDedup = candidates.length;
     candidates = deduplicateCandidates(candidates, autoSettings);
-    console.log(LOG_PREFIX, `Step 2/4: ${candidates.length} candidates after dedup (removed ${beforeDedup - candidates.length} within ${autoSettings.tipInfluenceRadiusMm}mm influence radius)`);
+
+    console.log(LOG_PREFIX,
+        `Step 2/3: ${candidates.length} candidates after dedup ` +
+        `(removed ${beforeDedup - candidates.length} within ${autoSettings.tipInfluenceRadiusMm}mm radius)`);
 
     if (candidates.length === 0) {
-        void beforeSnapshot;
-        return {
-            ...makeResult(0, 0, 0, 0, 0, false, 'All candidates deduplicated — nothing to place.'),
-            _trunkResults: new Map(),
-            _plan: { trunks: [], anchors: [], branches: [], leaves: [], rejectedCandidates: [] },
-        };
+        return makeResult(0, 0, 0, 0, 0, false, 'All candidates deduplicated — nothing to place.');
     }
 
     // ------------------------------------------------------------------
-    // 3. Plan support tree
+    // 3. Place candidates through the standard pipeline
     // ------------------------------------------------------------------
+    // Each candidate goes through resolveNormal → buildTrunkData →
+    // decideGridPlacement.  State is committed after each placement so
+    // subsequent candidates see existing supports (enabling organic
+    // tree fan-out via grid occupancy).
 
-    const plan: SupportPlan = planSupportTree(candidates, autoSettings);
-    console.log(LOG_PREFIX, `Step 3/4: Tree plan → ${plan.trunks.length}T ${plan.anchors.length}A ${plan.branches.length}B ${plan.leaves.length}L ${plan.rejectedCandidates.length}R (cluster radius ${autoSettings.clusterRadiusMm}mm, max branch reach ${autoSettings.maxBranchReachMm}mm)`);
+    const mesh = getModelMesh(modelId);
+    console.log(LOG_PREFIX,
+        `Mesh for ${modelId}: ${mesh ? 'available (pathfinding + SDF active)' : 'UNAVAILABLE (supports route straight, no collision avoidance)'}`);
 
-    // ------------------------------------------------------------------
-    // 4. Build geometry and commit to state
-    // ------------------------------------------------------------------
-    // Each builder returns the computed geometry without touching global
-    // state.  When the TODO(state-commit) blocks below are filled in, the
-    // returned entities (Roots, Trunk, Branch, Leaf, Anchor, Knot) will be
-    // committed via addRoot / addTrunk / addBranch / addLeaf / addAnchor /
-    // addKnot.
+    const gridEnabled = getSettings().grid?.enabled;
+    console.log(LOG_PREFIX,
+        `Grid mode: ${gridEnabled ? 'ENABLED (supports share grid nodes, branch/leaf fan-out active)' : 'DISABLED (all supports become standalone trunks)'}`);
 
     let placedTrunks = 0;
     let placedAnchors = 0;
     let placedBranches = 0;
     let placedLeaves = 0;
-    const rejected: Array<{ candidate: CandidatePoint; reason: string }> = [
-        ...plan.rejectedCandidates,
-    ];
+    let rejectedCount = 0;
 
-    // Per-candidate trunk results for the state-commit caller.
-    const trunkResults = new Map<string, TrunkBuildResult>();
-
-    // -- 4a. Anchors ---------------------------------------------------
-
-    for (const { candidate } of plan.anchors) {
+    for (const candidate of candidates) {
         try {
-            const { anchor, supportData: _supportData } = buildAnchorData({
-                tipPos: candidate.tipPos,
-                tipNormal: candidate.tipNormal,
-                modelId,
-                mesh,
-            });
-
-            addAnchor(anchor);
-            console.log(LOG_PREFIX, `Anchor placed: ${candidate.id} at Z=${candidate.zHeight.toFixed(1)}mm`);
-            placedAnchors++;
-        } catch (e) {
-            rejected.push({
-                candidate,
-                reason: `Anchor build failed: ${e instanceof Error ? e.message : String(e)}`,
-            });
-        }
-    }
-
-    // -- 4b. Trunks ----------------------------------------------------
-
-    for (const { candidate, overrides } of plan.trunks) {
-        try {
-            // Compute size overrides from the island geometry.
-            // For standalone (single-candidate) trunks the supported area
-            // equals the candidate's own area.  For core trunks (those
-            // selected as the core of a multi-candidate cluster) the
-            // caller should eventually pass the summed area of the whole
-            // cluster — tracked via the `totalSupportedAreaMm2` param.
-            const sizedOverrides: SizeOverrides = sizeParameters(
-                candidate,
-                candidate.islandAreaMm2,
-                candidate.zHeight,
-                supportSettings,
-            );
-
-            const mergedOverrides = { ...sizedOverrides, ...overrides };
-
-            const result = buildTrunkData({
-                tipPos: candidate.tipPos,
-                tipNormal: candidate.tipNormal,
-                modelId,
-                mesh,
-                overrides: mergedOverrides,
-                isPreview: false,
-            });
-
-            if (result.error) {
-                rejected.push({
-                    candidate,
-                    reason: `Trunk build error: ${result.error}`,
-                });
-                continue;
+            const result = placeOneCandidate(candidate, settingsOverride);
+            switch (result.kind) {
+                case 'trunk':   placedTrunks++; break;
+                case 'anchor':  placedAnchors++; break;
+                case 'branch':  placedBranches++; break;
+                case 'leaf':    placedLeaves++; break;
+                case 'reject':  rejectedCount++; break;
             }
-
-            addRoot(result.root);
-            addTrunk(result.trunk);
-            console.log(LOG_PREFIX, `Trunk placed: ${candidate.id} area=${candidate.islandAreaMm2.toFixed(2)}mm² Z=${candidate.zHeight.toFixed(1)}mm shaft=Ø${(mergedOverrides.shaftDiameterMm ?? supportSettings.shaft.diameterMm).toFixed(2)}mm`);
-
-            trunkResults.set(candidate.id, result);
-            placedTrunks++;
         } catch (e) {
-            rejected.push({
-                candidate,
-                reason: `Trunk build failed: ${e instanceof Error ? e.message : String(e)}`,
-            });
+            rejectedCount++;
+            console.warn(LOG_PREFIX,
+                `Exception placing ${candidate.id}: ${e instanceof Error ? e.message : String(e)}`);
         }
     }
 
-    // -- 4c. Branches --------------------------------------------------
-
-    for (const { candidate, parentKnot } of plan.branches) {
-        try {
-            // NOTE: parentKnot from planSupportTree is a placeholder.
-            // Before committing, the knot must be resolved to a real
-            // position on the parent trunk shaft.  Currently the knot's
-            // parentShaftId is empty and its pos is the core tip position.
-            // The resolution step will be added once state-commit is
-            // integrated.
-            const result = buildBranchData({
-                tipPos: candidate.tipPos,
-                tipNormal: candidate.tipNormal,
-                modelId,
-                parentKnot,
-                mesh,
-            });
-
-            addKnot(parentKnot);
-            addBranch(result.branch);
-            console.log(LOG_PREFIX, `Branch placed: ${candidate.id} → host knot on shaft ${parentKnot.parentShaftId || '(placeholder)'}`);
-            placedBranches++;
-        } catch (e) {
-            rejected.push({
-                candidate,
-                reason: `Branch build failed: ${e instanceof Error ? e.message : String(e)}`,
-            });
-        }
-    }
-
-    // -- 4d. Leaves ----------------------------------------------------
-
-    for (const { candidate, parentKnot, hostDiameterMm } of plan.leaves) {
-        try {
-            // NOTE: parentKnot is a placeholder (same caveat as branches).
-            const result = buildLeafData({
-                tipPos: candidate.tipPos,
-                surfaceNormal: candidate.tipNormal,
-                modelId,
-                parentKnot,
-                hostDiameterMm:
-                    hostDiameterMm > 0
-                        ? hostDiameterMm
-                        : supportSettings.shaft.diameterMm,
-                mesh,
-            });
-
-            addKnot(parentKnot);
-            addLeaf(result.leaf);
-            console.log(LOG_PREFIX, `Leaf placed: ${candidate.id} span=${distance(candidate.tipPos, parentKnot.pos).toFixed(1)}mm`);
-            placedLeaves++;
-        } catch (e) {
-            rejected.push({
-                candidate,
-                reason: `Leaf build failed: ${e instanceof Error ? e.message : String(e)}`,
-            });
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // 5. Assemble result
-    // ------------------------------------------------------------------
-
-    const totalRejected = rejected.length;
     const changed =
         placedTrunks > 0 ||
         placedAnchors > 0 ||
         placedBranches > 0 ||
         placedLeaves > 0;
 
-    console.log(LOG_PREFIX, `Step 4/4: Built ${placedTrunks}T ${placedAnchors}A ${placedBranches}B ${placedLeaves}L — ${totalRejected} rejected${changed ? '' : ' (no changes)'}`);
+    console.log(LOG_PREFIX,
+        `Step 3/3: ${placedTrunks}T ${placedAnchors}A ${placedBranches}B ${placedLeaves}L — ${rejectedCount} rejected`);
 
     // ------------------------------------------------------------------
-    // 6. State commit — auto-bracing + history
+    // 4. Auto-bracing + history
     // ------------------------------------------------------------------
 
     if (changed) {
-        console.log(LOG_PREFIX, `Committing ${placedTrunks}T ${placedAnchors}A ${placedBranches}B ${placedLeaves}L — running auto-brace...`);
-
-        // Auto-brace the newly placed supports.
+        console.log(LOG_PREFIX, 'Running auto-brace...');
         try {
             const braceResult = runAutoBracing();
             console.log(LOG_PREFIX, `Auto-brace: ${braceResult.message}`);
         } catch (e) {
-            console.warn(LOG_PREFIX, `Auto-brace failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+            console.warn(LOG_PREFIX,
+                `Auto-brace failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
         }
 
-        // Push an undo entry so the user can revert the entire operation.
         try {
             const afterSnapshot = getSnapshot();
             pushHistory({
@@ -365,19 +348,18 @@ export function runAutoPlace(
             });
             console.log(LOG_PREFIX, 'History entry pushed — undo available.');
         } catch (e) {
-            console.warn(LOG_PREFIX, `History push failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+            console.warn(LOG_PREFIX,
+                `History push failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
         }
     }
 
-    return {
+    return makeResult(
         placedTrunks,
         placedAnchors,
         placedBranches,
         placedLeaves,
-        rejectedCandidates: totalRejected,
+        rejectedCount,
         changed,
-        message: `Placed ${placedTrunks} trunks, ${placedAnchors} anchors, ${placedBranches} branches, ${placedLeaves} leaves. ${totalRejected} rejected.`,
-        _trunkResults: trunkResults,
-        _plan: plan,
-    };
+        `Placed ${placedTrunks} trunks, ${placedAnchors} anchors, ${placedBranches} branches, ${placedLeaves} leaves. ${rejectedCount} rejected.`,
+    );
 }
