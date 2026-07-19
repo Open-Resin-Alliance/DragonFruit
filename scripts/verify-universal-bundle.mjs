@@ -11,9 +11,12 @@
  *
  * `lipo -info` exits 0 even for a thin binary, so we grep its output for both
  * arches rather than trusting the exit code. We do NOT enforce a certificate
- * TYPE — Apple Development (dev machines) and ad-hoc "-" (CI) are both accepted;
- * we are verifying signature INTEGRITY, not Gatekeeper acceptance. Developer ID
- * + notarization is the follow-up df-macos-ci-developer-id-notarize.
+ * TYPE here — Developer ID (release CI), Apple Development (dev machines), and
+ * ad-hoc "-" (local/PR-check builds without secrets) are all accepted; this is
+ * verifying signature INTEGRITY, not Gatekeeper acceptance. Developer ID
+ * signing + notarization + stapling of both the .app and the rebuilt .dmg is
+ * handled by scripts/macos-embed-appex.mjs, conditioned on which identity it
+ * found in the keychain.
  *
  * Usage: node scripts/verify-universal-bundle.mjs
  * Exits non-zero if any assertion fails (all are checked before exiting, so one
