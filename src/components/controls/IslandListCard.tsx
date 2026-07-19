@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import type { Island } from '@/volumeAnalysis/IslandScan/types';
 import { IslandHierarchyModal } from '@/components/modals/IslandHierarchyModal';
 import { ChevronRight, Network } from 'lucide-react';
-import { Button, Card, CardHeader, IconButton, Input } from '@/components/ui/primitives';
+import { Button, Card, CardHeader, IconButton, Input } from '@/components/atoms';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 type IslandListCardProps = {

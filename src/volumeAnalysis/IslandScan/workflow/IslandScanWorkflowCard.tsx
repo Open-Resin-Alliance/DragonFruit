@@ -3,7 +3,7 @@
 import React from 'react';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 import { useIslandScanWorkflow } from './useIslandScanWorkflow';
-import { Button, Card, CardHeader } from '@/components/ui/primitives';
+import { Button, Card, CardHeader } from '@/components/atoms';
 
 interface Props {
   islands: ReturnType<typeof useIslandManager>;

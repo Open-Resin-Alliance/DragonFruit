@@ -22,8 +22,6 @@ import { IslandIdLabels } from '@/components/scene/IslandIdLabels';
 import { ScreenSpaceGizmo as UnifiedGizmo } from '@/components/gizmo';
 import { warmTransformGizmoGeometryCache } from '@/components/gizmo/gizmoGeometryCache';
 import { PickingDebugOverlay } from '@/components/picking';
-// DEBUG: temporary twig disk B diameter override — see src/supports/__debug__/
-import { TwigDebugOverrideCard } from '@/supports/__debug__/TwigDebugOverrideCard';
 import { SelectionProvider, SelectionManager, SelectionOutlineRenderer, SelectionSpotlight } from '@/components/selection';
 import type { SelectionHighlightMode } from '@/components/selection';
 import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
@@ -548,8 +546,15 @@ export function SceneCanvas({
       polygon: Array<{ x: number; y: number }>,
       helpers: {
         projectWorldPoint: (point: THREE.Vector3) => { x: number; y: number; z: number } | null;
+        /** Snapshot of the camera projection + container size at pointer-up,
+         *  so a resolver can hand projection off to a backend (e.g. Rust-side
+         *  voxel selection) instead of projecting per-voxel on the client.
+         *  viewProj is column-major projectionMatrix * matrixWorldInverse. */
+        getCameraProjection: () =>
+          | { viewProj: number[]; rectWidth: number; rectHeight: number }
+          | null;
       },
-    ) => string[];
+    ) => string[] | Promise<string[]>;
     /** altKey is true when the Alt modifier was held at pointer-up. */
     onSelectionChange: (ids: string[], altKey?: boolean) => void;
   };
@@ -1037,13 +1042,24 @@ export function SceneCanvas({
     }, 180);
   }, [cancelPendingSupportDragResets, resetSupportDragGroupNow]);
 
+  // Live transforms consumed per-frame by the cross-section stencil caps so
+  // the cut surface follows the mesh during gizmo drags instead of snapping
+  // into place on release. Mirrors liveDragTransformRef (active model) plus
+  // the multi-selection preview transforms.
+  const crossSectionLiveTransformsRef = React.useRef<Map<string, ModelTransform>>(new Map());
+
   const queueLiveDragTransform = React.useCallback((next: ModelTransform | null) => {
     liveDragTransformRef.current = next;
+    if (next && activeModelId) {
+      crossSectionLiveTransformsRef.current.set(activeModelId, next);
+    } else if (!next) {
+      crossSectionLiveTransformsRef.current.clear();
+    }
     // During active drag, avoid per-frame React rerenders; scene objects are
     // moved imperatively and this ref remains the source of truth.
     if (isGizmoDragging) return;
     setLiveDragTransformVersion((value) => value + 1);
-  }, [isGizmoDragging]);
+  }, [activeModelId, isGizmoDragging]);
 
   const {
     effectiveHoldSupportDragDelta,
@@ -1089,6 +1105,7 @@ export function SceneCanvas({
     // This prevents stale live transforms from the previous model from being
     // reused after delete/import/undo flows.
     liveDragTransformRef.current = null;
+    crossSectionLiveTransformsRef.current.clear();
     setLiveDragTransformVersion((value) => value + 1);
     setIsGizmoDragging(false);
     setIsGizmoRetargeting(false);
@@ -1104,6 +1121,7 @@ export function SceneCanvas({
     // Clear all transient gizmo/live state so rendering falls back to store data.
     cancelPendingSupportDragResets();
     liveDragTransformRef.current = null;
+    crossSectionLiveTransformsRef.current.clear();
     setLiveDragTransformVersion((value) => value + 1);
     gizmoTransformStartSnapshotRef.current = null;
     setActiveGizmoDragDescriptor(null);
@@ -1118,8 +1136,10 @@ export function SceneCanvas({
   ]);
 
   React.useEffect(() => {
+    const liveTransforms = crossSectionLiveTransformsRef.current;
     return () => {
       liveDragTransformRef.current = null;
+      liveTransforms.clear();
     };
   }, []);
 
@@ -2483,6 +2503,9 @@ export function SceneCanvas({
     for (const [modelId, preview] of Object.entries(previewByModelId)) {
       if (modelId === snapshot.activeModelId) continue;
 
+      // Keep the cross-section caps following the previewed models too.
+      crossSectionLiveTransformsRef.current.set(modelId, preview);
+
       const meshGroup = meshRefs.current[modelId];
       if (meshGroup) {
         meshGroup.position.copy(preview.position);
@@ -2889,12 +2912,38 @@ export function SceneCanvas({
       // ignore release failures
     }
 
-    customPrepareLassoSelection.onSelectionChange(
+    // Snapshot altKey now — the resolver may be async (Rust round-trip on
+    // release) and the pointer event must not be read after it settles.
+    const altKey = e.altKey;
+    const getCameraProjection = () => {
+      const projectionRect = containerRef.current?.getBoundingClientRect();
+      const projectionCamera = cameraRef.current;
+      if (!projectionRect || !projectionCamera) return null;
+      projectionCamera.updateMatrixWorld();
+      const viewProj = projectionCamera.projectionMatrix
+        .clone()
+        .multiply(projectionCamera.matrixWorldInverse)
+        .toArray();
+      return {
+        viewProj,
+        rectWidth: projectionRect.width,
+        rectHeight: projectionRect.height,
+      };
+    };
+
+    Promise.resolve(
       customPrepareLassoSelection.resolveSelection(path, {
         projectWorldPoint: projectPointToCanvas,
+        getCameraProjection,
       }),
-      e.altKey,
-    );
+    )
+      .then((ids) => {
+        customPrepareLassoSelection.onSelectionChange(ids, altKey);
+      })
+      .catch(() => {
+        // Selection resolution failed (e.g. backend unavailable); leave the
+        // blocked set unchanged rather than throwing from a pointer handler.
+      });
 
     suppressNextCanvasClickRef.current = true;
     e.preventDefault();
@@ -4474,7 +4523,7 @@ export function SceneCanvas({
       }
 
       benchmarkRunIdRef.current = requestId;
-      dispatchProgress({ requestId, status: 'started', message: `Preparing ${stressProfile} 3D orbit sweepsΓÇª` });
+      dispatchProgress({ requestId, status: 'started', message: `Preparing ${stressProfile} 3D orbit sweeps…` });
 
       const startedAt = performance.now();
       const startedAtIso = new Date().toISOString();
@@ -5847,6 +5896,7 @@ export function SceneCanvas({
                 <CrossSectionStencilCap
                   key="cross-section-cap-top"
                   entries={crossSectionCapEntries}
+                  liveTransformsRef={crossSectionLiveTransformsRef}
                   sourceObject={supportDragGroupRef?.current ?? null}
                   sourceObjectVersion={clipUpper != null ? crossSectionStencilSourceVersion : undefined}
                   // During slider scrubbing, avoid expensive source z-bound
@@ -5872,6 +5922,7 @@ export function SceneCanvas({
                 <CrossSectionStencilCap
                   key="cross-section-cap-bottom"
                   entries={crossSectionCapEntries}
+                  liveTransformsRef={crossSectionLiveTransformsRef}
                   sourceObject={supportDragGroupRef?.current ?? null}
                   sourceObjectVersion={crossSectionStencilSourceVersion}
                   skipSourceZBounds={isLayerScrubbing}
@@ -6741,7 +6792,7 @@ export function SceneCanvas({
           }}
         >
           <div className="rounded border border-neutral-700 bg-neutral-900/70 px-3 py-2 text-sm text-neutral-100">
-            Loading brushΓÇª
+            Loading brush…
           </div>
         </div>
       )}
@@ -6758,7 +6809,7 @@ export function SceneCanvas({
           }}
         >
           <div className="rounded border border-neutral-700 bg-neutral-900/70 px-3 py-2 text-sm text-neutral-100">
-            SmoothingΓÇª {Math.round((smoothingProcessing.progress ?? 0) * 100)}%
+            Smoothing… {Math.round((smoothingProcessing.progress ?? 0) * 100)}%
           </div>
         </div>
       )}
@@ -6781,14 +6832,6 @@ export function SceneCanvas({
 
       {/* GPU Picking Debug Overlay - shows what's under cursor */}
       {gpuPickingTest && <PickingDebugOverlay position="top-right" />}
-
-      {/* DEBUG: twig disk B diameter override. Hidden in normal builds — the
-          default twig is the tapered-twig code path with disk B forced equal
-          to disk A (achieved by leaving the override null). Lychee importer
-          bypasses buildTwig and can still produce asymmetric A/B. Re-mount
-          this card to expose the override for dev testing. */}
-      {false && <TwigDebugOverrideCard />}
-
 
       {showCrossSectionCapDebugPanel && (
         <div

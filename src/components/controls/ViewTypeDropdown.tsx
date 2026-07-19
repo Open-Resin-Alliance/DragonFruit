@@ -91,7 +91,8 @@ export function ViewTypeDropdown({
         title={title ?? (iconOnly ? `Camera view mode: ${currentLabel}` : 'View type')}
         options={dropdownOptions}
         className="space-y-0"
-        selectClassName={`${iconOnly ? '!h-8 !w-8 !p-2 justify-center' : '!h-8 !px-2 !py-1.5 text-xs'} ${fullWidth ? 'w-full' : ''}`}
+        selectClassName={`${iconOnly ? '!h-8 !w-8 !p-0' : '!h-8 !px-2 !py-1.5 text-xs'} ${fullWidth ? 'w-full' : ''}`}
+        hideChevron={iconOnly}
         menuAlign="right"
         menuClassName="!w-64"
         hideSelectedText={iconOnly}

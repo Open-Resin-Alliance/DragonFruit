@@ -63,6 +63,24 @@ function cellKey(qx: number, qy: number, qz: number): number {
     return (ux * 0x8000 + uy) * 0x8000 + uz;
 }
 
+// ---------- Matrix drift notifications ----------
+
+type SDFMatrixDriftListener = (meshUuid: string) => void;
+const sdfMatrixDriftListeners = new Set<SDFMatrixDriftListener>();
+
+/** Subscribe to "a mesh's world matrix changed" events, detected the next time
+ *  any caller refreshes that mesh's pooled SDF. Used by world-space caches
+ *  (stagnation points, placement results) whose entries are only valid for the
+ *  model position they were recorded at. */
+export function onSDFMatrixDrift(listener: SDFMatrixDriftListener): () => void {
+    sdfMatrixDriftListeners.add(listener);
+    return () => sdfMatrixDriftListeners.delete(listener);
+}
+
+function notifySDFMatrixDrift(meshUuid: string): void {
+    for (const listener of sdfMatrixDriftListeners) listener(meshUuid);
+}
+
 // ---------- SDFCache ----------
 
 export class SDFCache {
@@ -134,12 +152,22 @@ export class SDFCache {
      * If the mesh's world transform has changed since last call
      * (e.g. model was moved on the build plate), all cached distances
      * are invalidated and the matrix is updated.
+     *
+     * Returns true when drift was detected. Because several callers share the
+     * pooled instance and the first caller consumes the drift, world-space
+     * sibling caches (stagnation/placement results recorded at the OLD model
+     * position) must subscribe via `onSDFMatrixDrift` rather than rely on the
+     * return value — otherwise their stale points become false-collision
+     * landmines after a move.
      */
-    refreshMatrix(): void {
+    refreshMatrix(): boolean {
         if (!this.mesh.matrixWorld.equals(this._lastMatrix)) {
             this.cache.clear();
             this._snapshotMatrix();
+            notifySDFMatrixDrift(this.mesh.uuid);
+            return true;
         }
+        return false;
     }
 
     /**
@@ -520,6 +548,22 @@ export class SDFCache {
             && minZ <= this.worldBounds.max.z + margin;
     }
 
+    /**
+     * Signed distance at the EXACT world-space point — no cell quantization,
+     * no precomputed-grid shortcut, no caching (callers memoize their own
+     * outcomes). One BVH query per call.
+     *
+     * Use this for near-field gates whose safety margins are smaller than the
+     * grid substitution error: `distanceAt` answers with the distance at the
+     * quantized cell CENTER, displacing the query by up to cellSize·√3/2
+     * (~0.43mm at 0.5mm cells) — fatal for checks with sub-0.1mm margins like
+     * the contact-cone gate.
+     */
+    exactSignedDistanceAt(wx: number, wy: number, wz: number): number {
+        this._localPoint.set(wx, wy, wz).applyMatrix4(this.inverseMatrix);
+        return this._signedDistanceAtLocalPoint(Infinity);
+    }
+
     private _computeSignedDistanceAtQuantizedCell(qx: number, qy: number, qz: number, maxDistance = Infinity): number {
         const cs = this.cellSize;
         // Compute via BVH (local space)
@@ -528,6 +572,11 @@ export class SDFCache {
         const cZ = qz * cs;
 
         this._localPoint.set(cX, cY, cZ).applyMatrix4(this.inverseMatrix);
+        return this._signedDistanceAtLocalPoint(maxDistance);
+    }
+
+    /** Signed distance for the point currently in `_localPoint`. */
+    private _signedDistanceAtLocalPoint(maxDistance: number): number {
         const localMaxDistance = maxDistance === Infinity ? Infinity : maxDistance / Math.max(0.000001, this.worldScale);
         const result = this.bvh.closestPointToPoint(this._localPoint, this._resultTarget, 0, localMaxDistance);
 

@@ -73,13 +73,33 @@ export function segmentSatisfiesMaxAngleFromVertical(start: Vec3, end: Vec3, max
 const LENGTH_AWARE_UPPER_SPAN_TIGHTEN_START_MM = 5;
 const LENGTH_AWARE_UPPER_SPAN_MIN_MAX_ANGLE_FROM_VERTICAL_DEG = 15;
 const LENGTH_AWARE_UPPER_SPAN_TIGHTEN_DEGREES_PER_MM = 3;
+// Short-span detour slack: segments this short may bend up to the routing
+// detour angle (the old A* exploration budget) even when the trunk's base
+// angle is tighter. Local detours around bumps/crowns are geometrically
+// impossible within the base trunk angle (the clearance envelope around an
+// obstacle is locally steeper than any fixed cap), and a short strut segment
+// at 60° is mechanically sound. Long spans keep the existing tightening.
+export const SHORT_SPAN_DETOUR_MAX_LENGTH_MM = 3;
+export const SHORT_SPAN_DETOUR_MAX_ANGLE_FROM_VERTICAL_DEG = 60;
 
 export function getLengthAwareMaxAngleFromVerticalDeg(
     segmentLengthMm: number,
     baseMaxAngleFromVerticalDeg: number
 ): number {
+    const shortSpanMaxAngle = Math.max(
+        baseMaxAngleFromVerticalDeg,
+        SHORT_SPAN_DETOUR_MAX_ANGLE_FROM_VERTICAL_DEG,
+    );
+
+    if (segmentLengthMm <= SHORT_SPAN_DETOUR_MAX_LENGTH_MM) {
+        return shortSpanMaxAngle;
+    }
+
     if (segmentLengthMm <= LENGTH_AWARE_UPPER_SPAN_TIGHTEN_START_MM) {
-        return baseMaxAngleFromVerticalDeg;
+        // Taper from the detour slack back to the base angle.
+        const t = (segmentLengthMm - SHORT_SPAN_DETOUR_MAX_LENGTH_MM)
+            / (LENGTH_AWARE_UPPER_SPAN_TIGHTEN_START_MM - SHORT_SPAN_DETOUR_MAX_LENGTH_MM);
+        return shortSpanMaxAngle + (baseMaxAngleFromVerticalDeg - shortSpanMaxAngle) * t;
     }
 
     const excessLength = segmentLengthMm - LENGTH_AWARE_UPPER_SPAN_TIGHTEN_START_MM;
@@ -98,6 +118,29 @@ export function segmentSatisfiesLengthAwareMaxAngleFromVertical(
     const segmentLengthMm = distance3D(start, end);
     const allowedMaxAngle = getLengthAwareMaxAngleFromVerticalDeg(segmentLengthMm, baseMaxAngleFromVerticalDeg);
     return segmentSatisfiesMaxAngleFromVertical(start, end, allowedMaxAngle);
+}
+
+// Socket elbow: the FIRST chain segment below the contact-cone socket may form
+// a short, steep "elbow" to dodge small obstacles directly under the tip —
+// the standard shape mainstream mSLA slicers emit. Longer first segments fall
+// back to the regular length-aware rule.
+export const SOCKET_ELBOW_MAX_LENGTH_MM = 2.5;
+export const SOCKET_ELBOW_MAX_ANGLE_FROM_VERTICAL_DEG = 75;
+
+export function firstSegmentSatisfiesSocketElbowMaxAngle(
+    start: Vec3,
+    end: Vec3,
+    baseMaxAngleFromVerticalDeg: number
+): boolean {
+    const segmentLengthMm = distance3D(start, end);
+    if (segmentLengthMm <= SOCKET_ELBOW_MAX_LENGTH_MM) {
+        const allowedMaxAngle = Math.max(
+            getLengthAwareMaxAngleFromVerticalDeg(segmentLengthMm, baseMaxAngleFromVerticalDeg),
+            SOCKET_ELBOW_MAX_ANGLE_FROM_VERTICAL_DEG,
+        );
+        return segmentSatisfiesMaxAngleFromVertical(start, end, allowedMaxAngle);
+    }
+    return segmentSatisfiesLengthAwareMaxAngleFromVertical(start, end, baseMaxAngleFromVerticalDeg);
 }
 
 export function chainSatisfiesLengthAwareUpperSpanRule(

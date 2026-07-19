@@ -1,7 +1,7 @@
 "use client";
 
 import React from 'react';
-import { Card } from '@/components/ui/primitives';
+import { Card } from '@/components/atoms';
 import { LayerSlider } from '@/components/controls/LayerSlider';
 
 type VisualSettingsPanelProps = {

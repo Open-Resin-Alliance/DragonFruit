@@ -316,6 +316,9 @@ enum SliceCommands {
         /// Anti-aliasing level (Off, 2x, 4x, 8x)
         #[arg(long, default_value = "Off")]
         anti_aliasing: String,
+        /// Anti-aliasing mode (Coverage, Blur, 3daa)
+        #[arg(long, default_value = "Blur")]
+        anti_aliasing_mode: String,
         /// X-axis sub-pixel packing mode.
         ///
         /// - `none` (default): raw grayscale at source resolution; width_px = source_width_px.
@@ -1019,6 +1022,7 @@ fn cmd_slice_run(
     source_height_px: u32,
     png_compression: &str,
     anti_aliasing: &str,
+    anti_aliasing_mode: &str,
     x_packing_mode: &str,
     mirror_x: bool,
     mirror_y: bool,
@@ -1100,7 +1104,7 @@ fn cmd_slice_run(
         png_compression_strategy: png_compression.to_string(),
         container_compression_level: 2,
         anti_aliasing_level: anti_aliasing.to_string(),
-        anti_aliasing_mode: "Blur".to_string(),
+        anti_aliasing_mode: anti_aliasing_mode.to_string(),
         blur_brush_radius_px: 1,
         z_blur_radius_layers: 0,
         aa_on_supports: false,
@@ -1682,10 +1686,12 @@ fn main() {
         Commands::Slice { command } => match command {
             SliceCommands::Run { input, output, layer_height, build_width_mm, build_depth_mm,
                 source_width_px, source_height_px, png_compression, anti_aliasing,
-                x_packing_mode, mirror_x, mirror_y, format_version, min_aa_alpha, metadata_json, json } =>
+                anti_aliasing_mode, x_packing_mode, mirror_x, mirror_y, format_version, min_aa_alpha,
+                metadata_json, json } =>
                 cmd_slice_run(&input, &output, layer_height, build_width_mm, build_depth_mm,
                     source_width_px, source_height_px, &png_compression, &anti_aliasing,
-                    &x_packing_mode, mirror_x, mirror_y, &format_version, min_aa_alpha, &metadata_json, json),
+                    &anti_aliasing_mode, &x_packing_mode, mirror_x, mirror_y, &format_version,
+                    min_aa_alpha, &metadata_json, json),
             SliceCommands::Formats => { cmd_slice_formats(); Ok(()) },
             SliceCommands::PreviewLayer { input, layer, output } =>
                 extract_layer_png(&input, layer, &output),

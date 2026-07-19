@@ -1,6 +1,7 @@
 
 import React from 'react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import { useIsLinux } from '@/hooks/usePlatform';
 import { formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 import {
@@ -75,6 +76,31 @@ export function ModelStatsCard({
   }, []);
 
   const [isFlipped, setIsFlipped] = React.useState(false);
+  // The app forces WebKitGTK's SHM software renderer on Linux
+  // (WEBKIT_DISABLE_DMABUF_RENDERER=1 in main.rs, issue #83), and that path
+  // flattens preserve-3d and ignores backface-visibility — the true 3D flip
+  // renders both faces superimposed. There, use a two-phase "flat flip"
+  // instead: rotate the card edge-on, swap the visible face while it is
+  // invisible, and rotate back. Only one face is ever shown, so no backface
+  // culling is needed and it renders correctly even in software.
+  const useFlatFlip = useIsLinux();
+  const [flatFlipShownFace, setFlatFlipShownFace] = React.useState<'front' | 'back'>('front');
+  const [flatFlipEdgeOn, setFlatFlipEdgeOn] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!useFlatFlip) return;
+    const target = isFlipped ? 'back' : 'front';
+    if (flatFlipShownFace === target) {
+      setFlatFlipEdgeOn(false);
+      return;
+    }
+    setFlatFlipEdgeOn(true);
+    const timer = window.setTimeout(() => {
+      setFlatFlipShownFace(target);
+      setFlatFlipEdgeOn(false);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [isFlipped, flatFlipShownFace, useFlatFlip]);
   const baseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
   const inFlightBaseResinMlRef = React.useRef<Map<string, Promise<number | null>>>(new Map());
   const [estimatedResinMl, setEstimatedResinMl] = React.useState<number | null>(null);
@@ -468,14 +494,27 @@ export function ModelStatsCard({
           aria-label="Flip model stats card"
           onClick={handleToggleFlip}
           onKeyDown={handleCardKeyDown}
-          className="grid w-full min-w-0 transition-transform duration-500 ease-out [transform-style:preserve-3d] focus:outline-none"
-          style={{ transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)' }}
+          className={useFlatFlip
+            ? 'grid w-full min-w-0 focus:outline-none'
+            : 'grid w-full min-w-0 transition-transform duration-500 ease-out [transform-style:preserve-3d] focus:outline-none'}
+          style={useFlatFlip
+            ? {
+                transform: flatFlipEdgeOn ? 'rotateY(90deg)' : 'rotateY(0deg)',
+                transition: 'transform 250ms',
+                transitionTimingFunction: flatFlipEdgeOn ? 'ease-in' : 'ease-out',
+              }
+            : { transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)' }}
         >
           <div
             className="[grid-area:1/1] w-full min-w-0 ui-panel rounded-md px-3 py-2.5 shadow-md space-y-1.5 flex flex-col"
             style={{
               background: 'color-mix(in srgb, var(--surface-0), transparent 8%)',
-              backfaceVisibility: 'hidden',
+              ...(useFlatFlip
+                ? { visibility: flatFlipShownFace === 'front' ? ('visible' as const) : ('hidden' as const) }
+                // The explicit identity transform forces Blink to backface-cull
+                // this face; without it Chrome renders it mirrored through the
+                // back face when flipped (WebKit culls correctly either way).
+                : { backfaceVisibility: 'hidden' as const, transform: 'rotateY(0deg)' }),
             }}
           >
             <div className="font-semibold text-[12px] truncate" style={{ color: frontHeaderColor }}>
@@ -553,8 +592,9 @@ export function ModelStatsCard({
             className="[grid-area:1/1] w-full min-w-0 ui-panel rounded-md px-3 py-2.5 shadow-md space-y-1.5 flex flex-col"
             style={{
               background: 'color-mix(in srgb, var(--surface-0), transparent 8%)',
-              backfaceVisibility: 'hidden',
-              transform: 'rotateY(180deg)',
+              ...(useFlatFlip
+                ? { visibility: flatFlipShownFace === 'back' ? ('visible' as const) : ('hidden' as const) }
+                : { backfaceVisibility: 'hidden' as const, transform: 'rotateY(180deg)' }),
             }}
           >
             <div className="w-full min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-[12px]" style={{ color: 'var(--text-strong)' }} title={model ? model.name : 'No model selected'}>
@@ -565,7 +605,7 @@ export function ModelStatsCard({
               <span>STL size:</span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model?.fileSizeBytes != null ? formatBytes(model.fileSizeBytes) : '-'}</span>
 
-              <span>Polygons:</span>
+              <span>Triangles:</span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? formatPolygonCountCompact(model.polygonCount) : '-'}</span>
 
               <span>Shells:</span>

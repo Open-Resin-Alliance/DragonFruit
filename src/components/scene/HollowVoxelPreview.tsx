@@ -1,5 +1,7 @@
 import React from 'react';
 import * as THREE from 'three';
+import { getVoxelPreviewBudget, tryAllocateFloat32Array, warnOnce } from './hollowVoxelPreviewLimits';
+import { INSTANCED_EDGE_FRAGMENT_SHADER, INSTANCED_EDGE_VERTEX_SHADER } from './instancedEdgeShader';
 
 type HollowVoxelPreviewProps = {
   voxelCenters: Float32Array;
@@ -9,6 +11,13 @@ type HollowVoxelPreviewProps = {
 
 const CAVITY_COLOR = '#66ecff';
 const EDGE_COLOR = '#000000';
+const EDGE_OPACITY = 0.45;
+// Stable references so the shaderMaterial's `uniforms` prop doesn't get a
+// fresh object (and re-upload to the GPU) on every render.
+const EDGE_UNIFORMS = {
+  uColor: { value: new THREE.Color(EDGE_COLOR) },
+  uOpacity: { value: EDGE_OPACITY },
+};
 
 /** 12 edges of a unit cube centred at origin, as 24 vertex positions. */
 const CUBE_EDGE_VERTICES = new Float32Array([
@@ -37,9 +46,10 @@ function buildInstanceMatrices(
   offsetZ: number,
 ): Float32Array {
   const count = Math.floor(voxelCenters.length / 3);
-  const matrices = new Float32Array(count * 16);
+  const matrices = tryAllocateFloat32Array(count * 16) ?? new Float32Array(0);
+  const usableCount = Math.floor(matrices.length / 16);
   const scale = voxelSizeMm;
-  for (let i = 0; i < count; i += 1) {
+  for (let i = 0; i < usableCount; i += 1) {
     const base = i * 3;
     const cx = voxelCenters[base] + offsetX;
     const cy = voxelCenters[base + 1] + offsetY;
@@ -65,29 +75,19 @@ function buildInstanceMatrices(
   return matrices;
 }
 
-function buildEdgePositions(
-  voxelCenters: Float32Array,
-  voxelSizeMm: number,
-  offsetX: number,
-  offsetY: number,
-  offsetZ: number,
-): Float32Array {
-  const count = Math.floor(voxelCenters.length / 3);
-  const half = voxelSizeMm * 0.5;
-  const out = new Float32Array(count * 24 * 3); // 24 vertices per cube
-  for (let i = 0; i < count; i += 1) {
-    const base = i * 3;
-    const cx = voxelCenters[base] + offsetX;
-    const cy = voxelCenters[base + 1] + offsetY;
-    const cz = voxelCenters[base + 2] + offsetZ;
-    const vo = i * 72;
-    for (let v = 0; v < 72; v += 3) {
-      out[vo + v]     = cx + CUBE_EDGE_VERTICES[v]     * voxelSizeMm;
-      out[vo + v + 1] = cy + CUBE_EDGE_VERTICES[v + 1] * voxelSizeMm;
-      out[vo + v + 2] = cz + CUBE_EDGE_VERTICES[v + 2] * voxelSizeMm;
-    }
-  }
-  return out;
+/**
+ * Builds the GPU-instanced edge-wireframe geometry: a shared, non-instanced
+ * 24-vertex cube-edge template plus a per-instance transform attribute that
+ * reuses the exact same matrix buffer already built for the cube
+ * InstancedMesh (`matrices` from `buildInstanceMatrices`) -- zero additional
+ * per-voxel memory, unlike the previous fully-expanded world-space buffer.
+ */
+function buildInstancedEdgeGeometry(matrices: Float32Array): THREE.InstancedBufferGeometry {
+  const geom = new THREE.InstancedBufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(CUBE_EDGE_VERTICES, 3));
+  geom.setAttribute('instanceTransform', new THREE.InstancedBufferAttribute(matrices, 16));
+  geom.instanceCount = Math.floor(matrices.length / 16);
+  return geom;
 }
 
 /**
@@ -101,31 +101,62 @@ export function HollowVoxelPreview({
 }: HollowVoxelPreviewProps) {
   const meshRef = React.useRef<THREE.InstancedMesh>(null);
   const edgeRef = React.useRef<THREE.LineSegments>(null);
-  const count = Math.floor(voxelCenters.length / 3);
+  const fullCount = Math.floor(voxelCenters.length / 3);
+
+  const budget = getVoxelPreviewBudget();
+  const clampedCount = Math.min(fullCount, budget.maxCubeInstances);
+  const showEdges = fullCount <= budget.maxEdgeInstances;
+
+  // Cheap: subarray is a view over the same buffer, not a copy.
+  const clampedVoxelCenters = React.useMemo(
+    () => (clampedCount === fullCount ? voxelCenters : voxelCenters.subarray(0, clampedCount * 3)),
+    [voxelCenters, clampedCount, fullCount],
+  );
+
+  React.useEffect(() => {
+    if (fullCount > clampedCount) {
+      warnOnce(
+        'hollow-voxel-preview-cube-cap',
+        `[HollowVoxelPreview] voxel count ${fullCount} exceeds render budget (${budget.maxCubeInstances}); showing first ${clampedCount} voxels only.`,
+      );
+    } else if (!showEdges) {
+      warnOnce(
+        'hollow-voxel-preview-edge-cap',
+        `[HollowVoxelPreview] voxel count ${fullCount} exceeds edge-render budget (${budget.maxEdgeInstances}); showing cubes without edge outlines.`,
+      );
+    }
+  }, [fullCount, clampedCount, showEdges, budget.maxCubeInstances, budget.maxEdgeInstances]);
 
   const matrices = React.useMemo(() => {
     return buildInstanceMatrices(
-      voxelCenters,
+      clampedVoxelCenters,
       voxelSizeMm,
       meshOffset.x,
       meshOffset.y,
       meshOffset.z,
     );
-  }, [voxelCenters, voxelSizeMm, meshOffset.x, meshOffset.y, meshOffset.z]);
+  }, [clampedVoxelCenters, voxelSizeMm, meshOffset.x, meshOffset.y, meshOffset.z]);
 
-  // Edge geometry: single LineSegments with all cube edges baked in world space.
+  // Actual usable instance count -- derived from the built buffer itself
+  // rather than trusting clampedCount blindly, in case the (already
+  // budget-limited) allocation still failed for some other reason.
+  const count = Math.floor(matrices.length / 16);
+
+  // Edge geometry: GPU-instanced, reusing the same per-voxel matrices
+  // already built for the cube InstancedMesh above -- see
+  // buildInstancedEdgeGeometry. Skipped only if there are no cubes to draw.
   const edgeGeometry = React.useMemo(() => {
-    const edgePos = buildEdgePositions(
-      voxelCenters,
-      voxelSizeMm,
-      meshOffset.x,
-      meshOffset.y,
-      meshOffset.z,
-    );
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute('position', new THREE.BufferAttribute(edgePos, 3));
-    return geom;
-  }, [voxelCenters, voxelSizeMm, meshOffset.x, meshOffset.y, meshOffset.z]);
+    if (!showEdges || count === 0) return null;
+    return buildInstancedEdgeGeometry(matrices);
+  }, [matrices, count, showEdges]);
+
+  // R3F only auto-disposes attached geometry on unmount. When the memo swaps
+  // in a fresh edge geometry mid-life (every preview update), the previous
+  // one's GL buffers would otherwise leak (~64 bytes per voxel per swap).
+  React.useEffect(() => {
+    if (!edgeGeometry) return;
+    return () => edgeGeometry.dispose();
+  }, [edgeGeometry]);
 
   // Push instance matrices into the InstancedMesh on every change.
   React.useEffect(() => {
@@ -163,20 +194,24 @@ export function HollowVoxelPreview({
           depthWrite={true}
         />
       </instancedMesh>
+      {edgeGeometry && (
       <lineSegments
         ref={edgeRef}
         geometry={edgeGeometry}
         renderOrder={8}
+        frustumCulled={false}
         raycast={() => null}
       >
-        <lineBasicMaterial
-          color={EDGE_COLOR}
+        <shaderMaterial
           transparent
-          opacity={0.45}
           depthTest
           depthWrite={false}
+          uniforms={EDGE_UNIFORMS}
+          vertexShader={INSTANCED_EDGE_VERTEX_SHADER}
+          fragmentShader={INSTANCED_EDGE_FRAGMENT_SHADER}
         />
       </lineSegments>
+      )}
     </group>
   );
 }

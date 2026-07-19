@@ -4,8 +4,6 @@ import type { ContactDiskProfile } from '../../SupportPrimitives/ContactCone/typ
 import { getSettings } from '../../Settings';
 import { twigDiskJointStandoff } from './twigJointStandoff';
 import { twigJointDiameterForLocalDiameter } from './twigTaper';
-// DEBUG: temporary per-twig disk B diameter override. Remove with src/supports/__debug__/.
-import { getTwigDiskBOverrideMm } from '../../__debug__/twigDiameterOverride';
 import { isShaftBlocked, isCollisionFrustumBlocked } from '../../PlacementLogic/CollisionAvoidance';
 import { clampConeAxisDeviationFromSurfaceNormal } from '../../PlacementLogic/ConeAxisPolicy';
 
@@ -55,11 +53,10 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
     };
 
     // Twig sizing rule: each disk drives its own joint, and the shaft tapers
-    // between the two joints. Disk A keeps using the global tip.contactDiameterMm;
-    // disk B can be overridden via the temporary debug control to test taper.
+    // between the two joints. Both disks use the global tip.contactDiameterMm
+    // until per-disk diameter editing exists.
     const diskAContactDiameter = settings.tip.contactDiameterMm;
-    const diskBOverride = getTwigDiskBOverrideMm();
-    const diskBContactDiameter = diskBOverride ?? settings.tip.contactDiameterMm;
+    const diskBContactDiameter = settings.tip.contactDiameterMm;
 
     const jointDiameterA = twigJointDiameterForDisk(diskAContactDiameter);
     const jointDiameterB = twigJointDiameterForDisk(diskBContactDiameter);

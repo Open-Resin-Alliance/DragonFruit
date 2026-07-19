@@ -38,6 +38,11 @@ import {
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
+import {
+  deleteStoredMeshModifiers,
+  getStoredMeshModifiers,
+  storeModelMeshModifiers,
+} from '@/features/mesh-modifiers/meshModifierStore';
 import { splitClassifiedSupportGeometry } from '@/features/scene/splitClassifiedSupports';
 
 type PersistedMeshAppearance = {
@@ -89,6 +94,11 @@ const RECENT_FILES_DB_VERSION = 1;
 const RECENT_FILES_STORE_NAME = 'files';
 const SCENE_MODELS_SNAPSHOT_APPLY = 'scene_models_snapshot_apply';
 const SCENE_HISTORY_MAX_SNAPSHOTS = 200;
+// Belt-and-suspenders alongside the count cap above: a handful of
+// full-resolution geometry swaps (e.g. repeated hollowing on a large model)
+// can retain far more memory per snapshot than typical small edits, so the
+// flat count cap alone can leave a lot of stale geometry pinned alive.
+const SCENE_HISTORY_MAX_ESTIMATED_GEOMETRY_BYTES = 300 * 1024 * 1024;
 
 type SceneSnapshotPayload = { key: string };
 
@@ -172,29 +182,13 @@ function cloneMeshModifiersShallow(modifiers: ModelMeshModifiers): ModelMeshModi
 // ── External Mesh Modifier Store ─────────────────────────────────────────
 //
 // Model mesh modifiers (especially the MB-scale cavityPositionsBase64 /
-// sourcePositionsBase64 from LYS imports) are kept in this module-level Map
-// instead of on model objects. This prevents React's state reconciliation
-// from churning on large payloads during selection, copy, paste, and
-// duplicate operations.
-const meshModifierStoreRef: { current: Map<string, ModelMeshModifiers> } = {
-  current: new Map(),
-};
-
-function storeModelMeshModifiers(modelId: string, modifiers: ModelMeshModifiers | undefined | null): void {
-  if (modifiers) {
-    meshModifierStoreRef.current.set(modelId, modifiers);
-  } else {
-    meshModifierStoreRef.current.delete(modelId);
-  }
-}
-
-function getStoredMeshModifiers(modelId: string): ModelMeshModifiers | undefined {
-  return meshModifierStoreRef.current.get(modelId);
-}
-
-function deleteStoredMeshModifiers(modelId: string): void {
-  meshModifierStoreRef.current.delete(modelId);
-}
+// sourcePositionsBase64 from LYS imports) are kept in a module-level Map in
+// features/mesh-modifiers/meshModifierStore.ts instead of on model objects.
+// This prevents React's state reconciliation from churning on large payloads
+// during selection, copy, paste, and duplicate operations. Save/export/slice
+// boundaries must resolve modifiers through that store (see
+// resolveModelMeshModifiers) — model objects carry meshModifiers: undefined
+// by design.
 
 function schedulePostPaint(callback: () => void): void {
   if (typeof window === 'undefined') {
@@ -254,12 +248,53 @@ function hasSupportsOrKickstandsForModel(
   return Object.values(kickstandState.kickstands).some((kickstand) => kickstand.modelId === modelId);
 }
 
+function estimateGeometryBytes(geometry: THREE.BufferGeometry): number {
+  let total = 0;
+  for (const key in geometry.attributes) {
+    const attribute = geometry.attributes[key];
+    if (attribute?.array) {
+      total += (attribute.array as ArrayBufferView).byteLength;
+    }
+  }
+  if (geometry.index?.array) {
+    total += (geometry.index.array as ArrayBufferView).byteLength;
+  }
+  return total;
+}
+
+// Deliberately not deduplicated across snapshots/models: many pairs will
+// reference the same unchanged geometry, so this over-counts rather than
+// under-counts. That's the right direction for a safety cap -- it can only
+// make eviction more eager than strictly necessary, never less.
+function estimateSceneSnapshotRegistryBytes(): number {
+  let total = 0;
+  for (const pair of sceneSnapshotRegistry.values()) {
+    for (const model of pair.before.models) {
+      total += estimateGeometryBytes(model.geometry.geometry);
+    }
+    for (const model of pair.after.models) {
+      total += estimateGeometryBytes(model.geometry.geometry);
+    }
+  }
+  return total;
+}
+
 function storeSceneSnapshotPair(pair: SceneSnapshotPair): string {
   const key = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   sceneSnapshotRegistry.set(key, pair);
   sceneSnapshotOrder.push(key);
 
   while (sceneSnapshotOrder.length > SCENE_HISTORY_MAX_SNAPSHOTS) {
+    const removed = sceneSnapshotOrder.shift();
+    if (removed) sceneSnapshotRegistry.delete(removed);
+  }
+
+  // Always keep at least one snapshot so undo of the most recent action
+  // still works, even if it alone exceeds the byte budget.
+  while (
+    sceneSnapshotOrder.length > 1
+    && estimateSceneSnapshotRegistryBytes() > SCENE_HISTORY_MAX_ESTIMATED_GEOMETRY_BYTES
+  ) {
     const removed = sceneSnapshotOrder.shift();
     if (removed) sceneSnapshotRegistry.delete(removed);
   }
@@ -875,9 +910,9 @@ type ImportProgressState = {
   progress: number | null;
 };
 
-type SceneImportReportTone = 'success' | 'warning' | 'error';
+export type SceneImportReportTone = 'success' | 'warning' | 'error';
 
-type SceneImportReport = {
+export type SceneImportReport = {
   id: number;
   text: string;
   tone: SceneImportReportTone;
@@ -1028,6 +1063,9 @@ export function useSceneCollectionManager() {
   const deferredAccelerationPausedRef = useRef(false);
   const deferredDisposalQueueRef = useRef<THREE.BufferGeometry[]>([]);
   const deferredDisposalProcessingRef = useRef(false);
+  // Count of scheduled-but-unfinished flattening-plane computations (idle
+  // callbacks after geometry swaps). Part of hasPendingBackgroundGeometryWork.
+  const pendingFlatteningPlanesRef = useRef(0);
   const trackedGeometriesRef = useRef<Set<THREE.BufferGeometry>>(new Set());
 
   const tryRevokeObjectUrl = useCallback((url: string) => {
@@ -1792,6 +1830,21 @@ export function useSceneCollectionManager() {
     }
   }, [processDeferredAccelerationQueue]);
 
+  /**
+   * True while deferred post-swap geometry work (BVH acceleration builds,
+   * deferred geometry disposals, flattening-plane computation) is queued or
+   * running. Lets the UI keep a blocking "finalizing" indicator visible
+   * until the app is genuinely responsive again after a large geometry swap
+   * — the swap itself resolves long before this work drains.
+   */
+  const hasPendingBackgroundGeometryWork = useCallback(() => (
+    deferredAccelerationQueueRef.current.length > 0
+    || deferredAccelerationProcessingRef.current
+    || deferredDisposalQueueRef.current.length > 0
+    || deferredDisposalProcessingRef.current
+    || pendingFlatteningPlanesRef.current > 0
+  ), []);
+
   const processDeferredDisposalQueue = useCallback(() => {
     if (deferredDisposalProcessingRef.current) return;
     if (deferredDisposalQueueRef.current.length === 0) return;
@@ -2524,14 +2577,19 @@ export function useSceneCollectionManager() {
           setTimeout(cb, 16);
         }
       };
+      pendingFlatteningPlanesRef.current += 1;
       scheduleIdle(() => {
-        const planes = computeFlatteningPlanes(nextBufferGeometry);
-        nextGeometry.flatteningPlanes = planes;
-        setModels((prev) => prev.map((m) => (
-          m.id === id && m.geometry.geometry === nextBufferGeometry
-            ? { ...m, geometry: { ...m.geometry, flatteningPlanes: planes } }
-            : m
-        )));
+        try {
+          const planes = computeFlatteningPlanes(nextBufferGeometry);
+          nextGeometry.flatteningPlanes = planes;
+          setModels((prev) => prev.map((m) => (
+            m.id === id && m.geometry.geometry === nextBufferGeometry
+              ? { ...m, geometry: { ...m.geometry, flatteningPlanes: planes } }
+              : m
+          )));
+        } finally {
+          pendingFlatteningPlanesRef.current = Math.max(0, pendingFlatteningPlanesRef.current - 1);
+        }
       });
     }
 
@@ -2578,13 +2636,18 @@ export function useSceneCollectionManager() {
         setTimeout(cb, 16);
       }
     };
+    pendingFlatteningPlanesRef.current += 1;
     scheduleIdle(() => {
-      const planes = computeFlatteningPlanes(geom);
-      setModels((prev) => prev.map((m) => (
-        m.id === id && m.geometry.geometry === geom
-          ? { ...m, geometry: { ...m.geometry, flatteningPlanes: planes } }
-          : m
-      )));
+      try {
+        const planes = computeFlatteningPlanes(geom);
+        setModels((prev) => prev.map((m) => (
+          m.id === id && m.geometry.geometry === geom
+            ? { ...m, geometry: { ...m.geometry, flatteningPlanes: planes } }
+            : m
+        )));
+      } finally {
+        pendingFlatteningPlanesRef.current = Math.max(0, pendingFlatteningPlanesRef.current - 1);
+      }
     });
   }, [deferAccelerateGeometry]);
 
@@ -4788,6 +4851,7 @@ export function useSceneCollectionManager() {
     pasteCopiedModelsAutoArrange,
     duplicateModelWithTransforms,
     setBackgroundGeometryWorkPaused,
+    hasPendingBackgroundGeometryWork,
     canPasteModel: modelClipboard.length > 0,
 
     // Scene settings

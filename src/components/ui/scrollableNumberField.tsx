@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { IconButton, cn } from '@/components/ui/primitives';
+import { IconButton, cn } from '@/components/atoms';
 import { Minus, Plus } from 'lucide-react';
 
 interface ScrollableNumberFieldProps {

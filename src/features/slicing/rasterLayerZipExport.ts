@@ -576,14 +576,23 @@ function appendGeometryTriangles(
   const position = geometry.getAttribute('position');
   if (!position) return;
 
+  // A negative-determinant matrix (mirror / negative scale, e.g. a model
+  // matrix from a mirrored .lys import) reflects vertices without reordering
+  // them, inverting each triangle's winding. Swap b<->c to keep the baked
+  // geometry outward-wound for the rasterizer. Support/raft callers pass
+  // rotation-only matrices (determinant +1) or none, so they never flip. (#334)
+  const flipWinding = matrix ? matrix.determinant() < 0 : false;
+
   const v0 = new THREE.Vector3();
   const v1 = new THREE.Vector3();
   const v2 = new THREE.Vector3();
 
   const writeTri = (a: number, b: number, c: number) => {
+    const b2 = flipWinding ? c : b;
+    const c2 = flipWinding ? b : c;
     v0.set(position.getX(a), position.getY(a), position.getZ(a));
-    v1.set(position.getX(b), position.getY(b), position.getZ(b));
-    v2.set(position.getX(c), position.getY(c), position.getZ(c));
+    v1.set(position.getX(b2), position.getY(b2), position.getZ(b2));
+    v2.set(position.getX(c2), position.getY(c2), position.getZ(c2));
 
     if (matrix) {
       v0.applyMatrix4(matrix);
@@ -1376,6 +1385,10 @@ function buildTriangles(
 
   for (const model of models) {
     const matrix = composeModelMatrix(model.transform);
+    // A negative-determinant model transform (mirror / negative scale) reflects
+    // vertices without reordering them, inverting each triangle's winding. Swap
+    // b<->c so the baked model stays outward-wound for the rasterizer. (#334)
+    const flipWinding = matrix.determinant() < 0;
     const center = model.geometry.center;
     const geometry = model.geometry.geometry;
     const position = geometry.getAttribute('position');
@@ -1401,8 +1414,8 @@ function buildTriangles(
         const c = Number(idx[i + 2]);
 
         readVertex(a, v0);
-        readVertex(b, v1);
-        readVertex(c, v2);
+        readVertex(flipWinding ? c : b, v1);
+        readVertex(flipWinding ? b : c, v2);
 
         const zMin = Math.min(v0.z, v1.z, v2.z);
         const zMax = Math.max(v0.z, v1.z, v2.z);
@@ -1429,8 +1442,8 @@ function buildTriangles(
       const count = position.count;
       for (let i = 0; i < count; i += 3) {
         readVertex(i, v0);
-        readVertex(i + 1, v1);
-        readVertex(i + 2, v2);
+        readVertex(flipWinding ? i + 2 : i + 1, v1);
+        readVertex(flipWinding ? i + 1 : i + 2, v2);
 
         const zMin = Math.min(v0.z, v1.z, v2.z);
         const zMax = Math.max(v0.z, v1.z, v2.z);
@@ -1468,6 +1481,10 @@ function buildWorldTriangles(models: LoadedModel[]): WorldTriangle[] {
 
   for (const model of models) {
     const matrix = composeModelMatrix(model.transform);
+    // A negative-determinant model transform (mirror / negative scale) reflects
+    // vertices without reordering them, inverting each triangle's winding. Swap
+    // b<->c so the baked model stays outward-wound for the rasterizer. (#334)
+    const flipWinding = matrix.determinant() < 0;
     const center = model.geometry.center;
     const geometry = model.geometry.geometry;
     const position = geometry.getAttribute('position');
@@ -1493,8 +1510,8 @@ function buildWorldTriangles(models: LoadedModel[]): WorldTriangle[] {
         const c = Number(idx[i + 2]);
 
         readVertex(a, v0);
-        readVertex(b, v1);
-        readVertex(c, v2);
+        readVertex(flipWinding ? c : b, v1);
+        readVertex(flipWinding ? b : c, v2);
 
         const zMin = Math.min(v0.z, v1.z, v2.z);
         const zMax = Math.max(v0.z, v1.z, v2.z);
@@ -1517,8 +1534,8 @@ function buildWorldTriangles(models: LoadedModel[]): WorldTriangle[] {
       const count = position.count;
       for (let i = 0; i < count; i += 3) {
         readVertex(i, v0);
-        readVertex(i + 1, v1);
-        readVertex(i + 2, v2);
+        readVertex(flipWinding ? i + 2 : i + 1, v1);
+        readVertex(flipWinding ? i + 1 : i + 2, v2);
 
         const zMin = Math.min(v0.z, v1.z, v2.z);
         const zMax = Math.max(v0.z, v1.z, v2.z);
@@ -1557,6 +1574,14 @@ function appendModelTrianglesInRange(
   endTri: number,
 ): void {
   const matrix = composeModelMatrix(model.transform);
+  // A negative-determinant model transform (a mirror / negative scale, e.g.
+  // from a Lychee-mirrored .lys import or a transient live mirror preview)
+  // reflects the vertices without reordering them, which inverts every model
+  // triangle's winding. The rasterizer decides fill from face-normal X sign
+  // (geometry.rs: fill_wind), so an inside-out model overlapping the
+  // always-outward supports produces mixed-sign scanlines and dropped fill.
+  // Swap b<->c to keep the baked model consistently outward-wound. (#334)
+  const flipWinding = matrix.determinant() < 0;
   const center = model.geometry.center;
   const geometry = model.geometry.geometry;
   const position = geometry.getAttribute('position');
@@ -1577,6 +1602,11 @@ function appendModelTrianglesInRange(
     return target;
   };
 
+  const push = () =>
+    flipWinding
+      ? collector.pushTriangle(v0.x, v0.y, v0.z, v2.x, v2.y, v2.z, v1.x, v1.y, v1.z)
+      : collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
+
   if (index) {
     const idx = index.array;
     const triStart = startTri * 3;
@@ -1585,7 +1615,7 @@ function appendModelTrianglesInRange(
       readVertex(Number(idx[i]), v0);
       readVertex(Number(idx[i + 1]), v1);
       readVertex(Number(idx[i + 2]), v2);
-      collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
+      push();
     }
   } else {
     const triStart = startTri * 3;
@@ -1594,7 +1624,7 @@ function appendModelTrianglesInRange(
       readVertex(i, v0);
       readVertex(i + 1, v1);
       readVertex(i + 2, v2);
-      collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
+      push();
     }
   }
 }
@@ -2190,6 +2220,7 @@ async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promis
       buildVolumeMm: options.printerProfile.buildVolumeMm,
       bitDepth: options.printerProfile.bitDepth,
       outputFormat: options.printerProfile.display.outputFormat,
+      formatVersion: options.printerProfile.display.formatVersion,
       mirrorX: options.printerProfile.display.mirrorX === true,
       mirrorY: options.printerProfile.display.mirrorY === true,
     },
@@ -2396,6 +2427,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
       buildVolumeMm: options.printerProfile.buildVolumeMm,
       bitDepth: options.printerProfile.bitDepth,
       outputFormat: options.printerProfile.display.outputFormat,
+      formatVersion: options.printerProfile.display.formatVersion,
       mirrorX: options.printerProfile.display.mirrorX === true,
       mirrorY: options.printerProfile.display.mirrorY === true,
     },

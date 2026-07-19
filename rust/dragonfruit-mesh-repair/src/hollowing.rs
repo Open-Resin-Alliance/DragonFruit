@@ -643,7 +643,7 @@ pub fn hollow_voxel(mut mesh: IndexedMesh, options: &HollowOptions) -> HollowOut
         // The frontend will render spheres at removed_voxel_centers instead.
         (mesh.clone(), IndexedMesh::default())
     } else {
-        let (out, cavity) = build_hollow_output_mesh(
+        let (out, cavity, cavity_wall_score) = build_hollow_output_mesh(
             &mesh,
             &source_bbox,
             &grid,
@@ -654,6 +654,8 @@ pub fn hollow_voxel(mut mesh: IndexedMesh, options: &HollowOptions) -> HollowOut
             shell_voxels_f,
             smoothing_profile,
         );
+        #[cfg(not(feature = "manifold"))]
+        let _ = cavity_wall_score;
         #[cfg(feature = "manifold")]
         let (out, cavity) = finalize_hollow_output_mesh_for_manifold(
             &mesh,
@@ -667,6 +669,7 @@ pub fn hollow_voxel(mut mesh: IndexedMesh, options: &HollowOptions) -> HollowOut
             smoothing_profile,
             out,
             cavity,
+            cavity_wall_score,
         );
         (out, cavity)
     };
@@ -697,8 +700,8 @@ pub fn hollow_voxel(mut mesh: IndexedMesh, options: &HollowOptions) -> HollowOut
         };
     let mut removed_voxel_centers = collect_removed_voxel_centers(&grid, &solid, &keep);
     let removed_voxel_indices = collect_removed_voxel_indices(&grid, &solid, &keep);
-    let mut blocked_voxel_centers =
-        collect_blocked_voxel_centers(&grid, &options.blocked_voxel_indices);
+    let (mut blocked_voxel_centers, accepted_blocked_voxel_indices) =
+        collect_blocked_voxel_data(&grid, &solid, &options.blocked_voxel_indices);
 
     // Unrotate all outputs so DragonFruit's own (unrotated) geometry stays in
     // sync with what Rust produces.
@@ -743,12 +746,7 @@ pub fn hollow_voxel(mut mesh: IndexedMesh, options: &HollowOptions) -> HollowOut
         removed_voxel_centers,
         removed_voxel_indices,
         blocked_voxel_centers,
-        blocked_voxel_indices: options
-            .blocked_voxel_indices
-            .clone()
-            .into_iter()
-            .map(|i| i as u32)
-            .collect(),
+        blocked_voxel_indices: accepted_blocked_voxel_indices,
         report: HollowReport {
             mode: options.mode,
             voxel_resolution: options.voxel_resolution,
@@ -1003,15 +1001,19 @@ impl HollowSession {
         self.rotation_quat
     }
 
-    pub fn run(&self, options: &HollowOptions) -> HollowOutcome {
+    /// Recomputes the `keep` mask (which solid voxels remain material after
+    /// hollowing) for `options`, plus the count of voxels retained by the
+    /// initial shell-distance pass (`kept_shell`, reported as `shell_voxels`).
+    ///
+    /// This is the single source of truth for the keep mask: `run()` consumes
+    /// it to build the output mesh, and `select_removed_voxels_in_polygon`
+    /// consumes it so lasso selection sees the exact same cavity
+    /// (`removed = solid && !keep`) the preview was built from. Keeping one
+    /// implementation is what prevents projection/selection drift.
+    fn compute_keep_mask(&self, options: &HollowOptions) -> (Vec<bool>, usize) {
         let shell_voxels = (options.shell_thickness_mm.max(0.2) / self.grid.voxel_mm).ceil() as i32;
         let shell_voxels = shell_voxels.max(1);
         let shell_voxels_f = options.shell_thickness_mm.max(0.2) / self.grid.voxel_mm;
-        let smoothing_profile = effective_internal_cavity_smoothing_profile(
-            options.shell_thickness_mm,
-            options.smooth_internal_surfaces,
-            shell_voxels_f,
-        );
 
         let mut keep = vec![false; self.solid.len()];
         let mut kept_shell = 0usize;
@@ -1091,6 +1093,55 @@ impl HollowSession {
             }
         }
 
+        (keep, kept_shell)
+    }
+
+    /// Lasso selection over the FULL through-depth cavity, computed Rust-side
+    /// so it is immune to the boundary filter and viewport cap that narrow the
+    /// exported/rendered voxel subset. Returns the grid indices of every
+    /// removed (cavity) voxel whose projected screen point falls inside
+    /// `polygon` (container-pixel space). See the free `select_removed_voxels_in_polygon`
+    /// for the projection math, which is a 1:1 port of the frontend loop.
+    #[allow(clippy::too_many_arguments)]
+    pub fn select_removed_voxels_in_polygon(
+        &self,
+        options: &HollowOptions,
+        polygon: &[[f32; 2]],
+        view_proj: &[f32; 16],
+        rect_w: f32,
+        rect_h: f32,
+        geom_center: Vec3,
+        scale: Vec3,
+        model_quat: [f32; 4],
+        position: Vec3,
+    ) -> Vec<u32> {
+        let (keep, _kept_shell) = self.compute_keep_mask(options);
+        select_removed_voxels_in_polygon(
+            &self.grid,
+            &self.solid,
+            &keep,
+            self.rotation_quat,
+            polygon,
+            view_proj,
+            rect_w,
+            rect_h,
+            geom_center,
+            scale,
+            model_quat,
+            position,
+        )
+    }
+
+    pub fn run(&self, options: &HollowOptions) -> HollowOutcome {
+        let shell_voxels_f = options.shell_thickness_mm.max(0.2) / self.grid.voxel_mm;
+        let smoothing_profile = effective_internal_cavity_smoothing_profile(
+            options.shell_thickness_mm,
+            options.smooth_internal_surfaces,
+            shell_voxels_f,
+        );
+
+        let (keep, kept_shell) = self.compute_keep_mask(options);
+
         let removed_voxels = self
             .occupied_voxels
             .saturating_sub(keep.iter().filter(|v| **v).count());
@@ -1098,7 +1149,7 @@ impl HollowSession {
             // Sphere preview: skip the expensive mesh building entirely.
             (self.source_mesh.clone(), IndexedMesh::default())
         } else {
-            let (out, cavity) = build_hollow_output_mesh(
+            let (out, cavity, cavity_wall_score) = build_hollow_output_mesh(
                 &self.source_mesh,
                 &self.source_bbox,
                 &self.grid,
@@ -1109,6 +1160,8 @@ impl HollowSession {
                 shell_voxels_f,
                 smoothing_profile,
             );
+            #[cfg(not(feature = "manifold"))]
+            let _ = cavity_wall_score;
             #[cfg(feature = "manifold")]
             let (out, cavity) = finalize_hollow_output_mesh_for_manifold(
                 &self.source_mesh,
@@ -1122,6 +1175,7 @@ impl HollowSession {
                 smoothing_profile,
                 out,
                 cavity,
+                cavity_wall_score,
             );
             (out, cavity)
         };
@@ -1153,8 +1207,8 @@ impl HollowSession {
         let mut removed_voxel_centers =
             collect_removed_voxel_centers(&self.grid, &self.solid, &keep);
         let removed_voxel_indices = collect_removed_voxel_indices(&self.grid, &self.solid, &keep);
-        let mut blocked_voxel_centers =
-            collect_blocked_voxel_centers(&self.grid, &options.blocked_voxel_indices);
+        let (mut blocked_voxel_centers, accepted_blocked_voxel_indices) =
+            collect_blocked_voxel_data(&self.grid, &self.solid, &options.blocked_voxel_indices);
 
         // Unrotate all outputs so DragonFruit's own (unrotated) geometry
         // stays in sync with what Rust produces.
@@ -1202,12 +1256,7 @@ impl HollowSession {
             removed_voxel_centers,
             removed_voxel_indices,
             blocked_voxel_centers,
-            blocked_voxel_indices: options
-                .blocked_voxel_indices
-                .clone()
-                .into_iter()
-                .map(|i| i as u32)
-                .collect(),
+            blocked_voxel_indices: accepted_blocked_voxel_indices,
             report: HollowReport {
                 mode: options.mode,
                 voxel_resolution: self.voxel_resolution,
@@ -1224,19 +1273,50 @@ impl HollowSession {
     }
 }
 
+/// Returns true if the removed voxel at (x, y, z) is adjacent (6-connected)
+/// to at least one voxel that is not part of the removed cavity interior -
+/// i.e. it is kept material (shell) or genuinely outside the solid volume.
+/// Only these "boundary" removed voxels are ever visible in the rendered
+/// InstancedMesh preview, since interior removed voxels are fully occluded
+/// by the removed voxels surrounding them on all sides.
+#[inline]
+fn is_removed_voxel_boundary(
+    grid: &GridSpec,
+    solid: &[bool],
+    keep: &[bool],
+    x: usize,
+    y: usize,
+    z: usize,
+) -> bool {
+    for (dx, dy, dz) in N6 {
+        let (nx, ny, nz) = (x as isize + dx, y as isize + dy, z as isize + dz);
+        if !grid.in_bounds(nx, ny, nz) {
+            // Conservative: treat an out-of-grid neighbor as exposed too.
+            // Should not occur in practice given the 1-voxel construction
+            // margin, but never hides a genuinely exposed voxel if it did.
+            return true;
+        }
+        let n = grid.idx(nx as usize, ny as usize, nz as usize);
+        if !solid[n] || keep[n] {
+            // Neighbor is outside the solid mesh, or is kept (shell)
+            // material -> this removed voxel sits on the visible cavity wall.
+            return true;
+        }
+    }
+    false
+}
+
 fn collect_removed_voxel_centers(grid: &GridSpec, solid: &[bool], keep: &[bool]) -> Vec<f32> {
-    let removed_count = solid
-        .iter()
-        .zip(keep.iter())
-        .filter(|(is_solid, is_kept)| **is_solid && !**is_kept)
-        .count();
-    let mut centers = Vec::with_capacity(removed_count * 3);
+    let mut centers = Vec::new();
 
     for z in 0..grid.nz {
         for y in 0..grid.ny {
             for x in 0..grid.nx {
                 let index = grid.idx(x, y, z);
                 if !solid[index] || keep[index] {
+                    continue;
+                }
+                if !is_removed_voxel_boundary(grid, solid, keep, x, y, z) {
                     continue;
                 }
                 let center = grid.center_world(x, y, z);
@@ -1251,18 +1331,16 @@ fn collect_removed_voxel_centers(grid: &GridSpec, solid: &[bool], keep: &[bool])
 }
 
 fn collect_removed_voxel_indices(grid: &GridSpec, solid: &[bool], keep: &[bool]) -> Vec<u32> {
-    let removed_count = solid
-        .iter()
-        .zip(keep.iter())
-        .filter(|(is_solid, is_kept)| **is_solid && !**is_kept)
-        .count();
-    let mut indices = Vec::with_capacity(removed_count);
+    let mut indices = Vec::new();
 
     for z in 0..grid.nz {
         for y in 0..grid.ny {
             for x in 0..grid.nx {
                 let index = grid.idx(x, y, z);
                 if !solid[index] || keep[index] {
+                    continue;
+                }
+                if !is_removed_voxel_boundary(grid, solid, keep, x, y, z) {
                     continue;
                 }
                 indices.push(index as u32);
@@ -1273,24 +1351,183 @@ fn collect_removed_voxel_indices(grid: &GridSpec, solid: &[bool], keep: &[bool])
     indices
 }
 
-fn collect_blocked_voxel_centers(grid: &GridSpec, blocked_indices: &[usize]) -> Vec<f32> {
+/// Decodes committed blocked-voxel grid indices into world-space centers,
+/// mirroring the exact acceptance rule used when the blockers are applied to
+/// `keep` (`index` in bounds AND `solid[index]`). Returns centers and the
+/// accepted indices in lockstep - entry `i` of the centers always describes
+/// `accepted[i]` - so downstream positional mappings can never desync when a
+/// stale index is dropped.
+fn collect_blocked_voxel_data(
+    grid: &GridSpec,
+    solid: &[bool],
+    blocked_indices: &[usize],
+) -> (Vec<f32>, Vec<u32>) {
     let mut centers = Vec::with_capacity(blocked_indices.len() * 3);
+    let mut accepted = Vec::with_capacity(blocked_indices.len());
     for &index in blocked_indices {
-        let nz = grid.nz;
-        let ny = grid.ny;
-        let nx = grid.nx;
-        let z = index / (nx * ny);
-        let yz = index % (nx * ny);
-        let y = yz / nx;
-        let x = yz % nx;
-        if x < nx && y < ny && z < nz {
-            let c = grid.center_world(x, y, z);
-            centers.push(c.x);
-            centers.push(c.y);
-            centers.push(c.z);
+        if index >= solid.len() || !solid[index] {
+            continue;
+        }
+        let z = index / (grid.nx * grid.ny);
+        let yz = index % (grid.nx * grid.ny);
+        let y = yz / grid.nx;
+        let x = yz % grid.nx;
+        let c = grid.center_world(x, y, z);
+        centers.push(c.x);
+        centers.push(c.y);
+        centers.push(c.z);
+        accepted.push(index as u32);
+    }
+    (centers, accepted)
+}
+
+/// Ray-casting (even-odd) point-in-polygon test. A 1:1 port of the frontend
+/// `pointInPolygon` in `page.tsx` (the lasso resolver), including its
+/// `((yj - yi) || 1e-6)` zero-slope guard, so Rust selects exactly the voxels
+/// the polygon covers on screen.
+#[inline]
+fn point_in_polygon(polygon: &[[f32; 2]], x: f32, y: f32) -> bool {
+    let mut inside = false;
+    let n = polygon.len();
+    if n == 0 {
+        return false;
+    }
+    let mut j = n - 1;
+    for i in 0..n {
+        let xi = polygon[i][0];
+        let yi = polygon[i][1];
+        let xj = polygon[j][0];
+        let yj = polygon[j][1];
+        let denom = if (yj - yi) != 0.0 { yj - yi } else { 1e-6 };
+        let intersects =
+            ((yi > y) != (yj > y)) && (x < ((xj - xi) * (y - yi)) / denom + xi);
+        if intersects {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// Projects a world point to container-relative pixels, a 1:1 port of
+/// `projectWorldPoint`/`projectPointToCanvas` in `SceneCanvas.tsx`.
+///
+/// `view_proj` is a column-major 4x4 (`camera.projectionMatrix * matrixWorldInverse`,
+/// exactly what `Matrix4.toArray()` produces). The clip-space multiply mirrors
+/// THREE's `Vector3.applyMatrix4` (which divides by `w`), then the same
+/// NDC-finite / `z ∈ [-1, 1]` rejection and pixel mapping
+/// (`(ndc.x+1)*0.5*w`, `(1-ndc.y)*0.5*h`) the frontend uses. Returns `None`
+/// for any voxel the frontend would have dropped.
+#[inline]
+fn project_world_to_pixel(
+    view_proj: &[f32; 16],
+    v: Vec3,
+    rect_w: f32,
+    rect_h: f32,
+) -> Option<(f32, f32)> {
+    let m = view_proj;
+    // Column-major mat4 * vec4(v, 1): clip[row] = sum_col m[col*4 + row] * v[col].
+    let clip_x = m[0] * v.x + m[4] * v.y + m[8] * v.z + m[12];
+    let clip_y = m[1] * v.x + m[5] * v.y + m[9] * v.z + m[13];
+    let clip_z = m[2] * v.x + m[6] * v.y + m[10] * v.z + m[14];
+    let clip_w = m[3] * v.x + m[7] * v.y + m[11] * v.z + m[15];
+    if clip_w == 0.0 {
+        return None;
+    }
+    let ndc_x = clip_x / clip_w;
+    let ndc_y = clip_y / clip_w;
+    let ndc_z = clip_z / clip_w;
+    if !ndc_x.is_finite() || !ndc_y.is_finite() || !ndc_z.is_finite() {
+        return None;
+    }
+    if ndc_z < -1.0 || ndc_z > 1.0 {
+        return None;
+    }
+    let px = (ndc_x + 1.0) * 0.5 * rect_w;
+    let py = (1.0 - ndc_y) * 0.5 * rect_h;
+    Some((px, py))
+}
+
+/// Faithful 1:1 Rust port of the frontend lasso loop
+/// (`resolveBlockedHollowVoxelMarqueeSelection` in `page.tsx`, per voxel):
+///   1. `center` = exported (UNROTATED) voxel center — grid center rotated by
+///      `inv(session_rotation_quat)`, matching what the collectors export and
+///      what the frontend consumed.
+///   2. `local = (center - geom_center) * scale` (component-wise).
+///   3. `local = model_quat * local` (`quaternionFromGlobalEuler(rotation)`).
+///   4. `world = local + position`.
+///   5. project → container pixels, then even-odd point-in-polygon.
+///
+/// It iterates EVERY removed (cavity) voxel — `solid && !keep` — with NO
+/// boundary gate, so the full through-depth column is returned, not just the
+/// visible cavity-wall shell. That is the whole point: selection is decoupled
+/// from the boundary-filtered / cap-limited rendered subset.
+#[allow(clippy::too_many_arguments)]
+fn select_removed_voxels_in_polygon(
+    grid: &GridSpec,
+    solid: &[bool],
+    keep: &[bool],
+    session_rotation_quat: [f32; 4],
+    polygon: &[[f32; 2]],
+    view_proj: &[f32; 16],
+    rect_w: f32,
+    rect_h: f32,
+    geom_center: Vec3,
+    scale: Vec3,
+    model_quat: [f32; 4],
+    position: Vec3,
+) -> Vec<u32> {
+    if polygon.len() < 3 {
+        return Vec::new();
+    }
+
+    let inv_rotation_quat = [
+        -session_rotation_quat[0],
+        -session_rotation_quat[1],
+        -session_rotation_quat[2],
+        session_rotation_quat[3],
+    ];
+    let rotation_is_identity = session_rotation_quat[0] == 0.0
+        && session_rotation_quat[1] == 0.0
+        && session_rotation_quat[2] == 0.0;
+
+    let mut selected = Vec::new();
+    for z in 0..grid.nz {
+        for y in 0..grid.ny {
+            for x in 0..grid.nx {
+                let index = grid.idx(x, y, z);
+                if !solid[index] || keep[index] {
+                    continue;
+                }
+
+                // (1) Exported-space (unrotated) center, matching the collectors.
+                let mut center = grid.center_world(x, y, z);
+                if !rotation_is_identity {
+                    center = center.rotate_by_quat(inv_rotation_quat);
+                }
+                // (2) local = (center - geom_center) * scale (component-wise).
+                let local = Vec3::new(
+                    (center.x - geom_center.x) * scale.x,
+                    (center.y - geom_center.y) * scale.y,
+                    (center.z - geom_center.z) * scale.z,
+                );
+                // (3) local = model_quat * local.
+                let local = local.rotate_by_quat(model_quat);
+                // (4) world = local + position.
+                let world = local.add(position);
+                // (5) project + point-in-polygon.
+                let Some((px, py)) = project_world_to_pixel(view_proj, world, rect_w, rect_h)
+                else {
+                    continue;
+                };
+                if point_in_polygon(polygon, px, py) {
+                    selected.push(index as u32);
+                }
+            }
         }
     }
-    centers
+
+    selected
 }
 
 #[cfg(not(feature = "manifold"))]
@@ -1420,8 +1657,6 @@ fn organic_boundary_mesh(
     for z in 0..grid.nz.saturating_sub(1) {
         for y in 0..grid.ny.saturating_sub(1) {
             for x in 0..grid.nx.saturating_sub(1) {
-                let mut has_kept = false;
-                let mut has_carved = false;
                 let mut has_scalar_positive = false;
                 let mut has_scalar_negative = false;
 
@@ -1434,8 +1669,6 @@ fn organic_boundary_mesh(
                     corner_pos[corner_i] = grid.center_world(vx, vy, vz);
                     corner_kept[corner_i] = positive[vi];
                     corner_carved[corner_i] = negative[vi];
-                    has_kept |= corner_kept[corner_i];
-                    has_carved |= corner_carved[corner_i];
                     corner_scalar[corner_i] = scalar_field[vi];
                     if corner_kept[corner_i] || corner_carved[corner_i] {
                         if corner_scalar[corner_i] >= 0.0 {
@@ -1446,7 +1679,11 @@ fn organic_boundary_mesh(
                     }
                 }
 
-                if !(has_kept && has_carved) && !(has_scalar_positive && has_scalar_negative) {
+                // Scalar-sign-only gate: cubes whose classified corners all
+                // share one scalar sign contain no isosurface. (Cubes with
+                // only a hard-label crossing were exactly the shard
+                // generators removed by the 2026-07-12 audit fix.)
+                if !(has_scalar_positive && has_scalar_negative) {
                     continue;
                 }
 
@@ -1591,6 +1828,41 @@ fn build_smoothed_cavity_scalar_field(
         std::mem::swap(&mut field, &mut scratch);
     }
 
+    // Outer-skin guard: blur must never flip a kept voxel that sits on the
+    // model's outer surface (6-adjacent to non-solid space or the grid
+    // border) negative — a flip there lets the cavity isosurface exit
+    // through the model's outer skin at thin features. Clamp those voxels
+    // back to the same positive epsilon floor used at initialization.
+    let skin_floor = 0.05 * shell_voxels_f.max(0.2);
+    for z in 0..grid.nz {
+        for y in 0..grid.ny {
+            for x in 0..grid.nx {
+                let i = grid.idx(x, y, z);
+                if !keep[i] || !solid[i] {
+                    continue;
+                }
+                let mut touches_outside = false;
+                for (dx, dy, dz) in N6 {
+                    let nx_i = x as isize + dx;
+                    let ny_i = y as isize + dy;
+                    let nz_i = z as isize + dz;
+                    if !grid.in_bounds(nx_i, ny_i, nz_i) {
+                        touches_outside = true;
+                        break;
+                    }
+                    let ni = grid.idx(nx_i as usize, ny_i as usize, nz_i as usize);
+                    if !solid[ni] {
+                        touches_outside = true;
+                        break;
+                    }
+                }
+                if touches_outside {
+                    field[i] = field[i].max(skin_floor);
+                }
+            }
+        }
+    }
+
     field
 }
 
@@ -1604,8 +1876,8 @@ fn build_hollow_output_mesh(
     options: &HollowOptions,
     shell_voxels_f: f32,
     smoothing_profile: InternalCavitySmoothingProfile,
-) -> (IndexedMesh, IndexedMesh) {
-    let cavity_mesh = build_cavity_inner_mesh(
+) -> (IndexedMesh, IndexedMesh, usize) {
+    let (cavity_mesh, cavity_wall_score) = build_cavity_inner_mesh(
         source_bbox,
         grid,
         solid,
@@ -1623,7 +1895,11 @@ fn build_hollow_output_mesh(
         merge_meshes(&filtered_source, &cavity_mesh)
     };
 
-    (normalize_mesh_for_boolean(out_mesh), cavity_mesh)
+    (
+        normalize_mesh_for_boolean(out_mesh),
+        cavity_mesh,
+        cavity_wall_score,
+    )
 }
 
 /// Build only the internal cavity (+ infill) mesh without the outer shell.
@@ -1638,7 +1914,7 @@ fn build_cavity_inner_mesh(
     options: &HollowOptions,
     shell_voxels_f: f32,
     smoothing_profile: InternalCavitySmoothingProfile,
-) -> IndexedMesh {
+) -> (IndexedMesh, usize) {
     let cavity_positive = keep.to_vec();
     let cavity_negative: Vec<bool> = solid
         .iter()
@@ -1654,14 +1930,16 @@ fn build_cavity_inner_mesh(
         shell_voxels_f,
         smoothing_profile.scalar_field_blur_iterations,
     );
-    let cavity_mesh = stabilize_cavity_mesh_for_boolean(
-        smooth_cavity_mesh(
-            organic_boundary_mesh(grid, &cavity_positive, &cavity_negative, &cavity_scalar),
+    let (cavity_mesh, wall_defect_score) = drop_open_cavity_fragments(
+        stabilize_cavity_mesh_for_boolean(
+            smooth_cavity_mesh(
+                organic_boundary_mesh(grid, &cavity_positive, &cavity_negative, &cavity_scalar),
+                grid.voxel_mm,
+                smoothing_profile.taubin_iterations,
+                smoothing_profile.taubin_max_step_scale,
+            ),
             grid.voxel_mm,
-            smoothing_profile.taubin_iterations,
-            smoothing_profile.taubin_max_step_scale,
         ),
-        grid.voxel_mm,
     );
 
     let infill_mesh = if matches!(options.mode, HollowMode::Infill) {
@@ -1678,13 +1956,16 @@ fn build_cavity_inner_mesh(
         IndexedMesh::default()
     };
 
-    if infill_mesh.triangles.is_empty() {
+    // The infill lattice beams are closed tubes by construction; the cavity
+    // wall's defect score is the meaningful manifold-failure predictor.
+    let combined = if infill_mesh.triangles.is_empty() {
         cavity_mesh
     } else if cavity_mesh.triangles.is_empty() {
         infill_mesh
     } else {
         merge_meshes(&cavity_mesh, &infill_mesh)
-    }
+    };
+    (combined, wall_defect_score)
 }
 
 fn polygonize_cavity_tetrahedron(
@@ -1716,22 +1997,19 @@ fn polygonize_cavity_tetrahedron(
         }
     }
 
-    // Prefer the blurred scalar field for contouring. The previous extractor
-    // only crossed hard kept/carved voxel labels, which let smoothing slide
-    // vertices along a blocky voxel edge network but not escape that network.
-    // If the scalar field is locally degenerate, fall back to hard labels so a
-    // disabled or numerically flat field still produces a closed cavity wall.
-    let use_scalar_sides = scalar_positive_count > 0 && scalar_negative_count > 0;
-    if !use_scalar_sides {
-        for (local_i, &corner_i) in tet.iter().enumerate() {
-            side[local_i] = if kept[corner_i] {
-                Some(true)
-            } else if carved[corner_i] {
-                Some(false)
-            } else {
-                None
-            };
-        }
+    // Contour strictly by the scalar field's sign. The field is initialized
+    // with signed epsilon floors that exactly match the hard kept/carved
+    // labels (see build_smoothed_cavity_scalar_field), so with blur disabled
+    // this is identical to hard-label contouring. With blur enabled the
+    // isosurface legitimately migrates off the hard-label boundary; a tet
+    // whose classified corners are all one scalar sign simply contains no
+    // isosurface and must emit nothing. The previous per-tetrahedron
+    // fallback to hard labels in that case emitted detached midpoint "shard"
+    // triangles whose borders matched nothing (adjacent tets contoured by
+    // the scalar criterion), making the cavity non-manifold by construction
+    // and corrupting cross-section stencil parity (2026-07-12 audit).
+    if scalar_positive_count == 0 || scalar_negative_count == 0 {
+        return;
     }
 
     for (ea, eb) in tet_edges {
@@ -1753,7 +2031,7 @@ fn polygonize_cavity_tetrahedron(
         let va = scalar[ia];
         let vb = scalar[ib];
         let denom = va - vb;
-        let t = if !use_scalar_sides || denom.abs() <= 1e-6 {
+        let t = if denom.abs() <= 1e-6 {
             0.5
         } else {
             (va / denom).clamp(0.0, 1.0)
@@ -2179,6 +2457,169 @@ fn reduced_internal_cavity_smoothing_profile(
     }
 }
 
+/// Drops vertices not referenced by any triangle and remaps indices in
+/// place. O(V + T), no hashing. Replaces the previous full triangle-soup
+/// re-weld whose only observable effect was this same compaction (the
+/// manifold backend tolerates unreferenced vertices, but downstream code
+/// historically assumed none remain after normalization).
+fn compact_unreferenced_vertices(mesh: &mut IndexedMesh) {
+    let mut used = vec![false; mesh.positions.len()];
+    for tri in &mesh.triangles {
+        used[tri[0] as usize] = true;
+        used[tri[1] as usize] = true;
+        used[tri[2] as usize] = true;
+    }
+    if used.iter().all(|&u| u) {
+        return;
+    }
+    let mut remap = vec![u32::MAX; mesh.positions.len()];
+    let mut next = 0u32;
+    let mut new_positions = Vec::with_capacity(mesh.positions.len());
+    for (i, &is_used) in used.iter().enumerate() {
+        if is_used {
+            remap[i] = next;
+            new_positions.push(mesh.positions[i]);
+            next += 1;
+        }
+    }
+    for tri in &mut mesh.triangles {
+        tri[0] = remap[tri[0] as usize];
+        tri[1] = remap[tri[1] as usize];
+        tri[2] = remap[tri[2] as usize];
+    }
+    mesh.positions = new_positions;
+}
+
+/// Removes detached "shard" fragments from a generated cavity wall mesh:
+/// edge-connected components, other than the largest (always kept --
+/// ShellOpenFace/drain-hole modes legitimately produce an open main wall),
+/// that contain boundary edges. Such fragments arise where the smoothed
+/// scalar isosurface and the hard voxel labels disagree locally; they are
+/// visually occluded, but their open borders make manifold conversion
+/// structurally impossible and corrupt cross-section stencil parity.
+///
+/// Returns the cleaned mesh plus its residual defect score
+/// (`boundary_edges + 4 * non_manifold_edges`), which manifold
+/// stabilization uses to skip provably futile attempts.
+fn drop_open_cavity_fragments(mesh: IndexedMesh) -> (IndexedMesh, usize) {
+    if mesh.triangles.is_empty() {
+        return (mesh, 0);
+    }
+
+    let topo = crate::core::halfedge::Topology::build(&mesh);
+    let boundary_edges = topo.boundary_edges();
+    let non_manifold_count = topo.non_manifold_edges().len();
+    if boundary_edges.is_empty() {
+        return (mesh, non_manifold_count * 4);
+    }
+
+    fn find(parent: &mut [u32], mut i: u32) -> u32 {
+        while parent[i as usize] != i {
+            parent[i as usize] = parent[parent[i as usize] as usize];
+            i = parent[i as usize];
+        }
+        i
+    }
+
+    // Union-find over faces sharing an edge (any multiplicity, so
+    // non-manifold edges still connect their components).
+    let face_count = mesh.triangles.len();
+    let mut parent: Vec<u32> = (0..face_count as u32).collect();
+    for info in topo.edges.values() {
+        let mut faces = info.faces.iter();
+        if let Some(&first) = faces.next() {
+            let root = find(&mut parent, first);
+            for &other in faces {
+                let other_root = find(&mut parent, other);
+                parent[other_root as usize] = root;
+            }
+        }
+    }
+
+    let mut component_size = vec![0usize; face_count];
+    for face in 0..face_count as u32 {
+        let root = find(&mut parent, face);
+        component_size[root as usize] += 1;
+    }
+    let mut component_open = vec![false; face_count];
+    for key in &boundary_edges {
+        if let Some(info) = topo.edges.get(key) {
+            for &face in &info.faces {
+                let root = find(&mut parent, face);
+                component_open[root as usize] = true;
+            }
+        }
+    }
+    let largest_root = (0..face_count)
+        .max_by_key(|&i| component_size[i])
+        .unwrap_or(0) as u32;
+
+    let retained: Vec<[u32; 3]> = mesh
+        .triangles
+        .iter()
+        .enumerate()
+        .filter(|(face, _)| {
+            let root = find(&mut parent, *face as u32);
+            root == largest_root || !component_open[root as usize]
+        })
+        .map(|(_, tri)| *tri)
+        .collect();
+
+    if retained.len() == mesh.triangles.len() {
+        return (mesh, boundary_edges.len() + non_manifold_count * 4);
+    }
+
+    let dropped = mesh.triangles.len() - retained.len();
+    let mut cleaned = IndexedMesh {
+        positions: mesh.positions,
+        triangles: retained,
+    };
+    compact_unreferenced_vertices(&mut cleaned);
+
+    let cleaned_topo = crate::core::halfedge::Topology::build(&cleaned);
+    let score =
+        cleaned_topo.boundary_edges().len() + cleaned_topo.non_manifold_edges().len() * 4;
+    eprintln!(
+        "[dragonfruit-mesh-repair] cavity fragment cleanup: dropped {dropped} shard triangles, residual defect score {score}"
+    );
+    (cleaned, score)
+}
+
+/// Cheap topology-level defect summary: a single hash pass over the edges,
+/// with none of the BVH self-intersection work `crate::analysis::analyze`
+/// performs. Used to classify manifold-conversion failures before deciding
+/// whether retries can possibly help.
+#[cfg_attr(not(feature = "manifold"), allow(dead_code))]
+#[derive(Debug, Clone, Copy)]
+struct MeshDefectSummary {
+    boundary_edges: usize,
+    non_manifold_edges: usize,
+    inconsistent_edges: usize,
+}
+
+#[cfg_attr(not(feature = "manifold"), allow(dead_code))]
+fn summarize_mesh_defects(mesh: &IndexedMesh) -> MeshDefectSummary {
+    let topo = crate::core::halfedge::Topology::build(mesh);
+    MeshDefectSummary {
+        boundary_edges: topo.boundary_edges().len(),
+        non_manifold_edges: topo.non_manifold_edges().len(),
+        inconsistent_edges: topo.inconsistent_edges(),
+    }
+}
+
+/// Vertex welding can only close hairline cracks — boundary edges whose
+/// counterparts sit within the weld epsilon. It cannot repair edges shared
+/// by more than two faces, and it never changes winding, so retrying the
+/// weld ladder against those defect classes is provably futile
+/// (2026-07-12 audit: the ladder's absolute weld range is single-digit
+/// micrometres, five orders of magnitude below voxel-scale defects).
+#[cfg_attr(not(feature = "manifold"), allow(dead_code))]
+fn weld_retries_worthwhile(defects: &MeshDefectSummary) -> bool {
+    defects.non_manifold_edges == 0
+        && defects.inconsistent_edges == 0
+        && defects.boundary_edges > 0
+}
+
 fn normalize_mesh_for_boolean(mesh: IndexedMesh) -> IndexedMesh {
     normalize_mesh_for_boolean_with_weld(mesh, 1e-6)
 }
@@ -2200,7 +2641,12 @@ fn normalize_mesh_for_boolean_with_weld(mesh: IndexedMesh, weld_epsilon: f32) ->
     });
 
     if normalized.triangles.len() != mesh.triangles.len() {
-        normalized = IndexedMesh::from_triangle_soup(&normalized.to_triangle_soup(), weld_epsilon);
+        // Degenerate-triangle removal can orphan vertices. The previous full
+        // triangle-soup re-weld here cost another O(T) soup materialization
+        // plus ~3T serial hash interns per call, and its only observable
+        // effect was orphan compaction (re-welding at the same epsilon
+        // re-quantizes onto the same grid). Compact directly instead.
+        compact_unreferenced_vertices(&mut normalized);
     }
 
     normalized
@@ -2277,45 +2723,48 @@ fn stabilize_hollow_mesh_for_manifold(mesh: IndexedMesh) -> HollowManifoldStabil
         }
     }
 
-    for weld_epsilon in [2e-6_f32, 5e-6_f32, 1e-5_f32] {
-        let candidate = normalize_mesh_for_boolean_with_weld(mesh.clone(), weld_epsilon);
-        eprintln!(
-            "[dragonfruit-mesh-repair] hollow manifold stabilization: retry weld_epsilon={weld_epsilon:.1e} tris={} verts={}",
-            candidate.triangle_count(),
-            candidate.vertex_count()
-        );
-        match try_roundtrip_manifold_mesh(candidate) {
-            Ok(roundtripped) => {
-                eprintln!(
-                    "[dragonfruit-mesh-repair] hollow manifold stabilization: retry succeeded weld_epsilon={weld_epsilon:.1e} tris={} verts={}",
-                    roundtripped.triangle_count(),
-                    roundtripped.vertex_count()
-                );
-                return HollowManifoldStabilization::Stabilized(roundtripped);
-            }
-            Err(reason) => {
-                eprintln!(
-                    "[dragonfruit-mesh-repair] hollow manifold stabilization: retry failed weld_epsilon={weld_epsilon:.1e} ({reason})"
-                );
+    // Classify the failure once, cheaply, before deciding whether weld
+    // retries can possibly help. (Previously a full crate::analysis::analyze
+    // — including a BVH self-intersection pass over every triangle — ran
+    // after ALL retries failed, purely to print a log line.)
+    let defects = summarize_mesh_defects(&mesh);
+    eprintln!(
+        "[dragonfruit-mesh-repair] hollow manifold stabilization: defect summary boundary={} non_manifold={} inconsistent_winding={}",
+        defects.boundary_edges, defects.non_manifold_edges, defects.inconsistent_edges
+    );
+
+    if weld_retries_worthwhile(&defects) {
+        for weld_epsilon in [2e-6_f32, 5e-6_f32, 1e-5_f32] {
+            let candidate = normalize_mesh_for_boolean_with_weld(mesh.clone(), weld_epsilon);
+            eprintln!(
+                "[dragonfruit-mesh-repair] hollow manifold stabilization: retry weld_epsilon={weld_epsilon:.1e} tris={} verts={}",
+                candidate.triangle_count(),
+                candidate.vertex_count()
+            );
+            match try_roundtrip_manifold_mesh(candidate) {
+                Ok(roundtripped) => {
+                    eprintln!(
+                        "[dragonfruit-mesh-repair] hollow manifold stabilization: retry succeeded weld_epsilon={weld_epsilon:.1e} tris={} verts={}",
+                        roundtripped.triangle_count(),
+                        roundtripped.vertex_count()
+                    );
+                    return HollowManifoldStabilization::Stabilized(roundtripped);
+                }
+                Err(reason) => {
+                    eprintln!(
+                        "[dragonfruit-mesh-repair] hollow manifold stabilization: retry failed weld_epsilon={weld_epsilon:.1e} ({reason})"
+                    );
+                }
             }
         }
+        eprintln!(
+            "[dragonfruit-mesh-repair] hollow manifold stabilization: all weld retries failed, returning normalized non-manifold mesh"
+        );
+    } else {
+        eprintln!(
+            "[dragonfruit-mesh-repair] hollow manifold stabilization: skipping weld retries — defect class cannot be fixed by vertex welding"
+        );
     }
-
-    eprintln!(
-        "[dragonfruit-mesh-repair] hollow manifold stabilization: all retries failed, returning normalized non-manifold mesh"
-    );
-
-    let analysis = crate::analysis::analyze(&mesh);
-    eprintln!(
-        "[dragonfruit-mesh-repair] hollow manifold stabilization: failure summary nme={} nmv={} boundary={} loops={} inconsistent={} self_int={} comps={}",
-        analysis.non_manifold_edges,
-        analysis.non_manifold_vertices,
-        analysis.boundary_edges,
-        analysis.boundary_loops,
-        analysis.inconsistent_winding_edges,
-        analysis.self_intersection_triangles,
-        analysis.connected_components,
-    );
 
     HollowManifoldStabilization::Failed(mesh)
 }
@@ -2333,8 +2782,22 @@ fn finalize_hollow_output_mesh_for_manifold(
     smoothing_profile: InternalCavitySmoothingProfile,
     out_mesh: IndexedMesh,
     cavity_mesh: IndexedMesh,
+    cavity_wall_score: usize,
 ) -> (IndexedMesh, IndexedMesh) {
-    match stabilize_hollow_mesh_for_manifold(out_mesh) {
+    // A nonzero cavity wall defect score guarantees the merged mesh cannot
+    // pass manifold conversion: merging is pure concatenation, and every
+    // downstream weld epsilon is finer than the cavity-phase welds already
+    // attempted (2026-07-12 audit). Skip provably futile attempts outright.
+    let initial = if cavity_wall_score == 0 {
+        stabilize_hollow_mesh_for_manifold(out_mesh)
+    } else {
+        eprintln!(
+            "[dragonfruit-mesh-repair] hollow manifold stabilization: skipping initial attempt — cavity wall defect score {cavity_wall_score}"
+        );
+        HollowManifoldStabilization::Failed(out_mesh)
+    };
+
+    match initial {
         HollowManifoldStabilization::Stabilized(mesh) => (mesh, cavity_mesh),
         HollowManifoldStabilization::Failed(original_mesh) => {
             if smoothing_profile.is_disabled() {
@@ -2358,7 +2821,7 @@ fn finalize_hollow_output_mesh_for_manifold(
                 );
 
                 // Only rebuild the cavity mesh — the outer shell is cached.
-                let retry_cavity_mesh = build_cavity_inner_mesh(
+                let (retry_cavity_mesh, retry_score) = build_cavity_inner_mesh(
                     source_bbox,
                     grid,
                     solid,
@@ -2368,6 +2831,12 @@ fn finalize_hollow_output_mesh_for_manifold(
                     shell_voxels_f,
                     retry_profile,
                 );
+                if retry_score != 0 {
+                    eprintln!(
+                        "[dragonfruit-mesh-repair] hollow manifold stabilization: skipping retry — cavity wall defect score {retry_score}"
+                    );
+                    continue;
+                }
                 let retry_mesh =
                     normalize_mesh_for_boolean(merge_meshes(&filtered_source, &retry_cavity_mesh));
 
@@ -2383,7 +2852,7 @@ fn finalize_hollow_output_mesh_for_manifold(
                     "[dragonfruit-mesh-repair] hollow manifold stabilization: retrying hollow build without internal smoothing"
                 );
 
-                let retry_cavity_mesh = build_cavity_inner_mesh(
+                let (retry_cavity_mesh, retry_score) = build_cavity_inner_mesh(
                     source_bbox,
                     grid,
                     solid,
@@ -2393,6 +2862,12 @@ fn finalize_hollow_output_mesh_for_manifold(
                     shell_voxels_f,
                     smoothing_profile.disabled(),
                 );
+                if retry_score != 0 {
+                    eprintln!(
+                        "[dragonfruit-mesh-repair] hollow manifold stabilization: skipping final retry — cavity wall defect score {retry_score}"
+                    );
+                    return (original_mesh, cavity_mesh);
+                }
                 let retry_mesh =
                     normalize_mesh_for_boolean(merge_meshes(&filtered_source, &retry_cavity_mesh));
 
@@ -3896,6 +4371,359 @@ fn vec3_normalize(v: Vec3) -> Option<Vec3> {
 mod tests {
     use super::*;
 
+    /// Unit icosphere generator for cavity-quality integration tests
+    /// (methodology ported from the 2026-07-12 audit probe binary).
+    fn test_icosphere(radius: f32, subdivisions: u32) -> IndexedMesh {
+        let t = (1.0 + 5.0f32.sqrt()) / 2.0;
+        let mut verts: Vec<Vec3> = vec![
+            Vec3::new(-1.0, t, 0.0),
+            Vec3::new(1.0, t, 0.0),
+            Vec3::new(-1.0, -t, 0.0),
+            Vec3::new(1.0, -t, 0.0),
+            Vec3::new(0.0, -1.0, t),
+            Vec3::new(0.0, 1.0, t),
+            Vec3::new(0.0, -1.0, -t),
+            Vec3::new(0.0, 1.0, -t),
+            Vec3::new(t, 0.0, -1.0),
+            Vec3::new(t, 0.0, 1.0),
+            Vec3::new(-t, 0.0, -1.0),
+            Vec3::new(-t, 0.0, 1.0),
+        ];
+        let mut faces: Vec<[u32; 3]> = vec![
+            [0, 11, 5],
+            [0, 5, 1],
+            [0, 1, 7],
+            [0, 7, 10],
+            [0, 10, 11],
+            [1, 5, 9],
+            [5, 11, 4],
+            [11, 10, 2],
+            [10, 7, 6],
+            [7, 1, 8],
+            [3, 9, 4],
+            [3, 4, 2],
+            [3, 2, 6],
+            [3, 6, 8],
+            [3, 8, 9],
+            [4, 9, 5],
+            [2, 4, 11],
+            [6, 2, 10],
+            [8, 6, 7],
+            [9, 8, 1],
+        ];
+
+        for _ in 0..subdivisions {
+            let mut midpoint_cache: std::collections::HashMap<(u32, u32), u32> =
+                std::collections::HashMap::new();
+            let mut midpoint = |a: u32, b: u32, verts: &mut Vec<Vec3>| -> u32 {
+                let key = if a < b { (a, b) } else { (b, a) };
+                if let Some(&idx) = midpoint_cache.get(&key) {
+                    return idx;
+                }
+                let pa = verts[a as usize];
+                let pb = verts[b as usize];
+                let mid = Vec3::new(
+                    (pa.x + pb.x) * 0.5,
+                    (pa.y + pb.y) * 0.5,
+                    (pa.z + pb.z) * 0.5,
+                );
+                let idx = verts.len() as u32;
+                verts.push(mid);
+                midpoint_cache.insert(key, idx);
+                idx
+            };
+            let mut next_faces = Vec::with_capacity(faces.len() * 4);
+            for [a, b, c] in faces {
+                let ab = midpoint(a, b, &mut verts);
+                let bc = midpoint(b, c, &mut verts);
+                let ca = midpoint(c, a, &mut verts);
+                next_faces.push([a, ab, ca]);
+                next_faces.push([b, bc, ab]);
+                next_faces.push([c, ca, bc]);
+                next_faces.push([ab, bc, ca]);
+            }
+            faces = next_faces;
+        }
+
+        // Project all vertices onto the sphere.
+        for v in &mut verts {
+            let len = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt().max(1e-9);
+            let s = radius / len;
+            *v = Vec3::new(v.x * s, v.y * s, v.z * s);
+        }
+
+        IndexedMesh {
+            positions: verts,
+            triangles: faces,
+        }
+    }
+
+    fn count_edge_connected_components(mesh: &IndexedMesh) -> usize {
+        let topo = crate::core::halfedge::Topology::build(mesh);
+        let n = mesh.triangles.len();
+        let mut parent: Vec<usize> = (0..n).collect();
+        fn find(parent: &mut Vec<usize>, mut i: usize) -> usize {
+            while parent[i] != i {
+                parent[i] = parent[parent[i]];
+                i = parent[i];
+            }
+            i
+        }
+        for info in topo.edges.values() {
+            let mut faces = info.faces.iter();
+            if let Some(&first) = faces.next() {
+                let root = find(&mut parent, first as usize);
+                for &other in faces {
+                    let other_root = find(&mut parent, other as usize);
+                    parent[other_root] = root;
+                }
+            }
+        }
+        let mut roots = std::collections::HashSet::new();
+        for i in 0..n {
+            let root = find(&mut parent, i);
+            roots.insert(root);
+        }
+        roots.len()
+    }
+
+    /// P0 integration regression test (audit fix #2/#3/#3b): a smoothed
+    /// cavity generated from a clean closed source mesh must itself be a
+    /// single watertight surface. Before the P0 fixes, the per-tetrahedron
+    /// hard-label fallback in the polygonizer emitted thousands of small
+    /// open "shard" fragments (measured in the 2026-07-12 audit), whose
+    /// boundary edges made manifold conversion structurally impossible and
+    /// corrupted cross-section stencil rendering.
+    #[test]
+    fn smoothed_cavity_from_sphere_is_single_watertight_component() {
+        let sphere = test_icosphere(20.0, 3);
+        let options = HollowOptions {
+            mode: HollowMode::Cavity,
+            voxel_resolution: 64,
+            shell_thickness_mm: 1.2,
+            smooth_internal_surfaces: true,
+            preview_cavity_only: true,
+            ..HollowOptions::default()
+        };
+
+        let outcome = hollow_voxel(sphere, &options);
+        let cavity = &outcome.mesh; // preview_cavity_only: out mesh IS the cavity
+        assert!(
+            cavity.triangle_count() > 1000,
+            "expected a substantial cavity mesh, got {} triangles",
+            cavity.triangle_count()
+        );
+
+        let topo = crate::core::halfedge::Topology::build(cavity);
+        let boundary = topo.boundary_edges().len();
+        let components = count_edge_connected_components(cavity);
+        assert_eq!(
+            boundary, 0,
+            "smoothed cavity has {boundary} boundary edges (open shard fragments)"
+        );
+        assert_eq!(
+            components, 1,
+            "smoothed cavity split into {components} edge-connected components"
+        );
+    }
+
+    /// P0 unit regression tests (audit fix #4): the weld-retry gate must
+    /// only allow retries for defect classes vertex welding can actually
+    /// fix (hairline boundary cracks), and must skip provably futile
+    /// retries (non-manifold edges, inconsistent winding, or no defect).
+    #[test]
+    fn weld_gate_classifies_defect_classes() {
+        // Closed tetrahedron with consistent outward winding: no defects.
+        let tet = IndexedMesh {
+            positions: vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ],
+            triangles: vec![[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]],
+        };
+        let clean = summarize_mesh_defects(&tet);
+        assert_eq!(clean.boundary_edges, 0);
+        assert_eq!(clean.non_manifold_edges, 0);
+        assert_eq!(clean.inconsistent_edges, 0);
+        assert!(
+            !weld_retries_worthwhile(&clean),
+            "no defects -> nothing for welding to fix"
+        );
+
+        // Same tetrahedron with one face removed: boundary-only defect,
+        // the one class welding could conceivably repair.
+        let open = IndexedMesh {
+            positions: tet.positions.clone(),
+            triangles: vec![[0, 2, 1], [0, 1, 3], [1, 2, 3]],
+        };
+        let open_defects = summarize_mesh_defects(&open);
+        assert!(open_defects.boundary_edges > 0);
+        assert_eq!(open_defects.non_manifold_edges, 0);
+        assert!(
+            weld_retries_worthwhile(&open_defects),
+            "boundary-only defects are weld-worthy"
+        );
+
+        // Third face glued onto an existing edge: non-manifold edge —
+        // welding can never fix this, retries must be skipped.
+        let mut non_manifold = tet.clone();
+        non_manifold.positions.push(Vec3::new(1.0, 1.0, 1.0));
+        non_manifold.triangles.push([0, 1, 4]);
+        let nm_defects = summarize_mesh_defects(&non_manifold);
+        assert!(nm_defects.non_manifold_edges > 0);
+        assert!(
+            !weld_retries_worthwhile(&nm_defects),
+            "non-manifold edges are not fixable by welding"
+        );
+    }
+
+    /// P0 invariants guard (audit fix #5, behavior-preserving refactor):
+    /// after normalization removes degenerate triangles, the mesh must have
+    /// no unreferenced vertices, all indices in range, and all
+    /// non-degenerate input triangles preserved. Guards the replacement of
+    /// the second full triangle-soup re-weld with direct orphan compaction.
+    #[test]
+    fn normalize_with_weld_compacts_orphans_and_preserves_triangles() {
+        // Two well-separated valid triangles plus one degenerate (zero-area)
+        // triangle whose vertices appear nowhere else.
+        let positions = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(10.0, 0.0, 0.0),
+            Vec3::new(0.0, 10.0, 0.0),
+            Vec3::new(0.0, 0.0, 20.0),
+            Vec3::new(10.0, 0.0, 20.0),
+            Vec3::new(0.0, 10.0, 20.0),
+            // Degenerate triangle: three collinear points far from the rest.
+            Vec3::new(50.0, 50.0, 50.0),
+            Vec3::new(51.0, 50.0, 50.0),
+            Vec3::new(52.0, 50.0, 50.0),
+        ];
+        let triangles = vec![[0u32, 1, 2], [3, 4, 5], [6, 7, 8]];
+        let mesh = IndexedMesh {
+            positions,
+            triangles,
+        };
+
+        let normalized = normalize_mesh_for_boolean_with_weld(mesh, 1e-6);
+
+        assert_eq!(
+            normalized.triangles.len(),
+            2,
+            "degenerate triangle should be removed"
+        );
+        let mut used = vec![false; normalized.positions.len()];
+        for tri in &normalized.triangles {
+            for &v in tri {
+                assert!(
+                    (v as usize) < normalized.positions.len(),
+                    "index {v} out of range after compaction"
+                );
+                used[v as usize] = true;
+            }
+        }
+        assert!(
+            used.iter().all(|&u| u),
+            "normalization left unreferenced vertices behind"
+        );
+    }
+
+    /// P0 unit regression test (audit fix #2): a tetrahedron whose corners
+    /// straddle the hard kept/carved labels but NOT the scalar field's sign
+    /// must emit nothing — the isosurface does not pass through it. Before
+    /// the fix, the per-tet fallback emitted midpoint triangles here,
+    /// producing detached shard fragments.
+    #[test]
+    fn polygonizer_emits_nothing_for_label_only_crossings() {
+        let grid = GridSpec {
+            nx: 2,
+            ny: 2,
+            nz: 2,
+            voxel_mm: 1.0,
+            min: Vec3::new(0.0, 0.0, 0.0),
+        };
+        // All 8 corners classified; hard labels split 4/4 along x, but the
+        // blurred scalar field is uniformly positive (crossing moved away).
+        let mut positive = vec![false; 8];
+        let mut negative = vec![false; 8];
+        let scalar = vec![0.5f32; 8];
+        for z in 0..2 {
+            for y in 0..2 {
+                for x in 0..2 {
+                    let i = grid.idx(x, y, z);
+                    if x == 0 {
+                        positive[i] = true;
+                    } else {
+                        negative[i] = true;
+                    }
+                }
+            }
+        }
+
+        let mesh = organic_boundary_mesh(&grid, &positive, &negative, &scalar);
+        assert_eq!(
+            mesh.triangle_count(),
+            0,
+            "label-only crossing emitted {} shard triangles",
+            mesh.triangle_count()
+        );
+    }
+
+    /// P0 unit regression test (audit fix #3b): blur must never flip the
+    /// scalar sign of a kept voxel on the model's outer skin (6-adjacent to
+    /// non-solid space) — a flip there lets the cavity isosurface exit
+    /// through the model's outer surface at thin features.
+    #[test]
+    fn scalar_field_blur_cannot_flip_outer_skin_voxels() {
+        // 5x5x5 grid: a 1-voxel-thick solid kept wall at x=1 (adjacent to
+        // empty space at x=0), backed by a large carved mass at x=2..=3
+        // whose strongly negative values would otherwise blur the thin
+        // wall negative.
+        let grid = GridSpec {
+            nx: 5,
+            ny: 5,
+            nz: 5,
+            voxel_mm: 1.0,
+            min: Vec3::new(0.0, 0.0, 0.0),
+        };
+        let n = grid.nx * grid.ny * grid.nz;
+        let mut solid = vec![false; n];
+        let mut keep = vec![false; n];
+        let mut dist = vec![0.0f32; n];
+        for z in 0..5 {
+            for y in 0..5 {
+                for x in 1..=3 {
+                    let i = grid.idx(x, y, z);
+                    solid[i] = true;
+                    if x == 1 {
+                        keep[i] = true;
+                        dist[i] = 0.0;
+                    } else {
+                        // Deep carved voxels: large dist makes shell_signed
+                        // strongly negative.
+                        dist[i] = 25.0;
+                    }
+                }
+            }
+        }
+
+        let shell_voxels_f = 1.0;
+        let field =
+            build_smoothed_cavity_scalar_field(&grid, &solid, &keep, &dist, shell_voxels_f, 9);
+
+        for z in 0..5 {
+            for y in 0..5 {
+                let i = grid.idx(1, y, z);
+                assert!(
+                    field[i] >= 0.0,
+                    "outer-skin kept voxel (1,{y},{z}) blurred negative: {}",
+                    field[i]
+                );
+            }
+        }
+    }
+
     #[test]
     fn parity_refinement_clears_enclosed_non_surface_cavity_component() {
         let grid = GridSpec {
@@ -3930,6 +4758,206 @@ mod tests {
             !solid[cavity_index],
             "parity refinement should clear the enclosed cavity center"
         );
+    }
+
+    #[test]
+    fn removed_voxel_collectors_emit_boundary_only_not_full_interior() {
+        // 7x7x7 grid; a 5x5x5 solid block occupies indices 1..=5 on every
+        // axis. Its outer 1-voxel-thick layer is "kept" (the shell), leaving
+        // an inner 3x3x3 sub-block (indices 2..=4) as the removed cavity.
+        // Of those 27 removed voxels, only the very center one (3,3,3) has
+        // no face-adjacent kept neighbor - the other 26 sit on the visible
+        // cavity wall and must still be emitted.
+        let grid = GridSpec {
+            nx: 7,
+            ny: 7,
+            nz: 7,
+            voxel_mm: 1.0,
+            min: Vec3::new(0.0, 0.0, 0.0),
+        };
+
+        let mut solid = vec![false; grid.nx * grid.ny * grid.nz];
+        let mut keep = vec![false; solid.len()];
+
+        for z in 1..=5 {
+            for y in 1..=5 {
+                for x in 1..=5 {
+                    let i = grid.idx(x, y, z);
+                    solid[i] = true;
+                    if x == 1 || x == 5 || y == 1 || y == 5 || z == 1 || z == 5 {
+                        keep[i] = true;
+                    }
+                }
+            }
+        }
+
+        let center_index = grid.idx(3, 3, 3);
+        let boundary_index = grid.idx(2, 2, 2);
+        assert!(solid[center_index] && !keep[center_index]);
+        assert!(solid[boundary_index] && !keep[boundary_index]);
+
+        let indices = collect_removed_voxel_indices(&grid, &solid, &keep);
+        assert_eq!(
+            indices.len(),
+            26,
+            "expected only the 26 shell-adjacent removed voxels, not the full 27-voxel interior"
+        );
+        assert!(
+            !indices.contains(&(center_index as u32)),
+            "fully-occluded interior voxel should be excluded"
+        );
+        assert!(
+            indices.contains(&(boundary_index as u32)),
+            "cavity-wall-adjacent voxel should still be included"
+        );
+
+        let centers = collect_removed_voxel_centers(&grid, &solid, &keep);
+        assert_eq!(centers.len(), 26 * 3);
+    }
+
+    #[test]
+    fn lasso_selection_returns_full_through_depth_cavity_column_not_just_boundary() {
+        // 5x5x5 solid block; the outer 1-voxel shell (any coord in {0, 4}) is
+        // kept, leaving the inner 3x3x3 (coords 1..=3) as the removed cavity.
+        // The dead-center voxel (2,2,2) is fully occluded (all 6 face
+        // neighbours are also removed), so the boundary filter drops it from
+        // the rendered/exported set — that is exactly the surface-peel
+        // regression this Rust selection restores.
+        let grid = GridSpec {
+            nx: 5,
+            ny: 5,
+            nz: 5,
+            voxel_mm: 1.0,
+            min: Vec3::new(0.0, 0.0, 0.0),
+        };
+
+        let mut solid = vec![false; grid.nx * grid.ny * grid.nz];
+        let mut keep = vec![false; solid.len()];
+        for z in 0..5 {
+            for y in 0..5 {
+                for x in 0..5 {
+                    let i = grid.idx(x, y, z);
+                    solid[i] = true;
+                    let is_shell = x == 0 || x == 4 || y == 0 || y == 4 || z == 0 || z == 4;
+                    if is_shell {
+                        keep[i] = true;
+                    }
+                }
+            }
+        }
+
+        // Analytic top-down orthographic view_proj (looking down -Z), so every
+        // Z layer projects to the SAME screen x/y — a through-depth column.
+        // ndc = world * 0.4 - 1  (world in [0,5] -> ndc in [-1,1]); w = 1.
+        // Column-major (as Matrix4.toArray produces), matching THREE:
+        //   clip.x = 0.4*wx - 1, clip.y = 0.4*wy - 1, clip.z = 0.4*wz - 1, w = 1.
+        let view_proj: [f32; 16] = [
+            0.4, 0.0, 0.0, 0.0, // col 0
+            0.0, 0.4, 0.0, 0.0, // col 1
+            0.0, 0.0, 0.4, 0.0, // col 2
+            -1.0, -1.0, -1.0, 1.0, // col 3 (translation)
+        ];
+        let rect_w = 100.0_f32;
+        let rect_h = 100.0_f32;
+        // Identity model transform so projection is purely the analytic view.
+        let identity_quat = [0.0_f32, 0.0, 0.0, 1.0];
+        let geom_center = Vec3::ZERO;
+        let scale = Vec3::new(1.0, 1.0, 1.0);
+        let position = Vec3::ZERO;
+
+        // A voxel center (cx, cy) projects to pixel:
+        //   px = ((0.4*cx - 1) + 1) * 0.5 * 100 = 0.4*cx*50 = 20*cx
+        //   py = (1 - (0.4*cy - 1)) * 0.5 * 100 = (2 - 0.4*cy)*50 = 100 - 20*cy
+        // Center column x=y=2 -> center (2.5,2.5) -> px=50, py=50.
+        // Corner column x=y=1 -> center (1.5,1.5) -> px=30, py=70.
+        // A tight polygon around (50,50) selects ONLY the x=y=2 column and
+        // excludes the (1,1,*) column at (30,70).
+        let polygon: Vec<[f32; 2]> = vec![[45.0, 45.0], [55.0, 45.0], [55.0, 55.0], [45.0, 55.0]];
+
+        let selected = select_removed_voxels_in_polygon(
+            &grid,
+            &solid,
+            &keep,
+            identity_quat,
+            &polygon,
+            &view_proj,
+            rect_w,
+            rect_h,
+            geom_center,
+            scale,
+            identity_quat,
+            position,
+        );
+
+        // The full through-depth center column (z = 1, 2, 3) must be selected,
+        // INCLUDING the fully-occluded interior voxel (2,2,2).
+        let center_deep = grid.idx(2, 2, 2);
+        let center_near = grid.idx(2, 2, 1);
+        let center_far = grid.idx(2, 2, 3);
+        assert!(
+            selected.contains(&(center_deep as u32)),
+            "the fully-occluded interior voxel (2,2,2) must be selected (through-depth)"
+        );
+        assert!(
+            selected.contains(&(center_near as u32)),
+            "near-layer center voxel (2,2,1) must be selected"
+        );
+        assert!(
+            selected.contains(&(center_far as u32)),
+            "far-layer center voxel (2,2,3) must be selected"
+        );
+
+        // Exactly the three cavity voxels of the center column — nothing else.
+        assert_eq!(
+            selected.len(),
+            3,
+            "only the x=y=2 cavity column (3 removed voxels) should be selected"
+        );
+
+        // A removed voxel that projects OUTSIDE the polygon must be excluded.
+        let outside = grid.idx(1, 1, 2); // projects to (30, 70)
+        assert!(
+            solid[outside] && !keep[outside],
+            "(1,1,2) is a removed cavity voxel"
+        );
+        assert!(
+            !selected.contains(&(outside as u32)),
+            "a cavity voxel projecting outside the polygon must be excluded"
+        );
+    }
+
+    #[test]
+    fn blocked_voxel_collector_drops_stale_indices_and_stays_positionally_aligned() {
+        let grid = GridSpec {
+            nx: 3,
+            ny: 3,
+            nz: 3,
+            voxel_mm: 1.0,
+            min: Vec3::new(0.0, 0.0, 0.0),
+        };
+
+        let mut solid = vec![false; grid.nx * grid.ny * grid.nz];
+        let first = grid.idx(1, 1, 1);
+        let second = grid.idx(2, 1, 1);
+        solid[first] = true;
+        solid[second] = true;
+
+        let not_solid = grid.idx(0, 0, 0);
+        let out_of_bounds = solid.len() + 4;
+        let blocked = vec![first, out_of_bounds, not_solid, second];
+
+        let (centers, accepted) = collect_blocked_voxel_data(&grid, &solid, &blocked);
+
+        // Acceptance must mirror the `keep[blocked_index] = true` rule
+        // exactly: in-bounds AND solid.
+        assert_eq!(accepted, vec![first as u32, second as u32]);
+        assert_eq!(centers.len(), accepted.len() * 3);
+
+        // Entry i of `centers` describes `accepted[i]` - after dropping the
+        // two stale entries the second center must be `second`'s, not
+        // `not_solid`'s.
+        let expected = grid.center_world(2, 1, 1);
+        assert_eq!(&centers[3..6], &[expected.x, expected.y, expected.z]);
     }
 
     #[test]

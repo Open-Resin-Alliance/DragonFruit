@@ -45,6 +45,7 @@ import {
   type SavedCustomThemeProfile,
 } from '@/components/settings/themeCustomizations';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { Tooltip } from '@/components/ui/Tooltip';
 import {
   DEFAULT_SPACEMOUSE_SETTINGS,
   getSavedSpaceMouseSettings,
@@ -131,6 +132,12 @@ const DEFAULT_HOVER_TINT_STRENGTH = 0.5;
 const DEFAULT_SELECTED_TINT_STRENGTH = 0.75;
 const DRAGONFRUIT_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? '0.0.0';
 const DRAGONFRUIT_BUILD_CHANNEL = (process.env.NEXT_PUBLIC_BUILD_CHANNEL ?? 'mainline').trim().toLowerCase();
+const DRAGONFRUIT_GIT_COMMIT = process.env.NEXT_PUBLIC_GIT_COMMIT ?? '';
+const DRAGONFRUIT_GIT_REF = process.env.NEXT_PUBLIC_GIT_REF ?? '';
+// e.g. "dev @ 62e80c79b" — identifies the exact build behind a version number.
+const DRAGONFRUIT_GIT_BUILD_LABEL = DRAGONFRUIT_GIT_COMMIT
+  ? `${DRAGONFRUIT_GIT_REF ? `${DRAGONFRUIT_GIT_REF} @ ` : ''}${DRAGONFRUIT_GIT_COMMIT}`
+  : '';
 const ORA_LOGO_DARK_URL = '/dragonfruit_assets/branding/open_resin_alliance_logo_darkmode.png';
 const DRAGONFRUIT_REPO_URL = 'https://github.com/Open-Resin-Alliance/DragonFruit';
 const DEFAULT_SLICING_THUMBNAIL_RENDER_SETTINGS: SlicingThumbnailRenderSettings = {
@@ -237,6 +244,17 @@ export function SettingsModal({
   initialTab,
 }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTabKey>(initialTab ?? 'general');
+
+  const [copied, setCopied] = useState(false);
+  const handleCopyBuildInfo = React.useCallback(async () => {
+    // Full build identity in one string — what a bug report needs.
+    const buildInfo = `DragonFruit ${DRAGONFRUIT_VERSION} (${DRAGONFRUIT_BUILD_CHANNEL})${DRAGONFRUIT_GIT_BUILD_LABEL ? ` — ${DRAGONFRUIT_GIT_BUILD_LABEL}` : ''}`;
+    try {
+      await navigator.clipboard.writeText(buildInfo);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* clipboard unavailable */ }
+  }, []);
 
   // Language is a draft like every other setting: changing the switcher only
   // updates draftLocale; the actual loadLocale happens in handleApply.
@@ -1211,7 +1229,7 @@ export function SettingsModal({
             }}
           >
             <div className="h-full min-h-0 overflow-y-auto custom-scrollbar pr-1 flex flex-col">
-              <div className="space-y-1.5">
+              <div className="space-y-1">
                 {sidebarTopTabs.map((tab) => {
                   const meta = tabMeta[tab];
                   const Icon = meta.icon;
@@ -1223,7 +1241,7 @@ export function SettingsModal({
                       key={tab}
                       type="button"
                       onClick={() => setActiveTab(tab)}
-                      className="w-full rounded-lg border px-3 py-2.5 text-left transition-all duration-150"
+                      className="w-full rounded-lg border px-3 py-2 text-left transition-all duration-150"
                       style={active
                         ? {
                           borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
@@ -1235,9 +1253,9 @@ export function SettingsModal({
                           background: 'var(--surface-1)',
                         }}
                     >
-                      <div className="flex items-start gap-2.5">
+                      <div className="flex items-center gap-2">
                         <span
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border"
                           style={{
                             borderColor: active
                               ? `color-mix(in srgb, ${tabColor}, var(--border-subtle) 30%)`
@@ -1263,7 +1281,7 @@ export function SettingsModal({
                 })}
               </div>
 
-              <div className="mt-auto space-y-1.5 pt-3">
+              <div className="mt-auto space-y-1 pt-3">
                 {sidebarBottomTabs.map((tab) => {
                   const meta = tabMeta[tab];
                   const Icon = meta.icon;
@@ -1276,7 +1294,7 @@ export function SettingsModal({
                       type="button"
                       aria-disabled={false}
                       onClick={() => setActiveTab(tab)}
-                      className="w-full rounded-lg border px-3 py-2.5 text-left transition-all duration-150"
+                      className="w-full rounded-lg border px-3 py-2 text-left transition-all duration-150"
                       style={{
                         ...(active
                           ? {
@@ -1290,9 +1308,9 @@ export function SettingsModal({
                           }),
                       }}
                     >
-                      <div className="flex items-start gap-2.5">
+                      <div className="flex items-center gap-2">
                         <span
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border"
                           style={{
                             borderColor: active
                               ? `color-mix(in srgb, ${tabColor}, var(--border-subtle) 30%)`
@@ -1321,15 +1339,6 @@ export function SettingsModal({
           </div>
 
           <div className={usesInternalTabScrollLayout ? 'flex-1 min-h-0 flex flex-col p-4' : 'flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4'}>
-            {activeTab !== 'about' && activeTab !== 'updates' && (
-              <div className="mb-3 rounded-lg border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
-                <div className="flex items-center gap-2">
-                  <ActiveTabIcon className="h-4 w-4" style={{ color: activeTabColor }} />
-                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{tabMeta[activeTab].label}</h3>
-                </div>
-                <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>{tabMeta[activeTab].description}</p>
-              </div>
-            )}
 
             <div key={activeTab} className={usesInternalTabScrollLayout ? 'animate-[settingsTabIn_180ms_ease-out] flex-1 min-h-0 flex flex-col' : 'animate-[settingsTabIn_180ms_ease-out]'}>
               {activeTab === 'general' && (
@@ -1504,23 +1513,39 @@ export function SettingsModal({
                           </span>
                         </div>
 
-                        <div className="mt-3 flex flex-wrap items-center justify-center gap-2.5">
-                          <span
-                            className="inline-flex rounded-full border px-2.5 py-0.5 text-[12px] font-semibold tabular-nums"
-                            style={{
-                              color: 'var(--text-strong)',
-                              borderColor: 'color-mix(in srgb, var(--border-subtle), white 8%)',
-                              background: 'color-mix(in srgb, var(--surface-1), transparent 8%)',
-                            }}
-                          >
-                            Version {DRAGONFRUIT_VERSION}
-                          </span>
-                          <span
-                            className="inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-semibold"
-                            style={buildStatusStyle}
-                          >
-                            {buildStatusLabel}
-                          </span>
+                        <div className="mt-3 flex flex-col items-center gap-2">
+                          <div className="flex flex-wrap items-center justify-center gap-2.5">
+                            <Tooltip
+                              content={
+                                <span className="whitespace-pre-line">
+                                  Click to copy build info{DRAGONFRUIT_GIT_BUILD_LABEL ? `\n${DRAGONFRUIT_GIT_BUILD_LABEL}` : ''}
+                                </span>
+                              }
+                            >
+                              <span
+                                role="button"
+                                tabIndex={0}
+                                onClick={handleCopyBuildInfo}
+                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCopyBuildInfo(); } }}
+                                className="inline-flex cursor-pointer items-center rounded-full border px-2.5 py-0.5 text-[12px] font-semibold tabular-nums transition-colors"
+                                style={{
+                                  color: copied ? '#2d8a4e' : 'var(--text-strong)',
+                                  borderColor: copied ? '#2d8a4e' : 'color-mix(in srgb, var(--border-subtle), white 8%)',
+                                  background: copied
+                                    ? 'rgba(45,138,78,0.1)'
+                                    : 'color-mix(in srgb, var(--surface-1), transparent 8%)',
+                                }}
+                              >
+                                {copied ? '✓ Copied!' : `Version ${DRAGONFRUIT_VERSION}`}
+                              </span>
+                            </Tooltip>
+                            <span
+                              className="inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-semibold"
+                              style={buildStatusStyle}
+                            >
+                              {buildStatusLabel}
+                            </span>
+                          </div>
                         </div>
                       </div>
 

@@ -1,0 +1,7 @@
+[toolchain]
+channel = "1.97.0"
+targets = [
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+  # iOS: add "aarch64-apple-ios-sim" (simulator) and/or "aarch64-apple-ios" (device)
+]

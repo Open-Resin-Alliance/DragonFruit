@@ -1,6 +1,16 @@
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import type { ModelHolePunchPlacement } from './types';
+import type { ModelHolePunchPlacement, ModelHollowingModifier } from './types';
+import { resolveModelMeshModifiers } from './meshModifierStore';
+import {
+  buildRotationSignature,
+  computeVoxelResolution,
+  getRotationQuatTuple,
+  getUniformScaleFactorForThickness,
+  hashBlockedVoxelIndices,
+  resolveBlockedVoxelValidity,
+  worldMmToLocalMm,
+} from './hollowingGrid';
 import { hollowFromGeometry, type HollowOptions } from '@/utils/meshHollowing';
 import { punchFromGeometry, type PunchOptions } from '@/utils/meshPunching';
 import { splitClassifiedSupportGeometry } from '@/features/scene/splitClassifiedSupports';
@@ -31,8 +41,27 @@ function computeGeometrySignature(geometry: THREE.BufferGeometry): string {
   return `${geometry.uuid}:${vertexCount}:${positionVersion}:${indexVersion}`;
 }
 
+// The blocked voxels forwarded to slice-time hollowing (and folded into the
+// cache signature) must be the same list. Item #7's invalidation effect clears
+// stale blockers in the UI; if a stale set still reaches slice time (rotation
+// changed in the same frame, or the effect never ran), dropping them beats
+// hollowing against a mismatched grid. Callers pass the store-resolved
+// `hollowing`, never `model.meshModifiers?.hollowing` directly.
+function getEffectiveBlockedVoxelIndices(
+  model: LoadedModel,
+  hollowing: ModelHollowingModifier,
+): number[] {
+  const blocked = hollowing.blockedVoxelIndices ?? [];
+  if (blocked.length === 0) return blocked;
+  const currentQuat = getRotationQuatTuple(model.transform.rotation);
+  if (resolveBlockedVoxelValidity(hollowing, currentQuat) === 'stale') {
+    return [];
+  }
+  return blocked;
+}
+
 function buildModifierSignature(model: LoadedModel): string | null {
-  const modifiers = model.meshModifiers;
+  const modifiers = resolveModelMeshModifiers(model);
   const hollowing = modifiers?.hollowing?.enabled && !modifiers.hollowing.bakedIntoGeometry
     ? modifiers.hollowing
     : null;
@@ -54,6 +83,20 @@ function buildModifierSignature(model: LoadedModel): string | null {
       infillCellMm: hollowing.infillCellMm ?? 4.2426,
       infillBeamRadiusMm: hollowing.infillBeamRadiusMm ?? 0.35,
       openFace: hollowing.openFace,
+      // Rotation and scale change the Rust voxel grid; the blocker hash changes
+      // the keep mask. Geometry version does not change on transform (rotation
+      // is a transform, geometry is local-space), so without these the cache
+      // would serve a cavity computed at a stale rotation/scale/blocker set.
+      // Hash (not the raw array) keeps the key O(1)-sized for large lasso
+      // selections (audit #23); it covers the *effective* (validity-filtered)
+      // list so the signature matches what is actually forwarded.
+      rotation: buildRotationSignature(model.transform.rotation),
+      scaleFactor: Number(
+        getUniformScaleFactorForThickness(model.transform.scale).toFixed(6),
+      ),
+      blockedVoxelIndicesHash: hashBlockedVoxelIndices(
+        getEffectiveBlockedVoxelIndices(model, hollowing),
+      ),
     } : null,
     holePunches: punches.map((placement) => ({
       centerNorm: placement.centerNorm,
@@ -205,7 +248,10 @@ export async function prepareModelGeometryForOutput(model: LoadedModel): Promise
     }
   }
 
-  const modifiers = model.meshModifiers;
+  // Model objects in React state deliberately carry meshModifiers: undefined
+  // (externalized store) — resolve through the store or unbaked hollowing is
+  // silently skipped at slice/export time.
+  const modifiers = resolveModelMeshModifiers(model);
   const hollowing = modifiers?.hollowing;
   const shouldApplyHollowing = Boolean(hollowing?.enabled && !hollowing.bakedIntoGeometry);
   // Hole punches are never auto-applied during slice/export — the user must
@@ -232,15 +278,27 @@ export async function prepareModelGeometryForOutput(model: LoadedModel): Promise
 
   if (shouldApplyHollowing && hollowing) {
     const maxExtent = Math.max(sourceBounds.size.x, sourceBounds.size.y, sourceBounds.size.z);
-    const voxelResolution = Math.min(192, Math.max(24, Math.round(maxExtent / Math.max(0.05, hollowing.voxelSizeMm))));
+    // The voxel grid lives in the model's local space, so world-space mm params
+    // (voxel size, shell thickness, infill dims) must be converted to local mm
+    // before hollowing — the same conversion the preview (buildHollowingOptions)
+    // and Apply paths already apply. For unscaled models this is an exact no-op
+    // (worldMmToLocalMm(v, 1) === max(1e-4, v)); scaled models now slice against
+    // the same grid the preview showed, so forwarded blockers land on the right
+    // voxels.
+    const scaleFactor = getUniformScaleFactorForThickness(model.transform.scale);
+    const voxelResolution = computeVoxelResolution(
+      worldMmToLocalMm(hollowing.voxelSizeMm, scaleFactor),
+      maxExtent,
+    );
     const quat = new THREE.Quaternion().setFromEuler(model.transform.rotation);
     const hollowOptions: HollowOptions = {
       mode: hollowing.mode,
       voxelResolution,
-      shellThicknessMm: hollowing.shellThicknessMm,
+      shellThicknessMm: worldMmToLocalMm(hollowing.shellThicknessMm, scaleFactor),
+      blockedVoxelIndices: getEffectiveBlockedVoxelIndices(model, hollowing),
       infillMode: hollowing.infillMode ?? 'lattice',
-      infillCellMm: hollowing.infillCellMm ?? 4.2426,
-      infillBeamRadiusMm: hollowing.infillBeamRadiusMm ?? 0.35,
+      infillCellMm: worldMmToLocalMm(hollowing.infillCellMm ?? 4.2426, scaleFactor),
+      infillBeamRadiusMm: worldMmToLocalMm(hollowing.infillBeamRadiusMm ?? 0.35, scaleFactor),
       openFace: hollowing.openFace,
       drainHoles: [],
       previewCavityOnly: false,

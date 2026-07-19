@@ -60,6 +60,7 @@ fn default_dither_device_gamma() -> f64 {
 }
 
 mod plugin_registry;
+mod window_state;
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::Deserialize;
@@ -2756,12 +2757,11 @@ async fn focus_main_window_command(app: DragonFruitAppHandle) -> Result<(), Stri
 async fn reveal_main_window_command(app: DragonFruitAppHandle) -> Result<(), String> {
     // Show the main window first so there is no gap between splash close and
     // main window appearance (which would expose the desktop for a frame).
-    // Maximize before show so the window is already at full size when it
-    // becomes visible — avoids a two-step resize flash on Windows.
+    // Geometry (restored session state or first-launch maximize) was already
+    // applied at window creation, so showing here causes no resize flash.
     if let Some(window) = app.get_webview_window("main") {
         let is_visible = window.is_visible().unwrap_or(true);
         if !is_visible {
-            let _ = window.maximize();
             // Re-enable taskbar entry just before we make the window visible.
             #[cfg(target_os = "windows")]
             let _ = window.set_skip_taskbar(false);
@@ -3268,6 +3268,8 @@ fn main() {
     let builder = builder.setup(|app| {
         let app_handle = app.handle().clone();
 
+        app.manage(window_state::WindowStateTracker::default());
+
         // Defer main window creation to an async task so the splashscreen's
         // WebView2 instance fully initialises before the main window's does.
         // On Windows, simultaneous WebView2 init produces a brief window flash
@@ -3306,12 +3308,22 @@ fn main() {
             let builder = builder.skip_taskbar(true);
 
             match builder.build() {
-                Ok(_window) => {
+                Ok(window) => {
+                    // Restore the previous session's geometry while the window
+                    // is still hidden; first launch keeps the maximized default.
+                    match window_state::load(&app_handle) {
+                        Some(state) => window_state::restore(&window, &state),
+                        None => {
+                            let _ = window.maximize();
+                        }
+                    }
+                    window_state::track(&window);
+
                     // On macOS, reveal immediately so a frontend startup hiccup
                     // can't leave the app invisible when created as hidden.
                     #[cfg(target_os = "macos")]
                     {
-                        if let Err(error) = _window.show() {
+                        if let Err(error) = window.show() {
                             log::warn!("Failed to show main window during setup: {error}");
                         }
                     }
@@ -3420,6 +3432,8 @@ fn main() {
             mesh_repair::mesh_hollow_preview_read_removed_voxel_centers,
             mesh_repair::mesh_hollow_preview_read_removed_voxel_indices,
             mesh_repair::mesh_hollow_preview_read_blocked_voxel_centers,
+            mesh_repair::mesh_hollow_preview_read_blocked_voxel_indices,
+            mesh_repair::mesh_hollow_preview_select_removed_voxels_in_polygon,
             mesh_repair::mesh_hollow_preview_read_cavity_positions,
             mesh_repair::mesh_hollow_staged_read_cavity_positions,
             mesh_repair::mesh_punch_staged,
@@ -3437,6 +3451,16 @@ fn main() {
             updater_channel::get_saved_update_channel,
             updater_channel::save_update_channel
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running DragonFruit desktop app");
+        .build(tauri::generate_context!())
+        .expect("error while running DragonFruit desktop app")
+        .run(|app_handle, event| {
+            // CloseRequested does not fire on macOS Cmd+Q, so also flush the
+            // tracked window state when the app itself is quitting.
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                window_state::save(app_handle);
+            }
+        });
 }

@@ -68,7 +68,9 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: |
+            ./src-tauri -> target
+            ./rust/dragonfruit-voxl-thumbnail -> target
           shared-key: tauri
 
       - name: Install frontend dependencies
@@ -90,6 +92,9 @@ jobs:
           echo "APPLE_ID=$APPLE_ID" >> "$GITHUB_ENV"
           echo "APPLE_PASSWORD=$APPLE_PASSWORD" >> "$GITHUB_ENV"
           echo "APPLE_TEAM_ID=MHNF3GA2MM" >> "$GITHUB_ENV"
+
+      - name: Generate plugin registry
+        run: node scripts/generate-plugin-registry.mjs
 
       - name: Generate plugin registry
         run: node scripts/generate-plugin-registry.mjs

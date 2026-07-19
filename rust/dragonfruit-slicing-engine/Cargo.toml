@@ -20,9 +20,10 @@ base64 = "0.22"
 aes = "0.8"
 cbc = "0.1"
 sha2 = "0.10"
-time = "=0.3.36"
-time-core = "=0.1.2"
+time = "=0.3.47"
+time-core = "=0.1.8"
 crossbeam-channel = "0.5.15"
+sysinfo = "0.39.6"
 
 md-5 = "0.10"
 [dev-dependencies]

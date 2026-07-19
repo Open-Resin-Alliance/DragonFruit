@@ -3,13 +3,36 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { msg } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
+import type { MessageDescriptor } from '@lingui/core';
 import { detectIsIOS } from '@/hooks/usePlatform';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
 import { AlertTriangle, CheckCircle2, ChevronDown, Download, Gamepad2, LayoutGrid, Loader2, Maximize2, Minimize2, Play, Plus, Printer, Redo2, RefreshCw, Trash2, Undo2, Wrench, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
+import { SceneOverlays } from '@/components/organisms/scene/SceneOverlays';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
+import { PreparePanelStack } from '@/components/organisms/panels/PreparePanelStack';
+import { AnalysisPanelStack } from '@/components/organisms/panels/AnalysisPanelStack';
+import { ExportPanelStack } from '@/components/organisms/panels/ExportPanelStack';
+import { PrintingPanelStack } from '@/components/organisms/panels/PrintingPanelStack';
+import { SharedPanelStack } from '@/components/organisms/panels/SharedPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
+import { NotificationStack } from '@/components/organisms/NotificationStack';
+import { EditorLayout } from '@/components/templates/EditorLayout';
+import { PrintingPreviewPane } from '@/components/organisms/PrintingPreviewPane';
+import { DiagnosticsModals } from '@/components/organisms/modals/DiagnosticsModals';
+import { PrintingModals } from '@/components/organisms/modals/PrintingModals';
+import { SceneFileModals } from '@/components/organisms/modals/SceneFileModals';
+import { ModifierModals } from '@/components/organisms/modals/ModifierModals';
+import { MeshRepairModals } from '@/components/organisms/modals/MeshRepairModals';
+import { useMirrorManager } from '@/features/mirror/useMirrorManager';
+import { useArrangeManager } from '@/features/scene/arrange/useArrangeManager';
+import { useHolePunchManager } from '@/features/hole-punching/useHolePunchManager';
+import { useHollowingManager } from '@/features/hollowing/useHollowingManager';
+import type { HollowingManagerDeps } from '@/features/hollowing/useHollowingManager';
+import { useModifierApplyOverlay } from '@/features/hollowing/useModifierApplyOverlay';
+import { useImportExportManager } from '@/features/import-export/useImportExportManager';
+import type { ImportExportManagerDeps } from '@/features/import-export/useImportExportManager';
 import { GlobalUpdateIndicator } from '@/features/updater/GlobalUpdateIndicator';
 import { EmptySceneState } from '@/components/layout/EmptySceneState';
 import { IslandScanCard } from '@/components/controls/IslandScanCard';
@@ -41,13 +64,13 @@ import { ExportManager } from '@/features/export/logic/ExportManager';
 import { resolveEntirePlateExportBaseName } from '@/features/export/logic/exportFileNaming';
 import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/SlicingPanel';
 import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
+import { usePrintingPreviewManager, type PrintingPreviewManagerDeps } from '@/features/printing/usePrintingPreviewManager';
+import { useEditorToasts } from '@/features/notifications/useEditorToasts';
 import { SliceMetricsDebugModal } from '@/features/slicing/components/SliceMetricsDebugModal';
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
 import { HollowingPanel, type HollowingPanelState } from '../features/hollowing';
 import { HolePunchPanel, type HolePunchPanelState } from '../features/hole-punching/HolePunchPanel';
-import { HolePunchPreviewCylinder } from '@/features/hole-punching/HolePunchPreviewCylinder';
-import { HolePunchGizmo } from '@/features/hole-punching/HolePunchGizmo';
 import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
 import { MirrorTool } from '@/features/mirror/MirrorTool';
 import { bakeWithFlips } from '@/features/mirror/logic/bakeWithFlips';
@@ -55,9 +78,10 @@ import { buildMirrorSupportTransforms, reflectTransformAcrossWorldAxis } from '@
 import type { MirrorAxis } from '@/features/mirror/types';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
-import { IconButton, Toast, ToastViewport } from '@/components/ui/primitives';
+import { IconButton, Toast, ToastViewport } from '@/components/atoms';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
@@ -80,7 +104,97 @@ import {
   shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
 import { computeProjectedFootprintHull, computeProjectedFootprintSize } from '@/utils/modelFootprint';
-import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { bytesToBase64, base64ToBytes } from '@/utils/base64';
+import { snapshotGeometryPositions, geometryFromSnapshot } from '@/utils/geometrySnapshot';
+import {
+  getDirectionScaleFactor,
+  getRadialScaleFactor,
+  getUniformScaleFactorForThickness,
+  worldMmToLocalMm,
+  computeVoxelResolution,
+} from '@/utils/geometryScaling';
+import { serializeHollowingModifier } from '@/features/hollowing/hollowingSerialize';
+import type {
+  HollowPreviewState,
+  HollowPreviewCacheEntry,
+  HollowingSourceEntry,
+  CavityGeometryEntry,
+} from '@/features/hollowing/hollowingPreviewTypes';
+import {
+  createHolePunchWorldFrame,
+  cloneHolePunchWorldFrame,
+  inferOpenFaceFromHit,
+  type HolePunchWorldFrame,
+  type HolePunchPlacementState,
+} from '@/features/hole-punching/holePunchGeometry';
+import {
+  toPersistedHolePunchPlacements,
+  fromPersistedHolePunchPlacements,
+  serializeHolePunchPlacements,
+  serializeSingleHolePunchPlacement,
+} from '@/features/hole-punching/holePunchPersistence';
+import {
+  createGeometryFromPreviewPositions,
+  disposeHollowPreviewCacheEntry,
+  disposeHollowPreviewGeometryIfUncached,
+} from '@/features/hollowing/hollowingPreviewCache';
+import {
+  formatPrintingMonitorEstimatedTime,
+  formatPrintingMonitorUsedMaterial,
+  formatPrintingMonitorAreaMm2,
+  parsePrintingMonitorSeconds,
+  parsePrintingMonitorMaterialMl,
+  parsePrintingMonitorAreaMm2,
+  normalizePrintingMonitorWebcamAspectRatio,
+  resolvePrintingMonitorAbsoluteUrl,
+} from '@/features/printing/printingMonitorFormat';
+import { usePrintingMonitorManager } from '@/features/printing/usePrintingMonitorManager';
+import {
+  readJsonObject,
+  readBooleanField,
+  readStringField,
+  readNumberField,
+} from '@/utils/jsonFields';
+import {
+  PRINTING_MONITOR_DEBUG_CHANNELS,
+  type FleetUploadMaterialOption,
+  type PrintingMonitorRecentPlate,
+  type PrintingMonitorPendingConfirmation,
+  type PrintingMonitorDebugChannelState,
+  type PrintingMonitorDebugState,
+  type PrintingMonitorFeatureToggleResponse,
+  type PrintingMonitorDebugChannel,
+} from '@/features/printing/printingMonitorTypes';
+import {
+  EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT,
+  EMPTY_HOME_KICKSTAND_COLLECTIONS_SNAPSHOT,
+  getHomeSupportCollectionsSnapshot,
+  getHomeKickstandCollectionsSnapshot,
+  type HomeSupportCollectionsSnapshot,
+  type HomeKickstandCollectionsSnapshot,
+} from '@/features/supports/supportSnapshotHelpers';
+import {
+  EXPORT_THUMBNAIL_RENDER_OPTIONS_STORAGE_KEY,
+  DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS,
+  resolveInitialExportThumbnailRenderOptions,
+  type ExportThumbnailRenderOptions,
+} from '@/features/export/exportThumbnailOptions';
+import {
+  PLUGIN_IMPORT_WARNING_DISMISSED_STORAGE_KEY,
+  getFileExtension,
+  getFileNameFromPath,
+  isDragonfruitTempArtifactPath,
+  isSupportedPrepareDropName,
+  getDroppedFileMimeType,
+  isSceneFileName,
+  normalizeActiveVoxlScenePath,
+  extractTauriDroppedPaths,
+  isLikelyFileDragPayload,
+  getPrepareDropSupportStateFromDataTransfer,
+  buildDroppedFilesSignature,
+  type LaunchSceneFileEntry,
+  type SceneFileHandoffPayload,
+} from '@/features/import-export/fileHandling';
 import { getPluginSceneOverlayLoader } from '@/features/plugins/pluginRegistry';
 import {
   type HullCacheEntry,
@@ -163,6 +277,7 @@ import {
   subscribeToPrinterReachability,
 } from '@/features/network/printerReachabilityStore';
 import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
+import { resolveOutputFileExtension } from '@/features/slicing/formats/registry';
 import {
   cleanupStalePrintTempArtifacts,
   deletePrintTempArtifactPath,
@@ -219,8 +334,6 @@ import { useSceneAutosave, suppressSceneAutosave } from '@/hooks/useSceneAutosav
 import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
 import { MeshRepairReportModal } from '@/components/scene/MeshRepairReportModal';
 import { MeshRepairConfirmModal } from '@/components/scene/MeshRepairConfirmModal';
-import { HollowVoxelEditOverlay } from '@/components/scene/HollowVoxelEditOverlay';
-import { HollowVoxelPreview } from '@/components/scene/HollowVoxelPreview';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
@@ -232,7 +345,6 @@ import {
   hollowFromGeometry,
   hollowPreviewFromCapturedSource,
   stageHollowPreviewSource,
-  type HollowOptions,
   type HollowReport,
 } from '@/utils/meshHollowing';
 import {
@@ -252,176 +364,9 @@ interface ShaftHoverDebugDetail {
   point: { x: number; y: number; z: number } | null;
 }
 
-type FleetUploadMaterialOption = {
-  id: string;
-  name: string;
-  layerHeightMm: number | null;
-};
-
-type PrintingMonitorRecentPlate = {
-  plateId: number;
-  name: string;
-  materialProfileName: string | null;
-  lastModifiedEpochSec: number | null;
-  layerCount: number | null;
-  printTimeSec: number | null;
-  usedMaterialMl: number | null;
-  totalSolidAreaMm2: number | null;
-  smallestAreaMm2: number | null;
-  largestAreaMm2: number | null;
-};
-
-type PrintingMonitorPendingConfirmation =
-  | {
-      kind: 'control';
-      action: 'cancel' | 'emergency-stop';
-    }
-  | {
-      kind: 'plate';
-      action: 'start' | 'delete';
-      plateId: number;
-      plateName: string;
-    };
-
-type PrintingMonitorDebugChannelState = {
-  requestedAtEpochMs: number | null;
-  request: Record<string, unknown> | null;
-  httpStatus: number | null;
-  rawPayload: unknown;
-  parsedPayload: unknown;
-  error: string | null;
-};
-
-type PrintingMonitorDebugState = {
-  status: PrintingMonitorDebugChannelState;
-  webcam: PrintingMonitorDebugChannelState;
-  plates: PrintingMonitorDebugChannelState;
-  taskHistory: PrintingMonitorDebugChannelState;
-  taskDetails: PrintingMonitorDebugChannelState;
-};
-
-type PrintingMonitorFeatureToggleResponse = {
-  operation: string;
-  httpStatus: number | null;
-  httpOk: boolean | null;
-  commandOk: boolean | null;
-  payload: unknown;
-  error: string | null;
-  requestedAtEpochMs: number;
-};
-
-const PRINTING_MONITOR_DEBUG_CHANNELS = ['status', 'webcam', 'plates', 'taskHistory', 'taskDetails'] as const;
-type PrintingMonitorDebugChannel = (typeof PRINTING_MONITOR_DEBUG_CHANNELS)[number];
-
 type PendingModifierResetAction = 'hollowing' | 'hole_punch' | 'clear_hollowing';
 
 const EMPTY_SUPPORT_BOUNDS_BY_MODEL_ID = new Map<string, THREE.Box3>();
-
-type HomeSupportSnapshot = ReturnType<typeof getSupportSnapshot>;
-type HomeSupportCollectionsSnapshot = Pick<
-  HomeSupportSnapshot,
-  'trunks' | 'branches' | 'leaves' | 'twigs' | 'sticks' | 'braces' | 'roots' | 'knots'
->;
-
-/**
- * Transforms Float32Array voxel centers from model-local to world space
- * by applying `(center - geometryCenter) * scale * quaternion + position`.
- * Used to render voxel cubes outside the model's rotated group.
- */
-function transformVoxelCentersToWorld(
-  voxelCenters: Float32Array,
-  geometryCenter: THREE.Vector3,
-  scale: THREE.Vector3,
-  quaternion: THREE.Quaternion,
-  position: THREE.Vector3,
-): Float32Array {
-  const count = Math.floor(voxelCenters.length / 3);
-  const out = new Float32Array(voxelCenters.length);
-  const tmp = new THREE.Vector3();
-  for (let i = 0; i < count; i += 1) {
-    const base = i * 3;
-    tmp.set(voxelCenters[base], voxelCenters[base + 1], voxelCenters[base + 2]);
-    tmp.sub(geometryCenter);
-    tmp.multiply(scale);
-    tmp.applyQuaternion(quaternion);
-    tmp.add(position);
-    out[base] = tmp.x;
-    out[base + 1] = tmp.y;
-    out[base + 2] = tmp.z;
-  }
-  return out;
-}
-
-/**
- * Renders HollowVoxelPreview in world space by pre-transforming the voxel
- * centers using the model's position/rotation/scale, then passing meshOffset
- * as zero since positions are already in world coordinates.
- */
-function WorldSpaceVoxelPreview({
-  voxelCenters,
-  voxelSizeMm,
-  modelTransform: { position, quaternion, scale },
-  geometryCenter,
-}: {
-  voxelCenters: Float32Array;
-  voxelSizeMm: number;
-  modelTransform: { position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 };
-  geometryCenter: THREE.Vector3;
-}) {
-  const worldCenters = React.useMemo(
-    () => transformVoxelCentersToWorld(voxelCenters, geometryCenter, scale, quaternion, position),
-    [voxelCenters, geometryCenter, scale, quaternion, position],
-  );
-  return (
-    <HollowVoxelPreview
-      voxelCenters={worldCenters}
-      voxelSizeMm={voxelSizeMm}
-      meshOffset={new THREE.Vector3(0, 0, 0)}
-    />
-  );
-}
-
-/**
- * Renders HollowVoxelEditOverlay in world space (same transform logic).
- */
-function WorldSpaceVoxelEditOverlay({
-  voxelCenters,
-  blockedVoxelCenters,
-  voxelRadiusMm,
-  blockedVoxelIndexSet,
-  modelTransform: { position, quaternion, scale },
-  geometryCenter,
-  onToggleVoxel,
-}: {
-  voxelCenters: Float32Array;
-  blockedVoxelCenters?: Float32Array;
-  voxelRadiusMm: number;
-  blockedVoxelIndexSet: Set<number>;
-  modelTransform: { position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 };
-  geometryCenter: THREE.Vector3;
-  onToggleVoxel?: (voxelIndex: number) => void;
-}) {
-  const worldCenters = React.useMemo(
-    () => transformVoxelCentersToWorld(voxelCenters, geometryCenter, scale, quaternion, position),
-    [voxelCenters, geometryCenter, scale, quaternion, position],
-  );
-  const worldBlockedCenters = React.useMemo(
-    () => blockedVoxelCenters
-      ? transformVoxelCentersToWorld(blockedVoxelCenters, geometryCenter, scale, quaternion, position)
-      : undefined,
-    [blockedVoxelCenters, geometryCenter, scale, quaternion, position],
-  );
-  return (
-    <HollowVoxelEditOverlay
-      voxelCenters={worldCenters}
-      blockedVoxelCenters={worldBlockedCenters}
-      voxelRadiusMm={voxelRadiusMm}
-      blockedVoxelIndexSet={blockedVoxelIndexSet}
-      meshOffset={new THREE.Vector3(0, 0, 0)}
-      onToggleVoxel={onToggleVoxel}
-    />
-  );
-}
 
 function countRecordEntries(record: Record<string, unknown>): number {
   let count = 0;
@@ -429,256 +374,6 @@ function countRecordEntries(record: Record<string, unknown>): number {
     count += 1;
   }
   return count;
-}
-
-type HomeKickstandSnapshot = ReturnType<typeof getKickstandSnapshot>;
-type HomeKickstandCollectionsSnapshot = Pick<
-  HomeKickstandSnapshot,
-  'kickstands' | 'roots' | 'knots'
->;
-
-type HollowPreviewState = {
-  modelId: string;
-  geometry: THREE.BufferGeometry;
-  infillGeometry: THREE.BufferGeometry | null;
-  removedVoxelCenters: Float32Array;
-  removedVoxelIndices: Uint32Array;
-  blockedVoxelCenters?: Float32Array;
-  report: HollowReport;
-  previewKey: string;
-  /** When true, the geometry is the original source mesh and the cavity
-   *  should be visualized as spheres at removedVoxelCenters instead. */
-  previewVoxelSpheres?: boolean;
-};
-
-type HollowPreviewCacheEntry = {
-  modelId: string;
-  report: HollowReport;
-  positions: Float32Array;
-  infillPositions?: Float32Array;
-  removedVoxelCenters?: Float32Array;
-  removedVoxelIndices?: Uint32Array;
-  blockedVoxelCenters?: Float32Array;
-  previewGeometry?: THREE.BufferGeometry | null;
-  infillGeometry?: THREE.BufferGeometry | null;
-};
-
-type HollowingSourceEntry = {
-  geometry: THREE.BufferGeometry;
-};
-
-/** Stores the per-model interior cavity surface mesh for Interior View Mode. */
-type CavityGeometryEntry = {
-  geometry: THREE.BufferGeometry;
-};
-
-type HolePunchPlacementState = {
-  id: string;
-  modelId: string;
-  worldPoint: THREE.Vector3;
-  worldNormal: THREE.Vector3;
-  worldFrame?: HolePunchWorldFrame;
-  localPoint: THREE.Vector3;
-  localNormal: THREE.Vector3;
-  radiusMm: number;
-  radiusYMm?: number;
-  depthMm: number;
-  depthMode: 'manual' | 'auto';
-};
-
-type HolePunchWorldFrame = {
-  xAxis: THREE.Vector3;
-  yAxis: THREE.Vector3;
-  zAxis: THREE.Vector3;
-};
-
-const HOLE_PUNCH_FRAME_REFERENCE_X = new THREE.Vector3(1, 0, 0);
-const HOLE_PUNCH_FRAME_REFERENCE_Z = new THREE.Vector3(0, 0, 1);
-
-function createHolePunchWorldFrame(worldNormal: THREE.Vector3): HolePunchWorldFrame {
-  const yAxis = worldNormal.clone();
-  if (yAxis.lengthSq() <= 1e-12) {
-    yAxis.set(0, 0, -1);
-  } else {
-    yAxis.normalize();
-  }
-  const displayY = yAxis.clone().negate();
-  const upReference = Math.abs(displayY.dot(HOLE_PUNCH_FRAME_REFERENCE_Z)) < 0.92
-    ? HOLE_PUNCH_FRAME_REFERENCE_Z.clone()
-    : HOLE_PUNCH_FRAME_REFERENCE_X.clone();
-  const displayZ = upReference
-    .sub(displayY.clone().multiplyScalar(upReference.dot(displayY)))
-    .normalize();
-  const xAxis = displayY.clone().cross(displayZ).normalize();
-  const zAxis = displayZ.negate();
-  return { xAxis, yAxis, zAxis };
-}
-
-function cloneHolePunchWorldFrame(frame: HolePunchWorldFrame): HolePunchWorldFrame {
-  return {
-    xAxis: frame.xAxis.clone(),
-    yAxis: frame.yAxis.clone(),
-    zAxis: frame.zAxis.clone(),
-  };
-}
-
-function normalizeDirectionTuple(x: number, y: number, z: number): [number, number, number] {
-  const dir = new THREE.Vector3(x, y, z);
-  if (dir.lengthSq() <= 1e-12) {
-    return [0, 0, -1];
-  }
-  dir.normalize();
-  return [dir.x, dir.y, dir.z];
-}
-
-function toPersistedHolePunchPlacements(
-  model: { geometry: GeometryWithBounds; transform?: ModelTransform },
-  placements: HolePunchPlacementState[],
-): ModelHolePunchPlacement[] {
-  const geometry = model.geometry.geometry;
-  const bbox = geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
-    geometry.getAttribute('position') as THREE.BufferAttribute,
-  );
-  const size = bbox.getSize(new THREE.Vector3());
-  const toNorm = (value: number, min: number, span: number) => (span <= 1e-9 ? 0.5 : (value - min) / span);
-
-  // When a model transform is available, derive localPoint/localNormal from
-  // worldPoint/worldNormal at serialization time so they always stay consistent
-  // with the model's current transform — even if the draft state has drifted
-  // (e.g. after gizmo manipulation). When transform is unavailable (legacy
-  // callers like hollow-apply that only pass a bare geometry), fall back to
-  // the stored localPoint/localNormal in the draft state.
-  let inverseModelMatrix: THREE.Matrix4 | null = null;
-  let inverseNormalMatrix: THREE.Matrix3 | null = null;
-  if (model.transform) {
-    const meshMatrix = new THREE.Matrix4()
-      .compose(
-        model.transform.position.clone(),
-        quaternionFromGlobalEuler(model.transform.rotation),
-        model.transform.scale.clone(),
-      )
-      .multiply(new THREE.Matrix4().makeTranslation(
-        -model.geometry.center.x,
-        -model.geometry.center.y,
-        -model.geometry.center.z,
-      ));
-    inverseModelMatrix = meshMatrix.clone().invert();
-
-    const normalMatrix = new THREE.Matrix3().getNormalMatrix(meshMatrix);
-    inverseNormalMatrix = normalMatrix.clone().invert();
-  }
-
-  return placements.map((placement) => {
-    let localPoint: THREE.Vector3;
-    let localNormal: THREE.Vector3;
-    if (inverseModelMatrix && inverseNormalMatrix) {
-      // Derive from world-space values — always consistent with current transform.
-      localPoint = placement.worldPoint.clone().applyMatrix4(inverseModelMatrix);
-      localNormal = placement.worldNormal
-        .clone()
-        .applyMatrix3(inverseNormalMatrix)
-        .normalize();
-    } else {
-      // Fallback: use stored values (legacy path).
-      localPoint = placement.localPoint;
-      localNormal = placement.localNormal;
-    }
-
-    const direction = normalizeDirectionTuple(localNormal.x, localNormal.y, localNormal.z);
-    return {
-      id: placement.id,
-      centerNorm: [
-        toNorm(localPoint.x, bbox.min.x, size.x),
-        toNorm(localPoint.y, bbox.min.y, size.y),
-        toNorm(localPoint.z, bbox.min.z, size.z),
-      ],
-      radiusMm: placement.radiusMm,
-      radiusYMm: placement.radiusYMm,
-      depthMm: placement.depthMm,
-      direction,
-      depthMode: placement.depthMode,
-    };
-  });
-}
-
-function fromPersistedHolePunchPlacements(
-  model: { id: string; geometry: GeometryWithBounds; transform: ModelTransform },
-  persisted: ModelHolePunchPlacement[],
-): HolePunchPlacementState[] {
-  if (persisted.length === 0) return [];
-
-  const bbox = model.geometry.bbox;
-  const size = model.geometry.size;
-  const toMm = (norm: number, min: number, span: number) => min + (norm * (span <= 1e-9 ? 0 : span));
-
-  const meshMatrix = new THREE.Matrix4()
-    .compose(
-      model.transform.position.clone(),
-      quaternionFromGlobalEuler(model.transform.rotation),
-      model.transform.scale.clone(),
-    )
-    .multiply(new THREE.Matrix4().makeTranslation(
-      -model.geometry.center.x,
-      -model.geometry.center.y,
-      -model.geometry.center.z,
-    ));
-
-  const normalMatrix = new THREE.Matrix3().getNormalMatrix(meshMatrix);
-
-  return persisted.map((placement) => {
-    const localPoint = new THREE.Vector3(
-      toMm(placement.centerNorm[0], bbox.min.x, size.x),
-      toMm(placement.centerNorm[1], bbox.min.y, size.y),
-      toMm(placement.centerNorm[2], bbox.min.z, size.z),
-    );
-
-    const localNormal = new THREE.Vector3(
-      placement.direction[0],
-      placement.direction[1],
-      placement.direction[2],
-    );
-    if (localNormal.lengthSq() <= 1e-12) {
-      localNormal.set(0, 0, -1);
-    } else {
-      localNormal.normalize();
-    }
-
-    const worldPoint = localPoint.clone().applyMatrix4(meshMatrix);
-    const worldNormal = localNormal.clone().applyNormalMatrix(normalMatrix).normalize();
-    const worldFrame = createHolePunchWorldFrame(worldNormal);
-
-    return {
-      id: placement.id,
-      modelId: model.id,
-      worldPoint,
-      worldNormal,
-      worldFrame,
-      localPoint,
-      localNormal,
-      radiusMm: placement.radiusMm,
-      radiusYMm: placement.radiusYMm,
-      depthMm: placement.depthMm,
-      depthMode: placement.depthMode ?? 'manual',
-    };
-  });
-}
-
-function serializeHollowingModifier(modifier: ModelHollowingModifier | null | undefined): string {
-  if (!modifier?.enabled) return 'disabled';
-  return JSON.stringify({
-    enabled: true,
-    blockedVoxelIndices: [...(modifier.blockedVoxelIndices ?? [])].sort((a, b) => a - b),
-    mode: modifier.mode,
-    voxelSizeMm: Number(modifier.voxelSizeMm.toFixed(4)),
-    shellThicknessMm: Number(modifier.shellThicknessMm.toFixed(4)),
-    infillMode: modifier.infillMode ?? 'lattice',
-    infillCellMm: Number((modifier.infillCellMm ?? 4.2426).toFixed(4)),
-    infillBeamRadiusMm: Number((modifier.infillBeamRadiusMm ?? 0.25).toFixed(4)),
-    openFace: modifier.openFace,
-    openFaceSelected: modifier.mode === 'shell_open_face'
-      ? (modifier.openFaceSelected ?? true)
-      : true,
-  });
 }
 
 function areSortedNumberArraysEqual(a: readonly number[], b: readonly number[]): boolean {
@@ -700,373 +395,16 @@ function isKeyboardTargetEditable(target: EventTarget | null): boolean {
   return Boolean(target.closest('[contenteditable="true"]'));
 }
 
-function inferOpenFaceFromHit(
-  hit: THREE.Intersection,
-  fallback: MeshModifierOpenFace,
-): MeshModifierOpenFace {
-  const normal = hit.face?.normal;
-  if (!normal) return fallback;
-
-  const absX = Math.abs(normal.x);
-  const absY = Math.abs(normal.y);
-  const absZ = Math.abs(normal.z);
-
-  if (absX >= absY && absX >= absZ) {
-    return normal.x >= 0 ? 'x_max' : 'x_min';
-  }
-  if (absY >= absX && absY >= absZ) {
-    return normal.y >= 0 ? 'y_max' : 'y_min';
-  }
-  return normal.z >= 0 ? 'z_max' : 'z_min';
-}
-
-function serializeHolePunchPlacements(placements: ModelHolePunchPlacement[]): string {
-  const normalizePlacement = (placement: ModelHolePunchPlacement) => ({
-    id: placement.id,
-    centerNorm: placement.centerNorm.map((value) => Number(value.toFixed(6))),
-    radiusMm: Number(placement.radiusMm.toFixed(4)),
-    radiusYMm: placement.radiusYMm != null ? Number(placement.radiusYMm.toFixed(4)) : undefined,
-    depthMm: Number(placement.depthMm.toFixed(4)),
-    direction: placement.direction.map((value) => Number(value.toFixed(6))),
-    depthMode: placement.depthMode ?? 'manual',
-  });
-
-  const sorted = [...placements]
-    .map(normalizePlacement)
-    .sort((a, b) => a.id.localeCompare(b.id));
-
-  return JSON.stringify(sorted);
-}
-
-function serializeSingleHolePunchPlacement(placement: ModelHolePunchPlacement): string {
-  return JSON.stringify({
-    id: placement.id,
-    centerNorm: placement.centerNorm.map((value) => Number(value.toFixed(6))),
-    radiusMm: Number(placement.radiusMm.toFixed(4)),
-    radiusYMm: placement.radiusYMm != null ? Number(placement.radiusYMm.toFixed(4)) : undefined,
-    depthMm: Number(placement.depthMm.toFixed(4)),
-    direction: placement.direction.map((value) => Number(value.toFixed(6))),
-    depthMode: placement.depthMode ?? 'manual',
-  });
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  if (typeof btoa === 'function') {
-    const CHUNK_SIZE = 0x8000;
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-      const chunk = bytes.subarray(i, i + CHUNK_SIZE);
-      binary += String.fromCharCode(...chunk);
-    }
-    return btoa(binary);
-  }
-
-  if (typeof Buffer !== 'undefined') {
-    return Buffer.from(bytes).toString('base64');
-  }
-
-  throw new Error('Base64 encoding is unavailable in this environment.');
-}
-
-function base64ToBytes(base64: string): Uint8Array {
-  const normalized = base64.replace(/\s+/g, '');
-
-  if (typeof atob === 'function') {
-    const binary = atob(normalized);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes;
-  }
-
-  if (typeof Buffer !== 'undefined') {
-    return new Uint8Array(Buffer.from(normalized, 'base64'));
-  }
-
-  throw new Error('Base64 decoding is unavailable in this environment.');
-}
-
-function snapshotGeometryPositions(geometry: THREE.BufferGeometry): {
-  sourcePositionsBase64: string;
-  sourcePositionCount: number;
-} {
-  const position = geometry.getAttribute('position');
-  if (!(position instanceof THREE.BufferAttribute)) {
-    throw new Error('Geometry has no position attribute.');
-  }
-
-  const floatArray = position.array instanceof Float32Array
-    ? position.array
-    : new Float32Array(position.array);
-  const bytes = new Uint8Array(
-    floatArray.buffer,
-    floatArray.byteOffset,
-    floatArray.byteLength,
-  );
-
-  return {
-    sourcePositionsBase64: bytesToBase64(bytes),
-    sourcePositionCount: position.count,
-  };
-}
-
-function geometryFromSnapshot(snapshot: {
-  sourcePositionsBase64?: string;
-  sourcePositionCount?: number;
-}): THREE.BufferGeometry | null {
-  const base64 = snapshot.sourcePositionsBase64;
-  const count = snapshot.sourcePositionCount;
-  if (!base64 || !Number.isFinite(count) || (count as number) <= 0) {
-    return null;
-  }
-
-  const bytes = base64ToBytes(base64);
-  if (bytes.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
-    return null;
-  }
-
-  const view = new Float32Array(
-    bytes.buffer,
-    bytes.byteOffset,
-    bytes.byteLength / Float32Array.BYTES_PER_ELEMENT,
-  );
-  const positions = new Float32Array(view.length);
-  positions.set(view);
-
-  if (positions.length !== (count as number) * 3) {
-    return null;
-  }
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geometry.computeVertexNormals();
-  geometry.computeBoundingBox();
-  geometry.computeBoundingSphere();
-  return geometry;
-}
-
-function getAbsSafeScaleComponents(scale: THREE.Vector3): THREE.Vector3 {
-  return new THREE.Vector3(
-    Math.max(1e-6, Math.abs(scale.x)),
-    Math.max(1e-6, Math.abs(scale.y)),
-    Math.max(1e-6, Math.abs(scale.z)),
-  );
-}
-
-function getDirectionScaleFactor(direction: THREE.Vector3, scale: THREE.Vector3): number {
-  const dir = direction.clone();
-  if (dir.lengthSq() <= 1e-12) {
-    dir.set(0, 0, -1);
-  } else {
-    dir.normalize();
-  }
-
-  const absScale = getAbsSafeScaleComponents(scale);
-  const scaledDir = new THREE.Vector3(
-    dir.x * absScale.x,
-    dir.y * absScale.y,
-    dir.z * absScale.z,
-  );
-  return Math.max(1e-6, scaledDir.length());
-}
-
-function getRadialScaleFactor(direction: THREE.Vector3, scale: THREE.Vector3): number {
-  const dir = direction.clone();
-  if (dir.lengthSq() <= 1e-12) {
-    dir.set(0, 0, -1);
-  } else {
-    dir.normalize();
-  }
-
-  const helper = Math.abs(dir.z) < 0.9
-    ? new THREE.Vector3(0, 0, 1)
-    : new THREE.Vector3(0, 1, 0);
-
-  const tangentA = helper.clone().cross(dir);
-  if (tangentA.lengthSq() <= 1e-12) {
-    tangentA.set(1, 0, 0);
-  } else {
-    tangentA.normalize();
-  }
-  const tangentB = dir.clone().cross(tangentA).normalize();
-
-  const absScale = getAbsSafeScaleComponents(scale);
-  const scaleAlong = (v: THREE.Vector3) => new THREE.Vector3(
-    v.x * absScale.x,
-    v.y * absScale.y,
-    v.z * absScale.z,
-  ).length();
-
-  const sA = scaleAlong(tangentA);
-  const sB = scaleAlong(tangentB);
-  return Math.max(1e-6, (sA + sB) * 0.5);
-}
-
-function getUniformScaleFactorForThickness(scale: THREE.Vector3): number {
-  const absScale = getAbsSafeScaleComponents(scale);
-  return Math.max(1e-6, (absScale.x + absScale.y + absScale.z) / 3);
-}
-
-function worldMmToLocalMm(worldMm: number, scaleFactor: number): number {
-  return Math.max(1e-4, worldMm / Math.max(1e-6, scaleFactor));
-}
-
-/** Convert a desired voxel size (mm in local space) to a voxel resolution
- *  count, given the model's largest bounding-box extent in local space.
- *  Clamped to [24, 192].
- *
- *  Callers MUST convert world-space voxel size to local space via
- *  `worldMmToLocalMm(voxelSizeMm, scaleFactor)` before calling this. */
-function computeVoxelResolution(voxelSizeMm: number, maxExtent: number): number {
-  const raw = Math.round(maxExtent / Math.max(0.05, voxelSizeMm));
-  return Math.min(192, Math.max(24, raw));
-}
-
-function buildGeometryVersionKey(geometry: THREE.BufferGeometry): string {
-  const position = geometry.getAttribute('position') as THREE.BufferAttribute | null;
-  const index = geometry.getIndex();
-
-  return [
-    geometry.uuid,
-    position?.count ?? 0,
-    position?.version ?? 0,
-    index?.count ?? 0,
-    index?.version ?? 0,
-  ].join(':');
-}
-
-function createGeometryFromPreviewPositions(positions: Float32Array): THREE.BufferGeometry {
-  const copied = new Float32Array(positions.length);
-  copied.set(positions);
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(copied, 3));
-  geometry.computeVertexNormals();
-  geometry.computeBoundingBox();
-  geometry.computeBoundingSphere();
-  return geometry;
-}
-
-function disposeHollowPreviewCacheEntry(entry: HollowPreviewCacheEntry): void {
-  entry.previewGeometry?.dispose();
-  entry.infillGeometry?.dispose();
-}
-
-function isHollowPreviewGeometryCacheOwned(
-  geometry: THREE.BufferGeometry | null,
-  entries: Iterable<HollowPreviewCacheEntry>,
-): boolean {
-  if (!geometry) return false;
-  for (const entry of entries) {
-    if (entry.previewGeometry === geometry || entry.infillGeometry === geometry) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function disposeHollowPreviewGeometryIfUncached(
-  geometry: THREE.BufferGeometry | null,
-  entries: Iterable<HollowPreviewCacheEntry>,
-): void {
-  if (!geometry) return;
-  if (isHollowPreviewGeometryCacheOwned(geometry, entries)) return;
-  geometry.dispose();
-}
-
-const EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT: HomeSupportCollectionsSnapshot = {
-  trunks: {},
-  branches: {},
-  leaves: {},
-  twigs: {},
-  sticks: {},
-  braces: {},
-  roots: {},
-  knots: {},
-};
-
-const EMPTY_HOME_KICKSTAND_COLLECTIONS_SNAPSHOT: HomeKickstandCollectionsSnapshot = {
-  kickstands: {},
-  roots: {},
-  knots: {},
-};
-
 const HOLE_PUNCH_OUTSIDE_PROTRUSION_MM = 3;
 const HOLE_PUNCH_DEPTH_OFFSET_FROM_SHELL_MM = 1;
 const HOLE_PUNCH_AUTO_DEPTH_RAY_START_OFFSET_MM = 0.3;
 const HOLE_PUNCH_AUTO_DEPTH_MIN_INSIDE_MM = 1;
 const HOLLOW_PREVIEW_DEBOUNCE_MS = 90;
-const HOLLOW_PREVIEW_THICKNESS_QUANTUM_MM = 0.2;
-
-function quantizePreviewShellThicknessMm(valueMm: number): number {
-  const clamped = Math.max(0.1, valueMm);
-  return Number((Math.round(clamped / HOLLOW_PREVIEW_THICKNESS_QUANTUM_MM) * HOLLOW_PREVIEW_THICKNESS_QUANTUM_MM).toFixed(3));
-}
 
 function getDefaultHolePunchDepthMm(shellThicknessMm: number): number {
   return Number(
     Math.min(120, Math.max(1, shellThicknessMm + HOLE_PUNCH_DEPTH_OFFSET_FROM_SHELL_MM)).toFixed(1),
   );
-}
-
-let cachedHomeSupportCollectionsSnapshot: HomeSupportCollectionsSnapshot | null = null;
-let cachedHomeKickstandCollectionsSnapshot: HomeKickstandCollectionsSnapshot | null = null;
-
-function getHomeSupportCollectionsSnapshot(): HomeSupportCollectionsSnapshot {
-  const snapshot = getSupportSnapshot();
-  const cached = cachedHomeSupportCollectionsSnapshot;
-
-  if (
-    cached
-    && cached.trunks === snapshot.trunks
-    && cached.branches === snapshot.branches
-    && cached.leaves === snapshot.leaves
-    && cached.twigs === snapshot.twigs
-    && cached.sticks === snapshot.sticks
-    && cached.braces === snapshot.braces
-    && cached.roots === snapshot.roots
-    && cached.knots === snapshot.knots
-  ) {
-    return cached;
-  }
-
-  const next: HomeSupportCollectionsSnapshot = {
-    trunks: snapshot.trunks,
-    branches: snapshot.branches,
-    leaves: snapshot.leaves,
-    twigs: snapshot.twigs,
-    sticks: snapshot.sticks,
-    braces: snapshot.braces,
-    roots: snapshot.roots,
-    knots: snapshot.knots,
-  };
-
-  cachedHomeSupportCollectionsSnapshot = next;
-  return next;
-}
-
-function getHomeKickstandCollectionsSnapshot(): HomeKickstandCollectionsSnapshot {
-  const snapshot = getKickstandSnapshot();
-  const cached = cachedHomeKickstandCollectionsSnapshot;
-
-  if (
-    cached
-    && cached.kickstands === snapshot.kickstands
-    && cached.roots === snapshot.roots
-    && cached.knots === snapshot.knots
-  ) {
-    return cached;
-  }
-
-  const next: HomeKickstandCollectionsSnapshot = {
-    kickstands: snapshot.kickstands,
-    roots: snapshot.roots,
-    knots: snapshot.knots,
-  };
-
-  cachedHomeKickstandCollectionsSnapshot = next;
-  return next;
 }
 
 function installReactDevtoolsSemverGuard() {
@@ -1113,44 +451,10 @@ if (typeof window !== 'undefined') {
   installReactDevtoolsSemverGuard();
 }
 
-type ExportThumbnailRenderOptions = {
-  includeGradient: boolean;
-  includeBuildPlate: boolean;
-  includeGrid: boolean;
-  centerOnModel: boolean;
-};
-
-const EXPORT_THUMBNAIL_RENDER_OPTIONS_STORAGE_KEY = 'dragonfruit.slicing.thumbnailRenderOptions';
-const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
-  includeGradient: false,
-  includeBuildPlate: false,
-  includeGrid: false,
-  centerOnModel: true,
-};
-
-const PLUGIN_SCENE_FILE_TYPES = GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS.flatMap(
-  (def) => (def.fileTypes ?? []).filter((ft) => ft.isSceneFile),
-);
-const PLUGIN_ALL_FILE_TYPES = GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS.flatMap(
-  (def) => def.fileTypes ?? [],
-);
-const PREPARE_DROP_EXTENSIONS = new Set([
-  '.stl', '.obj', '.3mf', '.voxl',
-  ...PLUGIN_ALL_FILE_TYPES.map((ft) => ft.fileExtension),
-]);
-const PLUGIN_IMPORT_WARNING_DISMISSED_STORAGE_KEY =
-  PLUGIN_SCENE_FILE_TYPES.find((ft) => ft.fileExtension === '.lys')?.importWarning?.storageKey
-  ?? 'dragonfruit.lysImportWarningDismissed';
 const COLD_START_SCENE_HANDOFF_DELAY_MS = 1150;
 const REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
 const REMOTE_OFFLINE_LAYER_HEIGHT_CHANGED_EVENT = 'dragonfruit:slicing-remote-offline-layer-height-changed';
 const SUPPORT_DRAG_HOLD_FALLBACK_MS = 320;
-const DEFAULT_MONITOR_BUSY_GRACE_MS = 30_000;
-const REACHABILITY_PROBE_TIMEOUT_MS = 7_500;
-const DEFAULT_WEBCAM_TIMEOUT_COOLDOWN_MS = 20_000;
-const DEFAULT_WEBCAM_FAILURE_COOLDOWN_MS = 8_000;
-const DEFAULT_WEBCAM_MAX_CONSECUTIVE_TIMEOUTS = 3;
-const DEFAULT_RTSP_DEBUG_POLL_MS = 4_000;
 const DEFAULT_RELAY_AUTORETRY_LIMIT = 2;
 const DEFAULT_RELAY_AUTORETRY_DELAY_MS = 1200;
 const RESIN_ESTIMATE_BACKGROUND_REFRESH_MS = 12_000;
@@ -1195,356 +499,6 @@ function createModelTransformKey(modelId: string, transform: ModelTransform): st
   ].join('|');
 }
 
-function getFileExtension(name: string): string {
-  const trimmed = name.trim().toLowerCase();
-  const dotIndex = trimmed.lastIndexOf('.');
-  if (dotIndex < 0 || dotIndex === trimmed.length - 1) return '';
-  return trimmed.slice(dotIndex);
-}
-
-function getFileNameFromPath(path: string): string {
-  const normalized = path.replace(/\\/g, '/');
-  const parts = normalized.split('/').filter(Boolean);
-  return parts[parts.length - 1] ?? path;
-}
-
-function isDragonfruitTempArtifactPath(path: string | null | undefined): boolean {
-  if (typeof path !== 'string') return false;
-  const trimmed = path.trim();
-  if (!trimmed) return false;
-  const name = getFileNameFromPath(trimmed).toLowerCase();
-  return name.startsWith('dragonfruit-slice-');
-}
-
-function isSupportedPrepareDropName(name: string): boolean {
-  return PREPARE_DROP_EXTENSIONS.has(getFileExtension(name));
-}
-
-function getDroppedFileMimeType(name: string): string {
-  const ext = getFileExtension(name);
-  if (ext === '.stl') return 'model/stl';
-  if (ext === '.obj') return 'model/obj';
-  if (ext === '.3mf') return 'model/3mf';
-  if (ext === '.voxl') return 'application/json';
-  const pluginType = PLUGIN_ALL_FILE_TYPES.find((ft) => ft.fileExtension === ext);
-  return pluginType?.mimeType ?? 'application/octet-stream';
-}
-
-function isSceneFileName(name: string): boolean {
-  const ext = getFileExtension(name);
-  if (ext === '.voxl') return true;
-  return PLUGIN_SCENE_FILE_TYPES.some((ft) => ft.fileExtension === ext);
-}
-
-function normalizeActiveVoxlScenePath(path: string | null | undefined): string | null {
-  if (typeof path !== 'string') return null;
-  const trimmed = path.trim();
-  if (!trimmed) return null;
-  return getFileExtension(trimmed) === '.voxl' ? trimmed : null;
-}
-
-type LaunchSceneFileEntry = {
-  path: string;
-  name: string;
-};
-
-type SceneFileHandoffPayload = {
-  paths?: string[];
-  source?: string;
-};
-
-function extractTauriDroppedPaths(payload: unknown): string[] {
-  const isStringArray = (value: unknown): value is string[] => (
-    Array.isArray(value) && value.every((item) => typeof item === 'string')
-  );
-
-  if (isStringArray(payload)) {
-    return payload;
-  }
-
-  if (payload && typeof payload === 'object' && 'paths' in payload) {
-    const candidate = (payload as { paths?: unknown }).paths;
-    if (isStringArray(candidate)) {
-      return candidate;
-    }
-  }
-
-  return [];
-}
-
-function isLikelyFileDragPayload(dataTransfer: DataTransfer | null): boolean {
-  if (!dataTransfer) return false;
-  if ((dataTransfer.files?.length ?? 0) > 0) return true;
-  if (Array.from(dataTransfer.items ?? []).some((item) => item.kind === 'file')) return true;
-  if (Array.from(dataTransfer.types ?? []).includes('Files')) return true;
-  // Desktop runtime drags may not expose file metadata until drop.
-  return true;
-}
-
-function getPrepareDropSupportStateFromDataTransfer(dataTransfer: DataTransfer | null): 'supported' | 'unsupported' | 'unknown' {
-  if (!dataTransfer) return 'unknown';
-
-  const fileNames = new Set<string>();
-
-  const directFiles = Array.from(dataTransfer.files ?? []);
-  for (const file of directFiles) {
-    if (typeof file.name === 'string' && file.name.trim().length > 0) {
-      fileNames.add(file.name.trim());
-    }
-  }
-
-  const items = Array.from(dataTransfer.items ?? []);
-  for (const item of items) {
-    if (item.kind !== 'file') continue;
-    try {
-      const file = item.getAsFile();
-      if (file && typeof file.name === 'string' && file.name.trim().length > 0) {
-        fileNames.add(file.name.trim());
-      }
-
-      const webkitEntry = (item as DataTransferItem & {
-        webkitGetAsEntry?: () => { isFile?: boolean; name?: string } | null;
-      }).webkitGetAsEntry?.();
-      if (webkitEntry?.isFile && typeof webkitEntry.name === 'string' && webkitEntry.name.trim().length > 0) {
-        fileNames.add(webkitEntry.name.trim());
-      }
-    } catch {
-      // Some runtimes throw here during drag hover metadata probing.
-    }
-  }
-
-  const maybeExtractNameFromTextPath = (raw: string) => {
-    const trimmed = raw.trim();
-    if (!trimmed) return;
-
-    const firstLine = trimmed.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim() ?? '';
-    if (!firstLine) return;
-
-    let normalized = firstLine;
-    if (normalized.startsWith('file://')) {
-      try {
-        normalized = decodeURIComponent(normalized.replace(/^file:\/\//, ''));
-      } catch {
-        normalized = normalized.replace(/^file:\/\//, '');
-      }
-    }
-
-    const name = getFileNameFromPath(normalized);
-    if (name.trim().length > 0) {
-      fileNames.add(name.trim());
-    }
-  };
-
-  try {
-    maybeExtractNameFromTextPath(dataTransfer.getData('text/uri-list'));
-    maybeExtractNameFromTextPath(dataTransfer.getData('text/plain'));
-  } catch {
-    // Ignore dataTransfer text extraction failures on restricted drag payloads.
-  }
-
-  if (fileNames.size === 0) {
-    return 'unknown';
-  }
-
-  const hasSupported = Array.from(fileNames).some((name) => isSupportedPrepareDropName(name));
-  return hasSupported ? 'supported' : 'unsupported';
-}
-
-function buildDroppedFilesSignature(files: File[]): string {
-  return files
-    .map((file) => `${file.name.trim().toLowerCase()}::${Number.isFinite(file.size) ? file.size : -1}`)
-    .sort((a, b) => a.localeCompare(b))
-    .join('|');
-}
-
-function resolveInitialExportThumbnailRenderOptions(): ExportThumbnailRenderOptions {
-  if (typeof window === 'undefined') return DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS;
-
-  try {
-    const raw = window.localStorage.getItem(EXPORT_THUMBNAIL_RENDER_OPTIONS_STORAGE_KEY);
-    if (!raw) return DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS;
-
-    const parsed = JSON.parse(raw) as Partial<ExportThumbnailRenderOptions>;
-    return {
-      includeGradient: typeof parsed.includeGradient === 'boolean'
-        ? parsed.includeGradient
-        : DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS.includeGradient,
-      includeBuildPlate: typeof parsed.includeBuildPlate === 'boolean'
-        ? parsed.includeBuildPlate
-        : DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS.includeBuildPlate,
-      includeGrid: typeof parsed.includeGrid === 'boolean'
-        ? parsed.includeGrid
-        : DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS.includeGrid,
-      centerOnModel: typeof parsed.centerOnModel === 'boolean'
-        ? parsed.centerOnModel
-        : DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS.centerOnModel,
-    };
-  } catch {
-    return DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS;
-  }
-}
-
-function formatPrintingMonitorEstimatedTime(seconds: number | null): string {
-  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return '—';
-
-  const rounded = Math.max(1, Math.round(seconds));
-  const hours = Math.floor(rounded / 3600);
-  const minutes = Math.floor((rounded % 3600) / 60);
-
-  if (hours > 0) {
-    return `${hours}h ${minutes.toString().padStart(2, '0')}m`;
-  }
-
-  if (minutes > 0) {
-    return `${minutes}m`;
-  }
-
-  return '<1m';
-}
-
-function formatPrintingMonitorUsedMaterial(ml: number | null): string {
-  if (ml == null || !Number.isFinite(ml) || ml <= 0) return '—';
-  return `${ml.toFixed(2)} mL`;
-}
-
-function formatPrintingMonitorAreaMm2(areaMm2: number | null): string {
-  if (areaMm2 == null || !Number.isFinite(areaMm2) || areaMm2 <= 0) return '—';
-  if (areaMm2 >= 1000) return `${areaMm2.toFixed(0)} mm²`;
-  if (areaMm2 >= 100) return `${areaMm2.toFixed(1)} mm²`;
-  return `${areaMm2.toFixed(2)} mm²`;
-}
-
-function parsePrintingMonitorSeconds(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-    return Math.round(value);
-  }
-
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  const numeric = Number(trimmed);
-  if (Number.isFinite(numeric) && numeric > 0) {
-    return Math.round(numeric);
-  }
-
-  const hms = trimmed.match(/^(\d{1,3}):(\d{1,2})(?::(\d{1,2}))?$/);
-  if (hms) {
-    const h = Number(hms[1]);
-    const m = Number(hms[2]);
-    const s = Number(hms[3] ?? '0');
-    if ([h, m, s].every((n) => Number.isFinite(n) && n >= 0)) {
-      const total = (hms[3] == null)
-        ? (h * 60 + m)
-        : (h * 3600 + m * 60 + s);
-      return total > 0 ? total : null;
-    }
-  }
-
-  const units = trimmed.match(/(?:(\d+(?:\.\d+)?)\s*h)?\s*(?:(\d+(?:\.\d+)?)\s*m)?\s*(?:(\d+(?:\.\d+)?)\s*s)?/i);
-  if (units) {
-    const h = Number(units[1] ?? 0);
-    const m = Number(units[2] ?? 0);
-    const s = Number(units[3] ?? 0);
-    if ([h, m, s].every((n) => Number.isFinite(n) && n >= 0)) {
-      const total = Math.round(h * 3600 + m * 60 + s);
-      return total > 0 ? total : null;
-    }
-  }
-
-  return null;
-}
-
-function parsePrintingMonitorMaterialMl(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-    return value;
-  }
-  if (typeof value !== 'string') return null;
-
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  const numeric = Number(trimmed);
-  if (Number.isFinite(numeric) && numeric > 0) {
-    return numeric;
-  }
-
-  const extracted = trimmed.match(/(\d+(?:\.\d+)?)/);
-  if (!extracted) return null;
-  const parsed = Number(extracted[1]);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-function parsePrintingMonitorAreaMm2(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-    return value;
-  }
-  if (typeof value !== 'string') return null;
-
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  const numeric = Number(trimmed);
-  if (Number.isFinite(numeric) && numeric > 0) {
-    return numeric;
-  }
-
-  const extracted = trimmed.match(/(\d+(?:\.\d+)?)/);
-  if (!extracted) return null;
-  const parsed = Number(extracted[1]);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-function normalizePrintingMonitorWebcamAspectRatio(value: number | null | undefined): number | null {
-  if (value == null || !Number.isFinite(value) || value <= 0) return null;
-  // Keep practical camera bounds and reject pathological stream metadata.
-  if (value < 0.45 || value > 2.4) return null;
-  return value;
-}
-
-function resolvePrintingMonitorAbsoluteUrl(candidate: string, host: string, port: number): string | null {
-  const trimmed = candidate.trim();
-  if (!trimmed) return null;
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
-  if (trimmed.startsWith('//')) return `http:${trimmed}`;
-  const base = `http://${host}${port === 80 ? '' : `:${port}`}`;
-  if (trimmed.startsWith('/')) return `${base}${trimmed}`;
-  return `${base}/${trimmed.replace(/^\/+/, '')}`;
-}
-
-type JsonObject = Record<string, unknown>;
-
-function asJsonObject(value: unknown): JsonObject {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return value as JsonObject;
-  }
-  return {};
-}
-
-async function readJsonObject(response: { json: () => Promise<unknown> }): Promise<JsonObject> {
-  try {
-    const payload = await response.json();
-    return asJsonObject(payload);
-  } catch {
-    return {};
-  }
-}
-
-function readBooleanField(payload: JsonObject, key: string): boolean | null {
-  const value = payload[key];
-  return typeof value === 'boolean' ? value : null;
-}
-
-function readStringField(payload: JsonObject, key: string): string | null {
-  const value = payload[key];
-  return typeof value === 'string' ? value : null;
-}
-
-function readNumberField(payload: JsonObject, key: string): number | null {
-  const value = payload[key];
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
 export default function Home() {
   const { _ } = useLingui();
   const { stage, sproutParentingLockHeld } = useLeafPlacementState();
@@ -1573,6 +527,102 @@ export default function Home() {
   const transformMgr = useTransformManager({ geom: scene.geom });
   const [uniformScaling, setUniformScaling] = React.useState(true);
 
+  // --- Hollowing manager: placed early so its state/setters are in scope for
+  //     useHolePunchManager below. Late/cross deps supplied via a ref populated
+  //     after the hole-punch manager and shared callbacks exist (TDZ break). ---
+  const hollowingDepsRef = React.useRef<HollowingManagerDeps>({
+    showOperationError: () => {},
+    setShowDamagedModelDialog: () => {},
+    beginFinalizing: () => {},
+    clearFinalizing: () => {},
+    nextPaint: async () => {},
+    persistActiveModelModifiers: () => {},
+    setPendingModifierResetAction: () => {},
+    setInteriorView: () => {},
+    setSessionShaderOverride: () => {},
+    computeAutoHolePunchDepthMmForGeometry: () => 0,
+    setHolePunchState: () => {},
+    setHolePunchPlacements: () => {},
+    holePunchPlacementsRef: { current: [] },
+    setPendingHolePunchAutoApplyModelId: () => {},
+    setPendingBlockerResetState: () => {},
+    setSelectedHolePunchPlacementIds: () => {},
+    setHoveredHolePunchPlacementId: () => {},
+    setHolePunchHoverPlacement: () => {},
+    interiorView: false,
+  });
+  const hollowing = useHollowingManager({
+    scene,
+    transformMgr,
+    deps: hollowingDepsRef,
+  });
+  const {
+    isPreviewingHollowing,
+    setIsPreviewingHollowing,
+    hollowPreview,
+    setHollowPreview,
+    hollowingState,
+    setHollowingState,
+    isShellOpenFaceSelected,
+    setIsShellOpenFaceSelected,
+    hollowingDraftEnabled,
+    setHollowingDraftEnabled,
+    hollowingEditMode,
+    setHollowingEditMode,
+    blockedHollowVoxelIndices,
+    setBlockedHollowVoxelIndices,
+    editingBlockedHollowVoxelIndices,
+    setEditingBlockedHollowVoxelIndices,
+    isApplyingBlockersHollowing,
+    setIsApplyingBlockersHollowing,
+    isApplyingHollowing,
+    setIsApplyingHollowing,
+    editingBlockedHollowVoxelIndicesRef,
+    hollowVoxelEditUndoStackRef,
+    hollowVoxelEditRedoStackRef,
+    hollowingEditModeRef,
+    hollowPreviewDebounceTimerRef,
+    hollowPreviewRequestSeqRef,
+    hollowPreviewResultCacheRef,
+    hollowPreviewWarmupKeyRef,
+    hollowingSourceByModelIdRef,
+    cavityGeometryByModelIdRef,
+    defaultHollowingState,
+    isHollowingApplied,
+    persistedHollowingSignature,
+    draftHollowingSignature,
+    isShellFaceSelectionPending,
+    isHollowingDirty,
+    canResetHollowing,
+    blockedHollowVoxelIndexSet,
+    editingBlockedHollowVoxelIndexSet,
+    blockedPreviewVoxelInstanceIdSet,
+    handleApplyHollowing,
+    handleResetHollowing,
+    handleClearAppliedHollowing,
+    handleResetHollowingSettings,
+    handleHollowingStateChange,
+    applyEditingBlockedHollowVoxelIndices,
+    undoHollowVoxelEdit,
+    redoHollowVoxelEdit,
+    commitBlockedHollowVoxelIndices,
+    toggleBlockedHollowVoxelIndex,
+    requestResetHollowing,
+    requestClearAppliedHollowing,
+    clearPendingHollowPreviewDebounce,
+    buildHollowPreviewRequest,
+    cacheHollowPreviewResult,
+    materializeHollowPreviewCacheEntry,
+    primeHollowPreviewCache,
+    runHollowPreview,
+    clearHollowPreview,
+    resolveBlockedHollowVoxelMarqueeSelection,
+    handleBlockedHollowVoxelMarqueeSelection,
+    handleStartHollowVoxelEditing,
+    handleClearHollowVoxelEditing,
+    handleDoneHollowVoxelEditing,
+  } = hollowing;
+
   // Ref for supports group (used for export)
   const supportsRef = React.useRef<THREE.Group | null>(null);
   // Hide support geometry in hollowing mode — it just gets in the way.
@@ -1582,8 +632,6 @@ export default function Home() {
   }, [scene.mode, transformMgr.transformMode]);
   // Ref for the drag-wrapper group around supports/rafts (live gizmo transform)
   const supportDragGroupRef = React.useRef<THREE.Group | null>(null);
-  const exportThumbnailCaptureRef = React.useRef<(() => Promise<Uint8Array | null>) | null>(null);
-  const exportThumbnailCaptureRunnerRef = React.useRef<(() => Promise<Uint8Array | null>) | null>(null);
   const supportDragResetRafRef = React.useRef<number | null>(null);
   const supportDragResetSecondRafRef = React.useRef<number | null>(null);
   const [holdSupportDragDeltaUntilSupportSync, setHoldSupportDragDeltaUntilSupportSync] = React.useState(false);
@@ -1678,18 +726,8 @@ export default function Home() {
   const [newDeviceToast, setNewDeviceToast] = React.useState<string | null>(null);
   const [isNewDeviceToastVisible, setIsNewDeviceToastVisible] = React.useState(false);
   const newDeviceToastTimeoutRef = React.useRef<number | null>(null);
-  const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; text: string; direction: 'undo' | 'redo' } | null>(null);
-  const [isHistoryActionToastVisible, setIsHistoryActionToastVisible] = React.useState(false);
-  const [isSceneImportToastVisible, setIsSceneImportToastVisible] = React.useState(false);
-  const [exportSuccessToast, setExportSuccessToast] = React.useState<{ id: number; path: string } | null>(null);
-  const [isExportSuccessToastVisible, setIsExportSuccessToastVisible] = React.useState(false);
-  const [exportErrorToast, setExportErrorToast] = React.useState<{ id: number; text: string } | null>(null);
-  const [isExportErrorToastVisible, setIsExportErrorToastVisible] = React.useState(false);
   const [isSceneSaveInProgress, setIsSceneSaveInProgress] = React.useState(false);
   const [isPreSliceSceneSaveInProgress, setIsPreSliceSceneSaveInProgress] = React.useState(false);
-  const [isSaveToastVisible, setIsSaveToastVisible] = React.useState(false);
-  const [isSaveToastAnimatedVisible, setIsSaveToastAnimatedVisible] = React.useState(false);
-  const [saveToastLabel, setSaveToastLabel] = React.useState<'Saving…' | 'Autosaving…'>('Autosaving…');
   const [showPluginImportWarningModal, setShowPluginImportWarningModal] = React.useState(false);
   const [suppressPluginImportWarning, setSuppressPluginImportWarning] = React.useState(false);
   const [pluginImportWarningSkipFuture, setPluginImportWarningSkipFuture] = React.useState(false);
@@ -1707,13 +745,6 @@ export default function Home() {
   const [showDamagedModelDialog, setShowDamagedModelDialog] = React.useState(false);
 
   // ZIP file picker modal
-  const [zipPickerState, setZipPickerState] = React.useState<{
-    zipName: string;
-    files: File[];
-    category: 'mesh' | 'scene' | 'mixed';
-    defaultSelectionCategory: 'mesh' | 'scene';
-  } | null>(null);
-  const zipPickerResolveRef = React.useRef<((files: File[]) => void) | null>(null);
   const hasUnsavedSceneChangesRef = React.useRef(false);
   const allowProgrammaticWindowCloseRef = React.useRef(false);
   const sceneSaveBaselineRef = React.useRef<{
@@ -1730,17 +761,6 @@ export default function Home() {
   const historyTransformResyncRafRef = React.useRef<number | null>(null);
   const historyTransformResyncSecondRafRef = React.useRef<number | null>(null);
   const historyTransformResyncTimeoutRef = React.useRef<number | null>(null);
-  const historyActionToastFadeTimeoutRef = React.useRef<number | null>(null);
-  const historyActionToastClearTimeoutRef = React.useRef<number | null>(null);
-  const printingMonitorErrorToastFadeTimeoutRef = React.useRef<number | null>(null);
-  const printingMonitorErrorToastClearTimeoutRef = React.useRef<number | null>(null);
-  const sceneImportToastFadeTimeoutRef = React.useRef<number | null>(null);
-  const exportSuccessToastFadeTimeoutRef = React.useRef<number | null>(null);
-  const exportErrorToastFadeTimeoutRef = React.useRef<number | null>(null);
-  const saveToastHideTimeoutRef = React.useRef<number | null>(null);
-  const saveToastClearTimeoutRef = React.useRef<number | null>(null);
-  const saveToastEnterRafRef = React.useRef<number | null>(null);
-  const saveToastShownAtRef = React.useRef<number | null>(null);
   const sceneSaveKickoffTimerRef = React.useRef<number | null>(null);
   const sceneSaveInFlightRef = React.useRef(false);
   const sceneSaveQueuedRef = React.useRef(false);
@@ -1766,145 +786,82 @@ export default function Home() {
     preferredSavePath: preferredOverwriteScenePathRef.current,
   });
 
-  React.useEffect(() => {
-    const MIN_SAVE_TOAST_VISIBLE_MS = 2000;
-    const TOAST_ANIMATION_MS = 220;
-    const hasActiveSaveWork = isSceneSaveInProgress || (isAutosaving && !isPreSliceSceneSaveInProgress);
-
-    if (hasActiveSaveWork) {
-      if (saveToastHideTimeoutRef.current !== null) {
-        window.clearTimeout(saveToastHideTimeoutRef.current);
-        saveToastHideTimeoutRef.current = null;
-      }
-      if (saveToastClearTimeoutRef.current !== null) {
-        window.clearTimeout(saveToastClearTimeoutRef.current);
-        saveToastClearTimeoutRef.current = null;
-      }
-      if (saveToastEnterRafRef.current !== null) {
-        window.cancelAnimationFrame(saveToastEnterRafRef.current);
-        saveToastEnterRafRef.current = null;
-      }
-
-      setSaveToastLabel(isSceneSaveInProgress ? 'Saving…' : 'Autosaving…');
-
-      if (!isSaveToastVisible) {
-        saveToastShownAtRef.current = Date.now();
-        setIsSaveToastVisible(true);
-        setIsSaveToastAnimatedVisible(false);
-        saveToastEnterRafRef.current = window.requestAnimationFrame(() => {
-          saveToastEnterRafRef.current = null;
-          setIsSaveToastAnimatedVisible(true);
-        });
-      } else if (!isSaveToastAnimatedVisible) {
-        setIsSaveToastAnimatedVisible(true);
-      }
-      return;
-    }
-
-    if (!isSaveToastVisible) {
-      saveToastShownAtRef.current = null;
-      return;
-    }
-
-    const shownAt = saveToastShownAtRef.current ?? Date.now();
-    const elapsed = Date.now() - shownAt;
-    const remaining = Math.max(0, MIN_SAVE_TOAST_VISIBLE_MS - elapsed);
-
-    if (saveToastHideTimeoutRef.current !== null) {
-      window.clearTimeout(saveToastHideTimeoutRef.current);
-    }
-    saveToastHideTimeoutRef.current = window.setTimeout(() => {
-      saveToastHideTimeoutRef.current = null;
-      setIsSaveToastAnimatedVisible(false);
-      if (saveToastClearTimeoutRef.current !== null) {
-        window.clearTimeout(saveToastClearTimeoutRef.current);
-      }
-      saveToastClearTimeoutRef.current = window.setTimeout(() => {
-        saveToastClearTimeoutRef.current = null;
-        saveToastShownAtRef.current = null;
-        setIsSaveToastVisible(false);
-      }, TOAST_ANIMATION_MS);
-    }, remaining);
-  }, [isAutosaving, isPreSliceSceneSaveInProgress, isSaveToastAnimatedVisible, isSaveToastVisible, isSceneSaveInProgress]);
-
-  React.useEffect(() => {
-    return () => {
-      if (saveToastHideTimeoutRef.current !== null) {
-        window.clearTimeout(saveToastHideTimeoutRef.current);
-        saveToastHideTimeoutRef.current = null;
-      }
-      if (saveToastClearTimeoutRef.current !== null) {
-        window.clearTimeout(saveToastClearTimeoutRef.current);
-        saveToastClearTimeoutRef.current = null;
-      }
-      if (saveToastEnterRafRef.current !== null) {
-        window.cancelAnimationFrame(saveToastEnterRafRef.current);
-        saveToastEnterRafRef.current = null;
-      }
-    };
-  }, []);
+  // Editor toast/notification subsystem (state, refs, fade/show effects,
+  // helpers). Triggers stay in Home and call these returned setters; the
+  // save-toast machinery effect reads save-progress externals injected here.
+  const {
+    historyActionToast,
+    setHistoryActionToast,
+    isHistoryActionToastVisible,
+    setIsHistoryActionToastVisible,
+    isSceneImportToastVisible,
+    setIsSceneImportToastVisible,
+    exportSuccessToast,
+    setExportSuccessToast,
+    isExportSuccessToastVisible,
+    setIsExportSuccessToastVisible,
+    exportErrorToast,
+    setExportErrorToast,
+    isExportErrorToastVisible,
+    setIsExportErrorToastVisible,
+    isSaveToastVisible,
+    setIsSaveToastVisible,
+    isSaveToastAnimatedVisible,
+    setIsSaveToastAnimatedVisible,
+    saveToastLabel,
+    setSaveToastLabel,
+    historyActionToastFadeTimeoutRef,
+    historyActionToastClearTimeoutRef,
+    printingMonitorErrorToastFadeTimeoutRef,
+    printingMonitorErrorToastClearTimeoutRef,
+    sceneImportToastFadeTimeoutRef,
+    exportSuccessToastFadeTimeoutRef,
+    exportErrorToastFadeTimeoutRef,
+    saveToastHideTimeoutRef,
+    saveToastClearTimeoutRef,
+    saveToastEnterRafRef,
+    saveToastShownAtRef,
+    printingMonitorErrorToast,
+    setPrintingMonitorErrorToast,
+    isPrintingMonitorErrorToastVisible,
+    setIsPrintingMonitorErrorToastVisible,
+    lastPrintingMonitorErrorToastRef,
+    clearPrintingMonitorErrorToastTimeouts,
+    normalizePrintingMonitorErrorMessage,
+    setPrintingMonitorError,
+    handleExportSuccess,
+    showOperationError,
+  } = useEditorToasts({
+    isSceneSaveInProgress,
+    isPreSliceSceneSaveInProgress,
+    isAutosaving,
+    sceneImportReport: scene.sceneImportReport,
+  });
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const [interiorView, setInteriorView] = React.useState(false);
-  const [isPreviewingHollowing, setIsPreviewingHollowing] = React.useState(false);
-  const [hollowPreview, setHollowPreview] = React.useState<HollowPreviewState | null>(null);
-  const shouldForceHollowingXray = scene.mode === 'prepare'
-    && transformMgr.transformMode === 'hollowing'
-    && !scene.activeModel?.meshModifiers?.hollowing?.bakedIntoGeometry;
-  const effectiveShaderType = (shouldForceHollowingXray || hollowPreview)
-    ? 'xray'
-    : (sessionShaderOverride ?? scene.shaderType);
-  const [isPrepareDragActive, setIsPrepareDragActive] = React.useState(false);
-  const [isPrepareDragUnsupported, setIsPrepareDragUnsupported] = React.useState(false);
   const isSupportSpotlightHoldActive = useActionActive('SUPPORTS', 'TEMP_SPOTLIGHT_HOLD');
   const [allowPrepareWithoutPrinter, setAllowPrepareWithoutPrinter] = React.useState(false);
   const [prepareSmoothingSettingsExpanded, setPrepareSmoothingSettingsExpanded] = React.useState(true);
-  const [hollowingState, setHollowingState] = React.useState<HollowingPanelState>({
-    mode: 'cavity',
-    voxelSizeMm: 0.65,
-    shellThicknessMm: 2.0,
-    infillMode: 'lattice',
-    infillCellMm: 4.2426,
-    infillBeamRadiusMm: 0.35,
-    openFace: 'z_max',
-  });
-  const [isShellOpenFaceSelected, setIsShellOpenFaceSelected] = React.useState(true);
-  const [hollowingDraftEnabled, setHollowingDraftEnabled] = React.useState(false);
-  const [hollowingEditMode, setHollowingEditMode] = React.useState(false);
-  const [blockedHollowVoxelIndices, setBlockedHollowVoxelIndices] = React.useState<number[]>([]);
-  const [editingBlockedHollowVoxelIndices, setEditingBlockedHollowVoxelIndices] = React.useState<number[]>([]);
-  const editingBlockedHollowVoxelIndicesRef = React.useRef<number[]>([]);
-  const hollowVoxelEditUndoStackRef = React.useRef<number[][]>([]);
-  const hollowVoxelEditRedoStackRef = React.useRef<number[][]>([]);
-  const hollowingEditModeRef = React.useRef(false);
-  const [holePunchState, setHolePunchState] = React.useState<HolePunchPanelState>({
-    radiusMm: 2.0,
-    radiusYMm: undefined,
-    depthMm: getDefaultHolePunchDepthMm(2.0),
-    depthMode: 'manual',
-  });
-  const [holePunchPlacements, setHolePunchPlacements] = React.useState<HolePunchPlacementState[]>([]);
-  const holePunchPlacementsRef = React.useRef<HolePunchPlacementState[]>([]);
   const [selectedHolePunchPlacementIds, setSelectedHolePunchPlacementIds] = React.useState<string[]>([]);
   const [hoveredHolePunchPlacementId, setHoveredHolePunchPlacementId] = React.useState<string | null>(null);
   const [holePunchHoverPlacement, setHolePunchHoverPlacement] = React.useState<HolePunchPlacementState | null>(null);
   const [isApplyingHolePunch, setIsApplyingHolePunch] = React.useState(false);
-  const [isApplyingBlockersHollowing, setIsApplyingBlockersHollowing] = React.useState(false);
   const [pendingHolePunchAutoApplyModelId, setPendingHolePunchAutoApplyModelId] = React.useState<string | null>(null);
-  const holePunchDragStateRef = React.useRef<{
-    pointerId: number;
-    placementId: string;
-    moved: boolean;
-  } | null>(null);
-  const suppressHolePunchClickPlacementIdRef = React.useRef<string | null>(null);
-  const suppressHolePunchGizmoReleaseClickUntilRef = React.useRef(0);
-  const [isApplyingHollowing, setIsApplyingHollowing] = React.useState(false);
+  const {
+    isFinalizing,
+    beginFinalizing,
+    clearFinalizing,
+    finalizingOverlayContent,
+    nextPaint,
+  } = useModifierApplyOverlay({
+    hasPendingBackgroundGeometryWork: scene.hasPendingBackgroundGeometryWork,
+    isApplyingHollowing,
+    isApplyingHolePunch,
+    pendingHolePunchAutoApplyModelId,
+  });
   const [pendingModifierResetAction, setPendingModifierResetAction] = React.useState<PendingModifierResetAction | null>(null);
   const [pendingBlockerResetState, setPendingBlockerResetState] = React.useState<HollowingPanelState | null>(null);
-  const hollowPreviewDebounceTimerRef = React.useRef<number | ReturnType<typeof setTimeout> | null>(null);
-  const hollowPreviewRequestSeqRef = React.useRef(0);
-  const hollowPreviewResultCacheRef = React.useRef<Map<string, HollowPreviewCacheEntry>>(new Map());
-  const hollowPreviewWarmupKeyRef = React.useRef<string | null>(null);
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(false);
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
   const [editorContextMenuSupportTarget, setEditorContextMenuSupportTarget] = React.useState<{
@@ -1915,30 +872,12 @@ export default function Home() {
   const [isManualRepairing, setIsManualRepairing] = React.useState(false);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
   const [isSliceMetricsDebugOpen, setIsSliceMetricsDebugOpen] = React.useState(false);
-    const handleRegisterExportThumbnailCapture = React.useCallback((capture: (() => Promise<Uint8Array | null>) | null) => {
-      exportThumbnailCaptureRef.current = capture;
-    }, []);
 
-    const captureExportThumbnailPng = React.useCallback(async () => {
-      const runCapture = exportThumbnailCaptureRunnerRef.current;
-      if (!runCapture) return null;
-      return runCapture();
-    }, []);
 
   const [isHistoryDebugOpen, setIsHistoryDebugOpen] = React.useState(false);
   const [supportsInfoModelId, setSupportsInfoModelId] = React.useState<string | null>(null);
   const [isTransformDebugOverlayOpen, setIsTransformDebugOverlayOpen] = React.useState(false);
-  const holePunchAutoDepthRaycasterRef = React.useRef(new THREE.Raycaster());
-  const holePunchAutoDepthMeshRef = React.useRef(
-    new THREE.Mesh(
-      undefined,
-      new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }),
-    ),
-  );
 
-  React.useEffect(() => {
-    holePunchPlacementsRef.current = holePunchPlacements;
-  }, [holePunchPlacements]);
   const [transformDebugTick, setTransformDebugTick] = React.useState(0);
   const [supportShaftHoverDebug, setSupportShaftHoverDebug] = React.useState<ShaftHoverDebugDetail>({
     segmentId: null,
@@ -1948,23 +887,78 @@ export default function Home() {
   const printingLayerPreviewLoadInFlightRef = React.useRef<Set<number>>(new Set());
 
   const [printingPreviewTotalLayers, setPrintingPreviewTotalLayers] = React.useState(0);
-  const [printingSelectedLayer, setPrintingSelectedLayer] = React.useState(1);
-  const [printingDisplayedLayer, setPrintingDisplayedLayer] = React.useState(1);
-  const [isPrintingLayerScrubbing, setIsPrintingLayerScrubbing] = React.useState(false);
-  const [printingPngLoadedUrl, setPrintingPngLoadedUrl] = React.useState<string | null>(null);
-  const [isSceneLayerScrubbing, setIsSceneLayerScrubbing] = React.useState(false);
-  const [isPrintingPreviewSettled, setIsPrintingPreviewSettled] = React.useState(false);
-  const [isPrintingSettledCanvasReady, setIsPrintingSettledCanvasReady] = React.useState(false);
 
-  const defaultHollowingState = React.useMemo<HollowingPanelState>(() => ({
-    mode: 'cavity',
-    voxelSizeMm: 0.65,
-    shellThicknessMm: 2.0,
-    infillMode: 'lattice',
-    infillCellMm: 4.2426,
-    infillBeamRadiusMm: 0.35,
-    openFace: 'z_max',
-  }), []);
+  const printingPreviewDepsRef = React.useRef<PrintingPreviewManagerDeps>({
+    printingPreviewTargetResolution: null,
+  });
+  const {
+    printingSelectedLayer,
+    setPrintingSelectedLayer,
+    printingDisplayedLayer,
+    setPrintingDisplayedLayer,
+    isPrintingLayerScrubbing,
+    setIsPrintingLayerScrubbing,
+    printingPngLoadedUrl,
+    setPrintingPngLoadedUrl,
+    isSceneLayerScrubbing,
+    setIsSceneLayerScrubbing,
+    isPrintingPreviewSettled,
+    setIsPrintingPreviewSettled,
+    isPrintingSettledCanvasReady,
+    setIsPrintingSettledCanvasReady,
+    printingPreviewZoom,
+    setPrintingPreviewZoom,
+    printingPreviewPan,
+    setPrintingPreviewPan,
+    isPrintingPreviewPanning,
+    setIsPrintingPreviewPanning,
+    printingPreviewViewportRef,
+    printingPreviewCanvasRef,
+    printingPreviewSettleTimeoutRef,
+    printingPreviewSettledRef,
+    printingPreviewCanvasRenderNonceRef,
+    printingPreviewLoadNonceRef,
+    pendingPrintingSelectedLayerRef,
+    printingSelectedLayerRafRef,
+    printingSelectedLayerRef,
+    printingPreviewZoomRef,
+    printingPreviewPanRef,
+    printingPreviewPanPendingRef,
+    printingPreviewPanRafRef,
+    printingPreviewDragRef,
+    schedulePrintingPreviewSettle,
+    queuePrintingPreviewPan,
+    clampPrintingPreviewPan,
+    clampPrintingLayer,
+    handlePrintingLayerChange,
+    handlePrintingLayerScrubStart,
+    handlePrintingLayerScrubEnd,
+    handleSceneLayerScrubStart,
+    handleSceneLayerScrubEnd,
+    handlePrintingPreviewWheel,
+    handlePrintingPreviewPointerDown,
+    handlePrintingPreviewPointerMove,
+    handlePrintingPreviewPointerEnd,
+    selectedPrintingLayerPreviewUrl,
+    isPrintingPngLoaded,
+    shouldShowScrubPreview,
+    printingPreviewPngUrlForDisplay,
+    printingPreviewDeMirrorTransform,
+    printingPreviewMirrorScale,
+    isPrintingPreviewLowResActive,
+    printingPreviewScrubQualityScale,
+    printingPreviewScrubUpscaleTransform,
+    printingPreviewVisualTransform,
+    printingPreviewCursor,
+    usePrintingSettledHiResCanvas,
+  } = usePrintingPreviewManager({
+    scene,
+    activePrinterProfile,
+    printingPreviewTotalLayers,
+    printingLayerPreviewUrls,
+    deps: printingPreviewDepsRef,
+  });
+
 
   const defaultHolePunchState = React.useMemo<HolePunchPanelState>(() => ({
     radiusMm: 2.0,
@@ -1976,25 +970,7 @@ export default function Home() {
     () => getDefaultHolePunchDepthMm(hollowingState.shellThicknessMm),
     [hollowingState.shellThicknessMm],
   );
-  const hollowingSourceByModelIdRef = React.useRef<Map<string, HollowingSourceEntry>>(new Map());
-  const cavityGeometryByModelIdRef = React.useRef<Map<string, CavityGeometryEntry>>(new Map());
-  const [printingPreviewZoom, setPrintingPreviewZoom] = React.useState(1);
-  const [printingPreviewPan, setPrintingPreviewPan] = React.useState({ x: 0, y: 0 });
-  const [isPrintingPreviewPanning, setIsPrintingPreviewPanning] = React.useState(false);
   const [exportThumbnailRenderOptions, setExportThumbnailRenderOptions] = React.useState<ExportThumbnailRenderOptions>(resolveInitialExportThumbnailRenderOptions);
-  const printingPreviewViewportRef = React.useRef<HTMLDivElement | null>(null);
-  const printingPreviewCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
-  const printingPreviewSettleTimeoutRef = React.useRef<number | null>(null);
-  const printingPreviewSettledRef = React.useRef(false);
-  const printingPreviewCanvasRenderNonceRef = React.useRef(0);
-  const printingPreviewLoadNonceRef = React.useRef(0);
-  const pendingPrintingSelectedLayerRef = React.useRef<number | null>(null);
-  const printingSelectedLayerRafRef = React.useRef<number | null>(null);
-  const printingSelectedLayerRef = React.useRef(1);
-  const printingPreviewZoomRef = React.useRef(1);
-  const printingPreviewPanRef = React.useRef({ x: 0, y: 0 });
-  const printingPreviewPanPendingRef = React.useRef({ x: 0, y: 0 });
-  const printingPreviewPanRafRef = React.useRef<number | null>(null);
   const previousSceneModeRef = React.useRef<typeof scene.mode>(scene.mode);
   const preservedNonPrintingLayerIndexRef = React.useRef<number | null>(null);
   const lastSliceHistoryEventIdRef = React.useRef<number | null>(null);
@@ -2008,13 +984,6 @@ export default function Home() {
   const preSliceUploadSelectionRef = React.useRef<{ deviceId: string; materialId?: string } | null>(null);
   const preSliceTargetPickerResolverRef = React.useRef<((selection: { deviceId: string; materialId?: string } | null) => void) | null>(null);
   const preSlicePrintConfirmResolverRef = React.useRef<((confirmed: boolean) => void) | null>(null);
-  const printingPreviewDragRef = React.useRef<{
-    pointerId: number;
-    startClientX: number;
-    startClientY: number;
-    originX: number;
-    originY: number;
-  } | null>(null);
   const [printingArtifact, setPrintingArtifact] = React.useState<SliceExportArtifact | null>(null);
   const [printingSlicingBenchmark, setPrintingSlicingBenchmark] = React.useState<SliceExportResult['benchmark'] | null>(null);
   const [printingArtifactIsInvalid, setPrintingArtifactIsInvalid] = React.useState(false);
@@ -2051,206 +1020,9 @@ export default function Home() {
   const [printingReadyPlateId, setPrintingReadyPlateId] = React.useState<number | null>(null);
   const [printingPrintNowBusy, setPrintingPrintNowBusy] = React.useState(false);
   const [printingUploadDialogOpen, setPrintingUploadDialogOpen] = React.useState(false);
-  const [printingTargetPickerOpen, setPrintingTargetPickerOpen] = React.useState(false);
-  const [printingTargetPickerMode, setPrintingTargetPickerMode] = React.useState<'post-slice' | 'pre-slice-upload' | 'pre-slice-print'>('post-slice');
-  const [printingTargetDeviceId, setPrintingTargetDeviceId] = React.useState<string | null>(null);
-  const [printingTargetMaterialId, setPrintingTargetMaterialId] = React.useState<string>('');
-  const [printingTargetMaterialOptions, setPrintingTargetMaterialOptions] = React.useState<FleetUploadMaterialOption[]>([]);
-  const [isPrintingTargetMaterialsLoading, setIsPrintingTargetMaterialsLoading] = React.useState(false);
-  const [printingTargetMaterialError, setPrintingTargetMaterialError] = React.useState<string | null>(null);
-  const printingTargetMaterialsCacheRef = React.useRef<Map<string, FleetUploadMaterialOption[]>>(new Map());
-  const [printingMonitorSnapshot, setPrintingMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
-  const [printingMonitorWebcamInfo, setPrintingMonitorWebcamInfo] = React.useState<PrinterMonitoringWebcamInfo | null>(null);
-  const [printingMonitorRelayBaseWsUrl, setPrintingMonitorRelayBaseWsUrl] = React.useState<string | null>(null);
-  const [printingMonitorRelaySetupError, setPrintingMonitorRelaySetupError] = React.useState<string | null>(null);
-  const [printingMonitorRelayDebugTransport, setPrintingMonitorRelayDebugTransport] = React.useState<{
-    clientPort: number | null;
-    serverPort: number | null;
-    transportHeader: string | null;
-    updatedAtEpochMs: number | null;
-  } | null>(null);
-  const [printingMonitorRelayReclaimDebug, setPrintingMonitorRelayReclaimDebug] = React.useState<{
-    activeSessionId: string | null;
-    clientRtpPort: number | null;
-    serverRtpPort: number | null;
-    lastClaimStatus: string | null;
-    lastClaimAtMs: number | null;
-    updatedAtMs: number | null;
-  } | null>(null);
-  const [isPrintingMonitorThumbnailLoaded, setIsPrintingMonitorThumbnailLoaded] = React.useState(false);
-  const [printingMonitorThumbnailDisplayUrl, setPrintingMonitorThumbnailDisplayUrl] = React.useState<string | null>(null);
-  const [isPrintingMonitorWebcamLoaded, setIsPrintingMonitorWebcamLoaded] = React.useState(false);
-  const [printingMonitorWebcamLoadError, setPrintingMonitorWebcamLoadError] = React.useState<string | null>(null);
-  const [printingMonitorWebcamAspectRatio, setPrintingMonitorWebcamAspectRatio] = React.useState<number | null>(null);
-  const [printingMonitorWebcamRefreshNonce, setPrintingMonitorWebcamRefreshNonce] = React.useState(0);
-  const [isPrintingMonitorWebcamResetBusy, setIsPrintingMonitorWebcamResetBusy] = React.useState(false);
-  const [isPrintingMonitorWebcamSnapshotSaving, setIsPrintingMonitorWebcamSnapshotSaving] = React.useState(false);
-  const [printingMonitorWebcamExpanded, setPrintingMonitorWebcamExpanded] = React.useState(false);
   const [preSlicePrintConfirmOpen, setPreSlicePrintConfirmOpen] = React.useState(false);
-  const [printingMonitorRecentPlates, setPrintingMonitorRecentPlates] = React.useState<PrintingMonitorRecentPlate[]>([]);
-  const [isPrintingMonitorRecentPlatesLoading, setIsPrintingMonitorRecentPlatesLoading] = React.useState(false);
-  const [printingMonitorRecentPlatesError, setPrintingMonitorRecentPlatesError] = React.useState<string | null>(null);
-  const [printingMonitorPlatesStoragePath, setPrintingMonitorPlatesStoragePath] = React.useState<'/local/' | '/usb/'>('/local/');
-  const [printingMonitorSelectedPlateId, setPrintingMonitorSelectedPlateId] = React.useState<number | null>(null);
-  const [isPrintingMonitorPolling, setIsPrintingMonitorPolling] = React.useState(false);
-  const [isPrintingMonitorStatusRequestInFlight, setIsPrintingMonitorStatusRequestInFlight] = React.useState(false);
-  const [printingMonitorLastStatusSuccessAtMs, setPrintingMonitorLastStatusSuccessAtMs] = React.useState<number | null>(null);
-  const [printingMonitorNowEpochMs, setPrintingMonitorNowEpochMs] = React.useState(() => Date.now());
-  const [printingMonitorErrorToast, setPrintingMonitorErrorToast] = React.useState<{ id: number; text: string } | null>(null);
-  const [isPrintingMonitorErrorToastVisible, setIsPrintingMonitorErrorToastVisible] = React.useState(false);
-  const [printingMonitorActionBusy, setPrintingMonitorActionBusy] = React.useState<null | 'start' | 'delete' | 'pause' | 'resume' | 'cancel' | 'emergency-stop' | 'webcam-enable' | 'webcam-disable' | 'timelapse-enable' | 'timelapse-disable'>(null);
-  const [printingMonitorControlPendingAction, setPrintingMonitorControlPendingAction] = React.useState<null | 'pause' | 'resume' | 'cancel' | 'emergency-stop'>(null);
-  const [printingMonitorActionStatus, setPrintingMonitorActionStatus] = React.useState<string | null>(null);
-  const [printingMonitorPendingConfirmation, setPrintingMonitorPendingConfirmation] = React.useState<PrintingMonitorPendingConfirmation | null>(null);
-  const [printingMonitorDeviceId, setPrintingMonitorDeviceId] = React.useState<string | null>(null);
-  const [printingMonitorViewMode, setPrintingMonitorViewMode] = React.useState<'detail' | 'dashboard'>('detail');
-  const [printingMonitorDashboardSnapshots, setPrintingMonitorDashboardSnapshots] = React.useState<Record<string, PrinterMonitoringSnapshot | null>>({});
-  const [isPrintingMonitorDashboardRefreshing, setIsPrintingMonitorDashboardRefreshing] = React.useState(false);
-  const [isPrintingMonitorPrinterMenuOpen, setIsPrintingMonitorPrinterMenuOpen] = React.useState(false);
-  const [isPrintingMonitorPrinterThumbnailFailed, setIsPrintingMonitorPrinterThumbnailFailed] = React.useState(false);
-  const [printingMonitorModalOpen, setPrintingMonitorModalOpen] = React.useState(false);
-  const [isPrintingMonitorDebugOpen, setIsPrintingMonitorDebugOpen] = React.useState(false);
-  const [isPrintingMonitorRtspDebugOpen, setIsPrintingMonitorRtspDebugOpen] = React.useState(false);
-  const [printingMonitorDebugCopyState, setPrintingMonitorDebugCopyState] = React.useState<'idle' | 'copied' | 'failed'>('idle');
-  const [printingMonitorLastFeatureToggleResponse, setPrintingMonitorLastFeatureToggleResponse] = React.useState<PrintingMonitorFeatureToggleResponse | null>(null);
-  const [printingMonitorDebugState, setPrintingMonitorDebugState] = React.useState<PrintingMonitorDebugState>({
-    status: {
-      requestedAtEpochMs: null,
-      request: null,
-      httpStatus: null,
-      rawPayload: null,
-      parsedPayload: null,
-      error: null,
-    },
-    webcam: {
-      requestedAtEpochMs: null,
-      request: null,
-      httpStatus: null,
-      rawPayload: null,
-      parsedPayload: null,
-      error: null,
-    },
-    plates: {
-      requestedAtEpochMs: null,
-      request: null,
-      httpStatus: null,
-      rawPayload: null,
-      parsedPayload: null,
-      error: null,
-    },
-    taskHistory: {
-      requestedAtEpochMs: null,
-      request: null,
-      httpStatus: null,
-      rawPayload: null,
-      parsedPayload: null,
-      error: null,
-    },
-    taskDetails: {
-      requestedAtEpochMs: null,
-      request: null,
-      httpStatus: null,
-      rawPayload: null,
-      parsedPayload: null,
-      error: null,
-    },
-  });
-  const lastPrintingMonitorErrorToastRef = React.useRef<{ message: string; atEpochMs: number } | null>(null);
-  const clearPrintingMonitorErrorToastTimeouts = React.useCallback(() => {
-    if (printingMonitorErrorToastFadeTimeoutRef.current !== null) {
-      window.clearTimeout(printingMonitorErrorToastFadeTimeoutRef.current);
-      printingMonitorErrorToastFadeTimeoutRef.current = null;
-    }
-    if (printingMonitorErrorToastClearTimeoutRef.current !== null) {
-      window.clearTimeout(printingMonitorErrorToastClearTimeoutRef.current);
-      printingMonitorErrorToastClearTimeoutRef.current = null;
-    }
-  }, []);
 
-  const normalizePrintingMonitorErrorMessage = React.useCallback((message: string) => {
-    const normalized = message.trim();
-    if (!normalized) return '';
-
-    const lower = normalized.toLowerCase();
-    if (lower.includes('tainted canvases may not be exported')) {
-      return 'Unable to export this webcam frame directly. Retrying through the secure snapshot proxy.';
-    }
-
-    return normalized;
-  }, []);
-
-  const setPrintingMonitorError = React.useCallback((nextError: string | null) => {
-    const normalized = typeof nextError === 'string' ? normalizePrintingMonitorErrorMessage(nextError) : '';
-
-    if (!normalized) {
-      clearPrintingMonitorErrorToastTimeouts();
-      setIsPrintingMonitorErrorToastVisible(false);
-      setPrintingMonitorErrorToast(null);
-      return;
-    }
-
-    const now = Date.now();
-    const previous = lastPrintingMonitorErrorToastRef.current;
-    if (
-      previous
-      && previous.message === normalized
-      && (now - previous.atEpochMs) < 1500
-    ) {
-      return;
-    }
-
-    lastPrintingMonitorErrorToastRef.current = {
-      message: normalized,
-      atEpochMs: now,
-    };
-
-    setPrintingMonitorErrorToast({ id: now, text: normalized });
-    setIsPrintingMonitorErrorToastVisible(true);
-
-    clearPrintingMonitorErrorToastTimeouts();
-    printingMonitorErrorToastFadeTimeoutRef.current = window.setTimeout(() => {
-      setIsPrintingMonitorErrorToastVisible(false);
-      printingMonitorErrorToastFadeTimeoutRef.current = null;
-    }, 2200);
-
-    printingMonitorErrorToastClearTimeoutRef.current = window.setTimeout(() => {
-      setPrintingMonitorErrorToast(null);
-      printingMonitorErrorToastClearTimeoutRef.current = null;
-    }, 2600);
-  }, [clearPrintingMonitorErrorToastTimeouts, normalizePrintingMonitorErrorMessage]);
-
-  React.useEffect(() => {
-    return () => {
-      clearPrintingMonitorErrorToastTimeouts();
-    };
-  }, [clearPrintingMonitorErrorToastTimeouts]);
-
-  const printingMonitorPrinterMenuRef = React.useRef<HTMLDivElement | null>(null);
-  const printingMonitorWebcamViewportRef = React.useRef<HTMLDivElement | null>(null);
-  const printingMonitorThumbnailCacheRef = React.useRef<Map<string, string>>(new Map());
-  const printingMonitorWebcamRequestInFlightRef = React.useRef(false);
-  const printingMonitorWebcamBusyUntilEpochMsRef = React.useRef(0);
-  const printingMonitorWebcamAutoPollBlockedRef = React.useRef(false);
-  const printingMonitorWebcamConsecutiveTimeoutsRef = React.useRef(0);
-  const printingMonitorRelayAutoRetryCountRef = React.useRef(0);
-  const printingMonitorRelayAutoRetryTimeoutRef = React.useRef<number | null>(null);
-  const printingMonitorWebcamReadinessTokenRef = React.useRef(0);
-  const printingMonitorWebcamReadinessTimeoutRef = React.useRef<number | null>(null);
-  const printingMonitorStartFocusDeviceIdRef = React.useRef<string | null>(null);
-  const printingMonitorRecentPlatesRequestIdRef = React.useRef(0);
-  const printingMonitorRecentPlatesRef = React.useRef<PrintingMonitorRecentPlate[]>([]);
-  const printingMonitorSelectedPlateIdRef = React.useRef<number | null>(null);
-  const printingMonitorRecentPlatesCacheRef = React.useRef<Map<string, {
-    plates: PrintingMonitorRecentPlate[];
-    selectedPlateId: number | null;
-    error: string | null;
-  }>>(new Map());
-  const printingMonitorLeftColumnRef = React.useRef<HTMLElement | null>(null);
-  const printingMonitorWebcamSectionRef = React.useRef<HTMLElement | null>(null);
-  const printingMonitorWebcamFollowerHeightPxRef = React.useRef<number | null>(null);
-  const monitorReachabilityInconclusiveCountsRef = React.useRef<Record<string, number>>({});
   const topbarPrinterOfflineCacheByDeviceIdRef = React.useRef<Record<string, boolean>>({});
-  const [selectedPrinterMonitorSnapshot, setSelectedPrinterMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
   const printerReachabilityByDeviceId = React.useSyncExternalStore(
     subscribeToPrinterReachability,
     getPrinterReachabilitySnapshot,
@@ -2275,17 +1047,6 @@ export default function Home() {
   const [isCrossSectionEnabled, setIsCrossSectionEnabled] = React.useState(true);
   const handleToggleCrossSection = React.useCallback(() => setIsCrossSectionEnabled((prev) => !prev), []);
   const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(0.5);
-  const [arrangePrecisionMode, setArrangePrecisionMode] = React.useState<ArrangePrecisionMode>('standard');
-  const [arrangeAllowRotateOnZ, setArrangeAllowRotateOnZ] = React.useState(false);
-  const [arrangeLayoutMode, setArrangeLayoutMode] = React.useState<ArrangeLayoutMode>('auto');
-  const [arrangeAnchorMode, setArrangeAnchorMode] = React.useState<ArrangeAnchorMode>('center');
-  const [arrangeArrayCountX, setArrangeArrayCountX] = React.useState(3);
-  const [arrangeArrayCountY, setArrangeArrayCountY] = React.useState(2);
-  const [arrangeArrayCountZ, setArrangeArrayCountZ] = React.useState(1);
-  const [arrangeArrayGapX, setArrangeArrayGapX] = React.useState(5);
-  const [arrangeArrayGapY, setArrangeArrayGapY] = React.useState(5);
-  const [arrangeArrayGapZ, setArrangeArrayGapZ] = React.useState(5);
-  const [activeArrangeOperation, setActiveArrangeOperation] = React.useState<'standard' | 'high_precision' | 'high_precision_fill' | 'array' | null>(null);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2469,297 +1230,64 @@ export default function Home() {
     recomputeUnsavedSceneChanges();
   }, [recomputeUnsavedSceneChanges, scene.models.length]);
 
-  const importSceneFilesWithPluginWarning = React.useCallback(async (
-    filesInput: FileList | File[],
-    options?: { resultingScenePath?: string | null; sourcePaths?: Array<string | null | undefined> },
-  ): Promise<boolean> => {
-    const sceneFiles = Array.from(filesInput);
-    if (sceneFiles.length === 0) return false;
+  // ── Import / drag-drop / scene-handoff + export-thumbnail capture ──────────
+  //   Extracted to useImportExportManager. Late/cross-domain deps (isDesktopRuntime,
+  //   slicing layer access, select-all model state) are supplied via a ref populated
+  //   AFTER those values exist below (TDZ break, mirrors the hollowing manager).
+  const importExportDepsRef = React.useRef<ImportExportManagerDeps>({
+    isDesktopRuntime: () => false,
+    slicing: { layerIndex: 0, setLayerIndex: () => {} },
+    isSelectAllModelsActive: false,
+    setIsSelectAllModelsActive: () => {},
+  });
+  const importExport = useImportExportManager({
+    scene,
+    importSceneFile,
+    importSceneFiles,
+    recentOpenedFiles,
+    reopenRecentOpenedFile,
+    maybeConfirmPluginImportWarning,
+    markSceneSaveBaseline,
+    setActiveSceneFilePath,
+    setLoadedSceneSaveSource,
+    sceneImportAutosaveSuppressMs,
+    deps: importExportDepsRef,
+  });
+  const {
+    isPrepareDragActive,
+    setIsPrepareDragActive,
+    isPrepareDragUnsupported,
+    setIsPrepareDragUnsupported,
+    exportThumbnailCaptureRunnerRef,
+    handleRegisterExportThumbnailCapture,
+    captureExportThumbnailPng,
+    runExportThumbnailCapture,
+    zipPickerState,
+    setZipPickerState,
+    zipPickerResolveRef,
+    nativePickerPreparationState,
+    setNativePickerPreparationState,
+    pendingStartupSceneHandoff,
+    setPendingStartupSceneHandoff,
+    handleTopBarOpenScene,
+    handleImportSceneInputChange,
+    handleLoadMeshChangeWithZip,
+    handleImportSceneChangeWithZip,
+    handleReopenRecentFile,
+    handleOpenMeshDialog,
+    handleOpenSceneDialog,
+    importSceneFilesWithPluginWarning,
+    handleDroppedPrepareFiles,
+    handlePrepareDragEnter,
+    handlePrepareDragOver,
+    handlePrepareDragLeave,
+    handlePrepareDrop,
+  } = importExport;
 
-    const proceed = await maybeConfirmPluginImportWarning(sceneFiles);
-    if (!proceed) return false;
-
-    // Fresh imports can emit a burst of history/model-count changes while meshes are
-    // still decoding and settling. Keep autosave asleep across the import and the
-    // immediate post-import stabilization window to avoid adding save/export work to
-    // the hot path.
-    suppressSceneAutosave(sceneImportAutosaveSuppressMs);
-
-    const imported = sceneFiles.length === 1
-      ? await importSceneFile(sceneFiles[0], {
-          sourcePath: options?.sourcePaths?.[0] ?? options?.resultingScenePath ?? null,
-        })
-      : await importSceneFiles(sceneFiles, {
-          sourcePaths: options?.sourcePaths,
-        });
-
-    if (imported) {
-      const importedSingleFile = sceneFiles.length === 1 ? sceneFiles[0] : null;
-      const importedSingleIsVoxl = Boolean(importedSingleFile && getFileExtension(importedSingleFile.name) === '.voxl');
-      const normalizedScenePath = normalizeActiveVoxlScenePath(options?.resultingScenePath);
-      setActiveSceneFilePath(normalizedScenePath);
-      if (importedSingleFile && importedSingleIsVoxl) {
-        setLoadedSceneSaveSource({
-          name: importedSingleFile.name,
-          path: normalizedScenePath,
-        });
-        markSceneSaveBaseline();
-      } else {
-        setLoadedSceneSaveSource(null);
-      }
-
-      suppressSceneAutosave(sceneImportAutosaveSuppressMs);
-    }
-
-    return imported;
-  }, [importSceneFile, importSceneFiles, markSceneSaveBaseline, maybeConfirmPluginImportWarning, sceneImportAutosaveSuppressMs]);
-
-  // ── ZIP import helpers ───────────────────────────────────────────────────
-
-  const resolveZipFiles = React.useCallback(async (
-    zip: File,
-    requestedCategory: 'mesh' | 'scene',
-  ): Promise<{ meshFiles: File[]; sceneFiles: File[] }> => {
-    const meshExts = new Set(['.stl', '.obj', '.3mf']);
-    const sceneExts = new Set(['.voxl', '.lys']);
-    const oppositeCategory = requestedCategory === 'mesh' ? 'scene' : 'mesh';
-
-    const readingLabel = 'Loading Archive…';
-    setNativePickerPreparationState({
-      active: true,
-      label: readingLabel,
-      detail: `Reading ${zip.name}…`,
-      progress: null,
-    });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-
-    let extracted: File[];
-    try {
-      extracted = await extractFilesFromZip(zip);
-    } catch (err) {
-      console.error('[ZIP] Failed to read ZIP archive:', err);
-      setNativePickerPreparationState({ active: false, label: '', detail: '', progress: null });
-      return { meshFiles: [], sceneFiles: [] };
-    }
-
-    const meshCandidates = extracted.filter((f) => meshExts.has(getFileExtensionLower(f.name)));
-    const sceneCandidates = extracted.filter((f) => sceneExts.has(getFileExtensionLower(f.name)));
-
-    // Clear spinner before potentially showing the picker modal (or returning nothing)
-    setNativePickerPreparationState({ active: false, label: '', detail: '', progress: null });
-
-    const hasMeshCandidates = meshCandidates.length > 0;
-    const hasSceneCandidates = sceneCandidates.length > 0;
-
-    let targetCategory: 'mesh' | 'scene' | 'mixed';
-    let targetCandidates: File[];
-
-    if (hasMeshCandidates && hasSceneCandidates) {
-      // Fully mixed ZIP: allow user to choose any combination of mesh/scene files.
-      targetCategory = 'mixed';
-      targetCandidates = [...meshCandidates, ...sceneCandidates];
-    } else {
-      const primaryCandidates = requestedCategory === 'mesh' ? meshCandidates : sceneCandidates;
-      const oppositeCandidates = requestedCategory === 'mesh' ? sceneCandidates : meshCandidates;
-      targetCategory = primaryCandidates.length === 0 && oppositeCandidates.length > 0
-        ? oppositeCategory
-        : requestedCategory;
-      targetCandidates = targetCategory === 'mesh' ? meshCandidates : sceneCandidates;
-    }
-
-    if (targetCandidates.length === 0) {
-      return { meshFiles: [], sceneFiles: [] };
-    }
-
-    const uniqueExts = new Set(targetCandidates.map((f) => getFileExtensionLower(f.name)));
-    const selectedCandidates = (targetCategory !== 'mixed' && uniqueExts.size === 1)
-      ? targetCandidates
-      : await new Promise<File[]>((resolve) => {
-          zipPickerResolveRef.current = resolve;
-          setZipPickerState({
-            zipName: zip.name,
-            files: targetCandidates,
-            category: targetCategory,
-            defaultSelectionCategory: requestedCategory,
-          });
-        });
-
-    const selectedMeshFiles = selectedCandidates.filter((file) => meshExts.has(getFileExtensionLower(file.name)));
-    const selectedSceneFiles = selectedCandidates.filter((file) => sceneExts.has(getFileExtensionLower(file.name)));
-
-    return {
-      meshFiles: selectedMeshFiles,
-      sceneFiles: selectedSceneFiles,
-    };
-  }, []);
-
-  const expandPickedFilesWithZip = React.useCallback(async (
-    files: File[],
-    requestedCategory: 'mesh' | 'scene',
-  ): Promise<{ meshFiles: File[]; sceneFiles: File[] }> => {
-    const meshExts = new Set(['.stl', '.obj', '.3mf']);
-    const sceneExts = new Set(['.voxl', '.lys']);
-
-    const meshFiles: File[] = [];
-    const sceneFiles: File[] = [];
-
-    for (const file of files) {
-      const ext = getFileExtensionLower(file.name);
-      if (ext === '.zip') {
-        const expanded = await resolveZipFiles(file, requestedCategory);
-        if (expanded.meshFiles.length > 0) meshFiles.push(...expanded.meshFiles);
-        if (expanded.sceneFiles.length > 0) sceneFiles.push(...expanded.sceneFiles);
-      } else if (meshExts.has(ext)) {
-        meshFiles.push(file);
-      } else if (sceneExts.has(ext)) {
-        sceneFiles.push(file);
-      }
-    }
-
-    return { meshFiles, sceneFiles };
-  }, [resolveZipFiles]);
-
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const handleImportSceneInputChange = React.useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
-    const files = Array.from(e.target.files);
-    void importSceneFilesWithPluginWarning(files);
-    e.target.value = '';
-  }, [importSceneFilesWithPluginWarning]);
-
-  const handleLoadMeshChangeWithZip = React.useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
-    const files = Array.from(e.target.files);
-    e.target.value = '';
-    const processed = await expandPickedFilesWithZip(files, 'mesh');
-    if (processed.meshFiles.length > 0) {
-      void scene.loadFiles(processed.meshFiles);
-    }
-    if (processed.sceneFiles.length > 0) {
-      await importSceneFilesWithPluginWarning(processed.sceneFiles, { resultingScenePath: null });
-    }
-  }, [expandPickedFilesWithZip, importSceneFilesWithPluginWarning, scene]);
-
-  const handleImportSceneChangeWithZip = React.useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
-    const files = Array.from(e.target.files);
-    e.target.value = '';
-    const processed = await expandPickedFilesWithZip(files, 'scene');
-    if (processed.sceneFiles.length > 0) {
-      await importSceneFilesWithPluginWarning(processed.sceneFiles, { resultingScenePath: null });
-    }
-    if (processed.meshFiles.length > 0) {
-      void scene.loadFiles(processed.meshFiles);
-    }
-  }, [expandPickedFilesWithZip, importSceneFilesWithPluginWarning, scene]);
-
-  const handleReopenRecentFile = React.useCallback(async (entryId: string) => {
-    const entry = recentOpenedFiles.find((item) => item.id === entryId);
-    if (!entry) return false;
-
-    if (entry.kind === 'scene' && entry.name.trim().toLowerCase().endsWith('.lys')) {
-      const proceed = await maybeConfirmPluginImportWarning([
-        new File([], entry.name, { type: 'application/octet-stream' }),
-      ]);
-      if (!proceed) return false;
-    }
-
-    const sourcePath = typeof entry.sourcePath === 'string' && entry.sourcePath.trim().length > 0
-      ? entry.sourcePath.trim()
-      : null;
-
-    // Preferred path for desktop: reload from the original source file so the
-    // editing session can resume with an overwrite-capable scene path.
-    if (entry.kind === 'scene' && sourcePath) {
-      try {
-        const sourceBytes = await readPrintArtifactBytesFromPath(sourcePath);
-        if (sourceBytes && sourceBytes.length > 0) {
-          const restoredFile = new File([Uint8Array.from(sourceBytes)], entry.name, {
-            type: getDroppedFileMimeType(entry.name),
-            lastModified: Date.now(),
-          });
-
-          const importedFromSource = await importSceneFilesWithPluginWarning([restoredFile], {
-            resultingScenePath: sourcePath,
-            sourcePaths: [sourcePath],
-          });
-
-          if (importedFromSource) {
-            return true;
-          }
-        }
-      } catch (error) {
-        console.warn('[RecentFiles] Failed reopening scene from original source path; falling back to cached copy.', error);
-      }
-    }
-
-    const reopened = await reopenRecentOpenedFile(entryId);
-    if (reopened && entry.kind === 'scene') {
-      setActiveSceneFilePath(normalizeActiveVoxlScenePath(sourcePath));
-      if (entry.name.trim().toLowerCase().endsWith('.voxl')) {
-        setLoadedSceneSaveSource({
-          name: entry.name,
-          path: normalizeActiveVoxlScenePath(sourcePath),
-        });
-        markSceneSaveBaseline();
-      } else {
-        setLoadedSceneSaveSource(null);
-      }
-    }
-    return reopened;
-  }, [importSceneFilesWithPluginWarning, markSceneSaveBaseline, maybeConfirmPluginImportWarning, recentOpenedFiles, reopenRecentOpenedFile]);
-  const [isAutoArranging, setIsAutoArranging] = React.useState(false);
   const [isExporting, setIsExporting] = React.useState(false);
-  const [arrangeOverlayElapsedSec, setArrangeOverlayElapsedSec] = React.useState(0);
-  const [arrangeOverlayModelCount, setArrangeOverlayModelCount] = React.useState<number | null>(null);
-  const [duplicateTotalCopies, setDuplicateTotalCopies] = React.useState(1);
-  const [duplicateSpacingMm, setDuplicateSpacingMm] = React.useState(0.5);
-  const showArrangeBlockingOverlay = isAutoArranging;
-  const showModifierApplyBlockingOverlay = isApplyingHollowing || isApplyingHolePunch || isApplyingBlockersHollowing || pendingHolePunchAutoApplyModelId !== null;
+  const showModifierApplyBlockingOverlay = isApplyingHollowing || isApplyingHolePunch || isApplyingBlockersHollowing || pendingHolePunchAutoApplyModelId !== null || isFinalizing;
   const [modifierApplyOverlayElapsedSec, setModifierApplyOverlayElapsedSec] = React.useState(0);
 
-  const arrangeOverlayContent = React.useMemo(() => {
-    if (activeArrangeOperation === 'high_precision_fill') {
-      return {
-        title: 'High-Precision Fill Running…',
-        detailLines: [
-          'Using SAT-based 2.5D nesting to pack duplicates onto the plate.',
-          'Please be patient while we compute the densest valid fill.',
-        ],
-      };
-    }
-
-    if (activeArrangeOperation === 'high_precision') {
-      return {
-        title: 'High-Precision Arrange Running…',
-        detailLines: [
-          'This is a computationally expensive operation for dense packing.',
-          'Please be patient while we process your models.',
-        ],
-      };
-    }
-
-    if (activeArrangeOperation === 'array') {
-      return {
-        title: 'Applying Array Arrange…',
-        detailLines: [
-          'Positioning models and validating placement.',
-          'Please wait a moment.',
-        ],
-      };
-    }
-
-    return {
-      title: 'Arranging Models…',
-      detailLines: [
-        'Computing placements and resolving collisions.',
-        'Please wait.',
-      ],
-    };
-  }, [activeArrangeOperation]);
 
   const modifierApplyOverlayContent = React.useMemo(() => {
     if (isApplyingHollowing && pendingHolePunchAutoApplyModelId) {
@@ -2771,6 +1299,8 @@ export default function Home() {
         ],
       };
     }
+
+    if (finalizingOverlayContent) return finalizingOverlayContent;
 
     if (isApplyingHollowing) {
       return {
@@ -2809,21 +1339,8 @@ export default function Home() {
         'Please wait a moment.',
       ],
     };
-  }, [isApplyingBlockersHollowing, isApplyingHolePunch, isApplyingHollowing, pendingHolePunchAutoApplyModelId]);
+  }, [finalizingOverlayContent, isApplyingBlockersHollowing, isApplyingHolePunch, isApplyingHollowing, pendingHolePunchAutoApplyModelId]);
 
-  React.useEffect(() => {
-    if (!showArrangeBlockingOverlay) {
-      setArrangeOverlayElapsedSec(0);
-      return;
-    }
-
-    const startedAt = Date.now();
-    const id = window.setInterval(() => {
-      setArrangeOverlayElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
-    }, 250);
-
-    return () => window.clearInterval(id);
-  }, [showArrangeBlockingOverlay]);
 
   React.useEffect(() => {
     if (!showModifierApplyBlockingOverlay) {
@@ -2839,75 +1356,12 @@ export default function Home() {
     return () => window.clearInterval(id);
   }, [showModifierApplyBlockingOverlay]);
 
-  const arrangeOverlayElapsedLabel = React.useMemo(() => {
-    const total = Math.max(0, arrangeOverlayElapsedSec);
-    const minutes = Math.floor(total / 60);
-    const seconds = total % 60;
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-  }, [arrangeOverlayElapsedSec]);
   const modifierApplyOverlayElapsedLabel = React.useMemo(() => {
     const total = Math.max(0, modifierApplyOverlayElapsedSec);
     const minutes = Math.floor(total / 60);
     const seconds = total % 60;
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   }, [modifierApplyOverlayElapsedSec]);
-  const [duplicateLayoutMode, setDuplicateLayoutMode] = React.useState<DuplicateLayoutMode>('auto');
-  const [duplicatePrecisionMode, setDuplicatePrecisionMode] = React.useState<ArrangePrecisionMode>('standard');
-  const [duplicateArrayCountX, setDuplicateArrayCountX] = React.useState(2);
-  const [duplicateArrayCountY, setDuplicateArrayCountY] = React.useState(1);
-  const [duplicateArrayCountZ, setDuplicateArrayCountZ] = React.useState(1);
-  const [duplicateArrayGapX, setDuplicateArrayGapX] = React.useState(5);
-  const [duplicateArrayGapY, setDuplicateArrayGapY] = React.useState(5);
-  const [duplicateArrayGapZ, setDuplicateArrayGapZ] = React.useState(5);
-  const [isDuplicating, setIsDuplicating] = React.useState(false);
-  const [duplicatePreviewTransforms, setDuplicatePreviewTransforms] = React.useState<Array<{
-    position: THREE.Vector3;
-    rotation: THREE.Euler;
-    scale: THREE.Vector3;
-  }>>([]);
-  const [arrangeArrayPreviewItems, setArrangeArrayPreviewItems] = React.useState<Array<{
-    model: (typeof scene.models)[number];
-    transform: {
-      position: THREE.Vector3;
-      rotation: THREE.Euler;
-      scale: THREE.Vector3;
-    };
-  }>>([]);
-  const [duplicateSourcePreviewTransform, setDuplicateSourcePreviewTransform] = React.useState<{
-    position: THREE.Vector3;
-    rotation: THREE.Euler;
-    scale: THREE.Vector3;
-  } | null>(null);
-  const [duplicateApplySourceModel, setDuplicateApplySourceModel] = React.useState<(typeof scene.models)[number] | null>(null);
-  const [duplicateApplySourceTransform, setDuplicateApplySourceTransform] = React.useState<{
-    position: THREE.Vector3;
-    rotation: THREE.Euler;
-    scale: THREE.Vector3;
-  } | null>(null);
-  const effectiveDuplicateTotalCopies = React.useMemo(() => {
-    if (duplicateLayoutMode === 'array') {
-      const countX = Math.max(1, Math.round(duplicateArrayCountX));
-      const countY = Math.max(1, Math.round(duplicateArrayCountY));
-      const countZ = Math.max(1, Math.round(duplicateArrayCountZ));
-      return Math.max(1, Math.min(128, countX * countY * countZ));
-    }
-
-    if (duplicatePrecisionMode === 'high_precision') {
-      return Math.max(1, duplicatePreviewTransforms.length + (duplicateSourcePreviewTransform ? 1 : 0));
-    }
-
-    return Math.max(1, Math.round(duplicateTotalCopies));
-  }, [
-    duplicateArrayCountX,
-    duplicateArrayCountY,
-    duplicateArrayCountZ,
-    duplicateLayoutMode,
-    duplicatePrecisionMode,
-    duplicatePreviewTransforms.length,
-    duplicateSourcePreviewTransform,
-    duplicateTotalCopies,
-  ]);
-  const isDuplicateSetupBlockingArrange = Boolean(scene.activeModel) && effectiveDuplicateTotalCopies > 1;
   const [supportRenderRefreshNonce, setSupportRenderRefreshNonce] = React.useState(0);
   const [gizmoResetNonce, setGizmoResetNonce] = React.useState(0);
   const [pendingDestructiveTransform, setPendingDestructiveTransform] = React.useState<{
@@ -2917,18 +1371,7 @@ export default function Home() {
     operationLabel: string;
   } | null>(null);
   const pendingDestructiveTransformContinueRef = React.useRef<(() => void) | null>(null);
-  const dragDepthRef = React.useRef(0);
-  const launchSceneFilesHandledRef = React.useRef(false);
-  const startupSceneHandoffReadyRef = React.useRef(false);
-  const queuedLaunchSceneEntriesRef = React.useRef<LaunchSceneFileEntry[]>([]);
-  const coldStartSceneHandoffTimerRef = React.useRef<number | null>(null);
-  const launchSceneImportInFlightRef = React.useRef(false);
   const desktopWindowRevealRequestedRef = React.useRef(false);
-  // Stable ref so the launch effect can always call the latest version of
-  // this callback without listing it as a dep (which causes effect re-runs
-  // and cancelled-flag races during scene initialization).
-  const importSceneFromLaunchEntriesRef = React.useRef<((entries: LaunchSceneFileEntry[]) => Promise<boolean>) | null>(null);
-  const [pendingStartupSceneHandoff, setPendingStartupSceneHandoff] = React.useState(false);
 
   const suppressTransformPersistenceCycles = React.useCallback((cycles = 1) => {
     const normalized = Math.max(0, Math.trunc(cycles));
@@ -2940,13 +1383,8 @@ export default function Home() {
     }
     suppressNextTransformPersistenceRef.current = true;
   }, []);
-  const lastPrepareDropRef = React.useRef<{ signature: string; atMs: number }>({
-    signature: '',
-    atMs: 0,
-  });
   const modelStatsCardContainerRef = React.useRef<HTMLDivElement | null>(null);
   const [modelStatsBottomClearancePx, setModelStatsBottomClearancePx] = React.useState(220);
-  const arrangeHullFootprintCacheRef = React.useRef<Map<string, HullCacheEntry>>(new Map());
   const trackSupportCollectionsInHome = scene.mode !== 'support';
   
   // Stable snapshot functions for useSyncExternalStore
@@ -3469,11 +1907,6 @@ export default function Home() {
     setPendingDestructiveTransform(null);
   }, []);
 
-  React.useEffect(() => {
-    if (arrangePrecisionMode !== 'high_precision') return;
-    if (arrangeAllowRotateOnZ) return;
-    setArrangeAllowRotateOnZ(true);
-  }, [arrangePrecisionMode, arrangeAllowRotateOnZ]);
 
   React.useLayoutEffect(() => {
     const element = modelStatsCardContainerRef.current;
@@ -3603,98 +2036,7 @@ export default function Home() {
     };
   }, [clearPrintingLayerPreviewUrls]);
 
-  React.useEffect(() => {
-    printingPreviewZoomRef.current = printingPreviewZoom;
-  }, [printingPreviewZoom]);
 
-  React.useEffect(() => {
-    printingPreviewPanRef.current = printingPreviewPan;
-  }, [printingPreviewPan]);
-
-  React.useEffect(() => {
-    printingSelectedLayerRef.current = printingSelectedLayer;
-  }, [printingSelectedLayer]);
-
-  React.useEffect(() => {
-    printingPreviewSettledRef.current = isPrintingPreviewSettled;
-  }, [isPrintingPreviewSettled]);
-
-  React.useEffect(() => {
-    return () => {
-      if (printingSelectedLayerRafRef.current !== null) {
-        window.cancelAnimationFrame(printingSelectedLayerRafRef.current);
-      }
-      if (printingPreviewPanRafRef.current !== null) {
-        window.cancelAnimationFrame(printingPreviewPanRafRef.current);
-      }
-      if (printingPreviewSettleTimeoutRef.current !== null) {
-        window.clearTimeout(printingPreviewSettleTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  const schedulePrintingPreviewSettle = React.useCallback(() => {
-    if (printingPreviewSettledRef.current) {
-      printingPreviewSettledRef.current = false;
-      setIsPrintingPreviewSettled(false);
-    }
-    if (printingPreviewSettleTimeoutRef.current !== null) {
-      window.clearTimeout(printingPreviewSettleTimeoutRef.current);
-    }
-    printingPreviewSettleTimeoutRef.current = window.setTimeout(() => {
-      printingPreviewSettleTimeoutRef.current = null;
-      printingPreviewSettledRef.current = true;
-      setIsPrintingPreviewSettled(true);
-    }, 180);
-  }, []);
-
-  const queuePrintingPreviewPan = React.useCallback((nextPan: { x: number; y: number }) => {
-    printingPreviewPanPendingRef.current = nextPan;
-    if (printingPreviewPanRafRef.current !== null) return;
-
-    printingPreviewPanRafRef.current = window.requestAnimationFrame(() => {
-      printingPreviewPanRafRef.current = null;
-      const pending = printingPreviewPanPendingRef.current;
-      setPrintingPreviewPan((previous) => {
-        if (Math.abs(previous.x - pending.x) < 0.05 && Math.abs(previous.y - pending.y) < 0.05) {
-          return previous;
-        }
-        return pending;
-      });
-    });
-  }, []);
-
-  const clampPrintingPreviewPan = React.useCallback((
-    nextPan: { x: number; y: number },
-    zoom: number,
-    viewportWidthPx: number,
-    viewportHeightPx: number,
-  ) => {
-    if (!Number.isFinite(zoom) || zoom <= 1.0001) {
-      return { x: 0, y: 0 };
-    }
-
-    const safeWidth = Math.max(1, viewportWidthPx);
-    const safeHeight = Math.max(1, viewportHeightPx);
-    const maxPanX = Math.max(0, ((zoom - 1) * safeWidth) * 0.5);
-    const maxPanY = Math.max(0, ((zoom - 1) * safeHeight) * 0.5);
-
-    return {
-      x: Math.max(-maxPanX, Math.min(maxPanX, nextPan.x)),
-      y: Math.max(-maxPanY, Math.min(maxPanY, nextPan.y)),
-    };
-  }, []);
-
-  React.useEffect(() => {
-    if (printingPreviewZoom <= 1.0001) {
-      queuePrintingPreviewPan({ x: 0, y: 0 });
-    }
-  }, [printingPreviewZoom, queuePrintingPreviewPan]);
-
-  const clampPrintingLayer = React.useCallback((nextLayer: number) => {
-    const rounded = Math.round(nextLayer);
-    return Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), rounded));
-  }, [printingPreviewTotalLayers]);
 
   const handlePrintingLayerPreviewGenerated = React.useCallback((payload: {
     layerIndex: number;
@@ -3751,15 +2093,6 @@ export default function Home() {
     setPrintingReadyPlateId(null);
   }, [clearPrintingLayerPreviewUrls]);
 
-  const selectedPrintingLayerPreviewUrl = React.useMemo(() => {
-    if (printingDisplayedLayer < 1) return null;
-    return printingLayerPreviewUrls[printingDisplayedLayer - 1] ?? null;
-  }, [printingLayerPreviewUrls, printingDisplayedLayer]);
-
-  const isPrintingPngLoaded = React.useMemo(() => {
-    if (!selectedPrintingLayerPreviewUrl) return false;
-    return printingPngLoadedUrl === selectedPrintingLayerPreviewUrl;
-  }, [printingPngLoadedUrl, selectedPrintingLayerPreviewUrl]);
 
   React.useEffect(() => {
     if (scene.mode !== 'printing') return;
@@ -3813,149 +2146,6 @@ export default function Home() {
     printingPreviewTotalLayers,
   ]);
 
-  // Show GPU preview during scrubbing or while waiting for PNG to load
-  // (GPU preview is fast enough to render real-time during scrub)
-  const shouldShowScrubPreview = React.useMemo(() => {
-    return (
-      isPrintingLayerScrubbing
-      || !isPrintingPreviewSettled
-      || !selectedPrintingLayerPreviewUrl
-      || !isPrintingPngLoaded
-    );
-  }, [
-    isPrintingLayerScrubbing,
-    isPrintingPreviewSettled,
-    selectedPrintingLayerPreviewUrl,
-    isPrintingPngLoaded,
-  ]);
-
-  const printingPreviewPngUrlForDisplay = React.useMemo(() => {
-    return selectedPrintingLayerPreviewUrl ?? printingPngLoadedUrl;
-  }, [printingPngLoadedUrl, selectedPrintingLayerPreviewUrl]);
-
-  React.useEffect(() => {
-    if (!selectedPrintingLayerPreviewUrl) {
-      setPrintingPngLoadedUrl(null);
-      return;
-    }
-
-    const loadNonce = ++printingPreviewLoadNonceRef.current;
-    let cancelled = false;
-    const targetUrl = selectedPrintingLayerPreviewUrl;
-    const image = new Image();
-    image.decoding = 'async';
-    image.onload = () => {
-      if (cancelled) return;
-      if (loadNonce !== printingPreviewLoadNonceRef.current) return;
-      setPrintingPngLoadedUrl(targetUrl);
-    };
-    image.onerror = () => {
-      // Fail-open so we do not get stuck in scrub preview if decode/load fails once.
-      if (cancelled) return;
-      if (loadNonce !== printingPreviewLoadNonceRef.current) return;
-      setPrintingPngLoadedUrl(targetUrl);
-    };
-    image.src = targetUrl;
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedPrintingLayerPreviewUrl]);
-
-  const handlePrintingPreviewWheel = React.useCallback((event: React.WheelEvent<HTMLDivElement>) => {
-    if (printingPreviewTotalLayers <= 0) return;
-    event.preventDefault();
-
-    const previousZoom = printingPreviewZoomRef.current;
-    if (previousZoom <= 1.0001 && event.deltaY > 0) {
-      return;
-    }
-
-    const factor = Math.exp(-event.deltaY * 0.0015);
-    const nextZoom = Math.max(1, Math.min(32, previousZoom * factor));
-
-    if (Math.abs(nextZoom - previousZoom) < 1e-5) return;
-
-    schedulePrintingPreviewSettle();
-
-    const viewportRect = printingPreviewViewportRef.current?.getBoundingClientRect();
-    if (!viewportRect) {
-      setPrintingPreviewZoom(nextZoom);
-      if (nextZoom <= 1.0001) queuePrintingPreviewPan({ x: 0, y: 0 });
-      return;
-    }
-
-    const pointerX = event.clientX - (viewportRect.left + viewportRect.width * 0.5);
-    const pointerY = event.clientY - (viewportRect.top + viewportRect.height * 0.5);
-    const previousPan = printingPreviewPanRef.current;
-    const contentX = (pointerX - previousPan.x) / Math.max(1e-4, previousZoom);
-    const contentY = (pointerY - previousPan.y) / Math.max(1e-4, previousZoom);
-    const nextPan = nextZoom <= 1.0001
-      ? { x: 0, y: 0 }
-      : {
-          x: pointerX - (contentX * nextZoom),
-          y: pointerY - (contentY * nextZoom),
-        };
-
-    const clampedPan = clampPrintingPreviewPan(
-      nextPan,
-      nextZoom,
-      viewportRect.width,
-      viewportRect.height,
-    );
-
-    setPrintingPreviewZoom(nextZoom);
-    queuePrintingPreviewPan(clampedPan);
-  }, [clampPrintingPreviewPan, queuePrintingPreviewPan, schedulePrintingPreviewSettle, printingPreviewTotalLayers]);
-
-  const handlePrintingPreviewPointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (printingPreviewTotalLayers <= 0) return;
-    if (printingPreviewZoomRef.current <= 1.0001) return;
-    if (event.button !== 0) return;
-
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    const currentPan = printingPreviewPanRef.current;
-    printingPreviewDragRef.current = {
-      pointerId: event.pointerId,
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      originX: currentPan.x,
-      originY: currentPan.y,
-    };
-    setIsPrintingPreviewPanning(true);
-    schedulePrintingPreviewSettle();
-  }, [schedulePrintingPreviewSettle, printingPreviewTotalLayers]);
-
-  const handlePrintingPreviewPointerMove = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    const drag = printingPreviewDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    event.preventDefault();
-
-    const nextPan = {
-      x: drag.originX + (event.clientX - drag.startClientX),
-      y: drag.originY + (event.clientY - drag.startClientY),
-    };
-    const viewportRect = printingPreviewViewportRef.current?.getBoundingClientRect();
-    const clampedPan = viewportRect
-      ? clampPrintingPreviewPan(nextPan, printingPreviewZoomRef.current, viewportRect.width, viewportRect.height)
-      : nextPan;
-
-    queuePrintingPreviewPan(clampedPan);
-    schedulePrintingPreviewSettle();
-  }, [clampPrintingPreviewPan, queuePrintingPreviewPan, schedulePrintingPreviewSettle]);
-
-  const handlePrintingPreviewPointerEnd = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    const drag = printingPreviewDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    printingPreviewDragRef.current = null;
-    setIsPrintingPreviewPanning(false);
-    schedulePrintingPreviewSettle();
-  }, [schedulePrintingPreviewSettle]);
-
   const printingPreviewTargetResolution = React.useMemo(() => {
     let printerWidth = Math.max(1, Math.round(activePrinterProfile?.display?.resolutionX ?? 0));
     const printerHeight = Math.max(1, Math.round(activePrinterProfile?.display?.resolutionY ?? 0));
@@ -3981,121 +2171,7 @@ export default function Home() {
     printingArtifact?.outputName,
   ]);
 
-  const printingPreviewDeMirrorTransform = React.useMemo(() => {
-    const mirrorX = activePrinterProfile?.display?.mirrorX === true;
-    const mirrorY = activePrinterProfile?.display?.mirrorY === true;
-    const scaleX = mirrorX ? -1 : 1;
-    const scaleY = mirrorY ? -1 : 1;
-    if (scaleX === 1 && scaleY === 1) return undefined;
-    return `scale(${scaleX}, ${scaleY})`;
-  }, [activePrinterProfile?.display?.mirrorX, activePrinterProfile?.display?.mirrorY]);
-
-  const printingPreviewMirrorScale = React.useMemo(() => ({
-    x: activePrinterProfile?.display?.mirrorX === true ? -1 : 1,
-    y: activePrinterProfile?.display?.mirrorY === true ? -1 : 1,
-  }), [activePrinterProfile?.display?.mirrorX, activePrinterProfile?.display?.mirrorY]);
-
-  const isPrintingPreviewLowResActive = React.useMemo(() => {
-    // Only use low-res PNG upscale path when scrubbing with PNG preview.
-    // When the fake cross-section preview is active, this would double-scale it.
-    return isPrintingLayerScrubbing && !shouldShowScrubPreview && printingPreviewZoom <= 1.0001;
-  }, [isPrintingLayerScrubbing, printingPreviewZoom, shouldShowScrubPreview]);
-
-  const printingPreviewScrubQualityScale = React.useMemo(() => {
-    if (!isPrintingPreviewLowResActive) return 1;
-    return 0.5;
-  }, [isPrintingPreviewLowResActive]);
-
-  const printingPreviewScrubUpscaleTransform = React.useMemo(() => {
-    if (printingPreviewScrubQualityScale >= 0.9999) return undefined;
-    const upscale = 1 / printingPreviewScrubQualityScale;
-    return `scale(${upscale})`;
-  }, [printingPreviewScrubQualityScale]);
-
-  const printingPreviewVisualTransform = React.useMemo(() => {
-    const transformParts: string[] = [];
-    if (Math.abs(printingPreviewPan.x) > 0.01 || Math.abs(printingPreviewPan.y) > 0.01) {
-      transformParts.push(`translate(${printingPreviewPan.x}px, ${printingPreviewPan.y}px)`);
-    }
-    if (Math.abs(printingPreviewZoom - 1) > 1e-4) {
-      transformParts.push(`scale(${printingPreviewZoom})`);
-    }
-    if (printingPreviewDeMirrorTransform) {
-      transformParts.push(printingPreviewDeMirrorTransform);
-    }
-    if (printingPreviewScrubUpscaleTransform) {
-      transformParts.push(printingPreviewScrubUpscaleTransform);
-    }
-    return transformParts.length > 0 ? transformParts.join(' ') : undefined;
-  }, [
-    printingPreviewDeMirrorTransform,
-    printingPreviewPan.x,
-    printingPreviewPan.y,
-    printingPreviewScrubUpscaleTransform,
-    printingPreviewZoom,
-  ]);
-
-  const printingPreviewCursor = React.useMemo<React.CSSProperties['cursor']>(() => {
-    if (!selectedPrintingLayerPreviewUrl) return 'default';
-    if (printingPreviewZoom > 1.0001) {
-      return isPrintingPreviewPanning ? 'grabbing' : 'grab';
-    }
-    return 'zoom-in';
-  }, [isPrintingPreviewPanning, printingPreviewZoom, selectedPrintingLayerPreviewUrl]);
-
-  React.useEffect(() => {
-    if (scene.mode !== 'printing') {
-      setIsPrintingLayerScrubbing(false);
-      setIsPrintingSettledCanvasReady(false);
-      printingPreviewSettledRef.current = false;
-      setIsPrintingPreviewSettled(false);
-      setPrintingPreviewZoom(1);
-      queuePrintingPreviewPan({ x: 0, y: 0 });
-      setIsPrintingPreviewPanning(false);
-      printingPreviewDragRef.current = null;
-      setPrintingDisplayedLayer(1);
-      if (printingPreviewSettleTimeoutRef.current !== null) {
-        window.clearTimeout(printingPreviewSettleTimeoutRef.current);
-        printingPreviewSettleTimeoutRef.current = null;
-      }
-    }
-  }, [queuePrintingPreviewPan, scene.mode]);
-
-  React.useEffect(() => {
-    if (scene.mode !== 'printing') return;
-    // Reset transform state on entering printing so scrub/PNG views stay in sync.
-    setIsPrintingSettledCanvasReady(false);
-    printingPreviewSettledRef.current = false;
-    setIsPrintingPreviewSettled(false);
-    setPrintingPreviewZoom(1);
-    queuePrintingPreviewPan({ x: 0, y: 0 });
-    setIsPrintingPreviewPanning(false);
-    printingPreviewDragRef.current = null;
-    if (printingPreviewSettleTimeoutRef.current !== null) {
-      window.clearTimeout(printingPreviewSettleTimeoutRef.current);
-      printingPreviewSettleTimeoutRef.current = null;
-    }
-  }, [queuePrintingPreviewPan, scene.mode]);
-
-  React.useEffect(() => {
-    if (scene.mode === 'printing') return;
-    setIsSceneLayerScrubbing(false);
-  }, [scene.mode]);
-
-  React.useEffect(() => {
-    if (scene.mode !== 'printing') return;
-    if (!selectedPrintingLayerPreviewUrl) {
-      printingPreviewSettledRef.current = false;
-      setIsPrintingPreviewSettled(false);
-      setIsPrintingSettledCanvasReady(false);
-      return;
-    }
-    schedulePrintingPreviewSettle();
-  }, [scene.mode, schedulePrintingPreviewSettle, selectedPrintingLayerPreviewUrl]);
-
-  React.useEffect(() => {
-    setIsPrintingSettledCanvasReady(false);
-  }, [selectedPrintingLayerPreviewUrl]);
+  printingPreviewDepsRef.current.printingPreviewTargetResolution = printingPreviewTargetResolution;
 
   const hasPrintingWorkspaceData = printingPreviewTotalLayers > 0 && printingArtifact !== null;
   const activeSliceProfileFingerprint = React.useMemo(() => {
@@ -4917,7 +2993,7 @@ export default function Home() {
     if (visible.length === 0) return '—';
     if (isPrintingEstimatedResinBusy && printingEstimatedResinMl == null) return 'Calculating…';
     if (printingEstimatedResinMl == null) return '—';
-    return `${printingEstimatedResinMl.toFixed(2)} mL`;
+    return `${printingEstimatedResinMl.toFixed(2)} ml`;
   }, [isPrintingEstimatedResinBusy, printingEstimatedResinMl, scene.models]);
 
   const estimatedPrintTimeLabel = React.useMemo(() => {
@@ -4943,9 +3019,9 @@ export default function Home() {
     const minutes = Math.floor(totalSec / 60);
     const hours = Math.floor(minutes / 60);
     const mins = minutes % 60;
-    if (hours > 0) return `~${hours}h ${mins}m`;
-    return `~${mins}m`;
-  }, [activeMaterialProfile, printingPreviewTotalLayers]);
+    if (hours > 0) return _(msg({ message: `~${hours} h ${mins} min`, comment: 'Approximate estimated print time (the "~" marks it as a rough estimate). {hours}/{mins} are whole-number quantities.' }));
+    return _(msg({ message: `~${mins} min`, comment: 'Approximate estimated print time under an hour (the "~" marks it as a rough estimate).' }));
+  }, [_, activeMaterialProfile, printingPreviewTotalLayers]);
 
   const canDownloadPrintArtifact = Boolean(printingArtifact);
   const activeNetworkUiAdapter = React.useMemo(
@@ -5021,10 +3097,6 @@ export default function Home() {
     activePrinterProfile?.networkConnection?.selectedMaterialLayerHeightMm,
     selectedSliceDeviceReachability,
   ]);
-  const printingMonitoringAdapter = React.useMemo(
-    () => getProfileMonitoringUiAdapter(activePrinterProfile?.networkSupport),
-    [activePrinterProfile?.networkSupport],
-  );
   const slicedLayerHeightMm = React.useMemo(() => {
     if (remoteOfflineSlicedLayerHeightMm != null) {
       return remoteOfflineSlicedLayerHeightMm;
@@ -5049,13 +3121,6 @@ export default function Home() {
   const reachablePrintableConnectedPrinterFleet = React.useMemo(() => {
     return printableConnectedPrinterFleet.filter((device) => printerReachabilityByDeviceId[device.id] !== false);
   }, [printableConnectedPrinterFleet, printerReachabilityByDeviceId]);
-  const printingTargetDevice = React.useMemo(() => {
-    if (printableConnectedPrinterFleet.length === 0) return null;
-    return printableConnectedPrinterFleet.find((device) => device.id === activePrinterProfile?.activeNetworkDeviceId)
-      ?? printableConnectedPrinterFleet.find((device) => device.id === printingTargetDeviceId)
-      ?? printableConnectedPrinterFleet[0]
-      ?? null;
-  }, [activePrinterProfile?.activeNetworkDeviceId, printableConnectedPrinterFleet, printingTargetDeviceId]);
   const selectedKnownPrinterDevice = React.useMemo(() => {
     const fleet = activePrinterProfile?.networkFleet ?? [];
     if (fleet.length === 0) return null;
@@ -5072,11 +3137,227 @@ export default function Home() {
       port: selectedKnownPrinterDevice?.port || 80,
     };
   }, [activePrinterProfile?.network?.ipAddress, selectedKnownPrinterDevice?.ipAddress, selectedKnownPrinterDevice?.port]);
-  const monitorSelectableDevices = React.useMemo(() => {
-    const fleet = activePrinterProfile?.networkFleet ?? [];
-    if (fleet.length === 0) return [] as PrinterNetworkDevice[];
-    return fleet.filter((device) => (device.ipAddress || '').trim().length > 0);
-  }, [activePrinterProfile?.networkFleet]);
+
+  // Printing-monitor domain (webcam/device/plates/upload/dashboard/debug/relay) — see usePrintingMonitorManager.
+  const {
+    printingTargetPickerOpen,
+    setPrintingTargetPickerOpen,
+    printingTargetPickerMode,
+    setPrintingTargetPickerMode,
+    printingTargetDeviceId,
+    setPrintingTargetDeviceId,
+    printingTargetMaterialId,
+    setPrintingTargetMaterialId,
+    printingTargetMaterialOptions,
+    setPrintingTargetMaterialOptions,
+    isPrintingTargetMaterialsLoading,
+    setIsPrintingTargetMaterialsLoading,
+    printingTargetMaterialError,
+    setPrintingTargetMaterialError,
+    printingTargetMaterialsCacheRef,
+    printingMonitorSnapshot,
+    setPrintingMonitorSnapshot,
+    printingMonitorWebcamInfo,
+    setPrintingMonitorWebcamInfo,
+    printingMonitorRelayBaseWsUrl,
+    setPrintingMonitorRelayBaseWsUrl,
+    printingMonitorRelaySetupError,
+    setPrintingMonitorRelaySetupError,
+    printingMonitorRelayDebugTransport,
+    setPrintingMonitorRelayDebugTransport,
+    printingMonitorRelayReclaimDebug,
+    setPrintingMonitorRelayReclaimDebug,
+    isPrintingMonitorThumbnailLoaded,
+    setIsPrintingMonitorThumbnailLoaded,
+    printingMonitorThumbnailDisplayUrl,
+    setPrintingMonitorThumbnailDisplayUrl,
+    isPrintingMonitorWebcamLoaded,
+    setIsPrintingMonitorWebcamLoaded,
+    printingMonitorWebcamLoadError,
+    setPrintingMonitorWebcamLoadError,
+    printingMonitorWebcamAspectRatio,
+    setPrintingMonitorWebcamAspectRatio,
+    printingMonitorWebcamRefreshNonce,
+    setPrintingMonitorWebcamRefreshNonce,
+    isPrintingMonitorWebcamResetBusy,
+    setIsPrintingMonitorWebcamResetBusy,
+    isPrintingMonitorWebcamSnapshotSaving,
+    setIsPrintingMonitorWebcamSnapshotSaving,
+    printingMonitorWebcamExpanded,
+    setPrintingMonitorWebcamExpanded,
+    printingMonitorRecentPlates,
+    setPrintingMonitorRecentPlates,
+    isPrintingMonitorRecentPlatesLoading,
+    setIsPrintingMonitorRecentPlatesLoading,
+    printingMonitorRecentPlatesError,
+    setPrintingMonitorRecentPlatesError,
+    printingMonitorPlatesStoragePath,
+    setPrintingMonitorPlatesStoragePath,
+    printingMonitorSelectedPlateId,
+    setPrintingMonitorSelectedPlateId,
+    isPrintingMonitorPolling,
+    setIsPrintingMonitorPolling,
+    isPrintingMonitorStatusRequestInFlight,
+    setIsPrintingMonitorStatusRequestInFlight,
+    printingMonitorLastStatusSuccessAtMs,
+    setPrintingMonitorLastStatusSuccessAtMs,
+    printingMonitorNowEpochMs,
+    setPrintingMonitorNowEpochMs,
+    printingMonitorActionBusy,
+    setPrintingMonitorActionBusy,
+    printingMonitorControlPendingAction,
+    setPrintingMonitorControlPendingAction,
+    printingMonitorActionStatus,
+    setPrintingMonitorActionStatus,
+    printingMonitorPendingConfirmation,
+    setPrintingMonitorPendingConfirmation,
+    printingMonitorDeviceId,
+    setPrintingMonitorDeviceId,
+    printingMonitorViewMode,
+    setPrintingMonitorViewMode,
+    printingMonitorDashboardSnapshots,
+    setPrintingMonitorDashboardSnapshots,
+    isPrintingMonitorDashboardRefreshing,
+    setIsPrintingMonitorDashboardRefreshing,
+    isPrintingMonitorPrinterMenuOpen,
+    setIsPrintingMonitorPrinterMenuOpen,
+    isPrintingMonitorPrinterThumbnailFailed,
+    setIsPrintingMonitorPrinterThumbnailFailed,
+    printingMonitorModalOpen,
+    setPrintingMonitorModalOpen,
+    isPrintingMonitorDebugOpen,
+    setIsPrintingMonitorDebugOpen,
+    isPrintingMonitorRtspDebugOpen,
+    setIsPrintingMonitorRtspDebugOpen,
+    printingMonitorDebugCopyState,
+    setPrintingMonitorDebugCopyState,
+    printingMonitorLastFeatureToggleResponse,
+    setPrintingMonitorLastFeatureToggleResponse,
+    printingMonitorDebugState,
+    setPrintingMonitorDebugState,
+    printingMonitorPrinterMenuRef,
+    printingMonitorWebcamViewportRef,
+    printingMonitorThumbnailCacheRef,
+    printingMonitorWebcamRequestInFlightRef,
+    printingMonitorWebcamBusyUntilEpochMsRef,
+    printingMonitorWebcamAutoPollBlockedRef,
+    printingMonitorWebcamConsecutiveTimeoutsRef,
+    printingMonitorRelayAutoRetryCountRef,
+    printingMonitorRelayAutoRetryTimeoutRef,
+    printingMonitorWebcamReadinessTokenRef,
+    printingMonitorWebcamReadinessTimeoutRef,
+    printingMonitorStartFocusDeviceIdRef,
+    printingMonitorRecentPlatesRequestIdRef,
+    printingMonitorRecentPlatesRef,
+    printingMonitorSelectedPlateIdRef,
+    printingMonitorRecentPlatesCacheRef,
+    printingMonitorLeftColumnRef,
+    printingMonitorWebcamSectionRef,
+    printingMonitorWebcamFollowerHeightPxRef,
+    monitorReachabilityInconclusiveCountsRef,
+    selectedPrinterMonitorSnapshot,
+    setSelectedPrinterMonitorSnapshot,
+    printingMonitoringAdapter,
+    printingTargetDevice,
+    monitorSelectableDevices,
+    dashboardMonitorDevices,
+    dashboardOnlineMonitorDevices,
+    monitoringDevice,
+    monitoringDeviceId,
+    monitoringDeviceHost,
+    monitoringDevicePort,
+    monitoringDeviceMainboardId,
+    printingMonitorRecentPlatesCacheKey,
+    printingTargetMaterialGroups,
+    requiresRemoteMaterialSelectionForUpload,
+    isPreSliceTargetPicker,
+    printingMonitorPlateId,
+    printingMonitorThumbnailUrl,
+    printingMonitorThumbnailCacheKey,
+    printingMonitorInlineWebcamUrl,
+    printingMonitorRtspSourceUrl,
+    printingMonitorIsDesktopRuntime,
+    printingMonitorWebcamUrl,
+    printingMonitorWebcamUsesRelayWs,
+    printingMonitorRtspDebugSummary,
+    printingMonitorHasCamera,
+    printingMonitorUsesTwoColumnDetailLayout,
+    printingMonitorModalWidthClass,
+    printingMonitorWebcamStatusPresentation,
+    printingMonitorWebcamDisplayPresentation,
+    printingMonitorUiPolicy,
+    printingMonitorBusyGraceMs,
+    printingMonitorReachabilityMaxInconclusivePolls,
+    printingMonitorSupportsWebcamStreamSlotReset,
+    printingMonitorWebcamMaxConsecutiveTimeouts,
+    printingMonitorWebcamTimeoutCooldownMs,
+    printingMonitorWebcamFailureCooldownMs,
+    printingMonitorWebcamCanResetStreamSlot,
+    monitorWebcamRotationDeg,
+    shouldSwapMonitorWebcamAspect,
+    monitorWebcamTransform,
+    printingMonitorCanExpandWebcam,
+    printingMonitorDetailWebcamExpanded,
+    monitorWebcamDisplayAspectRatio,
+    printingMonitorStateTextNormalized,
+    printingMonitorIsPauseTransition,
+    printingMonitorIsCancelTransition,
+    printingMonitorHasActivePrint,
+    printingMonitorAnyActionBusy,
+    printingMonitorCancelButtonAnimating,
+    printingMonitorPauseButtonAnimating,
+    printingMonitorPauseButtonDisabled,
+    printingMonitorCancelButtonDisabled,
+    printingMonitorEmergencyStopDisabled,
+    printingMonitorDisplayProgressPct,
+    printingMonitorDisplayCurrentLayer,
+    printingMonitorDisplayTotalLayers,
+    printingMonitorDisplayMaterialProfile,
+    isPrintingMonitorSelectedPrinterOfflineRaw,
+    isPrintingMonitorWithinSlowResponseGrace,
+    printingMonitorSlowResponseGraceRemainingSec,
+    shouldShowPrintingMonitorSlowResponseCard,
+    isPrintingMonitorSelectedPrinterOffline,
+    hasMonitorSelectableTarget,
+    hasPrintingMonitorFleet,
+    printingMonitorPrinterThumbnailSrc,
+    printingMonitorHeaderUsesFleetLabelOrder,
+    printingMonitorHeaderTopLabel,
+    printingMonitorHeaderBottomLabel,
+    printingMonitorHeaderTitle,
+    showTopbarMonitorButton,
+    refreshPrintingMonitorRecentPlates,
+    handlePrintingMonitorStoragePathChange,
+    cancelPrintingMonitorWebcamReadinessCheck,
+    schedulePrintingMonitorMjpegReadinessCheck,
+    triggerPrintingMonitorWebcamRetry,
+    handleSavePrintingMonitorWebcamSnapshot,
+    flushMonitors,
+    handleResetPrintingMonitorWebcamStreamSlot,
+    openPrintingMonitorForTargetDevice,
+    executeStartMonitorRecentPlate,
+    handleStartMonitorRecentPlate,
+    executeDeleteMonitorRecentPlate,
+    handleDeleteMonitorRecentPlate,
+    executePrintingMonitorControlAction,
+    executePrintingMonitorFeatureToggle,
+    executePrintingMonitorSdcpDebugCommand,
+    handlePrintingMonitorControlAction,
+    printingMonitorDebugBundle,
+    printingMonitorDebugPanels,
+    handleCopyPrintingMonitorDebugBundle,
+  } = usePrintingMonitorManager({
+    activePrinterProfile,
+    setPrintingMonitorError,
+    printingReadyPlateId,
+    setPrintingReadyPlateId,
+    printerReachabilityByDeviceId,
+    activeNetworkUiAdapter,
+    slicedLayerHeightMm,
+    isLayerHeightMatch,
+    printableConnectedPrinterFleet,
+    selectedPrinterProbeTarget,
+  });
 
   const allReachabilityProbeTargets = React.useMemo(() => {
     const targets = new Map<string, {
@@ -5130,57 +3411,7 @@ export default function Home() {
     return Array.from(targets.values());
   }, [profileState.printerProfiles]);
 
-  const dashboardMonitorDevices = React.useMemo(() => {
-    if (monitorSelectableDevices.length === 0) return [] as PrinterNetworkDevice[];
 
-    return [...monitorSelectableDevices].sort((a, b) => {
-      const aOffline = printerReachabilityByDeviceId[a.id] === false || a.connected !== true;
-      const bOffline = printerReachabilityByDeviceId[b.id] === false || b.connected !== true;
-      if (aOffline === bOffline) return 0;
-      return aOffline ? 1 : -1;
-    });
-  }, [monitorSelectableDevices, printerReachabilityByDeviceId]);
-
-  const dashboardOnlineMonitorDevices = React.useMemo(() => {
-    return monitorSelectableDevices.filter((device) => {
-      const hasHost = (device.ipAddress || '').trim().length > 0;
-      if (!hasHost) return false;
-      if (printerReachabilityByDeviceId[device.id] === false) return false;
-      return device.connected === true;
-    });
-  }, [monitorSelectableDevices, printerReachabilityByDeviceId]);
-  const monitoringDevice = React.useMemo(() => {
-    if (monitorSelectableDevices.length > 0) {
-      return monitorSelectableDevices.find((device) => device.id === printingMonitorDeviceId)
-        ?? monitorSelectableDevices.find((device) => device.id === activePrinterProfile?.activeNetworkDeviceId)
-        ?? monitorSelectableDevices.find((device) => device.id === printingTargetDevice?.id)
-        ?? monitorSelectableDevices[0]
-        ?? null;
-    }
-    return null;
-  }, [activePrinterProfile?.activeNetworkDeviceId, monitorSelectableDevices, printingMonitorDeviceId, printingTargetDevice?.id]);
-  const monitoringDeviceId = monitoringDevice?.id ?? null;
-  const monitoringDeviceHost = React.useMemo(() => {
-    return (monitoringDevice?.ipAddress || '').trim();
-  }, [monitoringDevice?.ipAddress]);
-  const monitoringDevicePort = monitoringDevice?.port || 80;
-  const monitoringDeviceMainboardId = React.useMemo(() => {
-    if (!monitoringDeviceId) return null;
-    if (!monitoringDeviceId.includes('-')) return monitoringDeviceId;
-    return monitoringDeviceId.split('-').pop() ?? monitoringDeviceId;
-  }, [monitoringDeviceId]);
-  const printingMonitorRecentPlatesCacheKey = React.useMemo(() => {
-    if (!monitoringDeviceHost) return null;
-    const pluginId = (printingMonitoringAdapter.pluginId ?? '').trim();
-    if (!pluginId) return null;
-    return `${pluginId}|${monitoringDeviceId ?? 'unknown'}|${monitoringDeviceHost.toLowerCase()}:${monitoringDevicePort}|${printingMonitorPlatesStoragePath}`;
-  }, [
-    monitoringDeviceHost,
-    monitoringDeviceId,
-    monitoringDevicePort,
-    printingMonitorPlatesStoragePath,
-    printingMonitoringAdapter.pluginId,
-  ]);
 
   React.useEffect(() => {
     if (allReachabilityProbeTargets.length === 0) return;
@@ -5267,21 +3498,6 @@ export default function Home() {
     };
   }, [allReachabilityProbeTargets]);
 
-  const printingTargetMaterialGroups = React.useMemo(() => {
-    const groups = new Map<string, FleetUploadMaterialOption[]>();
-    for (const material of printingTargetMaterialOptions) {
-      const label = material.layerHeightMm == null
-        ? 'Layer height unknown'
-        : '';
-      const bucket = groups.get(label);
-      if (bucket) {
-        bucket.push(material);
-      } else {
-        groups.set(label, [material]);
-      }
-    }
-    return Array.from(groups.entries()).map(([label, materials]) => ({ label, materials }));
-  }, [printingTargetMaterialOptions]);
   const sendToPrinterTargetName = printingTargetDevice?.displayName || printingTargetDevice?.hostName || printingTargetDevice?.ipAddress || null;
   const shouldShowOfflineRemoteMaterialName = Boolean(
     activeNetworkUiAdapter
@@ -5331,23 +3547,18 @@ export default function Home() {
     && reachablePrintableConnectedPrinterFleet.length > 0,
   );
   const canSliceAndPrint = canSliceAndUpload && Boolean(printingMonitoringAdapter.operations?.start);
-  const requiresRemoteMaterialSelectionForUpload = Boolean(
-    activeNetworkUiAdapter
-    && activeNetworkUiAdapter.supportsRemoteMaterialProfiles !== false,
-  );
   const suggestedSliceOutputFilename = React.useMemo(() => {
     const modelName = (scene.activeModel?.name ?? scene.models[0]?.name ?? '').trim();
     const base = (modelName || activePrinterProfile?.name || 'slice_export')
       .replace(/\.[^.]+$/, '')
       .replace(/[<>:"/\\|?*]+/g, '_')
       .replace(/\s+/g, '_');
-    const outputFormat = (activePrinterProfile?.display.outputFormat ?? '').trim();
-    const ext = outputFormat.length > 0
-      ? (outputFormat.startsWith('.') ? outputFormat : `.${outputFormat}`)
-      : '.print';
-    return `${base || 'slice_export'}${ext}`;
-  }, [activePrinterProfile?.display.outputFormat, activePrinterProfile?.name, scene.activeModel?.name, scene.models]);
-  const isPreSliceTargetPicker = printingTargetPickerMode !== 'post-slice';
+    const ext = resolveOutputFileExtension(
+      activePrinterProfile?.display.outputFormat,
+      activePrinterProfile?.display.formatVersion,
+    );
+    return `${base || 'slice_export'}.${ext}`;
+  }, [activePrinterProfile?.display.outputFormat, activePrinterProfile?.display.formatVersion, activePrinterProfile?.name, scene.activeModel?.name, scene.models]);
   const canPrintNow = Boolean(
     printingReadyPlateId
     && printingTargetDevice?.connected === true,
@@ -5477,455 +3688,14 @@ export default function Home() {
     const total = Math.max(0, printingDeviceProcessingElapsedSec);
     const minutes = Math.floor(total / 60);
     const seconds = total % 60;
-    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
-  }, [printingDeviceProcessingElapsedSec]);
+    const paddedSeconds = seconds.toString().padStart(2, '0');
+    return _(msg`${minutes} min ${paddedSeconds} s`);
+  }, [_, printingDeviceProcessingElapsedSec]);
 
-  const printingMonitorPlateId = React.useMemo(() => {
-    const candidate = printingMonitorSnapshot?.plateId ?? printingReadyPlateId;
-    if (candidate == null || !Number.isFinite(candidate) || candidate <= 0) return null;
-    return Math.round(candidate);
-  }, [printingMonitorSnapshot?.plateId, printingReadyPlateId]);
-  const printingMonitorThumbnailUrl = React.useMemo(() => {
-    if (!monitoringDevice) return null;
-    const host = (monitoringDevice.ipAddress || '').trim();
-    if (!host) return null;
-    const port = monitoringDevice.port || 80;
 
-    const metadataThumbnail = typeof printingMonitorSnapshot?.thumbnailPath === 'string'
-      ? printingMonitorSnapshot.thumbnailPath.trim()
-      : '';
-    if (metadataThumbnail) {
-      const resolved = resolvePrintingMonitorAbsoluteUrl(metadataThumbnail, host, port);
-      if (resolved) return resolved;
-    }
 
-    if (printingMonitorPlateId == null) return null;
-    const base = `http://${host}${port === 80 ? '' : `:${port}`}`;
-    return `${base}/static/plates/${printingMonitorPlateId}/3d.png`;
-  }, [monitoringDevice, printingMonitorPlateId, printingMonitorSnapshot?.thumbnailPath]);
-  const printingMonitorThumbnailCacheKey = React.useMemo(() => {
-    if (!monitoringDevice || !printingMonitorThumbnailUrl) return null;
-    const host = (monitoringDevice.ipAddress || '').trim();
-    if (!host) return null;
-    const port = monitoringDevice.port || 80;
-    return `${host}:${port}|${printingMonitorThumbnailUrl}`;
-  }, [monitoringDevice, printingMonitorThumbnailUrl]);
-  const printingMonitorInlineWebcamUrl = React.useMemo(() => {
-    const candidates = [
-      printingMonitorWebcamInfo?.streamUrl,
-      printingMonitorWebcamInfo?.snapshotUrl,
-    ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
 
-    return candidates.find((value) => /^https?:\/\//i.test(value)
-      || /^wss?:\/\//i.test(value)
-      || /^data:/i.test(value)
-      || /^blob:/i.test(value));
-  }, [printingMonitorWebcamInfo?.snapshotUrl, printingMonitorWebcamInfo?.streamUrl]);
 
-  const printingMonitorRtspSourceUrl = React.useMemo(() => {
-    const candidates = [
-      printingMonitorWebcamInfo?.streamUrl,
-      printingMonitorWebcamInfo?.snapshotUrl,
-    ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
-
-    return candidates.find((value) => /^rtsps?:\/\//i.test(value)) ?? null;
-  }, [printingMonitorWebcamInfo?.snapshotUrl, printingMonitorWebcamInfo?.streamUrl]);
-
-  const printingMonitorIsDesktopRuntime = React.useMemo(() => {
-    if (typeof window === 'undefined') return false;
-    return window.location.protocol === 'tauri:'
-      || window.location.protocol === 'file:'
-      || window.location.hostname === 'tauri.localhost'
-      || typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
-  }, []);
-
-  React.useEffect(() => {
-    if (!printingMonitorRtspSourceUrl || !printingMonitorModalOpen) {
-      setPrintingMonitorRelayBaseWsUrl(null);
-      setPrintingMonitorRelaySetupError(null);
-      setPrintingMonitorRelayDebugTransport(null);
-      setPrintingMonitorRelayReclaimDebug(null);
-      return;
-    }
-
-    let cancelled = false;
-    let inFlight = false;
-
-    const refreshRelayDebug = async () => {
-      if (cancelled || inFlight) return;
-      inFlight = true;
-      try {
-        const relayStatus = await fetchRtspRelayStatus(printingMonitorRtspSourceUrl);
-        const response = { ok: relayStatus.ok, status: relayStatus.status };
-        const payload = relayStatus.payload ?? null;
-        if (cancelled) return;
-
-        const wsBaseUrl = typeof payload?.wsBaseUrl === 'string'
-          ? payload.wsBaseUrl.trim()
-          : '';
-        if (response.ok && /^wss?:\/\//i.test(wsBaseUrl)) {
-          setPrintingMonitorRelayBaseWsUrl(wsBaseUrl);
-          setPrintingMonitorRelaySetupError(null);
-          const debugTransport = payload?.rtspDebugTransport && typeof payload.rtspDebugTransport === 'object'
-            ? {
-                clientPort: typeof payload.rtspDebugTransport.clientPort === 'number' ? payload.rtspDebugTransport.clientPort : null,
-                serverPort: typeof payload.rtspDebugTransport.serverPort === 'number' ? payload.rtspDebugTransport.serverPort : null,
-                transportHeader: typeof payload.rtspDebugTransport.transportHeader === 'string'
-                  ? payload.rtspDebugTransport.transportHeader
-                  : null,
-                updatedAtEpochMs: typeof payload.rtspDebugTransport.updatedAtEpochMs === 'number'
-                  ? payload.rtspDebugTransport.updatedAtEpochMs
-                  : null,
-              }
-            : null;
-          const reclaimDebug = payload?.rtspReclaimDebug && typeof payload.rtspReclaimDebug === 'object'
-            ? {
-                activeSessionId: typeof payload.rtspReclaimDebug.activeSessionId === 'string'
-                  ? payload.rtspReclaimDebug.activeSessionId
-                  : null,
-                clientRtpPort: typeof payload.rtspReclaimDebug.clientRtpPort === 'number'
-                  ? payload.rtspReclaimDebug.clientRtpPort
-                  : null,
-                serverRtpPort: typeof payload.rtspReclaimDebug.serverRtpPort === 'number'
-                  ? payload.rtspReclaimDebug.serverRtpPort
-                  : null,
-                lastClaimStatus: typeof payload.rtspReclaimDebug.lastClaimStatus === 'string'
-                  ? payload.rtspReclaimDebug.lastClaimStatus
-                  : null,
-                lastClaimAtMs: typeof payload.rtspReclaimDebug.lastClaimAtMs === 'number'
-                  ? payload.rtspReclaimDebug.lastClaimAtMs
-                  : null,
-                updatedAtMs: typeof payload.rtspReclaimDebug.updatedAtMs === 'number'
-                  ? payload.rtspReclaimDebug.updatedAtMs
-                  : null,
-              }
-            : null;
-          setPrintingMonitorRelayDebugTransport(debugTransport);
-          setPrintingMonitorRelayReclaimDebug(reclaimDebug);
-          return;
-        }
-
-        const payloadError = typeof payload?.error === 'string' ? payload.error.trim() : '';
-        const fallbackError = 'RTSP relay endpoint returned no websocket base URL.';
-        setPrintingMonitorRelayBaseWsUrl(null);
-        setPrintingMonitorRelaySetupError(payloadError || fallbackError);
-        setPrintingMonitorRelayDebugTransport(null);
-        setPrintingMonitorRelayReclaimDebug(null);
-      } catch (error) {
-        if (!cancelled) {
-          setPrintingMonitorRelayBaseWsUrl(null);
-          const message = error instanceof Error ? error.message : 'Unable to reach RTSP relay endpoint.';
-          setPrintingMonitorRelaySetupError(message);
-          setPrintingMonitorRelayDebugTransport(null);
-          setPrintingMonitorRelayReclaimDebug(null);
-        }
-      } finally {
-        inFlight = false;
-      }
-    };
-
-    void refreshRelayDebug();
-    const intervalId = window.setInterval(() => {
-      void refreshRelayDebug();
-    }, DEFAULT_RTSP_DEBUG_POLL_MS);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [printingMonitorModalOpen, printingMonitorRtspSourceUrl]);
-
-  const printingMonitorWebcamUrl = React.useMemo(() => {
-    if (printingMonitorInlineWebcamUrl) return printingMonitorInlineWebcamUrl;
-
-    if (!printingMonitorRtspSourceUrl || !printingMonitorRelayBaseWsUrl) return null;
-
-    const relayQueryUrl = encodeURIComponent(printingMonitorRtspSourceUrl);
-    return `${printingMonitorRelayBaseWsUrl}?url=${relayQueryUrl}`;
-  }, [printingMonitorInlineWebcamUrl, printingMonitorRelayBaseWsUrl, printingMonitorRtspSourceUrl]);
-  const printingMonitorWebcamUsesRelayWs = React.useMemo(() => {
-    const candidate = (printingMonitorWebcamUrl ?? '').trim();
-    return /^wss?:\/\//i.test(candidate);
-  }, [printingMonitorWebcamUrl]);
-  const printingMonitorRtspDebugSummary = React.useMemo(() => {
-    if (printingMonitorInlineWebcamUrl) {
-      return {
-        title: 'Inline webcam transport',
-        description: 'The monitor is using the printer-provided HTTP/data/blob stream directly, so no RTSP relay is involved.',
-      };
-    }
-
-    if (printingMonitorRtspSourceUrl && printingMonitorRelayBaseWsUrl) {
-      return {
-        title: 'RTSP relay transport',
-        description: 'The printer reported an RTSP source and the monitor is bridging it through the local relay websocket.',
-      };
-    }
-
-    if (printingMonitorRtspSourceUrl) {
-      if (printingMonitorIsDesktopRuntime && printingMonitorRelaySetupError) {
-        return {
-          title: 'RTSP relay unavailable',
-          description: `The printer reported an RTSP URL, but the relay endpoint could not be initialized in this bundled runtime (${printingMonitorRelaySetupError}).`,
-        };
-      }
-
-      return {
-        title: 'RTSP source detected',
-        description: 'The printer reported an RTSP URL, but the local relay websocket is not ready yet.',
-      };
-    }
-
-    return {
-      title: 'No RTSP source',
-      description: 'The printer did not report an RTSP webcam URL for this monitor session.',
-    };
-  }, [
-    printingMonitorInlineWebcamUrl,
-    printingMonitorIsDesktopRuntime,
-    printingMonitorRelayBaseWsUrl,
-    printingMonitorRelaySetupError,
-    printingMonitorRtspSourceUrl,
-  ]);
-  const printingMonitorHasCamera = activePrinterProfile?.hasCamera !== false;
-  const printingMonitorUsesTwoColumnDetailLayout = printingMonitorHasCamera;
-  const printingMonitorModalWidthClass = printingMonitorViewMode === 'detail' && !printingMonitorUsesTwoColumnDetailLayout
-    ? 'w-[min(760px,94vw)]'
-    : 'w-[min(1120px,94vw)]';
-  const printingMonitorWebcamStatusPresentation = React.useMemo(() => {
-    const rawMessage = (printingMonitorWebcamInfo?.message ?? 'No webcam feed reported yet.').trim();
-    const messageLower = rawMessage.toLowerCase();
-
-    if (messageLower.includes('stream limit') || messageLower.includes('simultaneous')) {
-      return {
-        tone: 'warning' as const,
-        title: 'Video Stream Busy',
-        description: rawMessage,
-      };
-    }
-
-    if (messageLower.includes('failed') || messageLower.includes('error') || messageLower.includes('unable')) {
-      return {
-        tone: 'error' as const,
-        title: 'Webcam Unavailable',
-        description: rawMessage,
-      };
-    }
-
-    return {
-      tone: 'neutral' as const,
-      title: 'Webcam Not Ready',
-      description: rawMessage,
-    };
-  }, [printingMonitorWebcamInfo?.message]);
-  const printingMonitorWebcamDisplayPresentation = React.useMemo(() => {
-    if (printingMonitorWebcamLoadError) {
-      return {
-        tone: 'error' as const,
-        title: 'Webcam Unavailable',
-        description: printingMonitorWebcamLoadError,
-      };
-    }
-
-    return printingMonitorWebcamStatusPresentation;
-  }, [printingMonitorWebcamLoadError, printingMonitorWebcamStatusPresentation]);
-  const printingMonitorUiPolicy = React.useMemo(() => {
-    return printingMonitoringAdapter.getMonitoringUiPolicy?.() ?? null;
-  }, [printingMonitoringAdapter]);
-  const printingMonitorBusyGraceMs = printingMonitorUiPolicy?.busyResponseGraceMs ?? DEFAULT_MONITOR_BUSY_GRACE_MS;
-  const printingMonitorReachabilityMaxInconclusivePolls = printingMonitorUiPolicy?.inconclusiveReachabilityMaxPolls ?? null;
-  const printingMonitorSupportsWebcamStreamSlotReset = Boolean(printingMonitorUiPolicy?.supportsWebcamStreamSlotReset);
-  const printingMonitorWebcamMaxConsecutiveTimeouts = printingMonitorUiPolicy?.webcamMaxConsecutiveTimeouts ?? DEFAULT_WEBCAM_MAX_CONSECUTIVE_TIMEOUTS;
-  const printingMonitorWebcamTimeoutCooldownMs = printingMonitorUiPolicy?.webcamTimeoutCooldownMs ?? DEFAULT_WEBCAM_TIMEOUT_COOLDOWN_MS;
-  const printingMonitorWebcamFailureCooldownMs = printingMonitorUiPolicy?.webcamFailureCooldownMs ?? DEFAULT_WEBCAM_FAILURE_COOLDOWN_MS;
-  const printingMonitorWebcamCanResetStreamSlot = React.useMemo(() => {
-    if (!printingMonitorSupportsWebcamStreamSlotReset) return false;
-    const messageLower = String(printingMonitorWebcamInfo?.message ?? '').toLowerCase();
-    if (!messageLower) return false;
-    return messageLower.includes('stream limit') || messageLower.includes('simultaneous');
-  }, [printingMonitorSupportsWebcamStreamSlotReset, printingMonitorWebcamInfo?.message]);
-  const monitorWebcamRotationDeg = React.useMemo(() => {
-    const candidate = Number(activePrinterProfile?.display.webcamRotationDeg ?? 0);
-    if (candidate === 0 || candidate === 90 || candidate === 180 || candidate === 270) {
-      return candidate as 0 | 90 | 180 | 270;
-    }
-    return 0;
-  }, [activePrinterProfile?.display.webcamRotationDeg]);
-  const shouldSwapMonitorWebcamAspect = React.useMemo(() => {
-    return monitorWebcamRotationDeg === 90 || monitorWebcamRotationDeg === 270;
-  }, [monitorWebcamRotationDeg]);
-  const monitorWebcamTransform = React.useMemo(() => {
-    const rotate = monitorWebcamRotationDeg !== 0
-      ? `rotate(${monitorWebcamRotationDeg}deg)`
-      : '';
-    const scale = shouldSwapMonitorWebcamAspect
-      ? ` scale(${printingMonitorWebcamAspectRatio ?? 1})`
-      : '';
-    const combined = `${rotate}${scale}`.trim();
-    return combined.length > 0 ? combined : undefined;
-  }, [monitorWebcamRotationDeg, printingMonitorWebcamAspectRatio, shouldSwapMonitorWebcamAspect]);
-  const printingMonitorCanExpandWebcam = React.useMemo(() => {
-    return Boolean(
-      printingMonitorModalOpen
-      && printingMonitorViewMode === 'detail'
-      && printingMonitorUsesTwoColumnDetailLayout
-      && printingMonitorHasCamera
-    );
-  }, [
-    printingMonitorHasCamera,
-    printingMonitorModalOpen,
-    printingMonitorUsesTwoColumnDetailLayout,
-    printingMonitorViewMode,
-  ]);
-  const printingMonitorDetailWebcamExpanded = printingMonitorCanExpandWebcam && printingMonitorWebcamExpanded;
-  const monitorWebcamDisplayAspectRatio = React.useMemo(() => {
-    const normalizedAspect = normalizePrintingMonitorWebcamAspectRatio(printingMonitorWebcamAspectRatio);
-    if (normalizedAspect == null) {
-      return null;
-    }
-    return shouldSwapMonitorWebcamAspect
-      ? (1 / normalizedAspect)
-      : normalizedAspect;
-  }, [printingMonitorWebcamAspectRatio, shouldSwapMonitorWebcamAspect]);
-  const printingMonitorStateTextNormalized = React.useMemo(() => {
-    return String(printingMonitorSnapshot?.stateText ?? '').trim().toLowerCase();
-  }, [printingMonitorSnapshot?.stateText]);
-  const printingMonitorIsPauseTransition = React.useMemo(() => {
-    return Boolean(
-      printingMonitorSnapshot?.pauseLatched
-      || printingMonitorStateTextNormalized === 'pausing',
-    );
-  }, [printingMonitorSnapshot?.pauseLatched, printingMonitorStateTextNormalized]);
-  const printingMonitorIsCancelTransition = React.useMemo(() => {
-    return Boolean(
-      printingMonitorStateTextNormalized === 'canceling'
-      || (printingMonitorSnapshot?.cancelLatched && printingMonitorStateTextNormalized !== 'idle'),
-    );
-  }, [printingMonitorSnapshot?.cancelLatched, printingMonitorStateTextNormalized]);
-  const printingMonitorHasActivePrint = React.useMemo(() => {
-    return Boolean(
-      printingMonitorSnapshot?.isPrinting
-      || printingMonitorSnapshot?.isPaused
-      || printingMonitorIsCancelTransition
-      || printingMonitorIsPauseTransition
-    );
-  }, [
-    printingMonitorSnapshot?.isPaused,
-    printingMonitorSnapshot?.isPrinting,
-    printingMonitorIsCancelTransition,
-    printingMonitorIsPauseTransition,
-  ]);
-  const printingMonitorAnyActionBusy = React.useMemo(() => {
-    return printingMonitorActionBusy !== null || printingMonitorControlPendingAction !== null;
-  }, [printingMonitorActionBusy, printingMonitorControlPendingAction]);
-  const printingMonitorCancelButtonAnimating = React.useMemo(() => {
-    return Boolean(
-      printingMonitorControlPendingAction === 'cancel'
-      || printingMonitorIsCancelTransition
-      || printingMonitorActionBusy === 'cancel',
-    );
-  }, [printingMonitorActionBusy, printingMonitorControlPendingAction, printingMonitorIsCancelTransition]);
-  const printingMonitorPauseButtonAnimating = React.useMemo(() => {
-    return Boolean(
-      printingMonitorControlPendingAction === 'pause'
-      || printingMonitorControlPendingAction === 'resume'
-      || printingMonitorIsPauseTransition
-      || printingMonitorActionBusy === 'pause'
-      || printingMonitorActionBusy === 'resume',
-    );
-  }, [
-    printingMonitorActionBusy,
-    printingMonitorControlPendingAction,
-    printingMonitorIsPauseTransition,
-  ]);
-  const printingMonitorPauseButtonDisabled = React.useMemo(() => {
-    if (!printingMonitoringAdapter.operations || !printingMonitorHasActivePrint) return true;
-    if (printingMonitorIsCancelTransition || printingMonitorControlPendingAction === 'cancel') return true;
-    if (printingMonitorIsPauseTransition || printingMonitorControlPendingAction === 'pause') return true;
-    return (
-      printingMonitorActionBusy === 'start'
-      || printingMonitorActionBusy === 'delete'
-      || printingMonitorActionBusy === 'pause'
-      || printingMonitorActionBusy === 'resume'
-      || printingMonitorActionBusy === 'emergency-stop'
-      || printingMonitorControlPendingAction === 'resume'
-      || printingMonitorControlPendingAction === 'emergency-stop'
-    );
-  }, [
-    printingMonitorActionBusy,
-    printingMonitorControlPendingAction,
-    printingMonitorHasActivePrint,
-    printingMonitorIsCancelTransition,
-    printingMonitorIsPauseTransition,
-    printingMonitoringAdapter.operations,
-  ]);
-  const printingMonitorCancelButtonDisabled = React.useMemo(() => {
-    if (!printingMonitoringAdapter.operations || !printingMonitorHasActivePrint) return true;
-    if (printingMonitorIsPauseTransition || printingMonitorIsCancelTransition) return true;
-    return printingMonitorAnyActionBusy;
-  }, [
-    printingMonitorAnyActionBusy,
-    printingMonitorHasActivePrint,
-    printingMonitorIsCancelTransition,
-    printingMonitorIsPauseTransition,
-    printingMonitoringAdapter.operations,
-  ]);
-  const printingMonitorEmergencyStopDisabled = React.useMemo(() => {
-    if (!printingMonitoringAdapter.operations) return true;
-    return (
-      printingMonitorActionBusy === 'start'
-      || printingMonitorActionBusy === 'delete'
-      || printingMonitorActionBusy === 'pause'
-      || printingMonitorActionBusy === 'resume'
-      || printingMonitorActionBusy === 'emergency-stop'
-      || printingMonitorControlPendingAction === 'pause'
-      || printingMonitorControlPendingAction === 'resume'
-      || printingMonitorControlPendingAction === 'emergency-stop'
-    );
-  }, [printingMonitorActionBusy, printingMonitorControlPendingAction, printingMonitoringAdapter.operations]);
-  const printingMonitorDisplayProgressPct = React.useMemo(() => {
-    if (!printingMonitorHasActivePrint) return null;
-    const totalRaw = printingMonitorSnapshot?.totalLayers;
-    const currentRaw = printingMonitorSnapshot?.currentLayer;
-    const totalNumeric = Number(totalRaw);
-    const currentNumeric = Number(currentRaw);
-    if (!Number.isFinite(totalNumeric) || !Number.isFinite(currentNumeric)) return null;
-
-    const total = Math.max(0, Math.round(totalNumeric));
-    const current = Math.max(0, Math.round(currentNumeric));
-    if (total <= 0) return null;
-
-    const completedLayers = Math.max(0, Math.min(total, current - 1));
-    return (completedLayers / total) * 100;
-  }, [printingMonitorHasActivePrint, printingMonitorSnapshot?.currentLayer, printingMonitorSnapshot?.totalLayers]);
-  const printingMonitorDisplayCurrentLayer = React.useMemo(() => {
-    if (!printingMonitorHasActivePrint) return null;
-    const raw = printingMonitorSnapshot?.currentLayer;
-    if (raw == null || !Number.isFinite(raw) || raw < 0) return null;
-    return Math.max(0, Math.round(raw));
-  }, [printingMonitorHasActivePrint, printingMonitorSnapshot?.currentLayer]);
-  const printingMonitorDisplayTotalLayers = React.useMemo(() => {
-    if (!printingMonitorHasActivePrint) return null;
-    const raw = printingMonitorSnapshot?.totalLayers;
-    if (raw == null || !Number.isFinite(raw) || raw <= 0) return null;
-    return Math.round(raw);
-  }, [printingMonitorHasActivePrint, printingMonitorSnapshot?.totalLayers]);
-  const printingMonitorDisplayMaterialProfile = React.useMemo(() => {
-    if (!printingMonitorHasActivePrint) return '—';
-
-    const activePlateId = printingMonitorPlateId;
-    if (activePlateId != null) {
-      const activePlate = printingMonitorRecentPlates.find((plate) => plate.plateId === activePlateId);
-      if (activePlate?.materialProfileName) return activePlate.materialProfileName;
-    }
-
-    if (printingMonitorSelectedPlateId != null) {
-      const selectedPlate = printingMonitorRecentPlates.find((plate) => plate.plateId === printingMonitorSelectedPlateId);
-      if (selectedPlate?.materialProfileName) return selectedPlate.materialProfileName;
-    }
-
-    return '—';
-  }, [printingMonitorHasActivePrint, printingMonitorPlateId, printingMonitorRecentPlates, printingMonitorSelectedPlateId]);
   const selectedPrinterStateTextNormalized = React.useMemo(() => {
     return String(selectedPrinterMonitorSnapshot?.stateText ?? '').trim().toLowerCase();
   }, [selectedPrinterMonitorSnapshot?.stateText]);
@@ -5993,281 +3763,12 @@ export default function Home() {
     printerReachabilityByDeviceId,
     selectedKnownPrinterDevice,
   ]);
-  const isPrintingMonitorSelectedPrinterOfflineRaw = React.useMemo(() => {
-    const monitorHost = (monitoringDevice?.ipAddress || activePrinterProfile?.network?.ipAddress || '').trim();
-    if (!monitorHost) return false;
 
-    if (printingMonitorSnapshot?.connected === true) {
-      return false;
-    }
 
-    if (monitoringDevice) {
-      if (printerReachabilityByDeviceId[monitoringDevice.id] !== true) return true;
-      return monitoringDevice.connected !== true;
-    }
 
-    return activePrinterProfile?.networkConnection?.connected === false;
-  }, [
-    activePrinterProfile?.network?.ipAddress,
-    activePrinterProfile?.networkConnection?.connected,
-    monitoringDevice,
-    printingMonitorSnapshot?.connected,
-    printerReachabilityByDeviceId,
-  ]);
-  const isPrintingMonitorWithinSlowResponseGrace = React.useMemo(() => {
-    if (!printingMonitorModalOpen) return false;
-    if (printingMonitorLastStatusSuccessAtMs == null) return false;
-    return (printingMonitorNowEpochMs - printingMonitorLastStatusSuccessAtMs) <= printingMonitorBusyGraceMs;
-  }, [
-    printingMonitorLastStatusSuccessAtMs,
-    printingMonitorModalOpen,
-    printingMonitorNowEpochMs,
-    printingMonitorBusyGraceMs,
-  ]);
-  const printingMonitorSlowResponseGraceRemainingSec = React.useMemo(() => {
-    if (!isPrintingMonitorWithinSlowResponseGrace || printingMonitorLastStatusSuccessAtMs == null) return 0;
-    const remainingMs = Math.max(0, printingMonitorBusyGraceMs - (printingMonitorNowEpochMs - printingMonitorLastStatusSuccessAtMs));
-    return Math.ceil(remainingMs / 1000);
-  }, [
-    isPrintingMonitorWithinSlowResponseGrace,
-    printingMonitorLastStatusSuccessAtMs,
-    printingMonitorNowEpochMs,
-    printingMonitorBusyGraceMs,
-  ]);
-  const shouldShowPrintingMonitorSlowResponseCard = React.useMemo(() => {
-    return isPrintingMonitorSelectedPrinterOfflineRaw && isPrintingMonitorWithinSlowResponseGrace;
-  }, [isPrintingMonitorSelectedPrinterOfflineRaw, isPrintingMonitorWithinSlowResponseGrace]);
-  const isPrintingMonitorSelectedPrinterOffline = React.useMemo(() => {
-    if (isPrintingMonitorSelectedPrinterOfflineRaw && isPrintingMonitorWithinSlowResponseGrace) {
-      return false;
-    }
-    return isPrintingMonitorSelectedPrinterOfflineRaw;
-  }, [
-    isPrintingMonitorSelectedPrinterOfflineRaw,
-    isPrintingMonitorWithinSlowResponseGrace,
-  ]);
-  const hasMonitorSelectableTarget = monitorSelectableDevices.length > 0;
-  const hasPrintingMonitorFleet = monitorSelectableDevices.length > 1;
-  const printingMonitorPrinterThumbnailSrc = React.useMemo(() => {
-    const source = activePrinterProfile?.imageDataUrl;
-    if (typeof source !== 'string') return null;
-    const trimmed = source.trim();
-    if (!trimmed || isPrintingMonitorPrinterThumbnailFailed) return null;
-    return trimmed;
-  }, [activePrinterProfile?.imageDataUrl, isPrintingMonitorPrinterThumbnailFailed]);
-  const printingMonitorHeaderUsesFleetLabelOrder = React.useMemo(() => {
-    return (activePrinterProfile?.networkFleet?.length ?? 0) > 1;
-  }, [activePrinterProfile?.networkFleet]);
-  const printingMonitorHeaderTopLabel = React.useMemo(() => {
-    if (printingMonitorHeaderUsesFleetLabelOrder) {
-      return activePrinterProfile?.name ?? 'Select Profile';
-    }
-    return 'Printer';
-  }, [activePrinterProfile?.name, printingMonitorHeaderUsesFleetLabelOrder]);
-  const printingMonitorHeaderBottomLabel = React.useMemo(() => {
-    const selectedPrinterName = monitoringDevice?.displayName || monitoringDevice?.hostName || monitoringDevice?.ipAddress || 'Selected printer';
-    return selectedPrinterName;
-  }, [monitoringDevice?.displayName, monitoringDevice?.hostName, monitoringDevice?.ipAddress]);
-  const printingMonitorHeaderTitle = React.useMemo(() => {
-    if (printingMonitorHeaderUsesFleetLabelOrder) {
-      return `Printer profile: ${printingMonitorHeaderTopLabel} • Active printer: ${printingMonitorHeaderBottomLabel}`;
-    }
-    return `Monitored printer: ${printingMonitorHeaderBottomLabel}`;
-  }, [printingMonitorHeaderBottomLabel, printingMonitorHeaderTopLabel, printingMonitorHeaderUsesFleetLabelOrder]);
-  const showTopbarMonitorButton = React.useMemo(() => {
-    const hasMonitoring = Boolean(
-      printingMonitoringAdapter.available
-      && printingMonitoringAdapter.pluginId
-      && printingMonitoringAdapter.operations
-    );
-    if (!hasMonitoring) return false;
-    if (!hasMonitorSelectableTarget) return false;
-    return true;
-  }, [hasMonitorSelectableTarget, printingMonitoringAdapter]);
 
-  React.useEffect(() => {
-    printingMonitorRecentPlatesRef.current = printingMonitorRecentPlates;
-  }, [printingMonitorRecentPlates]);
 
-  React.useEffect(() => {
-    printingMonitorSelectedPlateIdRef.current = printingMonitorSelectedPlateId;
-  }, [printingMonitorSelectedPlateId]);
 
-  React.useEffect(() => {
-    if (!printingMonitorModalOpen) return;
-
-    setPrintingMonitorNowEpochMs(Date.now());
-    const intervalId = window.setInterval(() => {
-      setPrintingMonitorNowEpochMs(Date.now());
-    }, 1000);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [printingMonitorModalOpen]);
-
-  React.useEffect(() => {
-    if (!printingMonitorModalOpen) return;
-    setPrintingMonitorLastStatusSuccessAtMs(null);
-    setIsPrintingMonitorStatusRequestInFlight(false);
-  }, [monitoringDevice?.id, printingMonitorModalOpen]);
-
-  React.useEffect(() => {
-    const shouldProbeFleetReachability = Boolean(
-      activeNetworkUiAdapter
-      && printingMonitoringAdapter.available
-      && printingMonitoringAdapter.pluginId
-      && printingMonitoringAdapter.operations?.status,
-    );
-
-    if (!shouldProbeFleetReachability) {
-      monitorReachabilityInconclusiveCountsRef.current = {};
-      return;
-    }
-
-    const probeFleet = (activePrinterProfile?.networkFleet ?? []).filter((device) => {
-      const host = (device.ipAddress || '').trim();
-      return host.length > 0;
-    });
-
-    if (probeFleet.length === 0) {
-      monitorReachabilityInconclusiveCountsRef.current = {};
-      return;
-    }
-
-    let cancelled = false;
-
-    const probeWithTimeout = async (device: PrinterNetworkDevice): Promise<boolean | null> => {
-      const host = (device.ipAddress || '').trim();
-      const port = device.port || 80;
-      if (!host) return false;
-
-      // Deterministic debug behavior for local dummy endpoints.
-      const normalizedHost = host.toLowerCase();
-      const normalizedName = `${device.displayName ?? ''} ${device.hostName ?? ''}`.toLowerCase();
-      if (normalizedHost.endsWith('999.999') || normalizedName.includes('debug dummy athena a')) {
-        return true;
-      }
-      if (normalizedHost.endsWith('999.998') || normalizedName.includes('debug dummy athena b')) {
-        return false;
-      }
-
-      try {
-        const result = await Promise.race<boolean | null>([
-          pluginNetworkFetch({
-            pluginId: printingMonitoringAdapter.pluginId!,
-            operation: printingMonitoringAdapter.operations!.status,
-            ipAddress: host,
-            port,
-          })
-            .then(async (response) => {
-              if (!response.ok) return false;
-
-              const payload = await readJsonObject(response);
-              const payloadOk = readBooleanField(payload, 'ok');
-              if (payloadOk != null) {
-                return payloadOk === true;
-              }
-
-              try {
-                const parsed = printingMonitoringAdapter.parseStatusPayload(payload, `reachability:${host}:${port}`);
-                if (parsed && typeof parsed.connected === 'boolean') {
-                  return parsed.connected;
-                }
-              } catch {
-                // Ignore parse errors and fall back to HTTP success semantics.
-              }
-
-              return true;
-            })
-            .catch(() => null),
-          new Promise<null>((resolve) => {
-            window.setTimeout(() => resolve(null), REACHABILITY_PROBE_TIMEOUT_MS);
-          }),
-        ]);
-
-        return result;
-      } catch {
-        return null;
-      }
-    };
-
-    const probeAll = async () => {
-      const entries = await Promise.all(
-        probeFleet.map(async (device) => {
-          const reachable = await probeWithTimeout(device);
-          return [device.id, reachable] as const;
-        }),
-      );
-
-      if (cancelled) return;
-
-      const previousReachability = getPrinterReachabilitySnapshot();
-      const previousInconclusiveCounts = monitorReachabilityInconclusiveCountsRef.current;
-      const nextInconclusiveCounts: Record<string, number> = {};
-      const nextMap: Record<string, boolean | null> = {};
-      const maxUnknownPolls = Math.max(1, printingMonitorReachabilityMaxInconclusivePolls ?? 1);
-      for (const [id, reachable] of entries) {
-        if (reachable === true) {
-          nextMap[id] = true;
-          nextInconclusiveCounts[id] = 0;
-          continue;
-        }
-
-        if (reachable === false) {
-          nextMap[id] = false;
-          nextInconclusiveCounts[id] = 0;
-          continue;
-        }
-
-        const unknownCount = (previousInconclusiveCounts[id] ?? 0) + 1;
-        nextInconclusiveCounts[id] = unknownCount;
-
-        const keepPreviousOnline = previousReachability[id] === true && unknownCount < maxUnknownPolls;
-        nextMap[id] = keepPreviousOnline ? true : false;
-      }
-
-      monitorReachabilityInconclusiveCountsRef.current = nextInconclusiveCounts;
-      const mergedMap: Record<string, boolean | null> = {
-        ...previousReachability,
-        ...nextMap,
-      };
-      setPrinterReachabilityMap(mergedMap);
-    };
-
-    void probeAll();
-
-    const intervalId = window.setInterval(() => {
-      void probeAll();
-    }, 9000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [
-    activeNetworkUiAdapter,
-    activePrinterProfile?.networkFleet,
-    printingMonitoringAdapter,
-  ]);
-
-  React.useEffect(() => {
-    if (!printingTargetPickerOpen) return;
-    if (!printingTargetDeviceId) return;
-    if (printerReachabilityByDeviceId[printingTargetDeviceId] !== false) return;
-
-    const fallbackOnline = printableConnectedPrinterFleet.find(
-      (device) => printerReachabilityByDeviceId[device.id] !== false,
-    );
-    if (fallbackOnline) {
-      setPrintingTargetDeviceId(fallbackOnline.id);
-    }
-  }, [
-    printableConnectedPrinterFleet,
-    printerReachabilityByDeviceId,
-    printingTargetDeviceId,
-    printingTargetPickerOpen,
-  ]);
 
   // Best-effort background cleanup of stale DragonFruit temp artifacts from prior runs.
   React.useEffect(() => {
@@ -6325,11 +3826,6 @@ export default function Home() {
     };
   }, []);
 
-  React.useEffect(() => {
-    if (!showTopbarMonitorButton && printingMonitorModalOpen) {
-      setPrintingMonitorModalOpen(false);
-    }
-  }, [printingMonitorModalOpen, showTopbarMonitorButton]);
 
   React.useEffect(() => {
     if (!activePrinterProfile || !activeNetworkUiAdapter) {
@@ -6372,139 +3868,6 @@ export default function Home() {
     }
   }, [activeNetworkUiAdapter, activePrinterProfile, printableConnectedPrinterFleet, printerReachabilityByDeviceId, printingTargetDeviceId]);
 
-  React.useEffect(() => {
-    if (!printingTargetPickerOpen) {
-      setIsPrintingTargetMaterialsLoading(false);
-      return;
-    }
-    if (!requiresRemoteMaterialSelectionForUpload) {
-      setPrintingTargetMaterialOptions([]);
-      setPrintingTargetMaterialId('__local_profile__');
-      setPrintingTargetMaterialError(null);
-      setIsPrintingTargetMaterialsLoading(false);
-      return;
-    }
-    if (!printingTargetDevice || !activeNetworkUiAdapter) {
-      setPrintingTargetMaterialOptions([]);
-      setPrintingTargetMaterialId('');
-      setPrintingTargetMaterialError('Select a printer to load matching material settings.');
-      setIsPrintingTargetMaterialsLoading(false);
-      return;
-    }
-
-    const host = (printingTargetDevice.ipAddress || '').trim();
-    if (!host) {
-      setPrintingTargetMaterialOptions([]);
-      setPrintingTargetMaterialId('');
-      setPrintingTargetMaterialError('Selected printer has no network address.');
-      setIsPrintingTargetMaterialsLoading(false);
-      return;
-    }
-
-    const cacheKey = `${activeNetworkUiAdapter.pluginId}:${host.toLowerCase()}`;
-    const applyResolvedMaterials = (parsed: FleetUploadMaterialOption[]) => {
-      const materialChoices = isPreSliceTargetPicker
-        ? parsed
-        : parsed.filter((material) => isLayerHeightMatch(material.layerHeightMm));
-
-      const selectedDeviceMaterialId = (printingTargetDevice.selectedMaterialId ?? '').trim();
-      if (
-        materialChoices.length === 0
-        && selectedDeviceMaterialId.length > 0
-        && (isPreSliceTargetPicker || isLayerHeightMatch(printingTargetDevice.selectedMaterialLayerHeightMm ?? null))
-      ) {
-        materialChoices.push({
-          id: selectedDeviceMaterialId,
-          name: printingTargetDevice.selectedMaterialName?.trim() || selectedDeviceMaterialId,
-          layerHeightMm: printingTargetDevice.selectedMaterialLayerHeightMm ?? null,
-        });
-      }
-
-      setPrintingTargetMaterialOptions(materialChoices);
-
-      setPrintingTargetMaterialId((previousId) => {
-        const preferredId = previousId.trim();
-        const fallbackId = materialChoices.find((material) => material.id === selectedDeviceMaterialId)?.id
-          ?? materialChoices[0]?.id
-          ?? '';
-        return materialChoices.some((material) => material.id === preferredId) ? preferredId : fallbackId;
-      });
-
-      if (materialChoices.length === 0) {
-        setPrintingTargetMaterialError(
-          isPreSliceTargetPicker
-            ? 'No material profiles found on this printer.'
-            : `No material on this printer matches sliced layer height ${slicedLayerHeightMm.toFixed(3)} mm.`,
-        );
-      } else {
-        setPrintingTargetMaterialError(null);
-      }
-    };
-
-    const cached = printingTargetMaterialsCacheRef.current.get(cacheKey);
-    if (cached) {
-      setIsPrintingTargetMaterialsLoading(false);
-      applyResolvedMaterials(cached);
-      return;
-    }
-
-    let cancelled = false;
-    setIsPrintingTargetMaterialsLoading(true);
-    setPrintingTargetMaterialError(null);
-
-    void (async () => {
-      try {
-        const response = await pluginNetworkFetch({
-          pluginId: activeNetworkUiAdapter.pluginId,
-          operation: activeNetworkUiAdapter.operations.materials,
-          host,
-        });
-
-        const payload = await readJsonObject(response);
-        const rawMaterials = Array.isArray(payload?.materials) ? payload.materials : [];
-
-        const parsed: FleetUploadMaterialOption[] = rawMaterials
-          .map((item: any) => {
-            if (typeof item?.id !== 'string' || typeof item?.name !== 'string') return null;
-            const processValues = activeNetworkUiAdapter.resolveMaterialProcessValues((item?.meta ?? {}) as Record<string, unknown>);
-            return {
-              id: item.id,
-              name: item.name,
-              layerHeightMm: Number.isFinite(Number(processValues.layerHeightMm))
-                ? Number(processValues.layerHeightMm)
-                : null,
-            } satisfies FleetUploadMaterialOption;
-          })
-          .filter((item: FleetUploadMaterialOption | null): item is FleetUploadMaterialOption => item !== null);
-
-        if (cancelled) return;
-        printingTargetMaterialsCacheRef.current.set(cacheKey, parsed);
-        applyResolvedMaterials(parsed);
-      } catch (error) {
-        if (cancelled) return;
-        const message = error instanceof Error ? error.message : 'Failed to load materials from printer.';
-        setPrintingTargetMaterialOptions([]);
-        setPrintingTargetMaterialId('');
-        setPrintingTargetMaterialError(message);
-      } finally {
-        if (!cancelled) {
-          setIsPrintingTargetMaterialsLoading(false);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    activeNetworkUiAdapter,
-    isPreSliceTargetPicker,
-    isLayerHeightMatch,
-    printingTargetDevice,
-    printingTargetPickerOpen,
-    requiresRemoteMaterialSelectionForUpload,
-    slicedLayerHeightMm,
-  ]);
 
   React.useEffect(() => {
     if (!printingUploadDialogOpen || printingUploadDialogStage !== 'processing' || printingDeviceProcessingStartedAtMs == null) {
@@ -6523,1402 +3886,39 @@ export default function Home() {
     };
   }, [printingDeviceProcessingStartedAtMs, printingUploadDialogOpen, printingUploadDialogStage]);
 
-  React.useEffect(() => {
-    const canProbeSelectedPrinter = Boolean(
-      printingMonitoringAdapter.available
-      && printingMonitoringAdapter.pluginId
-      && printingMonitoringAdapter.operations
-      && selectedPrinterProbeTarget,
-    );
 
-    if (!canProbeSelectedPrinter) {
-      setSelectedPrinterMonitorSnapshot(null);
-      return;
-    }
 
-    const host = (selectedPrinterProbeTarget?.host || '').trim();
-    const port = selectedPrinterProbeTarget?.port || 80;
-    if (!host) {
-      setSelectedPrinterMonitorSnapshot(null);
-      return;
-    }
 
-    let cancelled = false;
 
-    const poll = async () => {
-      while (!cancelled) {
-        try {
-          const response = await pluginNetworkFetch({
-            pluginId: printingMonitoringAdapter.pluginId,
-            operation: printingMonitoringAdapter.operations!.status,
-            ipAddress: host,
-            port,
-          });
 
-          const payload = await readJsonObject(response);
-          if (cancelled) return;
-          const snapshot = printingMonitoringAdapter.parseStatusPayload(payload, `${host}:${port}`);
-          setSelectedPrinterMonitorSnapshot(snapshot);
-        } catch {
-          if (cancelled) return;
-          setSelectedPrinterMonitorSnapshot(null);
-        }
 
-        await new Promise<void>((resolve) => {
-          window.setTimeout(resolve, 4500);
-        });
-      }
-    };
 
-    void poll();
 
-    return () => {
-      cancelled = true;
-    };
-  }, [printingMonitoringAdapter, selectedPrinterProbeTarget]);
 
-  React.useEffect(() => {
-    const canMonitor = Boolean(
-      printingMonitorModalOpen
-      && monitoringDevice
-      && printingMonitoringAdapter.available
-      && printingMonitoringAdapter.pluginId
-      && printingMonitoringAdapter.operations,
-    );
 
-    if (!canMonitor) {
-      setIsPrintingMonitorPolling(false);
-      setIsPrintingMonitorStatusRequestInFlight(false);
-      return;
-    }
 
-    const host = (monitoringDevice?.ipAddress || '').trim();
-    const port = monitoringDevice?.port || 80;
-    if (!host) {
-      setIsPrintingMonitorPolling(false);
-      setIsPrintingMonitorStatusRequestInFlight(false);
-      setPrintingMonitorError('No printer IP available for monitoring.');
-      return;
-    }
 
-    let cancelled = false;
-    setIsPrintingMonitorPolling(true);
 
-    const poll = async () => {
-      while (!cancelled) {
-        const requestPayload = {
-          pluginId: printingMonitoringAdapter.pluginId,
-          operation: printingMonitoringAdapter.operations!.status,
-          ipAddress: host,
-          port,
-          plateId: printingReadyPlateId,
-        };
 
-        setIsPrintingMonitorStatusRequestInFlight(true);
-        try {
-          const response = await pluginNetworkFetch(requestPayload);
 
-          const payload = await readJsonObject(response);
-          if (cancelled) return;
 
-          const snapshot = printingMonitoringAdapter.parseStatusPayload(payload, `${host}:${port}`);
-          setPrintingMonitorSnapshot(snapshot);
-          if (snapshot?.connected === true) {
-            setPrintingMonitorLastStatusSuccessAtMs(Date.now());
-          }
-          const payloadError = typeof payload?.error === 'string' ? payload.error : null;
-          const liveReachability = monitoringDevice ? getPrinterReachabilitySnapshot()[monitoringDevice.id] : null;
-          const isLikelyOffline = Boolean(
-            monitoringDevice
-            && (liveReachability !== true || monitoringDevice.connected !== true)
-            && snapshot?.connected !== true,
-          );
-          setPrintingMonitorError(isLikelyOffline ? null : payloadError);
-          setPrintingMonitorDebugState((previous) => ({
-            ...previous,
-            status: {
-              requestedAtEpochMs: Date.now(),
-              request: requestPayload,
-              httpStatus: response.status,
-              rawPayload: payload,
-              parsedPayload: snapshot,
-              error: null,
-            },
-          }));
-        } catch (error) {
-          if (cancelled) return;
-          const message = error instanceof Error ? error.message : 'Failed to poll printer status.';
-          const liveReachability = monitoringDevice ? getPrinterReachabilitySnapshot()[monitoringDevice.id] : null;
-          const isLikelyOffline = Boolean(
-            monitoringDevice
-            && (liveReachability !== true || monitoringDevice.connected !== true),
-          );
-          setPrintingMonitorError(isLikelyOffline ? null : message);
-          setPrintingMonitorDebugState((previous) => ({
-            ...previous,
-            status: {
-              requestedAtEpochMs: Date.now(),
-              request: requestPayload,
-              httpStatus: null,
-              rawPayload: null,
-              parsedPayload: null,
-              error: message,
-            },
-          }));
-        } finally {
-          if (!cancelled) {
-            setIsPrintingMonitorStatusRequestInFlight(false);
-          }
-        }
 
-        await new Promise<void>((resolve) => {
-          window.setTimeout(resolve, 2200);
-        });
-      }
-    };
 
-    void poll().finally(() => {
-      if (!cancelled) {
-        setIsPrintingMonitorPolling(false);
-        setIsPrintingMonitorStatusRequestInFlight(false);
-      }
-    });
 
-    return () => {
-      cancelled = true;
-      setIsPrintingMonitorPolling(false);
-      setIsPrintingMonitorStatusRequestInFlight(false);
-    };
-  }, [
-    monitoringDevice,
-    printingMonitoringAdapter,
-    printingMonitorModalOpen,
-    printingReadyPlateId,
-  ]);
 
-  const refreshPrintingMonitorRecentPlates = React.useCallback(async () => {
-    const requestId = ++printingMonitorRecentPlatesRequestIdRef.current;
 
-    const canLoadRecentPlates = Boolean(
-      printingMonitorModalOpen
-      && monitoringDevice
-      && printingMonitoringAdapter.available
-      && printingMonitoringAdapter.pluginId
-      && printingMonitoringAdapter.operations?.platesList,
-    );
-    if (!canLoadRecentPlates) {
-      if (requestId !== printingMonitorRecentPlatesRequestIdRef.current) return;
-      setPrintingMonitorRecentPlatesError(null);
-      setIsPrintingMonitorRecentPlatesLoading(false);
-      return;
-    }
 
-    const host = (monitoringDevice?.ipAddress || '').trim();
-    const port = monitoringDevice?.port || 80;
-    if (!host) {
-      if (requestId !== printingMonitorRecentPlatesRequestIdRef.current) return;
-      setPrintingMonitorRecentPlatesError('No printer IP available for recent print files.');
-      setIsPrintingMonitorRecentPlatesLoading(false);
-      return;
-    }
-
-    setIsPrintingMonitorRecentPlatesLoading(true);
-    setPrintingMonitorRecentPlatesError(null);
-
-    const requestPayload = {
-      pluginId: printingMonitoringAdapter.pluginId,
-      operation: printingMonitoringAdapter.operations!.platesList,
-      ipAddress: host,
-      port,
-      storagePath: printingMonitorPlatesStoragePath,
-      source: printingMonitorPlatesStoragePath,
-      url: printingMonitorPlatesStoragePath,
-    };
-
-    try {
-      const response = await pluginNetworkFetch(requestPayload);
-
-      const payload = await readJsonObject(response);
-      if (requestId !== printingMonitorRecentPlatesRequestIdRef.current) return;
-      if (!response.ok || payload?.ok === false) {
-        const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
-        throw new Error(reason);
-      }
-
-      const parsed: PrintingMonitorRecentPlate[] = (Array.isArray(payload?.plates) ? payload.plates : [])
-        .map((entry: unknown) => {
-          if (!entry || typeof entry !== 'object') return null;
-          const plate = entry as Record<string, unknown>;
-          const rawPlateId = plate.PlateID ?? plate.plateId ?? plate.plate_id ?? plate.id;
-          const plateId = Number(String(rawPlateId ?? '').trim());
-          if (!Number.isFinite(plateId) || plateId <= 0) return null;
-
-          const rawName = plate.Path ?? plate.path ?? plate.File ?? plate.file ?? plate.Name ?? plate.name;
-          const fullName = typeof rawName === 'string' ? rawName.trim() : `Plate #${Math.round(plateId)}`;
-          const cleanName = fullName.split('/').filter(Boolean).pop() || fullName;
-
-          const rawMaterialProfile =
-            plate.ProfileName
-            ?? plate.profileName
-            ?? plate.MaterialName
-            ?? plate.materialName
-            ?? plate.ResinName
-            ?? plate.resinName
-            ?? plate.Profile
-            ?? plate.profile;
-          const materialProfileFromName = typeof rawMaterialProfile === 'string'
-            ? rawMaterialProfile.trim()
-            : '';
-
-          const rawProfileId =
-            plate.ProfileID
-            ?? plate.profileId
-            ?? plate.profile_id
-            ?? plate.MaterialID
-            ?? plate.materialId;
-          const profileId = Number(String(rawProfileId ?? '').trim());
-          const materialProfileName = materialProfileFromName.length > 0
-            ? materialProfileFromName
-            : (Number.isFinite(profileId) && profileId > 0 ? `Profile #${Math.round(profileId)}` : null);
-
-          const rawFileData = plate.file_data ?? plate.fileData;
-          let fileData: Record<string, unknown> | undefined;
-          if (rawFileData && typeof rawFileData === 'object' && !Array.isArray(rawFileData)) {
-            fileData = rawFileData as Record<string, unknown>;
-          } else if (typeof rawFileData === 'string' && rawFileData.trim().length > 0) {
-            try {
-              const parsedFileData = JSON.parse(rawFileData) as unknown;
-              if (parsedFileData && typeof parsedFileData === 'object' && !Array.isArray(parsedFileData)) {
-                fileData = parsedFileData as Record<string, unknown>;
-              }
-            } catch {
-              fileData = undefined;
-            }
-          }
-          const rawLastModified = fileData?.last_modified ?? fileData?.lastModified ?? plate.lastModified;
-          const lastModifiedEpochSec = Number(String(rawLastModified ?? '').trim());
-          const rawLayerCount = plate.LayersCount ?? plate.layerCount ?? fileData?.layer_count;
-          const rawPrintTime =
-            plate.PrintTime
-            ?? plate.printTime
-            ?? plate.print_time
-            ?? plate.EstimatedTime
-            ?? plate.estimatedTime
-            ?? plate.estimated_time
-            ?? plate.Duration
-            ?? plate.duration
-            ?? fileData?.PrintTime
-            ?? fileData?.printTime
-            ?? fileData?.print_time
-            ?? fileData?.EstimatedTime
-            ?? fileData?.estimatedTime
-            ?? fileData?.estimated_time
-            ?? fileData?.Duration
-            ?? fileData?.duration;
-          const rawUsedMaterial =
-            plate.UsedMaterial
-            ?? plate.usedMaterial
-            ?? plate.used_material
-            ?? plate.MaterialUsage
-            ?? plate.materialUsage
-            ?? plate.material_usage
-            ?? fileData?.UsedMaterial
-            ?? fileData?.usedMaterial
-            ?? fileData?.used_material
-            ?? fileData?.MaterialUsage
-            ?? fileData?.materialUsage
-            ?? fileData?.material_usage;
-          const rawTotalSolidArea =
-            plate.TotalSolidArea
-            ?? plate.totalSolidArea
-            ?? plate.total_solid_area
-            ?? fileData?.TotalSolidArea
-            ?? fileData?.totalSolidArea
-            ?? fileData?.total_solid_area;
-          const rawLargestArea =
-            plate.LargestArea
-            ?? plate.largestArea
-            ?? plate.largest_area
-            ?? fileData?.LargestArea
-            ?? fileData?.largestArea
-            ?? fileData?.largest_area;
-          const rawSmallestArea =
-            plate.SmallestArea
-            ?? plate.smallestArea
-            ?? plate.smallest_area
-            ?? fileData?.SmallestArea
-            ?? fileData?.smallestArea
-            ?? fileData?.smallest_area;
-          const parsedPrintTimeSec = parsePrintingMonitorSeconds(rawPrintTime);
-          const parsedUsedMaterialMl = parsePrintingMonitorMaterialMl(rawUsedMaterial);
-          const parsedTotalSolidAreaMm2 = parsePrintingMonitorAreaMm2(rawTotalSolidArea);
-          const parsedLargestAreaMm2 = parsePrintingMonitorAreaMm2(rawLargestArea);
-          const parsedSmallestAreaMm2 = parsePrintingMonitorAreaMm2(rawSmallestArea);
-
-          return {
-            plateId: Math.round(plateId),
-            name: cleanName,
-            materialProfileName,
-            lastModifiedEpochSec: Number.isFinite(lastModifiedEpochSec) && lastModifiedEpochSec > 0
-              ? Math.round(lastModifiedEpochSec)
-              : null,
-            layerCount: Number.isFinite(Number(rawLayerCount)) && Number(rawLayerCount) > 0
-              ? Math.round(Number(rawLayerCount))
-              : null,
-            printTimeSec: parsedPrintTimeSec,
-            usedMaterialMl: parsedUsedMaterialMl,
-            totalSolidAreaMm2: parsedTotalSolidAreaMm2,
-            smallestAreaMm2: parsedSmallestAreaMm2,
-            largestAreaMm2: parsedLargestAreaMm2,
-          } satisfies PrintingMonitorRecentPlate;
-        })
-        .filter((item: PrintingMonitorRecentPlate | null): item is PrintingMonitorRecentPlate => item !== null)
-        .sort((a: PrintingMonitorRecentPlate, b: PrintingMonitorRecentPlate) => {
-          const aModified = a.lastModifiedEpochSec ?? 0;
-          const bModified = b.lastModifiedEpochSec ?? 0;
-          if (aModified !== bModified) return bModified - aModified;
-          return b.plateId - a.plateId;
-        })
-        .slice(0, 20);
-
-      setPrintingMonitorRecentPlates(parsed);
-      setPrintingMonitorDebugState((previous) => ({
-        ...previous,
-        plates: {
-          requestedAtEpochMs: Date.now(),
-          request: requestPayload,
-          httpStatus: response.status,
-          rawPayload: payload,
-          parsedPayload: parsed,
-          error: null,
-        },
-      }));
-      setPrintingMonitorSelectedPlateId((previous) => {
-        if (previous != null && parsed.some((plate: PrintingMonitorRecentPlate) => plate.plateId === previous)) return previous;
-        if (printingMonitorPlateId != null && parsed.some((plate: PrintingMonitorRecentPlate) => plate.plateId === printingMonitorPlateId)) {
-          return printingMonitorPlateId;
-        }
-        return parsed[0]?.plateId ?? null;
-      });
-      setPrintingMonitorRecentPlatesError(null);
-      if (printingMonitorRecentPlatesCacheKey) {
-        const resolvedSelectedPlateId = (
-          printingMonitorPlateId != null && parsed.some((plate: PrintingMonitorRecentPlate) => plate.plateId === printingMonitorPlateId)
-        )
-          ? printingMonitorPlateId
-          : (parsed[0]?.plateId ?? null);
-        printingMonitorRecentPlatesCacheRef.current.set(printingMonitorRecentPlatesCacheKey, {
-          plates: parsed,
-          selectedPlateId: resolvedSelectedPlateId,
-          error: null,
-        });
-      }
-    } catch (error) {
-      if (requestId !== printingMonitorRecentPlatesRequestIdRef.current) return;
-      const message = error instanceof Error ? error.message : 'Failed to load recent print files.';
-      setPrintingMonitorRecentPlatesError(message);
-      if (printingMonitorRecentPlatesCacheKey) {
-        const cached = printingMonitorRecentPlatesCacheRef.current.get(printingMonitorRecentPlatesCacheKey);
-        printingMonitorRecentPlatesCacheRef.current.set(printingMonitorRecentPlatesCacheKey, {
-          plates: cached?.plates ?? printingMonitorRecentPlatesRef.current,
-          selectedPlateId: cached?.selectedPlateId ?? printingMonitorSelectedPlateIdRef.current,
-          error: message,
-        });
-      }
-      setPrintingMonitorDebugState((previous) => ({
-        ...previous,
-        plates: {
-          requestedAtEpochMs: Date.now(),
-          request: requestPayload,
-          httpStatus: null,
-          rawPayload: null,
-          parsedPayload: null,
-          error: message,
-        },
-      }));
-    } finally {
-      if (requestId !== printingMonitorRecentPlatesRequestIdRef.current) return;
-      setIsPrintingMonitorRecentPlatesLoading(false);
-    }
-  }, [
-    monitoringDevice,
-    printingMonitorModalOpen,
-    printingMonitorPlateId,
-    printingMonitorPlatesStoragePath,
-    printingMonitorRecentPlatesCacheKey,
-    printingMonitoringAdapter,
-  ]);
-
-  const handlePrintingMonitorStoragePathChange = React.useCallback((nextPath: '/local/' | '/usb/') => {
-    if (nextPath === printingMonitorPlatesStoragePath) return;
-
-    // Switch immediately and hydrate from per-device cache (if available) while a fresh fetch runs.
-    printingMonitorRecentPlatesRequestIdRef.current += 1;
-    setIsPrintingMonitorRecentPlatesLoading(true);
-    setPrintingMonitorPlatesStoragePath(nextPath);
-  }, [printingMonitorPlatesStoragePath]);
-
-  React.useEffect(() => {
-    if (!printingMonitorModalOpen) return;
-
-    printingMonitorRecentPlatesRequestIdRef.current += 1;
-
-    if (!printingMonitorRecentPlatesCacheKey) {
-      setPrintingMonitorRecentPlates([]);
-      setPrintingMonitorRecentPlatesError(null);
-      setPrintingMonitorSelectedPlateId(null);
-      return;
-    }
-
-    const cached = printingMonitorRecentPlatesCacheRef.current.get(printingMonitorRecentPlatesCacheKey);
-    if (!cached) {
-      setPrintingMonitorRecentPlates([]);
-      setPrintingMonitorRecentPlatesError(null);
-      setPrintingMonitorSelectedPlateId(null);
-      return;
-    }
-
-    setPrintingMonitorRecentPlates(cached.plates);
-    setPrintingMonitorRecentPlatesError(cached.error);
-    setPrintingMonitorSelectedPlateId(cached.selectedPlateId);
-  }, [printingMonitorModalOpen, printingMonitorRecentPlatesCacheKey]);
-
-  React.useEffect(() => {
-    if (!printingMonitorModalOpen) {
-      printingMonitorRecentPlatesRequestIdRef.current += 1;
-      setIsPrintingMonitorRecentPlatesLoading(false);
-      return;
-    }
-
-    void refreshPrintingMonitorRecentPlates();
-  }, [printingMonitorModalOpen, refreshPrintingMonitorRecentPlates]);
-
-  React.useLayoutEffect(() => {
-    const webcamSection = printingMonitorWebcamSectionRef.current;
-    const clearSizing = () => {
-      webcamSection?.style.removeProperty('height');
-      webcamSection?.style.removeProperty('max-height');
-    };
-
-    if (
-      !printingMonitorModalOpen
-      || printingMonitorViewMode !== 'detail'
-      || !printingMonitorUsesTwoColumnDetailLayout
-      || !printingMonitorHasCamera
-    ) {
-      clearSizing();
-      return;
-    }
-
-    if (printingMonitorDetailWebcamExpanded) {
-      const cachedHeightPx = printingMonitorWebcamFollowerHeightPxRef.current;
-      if (cachedHeightPx && cachedHeightPx > 0 && webcamSection) {
-        webcamSection.style.height = `${cachedHeightPx}px`;
-        webcamSection.style.maxHeight = `${cachedHeightPx}px`;
-      } else {
-        clearSizing();
-      }
-      return;
-    }
-
-    let resizeObserver: ResizeObserver | null = null;
-    let rafId: number | null = null;
-
-    const applyFollowerHeight = () => {
-      const leftColumn = printingMonitorLeftColumnRef.current;
-      const rightColumn = printingMonitorWebcamSectionRef.current;
-      if (!leftColumn || !rightColumn) return;
-
-      const measured = Math.max(0, Math.round(leftColumn.getBoundingClientRect().height));
-      if (measured <= 0) return;
-
-      printingMonitorWebcamFollowerHeightPxRef.current = measured;
-      rightColumn.style.height = `${measured}px`;
-      rightColumn.style.maxHeight = `${measured}px`;
-    };
-
-    const bind = () => {
-      const leftColumn = printingMonitorLeftColumnRef.current;
-      if (!leftColumn) {
-        rafId = window.requestAnimationFrame(bind);
-        return;
-      }
-
-      applyFollowerHeight();
-      resizeObserver = new ResizeObserver(() => {
-        applyFollowerHeight();
-      });
-      resizeObserver.observe(leftColumn);
-      window.addEventListener('resize', applyFollowerHeight);
-    };
-
-    bind();
-
-    return () => {
-      if (rafId !== null) {
-        window.cancelAnimationFrame(rafId);
-      }
-      resizeObserver?.disconnect();
-      window.removeEventListener('resize', applyFollowerHeight);
-      clearSizing();
-    };
-  }, [
-    printingMonitorHasCamera,
-    printingMonitorDetailWebcamExpanded,
-    printingMonitorModalOpen,
-    printingMonitorUsesTwoColumnDetailLayout,
-    printingMonitorViewMode,
-  ]);
-
-  React.useEffect(() => {
-    if (printingMonitorCanExpandWebcam) return;
-    setPrintingMonitorWebcamExpanded(false);
-  }, [printingMonitorCanExpandWebcam]);
-
-  React.useEffect(() => {
-    if (printingMonitorPlateId == null) return;
-    setPrintingMonitorSelectedPlateId((previous) => previous ?? printingMonitorPlateId);
-  }, [printingMonitorPlateId]);
-
-  React.useEffect(() => {
-    if (!printingMonitorHasCamera) {
-      setPrintingMonitorWebcamInfo(null);
-      setPrintingMonitorWebcamLoadError(null);
-      setIsPrintingMonitorWebcamLoaded(false);
-      setPrintingMonitorWebcamAspectRatio(null);
-      return;
-    }
-
-    const canResolveWebcam = Boolean(
-      printingMonitorModalOpen
-      && monitoringDeviceId
-      && printingMonitoringAdapter.available
-      && printingMonitoringAdapter.pluginId
-      && printingMonitoringAdapter.operations,
-    );
-
-    if (!canResolveWebcam) return;
-
-    const host = monitoringDeviceHost;
-    const port = monitoringDevicePort;
-    if (!host) return;
-    const webcamOperation = printingMonitoringAdapter.operations?.webcamInfo;
-
-    if (!webcamOperation || webcamOperation.trim().length === 0) {
-      setPrintingMonitorWebcamInfo({
-        available: false,
-        streamUrl: null,
-        snapshotUrl: null,
-        message: 'Webcam operation is not configured for this plugin.',
-      });
-      setPrintingMonitorDebugState((previous) => ({
-        ...previous,
-        webcam: {
-          requestedAtEpochMs: Date.now(),
-          request: {
-            pluginId: printingMonitoringAdapter.pluginId,
-            operation: webcamOperation ?? null,
-            ipAddress: host,
-            port,
-          },
-          httpStatus: null,
-          rawPayload: null,
-          parsedPayload: null,
-          error: 'Webcam operation is not configured for this plugin.',
-        },
-      }));
-      return;
-    }
-
-    let cancelled = false;
-    const pollWebcamInfo = async () => {
-      if (cancelled || printingMonitorWebcamRequestInFlightRef.current) return;
-      if (printingMonitorWebcamAutoPollBlockedRef.current) return;
-
-      const now = Date.now();
-      if (printingMonitorWebcamBusyUntilEpochMsRef.current > now) {
-        return;
-      }
-
-      printingMonitorWebcamRequestInFlightRef.current = true;
-
-      const requestPayload = {
-        pluginId: printingMonitoringAdapter.pluginId,
-        operation: webcamOperation,
-        ipAddress: host,
-        port,
-        mainboardId: monitoringDeviceMainboardId,
-      };
-
-      try {
-        const requestStartedAt = Date.now();
-        const response = await pluginNetworkFetch(requestPayload);
-
-        const payload = await readJsonObject(response);
-        if (cancelled) return;
-        const parsed = printingMonitoringAdapter.parseWebcamInfoPayload(payload, host, port);
-        const elapsedMs = Date.now() - requestStartedAt;
-
-        const parsedMessage = String(parsed?.message ?? '').toLowerCase();
-        const payloadMessage = (readStringField(payload, 'message') ?? '').toLowerCase();
-        const ack = readNumberField(payload, 'ack');
-        const timedOut = parsedMessage.includes('timed out')
-          || payloadMessage.includes('timed out')
-          || parsedMessage.includes('no-response')
-          || payloadMessage.includes('no-response')
-          || ack === -1;
-        const streamLimitBusy = parsedMessage.includes('stream limit') || parsedMessage.includes('simultaneous');
-        const pluginFailure = !response.ok || payload?.ok === false;
-        let timeoutCircuitBreakerTripped = false;
-        let timeoutCount = printingMonitorWebcamConsecutiveTimeoutsRef.current;
-
-        if (streamLimitBusy) {
-          printingMonitorWebcamConsecutiveTimeoutsRef.current = 0;
-          printingMonitorWebcamAutoPollBlockedRef.current = true;
-          printingMonitorWebcamBusyUntilEpochMsRef.current = 0;
-        } else if (timedOut) {
-          timeoutCount += 1;
-          printingMonitorWebcamConsecutiveTimeoutsRef.current = timeoutCount;
-
-          if (timeoutCount >= printingMonitorWebcamMaxConsecutiveTimeouts) {
-            timeoutCircuitBreakerTripped = true;
-            printingMonitorWebcamAutoPollBlockedRef.current = true;
-            printingMonitorWebcamBusyUntilEpochMsRef.current = 0;
-          } else {
-            printingMonitorWebcamBusyUntilEpochMsRef.current = Date.now() + printingMonitorWebcamTimeoutCooldownMs;
-          }
-        } else if (pluginFailure) {
-          printingMonitorWebcamConsecutiveTimeoutsRef.current = 0;
-          printingMonitorWebcamBusyUntilEpochMsRef.current = Date.now() + printingMonitorWebcamFailureCooldownMs;
-        } else {
-          printingMonitorWebcamConsecutiveTimeoutsRef.current = 0;
-          printingMonitorWebcamBusyUntilEpochMsRef.current = 0;
-        }
-
-        const finalParsed: PrinterMonitoringWebcamInfo = timeoutCircuitBreakerTripped
-          ? {
-              available: false,
-              streamUrl: null,
-              snapshotUrl: null,
-              message: `Webcam timed out ${timeoutCount} times in a row. Auto-retries are paused to prevent request spam. Click Retry Webcam to try again.`,
-            }
-          : parsed;
-
-        if (!response.ok || timedOut || payload?.ok === false) {
-          console.warn('[Monitor/Webcam] Request warning', {
-            requestPayload,
-            httpStatus: response.status,
-            elapsedMs,
-            timedOut,
-            streamLimitBusy,
-            timeoutCount,
-            timeoutCircuitBreakerTripped,
-            ack,
-            cooldownUntilEpochMs: printingMonitorWebcamBusyUntilEpochMsRef.current,
-            payload,
-            parsed,
-          });
-        }
-
-        setPrintingMonitorWebcamInfo(finalParsed);
-        setPrintingMonitorDebugState((previous) => ({
-          ...previous,
-          webcam: {
-            requestedAtEpochMs: Date.now(),
-            request: requestPayload,
-            httpStatus: response.status,
-            rawPayload: payload,
-            parsedPayload: finalParsed,
-            error: null,
-          },
-        }));
-      } catch (error) {
-        if (cancelled) return;
-        let timeoutCount = printingMonitorWebcamConsecutiveTimeoutsRef.current + 1;
-        printingMonitorWebcamConsecutiveTimeoutsRef.current = timeoutCount;
-
-        const timeoutCircuitBreakerTripped = timeoutCount >= printingMonitorWebcamMaxConsecutiveTimeouts;
-        if (timeoutCircuitBreakerTripped) {
-          printingMonitorWebcamAutoPollBlockedRef.current = true;
-          printingMonitorWebcamBusyUntilEpochMsRef.current = 0;
-        } else {
-          printingMonitorWebcamBusyUntilEpochMsRef.current = Date.now() + printingMonitorWebcamTimeoutCooldownMs;
-        }
-
-        const message = timeoutCircuitBreakerTripped
-          ? `Webcam timed out ${timeoutCount} times in a row. Auto-retries are paused to prevent request spam. Click Retry Webcam to try again.`
-          : (error instanceof Error ? error.message : 'Unable to resolve webcam feed details.');
-
-        console.warn('[Monitor/Webcam] Request failed', {
-          requestPayload,
-          error: message,
-          timeoutCount,
-          timeoutCircuitBreakerTripped,
-          cooldownUntilEpochMs: printingMonitorWebcamBusyUntilEpochMsRef.current,
-        });
-        setPrintingMonitorWebcamInfo({
-          available: false,
-          streamUrl: null,
-          snapshotUrl: null,
-          message,
-        });
-        setPrintingMonitorDebugState((previous) => ({
-          ...previous,
-          webcam: {
-            requestedAtEpochMs: Date.now(),
-            request: requestPayload,
-            httpStatus: null,
-            rawPayload: null,
-            parsedPayload: null,
-            error: message,
-          },
-        }));
-      } finally {
-        printingMonitorWebcamRequestInFlightRef.current = false;
-      }
-    };
-
-    void pollWebcamInfo();
-    const intervalId = window.setInterval(() => {
-      void pollWebcamInfo();
-    }, 5_000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-      printingMonitorWebcamRequestInFlightRef.current = false;
-    };
-  }, [
-    monitoringDeviceHost,
-    monitoringDeviceId,
-    monitoringDeviceMainboardId,
-    monitoringDevicePort,
-    printingMonitorHasCamera,
-    printingMonitoringAdapter,
-    printingMonitorModalOpen,
-    printingMonitorWebcamRefreshNonce,
-  ]);
-
-  React.useEffect(() => {
-    if (!printingMonitorHasActivePrint || !printingMonitorThumbnailUrl || !printingMonitorThumbnailCacheKey) {
-      setPrintingMonitorThumbnailDisplayUrl(null);
-      setIsPrintingMonitorThumbnailLoaded(false);
-      return;
-    }
-
-    const cached = printingMonitorThumbnailCacheRef.current.get(printingMonitorThumbnailCacheKey) ?? null;
-    if (cached) {
-      setPrintingMonitorThumbnailDisplayUrl(cached);
-      setIsPrintingMonitorThumbnailLoaded(true);
-    } else {
-      setPrintingMonitorThumbnailDisplayUrl(null);
-      setIsPrintingMonitorThumbnailLoaded(false);
-    }
-
-    let cancelled = false;
-    const probeImage = new Image();
-    probeImage.decoding = 'async';
-    probeImage.onload = () => {
-      if (cancelled) return;
-      printingMonitorThumbnailCacheRef.current.set(printingMonitorThumbnailCacheKey, printingMonitorThumbnailUrl);
-      setPrintingMonitorThumbnailDisplayUrl(printingMonitorThumbnailUrl);
-      setIsPrintingMonitorThumbnailLoaded(true);
-    };
-    probeImage.onerror = () => {
-      if (cancelled) return;
-      const fallback = printingMonitorThumbnailCacheRef.current.get(printingMonitorThumbnailCacheKey) ?? null;
-      setPrintingMonitorThumbnailDisplayUrl(fallback);
-      setIsPrintingMonitorThumbnailLoaded(Boolean(fallback));
-    };
-    probeImage.src = printingMonitorThumbnailUrl;
-
-    return () => {
-      cancelled = true;
-    };
-  }, [printingMonitorHasActivePrint, printingMonitorThumbnailCacheKey, printingMonitorThumbnailUrl]);
-
-  React.useEffect(() => {
-    printingMonitorWebcamReadinessTokenRef.current += 1;
-    if (printingMonitorWebcamReadinessTimeoutRef.current != null) {
-      window.clearTimeout(printingMonitorWebcamReadinessTimeoutRef.current);
-      printingMonitorWebcamReadinessTimeoutRef.current = null;
-    }
-    setIsPrintingMonitorWebcamLoaded(false);
-    setPrintingMonitorWebcamLoadError(null);
-  }, [printingMonitorWebcamUrl]);
-
-  React.useEffect(() => {
-    setPrintingMonitorWebcamAspectRatio(null);
-  }, [printingMonitorWebcamUrl]);
-
-  const cancelPrintingMonitorWebcamReadinessCheck = React.useCallback(() => {
-    printingMonitorWebcamReadinessTokenRef.current += 1;
-    if (printingMonitorWebcamReadinessTimeoutRef.current != null) {
-      window.clearTimeout(printingMonitorWebcamReadinessTimeoutRef.current);
-      printingMonitorWebcamReadinessTimeoutRef.current = null;
-    }
-  }, []);
-
-  React.useEffect(() => {
-    if (!printingMonitorModalOpen) return;
-
-    cancelPrintingMonitorWebcamReadinessCheck();
-    if (printingMonitorRelayAutoRetryTimeoutRef.current != null) {
-      window.clearTimeout(printingMonitorRelayAutoRetryTimeoutRef.current);
-      printingMonitorRelayAutoRetryTimeoutRef.current = null;
-    }
-
-    printingMonitorRelayAutoRetryCountRef.current = 0;
-    printingMonitorWebcamAutoPollBlockedRef.current = false;
-    printingMonitorWebcamBusyUntilEpochMsRef.current = 0;
-    printingMonitorWebcamConsecutiveTimeoutsRef.current = 0;
-
-    setPrintingMonitorRelayBaseWsUrl(null);
-    setPrintingMonitorRelaySetupError(null);
-    setPrintingMonitorRelayDebugTransport(null);
-    setPrintingMonitorRelayReclaimDebug(null);
-    setPrintingMonitorWebcamInfo(null);
-    setPrintingMonitorWebcamLoadError(null);
-    setIsPrintingMonitorWebcamLoaded(false);
-    setPrintingMonitorWebcamAspectRatio(null);
-  }, [cancelPrintingMonitorWebcamReadinessCheck, monitoringDeviceId, printingMonitorModalOpen]);
-
-  const schedulePrintingMonitorMjpegReadinessCheck = React.useCallback((target: HTMLImageElement) => {
-    cancelPrintingMonitorWebcamReadinessCheck();
-
-    const readinessToken = printingMonitorWebcamReadinessTokenRef.current;
-    const sampleIntervalMs = 120;
-    const maxSamples = 36;
-    const minFrameDimensionPx = 64;
-    const minRenderedDimensionPx = 16;
-    let sampleCount = 0;
-    let stableDimensionSamples = 0;
-    let previousDimensionSignature: string | null = null;
-
-    const evaluateReadiness = () => {
-      if (printingMonitorWebcamReadinessTokenRef.current !== readinessToken) return;
-
-      const naturalW = Math.round(target.naturalWidth || 0);
-      const naturalH = Math.round(target.naturalHeight || 0);
-      const hasDimensions = Number.isFinite(naturalW)
-        && Number.isFinite(naturalH)
-        && naturalW > 0
-        && naturalH > 0;
-
-      let normalizedRatio: number | null = null;
-      if (hasDimensions) {
-        normalizedRatio = normalizePrintingMonitorWebcamAspectRatio(naturalW / naturalH);
-        if (normalizedRatio != null) {
-          setPrintingMonitorWebcamAspectRatio((previous) => {
-            if (previous != null && Math.abs(previous - normalizedRatio!) < 0.001) return previous;
-            return normalizedRatio;
-          });
-        }
-
-        const signature = `${naturalW}x${naturalH}`;
-        if (signature === previousDimensionSignature) {
-          stableDimensionSamples += 1;
-        } else {
-          previousDimensionSignature = signature;
-          stableDimensionSamples = 0;
-        }
-      }
-
-      const hasUsableFrameDimensions = hasDimensions
-        && naturalW >= minFrameDimensionPx
-        && naturalH >= minFrameDimensionPx;
-      const hasRenderableViewport = target.clientWidth >= minRenderedDimensionPx
-        && target.clientHeight >= minRenderedDimensionPx;
-      const ready = normalizedRatio != null
-        && hasRenderableViewport
-        && (hasUsableFrameDimensions ? stableDimensionSamples >= 1 : stableDimensionSamples >= 2);
-
-      if (ready) {
-        setIsPrintingMonitorWebcamLoaded(true);
-        setPrintingMonitorWebcamLoadError(null);
-        printingMonitorWebcamReadinessTimeoutRef.current = null;
-        return;
-      }
-
-      sampleCount += 1;
-      if (sampleCount >= maxSamples) {
-        if (normalizedRatio != null && hasDimensions && hasRenderableViewport) {
-          setIsPrintingMonitorWebcamLoaded(true);
-          setPrintingMonitorWebcamLoadError(null);
-        }
-        printingMonitorWebcamReadinessTimeoutRef.current = null;
-        return;
-      }
-
-      printingMonitorWebcamReadinessTimeoutRef.current = window.setTimeout(evaluateReadiness, sampleIntervalMs);
-    };
-
-    evaluateReadiness();
-  }, [cancelPrintingMonitorWebcamReadinessCheck]);
-
-  React.useEffect(() => {
-    return () => {
-      cancelPrintingMonitorWebcamReadinessCheck();
-    };
-  }, [cancelPrintingMonitorWebcamReadinessCheck]);
-
-  React.useLayoutEffect(() => {
-    if (!printingMonitorModalOpen) return;
-    const focusDeviceId = printingMonitorStartFocusDeviceIdRef.current;
-    if (focusDeviceId && monitorSelectableDevices.some((device) => device.id === focusDeviceId)) {
-      setPrintingMonitorDeviceId(focusDeviceId);
-      setPrintingMonitorViewMode('detail');
-      return;
-    }
-    setPrintingMonitorViewMode(monitorSelectableDevices.length > 1 ? 'dashboard' : 'detail');
-  }, [printingMonitorModalOpen, monitorSelectableDevices.length]);
-
-  React.useEffect(() => {
-    if (!printingMonitorModalOpen) {
-      printingMonitorStartFocusDeviceIdRef.current = null;
-      setIsPrintingMonitorPrinterMenuOpen(false);
-      setPrintingMonitorViewMode('detail');
-      setPrintingMonitorDashboardSnapshots({});
-      setIsPrintingMonitorDashboardRefreshing(false);
-      setIsPrintingMonitorWebcamResetBusy(false);
-      return;
-    }
-
-    if (monitorSelectableDevices.length === 0) {
-      setPrintingMonitorDeviceId(null);
-      return;
-    }
-
-    setPrintingMonitorDeviceId((previous) => {
-      const focusDeviceId = printingMonitorStartFocusDeviceIdRef.current;
-      if (focusDeviceId && monitorSelectableDevices.some((device) => device.id === focusDeviceId)) {
-        return focusDeviceId;
-      }
-
-      if (previous && monitorSelectableDevices.some((device) => device.id === previous)) {
-        return previous;
-      }
-
-      if (activePrinterProfile?.activeNetworkDeviceId && monitorSelectableDevices.some((device) => device.id === activePrinterProfile.activeNetworkDeviceId)) {
-        return activePrinterProfile.activeNetworkDeviceId;
-      }
-
-      if (printingTargetDevice?.id && monitorSelectableDevices.some((device) => device.id === printingTargetDevice.id)) {
-        return printingTargetDevice.id;
-      }
-
-      return monitorSelectableDevices[0]?.id ?? null;
-    });
-  }, [activePrinterProfile?.activeNetworkDeviceId, monitorSelectableDevices, printingMonitorModalOpen, printingTargetDevice?.id]);
-
-  const triggerPrintingMonitorWebcamRetry = React.useCallback(() => {
-    cancelPrintingMonitorWebcamReadinessCheck();
-    if (printingMonitorRelayAutoRetryTimeoutRef.current != null) {
-      window.clearTimeout(printingMonitorRelayAutoRetryTimeoutRef.current);
-      printingMonitorRelayAutoRetryTimeoutRef.current = null;
-    }
-    printingMonitorWebcamAutoPollBlockedRef.current = false;
-    printingMonitorWebcamBusyUntilEpochMsRef.current = 0;
-    printingMonitorWebcamConsecutiveTimeoutsRef.current = 0;
-    setPrintingMonitorWebcamLoadError(null);
-    setIsPrintingMonitorWebcamLoaded(false);
-    setPrintingMonitorWebcamRefreshNonce((previous) => previous + 1);
-  }, [cancelPrintingMonitorWebcamReadinessCheck]);
-
-  React.useEffect(() => {
-    printingMonitorRelayAutoRetryCountRef.current = 0;
-    if (printingMonitorRelayAutoRetryTimeoutRef.current != null) {
-      window.clearTimeout(printingMonitorRelayAutoRetryTimeoutRef.current);
-      printingMonitorRelayAutoRetryTimeoutRef.current = null;
-    }
-  }, [printingMonitorWebcamUrl]);
-
-  React.useEffect(() => {
-    return () => {
-      if (printingMonitorRelayAutoRetryTimeoutRef.current != null) {
-        window.clearTimeout(printingMonitorRelayAutoRetryTimeoutRef.current);
-        printingMonitorRelayAutoRetryTimeoutRef.current = null;
-      }
-    };
-  }, []);
-
-  const handleSavePrintingMonitorWebcamSnapshot = React.useCallback(async () => {
-    if (isPrintingMonitorWebcamSnapshotSaving) return;
-
-    const viewport = printingMonitorWebcamViewportRef.current;
-    if (!viewport) {
-      setPrintingMonitorError('Webcam view is not ready for snapshot capture.');
-      return;
-    }
-
-    const renderedCanvas = viewport.querySelector('canvas');
-    const renderedImage = viewport.querySelector('img');
-    if (!renderedCanvas && !renderedImage) {
-      setPrintingMonitorError('No webcam frame is available to capture.');
-      return;
-    }
-
-    setIsPrintingMonitorWebcamSnapshotSaving(true);
-
-    try {
-      let blob: Blob | null = null;
-      const snapshotSourceCandidates = Array.from(new Set([
-        renderedImage?.currentSrc,
-        renderedImage?.src,
-        printingMonitorWebcamInfo?.snapshotUrl,
-        printingMonitorWebcamInfo?.streamUrl,
-        printingMonitorWebcamUrl,
-      ]
-        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-        .map((value) => value.trim())));
-
-      if (renderedCanvas) {
-        try {
-          blob = await new Promise<Blob | null>((resolve, reject) => {
-            try {
-              renderedCanvas.toBlob((nextBlob) => resolve(nextBlob), 'image/png');
-            } catch (canvasError) {
-              reject(canvasError);
-            }
-          });
-        } catch (canvasError) {
-          const message = canvasError instanceof Error ? canvasError.message : String(canvasError ?? '');
-          if (!/tainted canvases may not be exported/i.test(message)) {
-            throw canvasError;
-          }
-        }
-      }
-
-      if (!blob) {
-        let snapshotFetchError: unknown = null;
-
-        for (const sourceUrl of snapshotSourceCandidates) {
-          const isDataOrBlobUrl = /^data:|^blob:/i.test(sourceUrl);
-          const isHttpUrl = /^https?:\/\//i.test(sourceUrl);
-          if (!isDataOrBlobUrl && !isHttpUrl) continue;
-
-          const requestUrl = isDataOrBlobUrl
-            ? sourceUrl
-            : `/api/webcam-snapshot?url=${encodeURIComponent(sourceUrl)}`;
-
-          try {
-            const response = await fetch(requestUrl, {
-              method: 'GET',
-              cache: 'no-store',
-            });
-
-            if (!response.ok) {
-              const payload = await readJsonObject(response);
-              const payloadError = readStringField(payload, 'error');
-              const reason = typeof payloadError === 'string' && payloadError.trim().length > 0
-                ? payloadError.trim()
-                : `HTTP ${response.status}`;
-              throw new Error(reason);
-            }
-
-            const nextBlob = await response.blob();
-            if (nextBlob.size <= 0) {
-              throw new Error('Snapshot source returned empty image data.');
-            }
-
-            blob = nextBlob;
-            break;
-          } catch (fetchError) {
-            snapshotFetchError = fetchError;
-          }
-        }
-
-        if (!blob && snapshotFetchError) {
-          throw snapshotFetchError;
-        }
-      }
-
-      if (!blob) {
-        throw new Error('Unable to capture webcam snapshot from the current feed.');
-      }
-
-      const bytes = new Uint8Array(await blob.arrayBuffer());
-      const baseNameRaw = (
-        monitoringDevice?.displayName
-        || monitoringDevice?.hostName
-        || monitoringDevice?.ipAddress
-        || 'printer'
-      ).trim();
-      const baseName = baseNameRaw.replace(/[^a-z0-9._-]+/gi, '_').replace(/^_+|_+$/g, '') || 'printer';
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filename = `webcam_${baseName}_${stamp}.png`;
-
-      try {
-        await savePrintArtifactWithNativeDialog(bytes, filename);
-      } catch {
-        const objectUrl = URL.createObjectURL(blob);
-        const anchor = document.createElement('a');
-        anchor.href = objectUrl;
-        anchor.download = filename;
-        anchor.rel = 'noopener';
-        anchor.style.display = 'none';
-        document.body?.appendChild(anchor);
-        anchor.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-        anchor.remove();
-        window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-      }
-
-      setPrintingMonitorActionStatus('Webcam snapshot saved.');
-      setPrintingMonitorError(null);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to save webcam snapshot.';
-      setPrintingMonitorError(message);
-    } finally {
-      setIsPrintingMonitorWebcamSnapshotSaving(false);
-    }
-  }, [
-    isPrintingMonitorWebcamSnapshotSaving,
-    monitoringDevice?.displayName,
-    monitoringDevice?.hostName,
-    monitoringDevice?.ipAddress,
-    printingMonitorWebcamInfo?.snapshotUrl,
-    printingMonitorWebcamInfo?.streamUrl,
-    printingMonitorWebcamUrl,
-  ]);
 
   // Flush webcam polling/circuit-breaker state on monitor close.
-  const flushMonitors = React.useCallback(async () => {
-    cancelPrintingMonitorWebcamReadinessCheck();
-    if (printingMonitorRelayAutoRetryTimeoutRef.current != null) {
-      window.clearTimeout(printingMonitorRelayAutoRetryTimeoutRef.current);
-      printingMonitorRelayAutoRetryTimeoutRef.current = null;
-    }
-    printingMonitorRelayAutoRetryCountRef.current = 0;
-    // Reset webcam polling state
-    printingMonitorWebcamAutoPollBlockedRef.current = false;
-    printingMonitorWebcamBusyUntilEpochMsRef.current = 0;
-    printingMonitorWebcamRequestInFlightRef.current = false;
-    printingMonitorWebcamConsecutiveTimeoutsRef.current = 0;
-    setPrintingMonitorWebcamLoadError(null);
-    setIsPrintingMonitorWebcamLoaded(false);
-    setPrintingMonitorWebcamAspectRatio(null);
-    setPrintingMonitorWebcamRefreshNonce((previous) => previous + 1);
-  }, [cancelPrintingMonitorWebcamReadinessCheck]);
 
-  const handleResetPrintingMonitorWebcamStreamSlot = React.useCallback(async () => {
-    if (isPrintingMonitorWebcamResetBusy) return;
-
-    const host = monitoringDeviceHost;
-    const port = monitoringDevicePort;
-    if (!printingMonitorModalOpen || !monitoringDeviceId || !host) {
-      setPrintingMonitorWebcamInfo({
-        available: false,
-        streamUrl: null,
-        snapshotUrl: null,
-        message: 'No printer IP available to reset webcam stream.',
-      });
-      return;
-    }
-
-    setIsPrintingMonitorWebcamResetBusy(true);
-
-    try {
-      triggerPrintingMonitorWebcamRetry();
-    } catch (error) {
-      const message = error instanceof Error
-        ? error.message
-        : 'Failed to reset webcam stream.';
-      setPrintingMonitorWebcamInfo({
-        available: false,
-        streamUrl: null,
-        snapshotUrl: null,
-        message,
-      });
-    } finally {
-      setIsPrintingMonitorWebcamResetBusy(false);
-    }
-  }, [
-    isPrintingMonitorWebcamResetBusy,
-    monitoringDeviceHost,
-    monitoringDeviceId,
-    printingMonitorModalOpen,
-    triggerPrintingMonitorWebcamRetry,
-  ]);
 
   // Manage printer monitor webcam lifecycle: disable when monitor closes.
-  React.useEffect(() => {
-    if (!printingMonitorModalOpen || !monitoringDeviceId) {
-      // Monitor closed or no device: disable the stream
-      void flushMonitors();
-      return;
-    }
 
-    // Cleanup when monitor closes
-    return () => {
-      void flushMonitors();
-    };
-  }, [printingMonitorModalOpen, monitoringDeviceId, flushMonitors]);
 
-  React.useEffect(() => {
-    const canPollDashboard = Boolean(
-      printingMonitorModalOpen
-      && printingMonitorViewMode === 'dashboard'
-      && printingMonitoringAdapter.available
-      && printingMonitoringAdapter.pluginId
-      && printingMonitoringAdapter.operations?.status,
-    );
 
-    if (!canPollDashboard) {
-      setIsPrintingMonitorDashboardRefreshing(false);
-      return;
-    }
 
-    if (dashboardOnlineMonitorDevices.length === 0) {
-      setPrintingMonitorDashboardSnapshots({});
-      setIsPrintingMonitorDashboardRefreshing(false);
-      return;
-    }
 
-    let cancelled = false;
 
-    const pollAll = async () => {
-      if (cancelled) return;
-      setIsPrintingMonitorDashboardRefreshing(true);
-
-      const entries = await Promise.all(
-        dashboardOnlineMonitorDevices.map(async (device) => {
-          const host = (device.ipAddress || '').trim();
-          const port = device.port || 80;
-          if (!host) return [device.id, null] as const;
-
-          try {
-            const response = await pluginNetworkFetch({
-              pluginId: printingMonitoringAdapter.pluginId!,
-              operation: printingMonitoringAdapter.operations!.status,
-              ipAddress: host,
-              port,
-            });
-
-            const payload = await readJsonObject(response);
-            const snapshot = printingMonitoringAdapter.parseStatusPayload(payload, `${host}:${port}`);
-            return [device.id, snapshot] as const;
-          } catch {
-            return [device.id, null] as const;
-          }
-        }),
-      );
-
-      if (cancelled) return;
-
-      const next: Record<string, PrinterMonitoringSnapshot | null> = {};
-      for (const [deviceId, snapshot] of entries) {
-        next[deviceId] = snapshot;
-      }
-      setPrintingMonitorDashboardSnapshots(next);
-      setIsPrintingMonitorDashboardRefreshing(false);
-    };
-
-    void pollAll();
-
-    const intervalId = window.setInterval(() => {
-      void pollAll();
-    }, 5000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [
-    dashboardOnlineMonitorDevices,
-    printingMonitorModalOpen,
-    printingMonitoringAdapter,
-    printingMonitorViewMode,
-  ]);
-
-  React.useEffect(() => {
-    if (!isPrintingMonitorPrinterMenuOpen) return;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (!target) return;
-      if (printingMonitorPrinterMenuRef.current?.contains(target)) return;
-      setIsPrintingMonitorPrinterMenuOpen(false);
-    };
-
-    window.addEventListener('mousedown', handlePointerDown);
-
-    let wasEscapePressed = false;
-    const unsubscribe = hotkeyStore.subscribe((state) => {
-      const active = state.activeKeys;
-      const isEscapePressed = active.has('escape');
-      if (isEscapePressed && !wasEscapePressed) {
-        setIsPrintingMonitorPrinterMenuOpen(false);
-      }
-      wasEscapePressed = isEscapePressed;
-    });
-
-    return () => {
-      window.removeEventListener('mousedown', handlePointerDown);
-      unsubscribe();
-    };
-  }, [isPrintingMonitorPrinterMenuOpen]);
-
-  React.useEffect(() => {
-    setIsPrintingMonitorPrinterThumbnailFailed(false);
-  }, [activePrinterProfile?.id, activePrinterProfile?.imageDataUrl]);
-
-  React.useEffect(() => {
-    if (!printingMonitorModalOpen) {
-      setPrintingMonitorLastStatusSuccessAtMs(null);
-      setIsPrintingMonitorStatusRequestInFlight(false);
-      setPrintingMonitorActionBusy(null);
-      setPrintingMonitorControlPendingAction(null);
-      setPrintingMonitorActionStatus(null);
-      setPrintingMonitorPendingConfirmation(null);
-      setIsPrintingMonitorDebugOpen(false);
-      setIsPrintingMonitorRtspDebugOpen(false);
-      setPrintingMonitorDebugCopyState('idle');
-      setPrintingMonitorError(null);
-    }
-  }, [printingMonitorModalOpen, setPrintingMonitorError]);
-
-  React.useEffect(() => {
-    if (!printingMonitorControlPendingAction) return;
-
-    const timeoutId = window.setTimeout(() => {
-      setPrintingMonitorControlPendingAction(null);
-    }, 20_000);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [printingMonitorControlPendingAction]);
-
-  React.useEffect(() => {
-    if (!printingMonitorControlPendingAction || !printingMonitorSnapshot) return;
-
-    const settled = (() => {
-      if (printingMonitorControlPendingAction === 'pause') {
-        return printingMonitorSnapshot.isPaused || !printingMonitorHasActivePrint;
-      }
-      if (printingMonitorControlPendingAction === 'resume') {
-        return !printingMonitorSnapshot.isPaused && !printingMonitorIsPauseTransition;
-      }
-      if (printingMonitorControlPendingAction === 'cancel') {
-        return !printingMonitorSnapshot.isPrinting
-          && !printingMonitorSnapshot.isPaused
-          && !printingMonitorIsCancelTransition;
-      }
-      return !printingMonitorSnapshot.isPrinting
-        && !printingMonitorSnapshot.isPaused
-        && !printingMonitorIsCancelTransition;
-    })();
-
-    if (settled) {
-      setPrintingMonitorControlPendingAction(null);
-    }
-  }, [
-    printingMonitorControlPendingAction,
-    printingMonitorHasActivePrint,
-    printingMonitorIsCancelTransition,
-    printingMonitorIsPauseTransition,
-    printingMonitorSnapshot,
-  ]);
 
   const handleDownloadPrintArtifact = React.useCallback(async () => {
     if (!printingArtifact) return;
@@ -8463,465 +4463,6 @@ export default function Home() {
     };
   }, [isDesktopRuntime]);
 
-  const buildSyntheticFileChangeEvent = React.useCallback((nextFiles: File[]): React.ChangeEvent<HTMLInputElement> => {
-    const dt = new DataTransfer();
-    nextFiles.forEach((file) => dt.items.add(file));
-    const target = { files: dt.files, value: '' } as unknown as HTMLInputElement;
-    return { target, currentTarget: target } as React.ChangeEvent<HTMLInputElement>;
-  }, []);
-
-  const [nativePickerPreparationState, setNativePickerPreparationState] = React.useState<{
-    active: boolean;
-    label: string;
-    detail: string;
-    progress: number | null;
-  }>({
-    active: false,
-    label: '',
-    detail: '',
-    progress: null,
-  });
-
-  const waitForUiTick = React.useCallback(() => new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  }), []);
-
-  const createPathBackedStlFile = React.useCallback((sourcePath: string, name: string): File => {
-    const file = new File([], name, {
-      type: getDroppedFileMimeType(name),
-      lastModified: Date.now(),
-    });
-    (file as File & { filePath?: string }).filePath = sourcePath;
-    return file;
-  }, []);
-
-  const pickFilesWithNativeDialog = React.useCallback(async (category: 'mesh' | 'scene', multiple: boolean): Promise<File[] | null> => {
-    if (!isDesktopRuntime()) return null;
-
-    try {
-      const picked = await pickOpenFilesWithNativeDialog(category, multiple);
-      if (!picked || picked.length === 0) return [];
-
-      const core = await import('@tauri-apps/api/core');
-      const files: File[] = [];
-
-      const readingLabel = category === 'scene' ? 'Loading Scene…' : 'Loading Mesh…';
-      const singleNoun = category === 'scene' ? 'scene file' : 'mesh file';
-      const pluralNoun = category === 'scene' ? 'scene files' : 'mesh files';
-
-      setNativePickerPreparationState({
-        active: true,
-        label: readingLabel,
-        detail: picked.length > 1
-          ? `Reading 0/${picked.length} selected ${pluralNoun}…`
-          : `Reading selected ${singleNoun}…`,
-        progress: null,
-      });
-      await waitForUiTick();
-
-      try {
-        for (let i = 0; i < picked.length; i += 1) {
-          const entry = picked[i];
-        try {
-          const sourcePath = entry.path.trim();
-          if (!sourcePath) continue;
-
-          const resolvedName = entry.name || getFileNameFromPath(sourcePath);
-          setNativePickerPreparationState({
-            active: true,
-            label: readingLabel,
-            detail: picked.length > 1
-              ? `Reading ${i + 1}/${picked.length}: ${resolvedName}`
-              : `Reading ${resolvedName}…`,
-            progress: null,
-          });
-
-          const name = resolvedName;
-          if (getFileExtensionLower(name) === '.stl') {
-            files.push(createPathBackedStlFile(sourcePath, name));
-          } else {
-            const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
-            files.push(new File([new Uint8Array(bytes)], name, {
-              type: getDroppedFileMimeType(name),
-              lastModified: Date.now(),
-            }));
-          }
-        } catch (error) {
-          console.warn(`[Picker] Failed reading picked file path: ${entry.path}`, error);
-        }
-      }
-
-        return files;
-      } finally {
-        setNativePickerPreparationState({
-          active: false,
-          label: '',
-          detail: '',
-          progress: null,
-        });
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error ?? '');
-      const cancelled = message.toLowerCase().includes('cancel');
-      if (cancelled) return [];
-      console.warn(`[Picker] Native ${category} picker failed, falling back to web input.`, error);
-      return null;
-    }
-  }, [createPathBackedStlFile, isDesktopRuntime, waitForUiTick]);
-
-  const pickFilesWithWebInput = React.useCallback((accept: string, multiple: boolean): Promise<File[]> => {
-    return new Promise((resolve) => {
-      if (typeof document === 'undefined') {
-        resolve([]);
-        return;
-      }
-
-      const input = document.createElement('input');
-      input.type = 'file';
-      // iOS WebKit greys out files whose extension it can't map to a known UTI
-      // (e.g. .stl, .3mf), and it ignores MIME hints too, so drop the filter
-      // there and rely on extension validation when the picked files are processed.
-      input.accept = detectIsIOS() ? '' : accept;
-      input.multiple = multiple;
-
-      input.onchange = () => {
-        resolve(Array.from(input.files ?? []));
-      };
-
-      input.click();
-    });
-  }, []);
-
-  const pickSceneFilesWithNativeDialog = React.useCallback(async (): Promise<Array<{ file: File; sourcePath: string }> | null> => {
-    if (!isDesktopRuntime()) return null;
-
-    try {
-      const picked = await pickOpenFilesWithNativeDialog('scene', true);
-      if (!picked || picked.length === 0) return [];
-
-      const core = await import('@tauri-apps/api/core');
-      const files: Array<{ file: File; sourcePath: string }> = [];
-
-      setNativePickerPreparationState({
-        active: true,
-        label: 'Loading Scene…',
-        detail: picked.length > 1
-          ? `Reading 0/${picked.length} selected scene files…`
-          : 'Reading selected scene file…',
-        progress: null,
-      });
-      await waitForUiTick();
-
-      try {
-        for (let i = 0; i < picked.length; i += 1) {
-          const entry = picked[i];
-        try {
-          const sourcePath = entry.path.trim();
-          if (!sourcePath) continue;
-
-          const resolvedName = entry.name || getFileNameFromPath(sourcePath);
-          setNativePickerPreparationState({
-            active: true,
-            label: 'Loading Scene…',
-            detail: picked.length > 1
-              ? `Reading ${i + 1}/${picked.length}: ${resolvedName}`
-              : `Reading ${resolvedName}…`,
-            progress: null,
-          });
-
-          const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
-          const name = resolvedName;
-
-          files.push({
-            file: new File([new Uint8Array(bytes)], name, {
-              type: getDroppedFileMimeType(name),
-              lastModified: Date.now(),
-            }),
-            sourcePath,
-          });
-        } catch (error) {
-          console.warn(`[Picker] Failed reading picked scene file path: ${entry.path}`, error);
-        }
-      }
-
-        return files;
-      } finally {
-        setNativePickerPreparationState({
-          active: false,
-          label: '',
-          detail: '',
-          progress: null,
-        });
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error ?? '');
-      const cancelled = message.toLowerCase().includes('cancel');
-      if (cancelled) return [];
-      console.warn('[Picker] Native scene picker failed, falling back to web input.', error);
-      return null;
-    }
-  }, [isDesktopRuntime, waitForUiTick]);
-
-  const handleOpenMeshDialog = React.useCallback(async () => {
-    const nativeFiles = await pickFilesWithNativeDialog('mesh', true);
-    if (nativeFiles) {
-      if (nativeFiles.length === 0) return;
-      const expanded = await expandPickedFilesWithZip(nativeFiles, 'mesh');
-      if (expanded.meshFiles.length > 0) {
-        void scene.loadFiles(expanded.meshFiles);
-      }
-      if (expanded.sceneFiles.length > 0) {
-        await importSceneFilesWithPluginWarning(expanded.sceneFiles, { resultingScenePath: null });
-      }
-      return;
-    }
-
-    const webFiles = await pickFilesWithWebInput('.stl,.obj,.3mf,.zip', true);
-    if (webFiles.length === 0) return;
-    const expanded = await expandPickedFilesWithZip(webFiles, 'mesh');
-    if (expanded.meshFiles.length > 0) {
-      scene.onFileChange(buildSyntheticFileChangeEvent(expanded.meshFiles));
-    }
-    if (expanded.sceneFiles.length > 0) {
-      await importSceneFilesWithPluginWarning(expanded.sceneFiles, { resultingScenePath: null });
-    }
-  }, [buildSyntheticFileChangeEvent, importSceneFilesWithPluginWarning, pickFilesWithNativeDialog, pickFilesWithWebInput, scene, expandPickedFilesWithZip]);
-
-  const handleOpenSceneDialog = React.useCallback(async () => {
-    const nativeFiles = await pickSceneFilesWithNativeDialog();
-    if (nativeFiles) {
-      if (nativeFiles.length === 0) return;
-      const nonZip = nativeFiles.filter((e) => getFileExtensionLower(e.file.name) !== '.zip');
-      const zips = nativeFiles.filter((e) => getFileExtensionLower(e.file.name) === '.zip');
-      const expandedFromZips = await expandPickedFilesWithZip(zips.map((e) => e.file), 'scene');
-      const sceneFiles = [...nonZip.map((e) => e.file), ...expandedFromZips.sceneFiles];
-
-      if (sceneFiles.length > 0) {
-        await importSceneFilesWithPluginWarning(
-          sceneFiles,
-          {
-            resultingScenePath: nonZip.length === 1 && expandedFromZips.sceneFiles.length === 0
-              ? nativeFiles[0]?.sourcePath ?? null
-              : null,
-            sourcePaths: [
-              ...nonZip.map((e) => e.sourcePath),
-              ...Array.from({ length: expandedFromZips.sceneFiles.length }, () => null),
-            ],
-          },
-        );
-      }
-
-      if (expandedFromZips.meshFiles.length > 0) {
-        void scene.loadFiles(expandedFromZips.meshFiles);
-      }
-      return;
-    }
-
-    const webFiles = await pickFilesWithWebInput('.voxl,.lys,.zip', true);
-    if (webFiles.length === 0) return;
-    const expanded = await expandPickedFilesWithZip(webFiles, 'scene');
-    if (expanded.sceneFiles.length > 0) {
-      await importSceneFilesWithPluginWarning(expanded.sceneFiles, { resultingScenePath: null });
-    }
-    if (expanded.meshFiles.length > 0) {
-      void scene.loadFiles(expanded.meshFiles);
-    }
-  }, [importSceneFilesWithPluginWarning, pickSceneFilesWithNativeDialog, pickFilesWithWebInput, expandPickedFilesWithZip]);
-
-  const importSceneFromLaunchEntries = React.useCallback(async (entries: LaunchSceneFileEntry[]): Promise<boolean> => {
-    if (!entries || entries.length === 0) return false;
-
-    const sceneEntries = entries.filter((entry) => {
-      const name = (entry.name || getFileNameFromPath(entry.path)).trim();
-      return isSceneFileName(name);
-    });
-
-    if (sceneEntries.length === 0) return false;
-
-    const core = await import('@tauri-apps/api/core');
-
-    const files: File[] = [];
-    for (const sceneEntry of sceneEntries) {
-      const sourcePath = sceneEntry.path.trim();
-      if (!sourcePath) continue;
-
-      const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
-      const name = sceneEntry.name || getFileNameFromPath(sourcePath);
-      files.push(new File([new Uint8Array(bytes)], name, {
-        type: getDroppedFileMimeType(name),
-        lastModified: Date.now(),
-      }));
-    }
-
-    if (files.length === 0) return false;
-    return await importSceneFilesWithPluginWarning(files, {
-      resultingScenePath: files.length === 1 ? sceneEntries[0]?.path ?? null : null,
-      sourcePaths: sceneEntries.map((entry) => entry.path),
-    });
-  }, [importSceneFilesWithPluginWarning]);
-
-  // Keep the ref in sync with the latest callback.
-  React.useEffect(() => {
-    importSceneFromLaunchEntriesRef.current = importSceneFromLaunchEntries;
-  }, [importSceneFromLaunchEntries]);
-
-  const flushQueuedLaunchSceneImports = React.useCallback(async (): Promise<void> => {
-    if (!startupSceneHandoffReadyRef.current) return;
-    if (launchSceneImportInFlightRef.current) return;
-
-    const queuedEntries = queuedLaunchSceneEntriesRef.current;
-    if (!queuedEntries || queuedEntries.length === 0) {
-      setPendingStartupSceneHandoff(false);
-      return;
-    }
-
-    queuedLaunchSceneEntriesRef.current = [];
-    launchSceneImportInFlightRef.current = true;
-
-    try {
-      const handler = importSceneFromLaunchEntriesRef.current;
-      if (!handler) return;
-
-      const imported = await handler(queuedEntries);
-      if (!imported) {
-        console.warn('[LaunchOpen] App launched with file arguments, but no supported scene file (.voxl/.lys) was found.');
-      }
-    } catch (error) {
-      console.warn('[LaunchOpen] Failed handling queued launch scene file arguments.', error);
-    } finally {
-      launchSceneImportInFlightRef.current = false;
-      const stillQueued = queuedLaunchSceneEntriesRef.current.length > 0;
-      setPendingStartupSceneHandoff(stillQueued && !startupSceneHandoffReadyRef.current);
-      if (stillQueued) {
-        void flushQueuedLaunchSceneImports();
-      }
-    }
-  }, []);
-
-  const queueLaunchSceneEntries = React.useCallback((entries: LaunchSceneFileEntry[]) => {
-    if (!entries || entries.length === 0) return;
-
-    const merged = new Map<string, LaunchSceneFileEntry>();
-    for (const entry of queuedLaunchSceneEntriesRef.current) {
-      const key = entry.path.trim().toLowerCase();
-      if (!key) continue;
-      merged.set(key, entry);
-    }
-    for (const entry of entries) {
-      const key = entry.path.trim().toLowerCase();
-      if (!key) continue;
-      merged.set(key, entry);
-    }
-
-    queuedLaunchSceneEntriesRef.current = Array.from(merged.values());
-
-    if (!startupSceneHandoffReadyRef.current) {
-      setPendingStartupSceneHandoff(true);
-      return;
-    }
-
-    void flushQueuedLaunchSceneImports();
-  }, [flushQueuedLaunchSceneImports]);
-
-  React.useEffect(() => {
-    if (!isDesktopRuntime()) {
-      startupSceneHandoffReadyRef.current = true;
-      return;
-    }
-
-    if (coldStartSceneHandoffTimerRef.current !== null) {
-      window.clearTimeout(coldStartSceneHandoffTimerRef.current);
-    }
-
-    coldStartSceneHandoffTimerRef.current = window.setTimeout(() => {
-      coldStartSceneHandoffTimerRef.current = null;
-      startupSceneHandoffReadyRef.current = true;
-      void flushQueuedLaunchSceneImports();
-    }, COLD_START_SCENE_HANDOFF_DELAY_MS);
-
-    return () => {
-      if (coldStartSceneHandoffTimerRef.current !== null) {
-        window.clearTimeout(coldStartSceneHandoffTimerRef.current);
-        coldStartSceneHandoffTimerRef.current = null;
-      }
-      startupSceneHandoffReadyRef.current = true;
-    };
-  }, [flushQueuedLaunchSceneImports, isDesktopRuntime]);
-
-  // Primary-launch file loading. Uses importSceneFromLaunchEntriesRef (a
-  // stable ref) so this effect only runs once on mount and is never
-  // cancelled mid-flight by scene re-renders during initialization.
-  React.useEffect(() => {
-    if (launchSceneFilesHandledRef.current) return;
-    launchSceneFilesHandledRef.current = true;
-
-    if (!isDesktopRuntime()) return;
-
-    void (async () => {
-      try {
-        const core = await import('@tauri-apps/api/core');
-        const launchEntries = await core.invoke<LaunchSceneFileEntry[]>('get_launch_scene_files');
-        if (!launchEntries || launchEntries.length === 0) return;
-
-        queueLaunchSceneEntries(launchEntries);
-      } catch (error) {
-        console.warn('[LaunchOpen] Failed handling launch scene file arguments.', error);
-      }
-    })();
-    // isDesktopRuntime is a stable useCallback([]) — this effect runs once on mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isDesktopRuntime, queueLaunchSceneEntries]);
-
-  React.useEffect(() => {
-    if (!isDesktopRuntime()) return;
-
-    let disposed = false;
-    let unlisten: (() => void) | null = null;
-
-    void (async () => {
-      try {
-        const { listen } = await import('@tauri-apps/api/event');
-
-        unlisten = await listen<SceneFileHandoffPayload>('dragonfruit://scene-file-handoff', (event) => {
-          if (disposed) return;
-          const paths = Array.isArray(event.payload?.paths) ? event.payload.paths : [];
-          if (paths.length === 0) return;
-
-          const entries: LaunchSceneFileEntry[] = paths
-            .map((path) => {
-              const trimmed = path.trim();
-              if (!trimmed) return null;
-              return {
-                path: trimmed,
-                name: getFileNameFromPath(trimmed),
-              } satisfies LaunchSceneFileEntry;
-            })
-            .filter((entry): entry is LaunchSceneFileEntry => Boolean(entry));
-
-          queueLaunchSceneEntries(entries);
-        });
-      } catch (error) {
-        if (!disposed) {
-          console.warn('[LaunchOpen] Failed subscribing to scene-file handoff events.', error);
-        }
-      }
-    })();
-
-    return () => {
-      disposed = true;
-      if (unlisten) {
-        try {
-          unlisten();
-        } catch {
-          // noop
-        }
-      }
-    };
-  }, [isDesktopRuntime, queueLaunchSceneEntries]);
-
-  const handleTopBarOpenScene = React.useCallback(() => {
-    void handleOpenSceneDialog();
-  }, [handleOpenSceneDialog]);
 
   const performSendToPrinter = React.useCallback(async (targetDevice: PrinterNetworkDevice, selectedMaterialIdOverride?: string) => {
     if (!printingArtifact || !activePrinterProfile) return;
@@ -9243,12 +4784,6 @@ export default function Home() {
     }
   }, [activeNetworkUiAdapter?.pluginId, printingSendBusy]);
 
-  const openPrintingMonitorForTargetDevice = React.useCallback((deviceId: string | null) => {
-    printingMonitorStartFocusDeviceIdRef.current = deviceId;
-    setPrintingMonitorDeviceId(deviceId);
-    setPrintingMonitorViewMode('detail');
-    setPrintingMonitorModalOpen(true);
-  }, []);
 
   const handlePrintNow = React.useCallback(async () => {
     if (!activePrinterProfile || !printingTargetDevice) return;
@@ -9300,935 +4835,17 @@ export default function Home() {
     }
   }, [activePrinterProfile, openPrintingMonitorForTargetDevice, printingMonitoringAdapter.operations, printingMonitoringAdapter.pluginId, printingReadyPlateId, printingTargetDevice]);
 
-  const executeStartMonitorRecentPlate = React.useCallback(async (plateId: number) => {
-    if (!printingMonitoringAdapter.pluginId || !printingMonitoringAdapter.operations?.start) return;
-    if (!Number.isFinite(plateId) || plateId <= 0) return;
 
-    const roundedPlateId = Math.round(plateId);
 
-    const host = (monitoringDevice?.ipAddress || '').trim();
-    const port = monitoringDevice?.port || 80;
-    if (!host) {
-      setPrintingMonitorError('No printer IP available to start selected file.');
-      return;
-    }
 
-    setPrintingMonitorActionBusy('start');
-    setPrintingMonitorActionStatus(null);
 
-    try {
-      const response = await pluginNetworkFetch({
-        pluginId: printingMonitoringAdapter.pluginId,
-        operation: printingMonitoringAdapter.operations.start,
-        ipAddress: host,
-        port,
-        plateId: roundedPlateId,
-      });
 
-      const payload = await readJsonObject(response);
-      if (!response.ok || payload?.ok === false) {
-        const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
-        throw new Error(reason);
-      }
 
-      setPrintingReadyPlateId(roundedPlateId);
-      setPrintingMonitorSelectedPlateId(roundedPlateId);
-      setPrintingMonitorActionStatus(`Started plate #${roundedPlateId}.`);
-      setPrintingMonitorError(null);
-      void refreshPrintingMonitorRecentPlates();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to start selected print file.';
-      setPrintingMonitorError(message);
-      setPrintingMonitorActionStatus(null);
-    } finally {
-      setPrintingMonitorActionBusy(null);
-    }
-  }, [
-    monitoringDevice?.ipAddress,
-    monitoringDevice?.port,
-    printingMonitoringAdapter,
-    refreshPrintingMonitorRecentPlates,
-  ]);
 
-  const handleStartMonitorRecentPlate = React.useCallback((plateId: number) => {
-    if (!Number.isFinite(plateId) || plateId <= 0) return;
-    const roundedPlateId = Math.round(plateId);
-    const matched = printingMonitorRecentPlates.find((plate) => plate.plateId === roundedPlateId);
-    setPrintingMonitorPendingConfirmation({
-      kind: 'plate',
-      action: 'start',
-      plateId: roundedPlateId,
-      plateName: matched?.name ?? `Plate #${roundedPlateId}`,
-    });
-  }, [printingMonitorRecentPlates]);
 
-  const executeDeleteMonitorRecentPlate = React.useCallback(async (plateId: number) => {
-    if (!printingMonitoringAdapter.pluginId || !printingMonitoringAdapter.operations?.deletePlate) return;
-    if (!Number.isFinite(plateId) || plateId <= 0) return;
 
-    const roundedPlateId = Math.round(plateId);
 
-    const host = (monitoringDevice?.ipAddress || '').trim();
-    const port = monitoringDevice?.port || 80;
-    if (!host) {
-      setPrintingMonitorError('No printer IP available to delete selected file.');
-      return;
-    }
 
-    setPrintingMonitorActionBusy('delete');
-    setPrintingMonitorActionStatus(null);
-
-    try {
-      const response = await pluginNetworkFetch({
-        pluginId: printingMonitoringAdapter.pluginId,
-        operation: printingMonitoringAdapter.operations.deletePlate,
-        ipAddress: host,
-        port,
-        plateId: roundedPlateId,
-      });
-
-      const payload = await readJsonObject(response);
-      if (!response.ok || payload?.ok === false) {
-        const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
-        throw new Error(reason);
-      }
-
-      setPrintingMonitorActionStatus(`Deleted plate #${roundedPlateId}.`);
-      setPrintingMonitorError(null);
-      setPrintingMonitorRecentPlates((previous) => previous.filter((plate) => plate.plateId !== roundedPlateId));
-      setPrintingMonitorSelectedPlateId((previous) => (previous === roundedPlateId ? null : previous));
-      if (printingReadyPlateId === roundedPlateId) {
-        setPrintingReadyPlateId(null);
-      }
-      void refreshPrintingMonitorRecentPlates();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to delete selected print file.';
-      setPrintingMonitorError(message);
-      setPrintingMonitorActionStatus(null);
-    } finally {
-      setPrintingMonitorActionBusy(null);
-    }
-  }, [
-    monitoringDevice?.ipAddress,
-    monitoringDevice?.port,
-    printingMonitoringAdapter,
-    printingReadyPlateId,
-    refreshPrintingMonitorRecentPlates,
-  ]);
-
-  const handleDeleteMonitorRecentPlate = React.useCallback((plateId: number) => {
-    if (!Number.isFinite(plateId) || plateId <= 0) return;
-    const roundedPlateId = Math.round(plateId);
-    const matched = printingMonitorRecentPlates.find((plate) => plate.plateId === roundedPlateId);
-    setPrintingMonitorPendingConfirmation({
-      kind: 'plate',
-      action: 'delete',
-      plateId: roundedPlateId,
-      plateName: matched?.name ?? `Plate #${roundedPlateId}`,
-    });
-  }, [printingMonitorRecentPlates]);
-
-  const executePrintingMonitorControlAction = React.useCallback(async (
-    action: 'pause' | 'resume' | 'cancel' | 'emergency-stop',
-  ) => {
-    if (!printingMonitoringAdapter.pluginId || !printingMonitoringAdapter.operations) return;
-
-    const host = (monitoringDevice?.ipAddress || '').trim();
-    const port = monitoringDevice?.port || 80;
-    if (!host) {
-      setPrintingMonitorError('No printer IP available for control command.');
-      return;
-    }
-
-    const operation = action === 'pause'
-      ? printingMonitoringAdapter.operations.pause
-      : action === 'resume'
-        ? printingMonitoringAdapter.operations.resume
-        : action === 'cancel'
-          ? printingMonitoringAdapter.operations.cancel
-          : printingMonitoringAdapter.operations.emergencyStop;
-
-    setPrintingMonitorActionBusy(action);
-    setPrintingMonitorControlPendingAction(action);
-    setPrintingMonitorActionStatus(null);
-
-    try {
-      const response = await pluginNetworkFetch({
-        pluginId: printingMonitoringAdapter.pluginId,
-        operation,
-        ipAddress: host,
-        port,
-        plateId: printingMonitorPlateId,
-      });
-
-      const payload = await readJsonObject(response);
-      if (!response.ok || payload?.ok === false) {
-        const reason = typeof payload?.error === 'string'
-          ? payload.error
-          : `HTTP ${response.status}`;
-        throw new Error(reason);
-      }
-
-      const successMessage = typeof payload?.message === 'string' && payload.message.trim().length > 0
-        ? payload.message.trim()
-        : action === 'pause'
-          ? 'Pause command sent.'
-          : action === 'resume'
-            ? 'Resume command sent.'
-            : action === 'cancel'
-              ? 'Cancel command sent.'
-              : 'Emergency stop command sent.';
-
-      setPrintingMonitorActionStatus(successMessage);
-      setPrintingMonitorError(null);
-
-      const statusResponse = await pluginNetworkFetch({
-        pluginId: printingMonitoringAdapter.pluginId,
-        operation: printingMonitoringAdapter.operations.status,
-        ipAddress: host,
-        port,
-        plateId: printingMonitorPlateId,
-      });
-      const statusPayload = await readJsonObject(statusResponse);
-      if (statusResponse.ok) {
-        setPrintingMonitorSnapshot(printingMonitoringAdapter.parseStatusPayload(statusPayload, `${host}:${port}`));
-      }
-    } catch (error) {
-      const message = error instanceof Error
-        ? error.message
-        : 'Failed to send control command to printer.';
-      setPrintingMonitorError(message);
-      setPrintingMonitorActionStatus(null);
-      setPrintingMonitorControlPendingAction(null);
-    } finally {
-      setPrintingMonitorActionBusy(null);
-    }
-  }, [monitoringDevice?.ipAddress, monitoringDevice?.port, printingMonitorPlateId, printingMonitoringAdapter]);
-
-  const executePrintingMonitorFeatureToggle = React.useCallback(async (
-    feature: 'webcam' | 'timelapse',
-    enabled: boolean,
-  ) => {
-    if (!printingMonitoringAdapter.pluginId || !printingMonitoringAdapter.operations) return;
-
-    const operation = feature === 'webcam'
-      ? (enabled ? printingMonitoringAdapter.operations.webcamEnable : printingMonitoringAdapter.operations.webcamDisable)
-      : (enabled ? printingMonitoringAdapter.operations.timelapseEnable : printingMonitoringAdapter.operations.timelapseDisable);
-    if (!operation) {
-      setPrintingMonitorError(`This monitor plugin does not expose ${feature} ${enabled ? 'enable' : 'disable'} commands.`);
-      return;
-    }
-
-    const host = (monitoringDevice?.ipAddress || '').trim();
-    const port = monitoringDevice?.port || 80;
-    if (!host) {
-      setPrintingMonitorError(`No printer IP available for ${feature} command.`);
-      return;
-    }
-
-    const busyKey = feature === 'webcam'
-      ? (enabled ? 'webcam-enable' : 'webcam-disable')
-      : (enabled ? 'timelapse-enable' : 'timelapse-disable');
-
-    const statusRawPayload = printingMonitorDebugState.status.rawPayload;
-    const statusPayloadRecord = (statusRawPayload && typeof statusRawPayload === 'object' && !Array.isArray(statusRawPayload))
-      ? statusRawPayload as Record<string, unknown>
-      : null;
-    const rawMainboardId = statusPayloadRecord?.mainboardId ?? statusPayloadRecord?.MainboardID;
-    const resolvedMainboardId = typeof rawMainboardId === 'string' && rawMainboardId.trim().length > 0
-      ? rawMainboardId.trim()
-      : monitoringDeviceMainboardId;
-
-    setPrintingMonitorActionBusy(busyKey);
-    setPrintingMonitorActionStatus(null);
-    let recordedResponse = false;
-
-    try {
-      const response = await pluginNetworkFetch({
-        pluginId: printingMonitoringAdapter.pluginId,
-        operation,
-        ipAddress: host,
-        port,
-        mainboardId: resolvedMainboardId,
-      });
-
-      const payload = await readJsonObject(response);
-      const commandOk = typeof payload?.ok === 'boolean' ? payload.ok : (response.ok ? true : false);
-      setPrintingMonitorLastFeatureToggleResponse({
-        operation,
-        httpStatus: response.status,
-        httpOk: response.ok,
-        commandOk,
-        payload,
-        error: payload?.ok === false || !response.ok
-          ? (typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`)
-          : null,
-        requestedAtEpochMs: Date.now(),
-      });
-      recordedResponse = true;
-      if (!response.ok || payload?.ok === false) {
-        const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
-        throw new Error(reason);
-      }
-
-      const featureLabel = feature === 'webcam' ? 'Video stream' : 'Timelapse';
-      setPrintingMonitorActionStatus(
-        typeof payload?.message === 'string' && payload.message.trim().length > 0
-          ? payload.message.trim()
-          : `${featureLabel} ${enabled ? 'enabled' : 'disabled'}.`,
-      );
-      setPrintingMonitorError(null);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : `Failed to send ${feature} command.`;
-      setPrintingMonitorError(message);
-      setPrintingMonitorActionStatus(null);
-      if (!recordedResponse) {
-        setPrintingMonitorLastFeatureToggleResponse({
-          operation,
-          httpStatus: null,
-          httpOk: false,
-          commandOk: false,
-          payload: null,
-          error: message,
-          requestedAtEpochMs: Date.now(),
-        });
-      }
-    } finally {
-      setPrintingMonitorActionBusy(null);
-    }
-  }, [
-    monitoringDevice?.ipAddress,
-    monitoringDevice?.port,
-    monitoringDeviceMainboardId,
-    printingMonitorDebugState.status.rawPayload,
-    printingMonitoringAdapter,
-  ]);
-
-  const executePrintingMonitorSdcpDebugCommand = React.useCallback(async (
-    options: {
-      operation: string;
-      label: string;
-      channel: PrintingMonitorDebugChannel;
-      payload?: Record<string, unknown>;
-    },
-  ) => {
-    if (!printingMonitoringAdapter.pluginId) return;
-
-    const host = (monitoringDevice?.ipAddress || '').trim();
-    const port = monitoringDevice?.port || 80;
-    if (!host) {
-      setPrintingMonitorError(`No printer IP available for ${options.label}.`);
-      return;
-    }
-
-    const requestPayload = {
-      pluginId: printingMonitoringAdapter.pluginId,
-      operation: options.operation,
-      ipAddress: host,
-      port,
-      ...(options.payload ?? {}),
-    };
-
-    setPrintingMonitorActionBusy(null);
-    setPrintingMonitorActionStatus(null);
-
-    try {
-      const response = await pluginNetworkFetch(requestPayload);
-      const payload = await readJsonObject(response);
-
-      setPrintingMonitorDebugState((previous) => ({
-        ...previous,
-        [options.channel]: {
-          requestedAtEpochMs: Date.now(),
-          request: requestPayload,
-          httpStatus: response.status,
-          rawPayload: payload,
-          parsedPayload: payload,
-          error: (!response.ok || payload?.ok === false)
-            ? (typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`)
-            : null,
-        },
-      }));
-
-      const commandOk = typeof payload?.ok === 'boolean'
-        ? payload.ok
-        : response.ok;
-      setPrintingMonitorLastFeatureToggleResponse({
-        operation: options.operation,
-        httpStatus: response.status,
-        httpOk: response.ok,
-        commandOk,
-        payload,
-        error: (!response.ok || payload?.ok === false)
-          ? (typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`)
-          : null,
-        requestedAtEpochMs: Date.now(),
-      });
-
-      if (!response.ok || payload?.ok === false) {
-        const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
-        throw new Error(reason);
-      }
-
-      setPrintingMonitorActionStatus(
-        typeof payload?.message === 'string' && payload.message.trim().length > 0
-          ? payload.message.trim()
-          : `${options.label} command accepted.`,
-      );
-      setPrintingMonitorError(null);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : `Failed to run ${options.label} command.`;
-      setPrintingMonitorError(message);
-      setPrintingMonitorActionStatus(null);
-      setPrintingMonitorLastFeatureToggleResponse((previous) => ({
-        operation: options.operation,
-        httpStatus: previous?.operation === options.operation ? previous.httpStatus : null,
-        httpOk: previous?.operation === options.operation ? previous.httpOk : false,
-        commandOk: false,
-        payload: previous?.operation === options.operation ? previous.payload : null,
-        error: message,
-        requestedAtEpochMs: Date.now(),
-      }));
-    }
-  }, [monitoringDevice?.ipAddress, monitoringDevice?.port, printingMonitoringAdapter.pluginId]);
-
-  const handlePrintingMonitorControlAction = React.useCallback((
-    action: 'pause' | 'resume' | 'cancel' | 'emergency-stop',
-  ) => {
-    if (action === 'cancel' || action === 'emergency-stop') {
-      setPrintingMonitorPendingConfirmation({ kind: 'control', action });
-      return;
-    }
-
-    void executePrintingMonitorControlAction(action);
-  }, [executePrintingMonitorControlAction]);
-
-  React.useEffect(() => {
-    if (!printingMonitorPendingConfirmation) return;
-
-    let wasEscapePressed = false;
-    const unsubscribe = hotkeyStore.subscribe((state) => {
-      const active = state.activeKeys;
-      const isEscapePressed = active.has('escape');
-      if (isEscapePressed && !wasEscapePressed) {
-        setPrintingMonitorPendingConfirmation(null);
-      }
-      wasEscapePressed = isEscapePressed;
-    });
-
-    return unsubscribe;
-  }, [printingMonitorPendingConfirmation]);
-
-  const handlePrintingLayerChange = React.useCallback((nextLayer: number) => {
-    if (!Number.isFinite(nextLayer)) return;
-    const clamped = clampPrintingLayer(nextLayer);
-
-    const flushPendingLayer = (options?: { syncDisplayedLayer?: boolean }) => {
-      const pending = pendingPrintingSelectedLayerRef.current;
-      pendingPrintingSelectedLayerRef.current = null;
-      if (pending == null) return;
-
-      printingSelectedLayerRef.current = pending;
-      setPrintingSelectedLayer((previous) => (previous === pending ? previous : pending));
-      if (options?.syncDisplayedLayer !== false) {
-        setPrintingDisplayedLayer((previous) => (previous === pending ? previous : pending));
-      }
-    };
-
-    if (isPrintingLayerScrubbing) {
-      const currentOrPending = pendingPrintingSelectedLayerRef.current ?? printingSelectedLayerRef.current;
-      if (currentOrPending === clamped) return;
-
-      pendingPrintingSelectedLayerRef.current = clamped;
-
-      if (printingSelectedLayerRafRef.current !== null) return;
-
-      printingSelectedLayerRafRef.current = window.requestAnimationFrame(() => {
-        printingSelectedLayerRafRef.current = null;
-        flushPendingLayer({ syncDisplayedLayer: false });
-      });
-      return;
-    }
-
-    if (printingSelectedLayerRafRef.current !== null) {
-      window.cancelAnimationFrame(printingSelectedLayerRafRef.current);
-      printingSelectedLayerRafRef.current = null;
-    }
-
-    pendingPrintingSelectedLayerRef.current = null;
-    printingSelectedLayerRef.current = clamped;
-    setPrintingSelectedLayer((previous) => (previous === clamped ? previous : clamped));
-    setPrintingDisplayedLayer((previous) => (previous === clamped ? previous : clamped));
-  }, [clampPrintingLayer, isPrintingLayerScrubbing]);
-
-  const handlePrintingLayerScrubStart = React.useCallback(() => {
-    setIsPrintingLayerScrubbing(true);
-    schedulePrintingPreviewSettle();
-  }, [schedulePrintingPreviewSettle]);
-
-  const handlePrintingLayerScrubEnd = React.useCallback(() => {
-    const flushPendingLayer = () => {
-      const pending = pendingPrintingSelectedLayerRef.current;
-      pendingPrintingSelectedLayerRef.current = null;
-      if (pending == null) return null;
-
-      printingSelectedLayerRef.current = pending;
-      setPrintingSelectedLayer((previous) => (previous === pending ? previous : pending));
-      setPrintingDisplayedLayer((previous) => (previous === pending ? previous : pending));
-      return pending;
-    };
-
-    if (printingSelectedLayerRafRef.current !== null) {
-      window.cancelAnimationFrame(printingSelectedLayerRafRef.current);
-      printingSelectedLayerRafRef.current = null;
-    }
-
-    const pending = flushPendingLayer();
-    setIsPrintingLayerScrubbing(false);
-    // Switch display target to the released layer immediately.
-    // If that layer PNG is not loaded yet, UI falls back to cross-section preview
-    // instead of showing stale PNG from the previously displayed layer.
-    const targetLayer = pending ?? printingSelectedLayerRef.current;
-    setPrintingDisplayedLayer(
-      Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), targetLayer)),
-    );
-    schedulePrintingPreviewSettle();
-  }, [schedulePrintingPreviewSettle, printingPreviewTotalLayers]);
-
-  const handleSceneLayerScrubStart = React.useCallback(() => {
-    setIsSceneLayerScrubbing(true);
-  }, []);
-
-  const handleSceneLayerScrubEnd = React.useCallback(() => {
-    setIsSceneLayerScrubbing(false);
-  }, []);
-
-  const usePrintingSettledHiResCanvas = React.useMemo(() => {
-    return Boolean(
-      selectedPrintingLayerPreviewUrl
-      && printingPreviewZoom > 1.0001
-      && !isPrintingLayerScrubbing,
-    );
-  }, [isPrintingLayerScrubbing, printingPreviewZoom, selectedPrintingLayerPreviewUrl]);
-
-  React.useEffect(() => {
-    if (!usePrintingSettledHiResCanvas) return;
-    if (!selectedPrintingLayerPreviewUrl) return;
-
-    const canvas = printingPreviewCanvasRef.current;
-    const viewport = printingPreviewViewportRef.current;
-    if (!canvas || !viewport) return;
-
-    const rect = viewport.getBoundingClientRect();
-    const viewportWidth = Math.max(1, Math.round(rect.width));
-    const viewportHeight = Math.max(1, Math.round(rect.height));
-    const dpr = Math.max(1, window.devicePixelRatio || 1);
-    const canvasWidth = Math.max(1, Math.round(viewportWidth * dpr));
-    const canvasHeight = Math.max(1, Math.round(viewportHeight * dpr));
-
-    if (canvas.width !== canvasWidth || canvas.height !== canvasHeight) {
-      canvas.width = canvasWidth;
-      canvas.height = canvasHeight;
-    }
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const renderNonce = ++printingPreviewCanvasRenderNonceRef.current;
-    let cancelled = false;
-    const image = new Image();
-    image.decoding = 'async';
-    image.onload = () => {
-      if (cancelled) return;
-      if (renderNonce !== printingPreviewCanvasRenderNonceRef.current) return;
-
-      const naturalWidth = Math.max(1, image.naturalWidth || 1);
-      const naturalHeight = Math.max(1, image.naturalHeight || 1);
-      const logicalSourceWidth = Math.max(1, printingPreviewTargetResolution?.viewportWidth ?? naturalWidth);
-      const logicalSourceHeight = Math.max(1, printingPreviewTargetResolution?.viewportHeight ?? naturalHeight);
-      const baseScale = Math.min(viewportWidth / logicalSourceWidth, viewportHeight / logicalSourceHeight);
-      const drawWidth = logicalSourceWidth * baseScale;
-      const drawHeight = logicalSourceHeight * baseScale;
-
-      ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.scale(dpr, dpr);
-      ctx.imageSmoothingEnabled = false;
-      ctx.translate(viewportWidth * 0.5 + printingPreviewPan.x, viewportHeight * 0.5 + printingPreviewPan.y);
-      ctx.scale(printingPreviewZoom, printingPreviewZoom);
-      ctx.scale(printingPreviewMirrorScale.x, printingPreviewMirrorScale.y);
-      ctx.drawImage(image, -drawWidth * 0.5, -drawHeight * 0.5, drawWidth, drawHeight);
-      ctx.restore();
-      setIsPrintingSettledCanvasReady(true);
-    };
-    image.src = selectedPrintingLayerPreviewUrl;
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    printingPreviewMirrorScale.x,
-    printingPreviewMirrorScale.y,
-    printingPreviewPan.x,
-    printingPreviewPan.y,
-    printingPreviewTargetResolution?.viewportHeight,
-    printingPreviewTargetResolution?.viewportWidth,
-    printingPreviewZoom,
-    selectedPrintingLayerPreviewUrl,
-    usePrintingSettledHiResCanvas,
-  ]);
-
-  const handleDroppedPrepareFiles = React.useCallback(async (
-    files: File[],
-    options?: { prearmedLoadingUi?: boolean },
-  ) => {
-    if (scene.mode !== 'prepare') return;
-
-    const supportedFiles = files.filter((file) => isSupportedPrepareDropName(file.name));
-    if (supportedFiles.length === 0) {
-      console.warn('[DragDrop] No supported files dropped. Supported: .stl, .obj, .3mf, .lys, .voxl');
-      return;
-    }
-
-    const signature = buildDroppedFilesSignature(supportedFiles);
-    const nowMs = Date.now();
-    const last = lastPrepareDropRef.current;
-    if (signature.length > 0 && last.signature === signature && (nowMs - last.atMs) < 1500) {
-      // Tauri desktop can emit both native drag-drop and DOM drop for a single gesture.
-      // Ignore near-identical repeat payloads to prevent duplicate imports.
-      return;
-    }
-    lastPrepareDropRef.current = { signature, atMs: nowMs };
-
-    const meshFiles = supportedFiles.filter((file) => {
-      const ext = getFileExtension(file.name);
-      return ext === '.stl' || ext === '.obj' || ext === '.3mf';
-    });
-    const sceneFiles = supportedFiles.filter((file) => {
-      const ext = getFileExtension(file.name);
-      return ext === '.lys' || ext === '.voxl';
-    });
-
-    const buildSyntheticFileChangeEvent = (nextFiles: File[]): React.ChangeEvent<HTMLInputElement> => {
-      const dt = new DataTransfer();
-      nextFiles.forEach((file) => dt.items.add(file));
-      const target = { files: dt.files, value: '' } as unknown as HTMLInputElement;
-      return { target, currentTarget: target } as React.ChangeEvent<HTMLInputElement>;
-    };
-
-    if (sceneFiles.length > 0) {
-      // Match "Import Scene" button behavior: when a scene file is present,
-      // treat the drop as a scene import path and don't separately load mesh files.
-      // Use the same handler as the Import Scene button.
-      const shouldPrearmLoadingUi = !options?.prearmedLoadingUi;
-
-      if (shouldPrearmLoadingUi) {
-        setNativePickerPreparationState({
-          active: true,
-          label: sceneFiles.length > 1 ? 'Loading dropped scenes…' : 'Loading dropped scene…',
-          detail: sceneFiles.length > 1
-            ? `Preparing ${sceneFiles.length} dropped scene files…`
-            : 'Preparing dropped scene file…',
-          progress: null,
-        });
-
-        await waitForUiTick();
-      }
-
-      try {
-        await importSceneFilesWithPluginWarning(sceneFiles);
-      } finally {
-        if (shouldPrearmLoadingUi) {
-          setNativePickerPreparationState({
-            active: false,
-            label: '',
-            detail: '',
-            progress: null,
-          });
-        }
-      }
-      return;
-    }
-
-    if (meshFiles.length > 0) {
-      // Use the same handler as the Load Mesh button.
-      const meshEvent = buildSyntheticFileChangeEvent(meshFiles);
-      scene.onFileChange(meshEvent);
-    }
-  }, [importSceneFilesWithPluginWarning, scene, waitForUiTick]);
-
-  const createFilesFromTauriDroppedPaths = React.useCallback(async (paths: string[]) => {
-    const normalizedSupportedPaths = paths
-      .map((path) => path.trim())
-      .filter((path) => path.length > 0)
-      .filter((path) => isSupportedPrepareDropName(getFileNameFromPath(path)));
-
-    if (normalizedSupportedPaths.length === 0) return [] as File[];
-
-    try {
-      const core = await import('@tauri-apps/api/core');
-      const files: File[] = [];
-
-      for (const sourcePath of normalizedSupportedPaths) {
-        try {
-          const name = getFileNameFromPath(sourcePath);
-          if (getFileExtensionLower(name) === '.stl') {
-            files.push(createPathBackedStlFile(sourcePath, name));
-          } else {
-            const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
-            files.push(new File([new Uint8Array(bytes)], name, {
-              type: getDroppedFileMimeType(name),
-              lastModified: Date.now(),
-            }));
-          }
-        } catch (error) {
-          console.warn(`[DragDrop] Failed reading dropped file path: ${sourcePath}`, error);
-        }
-      }
-
-      return files;
-    } catch {
-      return [] as File[];
-    }
-  }, [createPathBackedStlFile]);
-
-  const sceneModeRef = React.useRef(scene.mode);
-  const createFilesFromTauriDroppedPathsRef = React.useRef(createFilesFromTauriDroppedPaths);
-  const handleDroppedPrepareFilesRef = React.useRef(handleDroppedPrepareFiles);
-
-  React.useEffect(() => {
-    sceneModeRef.current = scene.mode;
-  }, [scene.mode]);
-
-  React.useEffect(() => {
-    createFilesFromTauriDroppedPathsRef.current = createFilesFromTauriDroppedPaths;
-  }, [createFilesFromTauriDroppedPaths]);
-
-  React.useEffect(() => {
-    handleDroppedPrepareFilesRef.current = handleDroppedPrepareFiles;
-  }, [handleDroppedPrepareFiles]);
-
-  React.useEffect(() => {
-    if (scene.mode !== 'prepare') return;
-    if (typeof window === 'undefined') return;
-
-    const isLikelyDesktopRuntime =
-      window.location.protocol === 'tauri:'
-      || window.location.protocol === 'file:'
-      || window.location.hostname === 'tauri.localhost'
-      || typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
-
-    if (!isLikelyDesktopRuntime) return;
-
-    const unlisten: Array<() => void | Promise<void>> = [];
-    let disposed = false;
-
-    const invokeUnlistenSafely = (remove: (() => void | Promise<void>) | undefined) => {
-      if (!remove) return;
-      try {
-        const result = remove();
-        if (result && typeof result.then === 'function') {
-          void result.catch(() => {
-            // noop
-          });
-        }
-      } catch {
-        // noop
-      }
-    };
-
-    const registerUnlisten = (remove: () => void | Promise<void>) => {
-      if (disposed) {
-        invokeUnlistenSafely(remove);
-        return;
-      }
-      unlisten.push(remove);
-    };
-
-    void (async () => {
-      try {
-        const { listen } = await import('@tauri-apps/api/event');
-
-        const unlistenDragOver = await listen<unknown>('tauri://drag-over', (event) => {
-          if (disposed || sceneModeRef.current !== 'prepare') return;
-          setIsPrepareDragActive(true);
-
-          const paths = extractTauriDroppedPaths(event.payload);
-          if (paths.length === 0) {
-            return;
-          }
-
-          const hasSupportedPath = paths.some((path) => {
-            const fileName = getFileNameFromPath(path);
-            return isSupportedPrepareDropName(fileName);
-          });
-          setIsPrepareDragUnsupported(!hasSupportedPath);
-        });
-        registerUnlisten(unlistenDragOver);
-
-        const hideOverlay = () => {
-          dragDepthRef.current = 0;
-          setIsPrepareDragActive(false);
-          setIsPrepareDragUnsupported(false);
-        };
-
-        const unlistenDragLeave = await listen('tauri://drag-leave', () => {
-          if (disposed) return;
-          hideOverlay();
-        });
-        registerUnlisten(unlistenDragLeave);
-
-        const unlistenDragCancelled = await listen('tauri://drag-drop-cancelled', () => {
-          if (disposed) return;
-          hideOverlay();
-        });
-        registerUnlisten(unlistenDragCancelled);
-
-        const unlistenDragDrop = await listen<unknown>('tauri://drag-drop', (event) => {
-          if (disposed || sceneModeRef.current !== 'prepare') return;
-
-          hideOverlay();
-
-          const paths = extractTauriDroppedPaths(event.payload);
-          if (paths.length === 0) return;
-
-          const supportedPathCount = paths.filter((path) => {
-            const fileName = getFileNameFromPath(path);
-            return isSupportedPrepareDropName(fileName);
-          }).length;
-
-          void (async () => {
-            if (supportedPathCount > 0) {
-              setNativePickerPreparationState({
-                active: true,
-                label: 'Loading dropped files…',
-                detail: supportedPathCount > 1
-                  ? `Reading 0/${supportedPathCount} dropped files…`
-                  : 'Reading dropped file…',
-                progress: null,
-              });
-
-              await new Promise<void>((resolve) => {
-                setTimeout(resolve, 0);
-              });
-            }
-
-            try {
-              const files = await createFilesFromTauriDroppedPathsRef.current(paths);
-              if (files.length === 0) return;
-              await handleDroppedPrepareFilesRef.current(files, { prearmedLoadingUi: true });
-            } finally {
-              if (supportedPathCount > 0) {
-                setNativePickerPreparationState({
-                  active: false,
-                  label: '',
-                  detail: '',
-                  progress: null,
-                });
-              }
-            }
-          })();
-        });
-        registerUnlisten(unlistenDragDrop);
-      } catch {
-        // Ignore in non-Tauri environments or when listeners are unavailable.
-      }
-    })();
-
-    return () => {
-      disposed = true;
-      while (unlisten.length > 0) {
-        const remove = unlisten.pop();
-        invokeUnlistenSafely(remove);
-      }
-    };
-  }, [scene.mode]);
-
-  const handlePrepareDragEnter = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    if (scene.mode !== 'prepare') return;
-    if (!isLikelyFileDragPayload(e.dataTransfer)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    dragDepthRef.current += 1;
-    const supportState = getPrepareDropSupportStateFromDataTransfer(e.dataTransfer);
-    if (supportState === 'unsupported') {
-      setIsPrepareDragUnsupported(true);
-    } else if (supportState === 'supported') {
-      setIsPrepareDragUnsupported(false);
-    }
-    setIsPrepareDragActive(true);
-  }, [scene.mode]);
-
-  const handlePrepareDragOver = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    if (scene.mode !== 'prepare') return;
-    if (!isLikelyFileDragPayload(e.dataTransfer)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const supportState = getPrepareDropSupportStateFromDataTransfer(e.dataTransfer);
-    if (supportState === 'unsupported') {
-      setIsPrepareDragUnsupported(true);
-    } else if (supportState === 'supported') {
-      setIsPrepareDragUnsupported(false);
-    }
-    e.dataTransfer.dropEffect = supportState === 'unsupported' ? 'none' : 'copy';
-    setIsPrepareDragActive(true);
-  }, [scene.mode]);
-
-  const handlePrepareDragLeave = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    if (scene.mode !== 'prepare') return;
-    e.preventDefault();
-    e.stopPropagation();
-    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
-    if (dragDepthRef.current === 0) {
-      setIsPrepareDragActive(false);
-      setIsPrepareDragUnsupported(false);
-    }
-  }, [scene.mode]);
-
-  const handlePrepareDrop = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    if (scene.mode !== 'prepare') return;
-    e.preventDefault();
-    e.stopPropagation();
-    dragDepthRef.current = 0;
-    setIsPrepareDragActive(false);
-    setIsPrepareDragUnsupported(false);
-    const files = Array.from(e.dataTransfer.files ?? []);
-    if (files.length === 0) return;
-
-    const supportedFileCount = files.filter((file) => isSupportedPrepareDropName(file.name)).length;
-
-    if (supportedFileCount > 0) {
-      void (async () => {
-        setNativePickerPreparationState({
-          active: true,
-          label: 'Loading dropped files…',
-          detail: supportedFileCount > 1
-            ? `Preparing ${supportedFileCount} dropped files…`
-            : 'Preparing dropped file…',
-          progress: null,
-        });
-
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 0);
-        });
-
-        try {
-          await handleDroppedPrepareFiles(files, { prearmedLoadingUi: true });
-        } finally {
-          setNativePickerPreparationState({
-            active: false,
-            label: '',
-            detail: '',
-            progress: null,
-          });
-        }
-      })();
-      return;
-    }
-
-    void handleDroppedPrepareFiles(files);
-  }, [handleDroppedPrepareFiles, scene.mode]);
 
   const closeEditorContextMenu = React.useCallback(() => {
     setEditorContextMenuPos(null);
@@ -10616,37 +5233,7 @@ export default function Home() {
     };
   }, [invalidatePendingTransformHistory]);
 
-  React.useEffect(() => {
-    if (!scene.sceneImportReport) {
-      setIsSceneImportToastVisible(false);
-      if (sceneImportToastFadeTimeoutRef.current !== null) {
-        window.clearTimeout(sceneImportToastFadeTimeoutRef.current);
-        sceneImportToastFadeTimeoutRef.current = null;
-      }
-      return;
-    }
 
-    setIsSceneImportToastVisible(true);
-
-    if (sceneImportToastFadeTimeoutRef.current !== null) {
-      window.clearTimeout(sceneImportToastFadeTimeoutRef.current);
-    }
-
-    const sceneImportToastDurationMs = scene.sceneImportReport.durationMs ?? 4200;
-    const sceneImportToastFadeMs = Math.max(0, sceneImportToastDurationMs - 400);
-
-    sceneImportToastFadeTimeoutRef.current = window.setTimeout(() => {
-      setIsSceneImportToastVisible(false);
-      sceneImportToastFadeTimeoutRef.current = null;
-    }, sceneImportToastFadeMs);
-
-    return () => {
-      if (sceneImportToastFadeTimeoutRef.current !== null) {
-        window.clearTimeout(sceneImportToastFadeTimeoutRef.current);
-        sceneImportToastFadeTimeoutRef.current = null;
-      }
-    };
-  }, [scene.sceneImportReport]);
 
   const handleNewDeviceDetected = React.useCallback((deviceId: string) => {
     setNewDeviceToast(deviceId);
@@ -10666,30 +5253,6 @@ export default function Home() {
         window.clearTimeout(newDeviceToastTimeoutRef.current);
       }
     };
-  }, []);
-
-  const handleExportSuccess = React.useCallback((savedPath: string) => {
-    setExportSuccessToast({ id: Date.now(), path: savedPath });
-    setIsExportSuccessToastVisible(true);
-    if (exportSuccessToastFadeTimeoutRef.current !== null) {
-      window.clearTimeout(exportSuccessToastFadeTimeoutRef.current);
-    }
-    exportSuccessToastFadeTimeoutRef.current = window.setTimeout(() => {
-      setIsExportSuccessToastVisible(false);
-      exportSuccessToastFadeTimeoutRef.current = null;
-    }, 3800);
-  }, []);
-
-  const showOperationError = React.useCallback((message: string) => {
-    setExportErrorToast({ id: Date.now(), text: message });
-    setIsExportErrorToastVisible(true);
-    if (exportErrorToastFadeTimeoutRef.current !== null) {
-      window.clearTimeout(exportErrorToastFadeTimeoutRef.current);
-    }
-    exportErrorToastFadeTimeoutRef.current = window.setTimeout(() => {
-      setIsExportErrorToastVisible(false);
-      exportErrorToastFadeTimeoutRef.current = null;
-    }, 4500);
   }, []);
 
   const cancelPendingHistoryTransformResyncFrames = React.useCallback(() => {
@@ -10792,7 +5355,9 @@ export default function Home() {
     const gesture = rightClickGestureRef.current;
     const moved = Boolean(gesture?.moved);
     const shouldSuppress = performance.now() < suppressEditorContextMenuUntilRef.current;
-    if (!moved && !shouldSuppress) {
+    // No editor menu on the empty-scene welcome screen — there is nothing to act
+    // on (unless the clipboard holds a cut/copied model that could be pasted).
+    if (!moved && !shouldSuppress && (scene.models.length > 0 || scene.canPasteModel)) {
       if (scene.mode === 'support' && supportShaftHoverDebug.segmentId && supportShaftHoverDebug.point) {
         setEditorContextMenuSupportTarget({
           segmentId: supportShaftHoverDebug.segmentId,
@@ -10808,7 +5373,7 @@ export default function Home() {
     window.setTimeout(() => {
       rightClickGestureRef.current = null;
     }, 0);
-  }, [scene.mode, supportShaftHoverDebug.point, supportShaftHoverDebug.segmentId]);
+  }, [scene.mode, scene.models.length, scene.canPasteModel, supportShaftHoverDebug.point, supportShaftHoverDebug.segmentId]);
 
   React.useEffect(() => {
     const markSuppressed = (durationMs: number) => {
@@ -11201,126 +5766,9 @@ export default function Home() {
     return unsubscribe;
   }, [printingMonitorModalOpen, printingSlicingBenchmark]);
 
-  const printingMonitorDebugBundle = React.useMemo(() => {
-    const selectedDeviceSummary = monitoringDevice
-      ? {
-          id: monitoringDevice.id,
-          displayName: monitoringDevice.displayName,
-          hostName: monitoringDevice.hostName,
-          ipAddress: monitoringDevice.ipAddress,
-          port: monitoringDevice.port,
-          connectedFlag: monitoringDevice.connected,
-          reachability: printerReachabilityByDeviceId[monitoringDevice.id],
-        }
-      : null;
 
-    const channelSummary = (channel: PrintingMonitorDebugChannel) => {
-      const debug = printingMonitorDebugState[channel];
-      return {
-        requestedAt: debug.requestedAtEpochMs
-          ? new Date(debug.requestedAtEpochMs).toISOString()
-          : null,
-        httpStatus: debug.httpStatus,
-        request: debug.request,
-        error: debug.error,
-        rawPayload: debug.rawPayload,
-        parsedPayload: debug.parsedPayload,
-      };
-    };
 
-    return {
-      selectedDevice: selectedDeviceSummary,
-      offlineGate: {
-        isPrintingMonitorSelectedPrinterOffline,
-        snapshotConnected: printingMonitorSnapshot?.connected ?? null,
-        snapshotStateText: printingMonitorSnapshot?.stateText ?? null,
-      },
-      channels: {
-        status: channelSummary('status'),
-        webcam: channelSummary('webcam'),
-        plates: channelSummary('plates'),
-        taskHistory: channelSummary('taskHistory'),
-        taskDetails: channelSummary('taskDetails'),
-      },
-    };
-  }, [
-    isPrintingMonitorSelectedPrinterOffline,
-    monitoringDevice,
-    printerReachabilityByDeviceId,
-    printingMonitorDebugState,
-    printingMonitorSnapshot?.connected,
-    printingMonitorSnapshot?.stateText,
-  ]);
 
-  const printingMonitorDebugPanels = React.useMemo(() => {
-    if (!isPrintingMonitorDebugOpen) return [] as Array<{
-      channel: PrintingMonitorDebugChannel;
-      statusText: string;
-      requestedAt: string | null;
-      json: string;
-      hasError: boolean;
-    }>;
-
-    return PRINTING_MONITOR_DEBUG_CHANNELS.map((channel) => {
-      const selectedChannel = printingMonitorDebugBundle.channels[channel];
-      const payload = {
-        channel,
-        requestedAt: selectedChannel.requestedAt,
-        httpStatus: selectedChannel.httpStatus,
-        request: selectedChannel.request,
-        error: selectedChannel.error,
-        rawPayload: selectedChannel.rawPayload,
-        parsedPayload: selectedChannel.parsedPayload,
-      };
-
-      let serialized = '';
-      try {
-        serialized = JSON.stringify(payload, null, 2);
-      } catch {
-        serialized = JSON.stringify({
-          ...payload,
-          rawPayload: '<unserializable>',
-          parsedPayload: '<unserializable>',
-        }, null, 2);
-      }
-
-      const hasError = Boolean(selectedChannel.error);
-      const statusText = hasError
-        ? 'error'
-        : selectedChannel.httpStatus == null
-          ? 'pending'
-          : `HTTP ${selectedChannel.httpStatus}`;
-
-      return {
-        channel,
-        statusText,
-        requestedAt: selectedChannel.requestedAt,
-        json: serialized,
-        hasError,
-      };
-    });
-  }, [isPrintingMonitorDebugOpen, printingMonitorDebugBundle.channels]);
-
-  const handleCopyPrintingMonitorDebugBundle = React.useCallback(async () => {
-    try {
-      if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
-        throw new Error('Clipboard API unavailable');
-      }
-      await navigator.clipboard.writeText(JSON.stringify({
-        generatedAt: new Date().toISOString(),
-        ...printingMonitorDebugBundle,
-      }, null, 2));
-      setPrintingMonitorDebugCopyState('copied');
-    } catch {
-      setPrintingMonitorDebugCopyState('failed');
-    }
-  }, [printingMonitorDebugBundle]);
-
-  React.useEffect(() => {
-    if (printingMonitorDebugCopyState === 'idle') return;
-    const timeoutId = window.setTimeout(() => setPrintingMonitorDebugCopyState('idle'), 1800);
-    return () => window.clearTimeout(timeoutId);
-  }, [printingMonitorDebugCopyState]);
 
   const formatDebugVec3 = React.useCallback((v: THREE.Vector3 | null | undefined) => {
     if (!v) return 'n/a';
@@ -11503,7 +5951,7 @@ export default function Home() {
     // Mirror mode/session writes model transforms explicitly through raw scene
     // updates. Persistence during this window can race and re-apply stale
     // reflected transforms after finalize.
-    if (transformMgr.transformMode === 'mirror' || mirrorSessionRef.current) {
+    if (transformMgr.transformMode === 'mirror' || mirror.mirrorSessionRef.current) {
       return;
     }
 
@@ -11899,10 +6347,11 @@ export default function Home() {
     const hours = Math.floor(wholeSeconds / 3600);
     const minutes = Math.floor((wholeSeconds % 3600) / 60);
     const seconds = wholeSeconds % 60;
+    const paddedSeconds = seconds.toString().padStart(2, '0');
 
-    if (hours > 0) return `${hours}h ${minutes}m`;
-    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
-  }, [activeMaterialProfile, estimatedSlicerLayerCount, scene.models]);
+    if (hours > 0) return _(msg`${hours} h ${minutes} min`);
+    return _(msg`${minutes} min ${paddedSeconds} s`);
+  }, [_, activeMaterialProfile, estimatedSlicerLayerCount, scene.models]);
 
   const printingCurrentHeightMm = React.useMemo(() => {
     if (scene.mode !== 'printing') return null;
@@ -11942,80 +6391,15 @@ export default function Home() {
     };
   }, [handlePrintingLayerChange, printingPreviewTotalLayers, scene.mode, slicing.layerIndex, slicing.numLayers, slicing.setLayerIndex]);
 
-  const runExportThumbnailCapture = React.useCallback(async () => {
-    const capture = exportThumbnailCaptureRef.current;
-    if (!capture) return null;
-
-    const previousLayerIndex = slicing.layerIndex;
-    const previousActiveModelId = scene.activeModelId;
-    const previousSelectedModelIds = scene.selectedModelIds;
-    const previousSelectAllActive = isSelectAllModelsActive;
-    const visibleModelIds = scene.models.filter((model) => model.visible).map((model) => model.id);
-    const forcedActiveModelId = visibleModelIds[0] ?? null;
-
-    const sameSelection = (
-      previousSelectedModelIds.length === visibleModelIds.length
-      && previousSelectedModelIds.every((id, index) => id === visibleModelIds[index])
-    );
-
-    const shouldResetLayer = previousLayerIndex !== 0;
-    const shouldSetSelection = visibleModelIds.length > 0 && !sameSelection;
-    const shouldSetActive = forcedActiveModelId !== previousActiveModelId;
-    const shouldSetSelectAllVisual = !previousSelectAllActive;
-
-    try {
-      // Ensure export thumbnail shows full geometry (no cross-section clipping)
-      // and equivalent to Ctrl+A model visibility context.
-      if (shouldResetLayer) {
-        slicing.setLayerIndex(0);
-      }
-
-      if (visibleModelIds.length > 0) {
-        if (shouldSetSelection) {
-          scene.setSelectedModelIds(visibleModelIds);
-        }
-        if (shouldSetActive) {
-          scene.setActiveModelId(forcedActiveModelId);
-        }
-        if (shouldSetSelectAllVisual) {
-          setIsSelectAllModelsActive(true);
-        }
-      }
-
-      if (shouldResetLayer || shouldSetSelection || shouldSetActive || shouldSetSelectAllVisual) {
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      }
-
-      return await capture();
-    } finally {
-      if (shouldResetLayer) {
-        slicing.setLayerIndex(previousLayerIndex);
-      }
-      if (shouldSetSelection) {
-        scene.setSelectedModelIds(previousSelectedModelIds);
-      }
-      if (shouldSetActive) {
-        scene.setActiveModelId(previousActiveModelId);
-      }
-      if (shouldSetSelectAllVisual) {
-        setIsSelectAllModelsActive(previousSelectAllActive);
-      }
-    }
-  }, [
+  // Populate the import/export manager deps now that the slicing manager and the
+  // select-all model state exist (breaks the TDZ/dependency cycle, mirrors the
+  // hollowing manager). Render-time assignment so mount-time effects see real values.
+  importExportDepsRef.current = {
+    isDesktopRuntime,
+    slicing: { layerIndex: slicing.layerIndex, setLayerIndex: slicing.setLayerIndex },
     isSelectAllModelsActive,
-    scene.activeModelId,
-    scene.models,
-    scene.selectedModelIds,
-    scene.setActiveModelId,
-    scene.setSelectedModelIds,
-    slicing.layerIndex,
-    slicing.setLayerIndex,
-  ]);
-
-  React.useEffect(() => {
-    exportThumbnailCaptureRunnerRef.current = runExportThumbnailCapture;
-  }, [runExportThumbnailCapture]);
+    setIsSelectAllModelsActive,
+  };
 
   React.useEffect(() => {
     const targetMicron = Math.max(1, Math.round(crossSectionLayerHeightMm * 1000));
@@ -13025,1064 +7409,98 @@ export default function Home() {
     window.setTimeout(resolve, ms);
   }), []);
 
-  const buildHighPrecisionArrangeSupportLocalPoints = React.useCallback((
-    modelTransformById: Map<string, (typeof scene.models)[number]['transform']>,
-  ) => {
-    const supportLocalPointsByModelId = new Map<string, { points: THREE.Vector3[]; key: string }>();
-
-    for (const model of scene.models) {
-      const supportBounds = supportBoundsByModelId.get(model.id);
-      if (!supportBounds || supportBounds.isEmpty()) continue;
-
-      const t = modelTransformById.get(model.id) ?? model.transform;
-      const worldMatrix = new THREE.Matrix4().compose(
-        t.position,
-        new THREE.Quaternion().setFromEuler(t.rotation),
-        t.scale,
-      );
-      const invWorldMatrix = worldMatrix.clone().invert();
-
-      const xs = [supportBounds.min.x, supportBounds.max.x];
-      const ys = [supportBounds.min.y, supportBounds.max.y];
-      const zs = [supportBounds.min.z, supportBounds.max.z];
-
-      const points: THREE.Vector3[] = [];
-      const seen = new Set<string>();
-      const tmp = new THREE.Vector3();
-      for (const x of xs) {
-        for (const y of ys) {
-          for (const z of zs) {
-            tmp.set(x, y, z).applyMatrix4(invWorldMatrix);
-            const dedupeKey = `${tmp.x.toFixed(4)}:${tmp.y.toFixed(4)}:${tmp.z.toFixed(4)}`;
-            if (seen.has(dedupeKey)) continue;
-            seen.add(dedupeKey);
-            points.push(tmp.clone());
-          }
-        }
-      }
-
-      if (points.length === 0) continue;
-
-      const key = [
-        supportBounds.min.x.toFixed(4),
-        supportBounds.min.y.toFixed(4),
-        supportBounds.min.z.toFixed(4),
-        supportBounds.max.x.toFixed(4),
-        supportBounds.max.y.toFixed(4),
-        supportBounds.max.z.toFixed(4),
-        points.length,
-      ].join('|');
-
-      supportLocalPointsByModelId.set(model.id, { points, key });
-    }
-
-    return supportLocalPointsByModelId;
-  }, [scene.models, supportBoundsByModelId]);
-
-  const buildHighPrecisionArrangeModels = React.useCallback((
-    sourceModels: (typeof scene.models),
-    modelTransformById: Map<string, (typeof scene.models)[number]['transform']>,
-  ): HighPrecisionArrangeModel[] => {
-    const supportLocalPointsByModelId = buildHighPrecisionArrangeSupportLocalPoints(modelTransformById);
-
-    return sourceModels.map((model): HighPrecisionArrangeModel => {
-      const t = modelTransformById.get(model.id) ?? model.transform;
-      const supportLocal = supportLocalPointsByModelId.get(model.id);
-
-      return {
-        id: model.id,
-        visible: model.visible,
-        transform: {
-          position: t.position.clone(),
-          rotation: t.rotation.clone(),
-          scale: t.scale.clone(),
-        },
-        geometry: {
-          center: model.geometry.center.clone(),
-          geometry: model.geometry.geometry,
-          supportLocalPoints: supportLocal?.points,
-          supportHullKey: supportLocal?.key,
-        },
-      };
-    });
-  }, [buildHighPrecisionArrangeSupportLocalPoints]);
-
-  const resolveArrangeVisibleModels = React.useCallback((scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
-    if (scope === 'all') {
-      return scene.models.filter((m) => m.visible);
-    }
-
-    const selectedIdSet = new Set(explicitSelectedIds ?? scene.selectedModelIds);
-
-    // Guard against transient selection desync: ensure active model participates
-    // when user arranges selected models and the active model is visible.
-    if (scene.activeModelId) {
-      const activeVisible = scene.models.some((m) => m.id === scene.activeModelId && m.visible);
-      if (activeVisible) selectedIdSet.add(scene.activeModelId);
-    }
-
-    return scene.models.filter((m) => m.visible && selectedIdSet.has(m.id));
-  }, [scene.activeModelId, scene.models, scene.selectedModelIds]);
-
-  const applyArrangeTransforms = React.useCallback((updates: Array<{
-    id: string;
-    transform: {
-      position: THREE.Vector3;
-      rotation: THREE.Euler;
-      scale: THREE.Vector3;
-    };
-  }>) => {
-    if (updates.length === 0) return;
-
-    const isFiniteNumber = (n: number) => Number.isFinite(n) && !Number.isNaN(n);
-    const sanitizedUpdates = updates.filter((update) => {
-      const { position, rotation, scale } = update.transform;
-      return isFiniteNumber(position.x)
-        && isFiniteNumber(position.y)
-        && isFiniteNumber(position.z)
-        && isFiniteNumber(rotation.x)
-        && isFiniteNumber(rotation.y)
-        && isFiniteNumber(rotation.z)
-        && isFiniteNumber(scale.x)
-        && isFiniteNumber(scale.y)
-        && isFiniteNumber(scale.z);
-    });
-
-    if (sanitizedUpdates.length === 0) {
-      console.warn('[Arrange][HighPrecision] Skipping apply: all computed transforms were non-finite.');
-      return;
-    }
-
-    if (sanitizedUpdates.length !== updates.length) {
-      console.warn('[Arrange][HighPrecision] Dropped non-finite transforms:', {
-        dropped: updates.length - sanitizedUpdates.length,
-        total: updates.length,
-      });
-    }
-
-    scene.updateModelTransforms(sanitizedUpdates);
-    setSupportRenderRefreshNonce((prev) => prev + 1);
-
-    if (!scene.activeModelId || displayActiveModelId !== scene.activeModelId) {
-      return;
-    }
-
-    const activeUpdate = sanitizedUpdates.find((update) => update.id === scene.activeModelId);
-    if (!activeUpdate) return;
-
-    const { position, rotation, scale } = activeUpdate.transform;
-    transformMgr.transformHook.setPosition(position.x, position.y, position.z);
-    transformMgr.transformHook.setRotation(rotation.x, rotation.y, rotation.z);
-    transformMgr.transformHook.setScale(scale.x, scale.y, scale.z);
-  }, [displayActiveModelId, scene, transformMgr.transformHook]);
-
-  const handleAutoArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
-    if (isAutoArranging) return;
-
-    const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
-
-    if (visibleModels.length <= 1) {
-      if (visibleModels.length === 1) {
-        const model = visibleModels[0];
-        const t = getArrangeTransform(model);
-        const dims = getModelSupportAwareDimensionsMm(model, undefined, t);
-
-        const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-        const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
-        const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-        const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
-        const sm = scene.view3dSettings.safetyMarginMm;
-        const minX = rawMinX + Math.max(0, sm?.left ?? 0);
-        const maxX = rawMaxX - Math.max(0, sm?.right ?? 0);
-        const minY = rawMinY + Math.max(0, sm?.front ?? 0);
-        const maxY = rawMaxY - Math.max(0, sm?.back ?? 0);
-
-        let centerX: number;
-        let centerY: number;
-        if (arrangeAnchorMode === 'front_left') {
-          centerX = minX + dims.width * 0.5;
-          centerY = minY + dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'front_right') {
-          centerX = maxX - dims.width * 0.5;
-          centerY = minY + dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'back_left') {
-          centerX = minX + dims.width * 0.5;
-          centerY = maxY - dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'back_right') {
-          centerX = maxX - dims.width * 0.5;
-          centerY = maxY - dims.depth * 0.5;
-        } else {
-          centerX = (minX + maxX) * 0.5;
-          centerY = (minY + maxY) * 0.5;
-        }
-
-        // Arrange and Duplicate previews should never overlap.
-        setDuplicateApplySourceModel(null);
-        setDuplicateApplySourceTransform(null);
-        setDuplicateSourcePreviewTransform(null);
-        setDuplicatePreviewTransforms([]);
-        setDuplicateTotalCopies(1);
-
-        applyArrangeTransforms([{
-          id: model.id,
-          transform: {
-            position: new THREE.Vector3(centerX, centerY, t.position.z),
-            rotation: t.rotation.clone(),
-            scale: t.scale.clone(),
-          },
-        }]);
-      }
-      return;
-    }
-
-    // Arrange and Duplicate previews should never overlap.
-    setDuplicateApplySourceModel(null);
-    setDuplicateApplySourceTransform(null);
-    setDuplicateSourcePreviewTransform(null);
-    setDuplicatePreviewTransforms([]);
-    setDuplicateTotalCopies(1);
-
-    const minSpinnerMs = 220;
-    const startedAt = performance.now();
-    setActiveArrangeOperation('standard');
-    setArrangeOverlayModelCount(visibleModels.length);
-    setIsAutoArranging(true);
-    await sleep(0);
-
-    try {
-      const modelTransformById = new Map(
-        visibleModels.map((model) => [model.id, getArrangeTransform(model)] as const),
-      );
-
-      const modelsWithFootprints = visibleModels.map((model) => {
-        const t = modelTransformById.get(model.id) ?? model.transform;
-        const baseFootprint = getModelSupportAwareDimensionsMm(model, undefined, t);
-        return {
-          model,
-          baseWidth: baseFootprint.width,
-          baseDepth: baseFootprint.depth,
-        };
-      });
-
-      const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-      const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
-      const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-      const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
-      const arrangeSm = scene.view3dSettings.safetyMarginMm;
-      const minX = rawMinX + Math.max(0, arrangeSm?.left ?? 0);
-      const maxX = rawMaxX - Math.max(0, arrangeSm?.right ?? 0);
-      const minY = rawMinY + Math.max(0, arrangeSm?.front ?? 0);
-      const maxY = rawMaxY - Math.max(0, arrangeSm?.back ?? 0);
-      const plateWidth = Math.max(1, maxX - minX);
-      const plateDepth = Math.max(1, maxY - minY);
-
-      type PackedEntry = {
-        model: (typeof visibleModels)[number];
-        width: number;
-        depth: number;
-        row: number;
-        indexInRow: number;
-        rotationZ: number;
-      };
-
-      type SpillEntry = {
-        model: (typeof visibleModels)[number];
-        width: number;
-        depth: number;
-        rotationZ: number;
-      };
-
-      type Row = {
-        widthUsed: number;
-        maxDepth: number;
-        items: PackedEntry[];
-      };
-
-      const evaluatePacking = (
-        ordered: typeof modelsWithFootprints,
-        targetRowWidth: number,
-        enableRotation: boolean,
-      ) => {
-        const rows: Row[] = [];
-        const spills: SpillEntry[] = [];
-        const placementSizeCache = new Map<string, { width: number; depth: number }>();
-
-        let occupiedArea = 0;
-        let totalDepthUsed = 0;
-
-        type PlacementOption = {
-          rotationZ: number;
-          width: number;
-          depth: number;
-        };
-
-        const normalizeToPi = (angle: number) => {
-          let a = angle % Math.PI;
-          if (a < 0) a += Math.PI;
-          return a;
-        };
-
-        const nearestEquivalentAngle = (reference: number, canonical: number) => {
-          const twoPi = Math.PI * 2;
-          const k = Math.round((reference - canonical) / twoPi);
-          return canonical + k * twoPi;
-        };
-
-        const footprintAtAngle = (model: (typeof visibleModels)[number], angleZ: number) => {
-          const t = modelTransformById.get(model.id) ?? model.transform;
-          const key = `${model.id}|${angleZ.toFixed(5)}|${t.scale.x.toFixed(5)}|${t.scale.y.toFixed(5)}|${t.scale.z.toFixed(5)}|${t.rotation.x.toFixed(5)}|${t.rotation.y.toFixed(5)}`;
-          const cached = placementSizeCache.get(key);
-          if (cached) return cached;
-
-          const dims = getModelSupportAwareDimensionsMm(model, angleZ, t);
-
-          placementSizeCache.set(key, dims);
-          return dims;
-        };
-
-        const getAllOptions = (current: (typeof modelsWithFootprints)[number]): PlacementOption[] => {
-          const t = modelTransformById.get(current.model.id) ?? current.model.transform;
-          const currentZ = t.rotation.z;
-          const currentCanonical = normalizeToPi(currentZ);
-
-          if (!enableRotation) {
-            const dims = footprintAtAngle(current.model, currentCanonical);
-            return [{ rotationZ: currentZ, width: dims.width, depth: dims.depth }];
-          }
-
-          const candidateCanonicals: number[] = [currentCanonical];
-          const coarseStepDeg = 15;
-          for (let deg = 0; deg < 180; deg += coarseStepDeg) {
-            candidateCanonicals.push(THREE.MathUtils.degToRad(deg));
-          }
-
-          // Ensure we always evaluate the width/depth-swapped alternative from the current pose.
-          candidateCanonicals.push(normalizeToPi(currentCanonical + (Math.PI * 0.5)));
-
-          const seenFootprints = new Set<string>();
-          const options: PlacementOption[] = [];
-
-          for (const rawCanonical of candidateCanonicals) {
-            const canonical = normalizeToPi(rawCanonical);
-            const dims = footprintAtAngle(current.model, canonical);
-            const key = `${dims.width.toFixed(3)}:${dims.depth.toFixed(3)}`;
-            if (seenFootprints.has(key)) continue;
-            seenFootprints.add(key);
-
-            options.push({
-              rotationZ: nearestEquivalentAngle(currentZ, canonical),
-              width: dims.width,
-              depth: dims.depth,
-            });
-          }
-
-          return options;
-        };
-
-        for (const current of ordered) {
-          const options = getAllOptions(current);
-          const fitOptions = options.filter((opt) => opt.width <= plateWidth && opt.depth <= plateDepth);
-
-          if (fitOptions.length === 0) {
-            const fallback = options.reduce((best, candidate) => {
-              const bestOverflow = Math.max(0, best.width - plateWidth) + Math.max(0, best.depth - plateDepth);
-              const candidateOverflow = Math.max(0, candidate.width - plateWidth) + Math.max(0, candidate.depth - plateDepth);
-              if (candidateOverflow < bestOverflow) return candidate;
-              if (candidateOverflow === bestOverflow && (candidate.width * candidate.depth) < (best.width * best.depth)) return candidate;
-              return best;
-            }, options[0]);
-
-            spills.push({
-              model: current.model,
-              width: fallback.width,
-              depth: fallback.depth,
-              rotationZ: fallback.rotationZ,
-            });
-            continue;
-          }
-
-          let bestPlacement:
-            | { kind: 'same-row'; rowIndex: number; option: PlacementOption; score: number }
-            | { kind: 'new-row'; option: PlacementOption; score: number }
-            | null = null;
-
-          if (rows.length > 0) {
-            for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-              const row = rows[rowIndex];
-              for (const option of fitOptions) {
-                const nextWidth = row.widthUsed + (row.items.length > 0 ? arrangeSpacingMm : 0) + option.width;
-                if (nextWidth > plateWidth) continue;
-
-                const nextDepth = Math.max(row.maxDepth, option.depth);
-                const depthDelta = nextDepth - row.maxDepth;
-                const nextTotalDepth = totalDepthUsed + depthDelta;
-                if (nextTotalDepth > plateDepth) continue;
-
-                // Prefer tighter rows, less depth growth, and widths near target row width.
-                const depthPenalty = depthDelta * 40;
-                const widthPenalty = Math.abs(targetRowWidth - nextWidth) * 0.08;
-                const areaScore = nextWidth * nextDepth;
-                const score = areaScore + depthPenalty + widthPenalty;
-
-                if (!bestPlacement || score < bestPlacement.score) {
-                  bestPlacement = { kind: 'same-row', rowIndex, option, score };
-                }
-              }
-            }
-          }
-
-          for (const option of fitOptions) {
-            const nextTotalDepth = totalDepthUsed + (rows.length > 0 ? arrangeSpacingMm : 0) + option.depth;
-            if (nextTotalDepth > plateDepth) continue;
-
-            const widthPenalty = Math.abs(targetRowWidth - option.width) * 0.12;
-            const score = (option.width * option.depth) + widthPenalty + 10;
-            if (!bestPlacement || score < bestPlacement.score) {
-              bestPlacement = { kind: 'new-row', option, score };
-            }
-          }
-
-          if (!bestPlacement) {
-            const fallback = fitOptions.reduce((best, candidate) => {
-              if (candidate.width < best.width) return candidate;
-              if (candidate.width === best.width && candidate.depth < best.depth) return candidate;
-              return best;
-            }, fitOptions[0]);
-
-            spills.push({
-              model: current.model,
-              width: fallback.width,
-              depth: fallback.depth,
-              rotationZ: fallback.rotationZ,
-            });
-            continue;
-          }
-
-          if (bestPlacement.kind === 'new-row') {
-            const row: Row = { widthUsed: 0, maxDepth: 0, items: [] };
-            rows.push(row);
-            totalDepthUsed += (rows.length > 1 ? arrangeSpacingMm : 0) + bestPlacement.option.depth;
-            row.widthUsed = bestPlacement.option.width;
-            row.maxDepth = bestPlacement.option.depth;
-            row.items.push({
-              model: current.model,
-              width: bestPlacement.option.width,
-              depth: bestPlacement.option.depth,
-              row: rows.length - 1,
-              indexInRow: 0,
-              rotationZ: bestPlacement.option.rotationZ,
-            });
-            occupiedArea += bestPlacement.option.width * bestPlacement.option.depth;
-          } else {
-            const row = rows[bestPlacement.rowIndex];
-            const previousDepth = row.maxDepth;
-            row.widthUsed += (row.items.length > 0 ? arrangeSpacingMm : 0) + bestPlacement.option.width;
-            row.maxDepth = Math.max(row.maxDepth, bestPlacement.option.depth);
-            totalDepthUsed += row.maxDepth - previousDepth;
-            row.items.push({
-              model: current.model,
-              width: bestPlacement.option.width,
-              depth: bestPlacement.option.depth,
-              row: bestPlacement.rowIndex,
-              indexInRow: row.items.length,
-              rotationZ: bestPlacement.option.rotationZ,
-            });
-            occupiedArea += bestPlacement.option.width * bestPlacement.option.depth;
-          }
-        }
-
-        const rowDepths = rows.map((r) => r.maxDepth);
-        const rowWidths = rows.map((r) => r.widthUsed);
-        const totalWidth = Math.min(plateWidth, rowWidths.reduce((acc, width) => Math.max(acc, width), 0));
-        const totalDepth = rowDepths.reduce((acc, depth) => acc + depth, 0) + Math.max(0, rows.length - 1) * arrangeSpacingMm;
-
-        const layoutArea = totalWidth * totalDepth;
-        const deadSpace = Math.max(0, layoutArea - occupiedArea);
-        const spillArea = spills.reduce((acc, item) => acc + (item.width * item.depth), 0);
-        const spillPenalty = spills.length * 1_000_000 + spillArea * 100;
-        const aspectPenalty = Math.abs(totalWidth - totalDepth) * 0.05;
-
-        return {
-          rows,
-          spills,
-          rowDepths,
-          totalWidth,
-          totalDepth,
-          score: deadSpace + spillPenalty + aspectPenalty,
-          usedRotation: enableRotation,
-        };
-      };
-
-      const countPackedItems = (layout: ReturnType<typeof evaluatePacking>) => (
-        layout.rows.reduce((acc, row) => acc + row.items.length, 0)
-      );
-
-      const isBetterLayout = (
-        candidate: ReturnType<typeof evaluatePacking>,
-        currentBest: ReturnType<typeof evaluatePacking> | null,
-      ) => {
-        if (!currentBest) return true;
-
-        if (candidate.spills.length !== currentBest.spills.length) {
-          return candidate.spills.length < currentBest.spills.length;
-        }
-
-        const candidatePackedCount = countPackedItems(candidate);
-        const bestPackedCount = countPackedItems(currentBest);
-        if (candidatePackedCount !== bestPackedCount) {
-          return candidatePackedCount > bestPackedCount;
-        }
-
-        const scoreDelta = candidate.score - currentBest.score;
-        if (Math.abs(scoreDelta) > 1e-6) {
-          return scoreDelta < 0;
-        }
-
-        // When layouts are effectively tied, do not force rotation.
-        if (candidate.usedRotation !== currentBest.usedRotation) {
-          return !candidate.usedRotation;
-        }
-
-        return false;
-      };
-
-      const byAreaDesc = [...modelsWithFootprints].sort((a, b) => (b.baseWidth * b.baseDepth) - (a.baseWidth * a.baseDepth));
-      const byMaxSideDesc = [...modelsWithFootprints].sort((a, b) => Math.max(b.baseWidth, b.baseDepth) - Math.max(a.baseWidth, a.baseDepth));
-      const orderingCandidates = [modelsWithFootprints, byAreaDesc, byMaxSideDesc];
-
-      const totalModelArea = modelsWithFootprints.reduce((acc, current) => acc + (current.baseWidth * current.baseDepth), 0);
-      const baseWidth = Math.min(plateWidth, Math.max(30, Math.sqrt(totalModelArea)));
-      const targetRowWidths = [
-        baseWidth * 0.8,
-        baseWidth,
-        baseWidth * 1.2,
-        plateWidth * 0.5,
-        plateWidth * 0.65,
-        plateWidth * 0.8,
-        plateWidth,
-      ]
-        .map((w) => Math.min(plateWidth, Math.max(20, w)));
-
-      const uniqueTargetRowWidths = [...new Set(targetRowWidths.map((w) => Number(w.toFixed(3))))];
-
-      let bestLayout: ReturnType<typeof evaluatePacking> | null = null;
-      const rotationModes = arrangeAllowRotateOnZ ? [false, true] : [false];
-      for (const ordered of orderingCandidates) {
-        for (const targetRowWidth of uniqueTargetRowWidths) {
-          for (const enableRotation of rotationModes) {
-            const layout = evaluatePacking(ordered, targetRowWidth, enableRotation);
-            if (isBetterLayout(layout, bestLayout)) {
-              bestLayout = layout;
-            }
-          }
-        }
-      }
-
-      if (!bestLayout) return;
-
-      const { rows, spills, rowDepths, totalWidth, totalDepth } = bestLayout;
-
-      let startX = minX + ((maxX - minX) - totalWidth) * 0.5;
-      let startY = minY + ((maxY - minY) - totalDepth) * 0.5;
-
-      if (arrangeAnchorMode === 'front_left') {
-        startX = minX;
-        startY = minY;
-      } else if (arrangeAnchorMode === 'front_right') {
-        startX = maxX - totalWidth;
-        startY = minY;
-      } else if (arrangeAnchorMode === 'back_left') {
-        startX = minX;
-        startY = maxY - totalDepth;
-      } else if (arrangeAnchorMode === 'back_right') {
-        startX = maxX - totalWidth;
-        startY = maxY - totalDepth;
-      }
-
-      const rowCenters: number[] = [];
-      let cursorY = startY;
-      for (let row = 0; row < rowDepths.length; row += 1) {
-        const depth = rowDepths[row];
-        rowCenters[row] = cursorY + depth * 0.5;
-        cursorY += depth + arrangeSpacingMm;
-      }
-
-      const packedWithPositions: Array<PackedEntry & { positionX: number; positionY: number }> = [];
-      rows.forEach((row, rowIndex) => {
-        let rowCursorX = startX;
-        row.items.forEach((item) => {
-          const centerX = rowCursorX + item.width * 0.5;
-          packedWithPositions.push({
-            ...item,
-            positionX: centerX,
-            positionY: rowCenters[rowIndex],
-          });
-          rowCursorX += item.width + arrangeSpacingMm;
-        });
-      });
-
-      const spillWithPositions: Array<SpillEntry & { positionX: number; positionY: number }> = [];
-      if (spills.length > 0) {
-        const outsideGap = Math.max(8, arrangeSpacingMm);
-        let columnLeftX = maxX + outsideGap;
-        let columnYCursor = minY;
-        let columnMaxWidth = 0;
-
-        spills.forEach((item) => {
-          if (columnYCursor > minY && (columnYCursor + item.depth) > maxY) {
-            columnLeftX += columnMaxWidth + outsideGap;
-            columnMaxWidth = 0;
-            columnYCursor = minY;
-          }
-
-          const positionX = columnLeftX + item.width * 0.5;
-          const positionY = columnYCursor + item.depth * 0.5;
-          spillWithPositions.push({ ...item, positionX, positionY });
-
-          columnYCursor += item.depth + arrangeSpacingMm;
-          columnMaxWidth = Math.max(columnMaxWidth, item.width);
-        });
-      }
-
-      applyArrangeTransforms(
-        [
-          ...packedWithPositions.map(({ model, rotationZ, positionX, positionY }) => {
-            const t = modelTransformById.get(model.id) ?? model.transform;
-            return {
-              id: model.id,
-              transform: {
-                position: new THREE.Vector3(positionX, positionY, t.position.z),
-                rotation: new THREE.Euler(
-                  t.rotation.x,
-                  t.rotation.y,
-                  rotationZ,
-                  t.rotation.order,
-                ),
-                scale: t.scale.clone(),
-              },
-            };
-          }),
-          ...spillWithPositions.map(({ model, rotationZ, positionX, positionY }) => {
-            const t = modelTransformById.get(model.id) ?? model.transform;
-            return {
-              id: model.id,
-              transform: {
-                position: new THREE.Vector3(positionX, positionY, t.position.z),
-                rotation: new THREE.Euler(
-                  t.rotation.x,
-                  t.rotation.y,
-                  rotationZ,
-                  t.rotation.order,
-                ),
-                scale: t.scale.clone(),
-              },
-            };
-          }),
-        ],
-      );
-    } finally {
-      const elapsed = performance.now() - startedAt;
-      if (elapsed < minSpinnerMs) {
-        await sleep(minSpinnerMs - elapsed);
-      }
-      setIsAutoArranging(false);
-      setActiveArrangeOperation(null);
-      setArrangeOverlayModelCount(null);
-    }
-  }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, getArrangeTransform, getModelSupportAwareDimensionsMm, isAutoArranging, resolveArrangeVisibleModels, scene, sleep, transformMgr, applyArrangeTransforms]);
-
-  const handleHighPrecisionArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
-    if (isAutoArranging) return;
-
-    const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
-    if (visibleModels.length <= 1) {
-      if (visibleModels.length === 1) {
-        const model = visibleModels[0];
-        const t = getArrangeTransform(model);
-        const dims = getModelSupportAwareDimensionsMm(model, undefined, t);
-
-        const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-        const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
-        const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-        const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
-        const sm = scene.view3dSettings.safetyMarginMm;
-        const minX = rawMinX + Math.max(0, sm?.left ?? 0);
-        const maxX = rawMaxX - Math.max(0, sm?.right ?? 0);
-        const minY = rawMinY + Math.max(0, sm?.front ?? 0);
-        const maxY = rawMaxY - Math.max(0, sm?.back ?? 0);
-
-        let centerX: number;
-        let centerY: number;
-        if (arrangeAnchorMode === 'front_left') {
-          centerX = minX + dims.width * 0.5;
-          centerY = minY + dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'front_right') {
-          centerX = maxX - dims.width * 0.5;
-          centerY = minY + dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'back_left') {
-          centerX = minX + dims.width * 0.5;
-          centerY = maxY - dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'back_right') {
-          centerX = maxX - dims.width * 0.5;
-          centerY = maxY - dims.depth * 0.5;
-        } else {
-          centerX = (minX + maxX) * 0.5;
-          centerY = (minY + maxY) * 0.5;
-        }
-
-        // Arrange and Duplicate previews should never overlap.
-        setDuplicateApplySourceModel(null);
-        setDuplicateApplySourceTransform(null);
-        setDuplicateSourcePreviewTransform(null);
-        setDuplicatePreviewTransforms([]);
-        setDuplicateTotalCopies(1);
-
-        applyArrangeTransforms([{
-          id: model.id,
-          transform: {
-            position: new THREE.Vector3(centerX, centerY, t.position.z),
-            rotation: t.rotation.clone(),
-            scale: t.scale.clone(),
-          },
-        }]);
-      }
-      return;
-    }
-
-    // Arrange and Duplicate previews should never overlap.
-    setDuplicateApplySourceModel(null);
-    setDuplicateApplySourceTransform(null);
-    setDuplicateSourcePreviewTransform(null);
-    setDuplicatePreviewTransforms([]);
-    setDuplicateTotalCopies(1);
-
-    const minSpinnerMs = 220;
-    const startedAt = performance.now();
-    setActiveArrangeOperation('high_precision');
-    setArrangeOverlayModelCount(visibleModels.length);
-    setIsAutoArranging(true);
-    await sleep(0);
-
-    try {
-      const modelTransformById = new Map(
-        scene.models.map((model) => [model.id, getArrangeTransform(model)] as const),
-      );
-      const visibleIdSet = new Set(visibleModels.map((model) => model.id));
-      const highPrecisionSceneModels = buildHighPrecisionArrangeModels(scene.models, modelTransformById);
-      const highPrecisionVisibleModels = highPrecisionSceneModels.filter((model) => visibleIdSet.has(model.id));
-
-      const updates = await computeHighPrecisionArrangeUpdatesWorker({
-        visibleModels: highPrecisionVisibleModels,
-        sceneModels: highPrecisionSceneModels,
-        widthMm: scene.view3dSettings.widthMm,
-        depthMm: scene.view3dSettings.depthMm,
-        originMode: scene.view3dSettings.originMode,
-        arrangeSpacingMm,
-        arrangeAllowRotateOnZ,
-        arrangeAnchorMode,
-        getArrangeTransform: (model) => model.transform,
-        hullCache: arrangeHullFootprintCacheRef.current,
-        safetyMarginMm: scene.view3dSettings.safetyMarginMm,
-      });
-
-      if (updates.length > 1) {
-        applyArrangeTransforms(updates);
-      }
-    } finally {
-      const elapsed = performance.now() - startedAt;
-      if (elapsed < minSpinnerMs) {
-        await sleep(minSpinnerMs - elapsed);
-      }
-      setIsAutoArranging(false);
-      setActiveArrangeOperation(null);
-      setArrangeOverlayModelCount(null);
-    }
-  }, [
-    arrangeAllowRotateOnZ,
-    arrangeAnchorMode,
-    arrangeSpacingMm,
-    getArrangeTransform,
-    isAutoArranging,
-    resolveArrangeVisibleModels,
+  const arrange = useArrangeManager({
     scene,
-    sleep,
     transformMgr,
-    buildHighPrecisionArrangeModels,
-    applyArrangeTransforms,
-  ]);
-
-  const computeManualArrayArrangeUpdates = React.useCallback((scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
-    const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
-
-    const modelTransformById = new Map(
-      visibleModels.map((model) => [model.id, getArrangeTransform(model)] as const),
-    );
-
-    if (visibleModels.length <= 1) return { models: visibleModels, updates: [] as Array<{ id: string; transform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 } }> };
-
-    const countX = Math.max(1, Math.round(arrangeArrayCountX));
-    const countY = Math.max(1, Math.round(arrangeArrayCountY));
-    const countZ = Math.max(1, Math.round(arrangeArrayCountZ));
-
-    // Gaps may be negative (nested arrays); the steps below keep a small
-    // positive floor so the array still advances.
-    const gapX = arrangeArrayGapX;
-    const gapY = arrangeArrayGapY;
-    const gapZ = arrangeArrayGapZ;
-
-    const baseDims = visibleModels.map((model) => {
-      const t = modelTransformById.get(model.id) ?? model.transform;
-      const projected = getModelSupportAwareDimensionsMm(model, undefined, t);
-      const scaledHeight = projected.height;
-
-      return {
-        width: projected.width,
-        depth: projected.depth,
-        height: scaledHeight,
-      };
-    });
-
-    const maxWidth = Math.max(...baseDims.map((d) => d.width));
-    const maxDepth = Math.max(...baseDims.map((d) => d.depth));
-    const maxHeight = Math.max(...baseDims.map((d) => d.height));
-
-    const stepX = Math.max(0.1, maxWidth + gapX);
-    const stepY = Math.max(0.1, maxDepth + gapY);
-    const stepZ = Math.max(0.1, maxHeight + gapZ);
-
-    const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-    const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
-    const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-    const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
-    const arraySm = scene.view3dSettings.safetyMarginMm;
-    const minX = rawMinX + Math.max(0, arraySm?.left ?? 0);
-    const maxX = rawMaxX - Math.max(0, arraySm?.right ?? 0);
-    const minY = rawMinY + Math.max(0, arraySm?.front ?? 0);
-    const maxY = rawMaxY - Math.max(0, arraySm?.back ?? 0);
-
-    const slotsPerLayer = countX * countY;
-    const requiredLayers = Math.max(1, Math.ceil(visibleModels.length / slotsPerLayer));
-    const usedCountZ = Math.max(countZ, requiredLayers);
-
-    const totalWidth = (countX - 1) * stepX;
-    const totalDepth = (countY - 1) * stepY;
-
-    let startX = (minX + maxX) * 0.5 - totalWidth * 0.5;
-    let startY = (minY + maxY) * 0.5 - totalDepth * 0.5;
-
-    if (arrangeAnchorMode === 'front_left') {
-      startX = minX + (maxWidth * 0.5);
-      startY = minY + (maxDepth * 0.5);
-    } else if (arrangeAnchorMode === 'front_right') {
-      startX = maxX - (maxWidth * 0.5) - totalWidth;
-      startY = minY + (maxDepth * 0.5);
-    } else if (arrangeAnchorMode === 'back_left') {
-      startX = minX + (maxWidth * 0.5);
-      startY = maxY - (maxDepth * 0.5) - totalDepth;
-    } else if (arrangeAnchorMode === 'back_right') {
-      startX = maxX - (maxWidth * 0.5) - totalWidth;
-      startY = maxY - (maxDepth * 0.5) - totalDepth;
-    }
-
-    const baseZ = Math.min(...visibleModels.map((model) => (modelTransformById.get(model.id) ?? model.transform).position.z));
-
-    const updates = visibleModels.map((model, index) => {
-      const t = modelTransformById.get(model.id) ?? model.transform;
-      const xIndex = index % countX;
-      const yIndex = Math.floor(index / countX) % countY;
-      const zIndex = Math.floor(index / (countX * countY)) % usedCountZ;
-
-      return {
-        id: model.id,
-        transform: {
-          position: new THREE.Vector3(
-            startX + (xIndex * stepX),
-            startY + (yIndex * stepY),
-            baseZ + (zIndex * stepZ),
-          ),
-          rotation: t.rotation.clone(),
-          scale: t.scale.clone(),
-        },
-      };
-    });
-
-    return { models: visibleModels, updates };
-  }, [
-    arrangeAnchorMode,
-    arrangeArrayCountX,
-    arrangeArrayCountY,
-    arrangeArrayCountZ,
-    arrangeArrayGapX,
-    arrangeArrayGapY,
-    arrangeArrayGapZ,
-    scene.models,
-    scene.selectedModelIds,
-    scene.view3dSettings.depthMm,
-    scene.view3dSettings.originMode,
-    scene.view3dSettings.safetyMarginMm,
-    scene.view3dSettings.widthMm,
+    sleep,
+    displayActiveModelId,
+    setDisplayActiveModelId,
+    setSupportRenderRefreshNonce,
+    supportBoundsByModelId,
+    arrangeSpacingMm,
+    setArrangeSpacingMm,
     getArrangeTransform,
     getModelSupportAwareDimensionsMm,
-    resolveArrangeVisibleModels,
-  ]);
-
-  const handleManualArrayArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
-    if (isAutoArranging) return;
-
-    const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
-    if (visibleModels.length <= 1) {
-      if (visibleModels.length === 1) {
-        const model = visibleModels[0];
-        const t = getArrangeTransform(model);
-        const dims = getModelSupportAwareDimensionsMm(model, undefined, t);
-
-        const rawMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-        const rawMaxX = rawMinX + scene.view3dSettings.widthMm;
-        const rawMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-        const rawMaxY = rawMinY + scene.view3dSettings.depthMm;
-        const sm = scene.view3dSettings.safetyMarginMm;
-        const minX = rawMinX + Math.max(0, sm?.left ?? 0);
-        const maxX = rawMaxX - Math.max(0, sm?.right ?? 0);
-        const minY = rawMinY + Math.max(0, sm?.front ?? 0);
-        const maxY = rawMaxY - Math.max(0, sm?.back ?? 0);
-
-        let centerX: number;
-        let centerY: number;
-        if (arrangeAnchorMode === 'front_left') {
-          centerX = minX + dims.width * 0.5;
-          centerY = minY + dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'front_right') {
-          centerX = maxX - dims.width * 0.5;
-          centerY = minY + dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'back_left') {
-          centerX = minX + dims.width * 0.5;
-          centerY = maxY - dims.depth * 0.5;
-        } else if (arrangeAnchorMode === 'back_right') {
-          centerX = maxX - dims.width * 0.5;
-          centerY = maxY - dims.depth * 0.5;
-        } else {
-          centerX = (minX + maxX) * 0.5;
-          centerY = (minY + maxY) * 0.5;
-        }
-
-        // Arrange and Duplicate previews should never overlap.
-        setDuplicateApplySourceModel(null);
-        setDuplicateApplySourceTransform(null);
-        setDuplicateSourcePreviewTransform(null);
-        setDuplicatePreviewTransforms([]);
-        setDuplicateTotalCopies(1);
-
-        applyArrangeTransforms([{
-          id: model.id,
-          transform: {
-            position: new THREE.Vector3(centerX, centerY, t.position.z),
-            rotation: t.rotation.clone(),
-            scale: t.scale.clone(),
-          },
-        }]);
-      }
-      return;
-    }
-
-    // Arrange and Duplicate previews should never overlap.
-    setDuplicateApplySourceModel(null);
-    setDuplicateApplySourceTransform(null);
-    setDuplicateSourcePreviewTransform(null);
-    setDuplicatePreviewTransforms([]);
-    setDuplicateTotalCopies(1);
-
-    const minSpinnerMs = 220;
-    const startedAt = performance.now();
-    setActiveArrangeOperation('array');
-    setArrangeOverlayModelCount(visibleModels.length);
-    setIsAutoArranging(true);
-    await sleep(0);
-
-    try {
-      const { updates } = computeManualArrayArrangeUpdates(scope, explicitSelectedIds);
-      if (updates.length <= 1) return;
-
-      applyArrangeTransforms(updates);
-    } finally {
-      const elapsed = performance.now() - startedAt;
-      if (elapsed < minSpinnerMs) {
-        await sleep(minSpinnerMs - elapsed);
-      }
-      setIsAutoArranging(false);
-      setActiveArrangeOperation(null);
-      setArrangeOverlayModelCount(null);
-    }
-  }, [
-    arrangeAnchorMode,
-    arrangeArrayCountX,
-    arrangeArrayCountY,
-    arrangeArrayCountZ,
-    arrangeArrayGapX,
-    arrangeArrayGapY,
-    arrangeArrayGapZ,
-    computeManualArrayArrangeUpdates,
-    isAutoArranging,
-    scene,
-    sleep,
-    transformMgr,
-    applyArrangeTransforms,
-  ]);
-
-  React.useEffect(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'arrange' || arrangeLayoutMode !== 'array') {
-      setArrangeArrayPreviewItems([]);
-      return;
-    }
-
-    const selectedVisibleCount = scene.models.filter((m) => m.visible && scene.selectedModelIds.includes(m.id)).length;
-    const previewScope: 'all' | 'selected' = selectedVisibleCount > 1 ? 'selected' : 'all';
-    const { models: previewModels, updates } = computeManualArrayArrangeUpdates(previewScope);
-
-    if (updates.length <= 1 || previewModels.length <= 1) {
-      setArrangeArrayPreviewItems([]);
-      return;
-    }
-
-    const updateMap = new Map(updates.map((update) => [update.id, update.transform]));
-    const previewItems = previewModels
-      .map((model) => {
-        const previewTransform = updateMap.get(model.id);
-        if (!previewTransform) return null;
-        return {
-          model,
-          transform: {
-            position: previewTransform.position.clone(),
-            rotation: previewTransform.rotation.clone(),
-            scale: previewTransform.scale.clone(),
-          },
-        };
-      })
-      .filter((item): item is { model: (typeof scene.models)[number]; transform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 } } => item !== null);
-
-    setArrangeArrayPreviewItems(previewItems);
-  }, [
+    getModelSupportAwareFootprintPolygonRef,
+  });
+  const {
+    arrangePrecisionMode,
+    setArrangePrecisionMode,
+    arrangeAllowRotateOnZ,
+    setArrangeAllowRotateOnZ,
     arrangeLayoutMode,
+    setArrangeLayoutMode,
+    arrangeAnchorMode,
+    setArrangeAnchorMode,
+    arrangeArrayCountX,
+    setArrangeArrayCountX,
+    arrangeArrayCountY,
+    setArrangeArrayCountY,
+    arrangeArrayCountZ,
+    setArrangeArrayCountZ,
+    arrangeArrayGapX,
+    setArrangeArrayGapX,
+    arrangeArrayGapY,
+    setArrangeArrayGapY,
+    arrangeArrayGapZ,
+    setArrangeArrayGapZ,
+    activeArrangeOperation,
+    setActiveArrangeOperation,
+    isAutoArranging,
+    setIsAutoArranging,
+    arrangeOverlayElapsedSec,
+    setArrangeOverlayElapsedSec,
+    arrangeOverlayModelCount,
+    setArrangeOverlayModelCount,
+    duplicateTotalCopies,
+    setDuplicateTotalCopies,
+    duplicateSpacingMm,
+    setDuplicateSpacingMm,
+    showArrangeBlockingOverlay,
+    arrangeOverlayContent,
+    arrangeOverlayElapsedLabel,
+    duplicateLayoutMode,
+    setDuplicateLayoutMode,
+    duplicatePrecisionMode,
+    setDuplicatePrecisionMode,
+    duplicateArrayCountX,
+    setDuplicateArrayCountX,
+    duplicateArrayCountY,
+    setDuplicateArrayCountY,
+    duplicateArrayCountZ,
+    setDuplicateArrayCountZ,
+    duplicateArrayGapX,
+    setDuplicateArrayGapX,
+    duplicateArrayGapY,
+    setDuplicateArrayGapY,
+    duplicateArrayGapZ,
+    setDuplicateArrayGapZ,
+    isDuplicating,
+    setIsDuplicating,
+    duplicatePreviewTransforms,
+    setDuplicatePreviewTransforms,
+    arrangeArrayPreviewItems,
+    setArrangeArrayPreviewItems,
+    duplicateSourcePreviewTransform,
+    setDuplicateSourcePreviewTransform,
+    duplicateApplySourceModel,
+    setDuplicateApplySourceModel,
+    duplicateApplySourceTransform,
+    setDuplicateApplySourceTransform,
+    effectiveDuplicateTotalCopies,
+    isDuplicateSetupBlockingArrange,
+    buildHighPrecisionArrangeSupportLocalPoints,
+    buildHighPrecisionArrangeModels,
+    resolveArrangeVisibleModels,
+    applyArrangeTransforms,
+    handleAutoArrangeModels,
+    handleHighPrecisionArrangeModels,
     computeManualArrayArrangeUpdates,
-    scene.mode,
-    scene.models,
-    scene.selectedModelIds,
-    transformMgr.transformMode,
-  ]);
-
-  const computeArrangeSlots = React.useCallback((count: number, stepX: number, stepY: number) => {
-    const columns = Math.max(1, Math.ceil(Math.sqrt(count)));
-    const rows = Math.ceil(count / columns);
-    const centerX = scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.widthMm * 0.5 : 0;
-    const centerY = scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.depthMm * 0.5 : 0;
-    const startX = centerX - ((columns - 1) * stepX) * 0.5;
-    const startY = centerY - ((rows - 1) * stepY) * 0.5;
-
-    return Array.from({ length: count }, (_, index) => {
-      const col = index % columns;
-      const row = Math.floor(index / columns);
-      return new THREE.Vector3(startX + col * stepX, startY + row * stepY, 0);
-    });
-  }, [scene.view3dSettings.depthMm, scene.view3dSettings.originMode, scene.view3dSettings.widthMm]);
+    handleManualArrayArrangeModels,
+    computeArrangeSlots,
+    handleConfirmDuplicate,
+    handleFillPlateDuplicate,
+  } = arrange;
 
   const finalizeMirrorSessionRef = React.useRef<() => void>(() => {});
   const setTransformModeWithMirrorFinalize = React.useCallback((nextMode: TransformMode) => {
@@ -15001,96 +8419,8 @@ export default function Home() {
   }, [isSelectAllModelsActive]);
 
 
-  const selectAllActive = useActionActive('CANVAS', 'SELECT_ALL');
-  const copyActive = useActionActive('CANVAS', 'COPY');
-  const pasteActive = useActionActive('CANVAS', 'PASTE');
-  const saveActive = useActionActive('GLOBAL', 'SAVE');
   const saveAsActive = useActionActive('GLOBAL', 'SAVE_AS');
-  const wasSelectAllActive = React.useRef(false);
-  const wasCopyActive = React.useRef(false);
-  const wasPasteActive = React.useRef(false);
-  const wasSaveActive = React.useRef(false);
   const wasSaveAsActive = React.useRef(false);
-
-  React.useEffect(() => {
-    if (!selectAllActive || wasSelectAllActive.current) {
-      wasSelectAllActive.current = selectAllActive;
-      return;
-    }
-    wasSelectAllActive.current = true;
-
-    if (scene.models.length === 0) return;
-    const visibleIds = scene.models.filter((model) => model.visible).map((model) => model.id);
-    if (visibleIds.length > 0) {
-      scene.setSelectedModelIds(visibleIds);
-      scene.setActiveModelId(visibleIds[0]);
-    }
-    setIsSelectAllModelsActive(true);
-  }, [selectAllActive, scene, setIsSelectAllModelsActive]);
-
-  React.useEffect(() => {
-    if (!copyActive || wasCopyActive.current) {
-      wasCopyActive.current = copyActive;
-      return;
-    }
-    wasCopyActive.current = true;
-
-    if (scene.mode !== 'prepare') return;
-    if (scene.selectedModelIds.length === 0 && !scene.activeModelId) return;
-    if (scene.selectedModelIds.length > 0) {
-      scene.copySelectedModels();
-    } else if (scene.activeModelId) {
-      scene.copyModel(scene.activeModelId);
-    }
-  }, [copyActive, scene]);
-
-  React.useEffect(() => {
-    if (!pasteActive || wasPasteActive.current) {
-      wasPasteActive.current = pasteActive;
-      return;
-    }
-    wasPasteActive.current = true;
-
-    if (scene.mode !== 'prepare') return;
-    if (!scene.canPasteModel) return;
-    const pastedIds = scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
-    // Paste shares geometry with the source — add its cached volume directly
-    // instead of waiting for the async resin effect loop.
-    if (pastedIds.length > 0 && printingEstimatedResinMlRef.current != null) {
-      const pastedModel = scene.models.find((m) => pastedIds.includes(m.id));
-      if (pastedModel) {
-        const geom = pastedModel.geometry.geometry;
-        const pos = geom.getAttribute('position');
-        const idx = geom.getIndex();
-        const sourceKey = String(geom.userData?.resinVolumeSourceKey ?? geom.uuid);
-        const posVer = (pos as { version?: number; data?: { version?: number } }).version
-          ?? (pos as { version?: number; data?: { version?: number } }).data?.version ?? 0;
-        const idxVer = (idx as { version?: number } | null)?.version ?? 0;
-        const cacheKey = `${sourceKey}:${posVer}:${idxVer}`;
-        const cachedMl = printingBaseResinMlCacheRef.current.get(cacheKey) ?? null;
-        if (cachedMl != null) {
-          const sx = Math.abs(pastedModel.transform.scale.x || 1);
-          const sy = Math.abs(pastedModel.transform.scale.y || 1);
-          const sz = Math.abs(pastedModel.transform.scale.z || 1);
-          const addedMl = cachedMl * sx * sy * sz;
-          const nextTotal = (printingEstimatedResinMlRef.current - supportAndRaftResinMl) + addedMl + supportAndRaftResinMl;
-          printingEstimatedResinMlRef.current = nextTotal;
-          setPrintingEstimatedResinMl(nextTotal);
-        }
-      }
-    }
-  }, [pasteActive, scene, arrangeSpacingMm, printingEstimatedResinMlRef, supportAndRaftResinMl, printingBaseResinMlCacheRef, setPrintingEstimatedResinMl]);
-
-  React.useEffect(() => {
-    if (!saveActive || wasSaveActive.current) {
-      wasSaveActive.current = saveActive;
-      return;
-    }
-    wasSaveActive.current = true;
-
-    if (scene.models.length === 0) return;
-    void handleTopBarSaveScene();
-  }, [saveActive, scene.models.length, handleTopBarSaveScene]);
 
   React.useEffect(() => {
     if (!saveAsActive || wasSaveAsActive.current) {
@@ -15350,315 +8680,6 @@ export default function Home() {
     transformMgr.transformMode,
   ]);
 
-  const handleConfirmDuplicate = React.useCallback(async () => {
-    if (isDuplicating) return;
-    if (!scene.activeModelId) return;
-    if (duplicatePreviewTransforms.length === 0) return;
-
-    const sourceModelAtApplyStart = scene.activeModel;
-    const sourcePreviewTransformAtApplyStart = duplicateSourcePreviewTransform;
-    if (sourceModelAtApplyStart && sourcePreviewTransformAtApplyStart) {
-      setDuplicateApplySourceModel(sourceModelAtApplyStart);
-      setDuplicateApplySourceTransform({
-        position: sourcePreviewTransformAtApplyStart.position.clone(),
-        rotation: sourcePreviewTransformAtApplyStart.rotation.clone(),
-        scale: sourcePreviewTransformAtApplyStart.scale.clone(),
-      });
-    } else {
-      setDuplicateApplySourceModel(null);
-      setDuplicateApplySourceTransform(null);
-    }
-
-    const minSpinnerMs = 220;
-    const startedAt = performance.now();
-    setIsDuplicating(true);
-    await sleep(0);
-
-    try {
-      const createdIds = scene.duplicateModelWithTransforms(
-        scene.activeModelId,
-        duplicatePreviewTransforms,
-        duplicateSourcePreviewTransform
-          ? {
-            position: duplicateSourcePreviewTransform.position.clone(),
-            rotation: duplicateSourcePreviewTransform.rotation.clone(),
-            scale: duplicateSourcePreviewTransform.scale.clone(),
-          }
-          : null,
-      );
-
-      const firstCreatedId = createdIds[0] ?? null;
-      const firstCreatedTransform = duplicatePreviewTransforms[0] ?? null;
-      if (firstCreatedId && firstCreatedTransform) {
-        setDisplayActiveModelId(firstCreatedId);
-        transformMgr.transformHook.setPosition(
-          firstCreatedTransform.position.x,
-          firstCreatedTransform.position.y,
-          firstCreatedTransform.position.z,
-        );
-        transformMgr.transformHook.setRotation(
-          firstCreatedTransform.rotation.x,
-          firstCreatedTransform.rotation.y,
-          firstCreatedTransform.rotation.z,
-        );
-        transformMgr.transformHook.setScale(
-          firstCreatedTransform.scale.x,
-          firstCreatedTransform.scale.y,
-          firstCreatedTransform.scale.z,
-        );
-      }
-
-      setDuplicateTotalCopies(1);
-      setDuplicateSourcePreviewTransform(null);
-      setDuplicatePreviewTransforms([]);
-    } finally {
-      const elapsed = performance.now() - startedAt;
-      if (elapsed < minSpinnerMs) {
-        await sleep(minSpinnerMs - elapsed);
-      }
-      setIsDuplicating(false);
-      setDuplicateApplySourceModel(null);
-      setDuplicateApplySourceTransform(null);
-    }
-  }, [duplicatePreviewTransforms, duplicateSourcePreviewTransform, isDuplicating, scene, sleep, transformMgr.transformHook]);
-
-  const handleFillPlateDuplicate = React.useCallback(async () => {
-    if (isDuplicating || isAutoArranging) return;
-    if (duplicateLayoutMode !== 'auto') return;
-    const model = scene.activeModel;
-    if (!model) return;
-
-    if (duplicatePrecisionMode === 'high_precision') {
-      const minSpinnerMs = 220;
-      const startedAt = performance.now();
-      const maxProbeCopies = 128;
-
-      setDuplicateApplySourceModel(null);
-      setDuplicateApplySourceTransform(null);
-      setDuplicateSourcePreviewTransform(null);
-      setDuplicatePreviewTransforms([]);
-      setIsDuplicating(true);
-      setActiveArrangeOperation('high_precision_fill');
-      setArrangeOverlayModelCount(maxProbeCopies);
-      setIsAutoArranging(true);
-      await sleep(0);
-
-      try {
-        const modelTransformById = new Map(
-          scene.models.map((sceneModel) => [sceneModel.id, sceneModel.transform] as const),
-        );
-        const highPrecisionSceneModels = buildHighPrecisionArrangeModels(scene.models, modelTransformById);
-        const highPrecisionSourceModel = highPrecisionSceneModels.find((candidate) => candidate.id === model.id);
-        if (!highPrecisionSourceModel) return;
-
-        const duplicateSceneModels: HighPrecisionArrangeModel[] = Array.from({ length: maxProbeCopies }, (_, index) => ({
-          ...highPrecisionSourceModel,
-          id: `${model.id}__duplicate_fill_${index}`,
-          visible: true,
-          transform: {
-            position: highPrecisionSourceModel.transform.position.clone(),
-            rotation: highPrecisionSourceModel.transform.rotation.clone(),
-            scale: highPrecisionSourceModel.transform.scale.clone(),
-          },
-          geometry: {
-            center: highPrecisionSourceModel.geometry.center.clone(),
-            geometry: highPrecisionSourceModel.geometry.geometry,
-            supportLocalPoints: highPrecisionSourceModel.geometry.supportLocalPoints?.map((point) => point.clone()),
-            supportHullKey: highPrecisionSourceModel.geometry.supportHullKey,
-          },
-        }));
-
-        const result = await computeHighPrecisionArrangeResultWorker({
-          visibleModels: duplicateSceneModels,
-          sceneModels: [...highPrecisionSceneModels.filter((sceneModel) => sceneModel.id !== model.id), ...duplicateSceneModels],
-          widthMm: scene.view3dSettings.widthMm,
-          depthMm: scene.view3dSettings.depthMm,
-          originMode: scene.view3dSettings.originMode,
-          arrangeSpacingMm: duplicateSpacingMm,
-          arrangeAllowRotateOnZ: true,
-          arrangeAnchorMode: 'center',
-          getArrangeTransform: (arrangeModel) => arrangeModel.transform,
-          hullCache: arrangeHullFootprintCacheRef.current,
-          safetyMarginMm: scene.view3dSettings.safetyMarginMm,
-        });
-
-        const packedIdSet = new Set(result.packedIds);
-        const packedUpdates = result.updates.filter((update) => packedIdSet.has(update.id));
-        if (packedUpdates.length <= 1) return;
-
-        let sourceUpdate = packedUpdates[0];
-        let sourceDistanceSq = Number.POSITIVE_INFINITY;
-        for (const update of packedUpdates) {
-          const dx = update.transform.position.x - model.transform.position.x;
-          const dy = update.transform.position.y - model.transform.position.y;
-          const distanceSq = (dx * dx) + (dy * dy);
-          if (distanceSq < sourceDistanceSq) {
-            sourceDistanceSq = distanceSq;
-            sourceUpdate = update;
-          }
-        }
-
-        const duplicateTransforms = packedUpdates
-          .filter((update) => update.id !== sourceUpdate.id)
-          .map((update) => ({
-            position: update.transform.position.clone(),
-            rotation: update.transform.rotation.clone(),
-            scale: update.transform.scale.clone(),
-          }));
-
-        if (duplicateTransforms.length === 0) return;
-
-        const createdIds = scene.duplicateModelWithTransforms(
-          model.id,
-          duplicateTransforms,
-          {
-            position: sourceUpdate.transform.position.clone(),
-            rotation: sourceUpdate.transform.rotation.clone(),
-            scale: sourceUpdate.transform.scale.clone(),
-          },
-        );
-
-        const firstCreatedId = createdIds[0] ?? null;
-        const firstCreatedTransform = duplicateTransforms[0] ?? null;
-        if (firstCreatedId && firstCreatedTransform) {
-          setDisplayActiveModelId(firstCreatedId);
-          transformMgr.transformHook.setPosition(
-            firstCreatedTransform.position.x,
-            firstCreatedTransform.position.y,
-            firstCreatedTransform.position.z,
-          );
-          transformMgr.transformHook.setRotation(
-            firstCreatedTransform.rotation.x,
-            firstCreatedTransform.rotation.y,
-            firstCreatedTransform.rotation.z,
-          );
-          transformMgr.transformHook.setScale(
-            firstCreatedTransform.scale.x,
-            firstCreatedTransform.scale.y,
-            firstCreatedTransform.scale.z,
-          );
-        }
-
-        setDuplicateTotalCopies(1);
-      } catch (error) {
-        console.warn('[Duplicate][HighPrecision] Failed applying fill-plate duplicate.', error);
-      } finally {
-        const elapsed = performance.now() - startedAt;
-        if (elapsed < minSpinnerMs) {
-          await sleep(minSpinnerMs - elapsed);
-        }
-        setIsDuplicating(false);
-        setIsAutoArranging(false);
-        setActiveArrangeOperation(null);
-        setArrangeOverlayModelCount(null);
-      }
-      return;
-    }
-
-    const sourceDims = getModelSupportAwareDimensionsMm(model, undefined, model.transform);
-    const width = sourceDims.width;
-    const depth = sourceDims.depth;
-    // Spacing may be negative (nesting); clamp so a step never collapses.
-    const spacing = Math.max(-Math.min(width, depth) + 0.1, duplicateSpacingMm);
-
-    const rawFillMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-    const rawFillMaxX = rawFillMinX + scene.view3dSettings.widthMm;
-    const rawFillMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-    const rawFillMaxY = rawFillMinY + scene.view3dSettings.depthMm;
-    const fillSm = scene.view3dSettings.safetyMarginMm;
-    const minX = rawFillMinX + Math.max(0, fillSm?.left ?? 0);
-    const maxX = rawFillMaxX - Math.max(0, fillSm?.right ?? 0);
-    const minY = rawFillMinY + Math.max(0, fillSm?.front ?? 0);
-    const maxY = rawFillMaxY - Math.max(0, fillSm?.back ?? 0);
-
-    const plateWidth = Math.max(1, maxX - minX);
-    const plateDepth = Math.max(1, maxY - minY);
-    // Add small epsilon to prevent floating point edge cases when spacing is very small
-    const gridSpacing = spacing > 0 ? spacing : 0.001;
-    const maxCols = Math.max(1, Math.floor((plateWidth + gridSpacing) / (width + gridSpacing)));
-    const maxRows = Math.max(1, Math.floor((plateDepth + gridSpacing) / (depth + gridSpacing)));
-
-    // Use actual spacing (including 0) for layout, not gridSpacing
-    const totalUsedWidth = (maxCols * width) + Math.max(0, maxCols - 1) * spacing;
-    const totalUsedDepth = (maxRows * depth) + Math.max(0, maxRows - 1) * spacing;
-    const startX = minX + ((plateWidth - totalUsedWidth) * 0.5) + (width * 0.5);
-    const startY = minY + ((plateDepth - totalUsedDepth) * 0.5) + (depth * 0.5);
-
-    const projectPolygon = (poly: THREE.Vector2[], axis: THREE.Vector2) => {
-      let min = Infinity;
-      let max = -Infinity;
-      for (const point of poly) {
-        const projected = point.dot(axis);
-        min = Math.min(min, projected);
-        max = Math.max(max, projected);
-      }
-      return { min, max };
-    };
-
-    const polygonsOverlap = (a: THREE.Vector2[], b: THREE.Vector2[]) => {
-      const testAxes = (poly: THREE.Vector2[]) => {
-        for (let i = 0; i < poly.length; i += 1) {
-          const p0 = poly[i];
-          const p1 = poly[(i + 1) % poly.length];
-          const edge = new THREE.Vector2(p1.x - p0.x, p1.y - p0.y);
-          if (edge.lengthSq() <= 1e-10) continue;
-          const axis = new THREE.Vector2(-edge.y, edge.x).normalize();
-          const pa = projectPolygon(a, axis);
-          const pb = projectPolygon(b, axis);
-          if (pa.max <= pb.min + spacing || pb.max <= pa.min + spacing) return false;
-        }
-        return true;
-      };
-      return testAxes(a) && testAxes(b);
-    };
-
-    const blockedPolygons = scene.models
-      .filter((m) => m.visible && m.id !== model.id)
-      .map((m) => getModelSupportAwareFootprintPolygonRef.current(m, undefined, m.transform));
-
-    const candidateCenters: Array<{ x: number; y: number; distSq: number }> = [];
-    for (let row = 0; row < maxRows; row += 1) {
-      for (let col = 0; col < maxCols; col += 1) {
-        const x = startX + col * (width + spacing);
-        const y = startY + row * (depth + spacing);
-        const dx = x - model.transform.position.x;
-        const dy = y - model.transform.position.y;
-        candidateCenters.push({ x, y, distSq: dx * dx + dy * dy });
-      }
-    }
-    candidateCenters.sort((a, b) => a.distSq - b.distSq);
-
-    let capacity = 0;
-    for (const candidate of candidateCenters) {
-      const candidateTransform = {
-        position: new THREE.Vector3(candidate.x, candidate.y, model.transform.position.z),
-        rotation: model.transform.rotation.clone(),
-        scale: model.transform.scale.clone(),
-      };
-      const candidatePolygon = getModelSupportAwareFootprintPolygonRef.current(model, undefined, candidateTransform);
-
-      if (blockedPolygons.some((blocked) => polygonsOverlap(candidatePolygon, blocked))) {
-        continue;
-      }
-
-      blockedPolygons.push(candidatePolygon);
-      capacity += 1;
-    }
-
-    const targetCopies = Math.min(128, Math.max(1, capacity));
-    setDuplicateTotalCopies(targetCopies);
-  }, [
-    buildHighPrecisionArrangeModels,
-    duplicateLayoutMode,
-    duplicatePrecisionMode,
-    duplicateSpacingMm,
-    getModelSupportAwareDimensionsMm,
-    isAutoArranging,
-    isDuplicating,
-    scene,
-    sleep,
-    transformMgr.transformHook,
-  ]);
 
   const handlePlaceOnFaceAnimationStart = React.useCallback(() => {
     ensurePendingTransformHistoryForActiveModel('rotate');
@@ -15680,468 +8701,89 @@ export default function Home() {
     scene.setModelMeshModifiers(activeModelId, next);
   }, [scene]);
 
-  const handleApplyHollowing = React.useCallback(() => {
-    void (async () => {
-      const activeModel = scene.activeModel;
-      if (!activeModel) return;
+  const holePunch = useHolePunchManager({
+    scene,
+    transformMgr,
+    sleep,
+    hollowingState,
+    hollowingDraftEnabled,
+    hollowPreview,
+    isShellOpenFaceSelected,
+    defaultHolePunchState,
+    recommendedHolePunchDepthMm,
+    setHollowingState,
+    setIsShellOpenFaceSelected,
+    setHollowingDraftEnabled,
+    persistActiveModelModifiers,
+    setPendingModifierResetAction,
+    hollowingSourceByModelIdRef,
+    hollowPreviewResultCacheRef,
+    isApplyingHolePunch,
+    setIsApplyingHolePunch,
+    isApplyingHollowing,
+    pendingHolePunchAutoApplyModelId,
+    setPendingHolePunchAutoApplyModelId,
+    selectedHolePunchPlacementIds,
+    setSelectedHolePunchPlacementIds,
+    setHoveredHolePunchPlacementId,
+    setHolePunchHoverPlacement,
+    showOperationError,
+    setShowDamagedModelDialog,
+    beginFinalizing,
+    clearFinalizing,
+    nextPaint,
+  });
+  const {
+    holePunchState,
+    setHolePunchState,
+    holePunchPlacements,
+    setHolePunchPlacements,
+    holePunchPlacementsRef,
+    holePunchDragStateRef,
+    suppressHolePunchClickPlacementIdRef,
+    suppressHolePunchGizmoReleaseClickUntilRef,
+    holePunchAutoDepthRaycasterRef,
+    holePunchAutoDepthMeshRef,
+    selectedHolePunchPlacementIdSet,
+    selectedHolePunchPlacements,
+    canUseAutoHolePunchDepth,
+    syncHolePunchPanelFromSelection,
+    activeHolePunchPlacements,
+    previousRecommendedHolePunchDepthRef,
+    appliedHolePunchPlacementsSignature,
+    draftHolePunchPlacementsSignature,
+    isHolePunchApplied,
+    holePunchNeedsBake,
+    isHolePunchDirty,
+    appliedHolePunchPlacementIds,
+    canResetHolePunch,
+    persistHolePunchPlacementsForModel,
+    computeAutoHolePunchDepthMmForGeometry,
+    computeAutoHolePunchDepthMm,
+    buildHolePunchPlacementForHit,
+    buildHolePunchPlacementFromHit,
+    handleHolePunchClick,
+    handleHolePunchHover,
+    handleSelectHolePunchPlacement,
+    handleHolePunchPlacementDragStart,
+    handleHolePunchPlacementDragMove,
+    handleHolePunchPlacementDragEnd,
+    holePunchGizmoDragRef,
+    handleHolePunchGizmoMoveStart,
+    handleHolePunchGizmoMove,
+    handleHolePunchGizmoMoveEnd,
+    holePunchGizmoRotateRef,
+    handleHolePunchGizmoRotateStart,
+    handleHolePunchGizmoRotate,
+    handleHolePunchGizmoRotateEnd,
+    handleDeleteSelectedHolePunchPlacement,
+    handleHolePunchStateChange,
+    handleResetHolePunch,
+    requestResetHolePunch,
+    handleApplyHolePunch,
+  } = holePunch;
 
-      const persistedHollowing = activeModel.meshModifiers?.hollowing;
-      const shouldApply = hollowingDraftEnabled || !persistedHollowing?.enabled;
-      if (!shouldApply) return;
-
-      if (hollowingState.mode === 'shell_open_face' && !isShellOpenFaceSelected) {
-        showOperationError('Pick the face to open before applying Shell mode.');
-        return;
-      }
-
-      const holesWereAlreadyBaked = activeModel.meshModifiers?.holePunchesBakedIntoGeometry === true;
-
-      const existingSource = hollowingSourceByModelIdRef.current.get(activeModel.id);
-      const needsNewSource = !existingSource || !persistedHollowing?.enabled;
-
-      let sourceGeometry: THREE.BufferGeometry;
-      if (needsNewSource) {
-        if (existingSource) {
-          existingSource.geometry.dispose();
-        }
-
-        if (persistedHollowing?.enabled) {
-          const restoredFromSnapshot = geometryFromSnapshot(persistedHollowing);
-          sourceGeometry = restoredFromSnapshot ?? activeModel.geometry.geometry.clone();
-        } else {
-          // Use the current geometry which may already have baked holes.
-          sourceGeometry = activeModel.geometry.geometry.clone();
-        }
-
-        hollowingSourceByModelIdRef.current.set(activeModel.id, {
-          geometry: sourceGeometry,
-        });
-      } else {
-        sourceGeometry = existingSource.geometry;
-      }
-
-      setIsApplyingHollowing(true);
-      try {
-        const effectiveHollowMode = hollowingState.mode === 'shell_open_face'
-          ? 'cavity'
-          : hollowingState.mode;
-        const shellScaleFactor = getUniformScaleFactorForThickness(activeModel.transform.scale);
-        const bbox = sourceGeometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
-          sourceGeometry.getAttribute('position') as THREE.BufferAttribute,
-        );
-        const bboxSize = bbox.getSize(new THREE.Vector3());
-        const maxExtent = Math.max(bboxSize.x, bboxSize.y, bboxSize.z);
-        const applyQuat = new THREE.Quaternion().setFromEuler(activeModel.transform.rotation);
-        const options: HollowOptions = {
-          mode: effectiveHollowMode,
-          voxelResolution: computeVoxelResolution(worldMmToLocalMm(hollowingState.voxelSizeMm, shellScaleFactor), maxExtent),
-          shellThicknessMm: worldMmToLocalMm(hollowingState.shellThicknessMm, shellScaleFactor),
-          blockedVoxelIndices: blockedHollowVoxelIndices,
-          infillMode: hollowingState.infillMode,
-          infillCellMm: worldMmToLocalMm(hollowingState.infillCellMm, shellScaleFactor),
-          infillBeamRadiusMm: worldMmToLocalMm(hollowingState.infillBeamRadiusMm, shellScaleFactor),
-          openFace: hollowingState.openFace,
-          drainHoles: [],
-          previewCavityOnly: false,
-          smoothInternalSurfaces: true,
-          internalChamferPasses: 2,
-          rotationQuat: [applyQuat.x, applyQuat.y, applyQuat.z, applyQuat.w],
-        };
-        const sourceGeometryKey = buildGeometryVersionKey(sourceGeometry);
-        const staged = await stageHollowPreviewSource(
-          sourceGeometry,
-          `${activeModel.id}::${sourceGeometryKey}`,
-        );
-
-        const result = staged
-          ? await hollowApplyFromCapturedSource(options)
-          : await hollowFromGeometry(sourceGeometry, options);
-        if (!result) {
-          showOperationError('Hollowing is available in DragonFruit Desktop only.');
-          return;
-        }
-
-        // Detect hollowing failure: if no voxels were removed, the manifold
-        // stabilization could not resolve the cavity surface, likely because
-        // the mesh is too damaged for boolean operations.
-        if (result.report && 'removedVoxels' in result.report && result.report.removedVoxels === 0) {
-          setShowDamagedModelDialog(true);
-          return;
-        }
-
-        const nextGeometry = new THREE.BufferGeometry();
-        nextGeometry.setAttribute('position', new THREE.BufferAttribute(result.positions, 3));
-        nextGeometry.computeVertexNormals();
-        nextGeometry.computeBoundingBox();
-        nextGeometry.computeBoundingSphere();
-
-        // Store cavity geometry for Interior View Mode
-        if (result.cavityPositions) {
-          const existingCavity = cavityGeometryByModelIdRef.current.get(activeModel.id);
-          if (existingCavity) {
-            existingCavity.geometry.dispose();
-          }
-          const cavityGeometry = new THREE.BufferGeometry();
-          cavityGeometry.setAttribute('position', new THREE.BufferAttribute(result.cavityPositions, 3));
-          cavityGeometry.computeVertexNormals();
-          cavityGeometry.computeBoundingBox();
-          cavityGeometry.computeBoundingSphere();
-          cavityGeometryByModelIdRef.current.set(activeModel.id, { geometry: cavityGeometry });
-        } else {
-          const existingCavity = cavityGeometryByModelIdRef.current.get(activeModel.id);
-          if (existingCavity) {
-            existingCavity.geometry.dispose();
-            cavityGeometryByModelIdRef.current.delete(activeModel.id);
-          }
-        }
-
-        const modeLabel = hollowingState.mode === 'shell_open_face'
-          ? 'Shell Hollowing'
-          : hollowingState.mode === 'infill'
-            ? 'Infill Hollowing'
-            : 'Cavity Hollowing';
-        const replaced = scene.replaceModelGeometry(
-          activeModel.id,
-          nextGeometry,
-          `${modeLabel} (${result.report.outputTriangleCount.toLocaleString()} tris)`,
-        );
-        if (!replaced) {
-          nextGeometry.dispose();
-          return;
-        }
-
-        // Hollowing is now baked — clear the preview overlay and exit X-Ray
-        // forced shader so the user can see surface detail for hole placement.
-        clearHollowPreview();
-        setSessionShaderOverride(null);
-
-        const sourceSnapshot = snapshotGeometryPositions(sourceGeometry);
-        let cavityPositionsBase64: string | undefined;
-        let cavityPositionCount: number | undefined;
-        if (result.cavityPositions) {
-          const cavityBytes = new Uint8Array(
-            result.cavityPositions.buffer,
-            result.cavityPositions.byteOffset,
-            result.cavityPositions.byteLength,
-          );
-          cavityPositionsBase64 = bytesToBase64(cavityBytes);
-          cavityPositionCount = result.cavityPositions.length / 3;
-        }
-
-        setHolePunchState((previous) => (
-          previous.depthMode === 'auto'
-            ? previous
-            : { ...previous, depthMode: 'auto' }
-        ));
-
-        const nextHolePunchPlacements = holePunchPlacementsRef.current.map((placement) => {
-          if (placement.modelId !== activeModel.id || placement.depthMode !== 'auto') {
-            return placement;
-          }
-
-          return {
-            ...placement,
-            depthMm: computeAutoHolePunchDepthMmForGeometry(
-              activeModel,
-              nextGeometry,
-              placement.worldPoint,
-              placement.worldNormal,
-            ),
-          };
-        });
-        setHolePunchPlacements(nextHolePunchPlacements);
-
-        const persistedHolePunches = toPersistedHolePunchPlacements(
-          { geometry: { geometry: nextGeometry } as GeometryWithBounds },
-          nextHolePunchPlacements.filter((placement) => placement.modelId === activeModel.id),
-        ).filter((placement) => placement.radiusMm > 0 && placement.depthMm > 0);
-
-        // When holes were already baked before hollowing, they were passed as
-        // drainHoles to the hollower which already cut them — no re-apply needed.
-        // Only auto-reapply holes that were in draft state (not yet baked).
-        const shouldAutoReapplyHolePunches = !holesWereAlreadyBaked && persistedHolePunches.length > 0;
-
-        persistActiveModelModifiers({
-          ...(activeModel.meshModifiers ?? {}),
-          hollowing: {
-            enabled: true,
-            bakedIntoGeometry: true,
-            sourcePositionsBase64: sourceSnapshot.sourcePositionsBase64,
-            sourcePositionCount: sourceSnapshot.sourcePositionCount,
-            cavityPositionsBase64,
-            cavityPositionCount,
-            blockedVoxelIndices: blockedHollowVoxelIndices,
-            mode: effectiveHollowMode,
-            voxelSizeMm: hollowingState.voxelSizeMm,
-            shellThicknessMm: hollowingState.shellThicknessMm,
-            infillMode: hollowingState.infillMode,
-            infillCellMm: hollowingState.infillCellMm,
-            infillBeamRadiusMm: hollowingState.infillBeamRadiusMm,
-            openFace: hollowingState.openFace,
-            openFaceSelected: hollowingState.mode === 'shell_open_face'
-              ? isShellOpenFaceSelected
-              : true,
-          },
-          holePunches: persistedHolePunches,
-          holePunchAppliedPlacements: holesWereAlreadyBaked ? persistedHolePunches : [],
-          holePunchesBakedIntoGeometry: holesWereAlreadyBaked,
-          holePunchSourcePositionsBase64: holesWereAlreadyBaked
-            ? (activeModel.meshModifiers?.holePunchSourcePositionsBase64 ?? undefined)
-            : undefined,
-          holePunchSourcePositionCount: holesWereAlreadyBaked
-            ? (activeModel.meshModifiers?.holePunchSourcePositionCount ?? undefined)
-            : undefined,
-        });
-
-        if (shouldAutoReapplyHolePunches) {
-          setPendingHolePunchAutoApplyModelId(activeModel.id);
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        showOperationError(`Hollowing failed: ${message}`);
-      } finally {
-        setIsApplyingHollowing(false);
-        setIsApplyingBlockersHollowing(false);
-      }
-    })();
-  }, [blockedHollowVoxelIndices, hollowingDraftEnabled, hollowingState, isShellOpenFaceSelected, persistActiveModelModifiers, scene]);
-
-  const handleResetHollowing = React.useCallback(() => {
-    const activeModel = scene.activeModel;
-    if (!activeModel) return;
-
-    const sourceEntry = hollowingSourceByModelIdRef.current.get(activeModel.id)
-      ?? (() => {
-        const restored = geometryFromSnapshot(activeModel.meshModifiers?.hollowing ?? {});
-        if (!restored) return null;
-        const entry = { geometry: restored };
-        hollowingSourceByModelIdRef.current.set(activeModel.id, entry);
-        return entry;
-      })();
-
-    if (sourceEntry) {
-      const restoredGeometry = sourceEntry.geometry.clone();
-      const restored = scene.replaceModelGeometry(activeModel.id, restoredGeometry, 'Reset Hollowing');
-      if (!restored) {
-        restoredGeometry.dispose();
-      }
-    }
-
-    // Clear cavity geometry and auto-disable interior view on hollowing reset
-    const existingCavity = cavityGeometryByModelIdRef.current.get(activeModel.id);
-    if (existingCavity) {
-      existingCavity.geometry.dispose();
-      cavityGeometryByModelIdRef.current.delete(activeModel.id);
-    }
-    setInteriorView(false);
-
-    setHollowingState(defaultHollowingState);
-    setIsShellOpenFaceSelected(true);
-    setHollowingDraftEnabled(false);
-    setHollowingEditMode(false);
-    setBlockedHollowVoxelIndices([]);
-    setEditingBlockedHollowVoxelIndices([]);
-    persistActiveModelModifiers({
-      ...(activeModel.meshModifiers ?? {}),
-      hollowing: {
-        enabled: false,
-        bakedIntoGeometry: false,
-        // Clear the source snapshot — hollowing was reset so the snapshot is
-        // stale (it may contain holes that have since been removed).
-        sourcePositionsBase64: undefined,
-        sourcePositionCount: undefined,
-        blockedVoxelIndices: [],
-        mode: defaultHollowingState.mode,
-        voxelSizeMm: defaultHollowingState.voxelSizeMm,
-        shellThicknessMm: defaultHollowingState.shellThicknessMm,
-        infillMode: defaultHollowingState.infillMode,
-        infillCellMm: defaultHollowingState.infillCellMm,
-        infillBeamRadiusMm: defaultHollowingState.infillBeamRadiusMm,
-        openFace: defaultHollowingState.openFace,
-        openFaceSelected: true,
-      },
-      // Preserve hole punch baked state — the geometry restored from the
-      // hollowing source still contains any pre-baked holes, so the system
-      // must not lose track of them.
-      holePunchAppliedPlacements: activeModel.meshModifiers?.holePunches ?? [],
-      holePunchesBakedIntoGeometry: activeModel.meshModifiers?.holePunchesBakedIntoGeometry === true,
-      holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
-      holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
-    });
-  }, [defaultHollowingState, persistActiveModelModifiers, scene.activeModel]);
-
-  const handleClearAppliedHollowing = React.useCallback(() => {
-    const activeModel = scene.activeModel;
-    if (!activeModel) return;
-
-    const sourceEntry = hollowingSourceByModelIdRef.current.get(activeModel.id)
-      ?? (() => {
-        const restored = geometryFromSnapshot(activeModel.meshModifiers?.hollowing ?? {});
-        if (!restored) return null;
-        const entry = { geometry: restored };
-        hollowingSourceByModelIdRef.current.set(activeModel.id, entry);
-        return entry;
-      })();
-
-    if (sourceEntry) {
-      const restoredGeometry = sourceEntry.geometry.clone();
-      const restored = scene.replaceModelGeometry(activeModel.id, restoredGeometry, 'Clear Hollowing');
-      if (!restored) {
-        restoredGeometry.dispose();
-      }
-    }
-
-    // Clear cavity geometry and disable interior view
-    const existingCavity = cavityGeometryByModelIdRef.current.get(activeModel.id);
-    if (existingCavity) {
-      existingCavity.geometry.dispose();
-      cavityGeometryByModelIdRef.current.delete(activeModel.id);
-    }
-    setInteriorView(false);
-
-    setHollowingDraftEnabled(false);
-    setHollowingEditMode(false);
-    setBlockedHollowVoxelIndices([]);
-    setEditingBlockedHollowVoxelIndices([]);
-    persistActiveModelModifiers({
-      ...(activeModel.meshModifiers ?? {}),
-      hollowing: {
-        enabled: false,
-        bakedIntoGeometry: false,
-        sourcePositionsBase64: undefined,
-        sourcePositionCount: undefined,
-        blockedVoxelIndices: [],
-        // Keep current settings — don't reset to defaults.
-        mode: hollowingState.mode,
-        voxelSizeMm: hollowingState.voxelSizeMm,
-        shellThicknessMm: hollowingState.shellThicknessMm,
-        infillMode: hollowingState.infillMode,
-        infillCellMm: hollowingState.infillCellMm,
-        infillBeamRadiusMm: hollowingState.infillBeamRadiusMm,
-        openFace: hollowingState.openFace,
-        openFaceSelected: hollowingState.mode === 'shell_open_face'
-          ? isShellOpenFaceSelected
-          : true,
-      },
-      holePunchAppliedPlacements: activeModel.meshModifiers?.holePunches ?? [],
-      holePunchesBakedIntoGeometry: activeModel.meshModifiers?.holePunchesBakedIntoGeometry === true,
-      holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
-      holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
-    });
-  }, [hollowingState, isShellOpenFaceSelected, persistActiveModelModifiers, scene.activeModel]);
-
-  const handleResetHollowingSettings = React.useCallback(() => {
-    setHollowingState(defaultHollowingState);
-    setIsShellOpenFaceSelected(true);
-  }, [defaultHollowingState]);
-
-  const handleHollowingStateChange = React.useCallback((next: HollowingPanelState) => {
-    const openFaceChanged = next.openFace !== hollowingState.openFace;
-    const resolutionChanged = Math.abs(next.voxelSizeMm - hollowingState.voxelSizeMm) > 1e-6;
-    const thicknessChanged = Math.abs(next.shellThicknessMm - hollowingState.shellThicknessMm) > 1e-6;
-    const blockedVoxelIndices = resolutionChanged
-      ? []
-      : blockedHollowVoxelIndices;
-    const nextShellOpenFaceSelected = next.mode === 'shell_open_face'
-      ? (
-        hollowingState.mode !== 'shell_open_face'
-          ? false
-          : (openFaceChanged ? true : isShellOpenFaceSelected)
-      )
-      : true;
-
-    // Warn before clearing blockers when adjusting resolution or thickness.
-    if ((resolutionChanged || thicknessChanged) && blockedHollowVoxelIndices.length > 0) {
-      setPendingBlockerResetState(next);
-      return;
-    }
-
-    setHollowingState(next);
-    setIsShellOpenFaceSelected(nextShellOpenFaceSelected);
-    setHollowingDraftEnabled(true);
-    setBlockedHollowVoxelIndices(blockedVoxelIndices);
-    // Clear editing indices when voxel resolution changes (new grid), but
-    // preserve them when only shell thickness or mode changes so the user
-    // stays in sphere edit mode with their current selection intact.
-    if (!hollowingEditMode || resolutionChanged) {
-      setEditingBlockedHollowVoxelIndices(blockedVoxelIndices);
-    }
-
-    if (!nextShellOpenFaceSelected) {
-      setSelectedHolePunchPlacementIds([]);
-      setHoveredHolePunchPlacementId(null);
-      setHolePunchHoverPlacement(null);
-    }
-
-    const activeModel = scene.activeModel;
-    if (!activeModel) return;
-
-    persistActiveModelModifiers({
-      ...(activeModel.meshModifiers ?? {}),
-      hollowing: {
-        enabled: true,
-        bakedIntoGeometry: false,
-        sourcePositionsBase64: activeModel.meshModifiers?.hollowing?.sourcePositionsBase64,
-        sourcePositionCount: activeModel.meshModifiers?.hollowing?.sourcePositionCount,
-        blockedVoxelIndices,
-        mode: next.mode,
-        voxelSizeMm: next.voxelSizeMm,
-        shellThicknessMm: next.shellThicknessMm,
-        infillMode: next.infillMode,
-        infillCellMm: next.infillCellMm,
-        infillBeamRadiusMm: next.infillBeamRadiusMm,
-        openFace: next.openFace,
-        openFaceSelected: nextShellOpenFaceSelected,
-      },
-    });
-  }, [blockedHollowVoxelIndices, hollowingState.mode, hollowingState.openFace, hollowingState.voxelSizeMm, isShellOpenFaceSelected, persistActiveModelModifiers, scene.activeModel]);
-
-  const selectedHolePunchPlacementIdSet = React.useMemo(
-    () => new Set(selectedHolePunchPlacementIds),
-    [selectedHolePunchPlacementIds],
-  );
-
-  const selectedHolePunchPlacements = React.useMemo(
-    () => holePunchPlacements.filter((placement) => selectedHolePunchPlacementIdSet.has(placement.id)),
-    [holePunchPlacements, selectedHolePunchPlacementIdSet],
-  );
-
-  const isHollowingApplied = React.useMemo(() => {
-    const modifier = scene.activeModel?.meshModifiers?.hollowing;
-    return Boolean(modifier?.enabled && modifier?.bakedIntoGeometry);
-  }, [scene.activeModel]);
-
-  const canUseAutoHolePunchDepth = React.useMemo(() => (
-    Boolean(scene.activeModel && (hollowingDraftEnabled || isHollowingApplied))
-  ), [hollowingDraftEnabled, isHollowingApplied, scene.activeModel]);
-
-  const syncHolePunchPanelFromSelection = React.useCallback((
-    nextSelectedIds: string[],
-    placements: HolePunchPlacementState[],
-    preferredId?: string | null,
-    autoDepthEnabled = canUseAutoHolePunchDepth,
-  ) => {
-    const preferredPlacement = preferredId
-      ? placements.find((placement) => placement.id === preferredId)
-      : null;
-    const fallbackPlacement = [...placements].reverse().find((placement) => nextSelectedIds.includes(placement.id)) ?? null;
-    const nextPlacement = preferredPlacement ?? fallbackPlacement;
-    if (nextPlacement) {
-      setHolePunchState({
-        radiusMm: nextPlacement.radiusMm,
-        radiusYMm: nextPlacement.radiusYMm,
-        depthMm: nextPlacement.depthMm,
-        depthMode: autoDepthEnabled ? nextPlacement.depthMode : 'manual',
-      });
-    }
-  }, [canUseAutoHolePunchDepth]);
-
-  const activeHolePunchPlacements = React.useMemo(() => {
-    const activeModelId = scene.activeModel?.id;
-    if (!activeModelId) return [] as HolePunchPlacementState[];
-    return holePunchPlacements.filter((placement) => placement.modelId === activeModelId);
-  }, [holePunchPlacements, scene.activeModel?.id]);
-
+  // Hollowing-aware Ctrl/Cmd+A/C/V/S hotkeys (hotkey-store rewrite from #297).
   React.useEffect(() => {
     let wasAPressed = false;
     let wasCPressed = false;
@@ -16195,7 +8837,32 @@ export default function Home() {
 
       if (isVJustPressed && !active.has('alt')) {
         if (scene.mode === 'prepare' && scene.canPasteModel) {
-          scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
+          const pastedIds = scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
+          // Paste shares geometry with the source — add its cached volume directly
+          // instead of waiting for the async resin effect loop.
+          if (pastedIds.length > 0 && printingEstimatedResinMlRef.current != null) {
+            const pastedModel = scene.models.find((m) => pastedIds.includes(m.id));
+            if (pastedModel) {
+              const geom = pastedModel.geometry.geometry;
+              const pos = geom.getAttribute('position');
+              const idx = geom.getIndex();
+              const sourceKey = String(geom.userData?.resinVolumeSourceKey ?? geom.uuid);
+              const posVer = (pos as { version?: number; data?: { version?: number } }).version
+                ?? (pos as { version?: number; data?: { version?: number } }).data?.version ?? 0;
+              const idxVer = (idx as { version?: number } | null)?.version ?? 0;
+              const cacheKey = `${sourceKey}:${posVer}:${idxVer}`;
+              const cachedMl = printingBaseResinMlCacheRef.current.get(cacheKey) ?? null;
+              if (cachedMl != null) {
+                const sx = Math.abs(pastedModel.transform.scale.x || 1);
+                const sy = Math.abs(pastedModel.transform.scale.y || 1);
+                const sz = Math.abs(pastedModel.transform.scale.z || 1);
+                const addedMl = cachedMl * sx * sy * sz;
+                const nextTotal = (printingEstimatedResinMlRef.current - supportAndRaftResinMl) + addedMl + supportAndRaftResinMl;
+                printingEstimatedResinMlRef.current = nextTotal;
+                setPrintingEstimatedResinMl(nextTotal);
+              }
+            }
+          }
         }
       }
 
@@ -16218,1032 +8885,45 @@ export default function Home() {
     activeHolePunchPlacements,
     syncHolePunchPanelFromSelection,
     arrangeSpacingMm,
-    handleTopBarSaveScene
+    handleTopBarSaveScene,
+    printingEstimatedResinMlRef,
+    supportAndRaftResinMl,
+    printingBaseResinMlCacheRef,
+    setPrintingEstimatedResinMl
   ]);
 
-  const previousRecommendedHolePunchDepthRef = React.useRef<number>(recommendedHolePunchDepthMm);
-
-  React.useEffect(() => {
-    const previousRecommendedDepth = previousRecommendedHolePunchDepthRef.current;
-    const nextRecommendedDepth = recommendedHolePunchDepthMm;
-
-    const shouldAutoUpdateDepth = selectedHolePunchPlacementIds.length === 0
-      && activeHolePunchPlacements.length === 0
-      && Math.abs(holePunchState.depthMm - previousRecommendedDepth) <= 1e-6;
-
-    if (shouldAutoUpdateDepth && Math.abs(holePunchState.depthMm - nextRecommendedDepth) > 1e-6) {
-      setHolePunchState((previous) => ({
-        ...previous,
-        depthMm: nextRecommendedDepth,
-      }));
-    }
-
-    previousRecommendedHolePunchDepthRef.current = nextRecommendedDepth;
-  }, [
-    activeHolePunchPlacements.length,
-    holePunchState.depthMm,
-    recommendedHolePunchDepthMm,
-    selectedHolePunchPlacementIds.length,
-  ]);
-
-  const appliedHolePunchPlacementsSignature = React.useMemo(() => {
-    const activeModel = scene.activeModel;
-    if (!activeModel) return '[]';
-    const appliedPlacements = activeModel.meshModifiers?.holePunchAppliedPlacements
-      ?? (activeModel.meshModifiers?.holePunchesBakedIntoGeometry
-        ? (activeModel.meshModifiers?.holePunches ?? [])
-        : []);
-    return serializeHolePunchPlacements(appliedPlacements);
-  }, [scene.activeModel]);
-
-  const draftHolePunchPlacementsSignature = React.useMemo(() => {
-    const activeModel = scene.activeModel;
-    if (!activeModel) return '[]';
-    const persistedDraft = toPersistedHolePunchPlacements(activeModel, activeHolePunchPlacements);
-    return serializeHolePunchPlacements(persistedDraft);
-  }, [activeHolePunchPlacements, scene.activeModel]);
-
-  const isHolePunchApplied = React.useMemo(() => {
-    const activeModel = scene.activeModel;
-    if (!activeModel) return false;
-    return Boolean(
-      (activeModel.meshModifiers?.holePunches?.length ?? 0) > 0
-      && activeModel.meshModifiers?.holePunchesBakedIntoGeometry,
-    );
-  }, [scene.activeModel]);
-
-  const holePunchNeedsBake = React.useMemo(() => {
-    const activeModel = scene.activeModel;
-    if (!activeModel) return false;
-    const placements = activeModel.meshModifiers?.holePunches ?? [];
-    const hasSourceSnapshot = Boolean(
-      activeModel.meshModifiers?.holePunchSourcePositionsBase64
-      && Number.isFinite(activeModel.meshModifiers?.holePunchSourcePositionCount)
-      && (activeModel.meshModifiers?.holePunchSourcePositionCount ?? 0) > 0,
-    );
-
-    if (activeModel.meshModifiers?.holePunchesBakedIntoGeometry) return false;
-    return placements.length > 0 || hasSourceSnapshot;
-  }, [scene.activeModel]);
-
-  const isHolePunchDirty = draftHolePunchPlacementsSignature !== appliedHolePunchPlacementsSignature;
-
-  const appliedHolePunchPlacementIds = React.useMemo(() => {
-    const activeModel = scene.activeModel;
-    if (!activeModel) {
-      return new Set<string>();
-    }
-
-    const appliedPlacements = activeModel.meshModifiers?.holePunchAppliedPlacements
-      ?? (activeModel.meshModifiers?.holePunchesBakedIntoGeometry
-        ? (activeModel.meshModifiers?.holePunches ?? [])
-        : []);
-
-    if (appliedPlacements.length === 0) {
-      return new Set<string>();
-    }
-
-    const currentPersistedPlacements = toPersistedHolePunchPlacements(activeModel, activeHolePunchPlacements)
-      .filter((placement) => placement.radiusMm > 0 && placement.depthMm > 0);
-
-    if (currentPersistedPlacements.length === 0) {
-      return new Set<string>();
-    }
-
-    const currentById = new Map<string, string>();
-    for (const placement of currentPersistedPlacements) {
-      currentById.set(placement.id, serializeSingleHolePunchPlacement(placement));
-    }
-
-    const appliedIds = new Set<string>();
-    for (const placement of appliedPlacements) {
-      const currentSignature = currentById.get(placement.id);
-      if (!currentSignature) continue;
-      if (currentSignature === serializeSingleHolePunchPlacement(placement)) {
-        appliedIds.add(placement.id);
-      }
-    }
-
-    return appliedIds;
-  }, [activeHolePunchPlacements, scene.activeModel]);
-
-  const persistedHollowingSignature = React.useMemo(
-    () => serializeHollowingModifier(scene.activeModel?.meshModifiers?.hollowing),
-    [scene.activeModel],
-  );
-
-  const draftHollowingSignature = React.useMemo(
-    () => serializeHollowingModifier({
-      enabled: hollowingDraftEnabled,
-      blockedVoxelIndices: blockedHollowVoxelIndices,
-      mode: hollowingState.mode,
-      voxelSizeMm: hollowingState.voxelSizeMm,
-      shellThicknessMm: hollowingState.shellThicknessMm,
-      infillMode: hollowingState.infillMode,
-      infillCellMm: hollowingState.infillCellMm,
-      infillBeamRadiusMm: hollowingState.infillBeamRadiusMm,
-      openFace: hollowingState.openFace,
-      openFaceSelected: hollowingState.mode === 'shell_open_face'
-        ? isShellOpenFaceSelected
-        : true,
-    }),
-    [
-      hollowingDraftEnabled,
-      blockedHollowVoxelIndices,
-      hollowingState.mode,
-      hollowingState.openFace,
-      hollowingState.infillMode,
-      hollowingState.shellThicknessMm,
-      hollowingState.infillBeamRadiusMm,
-      hollowingState.infillCellMm,
-      hollowingState.voxelSizeMm,
-      isShellOpenFaceSelected,
-    ],
-  );
-
-  const isShellFaceSelectionPending = hollowingState.mode === 'shell_open_face' && !isShellOpenFaceSelected;
-
-  const isHollowingDirty = draftHollowingSignature !== persistedHollowingSignature;
-
-  const canResetHollowing = React.useMemo(() => {
-    const activeModel = scene.activeModel;
-    if (!activeModel) return false;
-    const modifier = activeModel.meshModifiers?.hollowing;
-    if (!modifier) return false;
-    return Boolean(modifier.enabled || isHollowingDirty || isHollowingApplied);
-  }, [isHollowingApplied, isHollowingDirty, scene.activeModel]);
-
-  const blockedHollowVoxelIndexSet = React.useMemo(
-    () => new Set(blockedHollowVoxelIndices),
-    [blockedHollowVoxelIndices],
-  );
-
-  const editingBlockedHollowVoxelIndexSet = React.useMemo(
-    () => new Set(editingBlockedHollowVoxelIndices),
-    [editingBlockedHollowVoxelIndices],
-  );
-
-  React.useEffect(() => {
-    editingBlockedHollowVoxelIndicesRef.current = editingBlockedHollowVoxelIndices;
-  }, [editingBlockedHollowVoxelIndices]);
-
-  React.useEffect(() => {
-    hollowingEditModeRef.current = hollowingEditMode;
-  }, [hollowingEditMode]);
-
-  React.useEffect(() => {
-    if (hollowingEditMode) return;
-    hollowVoxelEditUndoStackRef.current = [];
-    hollowVoxelEditRedoStackRef.current = [];
-  }, [hollowingEditMode]);
-
-  const applyEditingBlockedHollowVoxelIndices = React.useCallback((
-    nextIndicesInput: Iterable<number>,
-    options?: { recordHistory?: boolean },
-  ) => {
-    const nextIndices = [...new Set(nextIndicesInput)]
-      .filter((value) => Number.isFinite(value))
-      .sort((a, b) => a - b);
-    const previousIndices = editingBlockedHollowVoxelIndicesRef.current;
-    if (areSortedNumberArraysEqual(previousIndices, nextIndices)) {
-      return false;
-    }
-
-    if (options?.recordHistory ?? true) {
-      hollowVoxelEditUndoStackRef.current.push([...previousIndices]);
-      if (hollowVoxelEditUndoStackRef.current.length > 100) {
-        hollowVoxelEditUndoStackRef.current.shift();
-      }
-      hollowVoxelEditRedoStackRef.current = [];
-    }
-
-    editingBlockedHollowVoxelIndicesRef.current = nextIndices;
-    setEditingBlockedHollowVoxelIndices(nextIndices);
-    return true;
-  }, []);
-
-  const undoHollowVoxelEdit = React.useCallback(() => {
-    const previousIndices = hollowVoxelEditUndoStackRef.current.pop();
-    if (!previousIndices) return false;
-
-    hollowVoxelEditRedoStackRef.current.push([...editingBlockedHollowVoxelIndicesRef.current]);
-    editingBlockedHollowVoxelIndicesRef.current = previousIndices;
-    setEditingBlockedHollowVoxelIndices(previousIndices);
-    return true;
-  }, []);
-
-  const redoHollowVoxelEdit = React.useCallback(() => {
-    const nextIndices = hollowVoxelEditRedoStackRef.current.pop();
-    if (!nextIndices) return false;
-
-    hollowVoxelEditUndoStackRef.current.push([...editingBlockedHollowVoxelIndicesRef.current]);
-    editingBlockedHollowVoxelIndicesRef.current = nextIndices;
-    setEditingBlockedHollowVoxelIndices(nextIndices);
-    return true;
-  }, []);
-
-  React.useEffect(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'hollowing' || !hollowingEditMode) {
-      return;
-    }
-
-    let wasZPressed = false;
-    let wasYPressed = false;
-
-    const unsubscribe = hotkeyStore.subscribe((state) => {
-      const active = state.activeKeys;
-      const isCtrlOrMeta = active.has('ctrl') || active.has('meta') || active.has('control');
-      const isZPressed = active.has('z') && isCtrlOrMeta;
-      const isYPressed = active.has('y') && isCtrlOrMeta;
-
-      const isZJustPressed = isZPressed && !wasZPressed;
-      const isYJustPressed = isYPressed && !wasYPressed;
-
-      if (isZJustPressed) {
-        if (active.has('shift')) {
-          redoHollowVoxelEdit();
-        } else {
-          undoHollowVoxelEdit();
-        }
-      } else if (isYJustPressed) {
-        redoHollowVoxelEdit();
-      }
-
-      wasZPressed = isZPressed;
-      wasYPressed = isYPressed;
-    });
-
-    return unsubscribe;
-  }, [hollowingEditMode, redoHollowVoxelEdit, scene.mode, transformMgr.transformMode, undoHollowVoxelEdit]);
-
-  const blockedPreviewVoxelInstanceIdSet = React.useMemo(() => {
-    const preview = hollowPreview;
-    if (!preview) return new Set<number>();
-    const activeBlockedIndexSet = hollowingEditMode
-      ? editingBlockedHollowVoxelIndexSet
-      : blockedHollowVoxelIndexSet;
-
-    const next = new Set<number>();
-    for (let instanceIndex = 0; instanceIndex < preview.removedVoxelIndices.length; instanceIndex += 1) {
-      if (activeBlockedIndexSet.has(preview.removedVoxelIndices[instanceIndex] ?? -1)) {
-        next.add(instanceIndex);
-      }
-    }
-    // Also map committed blocked voxel centers: their instance index is
-    // offset past the removed voxels. If the user cleared a blocked voxel
-    // from the editing set, it won't be in activeBlockedIndexSet and will
-    // render as yellow.
-    if (preview.blockedVoxelCenters) {
-      const blockedCount = Math.floor(preview.blockedVoxelCenters.length / 3);
-      for (let blockedIndex = 0; blockedIndex < blockedCount; blockedIndex += 1) {
-        const gridIndex = blockedHollowVoxelIndices[blockedIndex];
-        if (activeBlockedIndexSet.has(gridIndex)) {
-          next.add(preview.removedVoxelIndices.length + blockedIndex);
-        }
-      }
-    }
-    return next;
-  }, [blockedHollowVoxelIndexSet, blockedHollowVoxelIndices, editingBlockedHollowVoxelIndexSet, hollowPreview, hollowingEditMode]);
-
-  const commitBlockedHollowVoxelIndices = React.useCallback((nextIndices: number[]) => {
-    const activeModel = scene.activeModel;
-    if (!activeModel) return;
-
-    setBlockedHollowVoxelIndices(nextIndices);
-    setHollowingDraftEnabled(true);
-    persistActiveModelModifiers({
-      ...(activeModel.meshModifiers ?? {}),
-      hollowing: {
-        enabled: true,
-        bakedIntoGeometry: false,
-        sourcePositionsBase64: activeModel.meshModifiers?.hollowing?.sourcePositionsBase64,
-        sourcePositionCount: activeModel.meshModifiers?.hollowing?.sourcePositionCount,
-        blockedVoxelIndices: nextIndices,
-        mode: hollowingState.mode,
-        voxelSizeMm: hollowingState.voxelSizeMm,
-        shellThicknessMm: hollowingState.shellThicknessMm,
-        infillMode: hollowingState.infillMode,
-        infillCellMm: hollowingState.infillCellMm,
-        infillBeamRadiusMm: hollowingState.infillBeamRadiusMm,
-        openFace: hollowingState.openFace,
-        openFaceSelected: hollowingState.mode === 'shell_open_face'
-          ? isShellOpenFaceSelected
-          : true,
-      },
-    });
-  }, [hollowingState, isShellOpenFaceSelected, persistActiveModelModifiers, scene.activeModel]);
-
-  const toggleBlockedHollowVoxelIndex = React.useCallback((voxelIndex: number) => {
-    const currentPreview = hollowPreview;
-    if (!currentPreview || voxelIndex < 0) return;
-
-    let gridVoxelIndex: number;
-
-    const removedCount = currentPreview.removedVoxelIndices.length;
-    if (voxelIndex < removedCount) {
-      // Instance in the removed voxel array — look up grid index directly.
-      gridVoxelIndex = currentPreview.removedVoxelIndices[voxelIndex];
-    } else {
-      // Instance in the appended blocked-only array — look up via
-      // blockedHollowVoxelIndices (committed set, same order as blocked centers).
-      const blockedOffset = voxelIndex - removedCount;
-      gridVoxelIndex = blockedHollowVoxelIndices[blockedOffset];
-    }
-
-    if (!Number.isFinite(gridVoxelIndex)) return;
-
-    const next = new Set(editingBlockedHollowVoxelIndexSet);
-    if (next.has(gridVoxelIndex)) {
-      next.delete(gridVoxelIndex);
-    } else {
-      next.add(gridVoxelIndex);
-    }
-    applyEditingBlockedHollowVoxelIndices(next);
-  }, [applyEditingBlockedHollowVoxelIndices, blockedHollowVoxelIndices, editingBlockedHollowVoxelIndexSet, hollowPreview]);
-
-  const canResetHolePunch = React.useMemo(() => {
-    const activeModel = scene.activeModel;
-    if (!activeModel) return false;
-    return activeHolePunchPlacements.length > 0
-      || (activeModel.meshModifiers?.holePunchAppliedPlacements?.length ?? 0) > 0
-      || Boolean(
-        activeModel.meshModifiers?.holePunchesBakedIntoGeometry
-        && (activeModel.meshModifiers?.holePunches?.length ?? 0) > 0,
-      );
-  }, [activeHolePunchPlacements.length, scene.activeModel]);
-
-  const persistHolePunchPlacementsForModel = React.useCallback((
-    activeModel: NonNullable<typeof scene.activeModel>,
-    placements: HolePunchPlacementState[],
-  ) => {
-    const nextActivePlacements = placements.filter((placement) => placement.modelId === activeModel.id);
-    const nextPersisted = toPersistedHolePunchPlacements(activeModel, nextActivePlacements)
-      .filter((placement) => placement.radiusMm > 0 && placement.depthMm > 0);
-
-    persistActiveModelModifiers({
-      ...(activeModel.meshModifiers ?? {}),
-      holePunches: nextPersisted,
-      holePunchAppliedPlacements: activeModel.meshModifiers?.holePunchAppliedPlacements
-        ?? (activeModel.meshModifiers?.holePunchesBakedIntoGeometry
-          ? (activeModel.meshModifiers?.holePunches ?? [])
-          : []),
-      holePunchesBakedIntoGeometry: false,
-      holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
-      holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
-    });
-  }, [persistActiveModelModifiers]);
-
-  const computeAutoHolePunchDepthMmForGeometry = React.useCallback((
-    model: (typeof scene.models)[number],
-    targetGeometry: THREE.BufferGeometry,
-    worldPoint: THREE.Vector3,
-    worldNormal: THREE.Vector3,
-  ) => {
-
-    const axis = worldNormal.clone();
-    if (axis.lengthSq() <= 1e-10) {
-      return getDefaultHolePunchDepthMm(hollowingState.shellThicknessMm);
-    }
-    axis.normalize();
-
-    const raycaster = holePunchAutoDepthRaycasterRef.current;
-    const rayMesh = holePunchAutoDepthMeshRef.current;
-    rayMesh.geometry = targetGeometry;
-    rayMesh.position.set(
-      -model.geometry.center.x,
-      -model.geometry.center.y,
-      -model.geometry.center.z,
-    );
-    rayMesh.quaternion.copy(quaternionFromGlobalEuler(model.transform.rotation));
-    rayMesh.scale.copy(model.transform.scale);
-    rayMesh.updateMatrixWorld(true);
-
-    const origin = worldPoint.clone().addScaledVector(axis, -HOLE_PUNCH_AUTO_DEPTH_RAY_START_OFFSET_MM);
-    raycaster.ray.origin.copy(origin);
-    raycaster.ray.direction.copy(axis);
-    raycaster.near = 0;
-    raycaster.far = 240;
-
-    const hits = raycaster.intersectObject(rayMesh, false);
-    const distinctDistances: number[] = [];
-    for (const hit of hits) {
-      if (distinctDistances.length > 0 && Math.abs(hit.distance - distinctDistances[distinctDistances.length - 1]) <= 0.05) {
-        continue;
-      }
-      distinctDistances.push(hit.distance);
-      if (distinctDistances.length >= 2) break;
-    }
-
-    if (distinctDistances.length < 2) {
-      return getDefaultHolePunchDepthMm(hollowingState.shellThicknessMm);
-    }
-
-    const shellPathLengthMm = Math.max(
-      HOLE_PUNCH_AUTO_DEPTH_MIN_INSIDE_MM,
-      distinctDistances[1] - distinctDistances[0],
-    );
-    return Number(
-      Math.min(120, shellPathLengthMm + HOLE_PUNCH_DEPTH_OFFSET_FROM_SHELL_MM).toFixed(1),
-    );
-  }, [hollowingState.shellThicknessMm]);
-
-  const computeAutoHolePunchDepthMm = React.useCallback((
-    modelId: string,
-    worldPoint: THREE.Vector3,
-    worldNormal: THREE.Vector3,
-  ) => {
-    const activeModel = scene.models.find((model) => model.id === modelId) ?? null;
-    if (!activeModel) {
-      return getDefaultHolePunchDepthMm(hollowingState.shellThicknessMm);
-    }
-
-    const previewGeometry = (
-      hollowPreview
-      && hollowPreview.modelId === modelId
-      && hollowingDraftEnabled
-    ) ? hollowPreview.geometry : null;
-
-    const shouldUseActiveGeometry = Boolean(
-      scene.getModelMeshModifiers(modelId)?.hollowing?.enabled
-      && scene.getModelMeshModifiers(modelId)?.hollowing?.bakedIntoGeometry,
-    );
-
-    const targetGeometry = previewGeometry ?? (shouldUseActiveGeometry ? activeModel.geometry.geometry : null);
-    if (!targetGeometry) {
-      return getDefaultHolePunchDepthMm(hollowingState.shellThicknessMm);
-    }
-
-    return computeAutoHolePunchDepthMmForGeometry(activeModel, targetGeometry, worldPoint, worldNormal);
-  }, [computeAutoHolePunchDepthMmForGeometry, hollowPreview, hollowingDraftEnabled, hollowingState.shellThicknessMm, scene.models]);
-
-  const buildHolePunchPlacementForHit = React.useCallback((
-    base: Pick<HolePunchPlacementState, 'id' | 'modelId' | 'radiusMm' | 'radiusYMm' | 'depthMm' | 'depthMode'>,
-    hit: THREE.Intersection,
-  ): HolePunchPlacementState => {
-    const localPoint = hit.object.worldToLocal(hit.point.clone());
-    const localNormal = hit.face?.normal
-      ? hit.face.normal.clone().normalize().negate()
-      : new THREE.Vector3(0, 0, -1);
-    const worldNormal = hit.face?.normal
-      ? hit.face.normal.clone().applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld)).normalize().negate()
-      : new THREE.Vector3(0, 0, -1);
-    const resolvedDepthMm = (base.depthMode === 'auto' && canUseAutoHolePunchDepth)
-      ? computeAutoHolePunchDepthMm(base.modelId, hit.point, worldNormal)
-      : base.depthMm;
-
-    return {
-      ...base,
-      worldPoint: hit.point.clone(),
-      worldNormal,
-      worldFrame: createHolePunchWorldFrame(worldNormal),
-      localPoint,
-      localNormal,
-      depthMm: resolvedDepthMm,
-      depthMode: base.depthMode === 'auto' && !canUseAutoHolePunchDepth ? 'manual' : base.depthMode,
-    };
-  }, [canUseAutoHolePunchDepth, computeAutoHolePunchDepthMm]);
-
-  const buildHolePunchPlacementFromHit = React.useCallback((hit: THREE.Intersection, modelId: string): HolePunchPlacementState => {
-    return buildHolePunchPlacementForHit({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      modelId,
-      radiusMm: holePunchState.radiusMm,
-      radiusYMm: holePunchState.radiusYMm,
-      depthMm: holePunchState.depthMm,
-      depthMode: canUseAutoHolePunchDepth ? holePunchState.depthMode : 'manual',
-    }, hit);
-  }, [buildHolePunchPlacementForHit, canUseAutoHolePunchDepth, holePunchState.depthMm, holePunchState.depthMode, holePunchState.radiusMm, holePunchState.radiusYMm]);
-
-  const handleHolePunchClick = React.useCallback((hit: THREE.Intersection) => {
-    const activeModel = scene.activeModel;
-    if (!activeModel) return;
-
-    const hitModelId = (hit.object.userData?.modelId as string | undefined) ?? activeModel.id;
-    if (hitModelId !== activeModel.id) return;
-
-    if (selectedHolePunchPlacementIds.length > 0 && Date.now() < suppressHolePunchGizmoReleaseClickUntilRef.current) {
-      setHolePunchHoverPlacement(null);
-      return;
-    }
-
-    if (hollowingState.mode === 'shell_open_face' && !isShellOpenFaceSelected) {
-      const pickedOpenFace = inferOpenFaceFromHit(hit, hollowingState.openFace);
-        const nextHollowingState: HollowingPanelState = {
-          ...hollowingState,
-          openFace: pickedOpenFace,
-        };
-
-      setHollowingState(nextHollowingState);
-      setIsShellOpenFaceSelected(true);
-      setHollowingDraftEnabled(true);
-      setSelectedHolePunchPlacementIds([]);
-      setHoveredHolePunchPlacementId(null);
-      setHolePunchHoverPlacement(null);
-
-      persistActiveModelModifiers({
-        ...(activeModel.meshModifiers ?? {}),
-        hollowing: {
-          enabled: true,
-          bakedIntoGeometry: false,
-          sourcePositionsBase64: activeModel.meshModifiers?.hollowing?.sourcePositionsBase64,
-          sourcePositionCount: activeModel.meshModifiers?.hollowing?.sourcePositionCount,
-          mode: nextHollowingState.mode,
-          voxelSizeMm: nextHollowingState.voxelSizeMm,
-          shellThicknessMm: nextHollowingState.shellThicknessMm,
-          infillMode: nextHollowingState.infillMode,
-          infillCellMm: nextHollowingState.infillCellMm,
-          infillBeamRadiusMm: nextHollowingState.infillBeamRadiusMm,
-          openFace: nextHollowingState.openFace,
-          openFaceSelected: true,
-        },
-      });
-      return;
-    }
-
-    if (selectedHolePunchPlacementIds.length > 0) {
-      setSelectedHolePunchPlacementIds([]);
-      setHoveredHolePunchPlacementId(null);
-      setHolePunchHoverPlacement(null);
-      return;
-    }
-
-    const placement = buildHolePunchPlacementFromHit(hit, activeModel.id);
-    setHolePunchPlacements((previous) => {
-      const nextPlacements = [...previous, placement];
-      persistHolePunchPlacementsForModel(activeModel, nextPlacements);
-      return nextPlacements;
-    });
-    setSelectedHolePunchPlacementIds([]);
-    setHoveredHolePunchPlacementId(null);
-    setHolePunchHoverPlacement(null);
-  }, [
-    buildHolePunchPlacementFromHit,
-    hollowingState,
-    isShellOpenFaceSelected,
-    persistHolePunchPlacementsForModel,
-    scene.activeModel,
-    selectedHolePunchPlacementIds.length,
-  ]);
-
-  const handleHolePunchHover = React.useCallback((hit: THREE.Intersection | null) => {
-    const activeModel = scene.activeModel;
-    if (
-      holePunchDragStateRef.current
-      || selectedHolePunchPlacementIds.length > 0
-      || !activeModel
-      || !hit
-      || (hollowingState.mode === 'shell_open_face' && !isShellOpenFaceSelected)
-    ) {
-      setHolePunchHoverPlacement(null);
-      return;
-    }
-
-    const hitModelId = (hit.object.userData?.modelId as string | undefined) ?? activeModel.id;
-    if (hitModelId !== activeModel.id) {
-      setHolePunchHoverPlacement(null);
-      return;
-    }
-
-    const placement = buildHolePunchPlacementFromHit(hit, activeModel.id);
-    setHolePunchHoverPlacement(placement);
-  }, [buildHolePunchPlacementFromHit, hollowingState.mode, isShellOpenFaceSelected, scene.activeModel, selectedHolePunchPlacementIds.length]);
-
-  const handleSelectHolePunchPlacement = React.useCallback((
-    placementId: string,
-    selectionMode: 'single' | 'toggle' | 'add' = 'single',
-  ) => {
-    if (suppressHolePunchClickPlacementIdRef.current === placementId) {
-      suppressHolePunchClickPlacementIdRef.current = null;
-      return;
-    }
-    const exists = holePunchPlacements.some((entry) => entry.id === placementId);
-    if (!exists) return;
-
-    setSelectedHolePunchPlacementIds((previous) => {
-      let nextIds: string[];
-      if (selectionMode === 'toggle') {
-        nextIds = previous.includes(placementId)
-          ? previous.filter((id) => id !== placementId)
-          : [...previous, placementId];
-      } else if (selectionMode === 'add') {
-        nextIds = previous.includes(placementId) ? previous : [...previous, placementId];
-      } else {
-        nextIds = [placementId];
-      }
-
-      syncHolePunchPanelFromSelection(nextIds, holePunchPlacements, placementId);
-      return nextIds;
-    });
-  }, [holePunchPlacements, syncHolePunchPanelFromSelection]);
-
-  const handleHolePunchPlacementDragStart = React.useCallback((
-    placementId: string,
-    event: ThreeEvent<PointerEvent>,
-  ) => {
-    if (event.button !== 0) return;
-    if (event.shiftKey || event.ctrlKey || event.metaKey) {
-      handleSelectHolePunchPlacement(
-        placementId,
-        event.ctrlKey || event.metaKey ? 'toggle' : 'add',
-      );
-      return;
-    }
-    holePunchDragStateRef.current = {
-      pointerId: event.pointerId,
-      placementId,
-      moved: false,
-    };
-    suppressHolePunchClickPlacementIdRef.current = null;
-    setHoveredHolePunchPlacementId(placementId);
-    setHolePunchHoverPlacement(null);
-    handleSelectHolePunchPlacement(placementId, 'single');
-    const pointerTarget = event.target as Element | null;
-    pointerTarget?.setPointerCapture?.(event.pointerId);
-  }, [handleSelectHolePunchPlacement]);
-
-  const handleHolePunchPlacementDragMove = React.useCallback((
-    placementId: string,
-    event: ThreeEvent<PointerEvent>,
-    raycastActiveModelFromRay: (ray: THREE.Ray) => THREE.Intersection | null,
-  ) => {
-    const drag = holePunchDragStateRef.current;
-    if (!drag || drag.pointerId !== event.pointerId || drag.placementId !== placementId) return;
-
-    const hit = raycastActiveModelFromRay(event.ray);
-    if (!hit) return;
-
-    drag.moved = true;
-    setHolePunchPlacements((previous) => previous.map((placement) => (
-      placement.id === placementId
-        ? buildHolePunchPlacementForHit(placement, hit)
-        : placement
-    )));
-    setSelectedHolePunchPlacementIds((previous) => (
-      previous.includes(placementId) ? previous : [placementId]
-    ));
-    setHoveredHolePunchPlacementId(placementId);
-    setHolePunchHoverPlacement(null);
-  }, [buildHolePunchPlacementForHit]);
-
-  const handleHolePunchPlacementDragEnd = React.useCallback((
-    placementId: string,
-    event: ThreeEvent<PointerEvent>,
-  ) => {
-    const drag = holePunchDragStateRef.current;
-    if (!drag || drag.pointerId !== event.pointerId || drag.placementId !== placementId) return;
-
-    holePunchDragStateRef.current = null;
-    const pointerTarget = event.target as Element | null;
-    pointerTarget?.releasePointerCapture?.(event.pointerId);
-
-    if (!drag.moved) return;
-
-    suppressHolePunchClickPlacementIdRef.current = placementId;
-    const activeModel = scene.activeModel;
-    if (activeModel) {
-      persistHolePunchPlacementsForModel(activeModel, holePunchPlacementsRef.current);
-    }
-  }, [persistHolePunchPlacementsForModel, scene.activeModel]);
-
-  /**
-   * Gizmo-based placement move — applies the delta directly without snapping
-   * to surface normals, giving the user precise axis-constrained control.
-   */
-  const holePunchGizmoDragRef = React.useRef<{
-    placementId: string;
-    startWorldPoint: THREE.Vector3;
-    startLocalPoint: THREE.Vector3;
-    accumulatedDelta: THREE.Vector3;
-    /** Inverse model matrix (world→local) captured at drag start, used to
-     *  convert the world-space gizmo delta into the model's local coordinate
-     *  space so the persisted localPoint stays accurate for Rust. */
-    inverseModelMatrix: THREE.Matrix4;
-  } | null>(null);
-
-  const handleHolePunchGizmoMoveStart = React.useCallback((placementId: string) => {
-    const placement = holePunchPlacementsRef.current.find((candidate) => candidate.id === placementId);
-    if (!placement) {
-      holePunchGizmoDragRef.current = null;
-      return;
-    }
-
-    // Compute the inverse model matrix so we can convert the world-space
-    // gizmo delta into the model's local coordinate space. This keeps
-    // localPoint accurate for Rust serialization even when the model is
-    // rotated.
-    let inverseModelMatrix: THREE.Matrix4;
-    const activeModel = scene.activeModel;
-    if (activeModel && placement.modelId === activeModel.id) {
-      const meshMatrix = new THREE.Matrix4()
-        .compose(
-          activeModel.transform.position.clone(),
-          quaternionFromGlobalEuler(activeModel.transform.rotation),
-          activeModel.transform.scale.clone(),
-        )
-        .multiply(new THREE.Matrix4().makeTranslation(
-          -activeModel.geometry.center.x,
-          -activeModel.geometry.center.y,
-          -activeModel.geometry.center.z,
-        ));
-      inverseModelMatrix = meshMatrix.invert();
-    } else {
-      // Fallback: identity matrix (world = local), preserves old behavior.
-      inverseModelMatrix = new THREE.Matrix4();
-    }
-
-    holePunchGizmoDragRef.current = {
-      placementId,
-      startWorldPoint: placement.worldPoint.clone(),
-      startLocalPoint: placement.localPoint.clone(),
-      accumulatedDelta: new THREE.Vector3(),
-      inverseModelMatrix,
-    };
-  }, [scene.activeModel]);
-
-  const handleHolePunchGizmoMove = React.useCallback((
-    placementId: string,
-    delta: THREE.Vector3,
-  ) => {
-    const drag = holePunchGizmoDragRef.current;
-    if (!drag || drag.placementId !== placementId) return;
-
-    drag.accumulatedDelta.add(delta);
-    const nextWorldPoint = drag.startWorldPoint.clone().add(drag.accumulatedDelta);
-    // Convert the new world point back to model local space using the
-    // inverse matrix captured at drag start. Directly adding the world-space
-    // delta to the local point would be wrong when the model has a rotation.
-    const nextLocalPoint = nextWorldPoint.clone().applyMatrix4(drag.inverseModelMatrix);
-
-    setHolePunchPlacements((previous) => {
-      const nextPlacements = previous.map((placement) => {
-        if (placement.id !== placementId) return placement;
-        return {
-          ...placement,
-          worldPoint: nextWorldPoint.clone(),
-          localPoint: nextLocalPoint.clone(),
-        };
-      });
-      holePunchPlacementsRef.current = nextPlacements;
-      return nextPlacements;
-    });
-  }, []);
-
-  const handleHolePunchGizmoMoveEnd = React.useCallback((placementId: string) => {
-    if (!holePunchGizmoDragRef.current || holePunchGizmoDragRef.current.placementId !== placementId) return;
-
-    suppressHolePunchGizmoReleaseClickUntilRef.current = Date.now() + 250;
-    holePunchGizmoDragRef.current = null;
-    const activeModel = scene.activeModel;
-    if (activeModel) {
-      persistHolePunchPlacementsForModel(activeModel, holePunchPlacementsRef.current);
-    }
-  }, [persistHolePunchPlacementsForModel, scene.activeModel]);
-
-  /**
-   * Gizmo-based placement rotation — updates the cylinder normal without
-   * snapping, giving the user precise rotational control via the gizmo rings.
-   */
-  const holePunchGizmoRotateRef = React.useRef<{ placementId: string } | null>(null);
-
-  const handleHolePunchGizmoRotateStart = React.useCallback((placementId: string) => {
-    holePunchGizmoRotateRef.current = { placementId };
-  }, []);
-
-  const handleHolePunchGizmoRotate = React.useCallback((
-    placementId: string,
-    newNormal: THREE.Vector3,
-    worldFrame: HolePunchWorldFrame,
-  ) => {
-    if (!holePunchGizmoRotateRef.current || holePunchGizmoRotateRef.current.placementId !== placementId) return;
-
-    // Convert the world-space normal to local space using the inverse
-    // normal matrix, so the persisted direction stays accurate for Rust.
-    let localNormal = newNormal.clone();
-    const activeModel = scene.activeModel;
-    if (activeModel) {
-      const meshMatrix = new THREE.Matrix4()
-        .compose(
-          activeModel.transform.position.clone(),
-          quaternionFromGlobalEuler(activeModel.transform.rotation),
-          activeModel.transform.scale.clone(),
-        )
-        .multiply(new THREE.Matrix4().makeTranslation(
-          -activeModel.geometry.center.x,
-          -activeModel.geometry.center.y,
-          -activeModel.geometry.center.z,
-        ));
-      const normalMatrix = new THREE.Matrix3().getNormalMatrix(meshMatrix);
-      const inverseNormalMatrix = normalMatrix.clone().invert();
-      localNormal = newNormal.clone().applyMatrix3(inverseNormalMatrix).normalize();
-    }
-
-    setHolePunchPlacements((previous) => {
-      const nextPlacements = previous.map((placement) => {
-        if (placement.id !== placementId) return placement;
-        return {
-          ...placement,
-          worldNormal: newNormal.clone(),
-          worldFrame: cloneHolePunchWorldFrame(worldFrame),
-          localNormal,
-        };
-      });
-      holePunchPlacementsRef.current = nextPlacements;
-      return nextPlacements;
-    });
-  }, [scene.activeModel]);
-
-  const handleHolePunchGizmoRotateEnd = React.useCallback((placementId: string) => {
-    if (!holePunchGizmoRotateRef.current || holePunchGizmoRotateRef.current.placementId !== placementId) return;
-
-    suppressHolePunchGizmoReleaseClickUntilRef.current = Date.now() + 250;
-    holePunchGizmoRotateRef.current = null;
-    const activeModel = scene.activeModel;
-    if (activeModel) {
-      persistHolePunchPlacementsForModel(activeModel, holePunchPlacementsRef.current);
-    }
-  }, [persistHolePunchPlacementsForModel, scene.activeModel]);
-
-  const handleDeleteSelectedHolePunchPlacement = React.useCallback(() => {
-    const activeModel = scene.activeModel;
-    if (!activeModel || selectedHolePunchPlacementIds.length === 0) return;
-
-    const selectedIds = new Set(selectedHolePunchPlacementIds);
-    const nextPlacements = holePunchPlacements.filter((placement) => !selectedIds.has(placement.id));
-    const remainingForModel = nextPlacements.filter((p) => p.modelId === activeModel.id);
-    const holesWereBaked = activeModel.meshModifiers?.holePunchesBakedIntoGeometry === true;
-
-    setHolePunchPlacements(nextPlacements);
-    setSelectedHolePunchPlacementIds([]);
-    setHoveredHolePunchPlacementId(null);
-    setHolePunchHoverPlacement(null);
-
-    // If holes were baked and we just deleted the last placement for the
-    // active model, restore the pre-punch geometry so the boolean cut is
-    // actually undone — otherwise the hole remains in the mesh and the
-    // hollowing cache keeps pointing at stale geometry.
-    if (holesWereBaked && remainingForModel.length === 0) {
-      const restored = geometryFromSnapshot({
-        sourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
-        sourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
-      });
-      if (restored) {
-        const restoredGeometry = restored.clone();
-        const replaced = scene.replaceModelGeometry(activeModel.id, restoredGeometry, 'Hole Punching (Removed)');
-        if (!replaced) {
-          restoredGeometry.dispose();
-        }
-        restored.dispose();
-      }
-      hollowingSourceByModelIdRef.current.delete(activeModel.id);
-      // Clear the preview result cache too — it may hold a stale result from
-      // when the hole was still present.
-      for (const [key, entry] of hollowPreviewResultCacheRef.current.entries()) {
-        if (entry.modelId === activeModel.id) {
-          disposeHollowPreviewCacheEntry(entry);
-          hollowPreviewResultCacheRef.current.delete(key);
-        }
-      }
-      persistActiveModelModifiers({
-        ...(activeModel.meshModifiers ?? {}),
-        holePunches: [],
-        holePunchAppliedPlacements: [],
-        holePunchesBakedIntoGeometry: false,
-        // Clear the source snapshot — pre-punch geometry was already restored
-        // so there's nothing left to apply.
-        holePunchSourcePositionsBase64: undefined,
-        holePunchSourcePositionCount: undefined,
-      });
-    } else {
-      persistHolePunchPlacementsForModel(activeModel, nextPlacements);
-    }
-  }, [holePunchPlacements, persistActiveModelModifiers, persistHolePunchPlacementsForModel, scene.activeModel, selectedHolePunchPlacementIds]);
-
-  React.useEffect(() => {
-    const unregister = registerDeleteHandler(
-      () => (
-        scene.mode === 'prepare'
-        && transformMgr.transformMode === 'hollowing'
-        && selectedHolePunchPlacementIds.length > 0
-        && selectedHolePunchPlacements.some((placement) => placement.modelId === scene.activeModel?.id)
-      ),
-      handleDeleteSelectedHolePunchPlacement,
-      50,
-    );
-
-    return () => {
-      unregister();
-    };
-  }, [
-    handleDeleteSelectedHolePunchPlacement,
-    scene.activeModel?.id,
-    scene.mode,
-    selectedHolePunchPlacementIds.length,
-    selectedHolePunchPlacements,
-    transformMgr.transformMode,
-  ]);
-
-  const handleHolePunchStateChange = React.useCallback((next: HolePunchPanelState) => {
-    const normalizedNext: HolePunchPanelState = canUseAutoHolePunchDepth
-      ? next
-      : { ...next, depthMode: 'manual' };
-    setHolePunchState(normalizedNext);
-    setHolePunchPlacements((previous) => {
-      if (selectedHolePunchPlacementIds.length === 0) return previous;
-      const nextPlacements = previous.map((placement) => (
-        selectedHolePunchPlacementIdSet.has(placement.id)
-          ? {
-              ...placement,
-              radiusMm: normalizedNext.radiusMm,
-              radiusYMm: normalizedNext.radiusYMm,
-              depthMm: normalizedNext.depthMode === 'auto'
-                ? computeAutoHolePunchDepthMm(placement.modelId, placement.worldPoint, placement.worldNormal)
-                : normalizedNext.depthMm,
-              depthMode: normalizedNext.depthMode,
-            }
-          : placement
-      ));
-
-      const activeModel = scene.activeModel;
-      if (activeModel) {
-        persistHolePunchPlacementsForModel(activeModel, nextPlacements);
-      }
-
-      return nextPlacements;
-    });
-  }, [
-    canUseAutoHolePunchDepth,
-    computeAutoHolePunchDepthMm,
-    persistHolePunchPlacementsForModel,
-    scene.activeModel,
-    selectedHolePunchPlacementIdSet,
-    selectedHolePunchPlacementIds.length,
-  ]);
-
-  const handleResetHolePunch = React.useCallback(() => {
-    const activeModel = scene.activeModel;
-    const activeModelId = activeModel?.id ?? null;
-    if (!activeModelId || !activeModel) return;
-
-    const restored = geometryFromSnapshot({
-      sourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
-      sourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
-    });
-    if (restored) {
-      const restoredGeometry = restored.clone();
-      const replaced = scene.replaceModelGeometry(activeModel.id, restoredGeometry, 'Reset Hole Punching');
-      if (!replaced) {
-        restoredGeometry.dispose();
-      }
-      restored.dispose();
-    }
-
-    // Pre-punch geometry was restored — invalidate the hollowing source cache
-    // so the next hollowing preview uses the hole-free geometry.
-    hollowingSourceByModelIdRef.current.delete(activeModel.id);
-
-    setHolePunchPlacements((previous) => {
-      const updated = previous.filter((placement) => placement.modelId !== activeModelId);
-      persistActiveModelModifiers({
-        ...(activeModel.meshModifiers ?? {}),
-        holePunches: [],
-        holePunchAppliedPlacements: [],
-        // Pre-punch geometry was restored — no holes are baked into it.
-        holePunchesBakedIntoGeometry: false,
-        holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
-        holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
-      });
-      return updated;
-    });
-    setHolePunchState(defaultHolePunchState);
-    setSelectedHolePunchPlacementIds([]);
-    setHoveredHolePunchPlacementId(null);
-    setHolePunchHoverPlacement(null);
-  }, [defaultHolePunchState, persistActiveModelModifiers, scene.activeModel]);
-
-  const requestResetHollowing = React.useCallback(() => {
-    if (!canResetHollowing || isApplyingHollowing || isPreviewingHollowing) return;
-    setPendingModifierResetAction('hollowing');
-  }, [canResetHollowing, isApplyingHollowing, isPreviewingHollowing]);
-
-  const requestClearAppliedHollowing = React.useCallback(() => {
-    setPendingModifierResetAction('clear_hollowing');
-  }, []);
-
-  const requestResetHolePunch = React.useCallback(() => {
-    if (!canResetHolePunch || isApplyingHolePunch) return;
-    const activeModel = scene.activeModel;
-    const hasAppliedOrBakedPunches = (activeModel?.meshModifiers?.holePunchAppliedPlacements?.length ?? 0) > 0
-      || Boolean(
-        activeModel?.meshModifiers?.holePunchesBakedIntoGeometry
-        && (activeModel?.meshModifiers?.holePunches?.length ?? 0) > 0,
-      );
-    if (!hasAppliedOrBakedPunches) {
-      // Only un-applied draft punches — skip confirmation.
-      handleResetHolePunch();
-      return;
-    }
-    setPendingModifierResetAction('hole_punch');
-  }, [canResetHolePunch, handleResetHolePunch, isApplyingHolePunch, scene.activeModel]);
+  // Relocated from the early state block: depends on hollowPreview which is now
+  // produced by useHollowingManager (declared above, after transformMgr).
+  const shouldForceHollowingXray = scene.mode === 'prepare'
+    && transformMgr.transformMode === 'hollowing'
+    && !scene.activeModel?.meshModifiers?.hollowing?.bakedIntoGeometry;
+  const effectiveShaderType = (shouldForceHollowingXray || hollowPreview)
+    ? 'xray'
+    : (sessionShaderOverride ?? scene.shaderType);
+
+  // Populate the hollowing manager deps now that the hole-punch manager and
+  // shared callbacks exist (breaks the TDZ/dependency cycle).
+  hollowingDepsRef.current = {
+    showOperationError,
+    setShowDamagedModelDialog,
+    beginFinalizing,
+    clearFinalizing,
+    nextPaint,
+    persistActiveModelModifiers,
+    setPendingModifierResetAction,
+    setInteriorView,
+    setSessionShaderOverride,
+    computeAutoHolePunchDepthMmForGeometry,
+    setHolePunchState,
+    setHolePunchPlacements,
+    holePunchPlacementsRef,
+    setPendingHolePunchAutoApplyModelId,
+    setPendingBlockerResetState,
+    setSelectedHolePunchPlacementIds,
+    setHoveredHolePunchPlacementId,
+    setHolePunchHoverPlacement,
+    interiorView,
+  };
 
   const handleConfirmModifierReset = React.useCallback(() => {
     const action = pendingModifierResetAction;
@@ -17283,6 +8963,7 @@ export default function Home() {
         enabled: true,
         bakedIntoGeometry: false,
         blockedVoxelIndices,
+        blockedVoxelRotationQuat: undefined,
         mode: next.mode,
         voxelSizeMm: next.voxelSizeMm,
         shellThicknessMm: next.shellThicknessMm,
@@ -17295,548 +8976,7 @@ export default function Home() {
     });
   }, [defaultHollowingState, hollowingState, pendingBlockerResetState, persistActiveModelModifiers, scene.activeModel]);
 
-  const handleApplyHolePunch = React.useCallback(() => {
-    void (async () => {
-      const activeModel = scene.activeModel;
-      if (!activeModel) return;
 
-      const placements = activeHolePunchPlacements;
-      const persisted = toPersistedHolePunchPlacements(activeModel, placements)
-        .filter((placement) => placement.radiusMm > 0 && placement.depthMm > 0);
-
-      const bakedPlacements = activeModel.meshModifiers?.holePunches ?? [];
-      const bakedPlacementSignaturesById = new Map<string, string>();
-      for (const placement of bakedPlacements) {
-        bakedPlacementSignaturesById.set(placement.id, serializeSingleHolePunchPlacement(placement));
-      }
-
-      const draftPlacementSignaturesById = new Map<string, string>();
-      for (const placement of persisted) {
-        draftPlacementSignaturesById.set(placement.id, serializeSingleHolePunchPlacement(placement));
-      }
-
-      const bakedPlacementsUnchanged = bakedPlacements.every((placement) => (
-        draftPlacementSignaturesById.get(placement.id) === serializeSingleHolePunchPlacement(placement)
-      ));
-
-      const appendOnlyNewPlacements = (
-        activeModel.meshModifiers?.holePunchesBakedIntoGeometry
-        && bakedPlacementsUnchanged
-        && persisted.length > bakedPlacements.length
-      )
-        ? persisted.filter((placement) => !bakedPlacementSignaturesById.has(placement.id))
-        : [];
-
-      const hasStoredPunchSource = Boolean(
-        activeModel.meshModifiers?.holePunchSourcePositionsBase64
-        && Number.isFinite(activeModel.meshModifiers?.holePunchSourcePositionCount)
-        && (activeModel.meshModifiers?.holePunchSourcePositionCount ?? 0) > 0,
-      );
-
-      const useAppendOnlyFastPath = Boolean(
-        activeModel.meshModifiers?.holePunchesBakedIntoGeometry
-        && hasStoredPunchSource
-        && appendOnlyNewPlacements.length > 0,
-      );
-
-      const punchesToApply = useAppendOnlyFastPath
-        ? appendOnlyNewPlacements
-        : persisted;
-
-      if (persisted.length === 0) {
-        const restored = geometryFromSnapshot({
-          sourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
-          sourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
-        });
-
-        if (restored) {
-          const restoredGeometry = restored.clone();
-          const replaced = scene.replaceModelGeometry(activeModel.id, restoredGeometry, 'Hole Punching (Removed)');
-          if (!replaced) {
-            restoredGeometry.dispose();
-          }
-          restored.dispose();
-        }
-
-        // Pre-punch geometry was restored — clear the hollowing cache so the
-        // next preview resolves from the hole-free geometry.
-        hollowingSourceByModelIdRef.current.delete(activeModel.id);
-
-        persistActiveModelModifiers({
-          ...(activeModel.meshModifiers ?? {}),
-          holePunches: [],
-          holePunchAppliedPlacements: [],
-          // No holes remain in the geometry after restoring the pre-punch source.
-          holePunchesBakedIntoGeometry: false,
-          holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
-          holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
-        });
-        return;
-      }
-
-      setIsApplyingHolePunch(true);
-      await sleep(0);
-      try {
-        let sourceGeometry: THREE.BufferGeometry;
-        let ownsSourceGeometry = false;
-        let sourceSnapshot: {
-          sourcePositionsBase64: string;
-          sourcePositionCount: number;
-        };
-
-        if (useAppendOnlyFastPath) {
-          sourceGeometry = activeModel.geometry.geometry.clone();
-          ownsSourceGeometry = true;
-          sourceSnapshot = {
-            sourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64 ?? '',
-            sourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount ?? 0,
-          };
-        } else if (hasStoredPunchSource) {
-          const restoredFromSnapshot = geometryFromSnapshot({
-            sourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
-            sourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
-          });
-
-          if (!restoredFromSnapshot) {
-            showOperationError('Hole punch source snapshot is missing or invalid. Re-apply cannot continue.');
-            return;
-          }
-
-          sourceGeometry = restoredFromSnapshot;
-          ownsSourceGeometry = true;
-          sourceSnapshot = snapshotGeometryPositions(sourceGeometry);
-        } else {
-          sourceGeometry = activeModel.geometry.geometry.clone();
-          ownsSourceGeometry = true;
-          sourceSnapshot = snapshotGeometryPositions(sourceGeometry);
-        }
-
-        const sourceBbox = sourceGeometry.boundingBox
-          ?? new THREE.Box3().setFromBufferAttribute(sourceGeometry.getAttribute('position') as THREE.BufferAttribute);
-        const sourceSize = sourceBbox.getSize(new THREE.Vector3());
-        const toMm = (norm: number, min: number, span: number) => min + (norm * (span <= 1e-9 ? 0 : span));
-        const toNorm = (value: number, min: number, span: number) => (span <= 1e-9 ? 0.5 : (value - min) / span);
-
-        const punchOptions: PunchOptions = {
-          punches: punchesToApply.map((placement) => {
-            const axis = new THREE.Vector3(
-              placement.direction[0],
-              placement.direction[1],
-              placement.direction[2],
-            );
-            if (axis.lengthSq() <= 1e-12) {
-              axis.set(0, 0, -1);
-            } else {
-              axis.normalize();
-            }
-
-            const axisScaleFactor = getDirectionScaleFactor(axis, activeModel.transform.scale);
-            const radialScaleFactor = getRadialScaleFactor(axis, activeModel.transform.scale);
-            const localOutsideProtrusionMm = worldMmToLocalMm(
-              HOLE_PUNCH_OUTSIDE_PROTRUSION_MM,
-              axisScaleFactor,
-            );
-            const localDepthMm = worldMmToLocalMm(placement.depthMm, axisScaleFactor);
-            const localRadiusMm = worldMmToLocalMm(placement.radiusMm, radialScaleFactor);
-            const localRadiusYMm = placement.radiusYMm != null
-              ? worldMmToLocalMm(placement.radiusYMm, radialScaleFactor)
-              : undefined;
-
-            const surfaceCenterMm = new THREE.Vector3(
-              toMm(placement.centerNorm[0], sourceBbox.min.x, sourceSize.x),
-              toMm(placement.centerNorm[1], sourceBbox.min.y, sourceSize.y),
-              toMm(placement.centerNorm[2], sourceBbox.min.z, sourceSize.z),
-            );
-
-            // Punch kernel expects cylinder start at centerNorm and extends along
-            // direction for lengthMm. Shift start slightly opposite axis so cut
-            // spans outside protrusion + requested depth inside.
-            const shiftedStartMm = surfaceCenterMm.clone().add(
-              axis.clone().multiplyScalar(-localOutsideProtrusionMm),
-            );
-
-            const shiftedStartNorm: [number, number, number] = [
-              toNorm(shiftedStartMm.x, sourceBbox.min.x, sourceSize.x),
-              toNorm(shiftedStartMm.y, sourceBbox.min.y, sourceSize.y),
-              toNorm(shiftedStartMm.z, sourceBbox.min.z, sourceSize.z),
-            ];
-
-            // No longer clamp centerNorm to [0,1] — the Rust backend now
-            // accepts out-of-bounds values so holes pulled outside the model
-            // bbox via the gizmo stay exactly where the user positioned them.
-            // The outside-protrusion shift may push the start past the bbox
-            // boundary; compute the effective extra length from the actual
-            // (unclamped) offset between surface center and shifted start.
-            const shiftedStartMmActual = new THREE.Vector3(
-              toMm(shiftedStartNorm[0], sourceBbox.min.x, sourceSize.x),
-              toMm(shiftedStartNorm[1], sourceBbox.min.y, sourceSize.y),
-              toMm(shiftedStartNorm[2], sourceBbox.min.z, sourceSize.z),
-            );
-
-            const effectiveOutsideMm = Math.max(
-              0,
-              surfaceCenterMm.clone().sub(shiftedStartMmActual).dot(axis),
-            );
-
-            return {
-              centerNorm: shiftedStartNorm,
-              radiusMm: localRadiusMm,
-              radiusYMm: localRadiusYMm,
-              direction: [axis.x, axis.y, axis.z] as [number, number, number],
-              lengthMm: localDepthMm + effectiveOutsideMm,
-            };
-          }),
-        };
-
-        const punchSourceKey = useAppendOnlyFastPath
-          ? `${activeModel.id}::append:${buildGeometryVersionKey(activeModel.geometry.geometry)}::${appendOnlyNewPlacements.length}`
-          : hasStoredPunchSource
-          ? `${activeModel.id}::hole-source:${activeModel.meshModifiers?.holePunchSourcePositionCount ?? 0}:${activeModel.meshModifiers?.holePunchSourcePositionsBase64?.length ?? 0}`
-          : `${activeModel.id}::geom:${buildGeometryVersionKey(activeModel.geometry.geometry)}`;
-
-        const staged = await stagePunchSource(sourceGeometry, punchSourceKey);
-        if (!staged) {
-          if (ownsSourceGeometry) {
-            sourceGeometry.dispose();
-          }
-          showOperationError('Hole punching is available in DragonFruit Desktop only.');
-          return;
-        }
-
-        const result = await punchFromCapturedSource(punchOptions);
-        if (!result) {
-          if (ownsSourceGeometry) {
-            sourceGeometry.dispose();
-          }
-          showOperationError('Hole punching is available in DragonFruit Desktop only.');
-          return;
-        }
-
-        // Detect manifold boolean failure: if the output triangle count matches
-        // the source (mesh unchanged) despite valid punches, the mesh is too
-        // damaged for boolean operations. We compare output vs source rather
-        // than removedTriangleCount because manifold re-triangulation can
-        // increase the triangle count (e.g., 136 → 210), making a saturating
-        // subtraction report zero triangles removed even when the boolean
-        // succeeded (non-hollowed meshes are especially prone to this).
-        if (result.report.outputTriangleCount === result.report.sourceTriangleCount && result.report.punchCount > 0) {
-          if (ownsSourceGeometry) {
-            sourceGeometry.dispose();
-          }
-          setShowDamagedModelDialog(true);
-          return;
-        }
-
-        const nextGeometry = new THREE.BufferGeometry();
-        nextGeometry.setAttribute('position', new THREE.BufferAttribute(result.positions, 3));
-        nextGeometry.computeVertexNormals();
-        nextGeometry.computeBoundingBox();
-        nextGeometry.computeBoundingSphere();
-
-        const replaced = scene.replaceModelGeometry(
-          activeModel.id,
-          nextGeometry,
-          `Hole Punching (${result.report.outputTriangleCount.toLocaleString()} tris)`,
-        );
-        if (!replaced) {
-          if (ownsSourceGeometry) {
-            sourceGeometry.dispose();
-          }
-          nextGeometry.dispose();
-          return;
-        }
-
-        if (ownsSourceGeometry) {
-          sourceGeometry.dispose();
-        }
-
-        // Hole-punched geometry just replaced the model — invalidate the
-        // hollowing source cache so future hollowing previews resolve from
-        // the current (hole-punched) geometry rather than a stale snapshot.
-        hollowingSourceByModelIdRef.current.delete(activeModel.id);
-
-        persistActiveModelModifiers({
-          ...(activeModel.meshModifiers ?? {}),
-          holePunches: persisted,
-          holePunchAppliedPlacements: persisted,
-          holePunchesBakedIntoGeometry: true,
-          holePunchSourcePositionsBase64: sourceSnapshot.sourcePositionsBase64,
-          holePunchSourcePositionCount: sourceSnapshot.sourcePositionCount,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        showOperationError(`Hole punching failed: ${message}`);
-      } finally {
-        setIsApplyingHolePunch(false);
-      }
-    })();
-  }, [activeHolePunchPlacements, persistActiveModelModifiers, scene, sleep]);
-
-  React.useEffect(() => {
-    if (!pendingHolePunchAutoApplyModelId) return;
-    if (isApplyingHollowing || isApplyingHolePunch) return;
-
-    const activeModel = scene.activeModel;
-    if (!activeModel || activeModel.id !== pendingHolePunchAutoApplyModelId) {
-      return;
-    }
-
-    if ((activeModel.meshModifiers?.holePunches?.length ?? 0) === 0) {
-      setPendingHolePunchAutoApplyModelId(null);
-      return;
-    }
-
-    setPendingHolePunchAutoApplyModelId(null);
-    handleApplyHolePunch();
-  }, [
-    handleApplyHolePunch,
-    isApplyingHolePunch,
-    isApplyingHollowing,
-    pendingHolePunchAutoApplyModelId,
-    scene.activeModel,
-  ]);
-
-  const clearPendingHollowPreviewDebounce = React.useCallback(() => {
-    if (hollowPreviewDebounceTimerRef.current !== null) {
-      clearTimeout(hollowPreviewDebounceTimerRef.current);
-      hollowPreviewDebounceTimerRef.current = null;
-    }
-  }, []);
-
-  const resolveHollowPreviewSourceGeometry = React.useCallback((activeModel: (typeof scene.models)[number]) => {
-    const sourceEntry = hollowingSourceByModelIdRef.current.get(activeModel.id);
-    if (sourceEntry) {
-      return sourceEntry.geometry;
-    }
-
-    // Only restore from the hollowing snapshot if hollowing is actually baked
-    // (or at least enabled). If hollowing was reset/cleared, the snapshot is a
-    // stale copy of the pre-hollowing geometry which may have holes that have
-    // since been removed — using it would make the preview ignore hole changes.
-    const h = activeModel.meshModifiers?.hollowing;
-    const snapshotIsValid = h?.sourcePositionsBase64 && (h.bakedIntoGeometry || h.enabled);
-    const restoredFromSnapshot = snapshotIsValid
-      ? geometryFromSnapshot(h)
-      : null;
-    if (restoredFromSnapshot) {
-      hollowingSourceByModelIdRef.current.set(activeModel.id, { geometry: restoredFromSnapshot });
-      return restoredFromSnapshot;
-    }
-
-    return activeModel.geometry.geometry;
-  }, []);
-
-  const buildHollowingOptions = React.useCallback((
-    modelScale: THREE.Vector3,
-    maxExtent: number,
-    tuning?: { preview?: boolean; previewShellThicknessMm?: number },
-    stateOverride?: HollowingPanelState,
-  ): HollowOptions => {
-    const preview = Boolean(tuning?.preview);
-    const state = stateOverride ?? hollowingState;
-    const effectiveHollowMode = state.mode === 'shell_open_face'
-      ? 'cavity'
-      : state.mode;
-    const voxelResolution = computeVoxelResolution(
-      worldMmToLocalMm(state.voxelSizeMm, getUniformScaleFactorForThickness(modelScale)),
-      maxExtent,
-    );
-    const shellThicknessMmWorld = preview
-      ? (tuning?.previewShellThicknessMm ?? state.shellThicknessMm)
-      : state.shellThicknessMm;
-    const hasCommittedBlockedVoxels = blockedHollowVoxelIndices.length > 0;
-
-    return {
-      mode: effectiveHollowMode,
-      voxelResolution,
-      shellThicknessMm: worldMmToLocalMm(
-        shellThicknessMmWorld,
-        getUniformScaleFactorForThickness(modelScale),
-      ),
-      blockedVoxelIndices: blockedHollowVoxelIndices,
-      infillMode: state.infillMode,
-      infillCellMm: worldMmToLocalMm(
-        state.infillCellMm,
-        getUniformScaleFactorForThickness(modelScale),
-      ),
-      infillBeamRadiusMm: worldMmToLocalMm(
-        state.infillBeamRadiusMm,
-        getUniformScaleFactorForThickness(modelScale),
-      ),
-      openFace: state.openFace,
-      drainHoles: [],
-      previewCavityOnly: false,
-      smoothInternalSurfaces: !preview || hasCommittedBlockedVoxels,
-      internalChamferPasses: !preview || hasCommittedBlockedVoxels ? 2 : 0,
-    };
-  }, [
-    hollowingState.mode,
-    hollowingState.openFace,
-    hollowingState.infillMode,
-    hollowingState.infillBeamRadiusMm,
-    hollowingState.infillCellMm,
-    hollowingState.shellThicknessMm,
-    hollowingState.voxelSizeMm,
-    blockedHollowVoxelIndices,
-  ]);
-
-  const buildHollowPreviewRequest = React.useCallback((
-    activeModel: (typeof scene.models)[number],
-    overrideState?: HollowingPanelState,
-  ) => {
-    const previewState = overrideState ?? hollowingState;
-    const previewShellThicknessMm = quantizePreviewShellThicknessMm(previewState.shellThicknessMm);
-    const sourceGeometry = resolveHollowPreviewSourceGeometry(activeModel);
-    const sourceGeometryKey = buildGeometryVersionKey(sourceGeometry);
-    const bbox = sourceGeometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
-      sourceGeometry.getAttribute('position') as THREE.BufferAttribute,
-    );
-    const bboxSize = bbox.getSize(new THREE.Vector3());
-    const maxExtent = Math.max(bboxSize.x, bboxSize.y, bboxSize.z);
-    const previewQuat = new THREE.Quaternion().setFromEuler(activeModel.transform.rotation);
-    const options: HollowOptions = {
-      ...buildHollowingOptions(activeModel.transform.scale, maxExtent, {
-        preview: true,
-        previewShellThicknessMm,
-      }, previewState),
-      drainHoles: [],
-      previewCavityOnly: true,
-      previewVoxelSpheres: true,
-      rotationQuat: [previewQuat.x, previewQuat.y, previewQuat.z, previewQuat.w],
-    };
-    const optionsKey = JSON.stringify(options);
-    const previewKey = `${activeModel.id}::${sourceGeometryKey}::${optionsKey}`;
-
-    return {
-      sourceGeometry,
-      sourceGeometryKey,
-      options,
-      previewKey,
-    };
-  }, [
-    buildHollowingOptions,
-    hollowingState.shellThicknessMm,
-    hollowingState.voxelSizeMm,
-    resolveHollowPreviewSourceGeometry,
-  ]);
-
-  const cacheHollowPreviewResult = React.useCallback((
-    activeModelId: string,
-    report: HollowReport,
-    positions: Float32Array,
-    infillPositions: Float32Array | undefined,
-    removedVoxelCenters: Float32Array | undefined,
-    removedVoxelIndices: Uint32Array | undefined,
-    blockedVoxelCenters: Float32Array | undefined,
-    previewKey: string,
-  ) => {
-    const cachedPositions = new Float32Array(positions.length);
-    cachedPositions.set(positions);
-    const cachedRemovedVoxelCenters = removedVoxelCenters
-      ? new Float32Array(removedVoxelCenters)
-      : undefined;
-    const cachedRemovedVoxelIndices = removedVoxelIndices
-      ? new Uint32Array(removedVoxelIndices)
-      : undefined;
-    const cachedBlockedVoxelCenters = blockedVoxelCenters
-      ? new Float32Array(blockedVoxelCenters)
-      : undefined;
-
-    hollowPreviewResultCacheRef.current.set(previewKey, {
-      modelId: activeModelId,
-      report,
-      positions: cachedPositions,
-      infillPositions,
-      removedVoxelCenters: cachedRemovedVoxelCenters,
-      removedVoxelIndices: cachedRemovedVoxelIndices,
-      blockedVoxelCenters: cachedBlockedVoxelCenters,
-      previewGeometry: null,
-      infillGeometry: null,
-    });
-
-    if (hollowPreviewResultCacheRef.current.size > 6) {
-      const oldest = hollowPreviewResultCacheRef.current.keys().next().value;
-      if (oldest != null) {
-        const evicted = hollowPreviewResultCacheRef.current.get(oldest);
-        if (evicted) {
-          disposeHollowPreviewCacheEntry(evicted);
-        }
-        hollowPreviewResultCacheRef.current.delete(oldest);
-      }
-    }
-
-    return cachedPositions;
-  }, []);
-
-  const materializeHollowPreviewCacheEntry = React.useCallback((previewKey: string) => {
-    const cached = hollowPreviewResultCacheRef.current.get(previewKey);
-    if (!cached) return null;
-
-    if (!cached.previewGeometry) {
-      cached.previewGeometry = createGeometryFromPreviewPositions(cached.positions);
-    }
-
-    if (cached.infillPositions && !cached.infillGeometry) {
-      cached.infillGeometry = createGeometryFromPreviewPositions(cached.infillPositions);
-    }
-
-    return cached;
-  }, []);
-
-  const primeHollowPreviewCache = React.useCallback(async (
-    activeModel: (typeof scene.models)[number],
-    overrideState?: HollowingPanelState,
-  ) => {
-    const { sourceGeometry, sourceGeometryKey, options, previewKey } = buildHollowPreviewRequest(activeModel, overrideState);
-
-    if (hollowPreviewResultCacheRef.current.has(previewKey) || hollowPreviewWarmupKeyRef.current === previewKey) {
-      return;
-    }
-
-    hollowPreviewWarmupKeyRef.current = previewKey;
-    try {
-      const staged = await stageHollowPreviewSource(
-        sourceGeometry,
-        `${activeModel.id}::${sourceGeometryKey}`,
-      );
-      if (!staged) {
-        return;
-      }
-
-      const result = await hollowPreviewFromCapturedSource(options);
-      if (!result) {
-        return;
-      }
-
-      cacheHollowPreviewResult(
-        activeModel.id,
-        result.report,
-        result.positions,
-        result.infillPositions,
-        result.removedVoxelCenters,
-        result.removedVoxelIndices,
-        result.blockedVoxelCenters,
-        previewKey,
-      );
-
-      const scheduleMaterialize = typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function'
-        ? (cb: () => void) => window.requestIdleCallback(() => cb())
-        : (cb: () => void) => window.setTimeout(cb, 0);
-      scheduleMaterialize(() => {
-        try {
-          materializeHollowPreviewCacheEntry(previewKey);
-        } catch (error) {
-          console.warn('[Hollowing] Failed to materialize cached preview geometry:', error);
-        }
-      });
-    } catch (error) {
-      console.warn('[Hollowing] Warm preview prime failed:', error);
-    } finally {
-      if (hollowPreviewWarmupKeyRef.current === previewKey) {
-        hollowPreviewWarmupKeyRef.current = null;
-      }
-    }
-  }, [buildHollowPreviewRequest, cacheHollowPreviewResult, materializeHollowPreviewCacheEntry]);
 
   const handleTransformToolbarHover = React.useCallback((mode: TransformMode | null) => {
     if (mode === 'hollowing') {
@@ -17868,377 +9008,6 @@ export default function Home() {
     scene.mode,
   ]);
 
-  const runHollowPreview = React.useCallback(async ({
-    activeModel,
-    sourceGeometry,
-    sourceGeometryKey,
-    options,
-    previewKey,
-    notifyUnavailable,
-  }: {
-    activeModel: (typeof scene.models)[number];
-    sourceGeometry: THREE.BufferGeometry;
-    sourceGeometryKey: string;
-    options: HollowOptions;
-    previewKey: string;
-    notifyUnavailable: boolean;
-  }) => {
-    const requestSeq = ++hollowPreviewRequestSeqRef.current;
-    setIsPreviewingHollowing(true);
-
-    try {
-      const cached = hollowPreviewResultCacheRef.current.get(previewKey);
-      if (cached) {
-        hollowPreviewResultCacheRef.current.delete(previewKey);
-        hollowPreviewResultCacheRef.current.set(previewKey, cached);
-        const materialized = materializeHollowPreviewCacheEntry(previewKey) ?? cached;
-        const previewGeometry = materialized.previewGeometry ?? createGeometryFromPreviewPositions(materialized.positions);
-        const infillGeometry = materialized.infillGeometry
-          ?? (materialized.infillPositions ? createGeometryFromPreviewPositions(materialized.infillPositions) : null);
-        if (hollowPreviewRequestSeqRef.current !== requestSeq) {
-          disposeHollowPreviewGeometryIfUncached(previewGeometry, hollowPreviewResultCacheRef.current.values());
-          disposeHollowPreviewGeometryIfUncached(infillGeometry, hollowPreviewResultCacheRef.current.values());
-          return;
-        }
-
-        setHollowPreview((previous) => {
-          if (previous) {
-            disposeHollowPreviewGeometryIfUncached(previous.geometry, hollowPreviewResultCacheRef.current.values());
-            disposeHollowPreviewGeometryIfUncached(previous.infillGeometry ?? null, hollowPreviewResultCacheRef.current.values());
-          }
-          return {
-            modelId: cached.modelId,
-            geometry: previewGeometry,
-            infillGeometry,
-            removedVoxelCenters: cached.removedVoxelCenters ?? new Float32Array(0),
-            removedVoxelIndices: cached.removedVoxelIndices ?? new Uint32Array(0),
-            blockedVoxelCenters: cached.blockedVoxelCenters,
-            report: cached.report,
-            previewKey,
-            previewVoxelSpheres: true,
-          };
-        });
-        return;
-      }
-
-      const staged = await stageHollowPreviewSource(
-        sourceGeometry,
-        `${activeModel.id}::${sourceGeometryKey}`,
-      );
-      if (!staged) {
-        if (notifyUnavailable) {
-          showOperationError('Hollowing preview is available in DragonFruit Desktop only.');
-        }
-        return;
-      }
-
-      const result = await hollowPreviewFromCapturedSource(options);
-      if (!result) {
-        if (notifyUnavailable) {
-          showOperationError('Hollowing preview is available in DragonFruit Desktop only.');
-        }
-        return;
-      }
-
-      const cachedPositions = cacheHollowPreviewResult(
-        activeModel.id,
-        result.report,
-        result.positions,
-        result.infillPositions,
-        result.removedVoxelCenters,
-        result.removedVoxelIndices,
-        result.blockedVoxelCenters,
-        previewKey,
-      );
-      const materialized = materializeHollowPreviewCacheEntry(previewKey);
-
-      const previewGeometry = materialized?.previewGeometry
-        ?? createGeometryFromPreviewPositions(cachedPositions);
-      const infillGeometry = materialized?.infillGeometry
-        ?? (result.infillPositions
-          ? createGeometryFromPreviewPositions(result.infillPositions)
-          : null);
-
-      if (hollowPreviewRequestSeqRef.current !== requestSeq) {
-        disposeHollowPreviewGeometryIfUncached(previewGeometry, hollowPreviewResultCacheRef.current.values());
-        disposeHollowPreviewGeometryIfUncached(infillGeometry, hollowPreviewResultCacheRef.current.values());
-        return;
-      }
-
-      setHollowPreview((previous) => {
-        if (previous) {
-          disposeHollowPreviewGeometryIfUncached(previous.geometry, hollowPreviewResultCacheRef.current.values());
-          disposeHollowPreviewGeometryIfUncached(previous.infillGeometry ?? null, hollowPreviewResultCacheRef.current.values());
-        }
-        return {
-          modelId: activeModel.id,
-          geometry: previewGeometry,
-          infillGeometry,
-          removedVoxelCenters: result.removedVoxelCenters ?? new Float32Array(0),
-          removedVoxelIndices: result.removedVoxelIndices ?? new Uint32Array(0),
-          blockedVoxelCenters: result.blockedVoxelCenters,
-          report: result.report,
-          previewKey,
-          previewVoxelSpheres: true,
-        };
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (notifyUnavailable) {
-        showOperationError(`Hollowing preview failed: ${message}`);
-      } else {
-        console.warn('[Hollowing] Debounced preview failed:', message);
-      }
-    } finally {
-      if (hollowPreviewRequestSeqRef.current === requestSeq) {
-        setIsPreviewingHollowing(false);
-        setIsApplyingBlockersHollowing(false);
-      }
-    }
-  }, [cacheHollowPreviewResult, scene.models]);
-
-  const clearHollowPreview = React.useCallback(() => {
-    hollowPreviewRequestSeqRef.current += 1;
-    setIsPreviewingHollowing(false);
-    clearPendingHollowPreviewDebounce();
-    setHollowPreview((previous) => {
-      if (previous) {
-        disposeHollowPreviewGeometryIfUncached(previous.geometry, hollowPreviewResultCacheRef.current.values());
-        disposeHollowPreviewGeometryIfUncached(previous.infillGeometry ?? null, hollowPreviewResultCacheRef.current.values());
-      }
-      return null;
-    });
-  }, [clearPendingHollowPreviewDebounce]);
-
-  React.useEffect(() => {
-    return () => {
-      if (hollowPreview) {
-        hollowPreview.geometry.dispose();
-        hollowPreview.infillGeometry?.dispose();
-      }
-    };
-  }, [hollowPreview]);
-
-  React.useEffect(() => {
-    return () => {
-      clearPendingHollowPreviewDebounce();
-    };
-  }, [clearPendingHollowPreviewDebounce]);
-
-  React.useEffect(() => {
-    const liveIds = new Set(scene.models.map((model) => model.id));
-    for (const [modelId, entry] of hollowingSourceByModelIdRef.current.entries()) {
-      if (liveIds.has(modelId)) continue;
-      entry.geometry.dispose();
-      hollowingSourceByModelIdRef.current.delete(modelId);
-    }
-
-    for (const [modelId, entry] of cavityGeometryByModelIdRef.current.entries()) {
-      if (liveIds.has(modelId)) continue;
-      entry.geometry.dispose();
-      cavityGeometryByModelIdRef.current.delete(modelId);
-    }
-
-    // If the active model's cavity geometry was just removed, exit interior view
-    // so the user doesn't get stuck with no way to toggle it off.
-    if (
-      interiorView &&
-      (!scene.activeModel || !cavityGeometryByModelIdRef.current.has(scene.activeModel.id))
-    ) {
-      setInteriorView(false);
-    }
-
-    for (const [cacheKey, entry] of hollowPreviewResultCacheRef.current.entries()) {
-      if (liveIds.has(entry.modelId)) continue;
-      disposeHollowPreviewCacheEntry(entry);
-      hollowPreviewResultCacheRef.current.delete(cacheKey);
-    }
-  }, [scene.models, interiorView, setInteriorView]);
-
-  // Restore cavity geometry from persisted data for models with baked hollowing.
-  React.useEffect(() => {
-    for (const model of scene.models) {
-      const hollowing = scene.getModelMeshModifiers(model.id)?.hollowing;
-      if (!hollowing?.enabled || !hollowing.cavityPositionsBase64 || !hollowing.cavityPositionCount) {
-        continue;
-      }
-      if (cavityGeometryByModelIdRef.current.has(model.id)) {
-        continue; // already restored
-      }
-
-      const bytes = base64ToBytes(hollowing.cavityPositionsBase64);
-      if (bytes.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) continue;
-      const view = new Float32Array(
-        bytes.buffer,
-        bytes.byteOffset,
-        bytes.byteLength / Float32Array.BYTES_PER_ELEMENT,
-      );
-      if (view.length !== hollowing.cavityPositionCount * 3) continue;
-
-      const positions = new Float32Array(view.length);
-      positions.set(view);
-      const cavityGeometry = new THREE.BufferGeometry();
-      cavityGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      cavityGeometry.computeVertexNormals();
-      cavityGeometry.computeBoundingBox();
-      cavityGeometry.computeBoundingSphere();
-      cavityGeometryByModelIdRef.current.set(model.id, { geometry: cavityGeometry });
-    }
-  }, [scene.models]);
-
-  React.useEffect(() => {
-    return () => {
-      for (const entry of hollowingSourceByModelIdRef.current.values()) {
-        entry.geometry.dispose();
-      }
-      hollowingSourceByModelIdRef.current.clear();
-      for (const entry of cavityGeometryByModelIdRef.current.values()) {
-        entry.geometry.dispose();
-      }
-      cavityGeometryByModelIdRef.current.clear();
-      for (const entry of hollowPreviewResultCacheRef.current.values()) {
-        disposeHollowPreviewCacheEntry(entry);
-      }
-      hollowPreviewResultCacheRef.current.clear();
-    };
-  }, []);
-
-  React.useEffect(() => {
-    if (!hollowPreview) return;
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'hollowing') {
-      clearHollowPreview();
-      return;
-    }
-    const stillExists = scene.models.some((model) => model.id === hollowPreview.modelId);
-    if (!stillExists) {
-      clearHollowPreview();
-    }
-  }, [clearHollowPreview, hollowPreview, scene.mode, scene.models, transformMgr.transformMode]);
-
-  React.useEffect(() => {
-    if (scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing') {
-      return;
-    }
-    setHollowingEditMode(false);
-    setEditingBlockedHollowVoxelIndices(blockedHollowVoxelIndices);
-  }, [blockedHollowVoxelIndices, scene.mode, transformMgr.transformMode]);
-
-  const resolveBlockedHollowVoxelMarqueeSelection = React.useCallback((
-    polygon: Array<{ x: number; y: number }>,
-    helpers: {
-      projectWorldPoint: (point: THREE.Vector3) => { x: number; y: number; z: number } | null;
-    },
-  ) => {
-    const preview = hollowPreview;
-    const activeModel = scene.activeModel;
-    if (!preview || !activeModel || polygon.length < 3) return [] as string[];
-
-    const pointInPolygon = (x: number, y: number) => {
-      let inside = false;
-      for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
-        const xi = polygon[i].x;
-        const yi = polygon[i].y;
-        const xj = polygon[j].x;
-        const yj = polygon[j].y;
-        const intersects = ((yi > y) !== (yj > y))
-          && (x < ((xj - xi) * (y - yi)) / ((yj - yi) || 1e-6) + xi);
-        if (intersects) inside = !inside;
-      }
-      return inside;
-    };
-
-    const modelQuaternion = quaternionFromGlobalEuler(activeModel.transform.rotation);
-    const selected: string[] = [];
-
-    for (let instanceIndex = 0; instanceIndex < preview.removedVoxelIndices.length; instanceIndex += 1) {
-      const offset = instanceIndex * 3;
-      const localPoint = new THREE.Vector3(
-        preview.removedVoxelCenters[offset] - activeModel.geometry.center.x,
-        preview.removedVoxelCenters[offset + 1] - activeModel.geometry.center.y,
-        preview.removedVoxelCenters[offset + 2] - activeModel.geometry.center.z,
-      );
-      localPoint.multiply(activeModel.transform.scale);
-      localPoint.applyQuaternion(modelQuaternion);
-      localPoint.add(activeModel.transform.position);
-      const projected = helpers.projectWorldPoint(localPoint);
-      if (!projected) continue;
-      if (!pointInPolygon(projected.x, projected.y)) continue;
-      selected.push(String(preview.removedVoxelIndices[instanceIndex]));
-    }
-
-    // Also test blocked-only voxel centers so lassoing over them works.
-    if (preview.blockedVoxelCenters) {
-      const blockedCount = Math.floor(preview.blockedVoxelCenters.length / 3);
-      for (let blockedIndex = 0; blockedIndex < blockedCount; blockedIndex += 1) {
-        const offset = blockedIndex * 3;
-        const localPoint = new THREE.Vector3(
-          preview.blockedVoxelCenters[offset] - activeModel.geometry.center.x,
-          preview.blockedVoxelCenters[offset + 1] - activeModel.geometry.center.y,
-          preview.blockedVoxelCenters[offset + 2] - activeModel.geometry.center.z,
-        );
-        localPoint.multiply(activeModel.transform.scale);
-        localPoint.applyQuaternion(modelQuaternion);
-        localPoint.add(activeModel.transform.position);
-        const projected = helpers.projectWorldPoint(localPoint);
-        if (!projected) continue;
-        if (!pointInPolygon(projected.x, projected.y)) continue;
-        selected.push(String(blockedHollowVoxelIndices[blockedIndex]));
-      }
-    }
-
-    return selected;
-  }, [hollowPreview, scene.activeModel, blockedHollowVoxelIndices]);
-
-  const handleBlockedHollowVoxelMarqueeSelection = React.useCallback((ids: string[], altKey?: boolean) => {
-    if (ids.length === 0) return;
-    const next = new Set(editingBlockedHollowVoxelIndicesRef.current);
-    if (altKey) {
-      // Alt + lasso: un-block (remove from the blocked set).
-      for (const id of ids) {
-        const voxelIndex = Number(id);
-        if (!Number.isFinite(voxelIndex)) continue;
-        next.delete(voxelIndex);
-      }
-    } else {
-      // Plain lasso: block (add to the blocked set).
-      for (const id of ids) {
-        const voxelIndex = Number(id);
-        if (!Number.isFinite(voxelIndex)) continue;
-        next.add(voxelIndex);
-      }
-    }
-    applyEditingBlockedHollowVoxelIndices(next);
-  }, [applyEditingBlockedHollowVoxelIndices]);
-
-  const handleStartHollowVoxelEditing = React.useCallback(() => {
-    editingBlockedHollowVoxelIndicesRef.current = blockedHollowVoxelIndices;
-    hollowVoxelEditUndoStackRef.current = [];
-    hollowVoxelEditRedoStackRef.current = [];
-    setEditingBlockedHollowVoxelIndices(blockedHollowVoxelIndices);
-    setHollowingEditMode(true);
-  }, [blockedHollowVoxelIndices]);
-
-  const handleClearHollowVoxelEditing = React.useCallback(() => {
-    applyEditingBlockedHollowVoxelIndices([]);
-  }, [applyEditingBlockedHollowVoxelIndices]);
-
-  const handleDoneHollowVoxelEditing = React.useCallback(() => {
-    const nextIndices = [...editingBlockedHollowVoxelIndices].sort((a, b) => a - b);
-    const prevIndices = [...blockedHollowVoxelIndices].sort((a, b) => a - b);
-    const hasChanges = nextIndices.length !== prevIndices.length
-      || nextIndices.some((v, i) => v !== prevIndices[i]);
-
-    if (!hasChanges) {
-      setHollowingEditMode(false);
-      return;
-    }
-
-    commitBlockedHollowVoxelIndices(nextIndices);
-    clearHollowPreview();
-    setHollowingEditMode(false);
-    setIsApplyingBlockersHollowing(true);
-  }, [blockedHollowVoxelIndices, clearHollowPreview, commitBlockedHollowVoxelIndices, editingBlockedHollowVoxelIndices]);
-
   React.useEffect(() => {
     if (canUseAutoHolePunchDepth || holePunchState.depthMode !== 'auto') {
       return;
@@ -18246,45 +9015,6 @@ export default function Home() {
 
     setHolePunchState((previous) => ({ ...previous, depthMode: 'manual' }));
   }, [canUseAutoHolePunchDepth, holePunchState.depthMode]);
-
-  React.useEffect(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode === 'hollowing') {
-      return;
-    }
-
-    const activeModel = scene.activeModel;
-    if (!activeModel) {
-      return;
-    }
-
-    const persistedHollowing = activeModel.meshModifiers?.hollowing;
-    const warmupState: HollowingPanelState = persistedHollowing?.enabled
-      ? {
-          mode: persistedHollowing.mode === 'shell_open_face' ? 'cavity' : persistedHollowing.mode,
-          voxelSizeMm: persistedHollowing.voxelSizeMm,
-          shellThicknessMm: persistedHollowing.shellThicknessMm,
-          infillMode: persistedHollowing.infillMode ?? defaultHollowingState.infillMode,
-          infillCellMm: persistedHollowing.infillCellMm ?? defaultHollowingState.infillCellMm,
-          infillBeamRadiusMm: persistedHollowing.infillBeamRadiusMm ?? defaultHollowingState.infillBeamRadiusMm,
-          openFace: persistedHollowing.openFace,
-        }
-      : defaultHollowingState;
-
-    const previewRequest = buildHollowPreviewRequest(activeModel, warmupState);
-    if (hollowPreviewResultCacheRef.current.has(previewRequest.previewKey)
-      || hollowPreviewWarmupKeyRef.current === previewRequest.previewKey) {
-      return;
-    }
-
-    void primeHollowPreviewCache(activeModel, warmupState);
-  }, [
-    buildHollowPreviewRequest,
-    defaultHollowingState,
-    primeHollowPreviewCache,
-    scene.activeModel,
-    scene.mode,
-    transformMgr.transformMode,
-  ]);
 
   React.useEffect(() => {
     const activeModel = scene.activeModel;
@@ -18444,26 +9174,19 @@ export default function Home() {
       return;
     }
 
-    const previewShellThicknessMm = quantizePreviewShellThicknessMm(hollowingState.shellThicknessMm);
-    const sourceGeometry = resolveHollowPreviewSourceGeometry(activeModel);
-    const sourceGeometryKey = buildGeometryVersionKey(sourceGeometry);
-    const bbox = sourceGeometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
-      sourceGeometry.getAttribute('position') as THREE.BufferAttribute,
-    );
-    const bboxSize = bbox.getSize(new THREE.Vector3());
-    const maxExtent = Math.max(bboxSize.x, bboxSize.y, bboxSize.z);
-
-    const debounceQuat = new THREE.Quaternion().setFromEuler(activeModel.transform.rotation);
-    const options: HollowOptions = {
-      ...buildHollowingOptions(activeModel.transform.scale, maxExtent, {
-        preview: true,
-        previewShellThicknessMm,
-      }),
-      previewCavityOnly: true,
-      rotationQuat: [debounceQuat.x, debounceQuat.y, debounceQuat.z, debounceQuat.w],
-    };
-    const optionsKey = JSON.stringify(options);
-    const previewKey = `${activeModel.id}::${sourceGeometryKey}::${optionsKey}`;
+    // Single source of truth for preview options and cache keys, shared with
+    // the toolbar-hover warmup path. Building options inline here previously
+    // omitted `previewVoxelSpheres: true` (and `drainHoles: []`), which made
+    // every debounced parameter change run the full cavity-mesh build — and,
+    // on manifold failure, the entire stabilization retry cascade — for a
+    // result the preview never renders, while also splitting the cache keys
+    // so warmup-primed entries could never serve the live preview.
+    const {
+      sourceGeometry,
+      sourceGeometryKey,
+      options,
+      previewKey,
+    } = buildHollowPreviewRequest(activeModel);
 
     if (hollowPreview && hollowPreview.modelId === activeModel.id && hollowPreview.previewKey === previewKey) {
       return;
@@ -18485,7 +9208,7 @@ export default function Home() {
       clearPendingHollowPreviewDebounce();
     };
   }, [
-    buildHollowingOptions,
+    buildHollowPreviewRequest,
     clearHollowPreview,
     clearPendingHollowPreviewDebounce,
     hollowPreview,
@@ -18493,7 +9216,6 @@ export default function Home() {
     isHollowingDirty,
     isApplyingHollowing,
     isShellFaceSelectionPending,
-    resolveHollowPreviewSourceGeometry,
     runHollowPreview,
     scene.activeModel,
     scene.mode,
@@ -18516,366 +9238,20 @@ export default function Home() {
   // click toggles a parity bit and applies a negative-scale transform — the GPU
   // renders the flip immediately. On exit we run one combined bake against the
   // accumulated parity bits and reset the scale to positive.
-  const mirrorSessionRef = React.useRef<{
-    modelId: string;
-    flips: { x: boolean; y: boolean; z: boolean };
-    initialTransform: ModelTransform;
-    previewTransform: ModelTransform;
-    initialGeometry: GeometryWithBounds;
-  } | null>(null);
-  const mirrorPrevToolActiveRef = React.useRef(false);
-  const mirrorLocalOriginRef = React.useRef(new THREE.Vector3(0, 0, 0));
-  // Tracks a pending deferred bake so we can cancel/flush it on mode switch.
-  const pendingBakeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Tracks an in-flight bake worker so it can be terminated on flush.
-  const pendingBakeWorkerRef = React.useRef<Worker | null>(null);
-
-  const syncTransformManagerToTransform = React.useCallback((nextTransform: ModelTransform) => {
-    // Keep transform-manager state aligned with raw mirror updates so the
-    // persistence bridge cannot write a stale transform back into the model.
-    suppressTransformPersistenceCycles(8);
-    transformMgr.transformHook.setPosition(
-      nextTransform.position.x,
-      nextTransform.position.y,
-      nextTransform.position.z,
-    );
-    transformMgr.transformHook.setRotation(
-      nextTransform.rotation.x,
-      nextTransform.rotation.y,
-      nextTransform.rotation.z,
-    );
-    transformMgr.transformHook.setScale(
-      nextTransform.scale.x,
-      nextTransform.scale.y,
-      nextTransform.scale.z,
-    );
-  }, [suppressTransformPersistenceCycles, transformMgr.transformHook]);
-
-  const finalizeMirrorSession = React.useCallback(() => {
-    const session = mirrorSessionRef.current;
-    mirrorSessionRef.current = null;
-    if (!session) return;
-
-    const { modelId, flips, previewTransform, initialGeometry } = session;
-    const anyFlip = flips.x || flips.y || flips.z;
-
-    if (!anyFlip) {
-      // Net-zero session (e.g. user clicked X twice). Nothing to commit.
-      return;
-    }
-
-    let baked: THREE.BufferGeometry | null = null;
-    try {
-      baked = bakeWithFlips(initialGeometry.geometry, flips);
-    } catch (error) {
-      console.error('[Mirror] bakeWithFlips threw during finalize, preserving live mirrored state:', error);
-      return;
-    }
-    if (!baked) {
-      return;
-    }
-
-    // Preserve mirrored orientation while converting from reflected preview
-    // transform to baked geometry: finalTransform * bakedGeometry == previewTransform * sourceGeometry.
-    const bakeLocalMatrix = new THREE.Matrix4().identity();
-    const bakeLocalElements = bakeLocalMatrix.elements;
-    bakeLocalElements[0] = flips.x ? -1 : 1;
-    bakeLocalElements[5] = flips.y ? -1 : 1;
-    bakeLocalElements[10] = flips.z ? -1 : 1;
-
-    const previewMatrix = new THREE.Matrix4().compose(
-      previewTransform.position.clone(),
-      quaternionFromGlobalEuler(previewTransform.rotation),
-      previewTransform.scale.clone(),
-    );
-    const finalizedMatrix = previewMatrix.clone().multiply(bakeLocalMatrix);
-    const finalizedPosition = new THREE.Vector3();
-    const finalizedQuaternion = new THREE.Quaternion();
-    const finalizedScale = new THREE.Vector3();
-    finalizedMatrix.decompose(finalizedPosition, finalizedQuaternion, finalizedScale);
-    const finalizedTransform: ModelTransform = {
-      position: finalizedPosition,
-      rotation: new THREE.Euler().setFromQuaternion(finalizedQuaternion, 'ZYX'),
-      scale: finalizedScale,
-    };
-
-    // Replace geometry FIRST (direct setModels call using modelsRef.current),
-    // then apply the finalized transform AFTER via a functional setModels updater.
-    // This ordering matters: replaceModelGeometry uses a direct state value from
-    // modelsRef.current (pre-mirror transform), so any prior setModelTransformRaw
-    // functional updates get overwritten by the direct call. By setting the transform
-    // AFTER replaceModelGeometry, the functional updater applies on top of the
-    // direct state and the final batched React state has both the correct geometry
-    // AND the correct transform.
-    const axes = [flips.x && 'X', flips.y && 'Y', flips.z && 'Z'].filter(Boolean).join(', ');
-    scene.replaceModelGeometry(modelId, baked, `Mirror Model (${axes})`, {
-      includeSupportState: !flips.z,
-    });
-    scene.setModelTransformRaw(modelId, {
-      position: finalizedTransform.position.clone(),
-      rotation: finalizedTransform.rotation.clone(),
-      scale: finalizedTransform.scale.clone(),
-    });
-    syncTransformManagerToTransform(finalizedTransform);
-  }, [scene, transformMgr, syncTransformManagerToTransform]);
-
-  // Schedules baking off the main thread via a Web Worker so the visual mirror
-  // renders instantly. Cancels any in-flight worker/timer so rapid successive
-  // clicks only trigger one bake pass. The session stays alive until the worker
-  // completes (or flushPendingBake terminates it) so flushPendingBake can still
-  // call finalizeMirrorSession as a synchronous fallback.
-  const scheduleBake = React.useCallback(() => {
-    // Cancel any previously scheduled bake.
-    if (pendingBakeTimerRef.current !== null) {
-      clearTimeout(pendingBakeTimerRef.current);
-      pendingBakeTimerRef.current = null;
-    }
-    if (pendingBakeWorkerRef.current) {
-      pendingBakeWorkerRef.current.terminate();
-      pendingBakeWorkerRef.current = null;
-    }
-
-    const session = mirrorSessionRef.current;
-    if (!session) return;
-
-    const { modelId, flips, previewTransform, initialGeometry } = session;
-    const anyFlip = flips.x || flips.y || flips.z;
-    if (!anyFlip) {
-      // Net-zero session: clear without baking.
-      mirrorSessionRef.current = null;
-      return;
-    }
-
-    // Compute the finalised transform on the main thread (pure matrix math, fast).
-    const bakeLocalMatrix = new THREE.Matrix4().identity();
-    const ble = bakeLocalMatrix.elements;
-    ble[0] = flips.x ? -1 : 1;
-    ble[5] = flips.y ? -1 : 1;
-    ble[10] = flips.z ? -1 : 1;
-    const previewMatrix = new THREE.Matrix4().compose(
-      previewTransform.position.clone(),
-      quaternionFromGlobalEuler(previewTransform.rotation),
-      previewTransform.scale.clone(),
-    );
-    const finalizedMatrix = previewMatrix.clone().multiply(bakeLocalMatrix);
-    const fPos = new THREE.Vector3();
-    const fQuat = new THREE.Quaternion();
-    const fScale = new THREE.Vector3();
-    finalizedMatrix.decompose(fPos, fQuat, fScale);
-    const finalizedTransform: ModelTransform = {
-      position: fPos,
-      rotation: new THREE.Euler().setFromQuaternion(fQuat, 'ZYX'),
-      scale: fScale,
-    };
-
-    // Snapshot the geometry arrays needed by the worker.
-    const source = initialGeometry.geometry;
-    const posAttr = source.getAttribute('position') as THREE.BufferAttribute | undefined;
-    if (!posAttr) {
-      // No position attribute – fall back to synchronous bake.
-      finalizeMirrorSession();
-      return;
-    }
-
-    // Slice (memcpy) the arrays we need to modify; the originals stay on the
-    // main thread so the session geometry remains intact for flush fallback.
-    const positions = (posAttr.array as Float32Array).slice();
-    const normAttr = source.getAttribute('normal') as THREE.BufferAttribute | undefined;
-    const normals = normAttr ? (normAttr.array as Float32Array).slice() : null;
-    const idxAttr = source.getIndex();
-    const rawIdx = idxAttr?.array;
-    let indices: Uint16Array | Uint32Array | null = null;
-    let indexType: 'uint16' | 'uint32' | null = null;
-    if (rawIdx) {
-      indices = rawIdx.slice() as Uint16Array | Uint32Array;
-      indexType = rawIdx instanceof Uint16Array ? 'uint16' : 'uint32';
-    }
-    const posItemSize = posAttr.itemSize;
-    const normItemSize = normAttr?.itemSize ?? 3;
-    const axes: number[] = [];
-    if (flips.x) axes.push(0);
-    if (flips.y) axes.push(1);
-    if (flips.z) axes.push(2);
-    const axisLabel = [flips.x && 'X', flips.y && 'Y', flips.z && 'Z'].filter(Boolean).join(', ');
-    const includeSupports = !flips.z;
-
-    const worker = new Worker(
-      new URL('@/features/mirror/workers/bakeMirrorWorker', import.meta.url),
-      { type: 'module' },
-    );
-    pendingBakeWorkerRef.current = worker;
-
-    const transferables: Transferable[] = [positions.buffer];
-    if (normals) transferables.push(normals.buffer);
-    if (indices) transferables.push(indices.buffer);
-    worker.postMessage({ positions, normals, indices, posItemSize, normItemSize, axes }, transferables);
-
-    worker.onmessage = (e: MessageEvent) => {
-      // Discard result if a newer bake/flush already took over.
-      if (pendingBakeWorkerRef.current !== worker) {
-        worker.terminate();
-        return;
-      }
-      pendingBakeWorkerRef.current = null;
-      worker.terminate();
-
-      // Clear the session now that the worker has committed the bake.
-      mirrorSessionRef.current = null;
-
-      const { positions: bp, normals: bn, indices: bi } = e.data as {
-        positions: Float32Array;
-        normals: Float32Array | null;
-        indices: Uint16Array | Uint32Array | null;
-      };
-
-      // Reconstruct a Three.js geometry from the worker-returned arrays.
-      // We avoid a full geometry.clone() – only the modified arrays were
-      // copied; all other attributes (UV, vertex colour, etc.) are shared
-      // by reference from the source (safe since they are never modified).
-      const baked = new THREE.BufferGeometry();
-      baked.setAttribute('position', new THREE.BufferAttribute(bp, posItemSize));
-      if (bn) {
-        baked.setAttribute('normal', new THREE.BufferAttribute(bn, normItemSize));
-      } else {
-        baked.computeVertexNormals();
-      }
-      if (bi) {
-        baked.setIndex(new THREE.BufferAttribute(bi, 1));
-      }
-      const srcAttrs = source.attributes;
-      for (const name of Object.keys(srcAttrs)) {
-        if (name !== 'position' && name !== 'normal') {
-          baked.setAttribute(name, srcAttrs[name] as THREE.BufferAttribute);
-        }
-      }
-      baked.computeBoundingBox();
-      baked.computeBoundingSphere();
-
-      scene.replaceModelGeometry(modelId, baked, `Mirror Model (${axisLabel})`, {
-        includeSupportState: includeSupports,
-      });
-      scene.setModelTransformRaw(modelId, {
-        position: finalizedTransform.position.clone(),
-        rotation: finalizedTransform.rotation.clone(),
-        scale: finalizedTransform.scale.clone(),
-      });
-      syncTransformManagerToTransform(finalizedTransform);
-    };
-
-    worker.onerror = () => {
-      if (pendingBakeWorkerRef.current !== worker) return;
-      pendingBakeWorkerRef.current = null;
-      worker.terminate();
-      console.error('[Mirror] bake worker failed – falling back to synchronous bake');
-      finalizeMirrorSession();
-    };
-  }, [scene, finalizeMirrorSession, syncTransformManagerToTransform]);
-
-  // Cancels any pending deferred bake (timer or worker) and runs it
-  // synchronously now. Used when exiting mirror mode so geometry is committed
-  // before the tool switch fires.
-  const flushPendingBake = React.useCallback(() => {
-    if (pendingBakeTimerRef.current !== null) {
-      clearTimeout(pendingBakeTimerRef.current);
-      pendingBakeTimerRef.current = null;
-    }
-    if (pendingBakeWorkerRef.current) {
-      pendingBakeWorkerRef.current.terminate();
-      pendingBakeWorkerRef.current = null;
-    }
-    finalizeMirrorSession();
-  }, [finalizeMirrorSession]);
+  const mirror = useMirrorManager({
+    scene,
+    transformMgr,
+    mirrorToolActive,
+    suppressTransformPersistenceCycles,
+    requestDestructiveTransformSupportDeletionWithContinuation,
+  });
 
   React.useEffect(() => {
-    finalizeMirrorSessionRef.current = flushPendingBake;
-  }, [flushPendingBake]);
-
-  React.useEffect(() => {
-    const wasActive = mirrorPrevToolActiveRef.current;
-    mirrorPrevToolActiveRef.current = mirrorToolActive;
-    if (wasActive && !mirrorToolActive) {
-      flushPendingBake();
-    }
-  }, [mirrorToolActive, flushPendingBake]);
-
-  const handleMirror = React.useCallback((axis: MirrorAxis) => {
-    const modelId = scene.activeModelId;
-    if (!modelId) return;
-    const model = scene.models.find((m) => m.id === modelId);
-    if (!model) return;
-
-    if (!mirrorSessionRef.current || mirrorSessionRef.current.modelId !== modelId) {
-      // Finalize any prior session that was for a different model first.
-      if (mirrorSessionRef.current) flushPendingBake();
-      mirrorSessionRef.current = {
-        modelId,
-        flips: { x: false, y: false, z: false },
-        initialTransform: {
-          position: model.transform.position.clone(),
-          rotation: model.transform.rotation.clone(),
-          scale: model.transform.scale.clone(),
-        },
-        previewTransform: {
-          position: model.transform.position.clone(),
-          rotation: model.transform.rotation.clone(),
-          scale: model.transform.scale.clone(),
-        },
-        initialGeometry: model.geometry,
-      };
-    }
-
-    const session = mirrorSessionRef.current;
-    if (!session) return;
-
-    const performMirror = () => {
-      session.flips[axis] = !session.flips[axis];
-
-      // Reflect the model's transform across the world-space axis through the
-      // model's world bbox center. This produces a true world-space mirror
-      // regardless of the model's existing rotation.
-      const nextTransform = reflectTransformAcrossWorldAxis(
-        model.transform,
-        mirrorLocalOriginRef.current,
-        axis,
-      );
-      session.previewTransform = {
-        position: nextTransform.position.clone(),
-        rotation: nextTransform.rotation.clone(),
-        scale: nextTransform.scale.clone(),
-      };
-
-      // For X/Y also push supports through the same reflection. Z deletes
-      // supports up-front via the destructive modal.
-      if (axis !== 'z') {
-        const supportTransforms = buildMirrorSupportTransforms({
-          current: model.transform,
-          modelLocalBboxCenter: mirrorLocalOriginRef.current.clone(),
-          axis,
-        });
-        if (supportTransforms) {
-          transformSupportsForModel(modelId, supportTransforms.before, supportTransforms.after);
-        }
-      }
-
-      scene.setModelTransformRaw(modelId, nextTransform);
-      syncTransformManagerToTransform(nextTransform);
-
-      // Schedule baking in the next task so the visual mirror renders
-      // immediately. The session stays alive until the bake completes.
-      // On mode switch, flushPendingBake() will cancel and run synchronously.
-      scheduleBake();
-    };
-
-    if (axis === 'z') {
-      const proceedNow = requestDestructiveTransformSupportDeletionWithContinuation('Mirror Z', performMirror);
-      if (proceedNow) performMirror();
-    } else {
-      performMirror();
-    }
-  }, [scene, transformMgr, requestDestructiveTransformSupportDeletionWithContinuation, flushPendingBake, scheduleBake, syncTransformManagerToTransform]);
+    finalizeMirrorSessionRef.current = mirror.flushPendingBake;
+  }, [mirror.flushPendingBake]);
 
   return (
-    <div className="ui-shell relative h-screen w-screen overflow-hidden" data-no-window-drag="true">
+    <EditorLayout>
       <TopBar
         meshColor={scene.meshColor}
         onMeshColorChange={scene.setMeshColor}
@@ -18952,354 +9328,80 @@ export default function Home() {
       <FloatingPanelStack>
         {scene.mode === 'prepare' ? (
           <>
-            <ModelManagerPanel
-              key="prepare-models"
-              models={scene.models}
-              outsidePlateModelIds={outsidePlateModelIds}
-              activeModelId={scene.activeModelId}
-              selectedModelIds={scene.selectedModelIds}
-              onSelect={handleModelSelection}
-              onSelectRange={handleModelRangeSelection}
-              onSelectGroup={handleGroupSelection}
-              onGroupModels={handleGroupSelectedModels}
-              onUngroupModels={handleUngroupSelectedModels}
-              onUngroupGroup={handleUngroupFolder}
-              onSplitImportGroup={handleSplitImportGroup}
-              onRenameGroup={handleRenameFolder}
-              onRenameModel={handleRenameModel}
-              onModelContextMenu={handleModelListContextMenu}
-              onRepairModel={handleRepairModel}
-              onOpenSupportsInfo={handleOpenModelSupportsInfo}
-              onDelete={scene.deleteModel}
-              onVisibilityChange={scene.setModelVisibility}
-              dimmed={showEmptySceneDialog || importOverlayState.active}
-              bottomClearancePx={modelStatsBottomClearancePx}
-            />
-
-            {debugPrimitivesPanelVisible && (
-              <DebugPrimitivesPanel
-                key="prepare-debug-primitives"
-                onAdd={scene.addDebugPrimitive}
-                onClear={scene.clearDebugModels}
-              />
-            )}
-
-            {scene.geom && transformMgr.transformMode === 'transform' && (
-              <TransformControls
-                key="prepare-transform-controls"
-                position={transformMgr.transform.position}
-                onPositionChange={transformMgr.transformHook.setPosition}
-                onCenter={transformMgr.transformHook.centerXY}
-                onPlatform={transformMgr.transformHook.setPlatformZ}
-                rotation={transformMgr.transform.rotation}
-                onRotationChange={(x, y, z) => {
-                  const current = transformMgr.transform.rotation;
-                  const EPS = 1e-6;
-                  const hasDestructiveRotate = Math.abs(x - current.x) > EPS
-                    || Math.abs(y - current.y) > EPS;
-
-                  const hasAnyRotateDelta = hasDestructiveRotate || Math.abs(z - current.z) > EPS;
-                  if (hasAnyRotateDelta) {
-                    ensurePendingTransformHistoryForActiveModel('rotate');
-                  }
-
-                  if (hasDestructiveRotate) {
-                    const proceed = requestDestructiveTransformSupportDeletion('Rotate X/Y');
-                    if (!proceed) return;
-                  }
-
-                  transformMgr.transformHook.setRotation(x, y, z);
-                }}
-                onResetRotation={transformMgr.transformHook.resetRotation}
-                onRotationComplete={handleRotationComplete}
-                scale={transformMgr.transform.scale}
-                onScaleChange={(x, y, z) => {
-                  const current = transformMgr.transform.scale;
-                  const EPS = 1e-6;
-                  const hasDestructiveScale = Math.abs(x - current.x) > EPS
-                    || Math.abs(y - current.y) > EPS
-                    || Math.abs(z - current.z) > EPS;
-
-                  if (hasDestructiveScale) {
-                    ensurePendingTransformHistoryForActiveModel('scale');
-                  }
-
-                  if (hasDestructiveScale) {
-                    const proceed = requestDestructiveTransformSupportDeletion('Scale XYZ');
-                    if (!proceed) return;
-                  }
-
-                  transformMgr.transformHook.setScale(x, y, z);
-                }}
-                onResetScale={transformMgr.transformHook.resetScale}
-                uniformScaling={uniformScaling}
-                onUniformScalingChange={setUniformScaling}
-                modelBBox={scene.geom.bbox}
-                autoLift={transformMgr.autoLift}
-                onAutoLiftChange={handleAutoLiftChange}
-                liftDistance={transformMgr.liftDistance}
-                onLiftDistanceChange={transformMgr.setLiftDistance}
-                onLift={() => {
-                  const lowestWorldZ = transformMgr.getLowestWorldZ();
-                  if (lowestWorldZ !== null) transformMgr.transformHook.snapToLift(lowestWorldZ, transformMgr.liftDistance);
-                }}
-                onDrop={() => {
-                  const lowestWorldZ = transformMgr.getLowestWorldZ();
-                  if (lowestWorldZ !== null) transformMgr.transformHook.snapToPlatform(lowestWorldZ);
-                }}
-                onTransformCommit={scheduleCommitPendingTransformHistory}
-              />
-            )}
-
-            {scene.geom && transformMgr.transformMode === 'smoothing' && (
-              <MeshSmoothingSettingsPanel key="prepare-smoothing-settings" />
-            )}
-
-            {scene.geom && transformMgr.transformMode === 'hollowing' && (
-              <>
-                <HollowingPanel
-                  key="prepare-hollowing-panel"
-                  state={hollowingState}
-                  onStateChange={handleHollowingStateChange}
-                  onReset={requestClearAppliedHollowing}
-                  onResetSettings={handleResetHollowingSettings}
-                  onStartEdit={handleStartHollowVoxelEditing}
-                  onDoneEdit={handleDoneHollowVoxelEditing}
-                  onClearEdit={handleClearHollowVoxelEditing}
-                  onApply={() => { void handleApplyHollowing(); }}
-                  isApplying={isApplyingHollowing}
-                  isPreviewing={isPreviewingHollowing}
-                  isApplyingBlockers={isApplyingBlockersHollowing || isPreviewingHollowing}
-                  canApply={!isShellFaceSelectionPending && (isHollowingDirty || !isHollowingApplied)}
-                  canReset={canResetHollowing}
-                  canEdit={!isShellFaceSelectionPending && Boolean(scene.activeModel)}
-                  isEditMode={hollowingEditMode}
-                  isHollowingApplied={isHollowingApplied}
-                  shellFaceSelectionPending={isShellFaceSelectionPending}
-                />
-
-                <HolePunchPanel
-                  key="prepare-hole-punch-panel"
-                  state={holePunchState}
-                  onStateChange={handleHolePunchStateChange}
-                  onReset={requestResetHolePunch}
-                  onApply={() => { void handleApplyHolePunch(); }}
-                  canUseAutoDepth={canUseAutoHolePunchDepth}
-                  isApplying={isApplyingHolePunch}
-                  canApply={!isShellFaceSelectionPending && (isHolePunchDirty || holePunchNeedsBake)}
-                  canReset={!isShellFaceSelectionPending && canResetHolePunch}
-                  disabled={hollowingEditMode}
-                  interiorView={interiorView}
-                  interiorViewAvailable={hasCavityGeometry}
-                />
-              </>
-            )}
-
-            {scene.models.length > 0 && transformMgr.transformMode === 'arrange' && (
-              <>
-                <ArrangePanel
-                  key="prepare-arrange-panel"
-                  precisionMode={arrangePrecisionMode}
-                  onPrecisionModeChange={setArrangePrecisionMode}
-                  layoutMode={arrangeLayoutMode}
-                  onLayoutModeChange={setArrangeLayoutMode}
-                  spacingMm={arrangeSpacingMm}
-                  onSpacingMmChange={setArrangeSpacingMm}
-                  allowRotateOnZ={arrangeAllowRotateOnZ}
-                  onAllowRotateOnZChange={setArrangeAllowRotateOnZ}
-                  arrayCountX={arrangeArrayCountX}
-                  arrayCountY={arrangeArrayCountY}
-                  arrayCountZ={arrangeArrayCountZ}
-                  onArrayCountXChange={setArrangeArrayCountX}
-                  onArrayCountYChange={setArrangeArrayCountY}
-                  onArrayCountZChange={setArrangeArrayCountZ}
-                  arrayGapX={arrangeArrayGapX}
-                  arrayGapY={arrangeArrayGapY}
-                  arrayGapZ={arrangeArrayGapZ}
-                  onArrayGapXChange={setArrangeArrayGapX}
-                  onArrayGapYChange={setArrangeArrayGapY}
-                  onArrayGapZChange={setArrangeArrayGapZ}
-                  anchorMode={arrangeAnchorMode}
-                  onAnchorModeChange={setArrangeAnchorMode}
-                  onApplyAll={() => {
-                    void (arrangeLayoutMode === 'array'
-                      ? handleManualArrayArrangeModels('all')
-                      : (arrangePrecisionMode === 'high_precision'
-                        ? handleHighPrecisionArrangeModels('all')
-                        : handleAutoArrangeModels('all')));
-                  }}
-                  onApplySelected={() => {
-                    void (arrangeLayoutMode === 'array'
-                      ? handleManualArrayArrangeModels('selected')
-                      : (arrangePrecisionMode === 'high_precision'
-                        ? handleHighPrecisionArrangeModels('selected')
-                        : handleAutoArrangeModels('selected')));
-                  }}
-                  modelCount={scene.models.filter((m) => m.visible).length}
-                  selectedModelCount={scene.models.filter((m) => m.visible && scene.selectedModelIds.includes(m.id)).length}
-                  isApplying={isAutoArranging}
-                  disableArrangeActions={isDuplicateSetupBlockingArrange}
-                />
-
-                <DuplicatePanel
-                  key="prepare-duplicate-panel"
-                  activeModelName={scene.activeModel?.name ?? null}
-                  layoutMode={duplicateLayoutMode}
-                  onLayoutModeChange={setDuplicateLayoutMode}
-                  precisionMode={duplicatePrecisionMode}
-                  onPrecisionModeChange={setDuplicatePrecisionMode}
-                  totalCopies={duplicateTotalCopies}
-                  onTotalCopiesChange={setDuplicateTotalCopies}
-                  spacingMm={duplicateSpacingMm}
-                  onSpacingMmChange={setDuplicateSpacingMm}
-                  arrayCountX={duplicateArrayCountX}
-                  arrayCountY={duplicateArrayCountY}
-                  arrayCountZ={duplicateArrayCountZ}
-                  onArrayCountXChange={setDuplicateArrayCountX}
-                  onArrayCountYChange={setDuplicateArrayCountY}
-                  onArrayCountZChange={setDuplicateArrayCountZ}
-                  arrayGapX={duplicateArrayGapX}
-                  arrayGapY={duplicateArrayGapY}
-                  arrayGapZ={duplicateArrayGapZ}
-                  onArrayGapXChange={setDuplicateArrayGapX}
-                  onArrayGapYChange={setDuplicateArrayGapY}
-                  onArrayGapZChange={setDuplicateArrayGapZ}
-                  onConfirm={handleConfirmDuplicate}
-                  onFillPlate={handleFillPlateDuplicate}
-                  previewCount={duplicatePreviewTransforms.length}
-                  isApplying={isDuplicating || (isAutoArranging && activeArrangeOperation === 'high_precision_fill')}
-                />
-              </>
-            )}
+            {PreparePanelStack({
+              scene: scene,
+              transformMgr: transformMgr,
+              hollowing: hollowing,
+              holePunch: holePunch,
+              arrange: arrange,
+              outsidePlateModelIds: outsidePlateModelIds,
+              handleModelSelection: handleModelSelection,
+              handleModelRangeSelection: handleModelRangeSelection,
+              handleGroupSelection: handleGroupSelection,
+              handleGroupSelectedModels: handleGroupSelectedModels,
+              handleUngroupSelectedModels: handleUngroupSelectedModels,
+              handleUngroupFolder: handleUngroupFolder,
+              handleSplitImportGroup: handleSplitImportGroup,
+              handleRenameFolder: handleRenameFolder,
+              handleRenameModel: handleRenameModel,
+              handleModelListContextMenu: handleModelListContextMenu,
+              handleRepairModel: handleRepairModel,
+              handleOpenModelSupportsInfo: handleOpenModelSupportsInfo,
+              showEmptySceneDialog: showEmptySceneDialog,
+              importOverlayState: importOverlayState,
+              modelStatsBottomClearancePx: modelStatsBottomClearancePx,
+              debugPrimitivesPanelVisible: debugPrimitivesPanelVisible,
+              ensurePendingTransformHistoryForActiveModel: ensurePendingTransformHistoryForActiveModel,
+              requestDestructiveTransformSupportDeletion: requestDestructiveTransformSupportDeletion,
+              handleRotationComplete: handleRotationComplete,
+              handleAutoLiftChange: handleAutoLiftChange,
+              scheduleCommitPendingTransformHistory: scheduleCommitPendingTransformHistory,
+              uniformScaling: uniformScaling,
+              setUniformScaling: setUniformScaling,
+              isApplyingHolePunch: isApplyingHolePunch,
+              interiorView: interiorView,
+              hasCavityGeometry: hasCavityGeometry,
+              arrangeSpacingMm: arrangeSpacingMm,
+              setArrangeSpacingMm: setArrangeSpacingMm,
+            })}
           </>
         ) : scene.mode === 'analysis' ? (
           <>
-            <IslandScanCard
-              key="analysis-scan-card"
-              islands={islands}
-              hasGeometry={!!scene.geom}
-              onLoadSupportJson={scene.handleLoadSupportJson}
-              onImportSupportFile={scene.importSupportDataFile}
-              pluginImportPhase={scene.pluginImportPhase}
-              pluginImportError={scene.pluginImportError}
-              onPluginJsonFile={scene.handlePluginJsonFile}
-              onPluginStlFile={scene.handlePluginStlFile}
-              onCancelPluginImport={scene.cancelPluginImport}
-            />
-
-            <IslandScanWorkflowCard key="analysis-workflow" islands={islands} hasGeometry={!!scene.geom} />
-
-            <IslandVolumesHierarchyCard key="analysis-volumes" islands={islands} layerHeightMm={slicing.layerHeightMm} />
-
-            <IslandListCard
-              key="analysis-island-list"
-              islands={islands.scanData?.islands ?? []}
-              selectedIslandId={islands.selectedIslandId}
-              onSelectIsland={islands.setSelectedIslandId}
-              showMerged={islands.showMerged}
-              onShowMergedChange={islands.setShowMerged}
-              layerHeightMm={slicing.layerHeightMm}
-              zOffsetMm={0}
-            />
-
-            <IslandOverlayControls
-              key="analysis-overlay-controls"
-              enabled={islands.overlayEnabled}
-              onEnabledChange={islands.setOverlayEnabled}
-              brushRadiusMm={islands.overlayBrushRadius}
-              onBrushRadiusChange={islands.setOverlayBrushRadius}
-              color={islands.overlayColor}
-              onColorChange={islands.setOverlayColor}
-              opacity={islands.overlayOpacity}
-              onOpacityChange={islands.setOverlayOpacity}
-              taper={islands.overlayTaper}
-              onTaperChange={islands.setOverlayTaper}
-              islandCount={islands.scanData?.islands.length ?? 0}
-            />
-
-            <IslandVoxelControls
-              key="analysis-island-voxel"
-              enabled={islands.voxelEnabled && !islands.voxelShowTerritory}
-              onEnabledChange={(e) => {
-                if (e) {
-                  islands.setVoxelEnabled(true);
-                  islands.setVoxelShowTerritory(false);
-                } else {
-                  islands.setVoxelEnabled(false);
-                }
-              }}
-              opacity={islands.voxelOpacity}
-              onOpacityChange={islands.setVoxelOpacity}
-              colorScheme={islands.voxelColorScheme}
-              onColorSchemeChange={islands.setVoxelColorScheme}
-              showMerged={islands.voxelShowMerged}
-              onShowMergedChange={islands.setVoxelShowMerged}
-              islandCount={islands.scanData?.islands.length ?? 0}
-            />
-
-            <TerritoryVoxelControls
-              key="analysis-territory-voxel"
-              enabled={islands.voxelEnabled && islands.voxelShowTerritory}
-              onEnabledChange={(e) => {
-                if (e) {
-                  islands.setVoxelEnabled(true);
-                  islands.setVoxelShowTerritory(true);
-                } else {
-                  islands.setVoxelEnabled(false);
-                }
-              }}
-              opacity={islands.voxelOpacity}
-              onOpacityChange={islands.setVoxelOpacity}
-              islandCount={islands.voxelEnabled ? (islands.scanData?.islands.length ?? 0) : (islands.scanData?.islands.length ?? 0)}
-              useSurfaceContiguity={islands.useSurfaceContiguity}
-              onUseSurfaceContiguityChange={islands.setUseSurfaceContiguity}
-              onRescan={islands.onRunScanlineScan}
-            />
+            {AnalysisPanelStack({
+              scene: scene,
+              slicing: slicing,
+              islands: islands,
+            })}
           </>
         ) : scene.mode === 'export' ? (
           <>
-            <ExportPanel
-              key="export-main"
-              models={scene.models}
-              activeModel={scene.activeModel}
-              activeModelId={scene.activeModelId}
-              selectedModelIds={scene.selectedModelIds}
-              onActiveModelChange={scene.setActiveModelId}
-              supportsRef={supportsRef}
-              captureSceneThumbnailPng={captureExportThumbnailPng}
-              onExportSuccess={handleExportSuccess}
-              onExportError={showOperationError}
-              onExportProgress={setIsExporting}
-            />
-
-            <SlicingPanel
-              key="export-slicing"
-              models={scene.models}
-              activeModel={scene.activeModel}
-              estimatedLayerCountOverride={estimatedSlicerLayerCount}
-              estimatedLayerHeightMmOverride={crossSectionLayerHeightMm}
-              estimatedVolumeLabelOverride={estimatedVolumeMlLabel}
-              captureSceneThumbnailPng={captureExportThumbnailPng}
-              onSliceRunStarted={handleSliceRunStartedForPrinting}
-              onLayerPreviewGenerated={handlePrintingLayerPreviewGenerated}
-              onSlicingFinished={handleSlicingFinishedForPrinting}
-              onSliceArtifactReady={handleSliceArtifactReady}
-              onBenchmarkComplete={handleSlicingBenchmarkComplete}
-              onSliceTriggerRef={triggerSliceExportRef}
-              shouldAutoSlice={shouldAutoSliceOnExportEntry}
-              skipThumbnailCapture={shouldReturnToPrintingAfterSliceRef.current}
-              onSlicingBusyChange={setIsSlicingBusy}
-              canUpload={canSliceAndUpload}
-              canPrint={canSliceAndPrint}
-              onSliceIntentChanged={(intent) => { sliceIntentRef.current = intent; }}
-              onBeforeSliceStart={handleBeforeSliceStart}
-              onBeforeSlicingRun={handlePreSliceSceneSave}
-              resolveOutputPathForIntent={(intent) => (
-                intent === 'file' || intent === 'uvtools'
-                  ? (preSliceFileDestinationPathRef.current?.trim() || null)
-                  : null
-              )}
-            />
+            {ExportPanelStack({
+              scene: scene,
+              slicing: slicing,
+              supportsRef: supportsRef,
+              captureExportThumbnailPng: captureExportThumbnailPng,
+              handleExportSuccess: handleExportSuccess,
+              showOperationError: showOperationError,
+              estimatedSlicerLayerCount: estimatedSlicerLayerCount,
+              crossSectionLayerHeightMm: crossSectionLayerHeightMm,
+              estimatedVolumeMlLabel: estimatedVolumeMlLabel,
+              handleSliceRunStartedForPrinting: handleSliceRunStartedForPrinting,
+              handlePrintingLayerPreviewGenerated: handlePrintingLayerPreviewGenerated,
+              handleSlicingFinishedForPrinting: handleSlicingFinishedForPrinting,
+              handleSliceArtifactReady: handleSliceArtifactReady,
+              handleSlicingBenchmarkComplete: handleSlicingBenchmarkComplete,
+              triggerSliceExportRef: triggerSliceExportRef,
+              shouldAutoSliceOnExportEntry: shouldAutoSliceOnExportEntry,
+              shouldReturnToPrintingAfterSliceRef: shouldReturnToPrintingAfterSliceRef,
+              setIsSlicingBusy: setIsSlicingBusy,
+              canSliceAndUpload: canSliceAndUpload,
+              canSliceAndPrint: canSliceAndPrint,
+              sliceIntentRef: sliceIntentRef,
+              handleBeforeSliceStart: handleBeforeSliceStart,
+              handlePreSliceSceneSave: handlePreSliceSceneSave,
+              preSliceFileDestinationPathRef: preSliceFileDestinationPathRef,
+              setIsExporting: setIsExporting,
+            })}
           </>
 
         ) : scene.mode === 'support' ? (
@@ -19319,297 +9421,70 @@ export default function Home() {
           </>
         ) : scene.mode === 'printing' ? (
           <>
-            <PrintingPanel
-              outputName={printingArtifact?.outputName ?? null}
-              outputFormat={printingArtifact?.outputName?.split('.').pop() ? `.${printingArtifact.outputName.split('.').pop()}` : null}
-              outputSizeLabel={printingOutputSizeLabel}
-              printerName={activePrinterProfile?.name ?? 'No printer selected'}
-              resinName={printingResinName}
-              estimatedPrintTimeLabel={estimatedPrintTimeLabel}
-              estimatedVolumeLabel={estimatedVolumeMlLabel}
-              canDownload={canDownloadPrintArtifact}
-              canSendToPrinter={canSendToPrinter}
-              sendBusy={printingSendBusy}
-              sendStatusText={printingSendStatusText}
-              sendButtonLabel={sendToPrinterButtonLabel}
-              showSendTargetPicker={printableConnectedPrinterFleet.length > 1}
-              onOpenSendTargetPicker={() => {
-                setPrintingTargetPickerMode('post-slice');
-                setPrintingTargetPickerOpen(true);
-              }}
-              onDownload={handleDownloadPrintArtifact}
-              onSendToPrinter={handleSendToPrinter}
-              onCancelSendToPrinter={handleCancelSendToPrinter}
-              canSendToUvTools={getSavedUvToolsSettings().enabled}
-              onSendToUvTools={() => {
-                const fp = completedSaveDestinationPath;
-                if (!fp) return;
-                const s = getSavedUvToolsSettings();
-                launchExternalProcess(resolveUvToolsExecutablePath(s), fp).catch((err) =>
-                  console.warn('[UVTools] Failed to launch from printing panel:', err),
-                );
-              }}
-              sliceIntent={completedSliceIntent}
-              savedFilePath={completedSaveDestinationPath}
-            />
+            {PrintingPanelStack({
+              printingArtifact: printingArtifact,
+              printingOutputSizeLabel: printingOutputSizeLabel,
+              activePrinterProfile: activePrinterProfile,
+              printingResinName: printingResinName,
+              estimatedPrintTimeLabel: estimatedPrintTimeLabel,
+              estimatedVolumeMlLabel: estimatedVolumeMlLabel,
+              canDownloadPrintArtifact: canDownloadPrintArtifact,
+              canSendToPrinter: canSendToPrinter,
+              printingSendBusy: printingSendBusy,
+              printingSendStatusText: printingSendStatusText,
+              sendToPrinterButtonLabel: sendToPrinterButtonLabel,
+              printableConnectedPrinterFleet: printableConnectedPrinterFleet,
+              setPrintingTargetPickerMode: setPrintingTargetPickerMode,
+              setPrintingTargetPickerOpen: setPrintingTargetPickerOpen,
+              handleDownloadPrintArtifact: handleDownloadPrintArtifact,
+              handleSendToPrinter: handleSendToPrinter,
+              handleCancelSendToPrinter: handleCancelSendToPrinter,
+              completedSliceIntent: completedSliceIntent,
+              completedSaveDestinationPath: completedSaveDestinationPath,
+            })}
           </>
         ) : (
           <>
           </>
         )}
 
-        {scene.models.length > 0 && scene.mode !== 'printing' && (
-          <VisualSettingsPanel
-            key="visual-settings"
-            layerIndex={slicing.layerIndex}
-            maxLayers={slicing.numLayers}
-            onLayerIndexChange={slicing.setLayerIndex}
-            onScrubStart={handleSceneLayerScrubStart}
-            onScrubEnd={handleSceneLayerScrubEnd}
-            onCrossSectionModeChange={slicing.setCrossSectionMode}
-            currentHeightMm={slicing.currentHeightMm}
-            maxHeightMm={slicing.heightMm}
-            crossSectionMode={slicing.crossSectionMode}
-            lowerLayerIndex={slicing.lowerLayerIndex}
-            onLowerLayerIndexChange={slicing.setLowerLayerIndex}
-            lowerCurrentHeightMm={slicing.lowerCurrentHeightMm}
-            crossSectionEnabled={isCrossSectionEnabled}
-            onToggleCrossSection={handleToggleCrossSection}
-            layerHeightMm={slicing.layerHeightMm}
-          />
-        )}
-
-        {isTransformDebugOverlayOpen && (
-          <div
-            key="transform-debug-overlay"
-            className="rounded-lg border p-2.5 font-mono text-[10px] leading-tight shadow-xl"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              color: 'var(--text-strong)',
-              background: 'color-mix(in srgb, var(--surface-0), black 14%)',
-              fontSize: '10px',
-            }}
-          >
-            <div className="mb-2 flex items-center justify-between">
-              <div className="text-xs font-semibold" style={{ fontFamily: 'var(--font-geist-mono)' }}>
-                {scene.mode === 'printing' ? 'Printing Debug Overlay' : scene.mode === 'support' ? 'Support Debug Overlay' : 'Transform Debug Overlay'}
-              </div>
-              <button
-                type="button"
-                className="rounded border px-2 py-0.5 text-[10px]"
-                style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-                onClick={() => setIsTransformDebugOverlayOpen(false)}
-              >
-                Close
-              </button>
-            </div>
-
-            {scene.mode === 'printing' ? (
-              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                <div style={{ color: 'var(--text-muted)' }}>Mode</div><div>{scene.mode}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Total layers</div><div>{printingPreviewTotalLayers}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Selected layer</div><div>{printingSelectedLayer}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Displayed layer</div><div>{printingDisplayedLayer}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Is scrubbing</div><div>{isPrintingLayerScrubbing ? 'true' : 'false'}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Show scrub preview</div><div>{shouldShowScrubPreview ? 'true' : 'false'}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Send progress</div><div>{(printingSendProgress * 100).toFixed(1)}%</div>
-                <div style={{ color: 'var(--text-muted)' }}>Send busy</div><div>{printingSendBusy ? 'true' : 'false'}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Stage text</div><div className="truncate" title={printingSendStageText ?? 'none'}>{printingSendStageText ?? 'none'}</div>
-              </div>
-            ) : scene.mode === 'support' ? (
-              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                <div style={{ color: 'var(--text-muted)' }}>Mode</div><div>{scene.mode}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Active model</div><div>{scene.activeModelId ?? 'none'}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Hovered category</div><div>{supportDebugStats.hoveredCategory}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Hovered id</div><div>{supportDebugStats.hoveredId ?? 'none'}</div>
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                <div style={{ color: 'var(--text-muted)' }}>Mode</div><div>{scene.mode}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Transform mode</div><div>{transformMgr.transformMode}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Active model</div><div>{scene.activeModelId ?? 'none'}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Display model</div><div>{displayActiveModelId ?? 'none'}</div>
-                <div style={{ color: 'var(--text-muted)' }}>isTransforming</div><div>{transformMgr.isTransforming ? 'true' : 'false'}</div>
-                <div style={{ color: 'var(--text-muted)' }}>Drag group auto</div><div>{String(transformDebugStats.dragGroupAutoUpdate)}</div>
-              </div>
-            )}
-
-            {scene.mode === 'printing' && (
-              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Preview State
-                </div>
-                <div>Preview URLs loaded: {printingLayerPreviewUrls.filter(u => u !== null).length} / {printingPreviewTotalLayers}</div>
-                <div>Selected URL exists: {(printingLayerPreviewUrls[printingSelectedLayer - 1] ?? null) ? 'true' : 'false'}</div>
-                <div>Displayed URL exists: {(printingLayerPreviewUrls[printingDisplayedLayer - 1] ?? null) ? 'true' : 'false'}</div>
-                <div>Artifact ready: {printingArtifact ? 'true' : 'false'}</div>
-                <div>Artifact name: {printingArtifact?.outputName ?? 'none'}</div>
-                <div>Upload dialog open: {printingUploadDialogOpen ? 'true' : 'false'}</div>
-                <div>Upload stage: {printingUploadDialogStage}</div>
-                <div>Display progress: {(printingUploadDisplayProgress * 100).toFixed(1)}%</div>
-                <div>Ready plate ID: {printingReadyPlateId ?? 'none'}</div>
-                <div>Print now busy: {printingPrintNowBusy ? 'true' : 'false'}</div>
-                <div>Status text: {printingSendStatusText ?? 'none'}</div>
-
-                {printingSlicingBenchmark && (
-                  <>
-                    <div className="mt-2 mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                      Slicing Metrics
-                    </div>
-                    <div>Total time: {printingSlicingBenchmark.totalElapsedMs.toFixed(0)} ms</div>
-                    {printingSlicingBenchmark.meshPrepMs !== null && (
-                      <div>Mesh prep: {printingSlicingBenchmark.meshPrepMs.toFixed(0)} ms</div>
-                    )}
-                    {printingSlicingBenchmark.coreSlicingMs !== null && (
-                      <div>Core slicing: {printingSlicingBenchmark.coreSlicingMs.toFixed(0)} ms</div>
-                    )}
-                    {printingSlicingBenchmark.totalLayers !== null && (
-                      <div>Total layers: {printingSlicingBenchmark.totalLayers}</div>
-                    )}
-                    {printingSlicingBenchmark.layersPerSecond !== null && (
-                      <div>Layers/sec: {printingSlicingBenchmark.layersPerSecond.toFixed(1)}</div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-
-            {scene.mode === 'support' && (
-              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Placement Lock Debug
-                </div>
-                <div>Hovered category/id: {supportDebugStats.hoveredCategory} / {supportDebugStats.hoveredId ?? 'none'}</div>
-                <div>Shaft hovered segment: {supportDebugStats.shaftHoveredSegmentId ?? 'none'}</div>
-                <div>Shaft hover point: {formatDebugVec3Like(supportDebugStats.shaftHoverPoint)}</div>
-                <div>Brace Alt active: {supportDebugStats.braceAltActive ? 'true' : 'false'}</div>
-                <div>Brace stage: {supportDebugStats.braceStage}</div>
-                <div>Brace start: {supportDebugStats.braceStartKind ?? 'none'} / {supportDebugStats.braceStartSegmentId ?? 'n/a'}</div>
-                <div>Brace snap: {supportDebugStats.braceSnapKind ?? 'none'} / {supportDebugStats.braceSnapSegmentId ?? supportDebugStats.braceSnapLeafId ?? 'n/a'}</div>
-                <div>Preview start: {formatDebugVec3Like(supportDebugStats.previewStart)}</div>
-                <div>Preview end: {formatDebugVec3Like(supportDebugStats.previewEnd)}</div>
-                <div>Suppressed: {supportDebugStats.supportInteractionSuppressed ? 'true' : 'false'}</div>
-                <div>disableSelectionAndHover: {supportDebugStats.disableSelectionAndHover ? 'true' : 'false'}</div>
-                <div>Gizmo lock active: {supportDebugStats.gizmoInteractionLockActive ? 'true' : 'false'}</div>
-                <div>Knot dragging: {supportDebugStats.knotGizmoDragging ? 'true' : 'false'}</div>
-                <div>Joint dragging: {supportDebugStats.jointGizmoDragging ? 'true' : 'false'}</div>
-                <div>Knot guard remaining: {supportDebugStats.knotGuardRemainingMs} ms</div>
-                <div>Knot-only guard: {supportDebugStats.knotOnlyGuardRemainingMs} ms</div>
-                <div>Joint-only guard: {supportDebugStats.jointOnlyGuardRemainingMs} ms</div>
-                <div>Immediate hover model: {supportDebugStats.immediateModelHoverId ?? 'none'}</div>
-                <div>External hover model: {supportDebugStats.externalHoverModelId ?? 'none'}</div>
-                <div>Effective hover model: {supportDebugStats.effectiveHoverModelId ?? 'none'}</div>
-                <div>Scene hovered support: {supportDebugStats.sceneHoveredSupportId ?? 'none'}</div>
-                <div>Marquee hovered support: {supportDebugStats.marqueeHoveredSupportId ?? 'none'}</div>
-                <div>Raw hovered category/id: {supportDebugStats.rawHoveredCategory ?? 'none'} / {supportDebugStats.rawHoveredId ?? 'none'}</div>
-                <div>Visual hovered category/id: {supportDebugStats.hoveredCategoryForVisual ?? 'none'} / {supportDebugStats.hoveredIdForVisual ?? 'none'}</div>
-                <div>
-                  Hover vs snap segment mismatch:{' '}
-                  <span style={{ color: supportDebugStats.hoveredVsSnapMismatch ? '#ff8a8a' : 'var(--text-strong)' }}>
-                    {supportDebugStats.hoveredVsSnapMismatch ? 'YES' : 'no'}
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {scene.mode !== 'support' && scene.mode !== 'printing' && (
-              <>
-                <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                  <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                    Transform Delta (live vs store)
-                  </div>
-                  <div>Δpos: {formatDebugNumber(transformDebugStats.posDelta)} mm</div>
-                  <div>Δrot max: {formatDebugNumber(transformDebugStats.rotDelta)} rad</div>
-                  <div>Δscale: {formatDebugNumber(transformDebugStats.scaleDelta)}</div>
-                </div>
-
-                <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                  <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                    Active Model Transform
-                  </div>
-                  <div>Store pos: {formatDebugVec3(transformDebugStats.storeTransform?.position)}</div>
-                  <div>Live pos: {formatDebugVec3(transformDebugStats.liveTransform.position)}</div>
-                  <div>Drag Δ pos: {formatDebugVec3(transformDebugStats.dragGroupPos)}</div>
-                  <div>Drag Δ scale: {formatDebugVec3(transformDebugStats.dragGroupScale)}</div>
-                </div>
-              </>
-            )}
-
-            <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                Support Counts (all / active model)
-              </div>
-              <div>Trunks: {transformDebugStats.supportCounts.trunks} / {activeSupportEntityCounts.trunks}</div>
-              <div>Branches: {transformDebugStats.supportCounts.branches} / {activeSupportEntityCounts.branches}</div>
-              <div>Leaves: {transformDebugStats.supportCounts.leaves} / {activeSupportEntityCounts.leaves}</div>
-              <div>Twigs: {transformDebugStats.supportCounts.twigs} / {activeSupportEntityCounts.twigs}</div>
-              <div>Sticks: {transformDebugStats.supportCounts.sticks} / {activeSupportEntityCounts.sticks}</div>
-              <div>Braces: {transformDebugStats.supportCounts.braces} / {activeSupportEntityCounts.braces}</div>
-              <div>Roots: {transformDebugStats.supportCounts.roots} / {activeSupportEntityCounts.roots}</div>
-              <div>Knots: {transformDebugStats.supportCounts.knots} / {activeSupportEntityCounts.knots}</div>
-              <div>Kickstands: {transformDebugStats.supportCounts.kickstands} / {activeSupportEntityCounts.kickstands}</div>
-            </div>
-
-            {scene.mode !== 'support' && scene.mode !== 'printing' && (
-              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Transform Timeline
-                </div>
-                <div>Last op: {transformDebugStats.timeline.lastOperation ?? 'n/a'}</div>
-                <div>Drag released: {formatDebugTime(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-                <div>Live calculated: {formatDebugTime(transformDebugStats.timeline.liveCalculatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-                <div>Store update start: {formatDebugTime(transformDebugStats.timeline.storeUpdateStartedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-                <div>Store updated: {formatDebugTime(transformDebugStats.timeline.storeUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-                <div>Support store updated: {formatDebugTime(transformDebugStats.timeline.supportStoreUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-                <div>Kickstand store updated: {formatDebugTime(transformDebugStats.timeline.kickstandStoreUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-                <div>Active model store observed: {formatDebugTime(transformDebugStats.timeline.activeModelStoreObservedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-                <div>Release → Live: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.liveCalculatedAt)}</div>
-                <div>Live → Store start: {formatDebugLatencyMs(transformDebugStats.timeline.liveCalculatedAt, transformDebugStats.timeline.storeUpdateStartedAt)}</div>
-                <div>Store start → Store updated: {formatDebugLatencyMs(transformDebugStats.timeline.storeUpdateStartedAt, transformDebugStats.timeline.storeUpdatedAt)}</div>
-                <div>Release → Store updated: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.storeUpdatedAt)}</div>
-                <div>Release → Support store: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.supportStoreUpdatedAt)}</div>
-                <div>Release → Kickstand store: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.kickstandStoreUpdatedAt)}</div>
-                <div>Release → Active model observed: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.activeModelStoreObservedAt)}</div>
-              </div>
-            )}
-
-            {scene.mode !== 'support' && scene.mode !== 'printing' && (
-              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Transform History Commit
-                </div>
-                <div>Pending model: {transformDebugStats.historyCommit.pendingModelId ?? 'none'}</div>
-                <div>Pending description: {transformDebugStats.historyCommit.pendingDescription ?? 'none'}</div>
-                <div>Pending has after: {transformDebugStats.historyCommit.pendingHasAfter ? 'true' : 'false'}</div>
-                <div>Pending before rot: {formatDebugVec3Like(transformDebugStats.historyCommit.pendingBeforeRotation)}</div>
-                <div>Pending after rot: {formatDebugVec3Like(transformDebugStats.historyCommit.pendingAfterRotation)}</div>
-                <div>Commit requested: {transformDebugStats.historyCommit.commitRequested ? 'true' : 'false'}</div>
-                <div>Commit nonce: {transformDebugStats.historyCommit.commitNonce}</div>
-                <div>Pending resync: {transformDebugStats.historyCommit.pendingResync ? 'true' : 'false'}</div>
-                <div>Suppress next persistence: {transformDebugStats.historyCommit.suppressNextPersistence ? 'true' : 'false'}</div>
-                <div>
-                  Skip token: {transformDebugStats.historyCommit.skipToken
-                    ? `${transformDebugStats.historyCommit.skipToken.operation}:${transformDebugStats.historyCommit.skipToken.modelId}`
-                    : 'none'}
-                </div>
-                <div>Pending rotate-gizmo model: {transformDebugStats.historyCommit.pendingRotateGizmoModelId ?? 'none'}</div>
-                <div>Last result: {transformDebugStats.historyCommit.lastResult}</div>
-                <div>Last reason: {transformDebugStats.historyCommit.lastReason}</div>
-                <div>Last model: {transformDebugStats.historyCommit.lastModelId ?? 'none'}</div>
-                <div>Last description: {transformDebugStats.historyCommit.lastDescription ?? 'none'}</div>
-                <div>Last expected nonce: {transformDebugStats.historyCommit.lastExpectedNonce ?? 'n/a'}</div>
-                <div>Last scheduled nonce: {transformDebugStats.historyCommit.lastScheduledNonce ?? 'n/a'}</div>
-                <div>Last push applied: {transformDebugStats.historyCommit.lastPushApplied === null ? 'n/a' : (transformDebugStats.historyCommit.lastPushApplied ? 'true' : 'false')}</div>
-                <div>Undo before → after: {transformDebugStats.historyCommit.lastUndoCountBefore ?? 'n/a'} → {transformDebugStats.historyCommit.lastUndoCountAfter ?? 'n/a'}</div>
-                <div>Last attempt: {formatDebugTime(transformDebugStats.historyCommit.lastAt, transformDebugStats.timeline.nowPerfMs)}</div>
-              </div>
-            )}
-
-            <div className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-              Toggle: Ctrl+Shift+X
-            </div>
-          </div>
-        )}
+        {SharedPanelStack({
+          scene: scene,
+          slicing: slicing,
+          transformMgr: transformMgr,
+          handleSceneLayerScrubStart: handleSceneLayerScrubStart,
+          handleSceneLayerScrubEnd: handleSceneLayerScrubEnd,
+          isCrossSectionEnabled: isCrossSectionEnabled,
+          handleToggleCrossSection: handleToggleCrossSection,
+          isTransformDebugOverlayOpen: isTransformDebugOverlayOpen,
+          setIsTransformDebugOverlayOpen: setIsTransformDebugOverlayOpen,
+          displayActiveModelId: displayActiveModelId,
+          transformDebugStats: transformDebugStats,
+          supportDebugStats: supportDebugStats,
+          activeSupportEntityCounts: activeSupportEntityCounts,
+          formatDebugVec3: formatDebugVec3,
+          formatDebugVec3Like: formatDebugVec3Like,
+          formatDebugNumber: formatDebugNumber,
+          formatDebugTime: formatDebugTime,
+          formatDebugLatencyMs: formatDebugLatencyMs,
+          printingPreviewTotalLayers: printingPreviewTotalLayers,
+          printingSelectedLayer: printingSelectedLayer,
+          printingDisplayedLayer: printingDisplayedLayer,
+          isPrintingLayerScrubbing: isPrintingLayerScrubbing,
+          shouldShowScrubPreview: shouldShowScrubPreview,
+          printingSendProgress: printingSendProgress,
+          printingSendBusy: printingSendBusy,
+          printingSendStageText: printingSendStageText,
+          printingLayerPreviewUrls: printingLayerPreviewUrls,
+          printingArtifact: printingArtifact,
+          printingUploadDialogOpen: printingUploadDialogOpen,
+          printingUploadDialogStage: printingUploadDialogStage,
+          printingUploadDisplayProgress: printingUploadDisplayProgress,
+          printingReadyPlateId: printingReadyPlateId,
+          printingPrintNowBusy: printingPrintNowBusy,
+          printingSendStatusText: printingSendStatusText,
+          printingSlicingBenchmark: printingSlicingBenchmark,
+        })}
       </FloatingPanelStack>
 
       <div className="absolute inset-0 top-14 z-0 flex">
@@ -19793,207 +9668,42 @@ export default function Home() {
                 return true; // clear
               };
 
-              const previewModel = hollowPreview
-                ? scene.models.find((model) => model.id === hollowPreview.modelId) ?? null
-                : null;
-              const activeModelId = scene.activeModel?.id ?? null;
-              const isInHollowingTool = scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing';
-              const showDraftHolePunchMarkers = (
-                interiorView
-                || (
-                  isInHollowingTool
-                  && !isShellFaceSelectionPending
-                  && !hollowingEditMode
-                )
-              );
-              const holePunchCavityBoundaryDepthMm = (hollowingDraftEnabled || isHollowingApplied)
-                ? Math.max(0, hollowingState.shellThicknessMm)
-                : null;
-              const placedPunches = activeModelId
-                ? holePunchPlacements.filter((placement) => placement.modelId === activeModelId)
-                : [];
-              const hoverPunchPreview = (
-                !hoveredHolePunchPlacementId
-                && holePunchHoverPlacement
-                && holePunchHoverPlacement.modelId === activeModelId
-              )
-                ? holePunchHoverPlacement
-                : null;
-
               return (
-                <>
-                  {ghostData && LysGhostOverlay ? <LysGhostOverlay data={ghostData} visible /> : null}
-
-                  {placedPunches.map((placement) => {
-                    const isApplied = appliedHolePunchPlacementIds.has(placement.id);
-                    // Draft markers (blue, unapplied) always show so the user
-                    // can see what needs applying. Applied markers (orange/grey)
-                    // only show in prepare/hollowing mode.
-                    if (isApplied && !showDraftHolePunchMarkers) return null;
-                    return (
-                      <HolePunchPreviewCylinder
-                        key={`hole-punch-placement-${placement.id}`}
-                        position={placement.worldPoint}
-                        normal={placement.worldNormal}
-                        frame={placement.worldFrame}
-                        radiusMm={placement.radiusMm}
-                        radiusYMm={placement.radiusYMm}
-                        lengthMm={placement.depthMm}
-                        cavityBoundaryDepthMm={holePunchCavityBoundaryDepthMm}
-                        applied={isApplied}
-                        variant={isInHollowingTool && selectedHolePunchPlacementIdSet.has(placement.id)
-                          ? 'selected'
-                          : isInHollowingTool && placement.id === hoveredHolePunchPlacementId
-                            ? 'hover'
-                            : 'placed'}
-                        /* Only interactive when inside the hollowing tool */
-                        {...(isInHollowingTool ? {
-                          onHoverStart: () => {
-                            setHoveredHolePunchPlacementId(placement.id);
-                            setHolePunchHoverPlacement(null);
-                          },
-                          onHoverEnd: () => {
-                            setHoveredHolePunchPlacementId((previous) => (previous === placement.id ? null : previous));
-                          },
-                          onPointerDown: (event: any) => handleHolePunchPlacementDragStart(placement.id, event),
-                          onPointerMove: (event: any) => handleHolePunchPlacementDragMove(
-                            placement.id,
-                            event,
-                            raycastActiveModelFromRay,
-                          ),
-                          onPointerUp: (event: any) => handleHolePunchPlacementDragEnd(placement.id, event),
-                          onPointerCancel: (event: any) => handleHolePunchPlacementDragEnd(placement.id, event),
-                          onClick: () => {},
-                        } : {})}
-                      />
-                    );
-                  })}
-
-                  {showDraftHolePunchMarkers && hoverPunchPreview && (
-                    <HolePunchPreviewCylinder
-                      key="hole-punch-hover-preview"
-                      position={hoverPunchPreview.worldPoint}
-                      normal={hoverPunchPreview.worldNormal}
-                      radiusMm={holePunchState.radiusMm}
-                      radiusYMm={holePunchState.radiusYMm}
-                      lengthMm={holePunchState.depthMm}
-                      cavityBoundaryDepthMm={holePunchCavityBoundaryDepthMm}
-                      variant="hover"
-                    />
-                  )}
-
-                  {isInHollowingTool && selectedHolePunchPlacementIds.length === 1 && (() => {
-                    const selectedPlacement = placedPunches.find(
-                      (p) => selectedHolePunchPlacementIdSet.has(p.id),
-                    );
-                    if (!selectedPlacement) return null;
-                    return (
-                      <HolePunchGizmo
-                        key={`hole-punch-gizmo-${selectedPlacement.id}`}
-                        placement={selectedPlacement}
-                        onMoveStart={() => handleHolePunchGizmoMoveStart(selectedPlacement.id)}
-                        onMove={(delta) => handleHolePunchGizmoMove(selectedPlacement.id, delta)}
-                        onMoveEnd={() => handleHolePunchGizmoMoveEnd(selectedPlacement.id)}
-                        onRotateStart={() => handleHolePunchGizmoRotateStart(selectedPlacement.id)}
-                        onRotate={(newNormal, worldFrame) => handleHolePunchGizmoRotate(
-                          selectedPlacement.id,
-                          newNormal,
-                          worldFrame,
-                        )}
-                        onRotateEnd={() => handleHolePunchGizmoRotateEnd(selectedPlacement.id)}
-                      />
-                    );
-                  })()}
-
-                  {hollowPreview && previewModel && hollowingEditMode && !(isHollowingApplied && !isHollowingDirty) && (
-                    <WorldSpaceVoxelEditOverlay
-                      voxelCenters={hollowPreview.removedVoxelCenters}
-                      blockedVoxelCenters={hollowPreview.blockedVoxelCenters}
-                      voxelRadiusMm={Math.max(hollowPreview.report.voxelSizeMm, 0.2)}
-                      blockedVoxelIndexSet={blockedPreviewVoxelInstanceIdSet}
-                      modelTransform={{
-                        position: previewModel.transform.position,
-                        quaternion: quaternionFromGlobalEuler(previewModel.transform.rotation),
-                        scale: previewModel.transform.scale,
-                      }}
-                      geometryCenter={previewModel.geometry.center}
-                      onToggleVoxel={toggleBlockedHollowVoxelIndex}
-                    />
-                  )}
-
-                  {hollowPreview && previewModel && !hollowingEditMode && !(isHollowingApplied && !isHollowingDirty) && (
-                    <>
-                      {hollowPreview.previewVoxelSpheres && (
-                        <WorldSpaceVoxelPreview
-                          voxelCenters={hollowPreview.removedVoxelCenters}
-                          voxelSizeMm={hollowPreview.report.voxelSizeMm}
-                          modelTransform={{
-                            position: previewModel.transform.position,
-                            quaternion: quaternionFromGlobalEuler(previewModel.transform.rotation),
-                            scale: previewModel.transform.scale,
-                          }}
-                          geometryCenter={previewModel.geometry.center}
-                        />
-                      )}
-                      <group
-                        position={previewModel.transform.position}
-                        quaternion={quaternionFromGlobalEuler(previewModel.transform.rotation)}
-                        scale={previewModel.transform.scale}
-                      >
-                        {!hollowPreview.previewVoxelSpheres && (
-                          <mesh
-                            geometry={hollowPreview.geometry}
-                            position={new THREE.Vector3(
-                              -previewModel.geometry.center.x,
-                              -previewModel.geometry.center.y,
-                              -previewModel.geometry.center.z,
-                            )}
-                            raycast={() => null}
-                            renderOrder={6}
-                          >
-                            <meshStandardMaterial
-                              color={'#66ecff'}
-                              emissive={'#3be6f2'}
-                              emissiveIntensity={0.18}
-                              transparent
-                              opacity={0.62}
-                              depthTest
-                              depthWrite={false}
-                              side={THREE.DoubleSide}
-                              roughness={0.65}
-                              metalness={0.0}
-                            />
-                          </mesh>
-                        )}
-                        {hollowPreview.infillGeometry && (
-                          <mesh
-                            geometry={hollowPreview.infillGeometry}
-                            position={new THREE.Vector3(
-                              -previewModel.geometry.center.x,
-                            -previewModel.geometry.center.y,
-                            -previewModel.geometry.center.z,
-                          )}
-                          raycast={() => null}
-                          renderOrder={7}
-                        >
-                          <meshStandardMaterial
-                            color={'#43215f'}
-                            emissive={'#5a2f82'}
-                            emissiveIntensity={0.24}
-                            transparent
-                            opacity={0.9}
-                            depthTest
-                            depthWrite={false}
-                            side={THREE.DoubleSide}
-                            roughness={0.55}
-                            metalness={0.0}
-                          />
-                        </mesh>
-                      )}
-                    </group>
-                  </>
-                )}
-                </>
+              <SceneOverlays
+                raycastActiveModelFromRay={raycastActiveModelFromRay}
+                scene={scene}
+                transformMgr={transformMgr}
+                ghostData={ghostData}
+                LysGhostOverlay={LysGhostOverlay}
+                hollowPreview={hollowPreview}
+                hollowingEditMode={hollowingEditMode}
+                hollowingDraftEnabled={hollowingDraftEnabled}
+                isHollowingApplied={isHollowingApplied}
+                isHollowingDirty={isHollowingDirty}
+                isShellFaceSelectionPending={isShellFaceSelectionPending}
+                hollowingState={hollowingState}
+                blockedPreviewVoxelInstanceIdSet={blockedPreviewVoxelInstanceIdSet}
+                toggleBlockedHollowVoxelIndex={toggleBlockedHollowVoxelIndex}
+                interiorView={interiorView}
+                holePunchPlacements={holePunchPlacements}
+                appliedHolePunchPlacementIds={appliedHolePunchPlacementIds}
+                selectedHolePunchPlacementIds={selectedHolePunchPlacementIds}
+                selectedHolePunchPlacementIdSet={selectedHolePunchPlacementIdSet}
+                hoveredHolePunchPlacementId={hoveredHolePunchPlacementId}
+                holePunchHoverPlacement={holePunchHoverPlacement}
+                holePunchState={holePunchState}
+                setHoveredHolePunchPlacementId={setHoveredHolePunchPlacementId}
+                setHolePunchHoverPlacement={setHolePunchHoverPlacement}
+                handleHolePunchPlacementDragStart={handleHolePunchPlacementDragStart}
+                handleHolePunchPlacementDragMove={handleHolePunchPlacementDragMove}
+                handleHolePunchPlacementDragEnd={handleHolePunchPlacementDragEnd}
+                handleHolePunchGizmoMoveStart={handleHolePunchGizmoMoveStart}
+                handleHolePunchGizmoMove={handleHolePunchGizmoMove}
+                handleHolePunchGizmoMoveEnd={handleHolePunchGizmoMoveEnd}
+                handleHolePunchGizmoRotateStart={handleHolePunchGizmoRotateStart}
+                handleHolePunchGizmoRotate={handleHolePunchGizmoRotate}
+                handleHolePunchGizmoRotateEnd={handleHolePunchGizmoRotateEnd}
+              />
               );
             }}
             duplicatePreviewModel={
@@ -20040,7 +9750,7 @@ export default function Home() {
             {scene.mode === 'prepare' && transformMgr.transformMode === 'mirror' && (
               <MirrorTool
                 activeModelId={displayActiveModelId}
-                onMirror={handleMirror}
+                onMirror={mirror.handleMirror}
               />
             )}
           </SceneCanvas>
@@ -20110,175 +9820,35 @@ export default function Home() {
         </div>
 
         {scene.mode === 'printing' && (
-          <div
-            className="h-full w-1/2 min-w-0 min-h-0 grid overflow-hidden"
-            style={{ gridTemplateColumns: '56px minmax(0, 1fr)', background: 'var(--surface-0)' }}
-          >
-            <div
-              className="relative z-20 h-full overflow-visible border-r px-0 py-1.5"
-              style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}
-            >
-              <LayerSlider
-                min={1}
-                max={Math.max(1, printingPreviewTotalLayers)}
-                step={1}
-                value={Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer))}
-                onChange={handlePrintingLayerChange}
-                onScrubStart={handlePrintingLayerScrubStart}
-                onScrubEnd={handlePrintingLayerScrubEnd}
-                allowTrackClickJump
-                currentHeightMm={printingCurrentHeightMm ?? undefined}
-                maxHeightMm={slicing.heightMm}
-                showValue={true}
-                crossSectionMode={slicing.crossSectionMode}
-                showModeIndicator={false}
-                compactMinimalRail
-                dragBatchMode="raf"
-                docked
-                embedded
-                expandToContainer
-                className="mx-auto h-full"
-              />
-            </div>
-
-            <div className="h-full min-h-0 min-w-0 p-3 flex flex-col gap-2 overflow-hidden">
-              <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                Layer Preview
-              </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Layer {Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer))}/{Math.max(1, printingPreviewTotalLayers)}
-              </div>
-
-              <div
-                className="relative flex-1 min-h-0 min-w-0 rounded-lg border p-2 flex items-center justify-center overflow-hidden"
-                ref={printingPreviewViewportRef}
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'color-mix(in srgb, var(--surface-1), transparent 6%)',
-                  cursor: printingPreviewCursor,
-                  touchAction: 'none',
-                }}
-                onWheel={handlePrintingPreviewWheel}
-                onPointerDown={handlePrintingPreviewPointerDown}
-                onPointerMove={handlePrintingPreviewPointerMove}
-                onPointerUp={handlePrintingPreviewPointerEnd}
-                onPointerCancel={handlePrintingPreviewPointerEnd}
-              >
-                {/* Layered preview: GPU preview (instant) underneath, PNG (higher quality) on top when loaded */}
-                {(() => {
-                  const aspectW = printingPreviewTargetResolution
-                    ? printingPreviewTargetResolution.viewportWidth
-                    : activePrinterProfile?.buildVolumeMm?.width ?? 143;
-                  const aspectH = printingPreviewTargetResolution
-                    ? printingPreviewTargetResolution.viewportHeight
-                    : activePrinterProfile?.buildVolumeMm?.depth ?? 89;
-                  const aspectRatio = aspectW / aspectH;
-                  
-                  return (
-                    <div
-                      className="block rounded relative"
-                      style={{ 
-                        aspectRatio: aspectRatio.toString(),
-                        width: '100%',
-                        maxWidth: '100%',
-                        maxHeight: '100%',
-                        transform: printingPreviewVisualTransform || 'none',
-                        transformOrigin: 'center center',
-                        willChange: 'transform',
-                      }}
-                    >
-                      {/* Fast scrub preview: keep mounted to avoid first-use GPU warmup hitch. */}
-                      {printingPreviewTotalLayers > 0 && (
-                        <div
-                          className="absolute inset-0 transition-opacity duration-100"
-                          style={{
-                            opacity: 1,
-                            pointerEvents: 'none',
-                          }}
-                        >
-                          <PrintingLayerGpuPreview
-                            models={scene.models}
-                            clipZ={printingCurrentHeightMm}
-                            buildPlateWidthMm={activePrinterProfile?.buildVolumeMm?.width ?? 143}
-                            buildPlateDepthMm={activePrinterProfile?.buildVolumeMm?.depth ?? 89}
-                            viewportWidthMm={printingPreviewTargetResolution?.viewportWidth}
-                            viewportHeightMm={printingPreviewTargetResolution?.viewportHeight}
-                            supportGroupRef={supportDragGroupRef as React.RefObject<THREE.Group>}
-                            supportVersion={supportRenderRefreshNonce}
-                            mirrorX={activePrinterProfile?.display?.mirrorX === true}
-                            mirrorY={activePrinterProfile?.display?.mirrorY === true}
-                            className="block w-full h-full rounded"
-                            style={{
-                              transform: printingPreviewScrubUpscaleTransform || 'none',
-                              transformOrigin: 'center center',
-                              willChange: 'transform',
-                            }}
-                          />
-                        </div>
-                      )}
-
-                      {/* PNG layer on top (held briefly during scrub handoff to avoid flash). */}
-                      {printingPreviewPngUrlForDisplay && (
-                        <div 
-                          className="absolute inset-0 transition-opacity duration-150" 
-                          style={{ opacity: isPrintingPngLoaded ? 1 : 0 }}
-                        >
-                          {printingPreviewTargetResolution ? (
-                            <svg
-                              viewBox={`0 0 ${printingPreviewTargetResolution.viewportWidth} ${printingPreviewTargetResolution.viewportHeight}`}
-                              preserveAspectRatio="xMidYMid meet"
-                              className="block w-full h-full rounded"
-                              role="img"
-                              aria-label={`Layer ${printingSelectedLayer} preview`}
-                            >
-                              <image
-                                href={printingPreviewPngUrlForDisplay}
-                                x={0}
-                                y={0}
-                                width={printingPreviewTargetResolution.viewportWidth}
-                                height={printingPreviewTargetResolution.viewportHeight}
-                                preserveAspectRatio="none"
-                                style={{ imageRendering: 'pixelated' }}
-                              />
-                            </svg>
-                          ) : (
-                            <img
-                              src={printingPreviewPngUrlForDisplay}
-                              alt={`Layer ${printingSelectedLayer} preview`}
-                              className="block rounded w-full h-full object-contain"
-                              style={{ imageRendering: 'pixelated' }}
-                            />
-                          )}
-                        </div>
-                      )}
-
-                      {/* Fallback message when no data available */}
-                      {!selectedPrintingLayerPreviewUrl && printingPreviewTotalLayers === 0 && (
-                        <div
-                          className="absolute inset-0 rounded border border-dashed flex items-center justify-center text-xs"
-                          style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-                        >
-                          No preview available yet.
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
-
-                {selectedPrintingLayerPreviewUrl && usePrintingSettledHiResCanvas && (
-                  <canvas
-                    ref={printingPreviewCanvasRef}
-                    className="pointer-events-none absolute inset-0 block h-full w-full rounded transition-opacity duration-75"
-                    style={{
-                      imageRendering: 'pixelated',
-                      opacity: isPrintingSettledCanvasReady ? 1 : 0,
-                    }}
-                    aria-label={`Layer ${printingSelectedLayer} settled preview`}
-                  />
-                )}
-              </div>
-            </div>
-          </div>
+          <PrintingPreviewPane
+            printingPreviewTotalLayers={printingPreviewTotalLayers}
+            printingSelectedLayer={printingSelectedLayer}
+            handlePrintingLayerChange={handlePrintingLayerChange}
+            handlePrintingLayerScrubStart={handlePrintingLayerScrubStart}
+            handlePrintingLayerScrubEnd={handlePrintingLayerScrubEnd}
+            printingCurrentHeightMm={printingCurrentHeightMm}
+            slicingHeightMm={slicing.heightMm}
+            crossSectionMode={slicing.crossSectionMode}
+            printingPreviewViewportRef={printingPreviewViewportRef}
+            printingPreviewCursor={printingPreviewCursor}
+            handlePrintingPreviewWheel={handlePrintingPreviewWheel}
+            handlePrintingPreviewPointerDown={handlePrintingPreviewPointerDown}
+            handlePrintingPreviewPointerMove={handlePrintingPreviewPointerMove}
+            handlePrintingPreviewPointerEnd={handlePrintingPreviewPointerEnd}
+            printingPreviewTargetResolution={printingPreviewTargetResolution}
+            activePrinterProfile={activePrinterProfile}
+            printingPreviewVisualTransform={printingPreviewVisualTransform}
+            models={scene.models}
+            supportDragGroupRef={supportDragGroupRef}
+            supportRenderRefreshNonce={supportRenderRefreshNonce}
+            printingPreviewScrubUpscaleTransform={printingPreviewScrubUpscaleTransform}
+            printingPreviewPngUrlForDisplay={printingPreviewPngUrlForDisplay}
+            isPrintingPngLoaded={isPrintingPngLoaded}
+            selectedPrintingLayerPreviewUrl={selectedPrintingLayerPreviewUrl}
+            usePrintingSettledHiResCanvas={usePrintingSettledHiResCanvas}
+            printingPreviewCanvasRef={printingPreviewCanvasRef}
+            isPrintingSettledCanvasReady={isPrintingSettledCanvasReady}
+          />
         )}
       </div>
 
@@ -20290,3172 +9860,269 @@ export default function Home() {
         disabledActions={editorContextMenuDisabledActions}
       />
 
-      <DiagnosticsModal
-        isOpen={isDiagnosticsOpen}
-        onClose={() => setIsDiagnosticsOpen(false)}
-        appMode={scene.mode}
-        cameraProjectionMode={getSavedCameraProjectionSettings().mode}
-        modelCount={scene.models.length}
-        visibleModelCount={scene.models.filter((m) => m.visible).length}
-        selectedModelCount={scene.selectedModelIds.length}
-        totalPolygons={totalPolygons}
-        selectedPolygons={selectedPolygons}
-      />
-
-      <HistoryDebugModal
-        isOpen={isHistoryDebugOpen}
-        onClose={() => setIsHistoryDebugOpen(false)}
+      <DiagnosticsModals
+        clearHistory={clearHistory}
+        clearHistoryDebugEvents={clearHistoryDebugEvents}
+        handleHistoryCancelPreview={handleHistoryCancelPreview}
+        handleHistoryJumpToEvent={handleHistoryJumpToEvent}
         historyDebugEvents={historyDebugEvents}
+        historyPreviewTargetEventId={historyPreviewTargetEventId}
         historyStackCounts={historyStackCounts}
-        selectedPreviewEventId={historyPreviewTargetEventId}
-        isPreviewActive={isHistoryPreviewActive}
-        onJumpToEvent={handleHistoryJumpToEvent}
-        onCancelPreview={handleHistoryCancelPreview}
-        onClearEventLog={() => {
-          clearHistoryDebugEvents();
-        }}
-        onClearUndoRedoStacks={() => {
-          clearHistory();
-        }}
-        onClearAll={() => {
-          clearHistory();
-          clearHistoryDebugEvents();
-        }}
+        isDiagnosticsOpen={isDiagnosticsOpen}
+        isHistoryDebugOpen={isHistoryDebugOpen}
+        isHistoryPreviewActive={isHistoryPreviewActive}
+        isSliceMetricsDebugOpen={isSliceMetricsDebugOpen}
+        printingArtifact={printingArtifact}
+        printingOutputSizeLabel={printingOutputSizeLabel}
+        printingSlicingBenchmark={printingSlicingBenchmark}
+        scene={scene}
+        selectedPolygons={selectedPolygons}
+        setIsDiagnosticsOpen={setIsDiagnosticsOpen}
+        setIsHistoryDebugOpen={setIsHistoryDebugOpen}
+        setIsSliceMetricsDebugOpen={setIsSliceMetricsDebugOpen}
+        totalPolygons={totalPolygons}
       />
 
-      <SliceMetricsDebugModal
-        isOpen={isSliceMetricsDebugOpen}
-        onClose={() => setIsSliceMetricsDebugOpen(false)}
-        benchmark={printingSlicingBenchmark}
-        outputName={printingArtifact?.outputName ?? null}
-        outputSizeLabel={printingOutputSizeLabel}
+      <PrintingModals
+        DEFAULT_RELAY_AUTORETRY_DELAY_MS={DEFAULT_RELAY_AUTORETRY_DELAY_MS}
+        DEFAULT_RELAY_AUTORETRY_LIMIT={DEFAULT_RELAY_AUTORETRY_LIMIT}
+        activeNetworkUiAdapter={activeNetworkUiAdapter}
+        activePrinterProfile={activePrinterProfile}
+        canPrintNow={canPrintNow}
+        canSendToPrinter={canSendToPrinter}
+        cancelPrintingMonitorWebcamReadinessCheck={cancelPrintingMonitorWebcamReadinessCheck}
+        dashboardMonitorDevices={dashboardMonitorDevices}
+        executeDeleteMonitorRecentPlate={executeDeleteMonitorRecentPlate}
+        executePrintingMonitorControlAction={executePrintingMonitorControlAction}
+        executePrintingMonitorFeatureToggle={executePrintingMonitorFeatureToggle}
+        executePrintingMonitorSdcpDebugCommand={executePrintingMonitorSdcpDebugCommand}
+        executeStartMonitorRecentPlate={executeStartMonitorRecentPlate}
+        handleCopyPrintingMonitorDebugBundle={handleCopyPrintingMonitorDebugBundle}
+        handleDeleteMonitorRecentPlate={handleDeleteMonitorRecentPlate}
+        handlePrintNow={handlePrintNow}
+        handlePrintingMonitorControlAction={handlePrintingMonitorControlAction}
+        handlePrintingMonitorStoragePathChange={handlePrintingMonitorStoragePathChange}
+        handleResetPrintingMonitorWebcamStreamSlot={handleResetPrintingMonitorWebcamStreamSlot}
+        handleSavePrintingMonitorWebcamSnapshot={handleSavePrintingMonitorWebcamSnapshot}
+        handleSendToPrinter={handleSendToPrinter}
+        handleStartMonitorRecentPlate={handleStartMonitorRecentPlate}
+        hasPrintingMonitorFleet={hasPrintingMonitorFleet}
+        isPreSliceTargetPicker={isPreSliceTargetPicker}
+        isPrintingMonitorDebugOpen={isPrintingMonitorDebugOpen}
+        isPrintingMonitorPolling={isPrintingMonitorPolling}
+        isPrintingMonitorPrinterMenuOpen={isPrintingMonitorPrinterMenuOpen}
+        isPrintingMonitorRecentPlatesLoading={isPrintingMonitorRecentPlatesLoading}
+        isPrintingMonitorRtspDebugOpen={isPrintingMonitorRtspDebugOpen}
+        isPrintingMonitorSelectedPrinterOffline={isPrintingMonitorSelectedPrinterOffline}
+        isPrintingMonitorStatusRequestInFlight={isPrintingMonitorStatusRequestInFlight}
+        isPrintingMonitorThumbnailLoaded={isPrintingMonitorThumbnailLoaded}
+        isPrintingMonitorWebcamLoaded={isPrintingMonitorWebcamLoaded}
+        isPrintingMonitorWebcamResetBusy={isPrintingMonitorWebcamResetBusy}
+        isPrintingMonitorWebcamSnapshotSaving={isPrintingMonitorWebcamSnapshotSaving}
+        isPrintingMonitorWithinSlowResponseGrace={isPrintingMonitorWithinSlowResponseGrace}
+        isPrintingTargetMaterialsLoading={isPrintingTargetMaterialsLoading}
+        modeBeforePrintingRef={modeBeforePrintingRef}
+        monitorSelectableDevices={monitorSelectableDevices}
+        monitorWebcamDisplayAspectRatio={monitorWebcamDisplayAspectRatio}
+        monitorWebcamTransform={monitorWebcamTransform}
+        monitoringDevice={monitoringDevice}
+        openPrintingMonitorForTargetDevice={openPrintingMonitorForTargetDevice}
+        performSendToPrinter={performSendToPrinter}
+        preSlicePrintConfirmOpen={preSlicePrintConfirmOpen}
+        preSlicePrintConfirmResolverRef={preSlicePrintConfirmResolverRef}
+        preSliceTargetPickerResolverRef={preSliceTargetPickerResolverRef}
+        printableConnectedPrinterFleet={printableConnectedPrinterFleet}
+        printerReachabilityByDeviceId={printerReachabilityByDeviceId}
+        printingArtifact={printingArtifact}
+        printingDialogIsIndeterminate={printingDialogIsIndeterminate}
+        printingDialogProgressPercent={printingDialogProgressPercent}
+        printingDialogStageLabel={printingDialogStageLabel}
+        printingMonitorActionBusy={printingMonitorActionBusy}
+        printingMonitorActionStatus={printingMonitorActionStatus}
+        printingMonitorAnyActionBusy={printingMonitorAnyActionBusy}
+        printingMonitorCanExpandWebcam={printingMonitorCanExpandWebcam}
+        printingMonitorCancelButtonAnimating={printingMonitorCancelButtonAnimating}
+        printingMonitorCancelButtonDisabled={printingMonitorCancelButtonDisabled}
+        printingMonitorControlPendingAction={printingMonitorControlPendingAction}
+        printingMonitorDashboardSnapshots={printingMonitorDashboardSnapshots}
+        printingMonitorDebugBundle={printingMonitorDebugBundle}
+        printingMonitorDebugCopyState={printingMonitorDebugCopyState}
+        printingMonitorDebugPanels={printingMonitorDebugPanels}
+        printingMonitorDetailWebcamExpanded={printingMonitorDetailWebcamExpanded}
+        printingMonitorDisplayCurrentLayer={printingMonitorDisplayCurrentLayer}
+        printingMonitorDisplayMaterialProfile={printingMonitorDisplayMaterialProfile}
+        printingMonitorDisplayProgressPct={printingMonitorDisplayProgressPct}
+        printingMonitorDisplayTotalLayers={printingMonitorDisplayTotalLayers}
+        printingMonitorEmergencyStopDisabled={printingMonitorEmergencyStopDisabled}
+        printingMonitorHasActivePrint={printingMonitorHasActivePrint}
+        printingMonitorHasCamera={printingMonitorHasCamera}
+        printingMonitorHeaderBottomLabel={printingMonitorHeaderBottomLabel}
+        printingMonitorHeaderTitle={printingMonitorHeaderTitle}
+        printingMonitorHeaderTopLabel={printingMonitorHeaderTopLabel}
+        printingMonitorHeaderUsesFleetLabelOrder={printingMonitorHeaderUsesFleetLabelOrder}
+        printingMonitorInlineWebcamUrl={printingMonitorInlineWebcamUrl}
+        printingMonitorIsPauseTransition={printingMonitorIsPauseTransition}
+        printingMonitorLastFeatureToggleResponse={printingMonitorLastFeatureToggleResponse}
+        printingMonitorLeftColumnRef={printingMonitorLeftColumnRef}
+        printingMonitorModalOpen={printingMonitorModalOpen}
+        printingMonitorModalWidthClass={printingMonitorModalWidthClass}
+        printingMonitorPauseButtonAnimating={printingMonitorPauseButtonAnimating}
+        printingMonitorPauseButtonDisabled={printingMonitorPauseButtonDisabled}
+        printingMonitorPendingConfirmation={printingMonitorPendingConfirmation}
+        printingMonitorPlatesStoragePath={printingMonitorPlatesStoragePath}
+        printingMonitorPrinterMenuRef={printingMonitorPrinterMenuRef}
+        printingMonitorPrinterThumbnailSrc={printingMonitorPrinterThumbnailSrc}
+        printingMonitorRecentPlates={printingMonitorRecentPlates}
+        printingMonitorRecentPlatesError={printingMonitorRecentPlatesError}
+        printingMonitorRelayAutoRetryCountRef={printingMonitorRelayAutoRetryCountRef}
+        printingMonitorRelayAutoRetryTimeoutRef={printingMonitorRelayAutoRetryTimeoutRef}
+        printingMonitorRelayBaseWsUrl={printingMonitorRelayBaseWsUrl}
+        printingMonitorRelayDebugTransport={printingMonitorRelayDebugTransport}
+        printingMonitorRelayReclaimDebug={printingMonitorRelayReclaimDebug}
+        printingMonitorRtspDebugSummary={printingMonitorRtspDebugSummary}
+        printingMonitorRtspSourceUrl={printingMonitorRtspSourceUrl}
+        printingMonitorSlowResponseGraceRemainingSec={printingMonitorSlowResponseGraceRemainingSec}
+        printingMonitorSnapshot={printingMonitorSnapshot}
+        printingMonitorThumbnailDisplayUrl={printingMonitorThumbnailDisplayUrl}
+        printingMonitorThumbnailUrl={printingMonitorThumbnailUrl}
+        printingMonitorUsesTwoColumnDetailLayout={printingMonitorUsesTwoColumnDetailLayout}
+        printingMonitorViewMode={printingMonitorViewMode}
+        printingMonitorWebcamCanResetStreamSlot={printingMonitorWebcamCanResetStreamSlot}
+        printingMonitorWebcamDisplayPresentation={printingMonitorWebcamDisplayPresentation}
+        printingMonitorWebcamLoadError={printingMonitorWebcamLoadError}
+        printingMonitorWebcamSectionRef={printingMonitorWebcamSectionRef}
+        printingMonitorWebcamStatusPresentation={printingMonitorWebcamStatusPresentation}
+        printingMonitorWebcamUrl={printingMonitorWebcamUrl}
+        printingMonitorWebcamUsesRelayWs={printingMonitorWebcamUsesRelayWs}
+        printingMonitorWebcamViewportRef={printingMonitorWebcamViewportRef}
+        printingMonitoringAdapter={printingMonitoringAdapter}
+        printingPrintNowBusy={printingPrintNowBusy}
+        printingProcessingElapsedLabel={printingProcessingElapsedLabel}
+        printingReadyPlateId={printingReadyPlateId}
+        printingSendBusy={printingSendBusy}
+        printingSendStatusText={printingSendStatusText}
+        printingTargetDevice={printingTargetDevice}
+        printingTargetDeviceId={printingTargetDeviceId}
+        printingTargetMaterialError={printingTargetMaterialError}
+        printingTargetMaterialGroups={printingTargetMaterialGroups}
+        printingTargetMaterialId={printingTargetMaterialId}
+        printingTargetMaterialOptions={printingTargetMaterialOptions}
+        printingTargetPickerOpen={printingTargetPickerOpen}
+        printingUploadDialogOpen={printingUploadDialogOpen}
+        printingUploadDialogStage={printingUploadDialogStage}
+        printingUploadTelemetry={printingUploadTelemetry}
+        refreshPrintingMonitorRecentPlates={refreshPrintingMonitorRecentPlates}
+        requiresRemoteMaterialSelectionForUpload={requiresRemoteMaterialSelectionForUpload}
+        scene={scene}
+        schedulePrintingMonitorMjpegReadinessCheck={schedulePrintingMonitorMjpegReadinessCheck}
+        setIsPrintingMonitorDebugOpen={setIsPrintingMonitorDebugOpen}
+        setIsPrintingMonitorPrinterMenuOpen={setIsPrintingMonitorPrinterMenuOpen}
+        setIsPrintingMonitorPrinterThumbnailFailed={setIsPrintingMonitorPrinterThumbnailFailed}
+        setIsPrintingMonitorRtspDebugOpen={setIsPrintingMonitorRtspDebugOpen}
+        setIsPrintingMonitorWebcamLoaded={setIsPrintingMonitorWebcamLoaded}
+        setPreSlicePrintConfirmOpen={setPreSlicePrintConfirmOpen}
+        setPrintingMonitorDeviceId={setPrintingMonitorDeviceId}
+        setPrintingMonitorModalOpen={setPrintingMonitorModalOpen}
+        setPrintingMonitorPendingConfirmation={setPrintingMonitorPendingConfirmation}
+        setPrintingMonitorViewMode={setPrintingMonitorViewMode}
+        setPrintingMonitorWebcamAspectRatio={setPrintingMonitorWebcamAspectRatio}
+        setPrintingMonitorWebcamExpanded={setPrintingMonitorWebcamExpanded}
+        setPrintingMonitorWebcamLoadError={setPrintingMonitorWebcamLoadError}
+        setPrintingTargetDeviceId={setPrintingTargetDeviceId}
+        setPrintingTargetMaterialId={setPrintingTargetMaterialId}
+        setPrintingTargetPickerMode={setPrintingTargetPickerMode}
+        setPrintingTargetPickerOpen={setPrintingTargetPickerOpen}
+        setPrintingUploadDialogOpen={setPrintingUploadDialogOpen}
+        setShouldAutoSliceOnExportEntry={setShouldAutoSliceOnExportEntry}
+        setShowPrintingResliceModal={setShowPrintingResliceModal}
+        setShowSliceCompletedModal={setShowSliceCompletedModal}
+        setUvToolsLaunchingPath={setUvToolsLaunchingPath}
+        shouldReturnToPrintingAfterSliceRef={shouldReturnToPrintingAfterSliceRef}
+        shouldShowPrintingMonitorSlowResponseCard={shouldShowPrintingMonitorSlowResponseCard}
+        showPrintingResliceModal={showPrintingResliceModal}
+        showSliceCompletedModal={showSliceCompletedModal}
+        sliceCompletedModalData={sliceCompletedModalData}
+        slicedLayerHeightMm={slicedLayerHeightMm}
+        triggerPrintingMonitorWebcamRetry={triggerPrintingMonitorWebcamRetry}
+        uvToolsLaunchingPath={uvToolsLaunchingPath}
       />
 
-      <SliceCompletedModal
-        isOpen={showSliceCompletedModal}
-        onClose={() => setShowSliceCompletedModal(false)}
-        filePath={sliceCompletedModalData.filePath}
-        slicingTimeMs={sliceCompletedModalData.slicingTimeMs}
-        onOpenInUvTools={getSavedUvToolsSettings().enabled ? (fp) => {
-          const s = getSavedUvToolsSettings();
-          launchExternalProcess(resolveUvToolsExecutablePath(s), fp).catch((err) =>
-            console.warn('[UVTools] Failed to launch from completed dialog:', err),
-          );
-        } : undefined}
+      <SceneFileModals
+        arrangeOverlayContent={arrangeOverlayContent}
+        arrangeOverlayElapsedLabel={arrangeOverlayElapsedLabel}
+        arrangeOverlayModelCount={arrangeOverlayModelCount}
+        autosaveRecovery={autosaveRecovery}
+        closeUnsavedChangesBusy={closeUnsavedChangesBusy}
+        handleAutosaveDiscard={handleAutosaveDiscard}
+        handleAutosaveRestore={handleAutosaveRestore}
+        handleCancelPluginImportWarning={handleCancelPluginImportWarning}
+        handleContinuePluginImportWarning={handleContinuePluginImportWarning}
+        handleDiscardAndCloseProgram={handleDiscardAndCloseProgram}
+        handleSaveAndCloseProgram={handleSaveAndCloseProgram}
+        hasUnsavedSceneChanges={hasUnsavedSceneChanges}
+        pluginImportWarningSkipFuture={pluginImportWarningSkipFuture}
+        resolveSceneSaveChoice={resolveSceneSaveChoice}
+        scene={scene}
+        sceneSaveChoiceFileName={sceneSaveChoiceFileName}
+        sceneSaveChoicePath={sceneSaveChoicePath}
+        setPluginImportWarningSkipFuture={setPluginImportWarningSkipFuture}
+        setShowCloseUnsavedChangesModal={setShowCloseUnsavedChangesModal}
+        setSupportsInfoModelId={setSupportsInfoModelId}
+        setZipPickerState={setZipPickerState}
+        showArrangeBlockingOverlay={showArrangeBlockingOverlay}
+        showCloseUnsavedChangesModal={showCloseUnsavedChangesModal}
+        showPluginImportWarningModal={showPluginImportWarningModal}
+        showSceneSaveChoiceModal={showSceneSaveChoiceModal}
+        supportsInfoModelId={supportsInfoModelId}
+        zipPickerResolveRef={zipPickerResolveRef}
+        zipPickerState={zipPickerState}
       />
 
-      <UvToolsLaunchingModal
-        isOpen={uvToolsLaunchingPath !== null}
-        filePath={uvToolsLaunchingPath}
-        onLaunchComplete={() => setUvToolsLaunchingPath(null)}
+      <ModifierModals
+        handleApplyHolePunch={handleApplyHolePunch}
+        handleCancelDestructiveTransform={handleCancelDestructiveTransform}
+        handleConfirmBlockerReset={handleConfirmBlockerReset}
+        handleConfirmDestructiveTransform={handleConfirmDestructiveTransform}
+        handleConfirmModifierReset={handleConfirmModifierReset}
+        modifierApplyOverlayContent={modifierApplyOverlayContent}
+        modifierApplyOverlayElapsedLabel={modifierApplyOverlayElapsedLabel}
+        pendingBlockerResetState={pendingBlockerResetState}
+        pendingDestructiveTransform={pendingDestructiveTransform}
+        pendingModifierResetAction={pendingModifierResetAction}
+        setPendingBlockerResetState={setPendingBlockerResetState}
+        setPendingModifierResetAction={setPendingModifierResetAction}
+        setShowUnappliedHolePunchModal={setShowUnappliedHolePunchModal}
+        showModifierApplyBlockingOverlay={showModifierApplyBlockingOverlay}
+        showUnappliedHolePunchModal={showUnappliedHolePunchModal}
+        unappliedHolePunchResolveRef={unappliedHolePunchResolveRef}
       />
 
-      <ModelSupportsModal
-        isOpen={supportsInfoModelId !== null}
-        onClose={() => setSupportsInfoModelId(null)}
-        model={scene.models.find((m) => m.id === supportsInfoModelId) ?? null}
+      <MeshRepairModals
+        isManualRepairing={isManualRepairing}
+        manualRepairModelId={manualRepairModelId}
+        scene={scene}
+        setIsManualRepairing={setIsManualRepairing}
+        setManualRepairModelId={setManualRepairModelId}
+        setShowDamagedModelDialog={setShowDamagedModelDialog}
+        showDamagedModelDialog={showDamagedModelDialog}
       />
 
-      <StructuredDialogModal
-        open={showUnappliedHolePunchModal}
-        ariaLabel="Unapplied hole punches"
-        title="Unapplied Holes"
-        subtitle="Some models have unapplied hole punches"
-        icon={<AlertTriangle className="h-4 w-4" />}
-        iconTone="warning"
-        closeAriaLabel="Close"
-        onClose={() => {
-          setShowUnappliedHolePunchModal(false);
-          unappliedHolePunchResolveRef.current?.('skip');
-          unappliedHolePunchResolveRef.current = null;
-        }}
-        actions={(
-          <>
-            <button
-              type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-              onClick={() => {
-                setShowUnappliedHolePunchModal(false);
-                unappliedHolePunchResolveRef.current?.('skip');
-                unappliedHolePunchResolveRef.current = null;
-              }}
-            >
-              Continue Without
-            </button>
-            <button
-              type="button"
-              className="ui-button ui-button-accent !h-9 px-3 text-xs"
-              onClick={() => {
-                setShowUnappliedHolePunchModal(false);
-                unappliedHolePunchResolveRef.current = null;
-                // Defer so the modal closes before apply starts.
-                setTimeout(() => { handleApplyHolePunch(); }, 0);
-              }}
-            >
-              Apply Now
-            </button>
-          </>
-        )}
-      >
-        <div className="space-y-2">
-          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            One or more models have hole punches that haven&apos;t been applied.
-            Hole punches must be baked into the geometry before slicing or they
-            will not appear in the output.
-          </p>
-          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            <strong>Do you want to apply them now?</strong>
-          </p>
-        </div>
-      </StructuredDialogModal>
-
-      <DestructiveTransformModal
-        isOpen={pendingDestructiveTransform !== null}
-        modelName={pendingDestructiveTransform?.modelName ?? null}
-        supportCount={pendingDestructiveTransform?.supportCount ?? 0}
-        operationLabel={pendingDestructiveTransform?.operationLabel ?? 'Transform'}
-        onCancel={handleCancelDestructiveTransform}
-        onConfirm={handleConfirmDestructiveTransform}
+      <NotificationStack
+        isSaveToastVisible={isSaveToastVisible}
+        isSaveToastAnimatedVisible={isSaveToastAnimatedVisible}
+        saveToastLabel={saveToastLabel}
+        historyActionToast={historyActionToast}
+        isHistoryActionToastVisible={isHistoryActionToastVisible}
+        printingMonitorErrorToast={printingMonitorErrorToast}
+        isPrintingMonitorErrorToastVisible={isPrintingMonitorErrorToastVisible}
+        sceneImportReport={scene.sceneImportReport}
+        isSceneImportToastVisible={isSceneImportToastVisible}
+        onOpenMeshRepairReport={scene.openPendingMeshRepairReports}
+        exportSuccessToast={exportSuccessToast}
+        isExportSuccessToastVisible={isExportSuccessToastVisible}
+        exportErrorToast={exportErrorToast}
+        isExportErrorToastVisible={isExportErrorToastVisible}
       />
-
-      <StructuredDialogModal
-        open={showDamagedModelDialog}
-        ariaLabel="Mesh boolean operation failed"
-        title="Mesh quality too low"
-        subtitle="Boolean operation requires a manifold mesh"
-        icon={<AlertTriangle className="h-4 w-4" />}
-        iconTone="danger"
-        closeDisabled
-        onClose={() => setShowDamagedModelDialog(false)}
-        actions={(
-          <button
-            type="button"
-            className="ui-button ui-button-accent !h-9 px-3 text-xs"
-            onClick={() => setShowDamagedModelDialog(false)}
-          >
-            Got it
-          </button>
-        )}
-      >
-        <div className="space-y-2">
-          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            This mesh contains too many self-intersecting triangles and
-            non-manifold edges for boolean operations to succeed.
-            The import repair pass reduced but could not fully resolve
-            all issues in the geometry.
-          </p>
-          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            We recommend repairing the mesh in a dedicated 3D modeling
-            program such as <strong>Blender</strong> or{' '}
-            <strong>Netfabb</strong> before importing it into DragonFruit.
-          </p>
-        </div>
-      </StructuredDialogModal>
-
-      <StructuredDialogModal
-        open={pendingModifierResetAction !== null}
-        ariaLabel="Confirm modifier reset"
-        title={pendingModifierResetAction === 'hollowing' ? 'Remove Hollowing?' : 'Remove All Holes?'}
-        subtitle="This action can't be undone"
-        icon={<AlertTriangle className="h-4 w-4" />}
-        iconTone="warning"
-        closeAriaLabel="Close reset confirmation"
-        onClose={() => setPendingModifierResetAction(null)}
-        actions={(
-          <>
-            <button
-              type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-              onClick={() => setPendingModifierResetAction(null)}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="ui-button !h-9 px-3 text-xs"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 36%)',
-                background: 'color-mix(in srgb, var(--danger), transparent 86%)',
-                color: 'var(--danger)',
-              }}
-              onClick={handleConfirmModifierReset}
-            >
-              {pendingModifierResetAction === 'hollowing' ? 'Remove Hollowing' : 'Remove All Holes'}
-            </button>
-          </>
-        )}
-      >
-        <div className="space-y-2">
-          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            {pendingModifierResetAction === 'hollowing'
-              ? 'Are you sure you want to remove hollowing from this model?'
-              : 'Are you sure you want to remove all hole punches from this model?'}
-          </p>
-          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            {pendingModifierResetAction === 'hollowing'
-              ? 'Your model will return to its solid version.'
-              : 'All holes on this model will be removed.'}
-          </p>
-        </div>
-      </StructuredDialogModal>
-
-      <StructuredDialogModal
-        open={pendingBlockerResetState !== null}
-        ariaLabel="Confirm blocker reset"
-        title="Reset Blockers?"
-        subtitle="Blockers will be lost"
-        icon={<AlertTriangle className="h-4 w-4" />}
-        iconTone="warning"
-        closeAriaLabel="Close blocker reset confirmation"
-        onClose={() => setPendingBlockerResetState(null)}
-        actions={(
-          <>
-            <button
-              type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-              onClick={() => setPendingBlockerResetState(null)}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="ui-button !h-9 px-3 text-xs"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 36%)',
-                background: 'color-mix(in srgb, var(--danger), transparent 86%)',
-                color: 'var(--danger)',
-              }}
-              onClick={handleConfirmBlockerReset}
-            >
-              Reset Blockers
-            </button>
-          </>
-        )}
-      >
-        <div className="space-y-2">
-          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            Changing the voxel resolution or shell thickness will clear all applied blockers.
-          </p>
-          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            You will need to re-select blocked regions after the change.
-          </p>
-        </div>
-      </StructuredDialogModal>
-
-      {scene.sceneImportPlacementPrompt && (
-        <div
-          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              scene.resolveSceneImportPlacementPrompt('load_as_is');
-            }
-          }}
-        >
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Scene import placement decision"
-          >
-            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex min-w-0 items-center gap-3">
-                <span
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                    color: 'var(--accent)',
-                  }}
-                >
-                  <LayoutGrid className="h-4 w-4" />
-                </span>
-
-                <div className="min-w-0 pr-2">
-                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    Scene may be off-plate
-                  </h2>
-                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    Choose how to place imported models.
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-                aria-label="Close scene import placement prompt"
-                onClick={() => scene.resolveSceneImportPlacementPrompt('load_as_is')}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-4 p-5">
-              <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Imported scene</div>
-                <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={scene.sceneImportPlacementPrompt.fileName}>
-                  {scene.sceneImportPlacementPrompt.fileName}
-                </div>
-                <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  {scene.sceneImportPlacementPrompt.offPlateModelCount.toLocaleString()} of {scene.sceneImportPlacementPrompt.modelCount.toLocaleString()} model{scene.sceneImportPlacementPrompt.modelCount === 1 ? '' : 's'} appear outside the build plate.
-                </div>
-              </div>
-
-              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                <strong style={{ color: 'var(--text-strong)' }}>Auto-Arrange</strong> will reposition imported models onto free space on the plate.
-                <span className="mt-1 block">
-                  <strong style={{ color: 'var(--text-strong)' }}>Load As-Is</strong> keeps scene coordinates exactly as stored in the file.
-                </span>
-              </p>
-
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
-                  onClick={() => scene.resolveSceneImportPlacementPrompt('load_as_is')}
-                >
-                  Load As-Is
-                </button>
-                <button
-                  type="button"
-                  className="ui-button ui-button-accent !h-9 w-full px-3 text-xs"
-                  onClick={() => scene.resolveSceneImportPlacementPrompt('auto_arrange')}
-                >
-                  Auto-Arrange
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {autosaveRecovery && (
-        <SceneAutosaveRecoveryModal
-          savedAt={autosaveRecovery.savedAt}
-          onRestore={handleAutosaveRestore}
-          onDiscard={handleAutosaveDiscard}
-        />
-      )}
-
-      {scene.meshRepairConfirmPrompt && (
-        <MeshRepairConfirmModal
-          prompt={scene.meshRepairConfirmPrompt}
-          onRepair={() => scene.resolveMeshRepairConfirmPrompt('repair')}
-          onLoadAsIs={() => scene.resolveMeshRepairConfirmPrompt('load_as_is')}
-          onCancelImport={() => scene.resolveMeshRepairConfirmPrompt('cancel_import')}
-        />
-      )}
-
-      {manualRepairModelId && (() => {
-        const repairModel = scene.models.find(m => m.id === manualRepairModelId);
-        if (!repairModel) return null;
-        return (
-          <div
-            className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget && !isManualRepairing) {
-                setManualRepairModelId(null);
-              }
-            }}
-          >
-            <div
-              className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-              style={{
-                background: 'var(--surface-0)',
-                borderColor: 'var(--border-subtle)',
-                boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-              }}
-              role="dialog"
-              aria-modal="true"
-              aria-label="Repair mesh"
-            >
-              <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="flex min-w-0 items-center gap-3">
-                  <span
-                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                    style={{
-                      borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 45%)',
-                      background: 'color-mix(in srgb, #d97706, var(--surface-1) 88%)',
-                      color: '#d97706',
-                    }}
-                  >
-                    <AlertTriangle className="h-4 w-4" />
-                  </span>
-
-                  <div className="min-w-0 pr-2">
-                    <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                      Repair this mesh?
-                    </h2>
-                    <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                      DragonFruit will try to fix common geometry issues before you keep working.
-                    </p>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                  style={{
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-                  aria-label="Close repair mesh dialog"
-                  disabled={isManualRepairing}
-                  onClick={() => setManualRepairModelId(null)}
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="space-y-4 p-5">
-                <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Model</div>
-                  <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={repairModel.name}>
-                    {repairModel.name}
-                  </div>
-                </div>
-
-                <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                  Repair can help with holes, broken surfaces, and other mesh problems that may lead to slicing or print issues.
-                </p>
-
-                <div
-                  className="rounded-md border px-3 py-2"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 40%)',
-                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 92%)',
-                  }}
-                >
-                  <div className="flex items-start gap-2">
-                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#d97706' }} />
-                    <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                      <strong style={{ color: 'var(--text-strong)' }}>Heads up:</strong> The repaired result will replace this model in your current scene. Large or badly damaged meshes can take longer, and some files may still need manual cleanup afterward.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
-                    disabled={isManualRepairing}
-                    onClick={() => setManualRepairModelId(null)}
-                  >
-                    Keep Original
-                  </button>
-                  <button
-                    type="button"
-                    className="ui-button ui-button-accent !h-9 w-full px-3 text-xs flex items-center justify-center gap-1.5 disabled:opacity-60"
-                    disabled={isManualRepairing}
-                    onClick={() => {
-                      const id = manualRepairModelId;
-                      setIsManualRepairing(true);
-                      void scene.repairModelInPlace(id).finally(() => {
-                        setIsManualRepairing(false);
-                        setManualRepairModelId(null);
-                      });
-                    }}
-                  >
-                    {isManualRepairing
-                      ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Repairing…</>
-                      : <><Wrench className="h-3.5 w-3.5" />Repair</>
-                    }
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {scene.meshRepairReports.length > 0 && (
-        <MeshRepairReportModal
-          reports={scene.meshRepairReports}
-          presentation={scene.meshRepairReportPresentation}
-          onDismiss={scene.dismissMeshRepairReports}
-        />
-      )}
-
-      {showPluginImportWarningModal && (
-        <div
-          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              handleCancelPluginImportWarning();
-            }
-          }}
-        >
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="LYS import experimental warning"
-          >
-            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex min-w-0 items-center gap-3">
-                <span
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                    color: '#d97706',
-                  }}
-                >
-                  <AlertTriangle className="h-4 w-4" />
-                </span>
-
-                <div className="min-w-0 pr-2">
-                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    LYS Import is Experimental
-                  </h2>
-                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    This feature is still under development.
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-                aria-label="Close LYS import warning"
-                onClick={handleCancelPluginImportWarning}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-4 p-5">
-              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                Geometry, support placement, and transforms can import differently across `.lys` scene variants, so unforeseen results are still possible.
-              </p>
-
-              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                <label className="inline-flex items-center gap-2 text-xs select-none" style={{ color: 'var(--text-muted)' }}>
-                  <input
-                    type="checkbox"
-                    checked={pluginImportWarningSkipFuture}
-                    onChange={(event) => setPluginImportWarningSkipFuture(event.target.checked)}
-                    className="h-3.5 w-3.5 rounded border"
-                    style={{ accentColor: '#f59e0b' }}
-                  />
-                  <span>Do not remind again</span>
-                </label>
-
-                <div className="flex shrink-0 items-center gap-2">
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                    onClick={handleCancelPluginImportWarning}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    className="ui-button !h-9 px-3 text-xs"
-                    style={{
-                      borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
-                      background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
-                      color: '#fde68a',
-                    }}
-                    onClick={handleContinuePluginImportWarning}
-                  >
-                    Continue
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {zipPickerState && (
-        <ZipFilePickerModal
-          zipName={zipPickerState.zipName}
-          files={zipPickerState.files}
-          category={zipPickerState.category}
-          defaultSelectionCategory={zipPickerState.defaultSelectionCategory}
-          onConfirm={(selected) => {
-            const resolve = zipPickerResolveRef.current;
-            zipPickerResolveRef.current = null;
-            setZipPickerState(null);
-            resolve?.(selected);
-          }}
-          onCancel={() => {
-            const resolve = zipPickerResolveRef.current;
-            zipPickerResolveRef.current = null;
-            setZipPickerState(null);
-            resolve?.([]);
-          }}
-        />
-      )}
-
-      <StructuredDialogModal
-        open={showCloseUnsavedChangesModal}
-        ariaLabel="Unsaved changes"
-        title="Unsaved Scene Changes"
-        subtitle={hasUnsavedSceneChanges
-          ? 'You have unsaved edits in this scene.'
-          : 'This scene is already saved.'}
-        icon={<AlertTriangle className="h-4 w-4" />}
-        iconTone="warning"
-        zIndexClassName="z-[220]"
-        closeAriaLabel="Close unsaved changes modal"
-        closeDisabled={closeUnsavedChangesBusy !== 'none'}
-        onClose={() => {
-          if (closeUnsavedChangesBusy !== 'none') return;
-          setShowCloseUnsavedChangesModal(false);
-        }}
-        onBackdropClick={() => {
-          if (closeUnsavedChangesBusy !== 'none') return;
-          setShowCloseUnsavedChangesModal(false);
-        }}
-        actions={(
-          <>
-            <button
-              type="button"
-              className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                color: 'var(--danger)',
-              }}
-              disabled={closeUnsavedChangesBusy !== 'none'}
-              onClick={handleDiscardAndCloseProgram}
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              Discard Changes
-            </button>
-            <button
-              type="button"
-              className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
-              disabled={closeUnsavedChangesBusy !== 'none'}
-              onClick={handleSaveAndCloseProgram}
-            >
-              Save &amp; Close
-            </button>
-          </>
-        )}
-      >
-        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-          {hasUnsavedSceneChanges
-            ? 'You’re about to close DragonFruit with unsaved scene changes.'
-            : 'Close DragonFruit now?'}
-        </p>
-        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-          <strong>Please ensure you have saved any important work.</strong>
-        </p>
-      </StructuredDialogModal>
-
-      {showSceneSaveChoiceModal && (
-        <div
-          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              resolveSceneSaveChoice('cancel');
-            }
-          }}
-        >
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Save scene options"
-          >
-            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex min-w-0 items-center gap-3">
-                <span
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 55%)',
-                    background: 'color-mix(in srgb, #22c55e, var(--surface-1) 90%)',
-                    color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)',
-                  }}
-                >
-                  <CheckCircle2 className="h-4 w-4" />
-                </span>
-
-                <div className="min-w-0 pr-2">
-                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    Save Loaded Scene
-                  </h2>
-                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    Choose where Ctrl+S should save this imported `.voxl` scene.
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-                aria-label="Close save scene options"
-                onClick={() => resolveSceneSaveChoice('cancel')}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-3.5 p-5">
-              <div
-                className="rounded-lg border px-3 py-2.5"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'color-mix(in srgb, var(--surface-1), black 8%)',
-                }}
-              >
-                <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Loaded file
-                </div>
-                <div className="mt-1 text-sm font-semibold leading-tight" style={{ color: 'var(--text-strong)' }} title={sceneSaveChoiceFileName ?? ''}>
-                  {sceneSaveChoiceFileName ?? 'Loaded scene'}
-                </div>
-                <div className="mt-1 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }} title={sceneSaveChoicePath ?? ''}>
-                  {sceneSaveChoicePath ?? 'Original file path unavailable (overwrite disabled)'}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs whitespace-nowrap"
-                  onClick={() => resolveSceneSaveChoice('save_as')}
-                >
-                  Save as New Scene
-                </button>
-                <button
-                  type="button"
-                  className="ui-button ui-button-accent !h-9 px-3 text-xs whitespace-nowrap"
-                  disabled={!sceneSaveChoicePath}
-                  onClick={() => resolveSceneSaveChoice('overwrite')}
-                >
-                  Overwrite Loaded Scene
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {printingMonitorPendingConfirmation && (
-        <div
-          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setPrintingMonitorPendingConfirmation(null);
-            }
-          }}
-        >
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label={
-              printingMonitorPendingConfirmation.kind === 'control'
-                ? (printingMonitorPendingConfirmation.action === 'cancel' ? 'Confirm cancel print' : 'Confirm emergency stop')
-                : (printingMonitorPendingConfirmation.action === 'start' ? 'Confirm start recent file' : 'Confirm delete recent file')
-            }
-          >
-            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex items-center gap-2.5">
-                <span
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                    color: '#d97706',
-                  }}
-                >
-                  <AlertTriangle className="h-4 w-4" />
-                </span>
-                <div>
-                  <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    {printingMonitorPendingConfirmation.kind === 'control'
-                      ? (printingMonitorPendingConfirmation.action === 'cancel' ? 'Cancel Print Job' : 'Emergency Stop')
-                      : (printingMonitorPendingConfirmation.action === 'start' ? 'Start Recent Print File' : 'Delete Recent Print File')}
-                  </h2>
-                  <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                    {printingMonitorPendingConfirmation.kind === 'control'
-                      ? (
-                        printingMonitorPendingConfirmation.action === 'cancel'
-                          ? 'This action cannot be undone.'
-                          : 'This will immediately halt the printer.'
-                      )
-                      : (
-                        printingMonitorPendingConfirmation.action === 'start'
-                          ? 'Start this recent file on the selected printer now?'
-                          : 'This will remove the file from the printer.'
-                      )}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-                aria-label="Close monitor confirmation modal"
-                onClick={() => setPrintingMonitorPendingConfirmation(null)}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-4 space-y-3">
-              {printingMonitorPendingConfirmation.kind === 'plate' && (
-                <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>File</div>
-                  <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={`#${printingMonitorPendingConfirmation.plateId} • ${printingMonitorPendingConfirmation.plateName}`}>
-                    {`#${printingMonitorPendingConfirmation.plateId} • ${printingMonitorPendingConfirmation.plateName}`}
-                  </div>
-                </div>
-              )}
-
-              <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Printer</div>
-                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  {monitoringDevice?.displayName || monitoringDevice?.hostName || monitoringDevice?.ipAddress || 'Selected printer'}
-                </div>
-              </div>
-
-              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                {printingMonitorPendingConfirmation.kind === 'control'
-                  ? (
-                    printingMonitorPendingConfirmation.action === 'cancel'
-                      ? 'Canceling will stop the current print job and clear queued progress for this plate.'
-                      : 'Emergency Stop is for immediate intervention and should be used only when necessary.'
-                  )
-                  : (
-                    printingMonitorPendingConfirmation.action === 'start'
-                      ? 'The selected plate will begin printing immediately on this machine.'
-                      : 'Deleted files cannot be restored from this monitor.'
-                  )}
-              </p>
-
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
-                  onClick={() => setPrintingMonitorPendingConfirmation(null)}
-                >
-                  {printingMonitorPendingConfirmation.kind === 'plate' ? 'Keep File' : 'Keep Printing'}
-                </button>
-                <button
-                  type="button"
-                  className="ui-button !h-9 w-full px-3 text-xs"
-                  style={
-                    printingMonitorPendingConfirmation.kind === 'plate'
-                      ? (
-                        printingMonitorPendingConfirmation.action === 'start'
-                          ? {
-                              borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)',
-                              background: 'color-mix(in srgb, #22c55e, var(--surface-1) 84%)',
-                              color: 'color-mix(in srgb, #22c55e, var(--text-strong) 25%)',
-                            }
-                          : {
-                              borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
-                              background: 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)',
-                              color: 'color-mix(in srgb, #ef4444, var(--text-strong) 25%)',
-                            }
-                      )
-                      : (
-                        printingMonitorPendingConfirmation.action === 'cancel'
-                          ? {
-                              borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
-                              background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
-                              color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
-                            }
-                          : {
-                              borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
-                              background: 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)',
-                              color: 'color-mix(in srgb, #ef4444, var(--text-strong) 25%)',
-                            }
-                      )
-                  }
-                  onClick={() => {
-                    const pending = printingMonitorPendingConfirmation;
-                    if (!pending) return;
-                    setPrintingMonitorPendingConfirmation(null);
-                    if (pending.kind === 'control') {
-                      void executePrintingMonitorControlAction(pending.action);
-                      return;
-                    }
-                    if (pending.action === 'start') {
-                      void executeStartMonitorRecentPlate(pending.plateId);
-                    } else {
-                      void executeDeleteMonitorRecentPlate(pending.plateId);
-                    }
-                  }}
-                >
-                  {printingMonitorPendingConfirmation.kind === 'plate'
-                    ? (printingMonitorPendingConfirmation.action === 'start' ? 'Confirm Start' : 'Confirm Delete')
-                    : (printingMonitorPendingConfirmation.action === 'cancel' ? 'Confirm Cancel' : 'Confirm Emergency Stop')}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <PrintingResliceModal
-        isOpen={showPrintingResliceModal}
-        onCancel={() => {
-          setShowPrintingResliceModal(false);
-          scene.setMode(modeBeforePrintingRef.current);
-        }}
-        onResliceNow={() => {
-          setShowPrintingResliceModal(false);
-          shouldReturnToPrintingAfterSliceRef.current = true;
-          setShouldAutoSliceOnExportEntry(true);
-          scene.setMode('export');
-        }}
-      />
-
-      {preSlicePrintConfirmOpen && (
-        <div
-          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setPreSlicePrintConfirmOpen(false);
-              if (preSlicePrintConfirmResolverRef.current) {
-                preSlicePrintConfirmResolverRef.current(false);
-                preSlicePrintConfirmResolverRef.current = null;
-              }
-            }
-          }}
-        >
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Print readiness confirmation"
-          >
-            <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex min-w-0 items-center gap-3">
-                <span
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                    color: '#d97706',
-                  }}
-                >
-                  <AlertTriangle className="h-4 w-4" />
-                </span>
-
-                <div className="min-w-0 pr-2">
-                  <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                    Safety Check
-                  </div>
-                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    Confirm printer is ready to print
-                  </h2>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-                aria-label="Close print readiness confirmation"
-                onClick={() => {
-                  setPreSlicePrintConfirmOpen(false);
-                  if (preSlicePrintConfirmResolverRef.current) {
-                    preSlicePrintConfirmResolverRef.current(false);
-                    preSlicePrintConfirmResolverRef.current = null;
-                  }
-                }}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-4 p-5">
-              <div className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                Please verify before continuing:
-              </div>
-              <div className="rounded-md border p-3 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' }} />
-                  <span>Build plate and resin vat are properly seated and secured.</span>
-                </div>
-                <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' }} />
-                  <span>Resin is mixed, sufficient for the print, and at operating temperature.</span>
-                </div>
-                <div className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' }} />
-                  <span>Build plate is clean and clear, and the printer cover is fully closed.</span>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                  onClick={() => {
-                    setPreSlicePrintConfirmOpen(false);
-                    if (preSlicePrintConfirmResolverRef.current) {
-                      preSlicePrintConfirmResolverRef.current(false);
-                      preSlicePrintConfirmResolverRef.current = null;
-                    }
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="ui-button ui-button-accent !h-9 px-3 text-xs"
-                  onClick={() => {
-                    setPreSlicePrintConfirmOpen(false);
-                    if (preSlicePrintConfirmResolverRef.current) {
-                      preSlicePrintConfirmResolverRef.current(true);
-                      preSlicePrintConfirmResolverRef.current = null;
-                    }
-                  }}
-                >
-                  Continue to Slicing
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {printingTargetPickerOpen && (
-        <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/55 backdrop-blur-sm px-4">
-          <div
-            className="w-full max-w-3xl overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Choose printer"
-          >
-            <div className="border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div>
-                <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  {isPreSliceTargetPicker ? 'Pre-Slice Targeting' : 'Fleet Upload'}
-                </div>
-                <div className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  {isPreSliceTargetPicker ? 'Choose target before slicing' : 'Choose target printer'}
-                </div>
-              </div>
-            </div>
-
-            <div className="p-4 space-y-3.5">
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                {requiresRemoteMaterialSelectionForUpload
-                  ? (isPreSliceTargetPicker
-                    ? 'Pick the target machine and material profile now, then slicing will begin.'
-                    : 'Pick the target machine and material profile for this upload.')
-                  : (isPreSliceTargetPicker
-                    ? 'Pick the target machine now, then slicing will begin.'
-                    : 'Pick the target machine for this upload.')}
-              </div>
-              {requiresRemoteMaterialSelectionForUpload && !isPreSliceTargetPicker && (
-                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                  Target layer height: <span style={{ color: 'var(--text-strong)' }}>{slicedLayerHeightMm.toFixed(3)} mm</span>
-                </div>
-              )}
-
-              <div className={`grid gap-3 md:items-start ${requiresRemoteMaterialSelectionForUpload ? 'md:grid-cols-2' : 'md:grid-cols-1'}`}>
-                <div className="rounded-md border px-3 py-2.5 min-h-[360px]" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="text-[11px] mb-2" style={{ color: 'var(--text-muted)' }}>
-                    Target printer
-                  </div>
-                  <div className="max-h-[318px] overflow-y-auto custom-scrollbar pr-1 space-y-2">
-                    {printableConnectedPrinterFleet.map((device) => {
-                      const isSelected = device.id === (printingTargetDeviceId ?? printingTargetDevice?.id);
-                      const isDeviceOffline = printerReachabilityByDeviceId[device.id] === false;
-                      return (
-                        <button
-                          key={device.id}
-                          type="button"
-                          onClick={() => {
-                            if (isDeviceOffline) return;
-                            setPrintingTargetDeviceId(device.id);
-                            if (activePrinterProfile?.id) {
-                              selectPrinterNetworkDevice(activePrinterProfile.id, device.id);
-                            }
-                          }}
-                          disabled={isDeviceOffline}
-                          className="relative w-full rounded-lg border px-3 py-2.5 pr-9 text-left"
-                          style={isDeviceOffline
-                            ? {
-                                borderColor: 'color-mix(in srgb, var(--border-subtle), black 18%)',
-                                background: 'color-mix(in srgb, var(--surface-1), black 8%)',
-                                color: 'var(--text-muted)',
-                                opacity: 0.55,
-                              }
-                            : isSelected
-                            ? {
-                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 28%)',
-                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 89%)',
-                              }
-                            : {
-                                borderColor: 'var(--border-subtle)',
-                                background: 'color-mix(in srgb, var(--surface-1), black 3%)',
-                              }}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="text-[15px] font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                                {device.displayName || device.hostName || device.ipAddress}
-                              </div>
-                              <div className="text-[12px] leading-tight mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                                {device.ipAddress} • {isDeviceOffline ? 'Offline' : 'Online'}
-                              </div>
-                            </div>
-                          </div>
-                          {isDeviceOffline ? (
-                            <span
-                              className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold uppercase tracking-wide"
-                              style={{ color: 'var(--text-muted)' }}
-                              aria-label="Printer offline"
-                            >
-                              Offline
-                            </span>
-                          ) : (isSelected && (
-                            <div
-                              className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded-full"
-                              style={{
-                                color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)',
-                                background: 'color-mix(in srgb, #22c55e, transparent 84%)',
-                              }}
-                              aria-label="Selected printer"
-                              title="Selected"
-                            >
-                              <CheckCircle2 className="h-4 w-4" />
-                            </div>
-                          ))}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {requiresRemoteMaterialSelectionForUpload && (
-                  <div className="rounded-md border px-3 py-2.5 min-h-[360px]" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                    <div className="text-[11px] mb-2" style={{ color: 'var(--text-muted)' }}>
-                      {isPreSliceTargetPicker ? 'Target material' : 'Target material (matching sliced layer height)'}
-                    </div>
-                    {isPrintingTargetMaterialsLoading ? (
-                      <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Loading materials from selected printer…</div>
-                    ) : printingTargetMaterialOptions.length > 0 ? (
-                      <div className="max-h-[318px] overflow-y-auto custom-scrollbar pr-1 space-y-2">
-                        {printingTargetMaterialGroups.map((group) => (
-                          <div key={group.label} className="space-y-1.5">
-                            {group.label && (
-                              <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                                {group.label}
-                              </div>
-                            )}
-                            <div className="space-y-1">
-                              {group.materials.map((material) => {
-                                const isSelectedMaterial = material.id === printingTargetMaterialId;
-                                return (
-                                  <button
-                                    key={material.id}
-                                    type="button"
-                                    onClick={() => {
-                                      setPrintingTargetMaterialId(material.id);
-                                      if (activePrinterProfile?.id && printingTargetDevice) {
-                                        upsertPrinterNetworkDevice(
-                                          activePrinterProfile.id,
-                                          {
-                                            id: printingTargetDevice.id,
-                                            ipAddress: printingTargetDevice.ipAddress,
-                                            selectedMaterialId: material.id,
-                                            selectedMaterialName: material.name,
-                                            selectedMaterialLayerHeightMm: material.layerHeightMm ?? undefined,
-                                          },
-                                          { select: true },
-                                        );
-                                      }
-                                    }}
-                                    className="relative w-full rounded-md border px-2.5 py-2 pr-9 text-left"
-                                    style={isSelectedMaterial
-                                      ? {
-                                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 32%)',
-                                          background: 'color-mix(in srgb, var(--accent), var(--surface-1) 90%)',
-                                        }
-                                      : {
-                                          borderColor: 'var(--border-subtle)',
-                                          background: 'color-mix(in srgb, var(--surface-1), black 3%)',
-                                        }}
-                                  >
-                                    <div className="flex items-start justify-between gap-2">
-                                      <div className="min-w-0 text-[13px] font-medium truncate" style={{ color: 'var(--text-strong)' }} title={material.name}>
-                                        {material.name}
-                                      </div>
-                                    </div>
-                                    {material.layerHeightMm != null && (
-                                      <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                                        {material.layerHeightMm.toFixed(3)} mm
-                                      </div>
-                                    )}
-                                    {isSelectedMaterial && (
-                                      <div
-                                        className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded-full"
-                                        style={{
-                                          color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)',
-                                          background: 'color-mix(in srgb, #22c55e, transparent 84%)',
-                                        }}
-                                        aria-label="Selected material"
-                                        title="Selected"
-                                      >
-                                        <CheckCircle2 className="h-4 w-4" />
-                                      </div>
-                                    )}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                        {printingTargetMaterialError ?? 'No matching material profile found on this printer.'}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {requiresRemoteMaterialSelectionForUpload && printingTargetMaterialError && printingTargetMaterialOptions.length > 0 && (
-                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                  {printingTargetMaterialError}
-                </div>
-              )}
-
-              {printingTargetDevice && printerReachabilityByDeviceId[printingTargetDevice.id] === false && (
-                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                  Selected printer is offline. Choose an online printer to continue.
-                </div>
-              )}
-
-              <div className="flex items-center justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                  onClick={() => {
-                    setPrintingTargetPickerOpen(false);
-                    if (isPreSliceTargetPicker && preSliceTargetPickerResolverRef.current) {
-                      preSliceTargetPickerResolverRef.current(null);
-                      preSliceTargetPickerResolverRef.current = null;
-                    }
-                    setPrintingTargetPickerMode('post-slice');
-                  }}
-                  disabled={printingSendBusy}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="ui-button ui-button-accent !h-9 px-3 text-xs"
-                  disabled={
-                    printingSendBusy
-                    || isPrintingTargetMaterialsLoading
-                    || !printingTargetDevice
-                    || (requiresRemoteMaterialSelectionForUpload && !printingTargetMaterialId)
-                    || printerReachabilityByDeviceId[printingTargetDevice.id] === false
-                  }
-                  onClick={() => {
-                    if (!printingTargetDevice) return;
-                    if (requiresRemoteMaterialSelectionForUpload && !printingTargetMaterialId) return;
-                    setPrintingTargetPickerOpen(false);
-                    if (isPreSliceTargetPicker && preSliceTargetPickerResolverRef.current) {
-                      preSliceTargetPickerResolverRef.current({
-                        deviceId: printingTargetDevice.id,
-                        materialId: requiresRemoteMaterialSelectionForUpload ? printingTargetMaterialId : undefined,
-                      });
-                      preSliceTargetPickerResolverRef.current = null;
-                      setPrintingTargetPickerMode('post-slice');
-                      return;
-                    }
-
-                    setPrintingTargetPickerMode('post-slice');
-                    void performSendToPrinter(
-                      printingTargetDevice,
-                      requiresRemoteMaterialSelectionForUpload ? printingTargetMaterialId : undefined,
-                    );
-                  }}
-                >
-                  {isPreSliceTargetPicker ? 'Continue to Slicing' : 'Upload to Selected Printer'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {printingUploadDialogOpen && (
-        <div className="absolute inset-0 z-[121] flex items-center justify-center bg-black/55 backdrop-blur-sm px-4">
-          <div
-            className="w-full max-w-xl overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-live="polite"
-            aria-label="Printer upload status"
-          >
-            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="min-w-0">
-                <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Post-Processing
-                </div>
-                <div className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Upload to {activeNetworkUiAdapter?.displayName ?? 'Printer'}
-                </div>
-                <div className="mt-0.5 text-xs truncate" style={{ color: 'var(--text-muted)' }}>
-                  {printingArtifact?.outputName ?? 'Preparing artifact'}
-                </div>
-              </div>
-            </div>
-
-            <div className="p-4 space-y-3">
-              <div className="grid grid-cols-2 gap-2.5">
-                <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Stage</div>
-                  <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    {printingDialogStageLabel}
-                  </div>
-                </div>
-                <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Target Printer</div>
-                  <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={printingTargetDevice?.displayName || printingTargetDevice?.hostName || printingTargetDevice?.ipAddress || 'Pending'}>
-                    {printingTargetDevice?.displayName || printingTargetDevice?.hostName || printingTargetDevice?.ipAddress || 'Pending'}
-                  </div>
-                </div>
-                <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Plate</div>
-                  <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    {printingReadyPlateId ? `#${printingReadyPlateId}` : 'Pending'}
-                  </div>
-                </div>
-              </div>
-
-              <div className="text-xs min-h-[18px]" style={{ color: 'var(--text-muted)' }}>
-                {printingSendStatusText ?? 'Preparing upload pipeline…'}
-              </div>
-
-              {printingUploadDialogStage === 'started' && (
-                <div className="rounded-md border px-3 py-2 text-[11px]" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
-                  Print started. Use <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>Monitor</span> in the top bar to view live progress and webcam.
-                </div>
-              )}
-
-              {printingUploadDialogStage === 'uploading' && printingUploadTelemetry && (
-                <div className="grid grid-cols-3 gap-2 text-[11px]">
-                  <div
-                    className="rounded-md border px-2.5 py-2"
-                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
-                  >
-                    <div className="uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Speed</div>
-                    <div
-                      className="mt-1 text-xs font-semibold"
-                      style={{ color: 'var(--text-strong)', fontVariantNumeric: 'tabular-nums' }}
-                    >
-                      {printingUploadTelemetry.speed}
-                    </div>
-                  </div>
-                  <div
-                    className="rounded-md border px-2.5 py-2"
-                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
-                  >
-                    <div className="uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Remaining</div>
-                    <div
-                      className="mt-1 text-xs font-semibold"
-                      style={{ color: 'var(--text-strong)', fontVariantNumeric: 'tabular-nums' }}
-                    >
-                      {printingUploadTelemetry.remaining}
-                    </div>
-                  </div>
-                  <div
-                    className="rounded-md border px-2.5 py-2"
-                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
-                  >
-                    <div className="uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Transferred</div>
-                    <div
-                      className="mt-1 text-xs font-semibold"
-                      style={{ color: 'var(--text-strong)', fontVariantNumeric: 'tabular-nums' }}
-                    >
-                      {printingUploadTelemetry.transferred}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {printingDialogIsIndeterminate ? (
-                <>
-                  <div
-                    className="ui-loading-track h-2.5 w-full rounded-full"
-                    style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-                  >
-                    <div
-                      className="ui-loading-indicator"
-                      style={{ background: 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 28%))' }}
-                    />
-                  </div>
-                  <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                    Processing on {activeNetworkUiAdapter?.displayName ?? 'printer backend'}… elapsed {printingProcessingElapsedLabel}
-                  </div>
-                </>
-              ) : (
-                <div
-                  className="h-2.5 w-full rounded-full border overflow-hidden"
-                  style={{
-                    borderColor: 'var(--border-subtle)',
-                    background: 'color-mix(in srgb, var(--surface-2), black 20%)',
-                  }}
-                >
-                  <div
-                    className="h-full rounded-full transition-[width] duration-200 ease-out"
-                    style={{
-                      width: `${printingDialogProgressPercent.toFixed(2)}%`,
-                      background: printingUploadDialogStage === 'failed'
-                        ? 'linear-gradient(90deg, #ef4444, #f97316)'
-                        : printingUploadDialogStage === 'started'
-                          ? 'linear-gradient(90deg, #60a5fa, #22d3ee)'
-                          : 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 28%))',
-                    }}
-                  />
-                </div>
-              )}
-
-              <div className="mt-1 flex items-center justify-between text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                <span>
-                  {printingUploadDialogStage === 'processing'
-                    ? 'Waiting for metadata readiness'
-                    : 'Transfer progress'}
-                </span>
-                <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  {printingDialogIsIndeterminate ? '—' : `${printingDialogProgressPercent.toFixed(0)}%`}
-                </span>
-              </div>
-
-              <div className="pt-1 flex items-center justify-end gap-2">
-                {(printingUploadDialogStage === 'failed' || printingUploadDialogStage === 'started' || printingUploadDialogStage === 'ready') && (
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                    onClick={() => setPrintingUploadDialogOpen(false)}
-                    disabled={printingSendBusy || printingPrintNowBusy}
-                  >
-                    Close
-                  </button>
-                )}
-
-                {printingUploadDialogStage === 'failed' && (
-                  <button
-                    type="button"
-                    className="ui-button ui-button-accent !h-9 px-3 text-xs"
-                    onClick={() => { void handleSendToPrinter(); }}
-                    disabled={printingSendBusy || printingPrintNowBusy || !canSendToPrinter}
-                  >
-                    Retry Upload
-                  </button>
-                )}
-
-                {printingUploadDialogStage === 'ready' && (
-                  <button
-                    type="button"
-                    className="ui-button ui-button-accent !h-9 px-3 text-xs"
-                    onClick={handlePrintNow}
-                    disabled={!canPrintNow || printingPrintNowBusy || printingSendBusy}
-                  >
-                    {printingPrintNowBusy ? 'Starting print…' : 'Start Print'}
-                  </button>
-                )}
-
-                {printingUploadDialogStage === 'started' && (
-                  <button
-                    type="button"
-                    className="ui-button ui-button-accent !h-9 px-3 text-xs"
-                    onClick={() => openPrintingMonitorForTargetDevice(printingTargetDevice?.id ?? null)}
-                    disabled={printingSendBusy || printingPrintNowBusy}
-                  >
-                    Open Monitor
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {printingMonitorModalOpen && (
-        <div className="fixed inset-0 z-[140] flex items-center justify-center p-4" role="presentation">
-          <button
-            type="button"
-            className="absolute inset-0 bg-black/55"
-            onClick={() => setPrintingMonitorModalOpen(false)}
-            aria-label="Close printer monitor"
-          />
-
-          <div
-            className={`relative z-[1] ${printingMonitorModalWidthClass} max-h-[88vh] overflow-auto rounded-xl border shadow-2xl`}
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'color-mix(in srgb, var(--surface-0), #000 10%)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Printer monitor"
-          >
-            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              {printingMonitorViewMode === 'dashboard' ? (
-                <div className="inline-flex items-center gap-2 px-1.5 py-1">
-                  <div className="inline-flex h-7 w-7 items-center justify-center rounded-sm shrink-0" style={{
-                    background: 'color-mix(in srgb, #baf72e, var(--surface-1) 90%)',
-                    border: '1px solid color-mix(in srgb, #baf72e, var(--border-subtle) 45%)',
-                    color: 'var(--accent-secondary)',
-                  }}>
-                    <LayoutGrid className="h-3.5 w-3.5" />
-                  </div>
-                  <span className="min-w-0 flex max-w-[320px] flex-col items-start leading-none gap-[2px]">
-                    <span
-                      className="truncate text-[10px] tracking-[0.01em]"
-                      style={{ color: 'var(--text-muted)' }}
-                      title="Monitoring Dashboard"
-                    >
-                      Monitoring Dashboard
-                    </span>
-                    <span className="truncate text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }} title="Fleet Status Overview">
-                      Fleet Status Overview
-                    </span>
-                  </span>
-                </div>
-              ) : (
-                <div className="relative" ref={printingMonitorPrinterMenuRef}>
-                  {monitorSelectableDevices.length > 1 ? (
-                    <button
-                      type="button"
-                      className="group inline-flex items-center gap-2 rounded-md px-1.5 py-1 text-sm font-semibold transition-colors"
-                      style={{
-                        background: 'transparent',
-                        color: 'var(--text-strong)',
-                      }}
-                      onClick={() => setIsPrintingMonitorPrinterMenuOpen((previous) => !previous)}
-                      aria-label={printingMonitorHeaderUsesFleetLabelOrder
-                        ? `Select monitored printer for profile ${printingMonitorHeaderTopLabel}`
-                        : 'Select monitored printer'}
-                      title={printingMonitorHeaderTitle}
-                    >
-                      <div
-                        className="inline-flex h-7 w-7 items-center justify-center overflow-hidden rounded-sm shrink-0"
-                        style={{ background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}
-                      >
-                        {printingMonitorPrinterThumbnailSrc ? (
-                          <img
-                            src={printingMonitorPrinterThumbnailSrc}
-                            alt={activePrinterProfile?.name ?? 'Selected printer'}
-                            className="h-full w-full object-contain"
-                            draggable={false}
-                            onError={() => setIsPrintingMonitorPrinterThumbnailFailed(true)}
-                          />
-                        ) : (
-                          <Printer className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
-                        )}
-                      </div>
-                      <span className="min-w-0 flex max-w-[280px] flex-col items-start leading-none gap-[2px]">
-                        <span
-                          className={printingMonitorHeaderUsesFleetLabelOrder
-                            ? 'truncate text-[10px] tracking-[0.01em]'
-                            : 'text-[9px] uppercase tracking-[0.11em]'}
-                          style={{ color: 'var(--text-muted)' }}
-                          title={printingMonitorHeaderTopLabel}
-                        >
-                          {printingMonitorHeaderTopLabel}
-                        </span>
-                        <span className="truncate text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }} title={printingMonitorHeaderBottomLabel}>
-                          {printingMonitorHeaderBottomLabel}
-                        </span>
-                      </span>
-                      <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isPrintingMonitorPrinterMenuOpen ? 'rotate-180' : ''}`} />
-                    </button>
-                  ) : (
-                    <div className="inline-flex items-center gap-2 px-1.5 py-1">
-                      <div
-                        className="inline-flex h-7 w-7 items-center justify-center overflow-hidden rounded-sm shrink-0"
-                        style={{ background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}
-                      >
-                        {printingMonitorPrinterThumbnailSrc ? (
-                          <img
-                            src={printingMonitorPrinterThumbnailSrc}
-                            alt={activePrinterProfile?.name ?? 'Selected printer'}
-                            className="h-full w-full object-contain"
-                            draggable={false}
-                            onError={() => setIsPrintingMonitorPrinterThumbnailFailed(true)}
-                          />
-                        ) : (
-                          <Printer className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
-                        )}
-                      </div>
-                      <span className="min-w-0 flex max-w-[280px] flex-col items-start leading-none gap-[2px]">
-                        <span
-                          className={printingMonitorHeaderUsesFleetLabelOrder
-                            ? 'truncate text-[10px] tracking-[0.01em]'
-                            : 'text-[9px] uppercase tracking-[0.11em]'}
-                          style={{ color: 'var(--text-muted)' }}
-                          title={printingMonitorHeaderTopLabel}
-                        >
-                          {printingMonitorHeaderTopLabel}
-                        </span>
-                        <span className="truncate text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }} title={printingMonitorHeaderBottomLabel}>
-                          {printingMonitorHeaderBottomLabel}
-                        </span>
-                      </span>
-                    </div>
-                  )}
-
-                  {isPrintingMonitorPrinterMenuOpen && monitorSelectableDevices.length > 1 && (
-                    <div
-                      className="absolute left-0 top-full z-20 mt-2 w-[min(360px,82vw)] rounded-lg border p-1.5 shadow-xl"
-                      style={{
-                        borderColor: 'var(--border-subtle)',
-                        background: 'color-mix(in srgb, var(--surface-0), #000 8%)',
-                      }}
-                    >
-                      <div className="max-h-56 overflow-y-auto custom-scrollbar space-y-1 pr-0.5">
-                        {monitorSelectableDevices.map((device) => {
-                          const selected = monitoringDevice?.id === device.id;
-                          const display = device.displayName || device.hostName || device.ipAddress || `Printer ${device.id}`;
-                          const isOffline = printerReachabilityByDeviceId[device.id] === false;
-                          return (
-                            <button
-                              key={device.id}
-                              type="button"
-                              className="w-full rounded-md border px-2.5 py-2 text-left"
-                              style={isOffline
-                                ? {
-                                    borderColor: 'color-mix(in srgb, var(--border-subtle), black 18%)',
-                                    background: 'color-mix(in srgb, var(--surface-1), black 8%)',
-                                    opacity: 0.55,
-                                  }
-                                : selected
-                                ? {
-                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 35%)',
-                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 90%)',
-                                  }
-                                : {
-                                    borderColor: 'var(--border-subtle)',
-                                    background: 'var(--surface-1)',
-                                  }}
-                              disabled={isOffline}
-                              onClick={() => {
-                                if (isOffline) return;
-                                setPrintingMonitorDeviceId(device.id);
-                                setIsPrintingMonitorPrinterMenuOpen(false);
-                              }}
-                            >
-                              <div className="flex items-center gap-2">
-                                <div
-                                  className="inline-flex h-6 w-6 items-center justify-center overflow-hidden rounded-sm shrink-0"
-                                  style={{ background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}
-                                >
-                                  {printingMonitorPrinterThumbnailSrc ? (
-                                    <img
-                                      src={printingMonitorPrinterThumbnailSrc}
-                                      alt={activePrinterProfile?.name ?? display}
-                                      className="h-full w-full object-contain"
-                                      draggable={false}
-                                      onError={() => setIsPrintingMonitorPrinterThumbnailFailed(true)}
-                                    />
-                                  ) : (
-                                    <Printer className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
-                                  )}
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <div className="truncate text-[12px] font-semibold" style={{ color: 'var(--text-strong)' }} title={display}>
-                                    {display}
-                                  </div>
-                                  <div className="mt-0.5 truncate text-[10px]" style={{ color: 'var(--text-muted)' }} title={device.ipAddress || undefined}>
-                                    {device.ipAddress || 'No IP'} • {isOffline ? 'Offline' : 'Online'}
-                                  </div>
-                                </div>
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-              <div className="flex items-center gap-1.5">
-                {hasPrintingMonitorFleet && (
-                  <button
-                    type="button"
-                    className="ui-button ui-button-secondary !h-8 px-2.5 text-[11px] inline-flex items-center gap-1"
-                    onClick={() => {
-                      setIsPrintingMonitorPrinterMenuOpen(false);
-                      setPrintingMonitorViewMode((previous) => {
-                        const next = previous === 'dashboard' ? 'detail' : 'dashboard';
-                        return next;
-                      });
-                    }}
-                    title={printingMonitorViewMode === 'dashboard' ? 'Switch to detailed single-printer view' : 'Switch to dashboard view for all fleet printers'}
-                  >
-                    <LayoutGrid className="w-3.5 h-3.5" />
-                    {printingMonitorViewMode === 'dashboard' ? 'Detail View' : 'Dashboard View'}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary inline-flex items-center justify-center leading-none !h-8 !w-8 !p-0"
-                  onClick={() => setPrintingMonitorModalOpen(false)}
-                  aria-label="Close printer monitor"
-                  title="Close monitor"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            {printingMonitorViewMode === 'dashboard' ? (
-              <div className="p-5">
-                {dashboardMonitorDevices.length > 0 ? (
-                  <div
-                    className="overflow-y-auto custom-scrollbar pr-1"
-                    style={{ height: 'clamp(34rem, 66vh, 42rem)' }}
-                  >
-                    <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 auto-rows-max content-start">
-                    {dashboardMonitorDevices.map((device) => {
-                      const display = device.displayName || device.hostName || device.ipAddress || `Printer ${device.id}`;
-                      const snapshot = printingMonitorDashboardSnapshots[device.id] ?? null;
-                      const isOffline = printerReachabilityByDeviceId[device.id] === false || device.connected !== true;
-                      const isPaused = !isOffline && Boolean(snapshot?.isPaused);
-                      const isPrinting = !isOffline && Boolean(snapshot?.isPrinting) && !isPaused;
-                      const isIdle = !isOffline && !isPrinting && !isPaused;
-                      const stateText = isOffline ? 'Offline' : (snapshot?.stateText?.trim() || 'Status unavailable');
-                      const hasActivePrint = !isOffline && (isPrinting || isPaused);
-                      const currentLayer = Number.isFinite(Number(snapshot?.currentLayer)) ? Math.max(0, Math.round(Number(snapshot?.currentLayer))) : null;
-                      const totalLayersRaw = Number.isFinite(Number(snapshot?.totalLayers)) ? Math.round(Number(snapshot?.totalLayers)) : null;
-                      const totalLayers = totalLayersRaw != null && totalLayersRaw > 0 ? totalLayersRaw : null;
-                      const progressPct = totalLayers != null && currentLayer != null
-                        ? Math.max(0, Math.min(100, ((Math.max(0, currentLayer - 1)) / totalLayers) * 100))
-                        : null;
-                      const displayCurrentLayer = hasActivePrint ? currentLayer : null;
-                      const displayTotalLayers = hasActivePrint ? totalLayers : null;
-                      const displayProgressPct = hasActivePrint ? progressPct : null;
-                      const displayLayerText = hasActivePrint
-                        ? (displayTotalLayers != null
-                          ? `${displayCurrentLayer ?? '—'}/${displayTotalLayers}`
-                          : (displayCurrentLayer != null ? `${displayCurrentLayer}` : '—'))
-                        : '-/-';
-                      const brandColor = '#baf72e';
-                      const idleColor = '#60a5fa';
-                      const pausedColor = '#f59e0b';
-                      const cardHoverHintText = 'Click to show Detailed View';
-                      const progressFill = isPaused
-                        ? `linear-gradient(90deg, ${pausedColor}, color-mix(in srgb, ${pausedColor}, #fde68a 35%))`
-                        : isPrinting
-                          ? `linear-gradient(90deg, ${brandColor}, color-mix(in srgb, ${brandColor}, #52cc80 50%))`
-                          : 'color-mix(in srgb, var(--text-muted), transparent 78%)';
-                      const progressTextColor = isPaused
-                        ? '#fde68a'
-                        : isPrinting
-                          ? brandColor
-                          : 'var(--text-muted)';
-
-                      return (
-                        <div
-                          key={device.id}
-                          className="group w-full rounded-lg border overflow-hidden transition-shape hover:shadow-sm text-left"
-                          onClick={() => {
-                            if (isOffline) return;
-                            setPrintingMonitorDeviceId(device.id);
-                            setPrintingMonitorViewMode('detail');
-                          }}
-                          onKeyDown={(event) => {
-                            if (isOffline) return;
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault();
-                              setPrintingMonitorDeviceId(device.id);
-                              setPrintingMonitorViewMode('detail');
-                            }
-                          }}
-                          style={{
-                            borderColor: 'var(--border-subtle)',
-                            background: 'var(--surface-1)',
-                            cursor: isOffline ? 'not-allowed' : 'pointer',
-                          }}
-                          title={isOffline
-                              ? `${display} is offline`
-                              : `Open detailed monitor for ${display}`}
-                          aria-label={isOffline
-                              ? `${display} is offline`
-                              : `Open detailed monitor for ${display}`}
-                          role={isOffline ? undefined : 'button'}
-                          tabIndex={isOffline ? -1 : 0}
-                        >
-                          {/* Thumbnail Header */}
-                          {device.imageDataUrl ? (
-                            <div
-                              className="relative h-28 overflow-hidden"
-                              style={{
-                                background: 'linear-gradient(135deg, color-mix(in srgb, var(--surface-2), black 30%), var(--surface-1))',
-                              }}
-                            >
-                              <img
-                                src={device.imageDataUrl}
-                                alt={display}
-                                className="h-full w-full object-cover"
-                                style={isOffline ? { filter: 'grayscale(100%) sepia(0.25) brightness(0.94)' } : undefined}
-                                onError={(e) => {
-                                  e.currentTarget.style.display = 'none';
-                                }}
-                              />
-                              {!isOffline && (
-                                <div
-                                  className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100"
-                                  style={{ background: 'color-mix(in srgb, #000, transparent 55%)' }}
-                                >
-                                  <span
-                                    className="rounded-md border px-2 py-1 text-[10px] font-semibold tracking-wide"
-                                    style={{
-                                      borderColor: 'color-mix(in srgb, #baf72e, var(--border-subtle) 55%)',
-                                      color: '#d9ff8f',
-                                      background: 'color-mix(in srgb, #1f2937, transparent 35%)',
-                                    }}
-                                  >
-                                    {cardHoverHintText}
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <div
-                              className="relative h-28 flex items-center justify-center"
-                              style={{
-                                background: 'linear-gradient(135deg, color-mix(in srgb, var(--surface-2), black 30%), var(--surface-1))',
-                                color: 'var(--text-muted)',
-                              }}
-                            >
-                              <Printer className="h-8 w-8 opacity-40" />
-                              {!isOffline && (
-                                <div
-                                  className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100"
-                                  style={{ background: 'color-mix(in srgb, #000, transparent 55%)' }}
-                                >
-                                  <span
-                                    className="rounded-md border px-2 py-1 text-[10px] font-semibold tracking-wide"
-                                    style={{
-                                      borderColor: 'color-mix(in srgb, #baf72e, var(--border-subtle) 55%)',
-                                      color: '#d9ff8f',
-                                      background: 'color-mix(in srgb, #1f2937, transparent 35%)',
-                                    }}
-                                  >
-                                    {cardHoverHintText}
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          <div className="p-3 space-y-2">
-                            {/* Name + Status Pill */}
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="min-w-0 flex-1">
-                                <div className="truncate text-[13px] font-semibold leading-tight" style={{ color: 'var(--text-strong)' }} title={display}>
-                                  {display}
-                                </div>
-                                <div className="truncate text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }} title={device.ipAddress || undefined}>
-                                  {device.ipAddress || 'No IP'}
-                                </div>
-                              </div>
-                              <div
-                                className="inline-flex h-6 items-center rounded-full border px-2.5 text-[10px] font-semibold whitespace-nowrap flex-shrink-0"
-                                style={{
-                                  borderColor: isOffline
-                                    ? 'color-mix(in srgb, #ef4444, var(--border-subtle) 52%)'
-                                    : isPaused
-                                    ? `color-mix(in srgb, ${pausedColor}, var(--border-subtle) 45%)`
-                                    : isPrinting
-                                    ? `color-mix(in srgb, ${brandColor}, var(--border-subtle) 45%)`
-                                    : `color-mix(in srgb, ${idleColor}, var(--border-subtle) 40%)`,
-                                  color: isOffline
-                                    ? '#fecaca'
-                                    : isPaused
-                                      ? '#fde68a'
-                                      : isPrinting
-                                        ? brandColor
-                                        : '#bfdbfe',
-                                  background: isOffline
-                                    ? 'color-mix(in srgb, #ef4444, var(--surface-1) 90%)'
-                                    : isPaused
-                                    ? `color-mix(in srgb, ${pausedColor}, var(--surface-1) 90%)`
-                                    : isPrinting
-                                    ? `color-mix(in srgb, ${brandColor}, var(--surface-1) 92%)`
-                                    : `color-mix(in srgb, ${idleColor}, var(--surface-1) 88%)`,
-                                }}
-                              >
-                                {isOffline ? 'Offline' : (isPaused ? 'Paused' : (isPrinting ? 'Printing' : (isIdle ? 'Idle' : 'Idle')))}
-                              </div>
-                            </div>
-
-                            {/* State Text */}
-                            <div className="text-[11px] leading-tight" style={{ color: 'var(--text-muted)' }} title={stateText}>
-                              {stateText}
-                            </div>
-
-                            {/* Progress Bar (always rendered to keep card heights consistent) */}
-                            <div className="space-y-2 min-h-[34px]">
-                              <div className="h-2.5 w-full rounded-full border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), black 25%)' }}>
-                                <div
-                                  className="h-full rounded-full transition-[width] duration-200 ease-out"
-                                  style={{
-                                    width: `${(displayProgressPct ?? 0).toFixed(1)}%`,
-                                    background: hasActivePrint ? progressFill : 'color-mix(in srgb, var(--text-muted), transparent 78%)',
-                                  }}
-                                />
-                              </div>
-                              <div className="text-[10px] flex justify-between" style={{ color: 'var(--text-muted)' }}>
-                                <span>Layer {displayLayerText}</span>
-                                <span className="font-semibold" style={{ color: hasActivePrint ? progressTextColor : 'var(--text-muted)' }}>
-                                  {hasActivePrint && displayProgressPct != null ? `${displayProgressPct.toFixed(0)}%` : '-'}
-                                </span>
-                              </div>
-                            </div>
-
-                          </div>
-                        </div>
-                      );
-                    })}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="rounded-lg border p-6 text-center" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
-                    <Printer className="h-8 w-8 mx-auto mb-2 opacity-40" style={{ color: 'var(--text-muted)' }} />
-                    <div className="text-[12px] font-medium" style={{ color: 'var(--text-strong)' }}>
-                      No printers available
-                    </div>
-                    <div className="text-[11px] mt-1" style={{ color: 'var(--text-muted)' }}>
-                      No networked printers with valid IP addresses were found in this fleet
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : shouldShowPrintingMonitorSlowResponseCard ? (
-              <div className="p-4">
-                <div
-                  className="h-[min(62vh,520px)] rounded-xl border"
-                  style={{
-                    borderColor: 'var(--border-subtle)',
-                    background: 'color-mix(in srgb, var(--surface-1), #000 4%)',
-                  }}
-                >
-                  <div className="h-full w-full flex items-center justify-center p-6">
-                    <div className="max-w-md w-full rounded-xl border px-5 py-5 text-center" style={{
-                      borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 56%)',
-                      background: 'color-mix(in srgb, #78350f, var(--surface-1) 72%)',
-                    }}>
-                      <div className="mx-auto mb-3 inline-flex h-11 w-11 items-center justify-center rounded-lg border" style={{
-                        borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 52%)',
-                        background: 'color-mix(in srgb, #f59e0b, transparent 84%)',
-                        color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
-                      }}>
-                        <RefreshCw className="h-5 w-5 animate-spin" />
-                      </div>
-                      <h3 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                        Printer is responding slowly
-                      </h3>
-                      <p className="mt-2 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                        We will keep trying to reconnect for another {printingMonitorSlowResponseGraceRemainingSec}s. If reconnection fails, please verify the network configuration and confirm the printer is online.
-                      </p>
-                      <div className="mt-4 mx-auto w-[78%]">
-                        <div
-                          className="ui-loading-track h-2.5 w-full rounded-full"
-                          style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-                        >
-                          <div
-                            className="ui-loading-indicator"
-                            style={{ background: 'linear-gradient(90deg, #f59e0b, color-mix(in srgb, #f59e0b, #fde68a 28%))' }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : isPrintingMonitorSelectedPrinterOffline ? (
-              <div className="p-4">
-                <div
-                  className="h-[min(62vh,520px)] rounded-xl border"
-                  style={{
-                    borderColor: 'var(--border-subtle)',
-                    background: 'color-mix(in srgb, var(--surface-1), #000 4%)',
-                  }}
-                >
-                  <div className="h-full w-full flex items-center justify-center p-6">
-                    <div className="max-w-md w-full rounded-xl border px-5 py-5 text-center" style={{
-                      borderColor: 'color-mix(in srgb, #f87171, var(--border-subtle) 56%)',
-                      background: 'color-mix(in srgb, #7f1d1d, var(--surface-1) 72%)',
-                    }}>
-                      <div className="mx-auto mb-3 inline-flex h-11 w-11 items-center justify-center rounded-lg border" style={{
-                        borderColor: 'color-mix(in srgb, #f87171, var(--border-subtle) 52%)',
-                        background: 'color-mix(in srgb, #f87171, transparent 84%)',
-                        color: 'var(--danger)',
-                      }}>
-                        <AlertTriangle className="h-5 w-5" />
-                      </div>
-                      <h3 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                        This machine is currently offline
-                      </h3>
-                      <p className="mt-2 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                        Reconnect this printer in Network Settings, or choose a different online printer from the selector above.
-                      </p>
-                      <div className="mt-4 flex items-center justify-center">
-                        <button
-                          type="button"
-                          className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                          onClick={() => {
-                            setPrintingMonitorModalOpen(false);
-                            openProfileSettingsModal('printer', { openNetworkSettings: true });
-                          }}
-                        >
-                          Open Network Settings
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div
-                className={`p-4 grid grid-cols-1 items-start ${printingMonitorDetailWebcamExpanded ? 'gap-y-3 lg:gap-x-0' : 'gap-3'} ${printingMonitorUsesTwoColumnDetailLayout ? 'lg:items-stretch lg:[grid-template-columns:var(--printing-monitor-detail-columns)]' : ''}`}
-                style={printingMonitorUsesTwoColumnDetailLayout
-                  ? ({
-                      '--printing-monitor-detail-columns': printingMonitorDetailWebcamExpanded
-                        ? 'minmax(0,1fr)'
-                        : 'minmax(340px,1fr) minmax(420px,1fr)',
-                    } as React.CSSProperties)
-                  : undefined}
-              >
-                {!printingMonitorDetailWebcamExpanded && (
-                <section
-                  ref={printingMonitorLeftColumnRef}
-                  className="grid gap-3 grid-rows-[auto_1fr] overflow-hidden transition-[opacity,transform] duration-140 ease-out motion-reduce:transition-none opacity-100 translate-y-0"
-                >
-                <div className="w-full min-w-0 max-w-full overflow-hidden rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
-                  <div className={`grid min-h-[34px] items-center gap-2 px-1 ${printingMonitorHasActivePrint ? 'grid-cols-[1fr_auto]' : 'grid-cols-[1fr_auto_1fr]'}`}>
-                    <div className="justify-self-start text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                      {printingMonitorHasActivePrint ? 'Print Details' : 'Print Files'}
-                    </div>
-                    {!printingMonitorHasActivePrint && (
-                      <div
-                        className="relative inline-flex h-9 w-[132px] items-center rounded-lg border p-1 justify-self-center overflow-hidden"
-                        style={{
-                          borderColor: 'var(--border-subtle)',
-                          background: 'color-mix(in srgb, var(--surface-1), #000 12%)',
-                          boxShadow: 'inset 0 1px 0 color-mix(in srgb, #ffffff, transparent 94%)',
-                        }}
-                        aria-label="Print file source"
-                      >
-                        <span
-                          aria-hidden="true"
-                          className="pointer-events-none absolute bottom-1 left-1 top-1 rounded-md border transition-transform duration-200 ease-out"
-                          style={{
-                            width: 'calc(50% - 4px)',
-                            transform: printingMonitorPlatesStoragePath === '/usb/' ? 'translateX(100%)' : 'translateX(0)',
-                            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 32%)',
-                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 78%)',
-                          }}
-                        />
-                        <button
-                          type="button"
-                          className="relative z-[1] inline-flex h-7 min-w-0 flex-1 items-center justify-center rounded-md px-2.5 text-[11px] font-semibold tracking-[0.02em] transition-colors duration-200"
-                          style={{
-                            color: printingMonitorPlatesStoragePath === '/local/' ? 'var(--text-strong)' : 'var(--text-muted)',
-                          }}
-                          onClick={() => handlePrintingMonitorStoragePathChange('/local/')}
-                          title="Show print files from local storage"
-                        >
-                          Local
-                        </button>
-                        <button
-                          type="button"
-                          className="relative z-[1] inline-flex h-7 min-w-0 flex-1 items-center justify-center rounded-md px-2.5 text-[11px] font-semibold tracking-[0.02em] transition-colors duration-200"
-                          style={{
-                            color: printingMonitorPlatesStoragePath === '/usb/' ? 'var(--text-strong)' : 'var(--text-muted)',
-                          }}
-                          onClick={() => handlePrintingMonitorStoragePathChange('/usb/')}
-                          title="Show print files from USB storage"
-                        >
-                          USB
-                        </button>
-                      </div>
-                    )}
-                    <IconButton
-                      onClick={() => {
-                        void refreshPrintingMonitorRecentPlates();
-                      }}
-                      disabled={printingMonitorAnyActionBusy || isPrintingMonitorRecentPlatesLoading}
-                      className="!p-1.5 justify-self-end"
-                      title="Refresh print files"
-                      aria-label="Refresh print files"
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 ${isPrintingMonitorRecentPlatesLoading ? 'animate-spin' : ''}`} />
-                    </IconButton>
-                  </div>
-                  <div className="mt-1.5 w-full min-w-0 max-w-full rounded-md border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 6%)' }}>
-                    <div className="h-[clamp(220px,30vh,320px)] w-full">
-                      {printingMonitorHasActivePrint && (printingMonitorThumbnailDisplayUrl || printingMonitorThumbnailUrl) ? (
-                        <div className="relative h-full w-full overflow-hidden">
-                          {!isPrintingMonitorThumbnailLoaded && (
-                            <div className="absolute inset-0 flex items-center justify-center px-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                              <div className="w-[74%]">
-                                <div
-                                  className="ui-loading-track h-2.5 w-full rounded-full"
-                                  style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-                                >
-                                  <div
-                                    className="ui-loading-indicator"
-                                    style={{ background: 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 28%))' }}
-                                  />
-                                </div>
-                                <div className="mt-2 text-center">Loading thumbnail…</div>
-                              </div>
-                            </div>
-                          )}
-                          <img
-                            src={printingMonitorThumbnailDisplayUrl ?? printingMonitorThumbnailUrl ?? undefined}
-                            alt="Active print thumbnail"
-                            className="absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-150"
-                            style={{
-                              opacity: isPrintingMonitorThumbnailLoaded ? 1 : 0,
-                              maxWidth: '100%',
-                              maxHeight: '100%',
-                            }}
-                            loading="eager"
-                            decoding="async"
-                            fetchPriority="high"
-                          />
-                        </div>
-                      ) : (
-                        <div className="h-full w-full min-w-0 max-w-full overflow-hidden p-2">
-                          {printingMonitorRecentPlates.length > 0 ? (
-                            <div className="flex h-full min-h-0 w-full min-w-0 max-w-full flex-col overflow-hidden">
-                              <div className="min-h-0 w-full min-w-0 max-w-full flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar space-y-1 pr-1">
-                                {printingMonitorRecentPlates.map((plate) => {
-                                  return (
-                                    <div
-                                      key={plate.plateId}
-                                      className="w-full min-w-0 overflow-hidden rounded-md border px-2 py-1.5"
-                                      style={{
-                                        borderColor: 'var(--border-subtle)',
-                                        background: 'var(--surface-1)',
-                                      }}
-                                    >
-                                      <div className="flex w-full min-w-0 items-center gap-3 overflow-hidden">
-                                        <div className="min-w-0 basis-0 flex-1 overflow-hidden pr-3 text-left">
-                                          <div className="block w-full max-w-full truncate text-[11px]" style={{ color: 'var(--text-strong)' }} title={`#${plate.plateId} • ${plate.name}`}>
-                                            {`#${plate.plateId} • ${plate.name}`}
-                                          </div>
-                                          <div className="mt-0.5 block w-full max-w-full truncate text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                                            {plate.materialProfileName ?? 'Material profile unavailable'}
-                                          </div>
-                                          <div className="mt-0.5 block w-full max-w-full truncate text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                                            {`Est. ${formatPrintingMonitorEstimatedTime(plate.printTimeSec)} • ${formatPrintingMonitorUsedMaterial(plate.usedMaterialMl)}`}
-                                          </div>
-                                          <div className="mt-0.5 block w-full max-w-full truncate text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                                            {`Area Σ ${formatPrintingMonitorAreaMm2(plate.totalSolidAreaMm2)} • Min ${formatPrintingMonitorAreaMm2(plate.smallestAreaMm2)} • Max ${formatPrintingMonitorAreaMm2(plate.largestAreaMm2)}`}
-                                          </div>
-                                        </div>
-
-                                        <div className="flex w-[56px] shrink-0 items-center justify-end gap-1">
-                                          <IconButton
-                                            onClick={(event) => {
-                                              event.stopPropagation();
-                                              void handleStartMonitorRecentPlate(plate.plateId);
-                                            }}
-                                            className="!p-1.5"
-                                            style={{
-                                              borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)',
-                                              background: 'color-mix(in srgb, #22c55e, var(--surface-1) 86%)',
-                                              color: 'color-mix(in srgb, #22c55e, var(--text-strong) 25%)',
-                                            }}
-                                            title={`Start plate #${plate.plateId}`}
-                                            disabled={printingMonitorAnyActionBusy || printingMonitorHasActivePrint}
-                                          >
-                                            <Play className="w-3.5 h-3.5" />
-                                          </IconButton>
-                                          <IconButton
-                                            onClick={(event) => {
-                                              event.stopPropagation();
-                                              void handleDeleteMonitorRecentPlate(plate.plateId);
-                                            }}
-                                            className="!p-1.5"
-                                            style={{
-                                              borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
-                                              background: 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)',
-                                              color: '#fecaca',
-                                            }}
-                                            title={`Delete plate #${plate.plateId}`}
-                                            disabled={printingMonitorAnyActionBusy}
-                                          >
-                                            <Trash2 className="w-3.5 h-3.5" />
-                                          </IconButton>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="flex h-full w-full items-center justify-center px-3 py-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                              {isPrintingMonitorRecentPlatesLoading ? (
-                                'Loading recent print files…'
-                              ) : printingMonitorRecentPlatesError ? (
-                                printingMonitorRecentPlatesError
-                              ) : (
-                                <div className="flex flex-col items-center gap-2 text-center">
-                                  <span className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>No Files Found</span>
-                                  <button
-                                    type="button"
-                                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 !text-[11px] !font-semibold inline-flex items-center justify-center gap-1"
-                                    onClick={() => {
-                                      void refreshPrintingMonitorRecentPlates();
-                                    }}
-                                    disabled={printingMonitorAnyActionBusy || isPrintingMonitorRecentPlatesLoading}
-                                  >
-                                    <RefreshCw className="w-3.5 h-3.5" />
-                                    Refresh
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-md border p-3 space-y-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
-                  <div className="flex items-center justify-between gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    <span>{printingMonitorSnapshot?.stateText ?? 'Polling printer status…'}</span>
-                    <span>
-                      {isPrintingMonitorStatusRequestInFlight && isPrintingMonitorWithinSlowResponseGrace
-                        ? 'Busy…'
-                        : (isPrintingMonitorPolling ? 'Live' : 'Idle')}
-                    </span>
-                  </div>
-
-                  {printingMonitorHasActivePrint ? (
-                    <>
-                      <div
-                        className="h-2 w-full rounded-full border overflow-hidden"
-                        style={{
-                          borderColor: 'var(--border-subtle)',
-                          background: 'color-mix(in srgb, var(--surface-2), black 20%)',
-                        }}
-                      >
-                        <div
-                          className="h-full rounded-full transition-[width] duration-200 ease-out"
-                          style={{
-                            width: `${(printingMonitorDisplayProgressPct ?? 0).toFixed(2)}%`,
-                            background: 'linear-gradient(90deg, #60a5fa, #22d3ee)',
-                          }}
-                        />
-                      </div>
-                      <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                        Progress {printingMonitorDisplayProgressPct != null ? `${printingMonitorDisplayProgressPct.toFixed(1)}%` : '—'}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                      No active print.
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                    <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                      Layer:{' '}
-                      <span style={{ color: 'var(--text-strong)' }}>
-                        {printingMonitorDisplayTotalLayers != null
-                          ? `${printingMonitorDisplayCurrentLayer ?? '—'}/${printingMonitorDisplayTotalLayers}`
-                          : (printingMonitorDisplayCurrentLayer != null ? `${printingMonitorDisplayCurrentLayer}` : '—')}
-                      </span>
-                    </div>
-                    <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                      Material:{' '}
-                      <span style={{ color: 'var(--text-strong)' }}>{printingMonitorDisplayMaterialProfile}</span>
-                    </div>
-                    <div
-                      className="col-span-2 rounded-md border px-2.5 py-2 truncate"
-                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
-                      title={printingMonitorHasActivePrint ? (printingMonitorSnapshot?.jobName ?? undefined) : undefined}
-                    >
-                      Job:{' '}
-                      <span style={{ color: 'var(--text-strong)' }}>{printingMonitorHasActivePrint ? (printingMonitorSnapshot?.jobName ?? '—') : '—'}</span>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      className="ui-button !h-9 px-3 text-xs"
-                      style={!printingMonitorPauseButtonDisabled
-                        ? {
-                            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 87%)',
-                            color: 'var(--text-strong)',
-                          }
-                        : {
-                            borderColor: 'var(--border-subtle)',
-                            background: 'color-mix(in srgb, var(--surface-2), black 8%)',
-                            color: 'var(--text-muted)',
-                            opacity: 0.55,
-                          }}
-                      onClick={() => {
-                        void handlePrintingMonitorControlAction(printingMonitorSnapshot?.isPaused ? 'resume' : 'pause');
-                      }}
-                      disabled={printingMonitorPauseButtonDisabled}
-                    >
-                      {printingMonitorPauseButtonAnimating
-                        ? (
-                          <span className="inline-flex items-center gap-1.5">
-                            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                            <span>
-                              {printingMonitorControlPendingAction === 'resume'
-                                ? 'Resuming…'
-                                : printingMonitorSnapshot?.isPaused && !printingMonitorIsPauseTransition
-                                  ? 'Resuming…'
-                                  : 'Pausing…'}
-                            </span>
-                          </span>
-                        )
-                        : (printingMonitorSnapshot?.isPaused ? 'Resume' : 'Pause')}
-                    </button>
-
-                    <button
-                      type="button"
-                      className="ui-button !h-9 px-3 text-xs"
-                      style={!printingMonitorCancelButtonDisabled
-                        ? {
-                            borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 48%)',
-                            background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
-                            color: '#fde68a',
-                          }
-                        : {
-                            borderColor: 'var(--border-subtle)',
-                            background: 'color-mix(in srgb, var(--surface-2), black 8%)',
-                            color: 'var(--text-muted)',
-                            opacity: 0.55,
-                          }}
-                      onClick={() => {
-                        void handlePrintingMonitorControlAction('cancel');
-                      }}
-                      disabled={printingMonitorCancelButtonDisabled}
-                    >
-                      {printingMonitorCancelButtonAnimating
-                        ? (
-                          <span className="inline-flex items-center gap-1.5">
-                            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                            <span>Canceling…</span>
-                          </span>
-                        )
-                        : 'Cancel'}
-                    </button>
-
-                    <button
-                      type="button"
-                      className="ui-button !h-9 px-3 text-xs col-span-2"
-                      style={{
-                        borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
-                        background: 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)',
-                        color: '#fee2e2',
-                      }}
-                      onClick={() => {
-                        void handlePrintingMonitorControlAction('emergency-stop');
-                      }}
-                      disabled={printingMonitorEmergencyStopDisabled}
-                    >
-                      {(printingMonitorControlPendingAction === 'emergency-stop' || printingMonitorActionBusy === 'emergency-stop')
-                        ? 'Stopping…'
-                        : 'Emergency Stop'}
-                    </button>
-                  </div>
-
-                </div>
-                </section>
-                )}
-
-                {printingMonitorHasCamera && (
-                <section
-                  ref={printingMonitorWebcamSectionRef}
-                  className={`rounded-md border p-2 flex flex-col min-h-0 overflow-hidden self-stretch h-[min(62vh,520px)] lg:h-full transition-opacity duration-150 ease-out motion-reduce:transition-none ${printingMonitorDetailWebcamExpanded ? 'opacity-100' : 'opacity-[0.985]'}`}
-                  style={{
-                    borderColor: 'var(--border-subtle)',
-                    background: 'color-mix(in srgb, var(--surface-1), #000 4%)',
-                  }}
-                >
-                <div className="grid min-h-[34px] grid-cols-[1fr_auto] items-center gap-2 px-1">
-                  <div className="justify-self-start text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                    Webcam
-                  </div>
-                  <div className="justify-self-end inline-flex items-center gap-1.5">
-                    {printingMonitorCanExpandWebcam && (
-                      <IconButton
-                        onClick={() => setPrintingMonitorWebcamExpanded((previous) => !previous)}
-                        className="!p-1.5"
-                        title={printingMonitorDetailWebcamExpanded ? 'Collapse webcam view' : 'Expand webcam view'}
-                        aria-label={printingMonitorDetailWebcamExpanded ? 'Collapse webcam view' : 'Expand webcam view'}
-                      >
-                        {printingMonitorDetailWebcamExpanded
-                          ? <Minimize2 className="w-3.5 h-3.5" />
-                          : <Maximize2 className="w-3.5 h-3.5" />}
-                      </IconButton>
-                    )}
-                    <IconButton
-                      onClick={() => {
-                        void handleSavePrintingMonitorWebcamSnapshot();
-                      }}
-                      disabled={isPrintingMonitorWebcamSnapshotSaving || !printingMonitorWebcamUrl || !isPrintingMonitorWebcamLoaded}
-                      className="!p-1.5"
-                      title="Save webcam snapshot"
-                      aria-label="Save webcam snapshot"
-                    >
-                      {isPrintingMonitorWebcamSnapshotSaving
-                        ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        : <Download className="w-3.5 h-3.5" />}
-                    </IconButton>
-                  </div>
-                </div>
-                {printingMonitorWebcamUrl ? (
-                  <div className="mt-1.5 flex-1 min-h-0 min-w-0 flex items-center justify-center overflow-hidden">
-                    {printingMonitorWebcamLoadError ? (
-                      <div className="w-full max-w-full rounded-md border p-4 flex items-center justify-center h-full" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 7%)' }}>
-                        <div className="text-center max-w-[520px] w-full">
-                          <div
-                            className="inline-flex h-12 w-12 items-center justify-center rounded-full border mb-3"
-                            style={{
-                              borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 30%)',
-                              background: 'color-mix(in srgb, var(--danger), var(--surface-1) 90%)',
-                            }}
-                          >
-                            <AlertTriangle className="w-5 h-5" style={{ color: 'var(--danger)' }} />
-                          </div>
-
-                          <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                            {printingMonitorWebcamDisplayPresentation.title}
-                          </h4>
-                          <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                            {printingMonitorWebcamDisplayPresentation.description}
-                          </p>
-
-                          <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
-                            {printingMonitorWebcamCanResetStreamSlot && (
-                              <button
-                                type="button"
-                                className="ui-button ui-button-secondary !h-8 px-2.5 text-[10px]"
-                                onClick={() => {
-                                  void handleResetPrintingMonitorWebcamStreamSlot();
-                                }}
-                                disabled={isPrintingMonitorWebcamResetBusy}
-                                title="Ask the printer to disable any stale webcam stream before retrying"
-                              >
-                                {isPrintingMonitorWebcamResetBusy ? 'Resetting stream…' : 'Reset stream slot'}
-                              </button>
-                            )}
-
-                            <button
-                              type="button"
-                              className="ui-button ui-button-secondary !h-8 px-2.5 text-[10px]"
-                              onClick={() => {
-                                triggerPrintingMonitorWebcamRetry();
-                              }}
-                              disabled={isPrintingMonitorWebcamResetBusy}
-                            >
-                              Retry
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div
-                        ref={printingMonitorWebcamViewportRef}
-                        className="relative rounded-md border overflow-hidden h-full max-h-full max-w-full"
-                        style={{
-                          borderColor: 'var(--border-subtle)',
-                          background: 'color-mix(in srgb, var(--surface-1), #000 6%)',
-                          width: isPrintingMonitorWebcamLoaded ? undefined : '100%',
-                          minWidth: isPrintingMonitorWebcamLoaded ? undefined : 'min(100%, 220px)',
-                        }}
-                      >
-                        {!isPrintingMonitorWebcamLoaded && (
-                          <div className="absolute inset-0 z-[1] flex items-center justify-center px-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                            <div className="w-[74%]">
-                              <div
-                                className="ui-loading-track h-2.5 w-full rounded-full"
-                                style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-                              >
-                                <div
-                                  className="ui-loading-indicator"
-                                  style={{ background: 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 28%))' }}
-                                />
-                              </div>
-                              <div className="mt-2 text-center">Loading camera feed…</div>
-                            </div>
-                          </div>
-                        )}
-                        <div className="h-full w-full min-h-0 min-w-0 flex items-center justify-center overflow-hidden">
-                        <div
-                          className="max-h-full max-w-full"
-                          style={monitorWebcamDisplayAspectRatio != null
-                            ? {
-                                width: '100%',
-                                height: 'auto',
-                                maxWidth: '100%',
-                                maxHeight: '100%',
-                                aspectRatio: String(monitorWebcamDisplayAspectRatio),
-                              }
-                            : {
-                                width: '100%',
-                                height: '100%',
-                                maxWidth: '100%',
-                                maxHeight: '100%',
-                              }}
-                        >
-                          {printingMonitorWebcamUsesRelayWs ? (
-                            <RtspRelayCanvasPlayer
-                              url={printingMonitorWebcamUrl}
-                              className="block h-full w-full object-contain transition-opacity duration-150"
-                              style={{
-                                opacity: isPrintingMonitorWebcamLoaded ? 1 : 0,
-                                transform: monitorWebcamTransform,
-                                transformOrigin: 'center center',
-                              }}
-                              onLoaded={(ratio) => {
-                                cancelPrintingMonitorWebcamReadinessCheck();
-                                printingMonitorRelayAutoRetryCountRef.current = 0;
-                                if (printingMonitorRelayAutoRetryTimeoutRef.current != null) {
-                                  window.clearTimeout(printingMonitorRelayAutoRetryTimeoutRef.current);
-                                  printingMonitorRelayAutoRetryTimeoutRef.current = null;
-                                }
-                                const normalizedRatio = normalizePrintingMonitorWebcamAspectRatio(ratio);
-                                if (normalizedRatio != null) {
-                                  setPrintingMonitorWebcamAspectRatio((previous) => {
-                                    if (previous != null && Math.abs(previous - normalizedRatio) < 0.001) return previous;
-                                    return normalizedRatio;
-                                  });
-                                }
-                                setIsPrintingMonitorWebcamLoaded(true);
-                                setPrintingMonitorWebcamLoadError(null);
-                              }}
-                              onError={(message) => {
-                                cancelPrintingMonitorWebcamReadinessCheck();
-                                console.warn('[Monitor/Webcam] rtsp-relay playback issue', { url: printingMonitorWebcamUrl, message });
-                                const normalizedMessage = String(message ?? '').toLowerCase();
-                                const isRetryableRelayError = printingMonitorWebcamUsesRelayWs && (
-                                  normalizedMessage.includes('did not deliver any video data in time')
-                                  || normalizedMessage.includes('websocket disconnected')
-                                );
-                                if (isRetryableRelayError && printingMonitorRelayAutoRetryCountRef.current < DEFAULT_RELAY_AUTORETRY_LIMIT) {
-                                  printingMonitorRelayAutoRetryCountRef.current += 1;
-                                  const attempt = printingMonitorRelayAutoRetryCountRef.current;
-                                  setIsPrintingMonitorWebcamLoaded(false);
-                                  setPrintingMonitorWebcamLoadError(`Webcam stream stalled. Retrying (${attempt}/${DEFAULT_RELAY_AUTORETRY_LIMIT})…`);
-                                  if (printingMonitorRelayAutoRetryTimeoutRef.current != null) {
-                                    window.clearTimeout(printingMonitorRelayAutoRetryTimeoutRef.current);
-                                  }
-                                  printingMonitorRelayAutoRetryTimeoutRef.current = window.setTimeout(() => {
-                                    printingMonitorRelayAutoRetryTimeoutRef.current = null;
-                                    triggerPrintingMonitorWebcamRetry();
-                                  }, DEFAULT_RELAY_AUTORETRY_DELAY_MS);
-                                  return;
-                                }
-                                setIsPrintingMonitorWebcamLoaded(false);
-                                setPrintingMonitorWebcamLoadError(message);
-                              }}
-                            />
-                          ) : (
-                            <img
-                              src={printingMonitorWebcamUrl}
-                              alt="Printer webcam preview"
-                              className="block h-full w-full object-contain transition-opacity duration-150"
-                              style={{
-                                opacity: isPrintingMonitorWebcamLoaded ? 1 : 0,
-                                transform: monitorWebcamTransform,
-                                transformOrigin: 'center center',
-                              }}
-                              onLoad={(event) => {
-                                schedulePrintingMonitorMjpegReadinessCheck(event.currentTarget);
-                              }}
-                              onError={() => {
-                                cancelPrintingMonitorWebcamReadinessCheck();
-                                setIsPrintingMonitorWebcamLoaded(false);
-                                setPrintingMonitorWebcamLoadError('The webcam image could not be loaded.');
-                              }}
-                              loading="eager"
-                              decoding="async"
-                              fetchPriority="high"
-                            />
-                          )}
-                        </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="mt-1.5 flex-1 min-h-0 rounded-md border p-4 flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 7%)' }}>
-                    <div className="text-center max-w-[520px] w-full">
-                      <div
-                        className="inline-flex h-12 w-12 items-center justify-center rounded-full border mb-3"
-                        style={printingMonitorWebcamStatusPresentation.tone === 'warning'
-                            ? {
-                                borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 35%)',
-                                background: 'color-mix(in srgb, #d97706, var(--surface-1) 90%)',
-                              }
-                            : printingMonitorWebcamStatusPresentation.tone === 'error'
-                              ? {
-                                  borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 30%)',
-                                  background: 'color-mix(in srgb, var(--danger), var(--surface-1) 90%)',
-                                }
-                              : {
-                                  borderColor: 'var(--border-subtle)',
-                                  background: 'var(--surface-1)',
-                                }}
-                      >
-                        {printingMonitorWebcamStatusPresentation.tone === 'warning' ? (
-                          <AlertTriangle className="w-5 h-5" style={{ color: '#d97706' }} />
-                        ) : printingMonitorWebcamStatusPresentation.tone === 'error' ? (
-                          <AlertTriangle className="w-5 h-5" style={{ color: 'var(--danger)' }} />
-                        ) : (
-                          <RefreshCw className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
-                        )}
-                      </div>
-
-                      <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                        {printingMonitorWebcamStatusPresentation.title}
-                      </h4>
-                      <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                        {printingMonitorWebcamStatusPresentation.description}
-                      </p>
-
-                      <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
-                      {printingMonitorWebcamCanResetStreamSlot && (
-                        <button
-                          type="button"
-                          className="ui-button ui-button-secondary !h-8 px-2.5 text-[10px]"
-                          onClick={() => {
-                            void handleResetPrintingMonitorWebcamStreamSlot();
-                          }}
-                          disabled={isPrintingMonitorWebcamResetBusy}
-                          title="Ask the printer to disable any stale webcam stream before retrying"
-                        >
-                          {isPrintingMonitorWebcamResetBusy ? 'Resetting stream…' : 'Reset stream slot'}
-                        </button>
-                      )}
-
-                      <button
-                        type="button"
-                        className="ui-button ui-button-secondary !h-8 px-2.5 text-[10px]"
-                        onClick={() => {
-                          triggerPrintingMonitorWebcamRetry();
-                        }}
-                        disabled={isPrintingMonitorWebcamResetBusy}
-                      >
-                        Retry
-                      </button>
-                    </div>
-                    </div>
-                  </div>
-                )}
-                </section>
-                )}
-              </div>
-            )}
-
-            {isPrintingMonitorDebugOpen && (
-              <div className="pointer-events-none fixed right-4 top-[5.25rem] z-[170] w-[min(760px,94vw)]">
-                <div
-                  className="pointer-events-auto rounded-lg border p-2.5 font-mono text-[10px] leading-tight shadow-xl"
-                  style={{
-                    borderColor: 'var(--border-subtle)',
-                    color: 'var(--text-strong)',
-                    background: 'color-mix(in srgb, var(--surface-0), black 14%)',
-                    fontSize: '10px',
-                  }}
-                >
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="text-xs font-semibold" style={{ fontFamily: 'var(--font-geist-mono)' }}>
-                      Monitor Debug Overlay (Ctrl+Shift+N)
-                    </div>
-                    <div className="inline-flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        className="rounded border px-2 py-0.5 text-[10px]"
-                        style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-                        onClick={() => {
-                          void handleCopyPrintingMonitorDebugBundle();
-                        }}
-                        title="Copy monitor debug bundle"
-                      >
-                        {printingMonitorDebugCopyState === 'copied'
-                          ? 'Copied'
-                          : printingMonitorDebugCopyState === 'failed'
-                            ? 'Copy Failed'
-                            : 'Copy JSON'}
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded border px-2 py-0.5 text-[10px]"
-                        style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-                        onClick={() => setIsPrintingMonitorDebugOpen(false)}
-                      >
-                        Close
-                      </button>
-                    </div>
-                  </div>
-
-
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                    <div style={{ color: 'var(--text-muted)' }}>Printer</div>
-                    <div className="truncate" title={printingMonitorHeaderBottomLabel}>
-                      {printingMonitorHeaderBottomLabel}
-                    </div>
-
-                    <div style={{ color: 'var(--text-muted)' }}>Device host</div>
-                    <div className="truncate" title={printingMonitorDebugBundle.selectedDevice?.ipAddress ?? 'n/a'}>
-                      {printingMonitorDebugBundle.selectedDevice?.ipAddress ?? 'n/a'}
-                    </div>
-
-                    <div style={{ color: 'var(--text-muted)' }}>Reachability</div>
-                    <div>
-                      {printingMonitorDebugBundle.selectedDevice?.reachability == null
-                        ? 'unknown'
-                        : (printingMonitorDebugBundle.selectedDevice.reachability ? 'online' : 'offline')}
-                    </div>
-
-                    <div style={{ color: 'var(--text-muted)' }}>Offline gate</div>
-                    <div>{printingMonitorDebugBundle.offlineGate.isPrintingMonitorSelectedPrinterOffline ? 'true' : 'false'}</div>
-                  </div>
-
-                  <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                      Channel payloads
-                    </div>
-                    <div className="grid gap-2 lg:grid-cols-3">
-                      {printingMonitorDebugPanels.map((panel) => (
-                        <div
-                          key={panel.channel}
-                          className="rounded-md border overflow-hidden"
-                          style={{
-
-                            borderColor: 'var(--border-subtle)',
-                            background: 'color-mix(in srgb, var(--surface-2), #000 8%)',
-                          }}
-                        >
-                          <div
-                            className="border-b px-2 py-1 text-[10px] uppercase tracking-[0.08em] flex items-center justify-between gap-2"
-                            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-                          >
-                            <span>{panel.channel}</span>
-                            <span style={{ color: panel.hasError ? '#fca5a5' : 'var(--text-muted)' }}>
-                              {panel.statusText}
-                            </span>
-                          </div>
-                          <pre
-                            className="max-h-56 overflow-auto custom-scrollbar p-2 text-[10px] leading-[1.35]"
-                            style={{ color: 'var(--text-strong)' }}
-                          >
-                            {panel.json}
-                          </pre>
-                          <div
-                            className="border-t px-2 py-1 text-[10px]"
-                            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-                          >
-                            {panel.requestedAt ?? 'not requested'}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                      Manual SDCP commands
-                    </div>
-                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                      <button
-                        type="button"
-                        className="rounded-md border px-2 py-1 text-left text-[10px] transition-colors"
-                        style={{
-                          borderColor: 'var(--border-subtle)',
-                          background: 'color-mix(in srgb, var(--surface-2), #000 6%)',
-                          color: 'var(--text-strong)',
-                        }}
-                        disabled={printingMonitorAnyActionBusy || !printingMonitoringAdapter.operations?.webcamEnable}
-                        onClick={() => {
-                          void executePrintingMonitorFeatureToggle('webcam', true);
-                        }}
-                      >
-                        <div className="font-semibold uppercase tracking-wide">Cmd 386</div>
-                        <div className="mt-0.5" style={{ color: 'var(--text-muted)' }}>Enable video stream</div>
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-md border px-2 py-1 text-left text-[10px] transition-colors"
-                        style={{
-                          borderColor: 'var(--border-subtle)',
-                          background: 'color-mix(in srgb, var(--surface-2), #000 6%)',
-                          color: 'var(--text-strong)',
-                        }}
-                        disabled={printingMonitorAnyActionBusy || !printingMonitoringAdapter.operations?.webcamDisable}
-                        onClick={() => {
-                          void executePrintingMonitorFeatureToggle('webcam', false);
-                        }}
-                      >
-                        <div className="font-semibold uppercase tracking-wide">Cmd 386</div>
-                        <div className="mt-0.5" style={{ color: 'var(--text-muted)' }}>Disable video stream</div>
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-md border px-2 py-1 text-left text-[10px] transition-colors"
-                        style={{
-                          borderColor: 'var(--border-subtle)',
-                          background: 'color-mix(in srgb, var(--surface-2), #000 6%)',
-                          color: 'var(--text-strong)',
-                        }}
-                        disabled={printingMonitorAnyActionBusy || !printingMonitoringAdapter.operations?.timelapseEnable}
-                        onClick={() => {
-                          void executePrintingMonitorFeatureToggle('timelapse', true);
-                        }}
-                      >
-                        <div className="font-semibold uppercase tracking-wide">Cmd 387</div>
-                        <div className="mt-0.5" style={{ color: 'var(--text-muted)' }}>Enable timelapse</div>
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-md border px-2 py-1 text-left text-[10px] transition-colors"
-                        style={{
-                          borderColor: 'var(--border-subtle)',
-                          background: 'color-mix(in srgb, var(--surface-2), #000 6%)',
-                          color: 'var(--text-strong)',
-                        }}
-                        disabled={printingMonitorAnyActionBusy || !printingMonitoringAdapter.operations?.timelapseDisable}
-                        onClick={() => {
-                          void executePrintingMonitorFeatureToggle('timelapse', false);
-                        }}
-                      >
-                        <div className="font-semibold uppercase tracking-wide">Cmd 387</div>
-                        <div className="mt-0.5" style={{ color: 'var(--text-muted)' }}>Disable timelapse</div>
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-md border px-2 py-1 text-left text-[10px] transition-colors"
-                        style={{
-                          borderColor: 'var(--border-subtle)',
-                          background: 'color-mix(in srgb, var(--surface-2), #000 6%)',
-                          color: 'var(--text-strong)',
-                        }}
-                        disabled={printingMonitorAnyActionBusy || printingMonitoringAdapter.pluginId !== 'sdcp-v3'}
-                        onClick={() => {
-                          void executePrintingMonitorSdcpDebugCommand({
-                            operation: 'sdcp/task/history/list',
-                            label: 'Task history',
-                            channel: 'taskHistory',
-                          });
-                        }}
-                      >
-                        <div className="font-semibold uppercase tracking-wide">Cmd 320</div>
-                        <div className="mt-0.5" style={{ color: 'var(--text-muted)' }}>Fetch task history IDs</div>
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-md border px-2 py-1 text-left text-[10px] transition-colors"
-                        style={{
-                          borderColor: 'var(--border-subtle)',
-                          background: 'color-mix(in srgb, var(--surface-2), #000 6%)',
-                          color: 'var(--text-strong)',
-                        }}
-                        disabled={printingMonitorAnyActionBusy || printingMonitoringAdapter.pluginId !== 'sdcp-v3'}
-                        onClick={() => {
-                          void executePrintingMonitorSdcpDebugCommand({
-                            operation: 'sdcp/task/details',
-                            label: 'Task details',
-                            channel: 'taskDetails',
-                          });
-                        }}
-                      >
-                        <div className="font-semibold uppercase tracking-wide">Cmd 321</div>
-                        <div className="mt-0.5" style={{ color: 'var(--text-muted)' }}>Fetch task detail records</div>
-                      </button>
-                    </div>
-                    <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                      {printingMonitorActionStatus ?? 'Use these commands to manually toggle SDCP device features.'}
-                    </div>
-                  </div>
-
-                  <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                      Last SDCP response JSON
-                    </div>
-                    <div
-                      className="rounded-md border px-2 py-1"
-                      style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), #000 8%)' }}
-                    >
-                      <div className="flex items-center justify-between gap-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                        <span className="truncate" title={printingMonitorLastFeatureToggleResponse?.operation ?? 'n/a'}>
-                          {printingMonitorLastFeatureToggleResponse?.operation ?? 'No response yet'}
-                        </span>
-                        <span>
-                          {printingMonitorLastFeatureToggleResponse
-                            ? `HTTP ${printingMonitorLastFeatureToggleResponse.httpStatus ?? 'n/a'}${printingMonitorLastFeatureToggleResponse.httpOk === true ? ' • transport-ok' : printingMonitorLastFeatureToggleResponse.httpOk === false ? ' • transport-error' : ''}${printingMonitorLastFeatureToggleResponse.commandOk === true ? ' • command-ok' : printingMonitorLastFeatureToggleResponse.commandOk === false ? ' • command-error' : ''}`
-                            : 'waiting'}
-                        </span>
-                      </div>
-                      <pre
-                        className="mt-1 max-h-40 overflow-auto custom-scrollbar whitespace-pre-wrap break-words rounded-sm border px-2 py-1 text-[10px] leading-[1.35]"
-                        style={{
-                          borderColor: 'var(--border-subtle)',
-                          background: 'var(--surface-1)',
-                          color: 'var(--text-strong)',
-                        }}
-                      >
-                        {printingMonitorLastFeatureToggleResponse
-                          ? JSON.stringify({
-                            httpStatus: printingMonitorLastFeatureToggleResponse.httpStatus,
-                            httpOk: printingMonitorLastFeatureToggleResponse.httpOk,
-                            commandOk: printingMonitorLastFeatureToggleResponse.commandOk,
-                            error: printingMonitorLastFeatureToggleResponse.error,
-                            payload: printingMonitorLastFeatureToggleResponse.payload,
-                          }, null, 2)
-                          : 'Click a command to inspect the response JSON.'}
-                      </pre>
-                    </div>
-                  </div>
-
-                  <div className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                    Toggle: Ctrl+Shift+N
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-            {isPrintingMonitorRtspDebugOpen && (
-              <div className="pointer-events-none fixed left-4 top-[5.25rem] z-[170] w-[min(620px,94vw)]">
-                <div
-                  className="pointer-events-auto rounded-lg border p-2.5 font-mono text-[10px] leading-tight shadow-xl"
-                  style={{
-                    borderColor: 'var(--border-subtle)',
-                    color: 'var(--text-strong)',
-                    background: 'color-mix(in srgb, var(--surface-0), black 14%)',
-                    fontSize: '10px',
-                  }}
-                >
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="text-xs font-semibold" style={{ fontFamily: 'var(--font-geist-mono)' }}>
-                      RTSP Debug Overlay (Ctrl+Shift+M)
-                    </div>
-                    <button
-                      type="button"
-                      className="rounded border px-2 py-0.5 text-[10px]"
-                      style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-                      onClick={() => setIsPrintingMonitorRtspDebugOpen(false)}
-                    >
-                      Close
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                    <div style={{ color: 'var(--text-muted)' }}>Mode</div>
-                    <div>{printingMonitorRtspDebugSummary.title}</div>
-
-                    <div style={{ color: 'var(--text-muted)' }}>Source RTSP</div>
-                    <div className="truncate" title={printingMonitorRtspSourceUrl ?? 'n/a'}>
-                      {printingMonitorRtspSourceUrl ?? 'n/a'}
-                    </div>
-
-                    <div style={{ color: 'var(--text-muted)' }}>Relay base</div>
-                    <div className="truncate" title={printingMonitorRelayBaseWsUrl ?? 'n/a'}>
-                      {printingMonitorRelayBaseWsUrl ?? 'n/a'}
-                    </div>
-
-                    <div style={{ color: 'var(--text-muted)' }}>Final webcam URL</div>
-                    <div className="truncate" title={printingMonitorWebcamUrl ?? 'n/a'}>
-                      {printingMonitorWebcamUrl ?? 'n/a'}
-                    </div>
-
-                    <div style={{ color: 'var(--text-muted)' }}>Transport path</div>
-                    <div>
-                      {printingMonitorWebcamUsesRelayWs
-                        ? 'RTSP relay websocket'
-                        : printingMonitorInlineWebcamUrl
-                          ? 'Direct webcam URL'
-                          : 'Unavailable'}
-                    </div>
-
-                    <div style={{ color: 'var(--text-muted)' }}>UDP source port</div>
-                    <div>{printingMonitorRelayDebugTransport?.serverPort ?? 'n/a'}</div>
-
-                    <div style={{ color: 'var(--text-muted)' }}>UDP destination port</div>
-                    <div>{printingMonitorRelayDebugTransport?.clientPort ?? 'n/a'}</div>
-
-                    <div className="col-span-2 text-[10px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                      Source is the printer/server RTP port; destination is the DragonFruit/client RTP port.
-                    </div>
-
-                    <div style={{ color: 'var(--text-muted)' }}>Reclaim session</div>
-                    <div className="truncate" title={printingMonitorRelayReclaimDebug?.activeSessionId ?? 'n/a'}>
-                      {printingMonitorRelayReclaimDebug?.activeSessionId ?? 'n/a'}
-                    </div>
-
-                    <div style={{ color: 'var(--text-muted)' }}>Reclaim status</div>
-                    <div>{printingMonitorRelayReclaimDebug?.lastClaimStatus ?? 'n/a'}</div>
-
-                    <div style={{ color: 'var(--text-muted)' }}>Webcam status</div>
-                    <div title={printingMonitorWebcamDisplayPresentation.description}>
-                      {printingMonitorWebcamDisplayPresentation.title}
-                    </div>
-                  </div>
-
-                  <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="text-[10px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                      {printingMonitorRtspDebugSummary.description}
-                    </div>
-                    <div className="mt-1 text-[10px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                      Current feed note: {printingMonitorWebcamDisplayPresentation.description}
-                    </div>
-                    {printingMonitorRelayDebugTransport?.transportHeader && (
-                      <div className="mt-1 text-[10px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                        Last Transport header: {printingMonitorRelayDebugTransport.transportHeader}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                    Toggle: Ctrl+Shift+M
-                  </div>
-                </div>
-              </div>
-            )}
-
-      {isExporting && (
-        <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
-          <div
-            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
-            style={{ background: 'color-mix(in srgb, var(--surface-0), black 10%)', borderColor: 'var(--border-subtle)' }}
-            role="dialog"
-            aria-modal="true"
-            aria-live="polite"
-          >
-            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Exporting…
-            </div>
-            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-              <p>Writing mesh geometry and support data to file…</p>
-            </div>
-            <div className="ui-loading-track mt-3 h-2.5 w-full rounded-full" style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}>
-              <div className="ui-loading-indicator" style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }} />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showArrangeBlockingOverlay && (
-        <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
-          <div
-            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
-            style={{
-              background: 'color-mix(in srgb, var(--surface-0), black 10%)',
-              borderColor: 'var(--border-subtle)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-live="polite"
-          >
-            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              {arrangeOverlayContent.title}
-            </div>
-            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-              {arrangeOverlayContent.detailLines.map((line) => (
-                <p key={line}>{line}</p>
-              ))}
-            </div>
-
-            <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
-              Elapsed: {arrangeOverlayElapsedLabel}
-            </div>
-            <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Processing {arrangeOverlayModelCount ?? 0} {arrangeOverlayModelCount === 1 ? 'model' : 'models'}
-            </div>
-
-            <div
-              className="ui-loading-track mt-3 h-2.5 w-full rounded-full"
-              style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-            >
-              <div
-                className="ui-loading-indicator"
-                style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
 
       {islandsPoc.scanning && (
         <div className="absolute inset-0 z-[121] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
@@ -23501,42 +10168,23 @@ export default function Home() {
         </div>
       )}
 
-      {showModifierApplyBlockingOverlay && (
-        <div className="absolute inset-0 z-[121] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
+      {isExporting && (
+        <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
           <div
             className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
-            style={{
-              background: 'color-mix(in srgb, var(--surface-0), black 10%)',
-              borderColor: 'var(--border-subtle)',
-            }}
+            style={{ background: 'color-mix(in srgb, var(--surface-0), black 10%)', borderColor: 'var(--border-subtle)' }}
             role="dialog"
             aria-modal="true"
             aria-live="polite"
           >
             <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              {modifierApplyOverlayContent.title}
+              Exporting…
             </div>
             <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-              {modifierApplyOverlayContent.detailLines.map((line) => (
-                <p key={line}>{line}</p>
-              ))}
+              <p>Writing mesh geometry and support data to file…</p>
             </div>
-
-            <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
-              Elapsed: {modifierApplyOverlayElapsedLabel}
-            </div>
-            <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Processing 1 model
-            </div>
-
-            <div
-              className="ui-loading-track mt-3 h-2.5 w-full rounded-full"
-              style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-            >
-              <div
-                className="ui-loading-indicator"
-                style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
-              />
+            <div className="ui-loading-track mt-3 h-2.5 w-full rounded-full" style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}>
+              <div className="ui-loading-indicator" style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }} />
             </div>
           </div>
         </div>
@@ -23568,114 +10216,6 @@ export default function Home() {
         </ToastViewport>
       )}
 
-      {isSaveToastVisible && (
-        <ToastViewport zIndex={126} offset="1.25rem">
-          <Toast tone="info" animated visible={isSaveToastAnimatedVisible} className="flex items-center gap-2">
-            <RefreshCw className="h-4 w-4 animate-spin" />
-            {saveToastLabel}
-          </Toast>
-        </ToastViewport>
-      )}
-
-      {historyActionToast && (
-        <ToastViewport zIndex={125} offset="1.25rem">
-          <Toast
-            tone={historyActionToast.direction === 'undo' ? 'warning' : 'info'}
-            animated
-            visible={isHistoryActionToastVisible}
-            className="flex items-center gap-2"
-          >
-            {historyActionToast.direction === 'undo' ? (
-              <Undo2 className="h-4 w-4 motion-safe:animate-pulse" />
-            ) : (
-              <Redo2 className="h-4 w-4 motion-safe:animate-pulse" />
-            )}
-            {historyActionToast.text}
-          </Toast>
-        </ToastViewport>
-      )}
-
-      {printingMonitorErrorToast && (
-        <ToastViewport
-          zIndex={126}
-          offset={(historyActionToast || scene.sceneImportReport) ? '4.5rem' : '1.25rem'}
-        >
-          <Toast
-            tone="error"
-            animated
-            visible={isPrintingMonitorErrorToastVisible}
-            className="flex items-center gap-2"
-          >
-            <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
-            {printingMonitorErrorToast.text}
-          </Toast>
-        </ToastViewport>
-      )}
-
-      {scene.sceneImportReport && (
-        <ToastViewport zIndex={125} offset="1.25rem">
-          <Toast
-            tone={
-              scene.sceneImportReport.tone === 'error'
-                ? 'error'
-                : scene.sceneImportReport.tone === 'warning'
-                  ? 'warning'
-                  : 'success'
-            }
-            animated
-            visible={isSceneImportToastVisible}
-            className={`flex items-center gap-2 ${
-              scene.sceneImportReport.clickAction === 'openMeshRepairReport'
-                ? 'pointer-events-auto cursor-pointer select-none'
-                : ''
-            }`}
-            role={scene.sceneImportReport.clickAction === 'openMeshRepairReport' ? 'button' : undefined}
-            tabIndex={scene.sceneImportReport.clickAction === 'openMeshRepairReport' ? 0 : undefined}
-            onClick={() => {
-              if (scene.sceneImportReport?.clickAction === 'openMeshRepairReport') {
-                scene.openPendingMeshRepairReports();
-              }
-            }}
-            onKeyDown={(event) => {
-              if (scene.sceneImportReport?.clickAction !== 'openMeshRepairReport') {
-                return;
-              }
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                scene.openPendingMeshRepairReports();
-              }
-            }}
-          >
-            {scene.sceneImportReport.tone === 'error' ? (
-              <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
-            ) : scene.sceneImportReport.tone === 'warning' ? (
-              <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
-            ) : (
-              <CheckCircle2 className="h-4 w-4" />
-            )}
-            {scene.sceneImportReport.text}
-          </Toast>
-        </ToastViewport>
-      )}
-
-      {exportSuccessToast && (
-        <ToastViewport zIndex={125} offset="1.25rem">
-          <Toast tone="success" animated visible={isExportSuccessToastVisible} className="flex items-center gap-2">
-            <CheckCircle2 className="h-4 w-4" />
-            Saved to: {exportSuccessToast.path}
-          </Toast>
-        </ToastViewport>
-      )}
-
-      {exportErrorToast && (
-        <ToastViewport zIndex={125} offset="1.25rem">
-          <Toast tone="error" animated visible={isExportErrorToastVisible} className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
-            {exportErrorToast.text}
-          </Toast>
-        </ToastViewport>
-      )}
-
       {sproutParentingLockHeld && (
         <ToastViewport zIndex={125} offset="1.25rem">
           <Toast tone="info" visible={true} className="flex items-center gap-2">
@@ -23686,6 +10226,6 @@ export default function Home() {
         </ToastViewport>
       )}
 
-    </div>
+    </EditorLayout>
   );
 }

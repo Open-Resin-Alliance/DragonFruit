@@ -942,11 +942,22 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
 
 export function runAutoBracing(): AutoBraceResult {
     const before = structuredClone(getSnapshot());
+    // buildAutoBracedSnapshot mutates the kickstand store (strips/regenerates
+    // auto-generated kickstands), so both sides must be captured for undo/redo.
+    const kickstandBefore = structuredClone(getKickstandSnapshot());
     const built = buildAutoBracedSnapshot(before, getSettings().autoBracing);
     if (!built.changed) return built;
 
     setSnapshot(built.snapshot);
-    pushHistory({ type: SUPPORT_AUTO_BRACE_REPLACE, payload: { before, after: built.snapshot } });
+    pushHistory({
+        type: SUPPORT_AUTO_BRACE_REPLACE,
+        payload: {
+            before,
+            after: built.snapshot,
+            kickstandBefore,
+            kickstandAfter: structuredClone(getKickstandSnapshot()),
+        },
+    });
     return built;
 }
 

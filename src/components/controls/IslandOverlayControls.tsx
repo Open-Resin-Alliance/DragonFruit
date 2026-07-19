@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { NumberInput } from '@/components/ui/NumberInput';
-import { Card, CardHeader, IconButton, Input } from '@/components/ui/primitives';
+import { Card, CardHeader, IconButton, Input } from '@/components/atoms';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 type IslandOverlayControlsProps = {
