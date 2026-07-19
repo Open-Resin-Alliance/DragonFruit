@@ -76,11 +76,11 @@
       function formatDate(dateString) {
             if (!dateString) return 'Date unavailable';
             try {
-                  return new Intl.DateTimeFormat(undefined, {
-                        year: 'numeric',
-                        month: 'short',
-                        day: 'numeric',
-                  }).format(new Date(dateString));
+                  const date = new Date(dateString);
+                  const day = date.getDate();
+                  const month = date.toLocaleString(undefined, { month: 'short' });
+                  const year = date.getFullYear();
+                  return `${day} ${month} ${year}`;
             } catch {
                   return dateString;
             }
@@ -194,11 +194,23 @@
 
       function isRecentNightly(release) {
             if (!release?.prerelease || !release?.tag_name) return false;
-            if (!release.tag_name.startsWith('nightly_') && !release.tag_name.startsWith('dev_')) return false;
+            if (!release.tag_name.startsWith('nightly_')) return false;
             if (!release.published_at) return false;
             const ageMs = Date.now() - new Date(release.published_at).getTime();
             const cutoff = 14 * 24 * 60 * 60 * 1000;
             return ageMs < cutoff;
+      }
+
+      function findDevPreviewRelease(releases) {
+            if (!releases?.length) return null;
+
+            // Find the latest prerelease that is not a nightly build.
+            // Dev releases are tagged "v0.1.10" style (no dev_ prefix anymore).
+            const devPreview = (releases || [])
+                  .filter((r) => r?.prerelease && r?.tag_name && !r.tag_name.startsWith('nightly_') && r.tag_name.startsWith('v'))
+                  .sort((a, b) => new Date(b.published_at || 0) - new Date(a.published_at || 0));
+
+            return devPreview[0] || null;
       }
 
       function collectRecentNightlies(releases) {
@@ -206,7 +218,7 @@
       }
 
       function buildNightlyRow(release) {
-            const name = release.name || release.tag_name || 'Nightly';
+            const name = release.tag_name || release.name || 'Nightly';
             const tag = release.tag_name;
             const date = formatDate(release.published_at);
             const assets = release.assets || [];
@@ -223,7 +235,7 @@
             return `<div class="df-modal-nightly-row" data-tag="${tag}">
                   <div class="df-modal-nightly-info">
                         <a class="df-modal-nightly-name" href="${releaseUrl}" target="_blank" rel="noopener">${name}</a>
-                        <span class="df-modal-nightly-meta">${tag} · ${date}</span>
+                        <span class="df-modal-nightly-meta">${date}</span>
                   </div>
                   <div class="df-modal-nightly-assets">${assetLinks || '<span class="df-modal-no-assets">No assets</span>'}</div>
             </div>`;
@@ -281,30 +293,30 @@
             });
       }
 
-      function hydrateNightlyDownload(nightlyRelease) {
-            const nightlyLink = document.querySelector('#download-nightly');
-            const nightlyVersion = document.querySelector('#download-nightly-version');
-            if (!nightlyLink) return;
+      function hydrateDevPreviewDownload(devPreviewRelease) {
+            const devPreviewLink = document.querySelector('#download-nightly');
+            const devPreviewVersion = document.querySelector('#download-nightly-version');
+            if (!devPreviewLink) return;
 
-            if (!nightlyRelease) {
-                  if (nightlyVersion) nightlyVersion.textContent = 'No nightly available.';
+            if (!devPreviewRelease) {
+                  if (devPreviewVersion) devPreviewVersion.textContent = 'No dev preview available.';
                   return;
             }
 
-            const versionTag = nightlyRelease.name || nightlyRelease.tag_name || 'Nightly';
+            const versionTag = devPreviewRelease.tag_name || devPreviewRelease.name || 'Dev Preview';
             const preferredPlatform = detectPlatform();
-            const preferredAsset = preferredPlatform ? pickBestAsset(nightlyRelease.assets || [], preferredPlatform) : null;
+            const preferredAsset = preferredPlatform ? pickBestAsset(devPreviewRelease.assets || [], preferredPlatform) : null;
 
-            nightlyLink.href = preferredAsset
+            devPreviewLink.href = preferredAsset
                   ? preferredAsset.browser_download_url
-                  : nightlyRelease.html_url || RELEASES_URL;
+                  : devPreviewRelease.html_url || RELEASES_URL;
 
-            if (nightlyVersion) {
+            if (devPreviewVersion) {
                   const platformLabel = preferredPlatform ? PLATFORM_DEFS[preferredPlatform].label : null;
                   const architecture = detectArchitecture(preferredAsset?.name);
                   const platformContext = [platformLabel, architecture].filter(Boolean).join(' ');
                   const prefix = platformContext ? `${platformContext} · ` : '';
-                  nightlyVersion.textContent = `${prefix}${versionTag} · ${formatDate(nightlyRelease.published_at)}`;
+                  devPreviewVersion.textContent = `${prefix}Build ${versionTag} · ${formatDate(devPreviewRelease.published_at)}`;
             }
       }
 
@@ -425,9 +437,8 @@
 
             fetchJson(RELEASES_API_URL)
                   .then((releases) => {
-                        const nightlies = collectRecentNightlies(releases);
-                        const latestNightly = nightlies[0] || null;
-                        hydrateNightlyDownload(latestNightly);
+                        const devPreview = findDevPreviewRelease(releases);
+                        hydrateDevPreviewDownload(devPreview);
                   })
                   .catch(() => {
                         const nightlyVersion = document.querySelector('#download-nightly-version');

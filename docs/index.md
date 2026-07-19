@@ -40,11 +40,11 @@ hide:
     <a class="md-button md-button--primary" id="download-now" href="https://github.com/Open-Resin-Alliance/DragonFruit/releases/latest">Download Beta</a><button class="df-download-split-toggle" id="download-dropdown-toggle" aria-label="More download options" aria-expanded="false" aria-haspopup="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z"/></svg></button>
     <div class="df-download-dropdown" id="download-dropdown" hidden>
       <a class="df-download-dropdown-item" id="download-nightly" href="https://github.com/Open-Resin-Alliance/DragonFruit/releases">
-        <span class="df-download-dropdown-label">Download Nightly</span>
+        <span class="df-download-dropdown-label">Download Developer Beta</span>
         <span class="df-download-dropdown-sub" id="download-nightly-version">Fetching…</span>
       </a>
       <button class="df-download-dropdown-item df-show-all-nightlies" id="show-all-nightlies">
-        <span class="df-download-dropdown-label">Show other versions…</span>
+        <span class="df-download-dropdown-label">Show Nightlies</span>
       </button>
     </div>
   </div>
