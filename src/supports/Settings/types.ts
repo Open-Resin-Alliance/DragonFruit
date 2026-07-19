@@ -36,6 +36,10 @@ import {
     createDefaultAutoBracingSettings,
     type AutoBracingSettings,
 } from '../autoBracing/settings';
+import {
+    createDefaultAutoSupportSettings,
+    type AutoSupportSettings,
+} from '../autoSupport/settings';
 
 // --- Profile Types ---
 
@@ -136,6 +140,7 @@ export interface SupportSettings {
     grid: GridSettings;
     meshToMesh: MeshToMeshSettings;
     autoBracing: AutoBracingSettings;
+    autoSupport: AutoSupportSettings;
     devToolsEnabled: boolean;
     devTools: DevToolsSettings;
 }
@@ -197,6 +202,7 @@ export function createDefaultSettings(): SupportSettings {
             stickVsTwigCutoffMm: DEFAULT_MESH_TO_MESH_STICK_VS_TWIG_CUTOFF_MM,
         },
         autoBracing: createDefaultAutoBracingSettings(),
+        autoSupport: createDefaultAutoSupportSettings(),
         devToolsEnabled: false,
         devTools: {
             routingAlgorithm: 'potential',

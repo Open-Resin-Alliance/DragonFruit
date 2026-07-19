@@ -10,6 +10,10 @@ import {
     applyAutoBracingSettingsPatch,
     normalizeAutoBracingSettings,
 } from '../autoBracing/settings';
+import {
+    applyAutoSupportSettingsPatch,
+    normalizeAutoSupportSettings,
+} from '../autoSupport/settings';
 
 // --- Store ---
 
@@ -61,6 +65,10 @@ function mergeWithDefaults(settings: SupportSettings): SupportSettings {
         grid: mergedGrid,
         meshToMesh: { ...defaults.meshToMesh, ...(settings as any).meshToMesh },
         autoBracing: mergedAutoBracing,
+        autoSupport: normalizeAutoSupportSettings({
+            ...defaults.autoSupport,
+            ...((settings as any).autoSupport ?? {}),
+        }),
         devToolsEnabled: settings.devToolsEnabled !== undefined ? settings.devToolsEnabled : defaults.devToolsEnabled,
         devTools: settings.devTools ? { ...defaults.devTools, ...settings.devTools } : defaults.devTools,
     };
@@ -115,6 +123,10 @@ export function getMeshToMeshSettings() {
 
 export function getAutoBracingSettings() {
     return currentSettings.autoBracing;
+}
+
+export function getAutoSupportSettings() {
+    return currentSettings.autoSupport;
 }
 
 // --- Setters ---
@@ -204,6 +216,14 @@ export function updateAutoBracingSettings(autoBracing: Partial<SupportSettings['
     currentSettings = {
         ...currentSettings,
         autoBracing: applyAutoBracingSettingsPatch(currentSettings.autoBracing, autoBracing),
+    };
+    notify();
+}
+
+export function updateAutoSupportSettings(autoSupport: Partial<SupportSettings['autoSupport']>): void {
+    currentSettings = {
+        ...currentSettings,
+        autoSupport: applyAutoSupportSettingsPatch(currentSettings.autoSupport, autoSupport),
     };
     notify();
 }

@@ -7,6 +7,7 @@
 import { SupportPreset, PresetCollection, SupportSettings, createDefaultSettings } from './types';
 import { getSettings, setSettings, saveSettingsToLocalStorage } from './state';
 import { createDefaultAutoBracingSettings } from '../autoBracing/settings';
+import { createDefaultAutoSupportSettings } from '../autoSupport/settings';
 
 function normalizePresetSettings(
     settings: Partial<SupportSettings> | undefined,
@@ -58,6 +59,11 @@ function normalizePresetSettings(
             ...defaults.autoBracing,
             ...fallback.autoBracing,
             ...(source.autoBracing ?? {}),
+        },
+        autoSupport: {
+            ...defaults.autoSupport,
+            ...fallback.autoSupport,
+            ...(source.autoSupport ?? {}),
         },
     };
 }
@@ -120,6 +126,7 @@ const DETAIL_PRESET: SupportPreset = {
             stickVsTwigCutoffMm: 5.0,
         },
         autoBracing: createDefaultAutoBracingSettings(),
+        autoSupport: createDefaultAutoSupportSettings(),
         devToolsEnabled: false,
         devTools: createDefaultSettings().devTools,
     },
@@ -210,6 +217,7 @@ const ANCHOR_PRESET: SupportPreset = {
             stickVsTwigCutoffMm: 5.0,
         },
         autoBracing: createDefaultAutoBracingSettings(),
+        autoSupport: createDefaultAutoSupportSettings(),
         devToolsEnabled: false,
         devTools: createDefaultSettings().devTools,
     },
@@ -521,6 +529,9 @@ export function setActivePreset(id: string | null): void {
         autoBracing: {
             ...current.autoBracing,
         },
+        autoSupport: {
+            ...current.autoSupport,
+        },
     });
 
     // Keep selected preset + persisted settings in sync across app restarts.
@@ -552,6 +563,9 @@ export function savePreset(id: string): void {
         },
         autoBracing: {
             ...existingPreset.settings.autoBracing,
+        },
+        autoSupport: {
+            ...existingPreset.settings.autoSupport,
         },
     };
 
