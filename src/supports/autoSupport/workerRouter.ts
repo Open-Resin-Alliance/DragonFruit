@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { MeshBVH } from '@react-three/drei/node_modules/three-mesh-bvh';
+import { MeshBVH } from 'three-mesh-bvh';
 import type { SupportSettings } from '@/supports/Settings/types';
 import type { ScanResults } from '@/volumeAnalysis/IslandScan/ScanOrchestrator';
 import { routeRepairSupports, runAutoSupportPlan } from './autoSupportRunner';

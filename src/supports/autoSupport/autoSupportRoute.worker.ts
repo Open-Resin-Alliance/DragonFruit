@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { computeBoundsTree, acceleratedRaycast, MeshBVH } from '@react-three/drei/node_modules/three-mesh-bvh';
+import { computeBoundsTree, acceleratedRaycast, MeshBVH } from 'three-mesh-bvh';
 import { setSettings } from '@/supports/Settings/state';
 import type { SupportSettings } from '@/supports/Settings/types';
 import type { ScanResults } from '@/volumeAnalysis/IslandScan/ScanOrchestrator';
