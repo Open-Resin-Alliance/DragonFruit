@@ -3,6 +3,8 @@ export type {
   TreeCluster,
   SupportPlan,
   AutoPlaceResult,
+  AutoPlaceAnalytics,
+  RejectReason,
 } from "./types";
 
 export {

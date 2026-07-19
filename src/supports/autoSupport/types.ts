@@ -48,6 +48,29 @@ export interface SupportPlan {
     rejectedCandidates: Array<{ candidate: CandidatePoint; reason: string }>;
 }
 
+/** Why a candidate was rejected. */
+export type RejectReason =
+    | 'trunk_build_error'
+    | 'grid_reject_collision'
+    | 'grid_reject_no_attachment'
+    | 'grid_reject_other'
+    | 'already_supported'
+    | 'exception';
+
+/** Detailed analytics from an auto-place run. */
+export interface AutoPlaceAnalytics {
+    /** Number of islands that had at least one support placed near them. */
+    islandsCovered: number;
+    /** Number of islands that still have no nearby support. */
+    islandsUncovered: number;
+    /** Breakdown of candidates by assigned preset. */
+    presets: { detail: number; structure: number; anchor: number };
+    /** Breakdown of rejections by reason. */
+    rejectionReasons: Partial<Record<RejectReason, number>>;
+    /** Area coverage: sum of covered island areas / total island area (0–1). */
+    areaCoverage: number;
+}
+
 /** Result returned by the auto-place orchestrator. */
 export interface AutoPlaceResult {
     placedTrunks: number;
@@ -59,4 +82,6 @@ export interface AutoPlaceResult {
     changed: boolean;
     /** Human-readable summary for UI feedback. */
     message: string;
+    /** Detailed analytics (undefined for no-op runs). */
+    analytics?: AutoPlaceAnalytics;
 }

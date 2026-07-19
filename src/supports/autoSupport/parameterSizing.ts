@@ -1,63 +1,161 @@
 import type { CandidatePoint } from './types';
 import type { SupportSettings } from '../Settings/types';
+import { createDefaultSettings } from '../Settings/types';
 
-/** Override values for buildTrunkData's overrides parameter. */
+// ---------------------------------------------------------------------------
+// Preset definitions — mirrors the built-in presets from
+// src/supports/Settings/presets.ts.  Inlined so auto-placement doesn't
+// depend on the preset store / React runtime.
+// ---------------------------------------------------------------------------
+
+/** Thin supports for fine details and small islands (≤ 0.15 mm²). */
+const DETAIL_SETTINGS: SupportSettings = {
+    ...createDefaultSettings(),
+    tip: {
+        shape: 'cone',
+        type: 'disk',
+        contactDiameterMm: 0.22,
+        bodyDiameterMm: 0.8,
+        lengthMm: 2.5,
+        penetrationMm: 0,
+        coneAngleMode: 'adaptive',
+        adaptiveConeAngleOffsetDeg: 60,
+        coneAngleDeg: 100,
+        breakpointMm: 0,
+    },
+    shaft: {
+        shape: 'cylinder',
+        diameterMm: 0.8,
+        secondaryDiameterMm: 0.8,
+        isStraight: true,
+        maxAngleDeg: 80,
+    },
+    roots: {
+        shape: 'cylinder',
+        diameterMm: 2.0,
+        diskHeightMm: 0.5,
+        coneHeightMm: 1.0,
+        neckDiameterMm: 0.8,
+        neckBlend: 0.7,
+    },
+    baseFlare: {
+        enabled: true,
+        diameterMm: 2.5,
+        heightMm: 1.2,
+    },
+};
+
+/** Balanced supports for medium islands (0.15 – 0.50 mm²). */
+const STRUCTURE_SETTINGS: SupportSettings = {
+    ...createDefaultSettings(),
+    tip: {
+        ...createDefaultSettings().tip,
+        contactDiameterMm: 0.28,
+        lengthMm: 2.5,
+    },
+    shaft: {
+        ...createDefaultSettings().shaft,
+        diameterMm: 1.0,
+        secondaryDiameterMm: 1.0,
+    },
+    roots: {
+        ...createDefaultSettings().roots,
+        diameterMm: 2.0,
+        diskHeightMm: 0.5,
+        coneHeightMm: 1.0,
+    },
+};
+
+/** Heavy supports for large overhangs (> 0.50 mm²). */
+const ANCHOR_SETTINGS: SupportSettings = {
+    ...createDefaultSettings(),
+    tip: {
+        shape: 'cone',
+        type: 'disk',
+        contactDiameterMm: 0.4,
+        bodyDiameterMm: 1.2,
+        lengthMm: 2.5,
+        penetrationMm: 0,
+        coneAngleMode: 'adaptive',
+        adaptiveConeAngleOffsetDeg: 60,
+        coneAngleDeg: 100,
+        breakpointMm: 0,
+    },
+    shaft: {
+        shape: 'cylinder',
+        diameterMm: 1.2,
+        secondaryDiameterMm: 1.2,
+        isStraight: true,
+        maxAngleDeg: 80,
+    },
+    roots: {
+        shape: 'cylinder',
+        diameterMm: 2.0,
+        diskHeightMm: 0.5,
+        coneHeightMm: 1.0,
+        neckDiameterMm: 1.5,
+        neckBlend: 0.7,
+    },
+    baseFlare: {
+        enabled: true,
+        diameterMm: 4.0,
+        heightMm: 2.0,
+    },
+};
+
+// ---------------------------------------------------------------------------
+// Override type
+// ---------------------------------------------------------------------------
+
 export interface SizeOverrides {
     shaftDiameterMm?: number;
     tipContactDiameterMm?: number;
     tipBodyDiameterMm?: number;
     tipLengthMm?: number;
+    tipPenetrationMm?: number;
     rootsDiameterMm?: number;
+    rootsDiskHeightMm?: number;
+    rootsConeHeightMm?: number;
 }
 
+// ---------------------------------------------------------------------------
+// Thresholds
+// ---------------------------------------------------------------------------
+
+const DETAIL_MAX_AREA_MM2 = 0.15;
+const STRUCTURE_MAX_AREA_MM2 = 0.50;
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 /**
- * Compute support size parameters based on island geometry.
+ * Select support dimensions using the same presets as the manual
+ * placement toolbar (Detail / Structure / Anchor).
  *
- * @param candidate - The candidate point to size supports for
- * @param totalSupportedAreaMm2 - Total area this support carries
- *   (for core trunks: sum of own area + all satellites; for standalone: own area)
- * @param zHeight - Z-height above build plate (mm)
- * @param settings - Current support settings (for base values)
+ * | Island area       | Preset    | Tip Ø  | Shaft Ø | Use case        |
+ * |-------------------|-----------|--------|---------|-----------------|
+ * | ≤ 0.15 mm²        | Detail    | 0.22   | 0.8     | fine features   |
+ * | 0.15 – 0.50 mm²   | Structure | 0.28   | 1.0     | general use     |
+ * | > 0.50 mm²        | Anchor    | 0.40   | 1.2     | large overhangs |
  */
-export function sizeParameters(
-    candidate: CandidatePoint,
-    totalSupportedAreaMm2: number,
-    zHeight: number,
-    settings: SupportSettings,
-): SizeOverrides {
-    const area = Math.max(totalSupportedAreaMm2, 0.01);
-    const referenceArea = 1.0; // mm² reference for scaling
-
-    // Shaft diameter: scales with sqrt(area), 1.0x to 2.5x base
-    const shaftScale = clamp(Math.sqrt(area / referenceArea), 1.0, 2.5);
-    const shaftDiameterMm = settings.shaft.diameterMm * shaftScale;
-
-    // Tip contact diameter: scales with sqrt(island area), 0.8x to 1.5x base
-    const tipScale = clamp(
-        Math.sqrt(candidate.islandAreaMm2 / Math.max(referenceArea * 0.5, 0.01)),
-        0.8,
-        1.5,
-    );
-    const tipContactDiameterMm = settings.tip.contactDiameterMm * tipScale;
-    const tipBodyDiameterMm = settings.tip.bodyDiameterMm * tipScale;
-
-    // Tip length: slightly longer for taller supports, 0.9x to 1.3x base
-    const lengthScale = clamp(1.0 + (zHeight - 10) / 100, 0.9, 1.3);
-    const tipLengthMm = settings.tip.lengthMm * lengthScale;
-
-    // Root diameter: scales with sqrt(area), 1.0x to 2.0x base
-    const rootScale = clamp(Math.sqrt(area / referenceArea), 1.0, 2.0);
-    const rootsDiameterMm = settings.roots.diameterMm * rootScale;
-
+export function sizeParameters(candidate: CandidatePoint): SizeOverrides {
+    const settings = selectPreset(candidate);
     return {
-        shaftDiameterMm: Number(shaftDiameterMm.toFixed(3)),
-        tipContactDiameterMm: Number(tipContactDiameterMm.toFixed(3)),
-        tipBodyDiameterMm: Number(tipBodyDiameterMm.toFixed(3)),
-        tipLengthMm: Number(tipLengthMm.toFixed(3)),
-        rootsDiameterMm: Number(rootsDiameterMm.toFixed(3)),
+        shaftDiameterMm: settings.shaft.diameterMm,
+        tipContactDiameterMm: settings.tip.contactDiameterMm,
+        tipBodyDiameterMm: settings.tip.bodyDiameterMm,
+        tipLengthMm: settings.tip.lengthMm,
+        tipPenetrationMm: settings.tip.penetrationMm,
+        rootsDiameterMm: settings.roots.diameterMm,
+        rootsDiskHeightMm: settings.roots.diskHeightMm,
+        rootsConeHeightMm: settings.roots.coneHeightMm,
     };
 }
 
-function clamp(value: number, min: number, max: number): number {
-    return Math.min(max, Math.max(min, value));
+function selectPreset(candidate: CandidatePoint): SupportSettings {
+    const area = candidate.islandAreaMm2;
+    if (area <= DETAIL_MAX_AREA_MM2) return DETAIL_SETTINGS;
+    if (area <= STRUCTURE_MAX_AREA_MM2) return STRUCTURE_SETTINGS;
+    return ANCHOR_SETTINGS;
 }
