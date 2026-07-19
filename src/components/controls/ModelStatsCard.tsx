@@ -3,6 +3,7 @@ import React from 'react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { useIsLinux } from '@/hooks/usePlatform';
 import { formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
+import { getPreviewBadgeInfo } from '@/utils/previewGeometryDisplay';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 import {
   getActiveMaterialProfile,
@@ -606,7 +607,26 @@ export function ModelStatsCard({
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model?.fileSizeBytes != null ? formatBytes(model.fileSizeBytes) : '-'}</span>
 
               <span>Triangles:</span>
-              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? formatPolygonCountCompact(model.polygonCount) : '-'}</span>
+              {(() => {
+                const previewInfo = model ? getPreviewBadgeInfo(model.geometry) : null;
+                if (!model) {
+                  return <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>-</span>;
+                }
+                if (previewInfo) {
+                  const label = `Preview of ${formatPolygonCountCompact(model.polygonCount)} `
+                    + `(full: ${formatPolygonCountCompact(previewInfo.originalTriangleCount)})`;
+                  return (
+                    <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }} title={label}>
+                      {label}
+                    </span>
+                  );
+                }
+                return (
+                  <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
+                    {formatPolygonCountCompact(model.polygonCount)}
+                  </span>
+                );
+              })()}
 
               <span>Shells:</span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model?.geometry.meshDefects?.nativeRepairReport?.post.component_count ?? '-'}</span>
@@ -614,6 +634,35 @@ export function ModelStatsCard({
               <span>Height:</span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? `${heightMm.toFixed(2)} mm` : '-'}</span>
             </div>
+
+            {(() => {
+              const previewInfo = model ? getPreviewBadgeInfo(model.geometry) : null;
+              if (!previewInfo) return null;
+              const errorPct = typeof previewInfo.achievedError === 'number'
+                ? `${(previewInfo.achievedError * 100).toFixed(2)}%`
+                : null;
+              const summary = errorPct
+                ? `Reduced preview — ${errorPct} error`
+                : 'Reduced preview';
+              const detail = `Interactive preview: ${formatPolygonCountCompact(previewInfo.previewTriangleCount)} of `
+                + `${formatPolygonCountCompact(previewInfo.originalTriangleCount)} triangles`
+                + (errorPct ? ` · achieved decimation error ${errorPct} of model extent` : '')
+                + '. Slicing and export use the full-resolution source.';
+              return (
+                <div
+                  className="flex items-start gap-1.5 rounded px-2 py-1 text-[10px]"
+                  title={detail}
+                  style={{
+                    background: 'color-mix(in srgb, #6366f1, var(--surface-1) 84%)',
+                    color: 'color-mix(in srgb, #6366f1, var(--text-strong) 20%)',
+                    border: '1px solid color-mix(in srgb, #6366f1, transparent 55%)',
+                  }}
+                >
+                  <span>◔</span>
+                  <span className="min-w-0">{summary}</span>
+                </div>
+              );
+            })()}
 
             {model?.geometry.meshDefects?.hasDefects && (
               <div

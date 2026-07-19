@@ -20,6 +20,7 @@ import type { PluginFileTypeHandler } from '@/features/plugins/pluginFileTypeBri
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
 import { generateUuid } from '@/utils/uuid';
+import { resolveDisplayPolygonCount, carryPreviewMarkerForward } from '@/utils/previewGeometryDisplay';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
 import { getKickstandSnapshot, setKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import type { KickstandState } from '@/supports/SupportTypes/Kickstand/types';
@@ -2197,8 +2198,7 @@ export function useSceneCollectionManager() {
               },
               visible: true,
               color,
-              polygonCount: merged.nativePreview?.originalTriangleCount
-                ?? merged.geometry.getAttribute('position').count / 3,
+              polygonCount: resolveDisplayPolygonCount(merged),
             };
 
             const assignedCenter = findFreeSpotCentersForModels([...stagedNewModels, model], 5).at(-1);
@@ -2238,8 +2238,7 @@ export function useSceneCollectionManager() {
               },
               visible: true,
               color,
-              polygonCount: geom.nativePreview?.originalTriangleCount
-                ?? geom.geometry.getAttribute('position').count / 3,
+              polygonCount: resolveDisplayPolygonCount(geom),
             };
 
             const assignedCenter = findFreeSpotCentersForModels([...stagedNewModels, model], 5).at(-1);
@@ -2515,7 +2514,7 @@ export function useSceneCollectionManager() {
     id: string,
     nextBufferGeometry: THREE.BufferGeometry,
     historyDescription: string,
-    options?: { includeSupportState?: boolean; deferPostProcessing?: boolean },
+    options?: { includeSupportState?: boolean; deferPostProcessing?: boolean; clearNativePreview?: boolean },
   ) => {
     const currentModels = modelsRef.current;
     const currentActiveModelId = activeModelIdRef.current;
@@ -2558,6 +2557,16 @@ export function useSceneCollectionManager() {
       nextEdgeGeometry = target.geometry.edgeGeometry;
     }
 
+    // Badge-lifecycle rule (Phase 2b, census finding 3): a write-back whose
+    // INPUT was a native preview yields output that is STILL decimation-derived
+    // (hollow/punch/repair run on the ~2M preview until Phase 4 routes them
+    // full-res), so carry the marker forward to keep the preview badge honest.
+    // Default-safe: a non-preview target has no marker → nothing is added. The
+    // future full-res path clears it deliberately via `clearNativePreview`.
+    const carriedPreview = carryPreviewMarkerForward(target.geometry, {
+      clearNativePreview: options?.clearNativePreview,
+    });
+
     const nextGeometry: GeometryWithBounds = {
       geometry: nextBufferGeometry,
       bbox,
@@ -2565,6 +2574,7 @@ export function useSceneCollectionManager() {
       size,
       flatteningPlanes: target.geometry.flatteningPlanes,
       ...(nextEdgeGeometry ? { edgeGeometry: nextEdgeGeometry } : {}),
+      ...(carriedPreview ? { nativePreview: carriedPreview } : {}),
     };
 
     if (!options?.deferPostProcessing) {
@@ -2768,8 +2778,7 @@ export function useSceneCollectionManager() {
       },
       visible: source.visible,
       color: source.color,
-      polygonCount: bodyGeom.nativePreview?.originalTriangleCount
-        ?? bodyGeom.geometry.getAttribute('position').count / 3,
+      polygonCount: resolveDisplayPolygonCount(bodyGeom),
     }));
 
     // Remove the merged source, add individual models
@@ -4251,11 +4260,11 @@ export function useSceneCollectionManager() {
             geometry.nativePreview = { ...persistedPreview };
           }
 
-          // Mirror the import-time convention: preview models report the
-          // ORIGINAL count (pre-Phase-2 concealment behavior, and the count
-          // the staging-size estimator needs for full-res output).
-          const polygonCount = geometry.nativePreview?.originalTriangleCount
-            ?? geometry.geometry.getAttribute('position').count / 3;
+          // Preview-honest count (Phase 2b): report the ACTUAL embedded
+          // triangle count. The restored `nativePreview.originalTriangleCount`
+          // still carries the full-mesh count for the badge / "(full: N)"
+          // label and the full-res output linkage.
+          const polygonCount = resolveDisplayPolygonCount(geometry);
           const color = clampHexColor(model.color, DEFAULT_MESH_COLOR);
 
           importedModels.push({
@@ -4663,8 +4672,12 @@ export function useSceneCollectionManager() {
         center: false,
         nativeProcessingMode: 'repair',
       });
-      const posAttr = processed.geometry.getAttribute('position') as THREE.BufferAttribute | null;
-      const polygonCount = posAttr ? Math.floor(posAttr.count / 3) : model.polygonCount;
+      // Badge-lifecycle rule (Phase 2b, census finding 3): repair-in-place runs
+      // on the preview and swaps in a fresh wrapper — carry the marker forward
+      // so the badge/honest count survive (default-safe: no prior marker → none).
+      const carriedPreview = carryPreviewMarkerForward(model.geometry);
+      if (carriedPreview) processed.nativePreview = carriedPreview;
+      const polygonCount = resolveDisplayPolygonCount(processed);
       const repairReport = processed.meshDefects?.nativeRepairReport ?? null;
 
       setModels(prev => prev.map(m =>
