@@ -4374,7 +4374,7 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                     };
 
                 let pool = ThreadPoolBuilder::new()
-                    .num_threads(post_worker_count)
+                    .num_threads(post_worker_count.max(2))
                     .build()
                     .map_err(|err| {
                         SlicerV3Error::LayerPreview(format!(
