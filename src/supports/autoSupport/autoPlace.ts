@@ -13,6 +13,7 @@ import { buildBranchData } from '../SupportTypes/Branch/branchBuilder';
 import { buildLeafData } from '../SupportTypes/Leaf/leafBuilder';
 import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
 import { calculateSmoothedNormal } from '../PlacementLogic/PlacementUtils';
+import { isShaftBlocked } from '../PlacementLogic/CollisionAvoidance';
 import { runAutoBracing } from '../autoBracing/autoBrace';
 import { pushHistory } from '@/history/historyStore';
 import { getModelMesh } from './meshStore';
@@ -154,7 +155,7 @@ function filterAlreadySupported(candidates: CandidatePoint[]): CandidatePoint[] 
 // ---------------------------------------------------------------------------
 
 /** When grid is disabled, merge candidates within this XY distance of an existing trunk. */
-const GRIDLESS_MERGE_RADIUS_MM = 2.0;
+const GRIDLESS_MERGE_RADIUS_MM = 4.0;
 
 interface MergeHost {
     trunkId: string;
@@ -286,7 +287,11 @@ function placeOneCandidate(
                 parentShaftId: bestKnotSegmentId || host.trunkId,
                 pos: knotPos,
             };
-            try {
+            // SDF collision pre-check: the straight path from knot to tip
+            // must be clear before we attempt the full branch build.
+            if (mesh && isShaftBlocked(parentKnot.pos, tipPos, 0.3, mesh)) {
+                // Fall through to trunk path.
+            } else try {
                 const { branch, supportData: sd } = buildBranchData({
                     tipPos,
                     tipNormal,
@@ -712,20 +717,29 @@ export function runAutoPlace(
                 diameter: sp.diameter + 0.1,
             };
 
+            // SDF collision check: the straight path from knot to tip
+            // must be clear of the model.
+            const leafMesh = getModelMesh(modelId);
+            if (leafMesh) {
+                const shaftRadius = 0.2; // leaf cone is thin
+                if (isShaftBlocked(sp.pos, { x: cx, y: cy, z: cz }, shaftRadius, leafMesh)) {
+                    continue;
+                }
+            }
+
             try {
-                const mesh = getModelMesh(modelId) ?? undefined;
-                const resolved = resolveSurfaceNormal({ x: cx, y: cy, z: cz }, mesh);
-                const { leaf, supportData: _sd } = buildLeafData({
+                const resolved = resolveSurfaceNormal({ x: cx, y: cy, z: cz }, leafMesh ?? undefined);
+                const { leaf, supportData: sd } = buildLeafData({
                     tipPos: resolved.point,
                     surfaceNormal: resolved.normal,
                     modelId,
                     parentKnot,
                     hostDiameterMm: sp.diameter,
-                    mesh,
+                    mesh: leafMesh ?? undefined,
                 });
+                if (sd.error) continue;
                 addKnot(parentKnot);
                 addLeaf(leaf);
-                void _sd;
                 fannedCount++;
                 supportedIds.add(island.id);
                 coveredArea += (island.areaMm2 ?? 0);
