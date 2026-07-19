@@ -326,8 +326,12 @@ export { configurePerf as setPathfindingPerfConfig };
  *   __dfPerf.reset()         // clear history
  */
 export function installPerfConsoleAPI(): void {
-    if (typeof window === 'undefined') return;
-    (window as any).__dfPerf = {
+    // Checked via globalThis so the bundler cannot inline it away: this module
+    // is also loaded in workers, where `typeof window` guards get compiled to
+    // a constant "object" in browser-destined chunks.
+    const win = (globalThis as { window?: unknown }).window;
+    if (!win) return;
+    (win as any).__dfPerf = {
         summary: (recentFrames?: number) => {
             console.log(getPerfSummary(recentFrames));
         },

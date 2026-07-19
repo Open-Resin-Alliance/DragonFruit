@@ -206,8 +206,10 @@ import {
   disposeIslandSupportMesh,
 } from '@/supports/autoSupport/islandSupportSurface';
 import { routeRepairSupports, runAutoSupportPlan } from '@/supports/autoSupport/autoSupportRunner';
+import { createAutoSupportRouteWorker, extractRouteWorkerMeshPayload, type AutoSupportPipelineWorker } from '@/supports/autoSupport/workerRouter';
+import { cancelIslandScanNative } from '@/volumeAnalysis/IslandScan/nativeIslandScan';
 import { AUTO_SUPPORT_PRESETS } from '@/supports/autoSupport/presets';
-import { collectSupportGeometry, contactWeldGroup, evaluateCoverageScan, plannedContactPoints, plannedSupportGroup } from '@/supports/autoSupport/verifyCoverage';
+import { collectSupportGeometry, collectSupportSegments, contactWeldGroup, distanceToSegmentSq, evaluateCoverageScan, plannedContactPoints, plannedSupportGroup } from '@/supports/autoSupport/verifyCoverage';
 import { buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
 import type { AutoSupportPlanPreview, AutoSupportPreset, AutoSupportProgress } from '@/supports/autoSupport/types';
 
@@ -12309,15 +12311,22 @@ export default function Home() {
 
   const [autoSupportPreview, setAutoSupportPreview] = React.useState<AutoSupportPlanPreview | null>(null);
   const autoSupportAbortRef = React.useRef<AbortController | null>(null);
+  const autoSupportWorkerRef = React.useRef<{ key: string; worker: AutoSupportPipelineWorker } | null>(null);
 
-  // Scan data and any pending plan describe one specific model; both are stale
-  // the moment the active model changes (switch, delete, reload).
+  // Scan data, any pending plan, and the pipeline worker's mesh all describe
+  // one specific model; they are stale the moment the active model changes.
   const clearIslandScanData = islands.clearScanData;
   React.useEffect(() => {
     clearIslandScanData();
     autoSupportAbortRef.current?.abort();
     setAutoSupportPreview(null);
+    autoSupportWorkerRef.current?.worker.dispose();
+    autoSupportWorkerRef.current = null;
   }, [clearIslandScanData, scene.activeModel?.id]);
+  React.useEffect(() => () => {
+    autoSupportWorkerRef.current?.worker.dispose();
+    autoSupportWorkerRef.current = null;
+  }, []);
 
   const handlePlanAutoSupports = React.useCallback(async (
     preset: AutoSupportPreset,
@@ -12331,15 +12340,15 @@ export default function Home() {
     autoSupportAbortRef.current?.abort();
     const abortController = new AbortController();
     autoSupportAbortRef.current = abortController;
+    abortController.signal.addEventListener('abort', () => { void cancelIslandScanNative(); }, { once: true });
 
     let scanData = islands.scanData;
     let scanBBox = islands.scanBBox;
     if (!scanData || !scanBBox) {
       onProgress({ phase: 'scan', completed: 0, total: 1 });
-      const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-      const scanned = isTauriRuntime
-        ? await islands.onRunNativeIslandScan()
-        : await islands.onRunIslandScan();
+      // Planning works in millimetres — a coarse dedicated scan is ~4x faster
+      // than the panel's marker-grade scan and leaves the panel state alone.
+      const scanned = await islands.onRunCoverageScan(null);
       if (!scanned || abortController.signal.aborted) return null;
       scanData = scanned.scanData;
       scanBBox = scanned.scanBBox;
@@ -12348,8 +12357,26 @@ export default function Home() {
 
     await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
     const mesh = createIslandSupportMesh(geom, transformMgr.transform, modelId);
+    // Run the whole pipeline (hierarchy, planning, routing, coverage
+    // evaluation) off the main thread when workers are available; on dense
+    // meshes these otherwise block the viewport for the entire generation.
+    // The worker persists across generations — its mesh, BVH, and SDF cache
+    // are only invalidated when the model or its transform changes.
+    const workerKey = `${modelId}:${mesh.matrixWorld.elements.join(',')}`;
+    let routeWorker = autoSupportWorkerRef.current?.key === workerKey
+      ? autoSupportWorkerRef.current.worker
+      : null;
+    if (!routeWorker) {
+      autoSupportWorkerRef.current?.worker.dispose();
+      autoSupportWorkerRef.current = null;
+      const workerMesh = extractRouteWorkerMeshPayload(mesh);
+      routeWorker = workerMesh
+        ? createAutoSupportRouteWorker({ mesh: workerMesh.payload, transfers: workerMesh.transfers, modelId, settings: getSupportSettings() })
+        : null;
+      if (routeWorker) autoSupportWorkerRef.current = { key: workerKey, worker: routeWorker };
+    }
     try {
-      const preview = await runAutoSupportPlan({
+      const planArgs = {
         scan: scanData,
         scanMinZ: scanBBox.min.z,
         layerHeightMm: slicing.layerHeightMm,
@@ -12359,7 +12386,10 @@ export default function Home() {
         existingTipPoints: supportTips.map((tip) => ({ x: tip.x, y: tip.y, z: tip.z })),
         signal: abortController.signal,
         onProgress,
-      });
+      };
+      const preview = routeWorker
+        ? await routeWorker.planAutoSupports(planArgs)
+        : await runAutoSupportPlan(planArgs);
 
       // Verify empirically: re-scan the model merged with the planned and
       // committed supports; any volume still passing the significance
@@ -12378,62 +12408,72 @@ export default function Home() {
           try {
             const verificationScan = await islands.onRunCoverageScan(supportGeometry);
             if (!verificationScan || abortController.signal.aborted) return null;
-            return evaluateCoverageScan({
+            const evaluateArgs = {
               scan: verificationScan.scanData,
               scanMinZ: verificationScan.scanBBox.min.z,
               layerHeightMm: slicing.layerHeightMm,
               settings: AUTO_SUPPORT_PRESETS[preset],
-            });
+            };
+            return routeWorker
+              ? await routeWorker.evaluateCoverage(evaluateArgs)
+              : evaluateCoverageScan(evaluateArgs);
           } finally {
             supportGeometry.dispose();
           }
         };
 
+        // Flagged spots with a support tip fused within reach are scan
+        // artifacts (voxel linkage, self-intersecting source geometry), not
+        // missing supports. Filtering them BEFORE deciding to repair means a
+        // steady-state generation pays one verification scan, not two plus a
+        // repair wave for the same recurring artifacts.
+        const fusedRadiusSq = 3 * 3;
+        const shaftRadiusSq = 2 * 2;
+        const realRemaindersOf = (contacts: typeof preview.supports[number]['contact'][]) => {
+          const allTips = [
+            ...plannedContactPoints(preview.supports),
+            ...supportTips.map((tip) => ({ x: tip.x, y: tip.y, z: tip.z })),
+          ];
+          const snapshot = getSupportSnapshot();
+          const shaftSegments = collectSupportSegments(preview.supports, snapshot, modelId);
+          return contacts.filter((contact) => {
+            const nearTip = allTips.some((tip) => {
+              const dx = tip.x - contact.position.x;
+              const dy = tip.y - contact.position.y;
+              const dz = tip.z - contact.position.z;
+              return dx * dx + dy * dy + dz * dz < fusedRadiusSq;
+            });
+            if (nearTip) return false;
+            return !shaftSegments.some((segment) => distanceToSegmentSq(contact.position, segment.a, segment.b) < shaftRadiusSq);
+          });
+        };
+
         onProgress({ phase: 'verify', completed: 0, total: 2 });
         let verification = await runVerificationScan();
+        let realRemainders = verification ? realRemaindersOf(verification.repairContacts) : [];
         onProgress({ phase: 'verify', completed: 1, total: 2 });
-        if (verification && verification.repairContacts.length > 0 && !abortController.signal.aborted) {
-          const repairs = await routeRepairSupports({
-            contacts: verification.repairContacts,
+        if (realRemainders.length > 0 && !abortController.signal.aborted) {
+          const repairArgs = {
+            contacts: realRemainders,
             settings: AUTO_SUPPORT_PRESETS[preset],
             modelId,
             mesh,
             existingTipPoints: supportTips.map((tip) => ({ x: tip.x, y: tip.y, z: tip.z })),
             signal: abortController.signal,
             onProgress,
-          });
+          };
+          const repairs = routeWorker
+            ? await routeWorker.repairSupports(repairArgs)
+            : await routeRepairSupports(repairArgs);
           if (repairs.length > 0) {
             preview.supports.push(...repairs);
             verification = (await runVerificationScan()) ?? verification;
+            realRemainders = verification ? realRemaindersOf(verification.repairContacts) : realRemainders;
           }
         }
         onProgress({ phase: 'verify', completed: 2, total: 2 });
         if (verification) {
-          // Flagged spots with a support tip fused within reach are scan
-          // artifacts (voxel linkage, self-intersecting source geometry), not
-          // missing supports — the repair round demonstrably placed tips on
-          // them and the scan still cannot always link sub-pixel contacts.
-          const fusedRadiusSq = 3 * 3;
-          const allTips = [
-            ...plannedContactPoints(preview.supports),
-            ...supportTips.map((tip) => ({ x: tip.x, y: tip.y, z: tip.z })),
-          ];
-          const realRemainders = verification.repairContacts.filter((contact) => !allTips.some((tip) => {
-            const dx = tip.x - contact.position.x;
-            const dy = tip.y - contact.position.y;
-            const dz = tip.z - contact.position.z;
-            return dx * dx + dy * dy + dz * dz < fusedRadiusSq;
-          }));
           preview.verification = { remainingVolumeCount: realRemainders.length };
-          if (verification.repairContacts.length > 0) {
-            console.warn('[auto-support] verification remainders', JSON.stringify(verification.repairContacts.map((contact) => ({
-              volumeId: contact.volumeId,
-              x: Number(contact.position.x.toFixed(2)),
-              y: Number(contact.position.y.toFixed(2)),
-              z: Number(contact.position.z.toFixed(2)),
-              fusedNearby: !realRemainders.includes(contact),
-            }))));
-          }
         }
       }
 

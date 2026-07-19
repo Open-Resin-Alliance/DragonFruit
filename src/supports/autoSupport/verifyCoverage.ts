@@ -60,6 +60,54 @@ export function contactWeldGroup(points: Array<{ x: number; y: number; z: number
   return group;
 }
 
+type Point = { x: number; y: number; z: number };
+
+/**
+ * Shaft segments of the planned supports plus a model's committed trunks and
+ * sticks. Verification runs on model-plus-support geometry, so a flagged spot
+ * lying on a support shaft is the support itself (e.g. the slightly
+ * overhanging foot of a tilted strut) — self-supporting by construction, not
+ * an unsupported model region.
+ */
+export function collectSupportSegments(
+  supports: PlannedAutoSupport[],
+  committed: { trunks: Record<string, { modelId: string; segments: Array<{ bottomJoint?: { pos: Point }; topJoint?: { pos: Point } }> }>; sticks: Record<string, { modelId: string; segments: Array<{ bottomJoint?: { pos: Point }; topJoint?: { pos: Point } }> }> },
+  modelId: string,
+): Array<{ a: Point; b: Point }> {
+  const segments: Array<{ a: Point; b: Point }> = [];
+  const push = (entries: Array<{ bottomJoint?: { pos: Point }; topJoint?: { pos: Point } }>) => {
+    for (const segment of entries) {
+      if (segment.bottomJoint && segment.topJoint) {
+        segments.push({ a: segment.bottomJoint.pos, b: segment.topJoint.pos });
+      }
+    }
+  };
+  for (const support of supports) {
+    push(support.kind === 'trunk' ? support.trunk.segments : support.stick.segments);
+  }
+  for (const trunk of Object.values(committed.trunks)) {
+    if (trunk.modelId === modelId) push(trunk.segments);
+  }
+  for (const stick of Object.values(committed.sticks)) {
+    if (stick.modelId === modelId) push(stick.segments);
+  }
+  return segments;
+}
+
+export function distanceToSegmentSq(point: Point, a: Point, b: Point): number {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const abz = b.z - a.z;
+  const lengthSq = abx * abx + aby * aby + abz * abz;
+  const t = lengthSq === 0
+    ? 0
+    : Math.max(0, Math.min(1, ((point.x - a.x) * abx + (point.y - a.y) * aby + (point.z - a.z) * abz) / lengthSq));
+  const dx = point.x - (a.x + abx * t);
+  const dy = point.y - (a.y + aby * t);
+  const dz = point.z - (a.z + abz * t);
+  return dx * dx + dy * dy + dz * dz;
+}
+
 export function plannedContactPoints(supports: PlannedAutoSupport[]): Array<{ x: number; y: number; z: number }> {
   return supports.flatMap((support) => {
     const positions = support.kind === 'trunk'

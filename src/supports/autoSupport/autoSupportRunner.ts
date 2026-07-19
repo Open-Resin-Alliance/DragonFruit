@@ -135,19 +135,15 @@ export async function routeRepairSupports(args: {
       overrides: DETAIL_OVERRIDES,
     }),
   ];
-  const outcomes = new Map<string, string>();
-  for (let stageIndex = 0; stageIndex < stages.length; stageIndex++) {
+  for (const stage of stages) {
     if (pending.length === 0) break;
-    const wave = await stages[stageIndex](pending);
+    const wave = await stage(pending);
     supports.push(...wave.supports);
-    for (const support of wave.supports) outcomes.set(support.contact.id, `${support.kind}@${stageIndex}`);
-    for (const failure of wave.failures) outcomes.set(failure.contactId, `${failure.reason}@${stageIndex}`);
     const failedIds = new Set(wave.failures
       .filter((failure) => failure.reason !== 'tip_spacing')
       .map((failure) => failure.contactId));
     pending = pending.filter((contact) => failedIds.has(contact.id));
   }
-  console.warn('[auto-support] repair outcomes', JSON.stringify(Object.fromEntries(outcomes)));
   return supports;
 }
 
@@ -375,29 +371,6 @@ export async function runAutoSupportPlan(args: AutoSupportRunArgs): Promise<Auto
     .filter((id) => !routedVolumeIds.has(id) && !crowdedSet.has(id))
     .sort((left, right) => left - right);
   const unresolvedSet = new Set(unresolvedVolumeIds);
-
-  if (unresolvedVolumeIds.length > 0) {
-    const attemptedContacts = allContacts;
-    console.warn('[auto-support] unresolved regions', JSON.stringify(unresolvedVolumeIds.map((id) => {
-      const volume = plan.volumes.find((candidate) => candidate.id === id);
-      return {
-        id,
-        firstLayer: volume?.firstLayer,
-        heightMm: volume?.heightMm,
-        baseAreaMm2: volume?.baseAreaMm2,
-        contacts: attemptedContacts
-          .filter((contact) => contact.volumeId === id)
-          .map((contact) => ({
-            x: Number(contact.position.x.toFixed(2)),
-            y: Number(contact.position.y.toFixed(2)),
-            z: Number(contact.position.z.toFixed(2)),
-          })),
-        reasons: failures
-          .filter((failure) => failure.volumeId === id)
-          .map((failure) => failure.reason),
-      };
-    })));
-  }
 
   return {
     preset: args.preset,

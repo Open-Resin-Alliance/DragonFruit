@@ -35,10 +35,11 @@ const AUTO_SUPPORT_FAILURE_LABELS: Record<string, string> = {
 
 function describeAutoSupportPreview(preview: AutoSupportPlanPreview): string {
   const stickCount = preview.supports.filter((support) => support.kind === 'stick').length;
+  const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
   const parts = [
     stickCount > 0
-      ? `Previewing ${preview.supports.length} supports (${stickCount} on-model struts) across ${preview.eligibleVolumeCount} regions.`
-      : `Previewing ${preview.supports.length} supports across ${preview.eligibleVolumeCount} regions.`,
+      ? `Previewing ${plural(preview.supports.length, 'support')} (${plural(stickCount, 'on-model strut')}) across ${plural(preview.eligibleVolumeCount, 'region')}.`
+      : `Previewing ${plural(preview.supports.length, 'support')} across ${plural(preview.eligibleVolumeCount, 'region')}.`,
   ];
   if (preview.coveredVolumeCount > 0) parts.push(`${preview.coveredVolumeCount} already covered.`);
   const unresolved = preview.unresolvedVolumeIds.length;
@@ -189,6 +190,7 @@ export function IslandsPanel({
   const handleAutoSupport = React.useCallback(async () => {
     if (!hasGeometry || !onPlanAutoSupports || autoSupporting) return;
     setAutoSupporting(true);
+    setCancelling(false);
     setAutoSupportProgress({ phase: 'scan', completed: 0, total: 1 });
     setSupportStatus(null);
     setSelectedMarkerId(null);
@@ -219,8 +221,11 @@ export function IslandsPanel({
     }
   }, [autoSupportPreset, autoSupporting, hasGeometry, onPlanAutoSupports, setSelectedMarkerId]);
 
+  const [cancelling, setCancelling] = React.useState(false);
+
   const handleAbortAutoSupport = React.useCallback(() => {
     autoSupportCancelledRef.current = true;
+    setCancelling(true);
     onAbortAutoSupportRun?.();
   }, [onAbortAutoSupportRun]);
 
@@ -342,14 +347,17 @@ export function IslandsPanel({
                     className="flex h-8 items-center justify-center rounded border text-[11px] font-semibold"
                     style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-0)' }}
                   >
-                    {autoSupportProgress
-                      ? `${AUTO_SUPPORT_PHASE_LABELS[autoSupportProgress.phase]}… ${autoSupportProgress.completed}/${autoSupportProgress.total}`
-                      : 'Working…'}
+                    {cancelling
+                      ? 'Cancelling… (finishing current step)'
+                      : autoSupportProgress
+                        ? `${AUTO_SUPPORT_PHASE_LABELS[autoSupportProgress.phase]}… ${autoSupportProgress.completed}/${autoSupportProgress.total}`
+                        : 'Working…'}
                   </div>
                   <button
                     type="button"
                     onClick={handleAbortAutoSupport}
-                    className="h-8 rounded border px-3 text-[11px] font-semibold"
+                    disabled={cancelling}
+                    className="h-8 rounded border px-3 text-[11px] font-semibold disabled:opacity-50"
                     style={{ borderColor: 'var(--danger)', color: 'var(--danger)', background: 'var(--surface-0)' }}
                   >
                     Cancel
