@@ -3915,98 +3915,9 @@ fn diag_read_rss_mb() -> f64 {
 /// Best-effort currently-available physical RAM, in bytes. `None` when the
 /// platform can't be queried, so callers fall back to a fixed cap (issue #386).
 fn available_ram_bytes() -> Option<u64> {
-    #[cfg(target_os = "linux")]
-    {
-        let text = std::fs::read_to_string("/proc/meminfo").ok()?;
-        let line = text.lines().find(|l| l.starts_with("MemAvailable:"))?;
-        let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
-        Some(kb.saturating_mul(1024))
-    }
-    #[cfg(target_os = "windows")]
-    {
-        // GlobalMemoryStatusEx via a tiny FFI shim so we pull in no new crate.
-        #[repr(C)]
-        struct MemStatusEx {
-            length: u32,
-            mem_load: u32,
-            total_phys: u64,
-            avail_phys: u64,
-            total_page: u64,
-            avail_page: u64,
-            total_virtual: u64,
-            avail_virtual: u64,
-            avail_extended_virtual: u64,
-        }
-        extern "system" {
-            fn GlobalMemoryStatusEx(buffer: *mut MemStatusEx) -> i32;
-        }
-        let mut s: MemStatusEx = unsafe { std::mem::zeroed() };
-        s.length = std::mem::size_of::<MemStatusEx>() as u32;
-        if unsafe { GlobalMemoryStatusEx(&mut s) } != 0 {
-            Some(s.avail_phys)
-        } else {
-            None
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // No single "available" field on macOS: approximate it as (free +
-        // inactive) pages, matching Activity Monitor's notion of reclaimable RAM.
-        // Pull page count from the mach VM stats and page size from sysctl; both
-        // live in libSystem so we need no extra crate or link flags.
-        use std::os::raw::{c_char, c_int, c_uint, c_void};
-        extern "C" {
-            fn sysctlbyname(
-                name: *const c_char,
-                oldp: *mut c_void,
-                oldlenp: *mut usize,
-                newp: *mut c_void,
-                newlen: usize,
-            ) -> c_int;
-            fn mach_host_self() -> c_uint;
-            fn host_statistics64(
-                host: c_uint,
-                flavor: c_int,
-                info: *mut c_int,
-                count: *mut c_uint,
-            ) -> c_int;
-        }
-        const HOST_VM_INFO64: c_int = 4;
-
-        let mut page_size: c_int = 0;
-        let mut plen = std::mem::size_of::<c_int>();
-        let rc_page = unsafe {
-            sysctlbyname(
-                b"hw.pagesize\0".as_ptr() as *const c_char,
-                &mut page_size as *mut c_int as *mut c_void,
-                &mut plen,
-                std::ptr::null_mut(),
-                0,
-            )
-        };
-        if rc_page != 0 || page_size <= 0 {
-            return None;
-        }
-
-        // vm_statistics64 starts with natural_t (u32) counts; free_count is field
-        // 0 and inactive_count is field 2, so reading a prefix buffer is safe
-        // regardless of the trailing fields' layout.
-        let mut info = [0i32; 64];
-        let mut count = info.len() as c_uint;
-        let rc_vm = unsafe {
-            host_statistics64(mach_host_self(), HOST_VM_INFO64, info.as_mut_ptr(), &mut count)
-        };
-        if rc_vm != 0 || count < 3 {
-            return None;
-        }
-        let free = info[0] as u32 as u64;
-        let inactive = info[2] as u32 as u64;
-        Some((free + inactive).saturating_mul(page_size as u64))
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-    {
-        None
-    }
+    let mut sys = sysinfo::System::new_all();
+    sys.refresh_memory();
+    Some(sys.available_memory())
 }
 
 /// Counting semaphore bounding the number of outstanding (dispatched-but-unfinished)
@@ -4162,7 +4073,11 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     let post_blur_ns_accum = Arc::new(AtomicU64::new(0));
     let support_merge_ns_accum = Arc::new(AtomicU64::new(0));
     let max_post_threads = choose_3daa_post_threads(width, height, job.total_layers);
-    let post_worker_count = max_post_threads.max(1);
+    // #386: never run a single post worker. `pool.scope` runs the dispatch loop on
+    // a pool worker; with only one worker it blocks in PostTaskGate::acquire() while
+    // the finalize tasks that would release the gate have no other worker to run on
+    // → deadlock (repros only when this was 1, i.e. hw<=4). Keep >=2 in all cases.
+    let post_worker_count = max_post_threads.max(2);
 
     let post_buffer = z_blur_radius
         .saturating_mul(2)
@@ -4292,10 +4207,11 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                         // model layer resident (the window is Arc-shared), plus a
                         // fixed (2·radius+1)-layer frontier the dispatcher holds.
                         // Solve (K + window)·worst_layer ≤ budget for K, clamp to
-                        // [1, default_cap]. Runs on the single dispatch thread, so
+                        // [2, default_cap]. Runs on the single dispatch thread, so
                         // the cap reflects the worst layer seen before the next
-                        // acquire. RAM is allowed to pull K below post_worker_count
-                        // (issue #386: on a starved box, not-OOMing wins over depth).
+                        // acquire. RAM may shrink K, but never below 2 — a cap of 1
+                        // would reintroduce the single-drainer deadlock even with a
+                        // 2-worker pool, so 2 is the hard floor (issue #386).
                         if ram_budget_bytes > 0 {
                             atomic_max(&post_worst_layer_bytes_w, model_run_bytes.max(1));
                             let worst =
@@ -4303,7 +4219,7 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                             let window_layers = (z_blur_radius as u64) * 2 + 1;
                             let ram_cap = (ram_budget_bytes / worst)
                                 .saturating_sub(window_layers)
-                                .max(1) as usize;
+                                .max(2) as usize;
                             post_gate_w.retune(ram_cap.min(default_cap));
                         }
 
