@@ -263,5 +263,39 @@ test('Newly migrated configurations: GLOBAL, DEBUG, MESH, NAVIGATION, PRESETS, H
     hotkeyStore.getState().clearKeys();
 });
 
+test('macOS uses Command, not Control, for primary-modifier shortcuts', () => {
+    const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        value: { platform: 'MacIntel' },
+    });
+
+    try {
+        hotkeyStore.getState().clearKeys();
+        hotkeyStore.getState().pressKey('Control');
+        hotkeyStore.getState().pressKey('v');
+        assert.equal(
+            isActionActiveSync('CANVAS', 'PASTE'),
+            false,
+            'macOS Ctrl+V must not activate paste',
+        );
+
+        hotkeyStore.getState().clearKeys();
+        hotkeyStore.getState().pressKey('Meta');
+        hotkeyStore.getState().pressKey('v');
+        assert.equal(
+            isActionActiveSync('CANVAS', 'PASTE'),
+            true,
+            'macOS Cmd+V must activate paste',
+        );
+    } finally {
+        hotkeyStore.getState().clearKeys();
+        if (navigatorDescriptor) {
+            Object.defineProperty(globalThis, 'navigator', navigatorDescriptor);
+        } else {
+            delete (globalThis as { navigator?: unknown }).navigator;
+        }
+    }
+});
 
 

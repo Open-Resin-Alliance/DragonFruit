@@ -217,7 +217,7 @@ import { IslandsPanel } from '@/components/controls/IslandsPanel';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { useSupportInteractionManager } from '@/features/supports/useSupportInteractionManager';
 import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
-import { hotkeyStore, useActionActive, isActionActiveSync } from '@/hotkeys/hotkeyStore';
+import { hotkeyStore, useActionActive, isActionActiveSync, isPrimaryModifierPressed } from '@/hotkeys/hotkeyStore';
 import { useDeleteHotkey } from '@/features/delete/useDeleteHotkey';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { useCameraProjectionHotkey } from '@/hotkeys/useCameraProjectionHotkey';
@@ -8551,11 +8551,11 @@ export default function Home() {
 
     const unsubscribe = hotkeyStore.subscribe((state) => {
       const active = state.activeKeys;
-      const isCtrlOrMeta = active.has('ctrl') || active.has('meta') || active.has('control');
-      const isAPressed = active.has('a') && isCtrlOrMeta;
-      const isCPressed = active.has('c') && isCtrlOrMeta;
-      const isVPressed = active.has('v') && isCtrlOrMeta;
-      const isSPressed = active.has('s') && isCtrlOrMeta;
+      const hasPrimaryModifier = isPrimaryModifierPressed(active);
+      const isAPressed = active.has('a') && hasPrimaryModifier;
+      const isCPressed = active.has('c') && hasPrimaryModifier;
+      const isVPressed = active.has('v') && hasPrimaryModifier;
+      const isSPressed = active.has('s') && hasPrimaryModifier;
 
       const isAJustPressed = isAPressed && !wasAPressed;
       const isCJustPressed = isCPressed && !wasCPressed;
