@@ -316,6 +316,71 @@ impl Bvh {
             }
         }
     }
+
+    /// Closest point on the mesh surface to `p`.
+    ///
+    /// Returns `(closest_point, face, distance_sq)`, or `None` if the mesh has
+    /// no triangles. Uses best-first traversal: the nearer child is descended
+    /// first and subtrees whose AABB is farther than the current best are
+    /// pruned, so this is near-log time on well-shaped meshes.
+    pub fn closest_point_on_surface(
+        &self,
+        mesh: &IndexedMesh,
+        p: Vec3,
+    ) -> Option<(Vec3, u32, f32)> {
+        if mesh.triangles.is_empty() {
+            return None;
+        }
+        let mut best_d2 = f32::INFINITY;
+        let mut best_pt = Vec3::new(0.0, 0.0, 0.0);
+        let mut best_face = 0u32;
+        self.closest_rec(mesh, self.root, p, &mut best_d2, &mut best_pt, &mut best_face);
+        Some((best_pt, best_face, best_d2))
+    }
+
+    fn closest_rec(
+        &self,
+        mesh: &IndexedMesh,
+        node: u32,
+        p: Vec3,
+        best_d2: &mut f32,
+        best_pt: &mut Vec3,
+        best_face: &mut u32,
+    ) {
+        match self.nodes[node as usize] {
+            Node::Leaf { face, .. } => {
+                let [a, b, c] = mesh.tri_positions(face);
+                let q = closest_point_on_triangle(p, a, b, c);
+                let d = p.sub(q);
+                let d2 = d.dot(d);
+                if d2 < *best_d2 {
+                    *best_d2 = d2;
+                    *best_pt = q;
+                    *best_face = face;
+                }
+            }
+            Node::Internal {
+                left,
+                right,
+                ..
+            } => {
+                // Descend the nearer child first, prune the farther if possible.
+                let dl = dist_point_aabb_sq(p, &node_bbox(&self.nodes, left));
+                let dr = dist_point_aabb_sq(p, &node_bbox(&self.nodes, right));
+                let (near, near_d, far, far_d) = if dl <= dr {
+                    (left, dl, right, dr)
+                } else {
+                    (right, dr, left, dl)
+                };
+                if near_d < *best_d2 {
+                    self.closest_rec(mesh, near, p, best_d2, best_pt, best_face);
+                }
+                if far_d < *best_d2 {
+                    self.closest_rec(mesh, far, p, best_d2, best_pt, best_face);
+                }
+            }
+        }
+    }
 }
 
 fn node_bbox(nodes: &[Node], idx: u32) -> Aabb {
@@ -336,6 +401,66 @@ fn ray_aabb(origin: Vec3, inv_dir: Vec3, bbox: &Aabb) -> bool {
     let tmin = t1.min(t2).max(t3.min(t4)).max(t5.min(t6));
     let tmax = t1.max(t2).min(t3.max(t4)).min(t5.max(t6));
     tmax >= tmin.max(0.0)
+}
+
+/// Squared distance from `p` to the closest point of `bbox` (0 if inside).
+#[inline]
+fn dist_point_aabb_sq(p: Vec3, bbox: &Aabb) -> f32 {
+    let dx = (bbox.min.x - p.x).max(0.0).max(p.x - bbox.max.x);
+    let dy = (bbox.min.y - p.y).max(0.0).max(p.y - bbox.max.y);
+    let dz = (bbox.min.z - p.z).max(0.0).max(p.z - bbox.max.z);
+    dx * dx + dy * dy + dz * dz
+}
+
+/// Closest point on triangle `abc` to `p` (Real-Time Collision Detection
+/// §5.1.5). Returns the actual point (barycentric clamp to vertex/edge/face).
+pub fn closest_point_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
+    let ab = b.sub(a);
+    let ac = c.sub(a);
+    let ap = p.sub(a);
+    let d1 = ab.dot(ap);
+    let d2 = ac.dot(ap);
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return a; // vertex region A
+    }
+
+    let bp = p.sub(b);
+    let d3 = ab.dot(bp);
+    let d4 = ac.dot(bp);
+    if d3 >= 0.0 && d4 <= d3 {
+        return b; // vertex region B
+    }
+
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let v = d1 / (d1 - d3);
+        return a.add(ab.scale(v)); // edge AB
+    }
+
+    let cp = p.sub(c);
+    let d5 = ab.dot(cp);
+    let d6 = ac.dot(cp);
+    if d6 >= 0.0 && d5 <= d6 {
+        return c; // vertex region C
+    }
+
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let w = d2 / (d2 - d6);
+        return a.add(ac.scale(w)); // edge AC
+    }
+
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return b.add(c.sub(b).scale(w)); // edge BC
+    }
+
+    // interior
+    let denom = 1.0 / (va + vb + vc);
+    let v = vb * denom;
+    let w = vc * denom;
+    a.add(ab.scale(v)).add(ac.scale(w))
 }
 
 /// Möller–Trumbore triangle intersection; returns `t >= 0` if hit in front.

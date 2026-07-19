@@ -55,6 +55,21 @@ enum Command {
         solidify_component_threshold: usize,
         #[arg(long, default_value_t = 128)]
         solidify_self_intersection_threshold: usize,
+        /// Allow the OpenVDB voxel-remesh fallback (needs the `openvdb` feature).
+        #[arg(long, default_value_t = true)]
+        remesh_fallback: bool,
+        /// Voxel count along the bbox diagonal for the remesh fallback.
+        #[arg(long, default_value_t = 256.0)]
+        remesh_target_voxels: f32,
+        /// Base volumeToMesh adaptivity [0,1] for the remesh fallback.
+        #[arg(long, default_value_t = 0.1)]
+        remesh_adaptivity: f32,
+        /// Curvature-adaptivity strength for the remesh fallback (0 disables).
+        #[arg(long, default_value_t = 1.0)]
+        remesh_curvature_adaptivity: f32,
+        /// Disable sharp-feature recovery in the remesh fallback.
+        #[arg(long, default_value_t = false)]
+        remesh_no_recover_features: bool,
     },
 }
 
@@ -84,6 +99,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             solidify_fragmented_components,
             solidify_component_threshold,
             solidify_self_intersection_threshold,
+            remesh_fallback,
+            remesh_target_voxels,
+            remesh_adaptivity,
+            remesh_curvature_adaptivity,
+            remesh_no_recover_features,
         } => {
             let options = RepairOptions {
                 weld_epsilon,
@@ -94,6 +114,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 solidify_fragmented_components,
                 solidify_component_threshold,
                 solidify_self_intersection_threshold,
+                remesh_fallback,
+                remesh_options: dragonfruit_mesh_repair::VoxelRemeshOptions {
+                    target_voxels_along_diag: remesh_target_voxels,
+                    adaptivity: remesh_adaptivity,
+                    curvature_adaptivity: remesh_curvature_adaptivity,
+                    recover_features: !remesh_no_recover_features,
+                    ..Default::default()
+                },
             };
             let outcome = repair_path(&input, &options)?;
             if let Some(p) = &out_stl {
