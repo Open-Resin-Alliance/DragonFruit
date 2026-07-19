@@ -196,10 +196,13 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
     }
   }, [geom, prepareTransformedGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minIslandAreaMm2, minOverlapPx, overlapNeighborhoodPx]);
 
-  // Scan the model merged with extra geometry (e.g. planned supports) without
-  // touching the panel's scan state — used for coverage verification.
+  // Scan the model, optionally merged with extra geometry (e.g. planned
+  // supports), without touching the panel's scan state. Used for coverage
+  // verification and for auto-support planning scans — support planning works
+  // in millimetres, so it runs at a coarse grid instead of marker-grade
+  // resolution.
   const onRunCoverageScan = useCallback(async (
-    extraGeometry: THREE.BufferGeometry,
+    extraGeometry: THREE.BufferGeometry | null,
     onProgress?: (done: number, total: number) => void,
   ): Promise<{ scanData: ScanResults; scanBBox: THREE.Box3 } | null> => {
     if (!geom) return null;
@@ -210,13 +213,16 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
     for (const name of Object.keys(modelOnly.attributes)) {
       if (name !== 'position') modelOnly.deleteAttribute(name);
     }
-    const merged = mergeGeometries([modelOnly, extraGeometry], false);
+    const merged = extraGeometry ? mergeGeometries([modelOnly, extraGeometry], false) : modelOnly;
     if (!merged) return null;
     merged.computeBoundingBox();
     const mergedBBox = merged.boundingBox!;
 
     const params = {
-      px_mm: pxMm,
+      // Verification needs "is this region supported", not marker-grade
+      // detail; a coarser grid is ~4x faster and less prone to sub-pixel
+      // linkage artifacts at support contacts.
+      px_mm: Math.max(pxMm, 0.2),
       support_buffer_mm: supportBufMm,
       connectivity,
       min_island_area_mm2: minIslandAreaMm2,
@@ -224,11 +230,17 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
       overlap_neighborhood_px: overlapNeighborhoodPx,
     };
     const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-    const res = isTauriRuntime
-      ? await runIslandScanNative({ geometry: merged, bbox: mergedBBox }, layerHeightMm, params, onProgress)
-      : await runIslandScan({ geometry: merged, bbox: mergedBBox }, layerHeightMm, params, onProgress);
-    merged.dispose();
-    return { scanData: res, scanBBox: mergedBBox };
+    try {
+      const res = isTauriRuntime
+        ? await runIslandScanNative({ geometry: merged, bbox: mergedBBox }, layerHeightMm, params, onProgress)
+        : await runIslandScan({ geometry: merged, bbox: mergedBBox }, layerHeightMm, params, onProgress);
+      return { scanData: res, scanBBox: mergedBBox };
+    } catch (error) {
+      if (String(error).includes('cancelled')) return null;
+      throw error;
+    } finally {
+      merged.dispose();
+    }
   }, [geom, prepareTransformedGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minIslandAreaMm2, minOverlapPx, overlapNeighborhoodPx]);
 
   // Compute markers

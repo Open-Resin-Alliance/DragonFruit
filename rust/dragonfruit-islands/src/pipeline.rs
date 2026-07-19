@@ -4,7 +4,7 @@
 //! Coordinates Phase 1 (per-layer scan) and Phase 2 (island tracking).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use rayon::prelude::*;
 
@@ -22,6 +22,20 @@ pub fn run_island_scan(
     masks: &[RleMask],
     on_progress: Option<&(dyn Fn(u32, u32) + Sync)>,
 ) -> IslandScanResult {
+    let never = AtomicBool::new(false);
+    run_island_scan_cancellable(job, masks, on_progress, &never)
+        .expect("scan without cancellation cannot be cancelled")
+}
+
+/// Like [`run_island_scan`], but returns `None` as soon as `cancel` is
+/// observed set. Checked between phases and on every layer of the
+/// sequential tracking phase.
+pub fn run_island_scan_cancellable(
+    job: &IslandScanJob,
+    masks: &[RleMask],
+    on_progress: Option<&(dyn Fn(u32, u32) + Sync)>,
+    cancel: &AtomicBool,
+) -> Option<IslandScanResult> {
     let num_layers = masks.len();
 
     // Phase 1: Per-layer scan — embarrassingly parallel.
@@ -46,15 +60,19 @@ pub fn run_island_scan(
         })
         .collect();
 
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+
     // Phase 2: Sequential island tracking
-    let mut tracker = IslandTracker::new(
-        job.px_mm,
-        job.min_overlap_px,
-        job.overlap_neighborhood_px,
-    );
+    let mut tracker =
+        IslandTracker::new(job.px_mm, job.min_overlap_px, job.overlap_neighborhood_px);
     let mut island_labels_per_layer: Vec<RleLabels> = Vec::with_capacity(num_layers);
 
     for (l, lr) in layer_results.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            return None;
+        }
         let prev_labels = if l > 0 {
             Some(&island_labels_per_layer[l - 1])
         } else {
@@ -122,27 +140,29 @@ pub fn run_island_scan(
     let filtered_ids: HashSet<IslandId> = filtered_islands.iter().map(|i| i.id).collect();
 
     // Reassign placeholder pixels and filter small island pixels (parallel per layer)
-    island_labels_per_layer.par_iter_mut().for_each(|layer_labels| {
-        for row in &mut layer_labels.rows {
-            for run in row.iter_mut() {
-                if run.id > 0 {
-                    let island_id = IslandId(run.id as u32);
-                    if placeholder_to_parent.contains_key(&island_id) {
-                        let resolved = resolve_true_parent(island_id, &placeholder_to_parent);
-                        run.id = resolved.0 as i32;
-                    } else if !filtered_ids.contains(&island_id) {
-                        run.id = 0;
+    island_labels_per_layer
+        .par_iter_mut()
+        .for_each(|layer_labels| {
+            for row in &mut layer_labels.rows {
+                for run in row.iter_mut() {
+                    if run.id > 0 {
+                        let island_id = IslandId(run.id as u32);
+                        if placeholder_to_parent.contains_key(&island_id) {
+                            let resolved = resolve_true_parent(island_id, &placeholder_to_parent);
+                            run.id = resolved.0 as i32;
+                        } else if !filtered_ids.contains(&island_id) {
+                            run.id = 0;
+                        }
                     }
                 }
             }
-        }
-    });
+        });
 
-    IslandScanResult {
+    Some(IslandScanResult {
         grid: job.grid.clone(),
         islands: filtered_islands,
         island_labels_per_layer,
-    }
+    })
 }
 
 /// Resolve placeholder chains to find the true parent.
@@ -170,10 +190,10 @@ fn resolve_true_parent(
 #[cfg(test)]
 mod tests {
     use crate::model::*;
-    use crate::rle::*;
     use crate::pipeline::*;
-    use crate::scan::*;
     use crate::rle::rle_encode;
+    use crate::rle::*;
+    use crate::scan::*;
 
     fn make_job(width: i32, height: i32, num_layers: u32) -> IslandScanJob {
         IslandScanJob {

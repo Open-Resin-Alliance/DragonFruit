@@ -1642,6 +1642,16 @@ struct NativeRleLabels {
     height: i32,
 }
 
+static ISLAND_SCAN_CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Request cancellation of an in-flight island scan. The scan bails at the
+/// next phase boundary or tracking layer and the scan command returns an
+/// "island scan cancelled" error.
+#[tauri::command]
+fn cancel_island_scan_native() {
+    ISLAND_SCAN_CANCEL.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 #[tauri::command]
 async fn run_island_scan_native(
     window: DragonFruitWindow,
@@ -1696,7 +1706,29 @@ async fn run_island_scan_native(
         let w = grid_width as usize;
         let h = grid_height as usize;
 
-        // Phase B: Island scan pipeline (sequential tracking using streaming)
+        ISLAND_SCAN_CANCEL.store(false, std::sync::atomic::Ordering::Relaxed);
+
+        // Phase B: Z-bucketed parallel rasterization — each layer only slices
+        // triangles crossing its plane. The streaming path used previously
+        // visited every triangle on every layer, which dominated scan time on
+        // dense meshes (~15s for 4.4M triangles x 1342 layers).
+        let t_raster = std::time::Instant::now();
+        let (masks, _gw, _gh, _nl, _ox, _oz) = dragonfruit_islands::rasterize::rasterize_for_island_scan(
+            &triangles,
+            params.bbox_min_x,
+            params.bbox_max_x,
+            params.bbox_min_y,
+            params.bbox_max_y,
+            params.bbox_min_z,
+            params.bbox_max_z,
+            params.px_mm,
+            params.layer_height_mm,
+        );
+        let rasterize_ms_actual = t_raster.elapsed().as_secs_f64() * 1000.0;
+        if ISLAND_SCAN_CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("island scan cancelled".to_string());
+        }
+
         let t_scan = std::time::Instant::now();
         let connectivity = if params.connectivity == 8 {
             dragonfruit_islands::model::Connectivity::Eight
@@ -1725,11 +1757,9 @@ async fn run_island_scan_native(
 
         let win_scan = win.clone();
         let scan_result = slicer_pool().install(|| {
-            dragonfruit_islands::stream::run_island_scan_streaming(
+            dragonfruit_islands::pipeline::run_island_scan_cancellable(
                 &job,
-                &triangles,
-                params.bbox_min_z,
-                true, // store_labels = true for Volume Analysis
+                &masks,
                 Some(&move |done: u32, total: u32| {
                     let _ = win_scan.emit("islandscan://progress", SliceProgressPayload {
                         done,
@@ -1737,11 +1767,15 @@ async fn run_island_scan_native(
                         phase: "Scanning".to_string(),
                     });
                 }),
+                &ISLAND_SCAN_CANCEL,
             )
         });
+        let Some(scan_result) = scan_result else {
+            return Err("island scan cancelled".to_string());
+        };
         let scan_ms = t_scan.elapsed().as_secs_f64() * 1000.0;
-        let rasterize_ms = 0.0;
-        let total_ms = scan_ms;
+        let rasterize_ms = rasterize_ms_actual;
+        let total_ms = rasterize_ms + scan_ms;
 
         let total_solid_px: u64 = scan_result
             .island_labels_per_layer
@@ -3327,6 +3361,7 @@ fn main() {
             slice_solid_native_to_temp_path,
             cancel_slicing,
             run_island_scan_native,
+            cancel_island_scan_native,
             mesh_minima::scan_mesh_minima,
             mesh_minima::scan_mesh_minima_from_path,
             mesh_minima::scan_voxel_islands_from_path,
