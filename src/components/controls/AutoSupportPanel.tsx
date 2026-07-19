@@ -53,7 +53,7 @@ type KnobDef = {
 
 const KNOBS: KnobDef[] = [
   { key: 'minIslandAreaMm2',     label: 'Min Island Area',       min: 0.01, max: 2,    step: 0.01, unit: 'mm²', hint: 'Skip islands smaller than this area' },
-  { key: 'tipInfluenceRadiusMm',  label: 'Tip Influence Radius',  min: 0.5,  max: 10,   step: 0.1,  unit: 'mm',  hint: 'Candidates within this distance are merged' },
+  { key: 'tipInfluenceRadiusMm',  label: 'Tip Influence Radius',  min: 0.1,  max: 10,   step: 0.1,  unit: 'mm',  hint: 'Candidates within this distance are merged' },
   { key: 'clusterRadiusMm',       label: 'Cluster Radius',        min: 5,    max: 40,   step: 0.5,  unit: 'mm',  hint: 'Max XY distance for grouping into a tree cluster' },
   { key: 'maxBranchReachMm',      label: 'Max Branch Reach',      min: 5,    max: 40,   step: 0.5,  unit: 'mm',  hint: 'Furthest a branch can fan out from its core trunk' },
   { key: 'maxBranchAngleDeg',     label: 'Max Branch Angle',      min: 20,   max: 60,   step: 1,    unit: '°',   hint: 'Steepest angle a branch can leave the trunk' },

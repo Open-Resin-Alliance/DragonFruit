@@ -29,13 +29,13 @@ type NumericAutoSupportSettingKey =
     | 'tipInfluenceRadiusMm';
 
 export const AUTO_SUPPORT_CONSTRAINTS = {
-    minIslandAreaMm2: { min: 0.01, max: 10, step: 0.01, defaultValue: 0.05 },
-    clusterRadiusMm: { min: 5, max: 40, step: 0.5, defaultValue: 15 },
-    maxBranchReachMm: { min: 5, max: 40, step: 0.5, defaultValue: 20 },
-    maxBranchAngleDeg: { min: 20, max: 60, step: 1, defaultValue: 45 },
-    minTrunkSeparationMm: { min: 3, max: 30, step: 0.5, defaultValue: 8 },
+    minIslandAreaMm2: { min: 0.01, max: 10, step: 0.01, defaultValue: 0.02 },
+    clusterRadiusMm: { min: 5, max: 40, step: 0.5, defaultValue: 20 },
+    maxBranchReachMm: { min: 5, max: 40, step: 0.5, defaultValue: 25 },
+    maxBranchAngleDeg: { min: 20, max: 60, step: 1, defaultValue: 50 },
+    minTrunkSeparationMm: { min: 3, max: 30, step: 0.5, defaultValue: 6 },
     densityFactor: { min: 0.5, max: 3.0, step: 0.1, defaultValue: 1.0 },
-    tipInfluenceRadiusMm: { min: 0.5, max: 10, step: 0.1, defaultValue: 2.0 },
+    tipInfluenceRadiusMm: { min: 0.1, max: 10, step: 0.1, defaultValue: 0.5 },
 } satisfies Record<NumericAutoSupportSettingKey, NumericConstraint>;
 
 export const AUTO_SUPPORT_HARD_RULES = {
