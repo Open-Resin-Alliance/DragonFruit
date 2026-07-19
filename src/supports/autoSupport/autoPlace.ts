@@ -282,15 +282,48 @@ function placeOneCandidate(
 
             // Fallback: use the host position if no shaft joint found.
             const knotPos = bestKnotPos ?? host.tipPos;
+            let knotDiameter = 1.0;
+            if (hostTrunk && bestKnotSegmentId) {
+                const seg = hostTrunk.segments.find(s => s.id === bestKnotSegmentId);
+                if (seg?.diameter) knotDiameter = seg.diameter;
+            }
             const parentKnot = {
                 id: `auto-merge-${candidate.id}`,
                 parentShaftId: bestKnotSegmentId || host.trunkId,
                 pos: knotPos,
+                diameter: knotDiameter + 0.1,
             };
-            // SDF collision pre-check: the straight path from knot to tip
-            // must be clear before we attempt the full branch build.
+            // Decide leaf vs branch based on span distance.
+            const spanMm = Math.sqrt(
+                (tipPos.x - knotPos.x) ** 2 +
+                (tipPos.y - knotPos.y) ** 2 +
+                (tipPos.z - knotPos.z) ** 2,
+            );
+            const MAX_AUTO_LEAF_SPAN_MM = 2.5;
+
+            // SDF collision pre-check.
             if (mesh && isShaftBlocked(parentKnot.pos, tipPos, 0.3, mesh)) {
                 // Fall through to trunk path.
+            } else if (spanMm <= MAX_AUTO_LEAF_SPAN_MM) {
+                // Close enough for a CTRL-ALT style leaf — just a cone.
+                try {
+                    const { leaf, supportData: sd } = buildLeafData({
+                        tipPos,
+                        surfaceNormal: tipNormal,
+                        modelId: candidate.modelId,
+                        parentKnot,
+                        hostDiameterMm: parentKnot.diameter ?? 1.0,
+                        mesh,
+                    });
+                    if (!sd.error) {
+                        addKnot(parentKnot);
+                        addLeaf(leaf);
+                        console.log(LOG_PREFIX,
+                            `Leaf (merge) ${candidate.id} → host ${host.trunkId} ` +
+                            `span=${spanMm.toFixed(1)}mm knotZ=${knotPos.z.toFixed(1)}mm`);
+                        return { kind: 'leaf', preset };
+                    }
+                } catch (_) {}
             } else try {
                 const { branch, supportData: sd } = buildBranchData({
                     tipPos,
@@ -302,13 +335,12 @@ function placeOneCandidate(
                 if (sd.error) {
                     console.log(LOG_PREFIX,
                         `Branch (merge) ${candidate.id}: collision \"${sd.error}\", falling back`);
-                    // Fall through to trunk path.
                 } else {
                     addKnot(parentKnot);
                     addBranch(branch);
                     console.log(LOG_PREFIX,
                         `Branch (merge) ${candidate.id} → host ${host.trunkId} ` +
-                        `knotZ=${knotPos.z.toFixed(1)}mm`);
+                        `span=${spanMm.toFixed(1)}mm knotZ=${knotPos.z.toFixed(1)}mm`);
                     return { kind: 'branch', preset };
                 }
             } catch (e) {
