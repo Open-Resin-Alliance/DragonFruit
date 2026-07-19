@@ -125,19 +125,36 @@ export function embedAppex({ targetTriple, repoRoot = DEFAULT_REPO_ROOT } = {}) 
   // load an unsigned extension, and Gatekeeper rejects an unsigned app) is worse
   // than a loud failure. xattr -rc is best-effort (it can fail benignly when
   // there are no extended attributes to clear).
+  // Notarization requires the Hardened Runtime + a secure timestamp on every
+  // piece of signed code. `codesign --force` replaces the whole signature —
+  // including any options baked into it by tauri's original signing — so
+  // those flags must be re-added explicitly, or the notary service rejects
+  // the resubmission with status "Invalid" even though the identity is right.
+  // Only meaningful (and only requested) on a real Developer ID re-sign,
+  // since that's the only case we go on to notarize; skipping it for Apple
+  // Development / ad-hoc keeps local/offline dev builds working (--timestamp
+  // needs network access to Apple's timestamp server).
+  const notarizationFlags = isDeveloperIdSigned ? ["--options", "runtime", "--timestamp"] : [];
+
   spawnSync("xattr", ["-rc", appexDst], { stdio: "pipe" });
   const signAppex = spawnSync(
     "codesign",
-    ["--force", "--sign", signIdentity, "--entitlements", entitlements, appexDst],
+    ["--force", "--sign", signIdentity, ...notarizationFlags, "--entitlements", entitlements, appexDst],
     { encoding: "utf8" }
   );
   if (signAppex.status !== 0) {
     return { ok: false, reason: `codesign of .appex failed: ${(signAppex.stderr || "").trim()}` };
   }
+  // No --deep here: the .appex is already correctly signed (with its own
+  // sandbox entitlement) above, and --deep would re-sign it as a side effect
+  // using the outer app's parameters — silently dropping that entitlement.
+  // Apple's own guidance is nested-code-first, then the outer bundle without
+  // --deep; everything else nested (the externalBin sidecar) is unchanged
+  // from tauri-action's original signing and doesn't need re-touching.
   spawnSync("xattr", ["-rc", appBundle], { stdio: "pipe" });
   const signApp = spawnSync(
     "codesign",
-    ["--force", "--sign", signIdentity, "--deep", appBundle],
+    ["--force", "--sign", signIdentity, ...notarizationFlags, appBundle],
     { encoding: "utf8" }
   );
   if (signApp.status !== 0) {
@@ -268,7 +285,7 @@ export function embedAppex({ targetTriple, repoRoot = DEFAULT_REPO_ROOT } = {}) 
       };
     }
     spawnSync("xattr", ["-rc", finalDmgPath], { stdio: "pipe" });
-    const signDmg = spawnSync("codesign", ["--force", "--sign", signIdentity, finalDmgPath], {
+    const signDmg = spawnSync("codesign", ["--force", "--sign", signIdentity, "--timestamp", finalDmgPath], {
       encoding: "utf8",
     });
     if (signDmg.status !== 0) {
@@ -325,11 +342,26 @@ function notarizeAndStaple(targetPath, { appleId, applePassword, appleTeamId }, 
   );
   if (zipPath) rmSync(zipPath, { force: true });
   if (submitResult.status !== 0 || !/status: Accepted/.test(submitResult.stdout || "")) {
+    // "Invalid"/"Rejected" from notarytool submit never says why — the actual
+    // reason (missing hardened runtime, unsigned nested code, ...) only shows
+    // up in the per-submission log, so fetch it here rather than making
+    // whoever's debugging a CI failure guess from a bare status line.
+    let detail = "";
+    const idMatch = /id: ([0-9a-f-]{36})/.exec(submitResult.stdout || "");
+    if (idMatch) {
+      const logResult = spawnSync(
+        "xcrun",
+        ["notarytool", "log", idMatch[1], "--apple-id", appleId, "--password", applePassword, "--team-id", appleTeamId],
+        { encoding: "utf8" }
+      );
+      if (logResult.stdout) detail = `\nnotarytool log:\n${logResult.stdout.trim()}`;
+    }
     return {
       ok: false,
       reason:
         `notarytool submit failed for ${path.basename(targetPath)}: ` +
-        `${(submitResult.stdout || "").trim()} ${(submitResult.stderr || "").trim()}`.trim(),
+        `${(submitResult.stdout || "").trim()} ${(submitResult.stderr || "").trim()}`.trim() +
+        detail,
     };
   }
 
