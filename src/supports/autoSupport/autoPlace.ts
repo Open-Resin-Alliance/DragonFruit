@@ -170,6 +170,26 @@ const LEAF_FAN_RADIUS_MM = 5.0;
 const LEAF_FAN_MAX_ANGLE_DEG = 60;
 
 // ---------------------------------------------------------------------------
+// Post-build collision verification
+// ---------------------------------------------------------------------------
+
+/** Check all segments of a built branch against the SDF. */
+function branchCollidesWithSDF(
+    branch: { segments: Array<{ bottomJoint?: { pos: { x: number; y: number; z: number } } | null; topJoint?: { pos: { x: number; y: number; z: number } } | null; diameter?: number }> },
+    mesh: THREE.Mesh,
+): boolean {
+    for (const seg of branch.segments) {
+        const start = seg.bottomJoint?.pos;
+        const end = seg.topJoint?.pos;
+        if (start && end) {
+            const r = (seg.diameter ?? 1.0) / 2;
+            if (isShaftBlocked(start, end, r, mesh)) return true;
+        }
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // Nearby-trunk merge
 // ---------------------------------------------------------------------------
 
@@ -238,10 +258,9 @@ function findMergeHost(
  */
 function placeOneCandidate(
     candidate: CandidatePoint,
-    settingsOverride: Partial<AutoSupportSettings> | undefined,
+    _settingsOverride: Partial<AutoSupportSettings> | undefined,
 ): { kind: string; rejectedReason?: RejectReason; preset?: 'detail' | 'structure' | 'anchor'; entityId?: string; stickCount?: number } {
     const supportSettings = getSettings();
-    const autoSettings = normalizeAutoSupportSettings(settingsOverride ?? undefined);
     const snapshot = getSnapshot();
     const mesh = getModelMesh(candidate.modelId) ?? undefined;
 
@@ -300,10 +319,11 @@ function placeOneCandidate(
                 (tipPos.z - knotPos.z) ** 2,
             );
             const MAX_AUTO_LEAF_SPAN_MM = 2.5;
+            const MAX_MERGE_SPAN_MM = GRIDLESS_MERGE_RADIUS_MM * 1.5;
 
-            // SDF collision pre-check.
-            if (mesh && isShaftBlocked(parentKnot.pos, tipPos, 0.3, mesh)) {
-                // Fall through to trunk path.
+            // Reject if the branch would be too long (nearly horizontal).
+            if (spanMm > MAX_MERGE_SPAN_MM) {
+                // Fall through to trunk path — span too large for a branch.
             } else if (spanMm <= MAX_AUTO_LEAF_SPAN_MM) {
                 // Close enough for a CTRL-ALT style leaf — just a cone.
                 try {
@@ -332,9 +352,12 @@ function placeOneCandidate(
                     parentKnot,
                     mesh,
                 });
-                if (sd.error) {
+                // Post-build SDF check: verify each segment of the actual
+                // branch geometry doesn't intersect the model.
+                const collides = sd.error || (mesh && branchCollidesWithSDF(branch, mesh));
+                if (collides) {
                     console.log(LOG_PREFIX,
-                        `Branch (merge) ${candidate.id}: collision \"${sd.error}\", falling back`);
+                        `Branch (merge) ${candidate.id}: collision, falling back`);
                 } else {
                     addKnot(parentKnot);
                     addBranch(branch);
