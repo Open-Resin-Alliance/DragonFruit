@@ -1339,3 +1339,447 @@ mod tests {
         assert!(parse_hole_punch_options(r#"{"punches": {}}"#).is_err());
     }
 }
+
+/// P0c RED HARNESS — STL import decimation remediation (plan:
+/// `agents/Claude/STL-import-perf/20260718-Implementation-Plan-*.md`, Phase 0
+/// steps 4–5). Test-only code (`#[cfg(test)]`): the deterministic off-origin
+/// lattice asset generator, the §D9 import wall-time baseline, and the R2
+/// deferred-red splice-contract test. Everything here is `#[ignore]`d so the
+/// pinned `cargo test` baseline (8 passed / 1 ignored) gains ignored entries
+/// only. Run pieces explicitly:
+///
+/// ```text
+/// cargo test p0_fullres_red_harness -- --ignored --nocapture
+/// ```
+#[cfg(test)]
+mod p0_fullres_red_harness {
+    use super::*;
+    use std::path::Path;
+    use std::time::Instant;
+
+    // --- Deterministic pre-supported-plate-like lattice -------------------
+    //
+    // Shape: one 120×120×1 mm base slab + a G×G grid of thin vertical struts,
+    // each capped by a small "tip" box hovering TIP_GAP_MM above the strut top
+    // (a detached contact tip, the feature class that unbounded decimation and
+    // inflated weld steps destroy). Strut heights vary deterministically so
+    // the simplifier has structure to chew on.
+    //
+    // OFF-ORIGIN BY CONSTRUCTION: the lattice bbox min corner sits exactly at
+    // LATTICE_ORIGIN_MM = (40, 25, 0), like a real plate export. The islands
+    // sideload frame bug survived precisely because origin-centered test
+    // meshes hide `center` mix-ups (decision memo §2.3) — assets generated
+    // here must never be origin-centered.
+    //
+    // Triangle enumeration order is STABLE and part of the contract (R2
+    // samples triangles by index): slab box tris 0..12, then per grid cell
+    // (row-major i, then j): 12 strut-box tris, 12 tip-box tris.
+
+    /// Test-local mirror of the `MAX_NATIVE_STL_TRIANGLES` const inside
+    /// `load_stl_file` (function-scoped there; production code is fenced for
+    /// P0). Assets above this count take the streaming-preview path.
+    const P0C_PREVIEW_GATE_TRIANGLES: u64 = 6_000_000;
+
+    const LATTICE_ORIGIN_MM: [f32; 3] = [40.0, 25.0, 0.0];
+    const LATTICE_PLATE_MM: f32 = 120.0;
+    const LATTICE_SLAB_MM: f32 = 1.0;
+    const LATTICE_TIP_GAP_MM: f32 = 0.06; // 60 µm — support-tip-gap scale
+    const LATTICE_TIP_HEIGHT_MM: f32 = 0.3;
+
+    /// Struts per side for a requested total triangle count.
+    fn lattice_grid_for_target(target_triangles: u64) -> u32 {
+        let cells = (target_triangles.saturating_sub(12)) / 24;
+        (((cells as f64).sqrt().floor()) as u32).max(1)
+    }
+
+    fn lattice_triangle_count(grid: u32) -> u64 {
+        12 + 24 * (grid as u64) * (grid as u64)
+    }
+
+    /// Triangle `t` (0..12) of an axis-aligned box, in a fixed order.
+    fn box_tri(min: [f32; 3], max: [f32; 3], t: u64) -> [[f32; 3]; 3] {
+        let [x0, y0, z0] = min;
+        let [x1, y1, z1] = max;
+        match t {
+            0 => [[x0, y0, z0], [x1, y1, z0], [x1, y0, z0]],
+            1 => [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0]],
+            2 => [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1]],
+            3 => [[x0, y0, z1], [x1, y1, z1], [x0, y1, z1]],
+            4 => [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1]],
+            5 => [[x0, y0, z0], [x1, y0, z1], [x0, y0, z1]],
+            6 => [[x0, y1, z0], [x1, y1, z1], [x1, y1, z0]],
+            7 => [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1]],
+            8 => [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1]],
+            9 => [[x0, y0, z0], [x0, y1, z1], [x0, y1, z0]],
+            10 => [[x1, y0, z0], [x1, y1, z1], [x1, y0, z1]],
+            _ => [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1]],
+        }
+    }
+
+    /// (strut box, tip box) for grid cell (i, j), as (min, max) pairs.
+    fn lattice_cell_boxes(grid: u32, i: u32, j: u32) -> ([[f32; 3]; 2], [[f32; 3]; 2]) {
+        let pitch = LATTICE_PLATE_MM / grid as f32;
+        let cx = LATTICE_ORIGIN_MM[0] + (i as f32 + 0.5) * pitch;
+        let cy = LATTICE_ORIGIN_MM[1] + (j as f32 + 0.5) * pitch;
+        let slab_top = LATTICE_ORIGIN_MM[2] + LATTICE_SLAB_MM;
+        // Deterministic height variation, 3.0–4.4 mm in 0.35 mm steps.
+        let h = 3.0 + 0.35 * ((i as u64 * 31 + j as u64 * 17) % 5) as f32;
+        let hw = 0.2 * pitch; // strut half-width
+        let tw = 0.275 * pitch; // tip half-width (slightly wider, like a contact tip)
+        let strut = [
+            [cx - hw, cy - hw, slab_top],
+            [cx + hw, cy + hw, slab_top + h],
+        ];
+        let tip_z0 = slab_top + h + LATTICE_TIP_GAP_MM;
+        let tip = [
+            [cx - tw, cy - tw, tip_z0],
+            [cx + tw, cy + tw, tip_z0 + LATTICE_TIP_HEIGHT_MM],
+        ];
+        (strut, tip)
+    }
+
+    /// Triangle `index` (0..lattice_triangle_count(grid)) of the lattice, in
+    /// raw-file (off-origin) coordinates. Single source of truth for both the
+    /// STL writer and R2's sampled-vertex reprojection reference.
+    fn lattice_triangle(grid: u32, index: u64) -> [[f32; 3]; 3] {
+        if index < 12 {
+            let slab_min = LATTICE_ORIGIN_MM;
+            let slab_max = [
+                LATTICE_ORIGIN_MM[0] + LATTICE_PLATE_MM,
+                LATTICE_ORIGIN_MM[1] + LATTICE_PLATE_MM,
+                LATTICE_ORIGIN_MM[2] + LATTICE_SLAB_MM,
+            ];
+            return box_tri(slab_min, slab_max, index);
+        }
+        let k = index - 12;
+        let cell = k / 24;
+        let within = k % 24;
+        let i = (cell / grid as u64) as u32;
+        let j = (cell % grid as u64) as u32;
+        let (strut, tip) = lattice_cell_boxes(grid, i, j);
+        if within < 12 {
+            box_tri(strut[0], strut[1], within)
+        } else {
+            box_tri(tip[0], tip[1], within - 12)
+        }
+    }
+
+    /// Streams the lattice to `path` as a binary STL (zeroed normals — every
+    /// DragonFruit reader derives normals from vertices). Returns the
+    /// triangle count written. Never materializes the soup in memory.
+    fn write_lattice_stl(path: &Path, grid: u32) -> std::io::Result<u64> {
+        let total = lattice_triangle_count(grid);
+        assert!(u32::try_from(total).is_ok(), "triangle count exceeds STL u32");
+        let file = std::fs::File::create(path)?;
+        let mut out = BufWriter::with_capacity(8 * 1024 * 1024, file);
+        out.write_all(&[0u8; 80])?;
+        out.write_all(&(total as u32).to_le_bytes())?;
+        let mut record = [0u8; 50];
+        for index in 0..total {
+            let tri = lattice_triangle(grid, index);
+            let mut at = 12;
+            for vertex in tri {
+                for component in vertex {
+                    record[at..at + 4].copy_from_slice(&component.to_le_bytes());
+                    at += 4;
+                }
+            }
+            out.write_all(&record)?;
+            record[12..48].fill(0);
+        }
+        out.flush()?;
+        Ok(total)
+    }
+
+    /// Resolve (and lazily generate) a cached lattice STL of ~`target`
+    /// triangles under the OS temp dir. Reused across runs when the on-disk
+    /// size matches; the repo temp sweeper only matches `dragonfruit-slice-*`,
+    /// so these survive until manually deleted.
+    fn ensure_lattice_stl(label: &str, target_triangles: u64) -> (PathBuf, u32, u64) {
+        let grid = lattice_grid_for_target(target_triangles);
+        let total = lattice_triangle_count(grid);
+        let expected_bytes = 84 + 50 * total;
+        let path = match std::env::var("DRAGONFRUIT_LATTICE_STL_PATH") {
+            Ok(p) if !p.trim().is_empty() => PathBuf::from(p),
+            _ => std::env::temp_dir().join(format!("dragonfruit-p0c-lattice-{label}.stl")),
+        };
+        let reusable = std::fs::metadata(&path)
+            .map(|m| m.len() == expected_bytes)
+            .unwrap_or(false);
+        if !reusable {
+            let started = Instant::now();
+            let written = write_lattice_stl(&path, grid).expect("write lattice STL");
+            eprintln!(
+                "[p0c] generated {} ({} triangles, {:.1} MB) in {:.2}s",
+                path.display(),
+                written,
+                expected_bytes as f64 / 1_048_576.0,
+                started.elapsed().as_secs_f64(),
+            );
+        } else {
+            eprintln!("[p0c] reusing cached {}", path.display());
+        }
+        (path, grid, total)
+    }
+
+    // --- Deliverable 1: asset generator (env-driven) ----------------------
+
+    /// Writes an off-origin lattice STL for manual/e2e verification.
+    /// Invocation (from `src-tauri/`):
+    ///
+    /// ```text
+    /// DRAGONFRUIT_LATTICE_STL_OUT=%TEMP%/plate-8m.stl \
+    /// DRAGONFRUIT_LATTICE_STL_TRIS=8000000 \
+    ///   cargo test generate_offorigin_lattice_stl_asset -- --ignored --nocapture
+    /// ```
+    ///
+    /// Defaults: ~8M triangles into `%TEMP%/dragonfruit-p0c-lattice-8m.stl`.
+    /// The ASSET is never committed (plan §C.4) — only this generator is.
+    #[test]
+    #[ignore = "P0 asset generator — run explicitly with --ignored --nocapture"]
+    fn generate_offorigin_lattice_stl_asset() {
+        let target: u64 = std::env::var("DRAGONFRUIT_LATTICE_STL_TRIS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8_000_000);
+        let grid = lattice_grid_for_target(target);
+        let total = lattice_triangle_count(grid);
+        let path = match std::env::var("DRAGONFRUIT_LATTICE_STL_OUT") {
+            Ok(p) if !p.trim().is_empty() => PathBuf::from(p),
+            _ => std::env::temp_dir().join(format!(
+                "dragonfruit-p0c-lattice-{}m.stl",
+                (target as f64 / 1_000_000.0).round() as u64
+            )),
+        };
+        let started = Instant::now();
+        let written = write_lattice_stl(&path, grid).expect("write lattice STL");
+        assert_eq!(written, total);
+        eprintln!(
+            "[p0c] wrote {} — {} triangles (grid {}×{}), {:.1} MB, {:.2}s",
+            path.display(),
+            written,
+            grid,
+            grid,
+            (84 + 50 * written) as f64 / 1_048_576.0,
+            started.elapsed().as_secs_f64(),
+        );
+    }
+
+    /// Harness self-check (fast, green): determinism, exact off-origin bbox
+    /// min, and count arithmetic. Ignored only to keep the pinned baseline
+    /// count (8 passed / 1 ignored) unchanged during the P0 window.
+    #[test]
+    #[ignore = "P0 harness self-check — run explicitly with --ignored"]
+    fn lattice_generator_is_deterministic_and_off_origin() {
+        let grid = lattice_grid_for_target(30_000);
+        assert_eq!(grid, 35);
+        let total = lattice_triangle_count(grid);
+        assert_eq!(total, 12 + 24 * 35 * 35); // 29_412
+
+        let dir = std::env::temp_dir();
+        let path_a = dir.join(format!("dragonfruit-p0c-selfcheck-a-{}.stl", std::process::id()));
+        let path_b = dir.join(format!("dragonfruit-p0c-selfcheck-b-{}.stl", std::process::id()));
+        assert_eq!(write_lattice_stl(&path_a, grid).unwrap(), total);
+        assert_eq!(write_lattice_stl(&path_b, grid).unwrap(), total);
+        let bytes_a = std::fs::read(&path_a).unwrap();
+        let bytes_b = std::fs::read(&path_b).unwrap();
+        assert_eq!(bytes_a.len() as u64, 84 + 50 * total);
+        assert!(bytes_a == bytes_b, "generator must be byte-deterministic");
+
+        // Off-origin guarantee: bbox min EXACTLY at (40, 25, 0).
+        let (min, max) = binary_stl_bounds(&path_a, total as u32).unwrap();
+        assert_eq!((min.x, min.y, min.z), (40.0, 25.0, 0.0));
+        assert_eq!((max.x, max.y), (160.0, 145.0));
+        // Tallest strut variant: 1.0 slab + 4.4 strut + 0.06 gap + 0.3 tip.
+        assert!((max.z - 5.76).abs() < 1e-4, "max.z = {}", max.z);
+
+        std::fs::remove_file(&path_a).ok();
+        std::fs::remove_file(&path_b).ok();
+    }
+
+    // --- Deliverable 1: §D9 import wall-time baseline ---------------------
+
+    /// Times the native import core for a >6M binary STL — exactly the code
+    /// `load_stl_file` runs for oversized files: `binary_stl_bounds` (bounds
+    /// pass) + `load_binary_stl_preview` bucketing + per-region weld +
+    /// meshopt simplify (`load_binary_stl_preview` calls the bounds pass
+    /// internally, so one call covers the full core). Feeds the plan §D9
+    /// gate: Phase-1 import wall-time must stay within +10% of this number.
+    ///
+    /// ```text
+    /// cargo test import_core_wall_time_baseline_12m -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "P0 §D9 wall-time baseline — run explicitly with --ignored --nocapture"]
+    fn import_core_wall_time_baseline_12m_lattice() {
+        let (path, _grid, total) = ensure_lattice_stl("12m", 12_000_000);
+        assert!(total > P0C_PREVIEW_GATE_TRIANGLES, "asset must take the >6M preview path");
+
+        let started = Instant::now();
+        let preview = load_binary_stl_preview(&path, total as u32, 2_000_000)
+            .expect("import core (bounds + bucket + simplify)");
+        let elapsed = started.elapsed();
+        eprintln!(
+            "[p0c][D9-baseline] import core: {} -> {} triangles in {:.3}s ({})",
+            total,
+            preview.triangles.len(),
+            elapsed.as_secs_f64(),
+            path.display(),
+        );
+        assert!(!preview.triangles.is_empty());
+    }
+
+    // --- Deliverable 2: R2 — the full-res splice contract (DEFERRED RED) --
+
+    /// The Phase-1 splice contract (decision memo §4.3 / plan Phase 1):
+    /// stream the ORIGINAL STL from `sourcePath` Rust-side and stage
+    /// `w = M · (v_raw − C_pre)` where `M = T·R·S` (the scene transform,
+    /// applied scale-first exactly as the WebView bake composes it) and
+    /// `C_pre` is the STORED import-time pre-centering bbox center — supplied
+    /// by the caller, NEVER recomputed from the full mesh (the islands
+    /// sideload's frame bug — memo §2.3 — came from substituting a scene-side
+    /// center; do not copy its datum).
+    struct FullResSpliceRequest<'a> {
+        source_stl: &'a Path,
+        /// Import-time pre-centering bbox center, raw-file frame (memo §2.2).
+        c_pre: [f64; 3],
+        translation: [f64; 3],
+        rotation_quat_xyzw: [f64; 4],
+        scale: [f64; 3],
+        /// Triangle indices (raw-file order) whose world-space vertices the
+        /// splice must report back for verification.
+        sample_triangle_indices: &'a [u64],
+    }
+
+    struct FullResSpliceOutcome {
+        /// Triangles staged for the slicer — must equal the SOURCE count.
+        staged_triangle_count: u64,
+        /// World-space vertices of the sampled triangles, captured BEFORE
+        /// transport encoding (quantized_u16 adds ~2–3 µm, far above this
+        /// contract's 1e-4 mm tolerance; quantization is covered by Phase 1's
+        /// separate frame-delta test).
+        sampled_world_triangles: Vec<[[f32; 3]; 3]>,
+    }
+
+    type FullResSplice = fn(&FullResSpliceRequest) -> Result<FullResSpliceOutcome, String>;
+
+    /// Phase 1 wires the real splice command core (the
+    /// `stage_fullres_segment`-shaped command of memo §4.3) into this seam,
+    /// un-ignores `r2_*` below, captures its red run FIRST, then implements.
+    /// Until then there is nothing to call — the returned `None` makes the
+    /// test fail with an explicit deferred-red marker when force-run.
+    fn phase1_fullres_splice() -> Option<FullResSplice> {
+        None
+    }
+
+    fn rotate_quat_f64(v: [f64; 3], q: [f64; 4]) -> [f64; 3] {
+        let [qx, qy, qz, qw] = q;
+        let t = [
+            2.0 * (qy * v[2] - qz * v[1]),
+            2.0 * (qz * v[0] - qx * v[2]),
+            2.0 * (qx * v[1] - qy * v[0]),
+        ];
+        [
+            v[0] + qw * t[0] + (qy * t[2] - qz * t[1]),
+            v[1] + qw * t[1] + (qz * t[0] - qx * t[2]),
+            v[2] + qw * t[2] + (qx * t[1] - qy * t[0]),
+        ]
+    }
+
+    /// f64 reference reprojection: `w = T + R·(S·(v_raw − C_pre))`.
+    fn expected_world(
+        v_raw: [f32; 3],
+        c_pre: [f64; 3],
+        translation: [f64; 3],
+        quat: [f64; 4],
+        scale: [f64; 3],
+    ) -> [f64; 3] {
+        let local = [
+            (v_raw[0] as f64 - c_pre[0]) * scale[0],
+            (v_raw[1] as f64 - c_pre[1]) * scale[1],
+            (v_raw[2] as f64 - c_pre[2]) * scale[2],
+        ];
+        let rotated = rotate_quat_f64(local, quat);
+        [
+            rotated[0] + translation[0],
+            rotated[1] + translation[1],
+            rotated[2] + translation[2],
+        ]
+    }
+
+    /// R2 — given the generated OFF-ORIGIN ~8M lattice + a scene transform +
+    /// C_pre, the staged output must carry the ORIGINAL triangle count (not
+    /// the ~2M preview) and sampled vertices must land on
+    /// `M · (v_raw − C_pre)` within 1e-4 mm (pre-quantization).
+    ///
+    /// DEFERRED RED (recorded plan §D1 deviation): the splice command does
+    /// not exist before Phase 1, so this cannot red-RUN today — it is
+    /// compile-ready against the contract and fails with an explicit marker
+    /// if force-run. Its red proof is owed at Phase-1 start.
+    #[test]
+    #[ignore = "red until Phase 1 lands the full-res splice command (stage_fullres_segment seam)"]
+    fn r2_fullres_splice_preserves_count_and_reprojects_within_100nm() {
+        let splice = match phase1_fullres_splice() {
+            Some(f) => f,
+            None => panic!(
+                "RED (deferred): Phase 1 has not landed the full-res splice command; \
+                 wire it into phase1_fullres_splice() and capture this test's red run \
+                 before implementing (plan §D1)"
+            ),
+        };
+
+        let (path, grid, total) = ensure_lattice_stl("8m", 8_000_000);
+        assert!(total > P0C_PREVIEW_GATE_TRIANGLES, "asset must take the >6M preview path");
+
+        // Analytic full-lattice bbox center, standing in for the STORED
+        // import-time C_pre (x: 40..160, y: 25..145, z: 0..5.76). In
+        // production this value comes from the persisted import datum — the
+        // contract is parametric in C_pre, and the splice must apply exactly
+        // the value it is handed.
+        let c_pre = [100.0, 85.0, 2.88];
+        // Non-trivial scene transform: rotation 30° about Z, non-uniform
+        // scale (applied BEFORE rotation, matching the WebView bake), and a
+        // translation — chosen to catch composition-order and frame bugs.
+        let half_angle = 30.0_f64.to_radians() / 2.0;
+        let quat = [0.0, 0.0, half_angle.sin(), half_angle.cos()];
+        let scale = [1.25, 1.0, 0.8];
+        let translation = [10.0, -4.0, 2.5];
+
+        let samples = [0u64, total / 2, total - 1];
+        let outcome = splice(&FullResSpliceRequest {
+            source_stl: &path,
+            c_pre,
+            translation,
+            rotation_quat_xyzw: quat,
+            scale,
+            sample_triangle_indices: &samples,
+        })
+        .expect("full-res splice");
+
+        assert_eq!(
+            outcome.staged_triangle_count, total,
+            "staged output must carry the ORIGINAL triangle count ({total}), \
+             not a decimated preview",
+        );
+
+        assert_eq!(outcome.sampled_world_triangles.len(), samples.len());
+        for (sample_index, &tri_index) in samples.iter().enumerate() {
+            let raw = lattice_triangle(grid, tri_index);
+            let staged = outcome.sampled_world_triangles[sample_index];
+            for (vertex_index, &v_raw) in raw.iter().enumerate() {
+                let want = expected_world(v_raw, c_pre, translation, quat, scale);
+                let got = staged[vertex_index];
+                let distance = ((got[0] as f64 - want[0]).powi(2)
+                    + (got[1] as f64 - want[1]).powi(2)
+                    + (got[2] as f64 - want[2]).powi(2))
+                .sqrt();
+                assert!(
+                    distance <= 1e-4,
+                    "triangle {tri_index} vertex {vertex_index}: staged {got:?} is \
+                     {distance:.6} mm from M·(v_raw − C_pre) = {want:?} (tolerance 1e-4 mm) \
+                     — frame reproduction is broken (memo §2.2/§2.3)",
+                );
+            }
+        }
+    }
+}
