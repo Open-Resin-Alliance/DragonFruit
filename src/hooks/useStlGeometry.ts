@@ -69,6 +69,15 @@ export type GeometryWithBounds = {
       sizeBytes: number;
       mtimeMs: number;
     };
+    /**
+     * meshopt achieved relative decimation error (relative to mesh extents,
+     * [0,1]) from the Phase-2a query-first decimation. Surfaced for the
+     * preview-honesty badge (Phase 2b consumes it); present only on decimated
+     * previews.
+     */
+    achievedError?: number;
+    /** The import-time governor triangle budget this preview was reduced to. */
+    budgetTriangles?: number;
   };
   /**
    * Internal hand-off from `processGeometry` to `loadStlGeometry`: the
@@ -750,16 +759,42 @@ type NativeStlLoadResult = {
   originalTriangleCount: number;
   previewTriangleCount: number;
   isPreview: boolean;
+  /** meshopt achieved relative error for a decimated preview (0 for verbatim). */
+  achievedError: number;
+  /** The import-time governor triangle budget (0 when unreported). */
+  budgetTriangles: number;
 };
+
+/**
+ * WebView JS-heap ceiling forwarded to the Rust budget governor so the import
+ * budget scales with the actual runtime (Chromium/WebView2). Undefined-safe:
+ * non-Chromium WebViews lack `performance.memory`, so the governor falls back
+ * to its system-RAM term / floor. See `stl_budget.rs`.
+ */
+function readJsHeapSizeLimit(): number | undefined {
+  const memory = (performance as Performance & { memory?: { jsHeapSizeLimit?: number } }).memory;
+  if (memory && typeof memory.jsHeapSizeLimit === 'number' && memory.jsHeapSizeLimit > 0) {
+    return memory.jsHeapSizeLimit;
+  }
+  return undefined;
+}
+
+// DFST header is 24 bytes: magic(4) flags(4) originalCount(4) outputCount(4)
+// achievedError:f32(4) budgetTriangles:u32(4). The last two were added for the
+// Phase-2a query-first decimation (see mesh_repair::encode_stl_response).
+const NATIVE_STL_HEADER_BYTES = 24;
 
 async function loadStlViaTauri(filePath: string): Promise<NativeStlLoadResult | null> {
   try {
     const { invoke } = await import('@tauri-apps/api/core');
-    const bytes = await invoke<ArrayBuffer>('load_stl_file', { filePath });
+    const bytes = await invoke<ArrayBuffer>('load_stl_file', {
+      filePath,
+      jsHeapSizeLimit: readJsHeapSizeLimit(),
+    });
     if (!bytes || bytes.byteLength === 0) return null;
 
-    if (bytes.byteLength < 16) return null;
-    const header = new DataView(bytes, 0, 16);
+    if (bytes.byteLength < NATIVE_STL_HEADER_BYTES) return null;
+    const header = new DataView(bytes, 0, NATIVE_STL_HEADER_BYTES);
     const hasMagic = header.getUint8(0) === 0x44
       && header.getUint8(1) === 0x46
       && header.getUint8(2) === 0x53
@@ -769,15 +804,18 @@ async function loadStlViaTauri(filePath: string): Promise<NativeStlLoadResult | 
     const flags = header.getUint32(4, true);
     const originalTriangleCount = header.getUint32(8, true);
     const previewTriangleCount = header.getUint32(12, true);
-    const expectedBytes = 16 + previewTriangleCount * 18 * Float32Array.BYTES_PER_ELEMENT;
+    const achievedError = header.getFloat32(16, true);
+    const budgetTriangles = header.getUint32(20, true);
+    const expectedBytes =
+      NATIVE_STL_HEADER_BYTES + previewTriangleCount * 18 * Float32Array.BYTES_PER_ELEMENT;
     if (previewTriangleCount === 0 || bytes.byteLength !== expectedBytes) {
       throw new Error('Native STL loader returned a truncated response.');
     }
 
-    const positions = new Float32Array(bytes, 16, previewTriangleCount * 9);
+    const positions = new Float32Array(bytes, NATIVE_STL_HEADER_BYTES, previewTriangleCount * 9);
     const normals = new Float32Array(
       bytes,
-      16 + previewTriangleCount * 9 * Float32Array.BYTES_PER_ELEMENT,
+      NATIVE_STL_HEADER_BYTES + previewTriangleCount * 9 * Float32Array.BYTES_PER_ELEMENT,
       previewTriangleCount * 9,
     );
 
@@ -802,6 +840,8 @@ async function loadStlViaTauri(filePath: string): Promise<NativeStlLoadResult | 
       originalTriangleCount,
       previewTriangleCount,
       isPreview: (flags & 1) !== 0,
+      achievedError,
+      budgetTriangles,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -855,6 +895,12 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
           previewTriangleCount: nativeResult.previewTriangleCount,
           ...(cPre ? { cPre } : {}),
           ...(sourceFingerprint ? { sourceFingerprint } : {}),
+          ...(Number.isFinite(nativeResult.achievedError)
+            ? { achievedError: nativeResult.achievedError }
+            : {}),
+          ...(nativeResult.budgetTriangles > 0
+            ? { budgetTriangles: nativeResult.budgetTriangles }
+            : {}),
         };
       }
       return processed;

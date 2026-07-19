@@ -5,6 +5,7 @@ mod mesh_minima;
 mod mesh_repair;
 mod network;
 mod sdf;
+mod stl_budget;
 mod updater_channel;
 
 fn default_minimum_aa_alpha_percent() -> f32 {

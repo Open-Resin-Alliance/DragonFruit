@@ -821,19 +821,18 @@ pub async fn mesh_repair_read_positions() -> Result<Response, String> {
 /// Processing the file in Rust avoids loading the entire raw STL into the
 /// webview's memory space, which can save ~1 GB for a large binary STL.
 #[tauri::command]
-pub async fn load_stl_file(file_path: String) -> Result<Response, String> {
+pub async fn load_stl_file(
+    file_path: String,
+    js_heap_size_limit: Option<f64>,
+) -> Result<Response, String> {
     use dragonfruit_mesh_repair::io;
 
     let path = std::path::Path::new(&file_path);
 
     log::info!("[load_stl_file] Starting native STL load: {file_path}");
 
-    // The current IPC format expands every triangle to positions plus normals
-    // (72 bytes/triangle), before Three.js builds its BVH and uploads buffers.
-    // Reject inputs that cannot fit that representation before the repair
-    // loader reads and indexes the entire STL in memory.
-    const MAX_NATIVE_STL_TRIANGLES: u64 = 6_000_000;
-    const PREVIEW_TARGET_TRIANGLES: usize = 2_000_000;
+    // ASCII STLs are ~7× larger on disk than binary; the byte cap guards the
+    // full-file parse against OOM before any triangle-count is known.
     const MAX_NATIVE_ASCII_STL_BYTES: u64 = 300_000_000;
     let file_size = std::fs::metadata(path)
         .map_err(|e| format!("Failed to inspect STL '{}': {e}", file_path))?
@@ -845,19 +844,84 @@ pub async fn load_stl_file(file_path: String) -> Result<Response, String> {
         .read(&mut header)
         .map_err(|e| format!("Failed to read STL header '{}': {e}", file_path))?;
 
+    // Governor inputs shared by the binary and ASCII paths. Memory is queried
+    // ONCE per import (no runtime feedback loop); `jsHeapSizeLimit` is the
+    // WebView-side constraint forwarded by the frontend (0 / None when the
+    // WebView doesn't expose `performance.memory`).
+    let (ram_total, ram_available) = crate::stl_budget::query_system_memory();
+    let heap_limit = js_heap_size_limit
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .map(|value| value as u64)
+        .unwrap_or(0);
+    let make_budget = |source_triangles: u64| {
+        let budget = crate::stl_budget::compute_triangle_budget(&crate::stl_budget::BudgetInputs {
+            ram_total_bytes: ram_total,
+            ram_available_bytes: ram_available,
+            heap_limit_bytes: heap_limit,
+            source_triangles,
+            // Per-model today; plate-level rebalancing is a documented
+            // follow-up (imports are per-file at this boundary).
+            concurrent_model_count: 1,
+        });
+        log::info!(
+            "[STL budget governor] budget={} tris, reason={}, inputs{{ram_total={}, ram_avail={}, heap_limit={}, bytes_per_tri={}, source_tris={}}}",
+            budget.budget_tris,
+            budget.reason.as_str(),
+            ram_total,
+            ram_available,
+            heap_limit,
+            crate::stl_budget::BYTES_PER_TRIANGLE_HEAP,
+            source_triangles,
+        );
+        budget
+    };
+
     if header_len == header.len() {
         let triangle_count = u32::from_le_bytes(header[80..84].try_into().unwrap()) as u64;
         let expected_binary_size = 84u64.saturating_add(triangle_count.saturating_mul(50));
-        if expected_binary_size == file_size && triangle_count > MAX_NATIVE_STL_TRIANGLES {
+        if expected_binary_size == file_size {
             drop(file);
-            let preview =
-                load_binary_stl_preview(path, triangle_count as u32, PREVIEW_TARGET_TRIANGLES)?;
+            let budget = make_budget(triangle_count);
+            if triangle_count <= budget.budget_tris {
+                // At/under budget → keep verbatim (NO decimation). The former
+                // hard 6M gate is gone; the budget scales with the machine.
+                let mesh = io::stl::load(path)
+                    .map_err(|e| format!("Failed to load STL '{}': {e}", file_path))?;
+                log::info!(
+                    "[load_stl_file] Native load kept verbatim: {} triangles (≤ budget {})",
+                    mesh.triangles.len(),
+                    budget.budget_tris,
+                );
+                return encode_stl_response(
+                    &mesh,
+                    triangle_count as u32,
+                    false,
+                    0.0,
+                    budget.budget_tris as u32,
+                )
+                .map(Response::new);
+            }
+            // Over budget → query-first decimation TO budget.
+            let outcome = decimate_binary_stl_to_budget(
+                path,
+                triangle_count as u32,
+                budget.budget_tris as usize,
+            )?;
             log::info!(
-                "[load_stl_file] Streaming preview complete: {} -> {} triangles",
+                "[load_stl_file] Query-first decimation: {} -> {} triangles (budget {}, achieved_error {:.6})",
                 triangle_count,
-                preview.triangles.len()
+                outcome.mesh.triangles.len(),
+                budget.budget_tris,
+                outcome.achieved_error,
             );
-            return encode_stl_response(&preview, triangle_count as u32, true).map(Response::new);
+            return encode_stl_response(
+                &outcome.mesh,
+                triangle_count as u32,
+                true,
+                outcome.achieved_error,
+                budget.budget_tris as u32,
+            )
+            .map(Response::new);
         }
     }
     if file_size > MAX_NATIVE_ASCII_STL_BYTES && header.starts_with(b"solid") {
@@ -869,21 +933,50 @@ pub async fn load_stl_file(file_path: String) -> Result<Response, String> {
     }
     drop(file);
 
+    // ASCII (or non-standard binary): parse fully, then apply the SAME
+    // governor policy to the loaded mesh.
     let mesh =
         io::stl::load(path).map_err(|e| format!("Failed to load STL '{}': {e}", file_path))?;
-
-    let tri_count = mesh.triangles.len();
-    encode_stl_response(&mesh, tri_count as u32, false).map(Response::new)
+    let source_tris = mesh.triangles.len() as u64;
+    let budget = make_budget(source_tris);
+    if source_tris <= budget.budget_tris {
+        return encode_stl_response(&mesh, source_tris as u32, false, 0.0, budget.budget_tris as u32)
+            .map(Response::new);
+    }
+    let outcome = decimate_indexed_to_budget(mesh, budget.budget_tris as usize, DECIMATION_OPTIONS);
+    log::info!(
+        "[load_stl_file] Query-first decimation (ASCII): {} -> {} triangles (budget {}, achieved_error {:.6})",
+        source_tris,
+        outcome.mesh.triangles.len(),
+        budget.budget_tris,
+        outcome.achieved_error,
+    );
+    encode_stl_response(
+        &outcome.mesh,
+        source_tris as u32,
+        true,
+        outcome.achieved_error,
+        budget.budget_tris as u32,
+    )
+    .map(Response::new)
 }
 
 const STL_RESPONSE_MAGIC: &[u8; 4] = b"DFST";
-const STL_RESPONSE_HEADER_BYTES: usize = 16;
+// 24-byte header: magic(4) + flags(4) + original_count(4) + output_count(4)
+// + achieved_error f32(4) + budget_tris u32(4). The two trailing fields were
+// added for Phase 2a (query-first decimation) so the frontend/badge can show
+// the ACTUAL decimation error + governor budget; they are 0 for verbatim
+// loads. Additive: the decoder in useStlGeometry.ts reads them at offsets
+// 16/20 and the payload now starts at offset 24.
+const STL_RESPONSE_HEADER_BYTES: usize = 24;
 const STL_RESPONSE_FLAG_PREVIEW: u32 = 1;
 
 fn encode_stl_response(
     mesh: &IndexedMesh,
     original_triangle_count: u32,
     is_preview: bool,
+    achieved_error: f32,
+    budget_triangles: u32,
 ) -> Result<Vec<u8>, String> {
     let tri_count = mesh.triangles.len();
     let positions_len = tri_count * 9 * std::mem::size_of::<f32>();
@@ -910,6 +1003,8 @@ fn encode_stl_response(
     );
     result.extend_from_slice(&original_triangle_count.to_le_bytes());
     result.extend_from_slice(&(tri_count as u32).to_le_bytes());
+    result.extend_from_slice(&achieved_error.to_le_bytes());
+    result.extend_from_slice(&budget_triangles.to_le_bytes());
     result.resize(response_len, 0);
     let (position_output, normal_output) =
         result[STL_RESPONSE_HEADER_BYTES..].split_at_mut(positions_len);
@@ -1181,6 +1276,187 @@ fn load_binary_stl_preview(
     } else {
         Ok(output)
     }
+}
+
+// --- Phase 2a: query-first, budget-governed decimation ----------------------
+//
+// Replaces the legacy fixed 6M-gate → 2M-target pair (which slashed a mesh a
+// hair over 6M by two-thirds) with a continuous policy: a mesh at/under the
+// governor budget is kept verbatim; a mesh over budget is decimated TO budget
+// in a SINGLE meshopt call, reading back the achieved count AND error. The
+// query is the decimation: meshopt reduces toward the count target but never
+// past the error bound, so if the error bound binds first the returned count
+// is the mesh's own safe-reduction floor. This whole-mesh call also removes
+// the legacy per-bucket `LockBorder` seam-locking that was itself a floor
+// inflator (P0: the bucketed 12M lattice floored at 6.22M).
+
+/// Initial tight relative error bound for the query-first simplify. meshopt's
+/// target/result error is RELATIVE to mesh extents (max axis) and lies in
+/// [0,1]; the legacy path passed 1.0 (100% = effectively unbounded). ~0.002
+/// (0.2 %) protects thin support struts/tips — high-curvature features resist
+/// collapse under a tight bound — while the budget count is spent on
+/// collapsible bulk surfaces (slabs, pads). This is the "error bound protects
+/// features, count budget is the resource backstop" split.
+const DECIMATION_TIGHT_ERROR: f32 = 0.002;
+
+/// Stepped relative-error tiers, escalated ONLY when an error-bounded result
+/// exceeds the soft ceiling (plan: 0.3 % → 1 %). Entry 0 is the tight bound.
+const DECIMATION_ERROR_TIERS: [f32; 3] = [DECIMATION_TIGHT_ERROR, 0.003, 0.01];
+
+/// Accept an error-bounded result up to this multiple of budget before
+/// escalating the error tier (governor-derived headroom, plan ≤ 2× budget).
+const SOFT_CEILING_BUDGET_MULTIPLE: usize = 2;
+
+/// meshopt options for the query-first simplify. Regularize + LockBorder
+/// DECISION (measured A/B on the 8M/12M off-origin lattice via
+/// `p2a_regularize_lockborder_ab` --ignored, 2026-07-19): at budget = ⅔ source
+/// all four option sets {none, LockBorder, Regularize, LockBorder|Regularize}
+/// hit the SAME triangle count, but Regularize RAISED the achieved error
+/// (8M: 0.000481 → 0.000532; 12M: 0.000396 → 0.000432) with zero count
+/// benefit — i.e. it spends fidelity to resample without buying any budget, so
+/// it is REJECTED. LockBorder is kept: it locks the mesh's outer topological
+/// border (a real edge to preserve) with no measured cost here, and unlike the
+/// legacy per-BUCKET LockBorder it does not lock interior seams (the whole-mesh
+/// call has no buckets), so it does not inflate the floor. `Prune` is NEVER
+/// set: it deletes disconnected components, which on a pre-supported plate
+/// would delete exactly the struts/contact tips the remediation preserves.
+const DECIMATION_OPTIONS: meshopt::SimplifyOptions = meshopt::SimplifyOptions::LockBorder;
+
+/// Result of a query-first decimation: the reduced mesh plus meshopt's
+/// achieved relative error (relative to mesh extents, [0,1]) for the honesty
+/// badge (Phase 2b consumes it; surfaced verbatim, never hidden).
+struct DecimationOutcome {
+    mesh: IndexedMesh,
+    achieved_error: f32,
+}
+
+/// Streams a binary STL's vertex soup WITHOUT materializing the whole file as
+/// a byte buffer (unlike `io::stl::load`'s `read_to_end`) — preserves the
+/// memory profile of the legacy streaming preview for very large inputs.
+fn load_binary_stl_soup(path: &std::path::Path, triangle_count: u32) -> Result<Vec<f32>, String> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| format!("Failed to open STL source for decimation: {e}"))?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    reader
+        .seek(SeekFrom::Start(84))
+        .map_err(|e| format!("Failed seeking STL: {e}"))?;
+    let mut record = [0u8; 50];
+    let mut soup: Vec<f32> = Vec::new();
+    soup.try_reserve_exact(triangle_count as usize * 9).map_err(|_| {
+        format!(
+            "Not enough memory to load {triangle_count} triangles for decimation"
+        )
+    })?;
+    for triangle_index in 0..triangle_count {
+        reader
+            .read_exact(&mut record)
+            .map_err(|e| format!("Truncated binary STL at triangle {triangle_index}: {e}"))?;
+        for offset in [12, 24, 36] {
+            let vertex = read_binary_stl_vertex(&record, offset);
+            soup.extend_from_slice(&[vertex.x, vertex.y, vertex.z]);
+        }
+    }
+    Ok(soup)
+}
+
+/// Query-first decimation of an already-indexed mesh TO a triangle budget in a
+/// SINGLE meshopt call, escalating the error tier only if the error bound
+/// binds so hard the result blows the soft ceiling. Returns the achieved
+/// count (implicit in the mesh) and achieved error.
+fn decimate_indexed_to_budget(
+    mesh: IndexedMesh,
+    budget_tris: usize,
+    options: meshopt::SimplifyOptions,
+) -> DecimationOutcome {
+    let source_tris = mesh.triangles.len();
+    if source_tris <= budget_tris {
+        // Defensive: the caller gates on budget, but never decimate up.
+        return DecimationOutcome {
+            mesh,
+            achieved_error: 0.0,
+        };
+    }
+
+    let indices: Vec<u32> = mesh
+        .triangles
+        .iter()
+        .flat_map(|triangle| triangle.iter().copied())
+        .collect();
+    let vertex_bytes: &[u8] = bytemuck::cast_slice(&mesh.positions);
+    let vertices = match meshopt::VertexDataAdapter::new(vertex_bytes, std::mem::size_of::<Vec3>(), 0)
+    {
+        Ok(adapter) => adapter,
+        // Vertex layout is fixed (Vec3, tight stride) — this cannot fail in
+        // practice; if it ever did, return the source unchanged rather than 0.
+        Err(_) => {
+            return DecimationOutcome {
+                mesh,
+                achieved_error: f32::NAN,
+            }
+        }
+    };
+
+    let target_index_count = budget_tris.max(1).saturating_mul(3).min(indices.len());
+    let soft_ceiling_tris = budget_tris.saturating_mul(SOFT_CEILING_BUDGET_MULTIPLE);
+
+    let mut selected: Vec<u32> = Vec::new();
+    let mut achieved_error = 1.0f32;
+    for &error in DECIMATION_ERROR_TIERS.iter() {
+        let mut tier_error = 0.0f32;
+        let simplified = meshopt::simplify(
+            &indices,
+            &vertices,
+            target_index_count,
+            error,
+            options,
+            Some(&mut tier_error),
+        );
+        let tier_count = simplified.len() / 3;
+        selected = simplified;
+        achieved_error = tier_error;
+        // Count target bound (at/under budget) or error-bounded result already
+        // under the soft ceiling → done. Otherwise escalate the error tier.
+        if tier_count <= soft_ceiling_tris {
+            break;
+        }
+    }
+
+    // meshopt returns an empty buffer if it cannot simplify at all — fall back
+    // to the source (legacy behavior) rather than emit an empty mesh.
+    if selected.is_empty() {
+        return DecimationOutcome {
+            mesh,
+            achieved_error: 1.0,
+        };
+    }
+
+    let triangles: Vec<[u32; 3]> = selected
+        .chunks_exact(3)
+        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
+        .collect();
+    // The simplified indices reference the ORIGINAL vertex buffer; keep it.
+    // `encode_stl_response` reads only referenced positions (per-triangle
+    // expansion), so unreferenced verts cost transient Rust memory only, never
+    // IPC bytes.
+    DecimationOutcome {
+        mesh: IndexedMesh {
+            positions: mesh.positions,
+            triangles,
+        },
+        achieved_error,
+    }
+}
+
+/// Streams a binary STL and decimates it to `budget_tris` (query-first).
+fn decimate_binary_stl_to_budget(
+    path: &std::path::Path,
+    triangle_count: u32,
+    budget_tris: usize,
+) -> Result<DecimationOutcome, String> {
+    let soup = load_binary_stl_soup(path, triangle_count)?;
+    let mesh = IndexedMesh::from_triangle_soup(&soup, io::DEFAULT_MERGE_EPSILON);
+    drop(soup);
+    Ok(decimate_indexed_to_budget(mesh, budget_tris, DECIMATION_OPTIONS))
 }
 
 #[cfg(test)]
@@ -2726,5 +3002,215 @@ mod p0_fullres_red_harness {
         eprintln!(
             "[p1][floor-test] {checked} sampled support columns all have floor coverage; nonzero floor pixels: {nonzero}",
         );
+    }
+
+    // --- Phase 2a: no-cliff + query-first decimation ----------------------
+    //
+    // The no-cliff contract (plan Phase 2 step 2): a mesh just OVER budget
+    // must lose ≈0 triangles — reduction ratio near 1.0 at the boundary, no
+    // 3× fidelity discontinuity. RED (captured 2026-07-19, orchestrator log):
+    //   [p2a][no-cliff][RED] source 6048108 → 3590720 tris (budget 6000000,
+    //   ratio-to-budget 0.598) — the legacy fixed 2M gate slashes a mesh a
+    //   hair over 6M to 3.59M; assert ≥ 0.9 × budget FAILED.
+    // GREEN below routes the same asset through the governor-budget query-first
+    // decimator, which keeps it at ~budget. These tests lazily generate a
+    // ~302 MB asset and run meshopt, so they are `#[ignore]` (heavy-asset
+    // convention, like the §D9 baseline); run explicitly:
+    //   cargo test p2a_ -- --ignored --nocapture
+
+    /// GREEN: a ~6.05M mesh (just over budget) stays near-verbatim under the
+    /// query-first decimator — the fixed-2M cliff is dead.
+    #[test]
+    #[ignore = "P2a heavy asset — run with --ignored --nocapture"]
+    fn p2a_no_cliff_mesh_just_over_budget_stays_near_verbatim() {
+        let (path, _grid, total) = ensure_lattice_stl("6p05m", 6_050_000);
+        assert!(
+            total > 6_000_000,
+            "asset must sit just over the legacy 6M gate ({total})"
+        );
+
+        // Budget just BELOW the source, so the source is "just over budget".
+        let budget: usize = (total as usize) - 200_000;
+        let outcome = decimate_binary_stl_to_budget(&path, total as u32, budget)
+            .expect("query-first budget decimation");
+        let output = outcome.mesh.triangles.len();
+
+        let ratio = output as f64 / budget as f64;
+        eprintln!(
+            "[p2a][no-cliff][GREEN] source {total} → {output} tris (budget {budget}, \
+             ratio-to-budget {ratio:.3}, achieved_error {:.6})",
+            outcome.achieved_error,
+        );
+        // meshopt never reduces BELOW the count target, so a correct policy
+        // lands at ≥ budget; the legacy 2M cliff landed at ~0.6 × budget.
+        assert!(
+            output as f64 >= budget as f64 * 0.9,
+            "no-cliff: a mesh just over budget dropped to {output} (< 0.9 × budget \
+             {budget}) — the fixed-gate cliff must stay dead"
+        );
+    }
+
+    /// Query-first on collapsible bulk: at a small budget the whole-mesh
+    /// simplify reaches the COUNT target (the lattice's slab/pad surfaces
+    /// collapse cheaply) while the tight error bound keeps the strut/tip
+    /// structure — output lands AT budget with achieved_error well under the
+    /// tight bound. (This is the effective-simplify case; the error-bound-binds
+    /// branch is exercised deterministically by the synthetic test below.
+    /// Note: the whole-mesh call has NO per-bucket border locking, so it does
+    /// NOT reproduce the P0 6.22M bucketing floor — that floor was an artifact
+    /// of the legacy per-region LockBorder, which this policy removes.)
+    #[test]
+    #[ignore = "P2a heavy asset — run with --ignored --nocapture"]
+    fn p2a_query_first_reaches_budget_on_collapsible_bulk() {
+        let (path, _grid, total) = ensure_lattice_stl("6p05m", 6_050_000);
+        let budget: usize = 500_000;
+        let outcome = decimate_binary_stl_to_budget(&path, total as u32, budget)
+            .expect("query-first budget decimation");
+        let output = outcome.mesh.triangles.len();
+        let soft_ceiling = budget * SOFT_CEILING_BUDGET_MULTIPLE;
+        eprintln!(
+            "[p2a][query-first] source {total} → {output} tris (budget {budget}, \
+             soft ceiling {soft_ceiling}, achieved_error {:.6})",
+            outcome.achieved_error,
+        );
+        // meshopt never reduces below the count target; the tight error bound
+        // keeps achieved error small (features preserved).
+        assert!(
+            output >= budget && output <= soft_ceiling,
+            "output {output} must land in [budget {budget}, soft ceiling {soft_ceiling}]"
+        );
+        assert!(
+            outcome.achieved_error.is_finite()
+                && outcome.achieved_error >= 0.0
+                && outcome.achieved_error <= DECIMATION_ERROR_TIERS[DECIMATION_ERROR_TIERS.len() - 1],
+            "achieved error must be reported and within the tier ceiling: {}",
+            outcome.achieved_error
+        );
+    }
+
+    /// Query-first ERROR-bound branch (fast, synthetic, deterministic): a few
+    /// large well-separated tetrahedra are incompressible under a tight error
+    /// bound (any collapse of a bbox-scale tet is a huge relative error). With
+    /// a budget below their triangle count the ERROR bound binds first, so the
+    /// output lands ABOVE budget but under the soft ceiling, with achieved
+    /// error ≤ the tight bound — exactly the "mesh reports its safe-reduction
+    /// floor" behavior the policy relies on.
+    #[test]
+    fn p2a_query_first_error_bound_binds_above_budget() {
+        // Three large tetrahedra, each spanning ~10 mm, spaced 100 mm apart so
+        // every tet is bbox-scale ⇒ every collapse is a large relative error.
+        let tets = [[0.0f32, 0.0, 0.0], [100.0, 0.0, 0.0], [0.0, 100.0, 0.0]];
+        let mut soup: Vec<f32> = Vec::new();
+        for base in tets {
+            let s = 10.0f32;
+            let v = [
+                [base[0], base[1], base[2]],
+                [base[0] + s, base[1], base[2]],
+                [base[0], base[1] + s, base[2]],
+                [base[0], base[1], base[2] + s],
+            ];
+            for face in [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]] {
+                for &vi in &face {
+                    soup.extend_from_slice(&v[vi]);
+                }
+            }
+        }
+        let mesh = IndexedMesh::from_triangle_soup(&soup, io::DEFAULT_MERGE_EPSILON);
+        let source = mesh.triangles.len(); // 12
+        let budget = 7usize; // below source; the error bound must protect the tets
+        let soft_ceiling = budget * SOFT_CEILING_BUDGET_MULTIPLE; // 14
+        let outcome = decimate_indexed_to_budget(mesh, budget, DECIMATION_OPTIONS);
+        let output = outcome.mesh.triangles.len();
+        eprintln!(
+            "[p2a][query-first-synthetic] source {source} → {output} tris \
+             (budget {budget}, soft ceiling {soft_ceiling}, achieved_error {:.6})",
+            outcome.achieved_error,
+        );
+        assert!(
+            output > budget,
+            "error bound must bind: output {output} should exceed budget {budget}"
+        );
+        assert!(
+            output <= soft_ceiling,
+            "error-bounded output {output} must stay under the soft ceiling {soft_ceiling}"
+        );
+        assert!(
+            outcome.achieved_error <= DECIMATION_TIGHT_ERROR + 1e-6,
+            "achieved error {} must respect the tight bound {DECIMATION_TIGHT_ERROR}",
+            outcome.achieved_error
+        );
+    }
+
+    /// A/B measurement (not a pass/fail gate): the Regularize + LockBorder
+    /// decision for `DECIMATION_OPTIONS`, run on the 8M + 12M off-origin
+    /// lattices. Prints achieved count + error for each option set at a fixed
+    /// budget so the choice is made by measured triangle/feature outcome
+    /// (numbers quoted in the Phase-2a AAR / the DECIMATION_OPTIONS comment).
+    #[test]
+    #[ignore = "P2a option A/B measurement — run with --ignored --nocapture"]
+    fn p2a_regularize_lockborder_ab() {
+        use meshopt::SimplifyOptions;
+        let option_sets = [
+            ("none", SimplifyOptions::None),
+            ("LockBorder", SimplifyOptions::LockBorder),
+            ("Regularize", SimplifyOptions::Regularize),
+            (
+                "LockBorder|Regularize",
+                SimplifyOptions::LockBorder.union(SimplifyOptions::Regularize),
+            ),
+        ];
+        for (label, target) in [("8m", 8_000_000u64), ("12m", 12_000_000u64)] {
+            let (path, _grid, total) = ensure_lattice_stl(label, target);
+            let budget = (total as usize) * 2 / 3; // force real reduction
+            for (name, options) in option_sets.iter().copied() {
+                // Fresh soup+index per run so each option starts from source.
+                let soup = load_binary_stl_soup(&path, total as u32).unwrap();
+                let mesh = IndexedMesh::from_triangle_soup(&soup, io::DEFAULT_MERGE_EPSILON);
+                drop(soup);
+                let started = Instant::now();
+                let outcome = decimate_indexed_to_budget(mesh, budget, options);
+                eprintln!(
+                    "[p2a][AB][{label}] {name:<22} budget {budget} → {} tris, \
+                     achieved_error {:.6}, {:.3}s",
+                    outcome.mesh.triangles.len(),
+                    outcome.achieved_error,
+                    started.elapsed().as_secs_f64(),
+                );
+            }
+        }
+    }
+
+    /// §D9 wall-time: the worst-case import core under the NEW policy
+    /// (streaming soup → weld → query-first single simplify, with error-tier
+    /// re-runs possible) on the 12M asset, at a budget that forces decimation.
+    /// Compared in the AAR against the P0 baseline (1.75–1.79 s) + 10 % gate.
+    #[test]
+    #[ignore = "P2a §D9 wall-time — run with --ignored --nocapture"]
+    fn p2a_import_core_wall_time_12m_lattice() {
+        let (path, _grid, total) = ensure_lattice_stl("12m", 12_000_000);
+        // Budget ≈ the legacy 6M gate, so the 12M asset is decimated (the
+        // realistic worst case: full weld + simplify + possible tier re-runs).
+        let budget: usize = 6_000_000;
+
+        let started = Instant::now();
+        let soup = load_binary_stl_soup(&path, total as u32).expect("soup");
+        let after_soup = started.elapsed();
+        let mesh = IndexedMesh::from_triangle_soup(&soup, io::DEFAULT_MERGE_EPSILON);
+        drop(soup);
+        let after_weld = started.elapsed();
+        let outcome = decimate_indexed_to_budget(mesh, budget, DECIMATION_OPTIONS);
+        let elapsed = started.elapsed();
+        eprintln!(
+            "[p2a][D9] import core (new policy): {total} → {} tris in {:.3}s \
+             (budget {budget}, achieved_error {:.6}) | breakdown: soup {:.3}s, \
+             weld {:.3}s, simplify {:.3}s",
+            outcome.mesh.triangles.len(),
+            elapsed.as_secs_f64(),
+            outcome.achieved_error,
+            after_soup.as_secs_f64(),
+            (after_weld - after_soup).as_secs_f64(),
+            (elapsed - after_weld).as_secs_f64(),
+        );
+        assert!(!outcome.mesh.triangles.is_empty());
     }
 }
