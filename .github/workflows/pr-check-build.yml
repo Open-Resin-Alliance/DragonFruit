@@ -96,9 +96,6 @@ jobs:
       - name: Generate plugin registry
         run: node scripts/generate-plugin-registry.mjs
 
-      - name: Generate plugin registry
-        run: node scripts/generate-plugin-registry.mjs
-
       - name: Build Tauri universal macOS bundle
         uses: tauri-apps/tauri-action@v0
         env:
