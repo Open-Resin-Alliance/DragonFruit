@@ -17,8 +17,13 @@ export function generateCandidates(
     const eligible = islands.filter(island => {
         if (island.supported === true) return false;
         if (island.grounded === true) return false;
-        const area = island.areaMm2 ?? 0;
-        if (area < settings.minIslandAreaMm2) return false;
+        // Minima islands don't have area — they represent sharp geometric
+        // features that need support regardless of size.
+        const isMinima = island.source === 'minima' && island.class === 'minimaOnly';
+        if (!isMinima) {
+            const area = island.areaMm2 ?? 0;
+            if (area < settings.minIslandAreaMm2) return false;
+        }
         return true;
     });
 
@@ -44,7 +49,9 @@ export function generateCandidates(
  * must fill them in before building supports.
  */
 export function candidateFromIsland(island: DetectedIsland): CandidatePoint {
-    const area = island.areaMm2 ?? 0;
+    // Minima islands don't have an area — use a default so they get
+    // scored and prioritized alongside voxel islands.
+    const area = island.areaMm2 ?? (island.source === 'minima' ? 0.05 : 0);
     const z = island.baseZ;
     const overhangAngle = estimateOverhangAngle(island);
     const source: CandidatePoint['source'] =

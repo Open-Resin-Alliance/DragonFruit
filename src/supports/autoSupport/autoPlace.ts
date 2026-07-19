@@ -674,7 +674,7 @@ export function runAutoPlace(
 
         let skippedDist = 0;
         let skippedAngle = 0;
-        let skippedBelow = 0;
+        let skippedSameZ = 0;
 
         for (const island of islands) {
             if (supportedIds.has(island.id)) continue;
@@ -700,8 +700,9 @@ export function runAutoPlace(
             const sp = bestSP;
             const hDist = Math.sqrt((cx - sp.pos.x) ** 2 + (cy - sp.pos.y) ** 2);
             const vDist = cz - sp.pos.z;
-            if (vDist <= 0) { skippedBelow++; continue; }
-            const angleFromVertical = Math.atan2(hDist, vDist);
+            const absVDist = Math.abs(vDist);
+            if (absVDist < 0.01) { skippedSameZ++; continue; }
+            const angleFromVertical = Math.atan2(hDist, absVDist);
             if (angleFromVertical > maxAngleRad) { skippedAngle++; continue; }
 
             const parentKnot = {
@@ -749,7 +750,7 @@ export function runAutoPlace(
                 `Leaf fanning pass ${pass}: 0 leaves — ` +
                 `${skippedDist} too far (>${LEAF_FAN_RADIUS_MM}mm), ` +
                 `${skippedAngle} angle too steep (>${LEAF_FAN_MAX_ANGLE_DEG}°), ` +
-                `${skippedBelow} shaft above island.`);
+                `${skippedSameZ} same Z (can't attach).`);
             break;
         }
     }
