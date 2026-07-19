@@ -429,8 +429,11 @@ fn build_row_spans_nonzero_inner(
         let pos_overlap = spans_overlap_px(&pos_spans, prev);
         let neg_overlap = spans_overlap_px(&neg_spans, prev);
 
-        let choose_pos = if pos_overlap != neg_overlap {
-            pos_overlap > neg_overlap
+        let pos_score = 2 * (pos_overlap as i64) - (spans_total_px(&pos_spans) as i64);
+        let neg_score = 2 * (neg_overlap as i64) - (spans_total_px(&neg_spans) as i64);
+
+        let choose_pos = if pos_score != neg_score {
+            pos_score > neg_score
         } else if pos_pairs != neg_pairs {
             pos_pairs > neg_pairs
         } else {
@@ -5273,5 +5276,38 @@ mod tests {
             end_exclusive: 2,
         };
         assert_eq!(active_edge_cmp(&edge_a, &edge_c), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_defective_mesh_symmetric_difference_score() {
+        use super::{build_row_spans_nonzero_ctx, ActiveEdge, RowSpan};
+
+        // Simulated defective row edges (missing exit edge for Model 1):
+        // Model 1 was supposed to be 10..20, but the exit is missing.
+        // Model 2 is at 40..50 (healthy).
+        // Active edges:
+        // x = 10, wind = 1
+        // x = 40, wind = 1
+        // x = 50, wind = -1
+        let active_edges = vec![
+            ActiveEdge { x: 10.0, dx_dy: 0.0, wind: 1, end_exclusive: 1 },
+            ActiveEdge { x: 40.0, dx_dy: 0.0, wind: 1, end_exclusive: 1 },
+            ActiveEdge { x: 50.0, dx_dy: 0.0, wind: -1, end_exclusive: 1 },
+        ];
+
+        // Previous row was healthy: Model 1 at 10..20, Model 2 at 40..50.
+        let prev_spans = vec![
+            RowSpan { a: 10.0, b: 20.0, start: 10, end: 20 },
+            RowSpan { a: 40.0, b: 50.0, start: 40, end: 50 },
+        ];
+
+        let spans = build_row_spans_nonzero_ctx(&active_edges, 100, false, Some(&prev_spans));
+
+        // Under our new symmetric difference score, the positive option [40..50] (Score = 10)
+        // should win over the negative option [10..40] (which fills the gap and has Score = -10).
+        // Thus, spans should be [40..50], NOT [10..40].
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start, 40);
+        assert_eq!(spans[0].end, 49);
     }
 }
