@@ -368,6 +368,10 @@ type PendingModifierResetAction = 'hollowing' | 'hole_punch' | 'clear_hollowing'
 
 const EMPTY_SUPPORT_BOUNDS_BY_MODEL_ID = new Map<string, THREE.Box3>();
 
+// Auto-support lift target: high enough that the former plate-contact area
+// clears the surface-fill floor and full-size roots fit beneath it.
+const AUTO_SUPPORT_LIFT_MM = 5;
+
 function countRecordEntries(record: Record<string, unknown>): number {
   let count = 0;
   for (const _key in record) {
@@ -6696,6 +6700,21 @@ export default function Home() {
   const [autoSupportPreview, setAutoSupportPreview] = React.useState<AutoSupportPlanPreview | null>(null);
   const autoSupportAbortRef = React.useRef<AbortController | null>(null);
   const autoSupportWorkerRef = React.useRef<{ key: string; worker: AutoSupportPipelineWorker } | null>(null);
+  const autoSupportLiftRef = React.useRef<{ modelId: string; originalZ: number } | null>(null);
+  const pendingAutoSupportRunRef = React.useRef<{
+    preset: AutoSupportPreset;
+    onProgress: (progress: AutoSupportProgress) => void;
+    options?: { onModelStruts?: boolean; surfaceFill?: boolean };
+    resolve: (preview: AutoSupportPlanPreview | null) => void;
+  } | null>(null);
+
+  const restoreAutoSupportLift = React.useCallback(() => {
+    const lift = autoSupportLiftRef.current;
+    autoSupportLiftRef.current = null;
+    if (!lift || scene.activeModel?.id !== lift.modelId) return;
+    const position = transformMgr.transform.position;
+    transformMgr.transformHook.setPosition(position.x, position.y, lift.originalZ);
+  }, [scene.activeModel?.id, transformMgr]);
 
   // Scan data, any pending plan, and the pipeline worker's mesh are all in
   // world space for one specific model; they are stale the moment the active
@@ -6724,6 +6743,7 @@ export default function Home() {
     preset: AutoSupportPreset,
     onProgress: (progress: AutoSupportProgress) => void,
     options?: { onModelStruts?: boolean; surfaceFill?: boolean },
+    resumedAfterLift = false,
   ): Promise<AutoSupportPlanPreview | null> => {
     const geom = scene.geom;
     const modelId = scene.activeModel?.id;
@@ -6733,6 +6753,24 @@ export default function Home() {
       allowOnModelStruts: options?.onModelStruts ?? true,
       allowSurfaceFill: options?.surfaceFill ?? true,
     };
+
+    // Lift the model off the plate first so its plate-contact area gets
+    // supports too, leaving only supports touching the plate. Without the
+    // lift there is nowhere to put supports under the resting footprint, so
+    // this is unconditional. The transform flows through React state, so
+    // generation resumes on the next render via pendingAutoSupportRunRef once
+    // the lifted transform has propagated.
+    if (!resumedAfterLift) {
+      const lowestWorldZ = transformMgr.getLowestWorldZ();
+      if (lowestWorldZ !== null && lowestWorldZ < AUTO_SUPPORT_LIFT_MM - 0.01) {
+        const position = transformMgr.transform.position;
+        autoSupportLiftRef.current = { modelId, originalZ: position.z };
+        return new Promise<AutoSupportPlanPreview | null>((resolve) => {
+          pendingAutoSupportRunRef.current = { preset, onProgress, options, resolve };
+          transformMgr.transformHook.setPosition(position.x, position.y, position.z + (AUTO_SUPPORT_LIFT_MM - lowestWorldZ));
+        });
+      }
+    }
 
     setAutoSupportPreview(null);
     autoSupportAbortRef.current?.abort();
@@ -6876,17 +6914,32 @@ export default function Home() {
         }
       }
 
+      if (preview.supports.length === 0) restoreAutoSupportLift();
       setAutoSupportPreview(preview.supports.length > 0 ? preview : null);
       return preview;
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') return null;
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        restoreAutoSupportLift();
+        return null;
+      }
+      restoreAutoSupportLift();
       throw error;
     } finally {
       clearSDFCacheForMesh(mesh.uuid);
       disposeIslandSupportMesh(mesh);
       if (autoSupportAbortRef.current === abortController) autoSupportAbortRef.current = null;
     }
-  }, [islands, scene.activeModel?.id, scene.geom, slicing.layerHeightMm, supportTips, transformMgr.transform]);
+  }, [islands, restoreAutoSupportLift, scene.activeModel?.id, scene.geom, slicing.layerHeightMm, supportTips, transformMgr.transform]);
+
+  // Resume a generation that paused to lift the model: once the lifted
+  // transform has propagated through a render, handlePlanAutoSupports gets a
+  // new identity and this effect picks the run back up.
+  React.useEffect(() => {
+    const pending = pendingAutoSupportRunRef.current;
+    if (!pending) return;
+    pendingAutoSupportRunRef.current = null;
+    void handlePlanAutoSupports(pending.preset, pending.onProgress, pending.options, true).then(pending.resolve);
+  }, [handlePlanAutoSupports]);
 
   const handleAbortAutoSupportRun = React.useCallback(() => {
     autoSupportAbortRef.current?.abort();
@@ -6915,10 +6968,16 @@ export default function Home() {
       endSupportStateBatch();
     }
     pushSupportEditHistory('Generate auto supports', before, captureSupportEditSnapshot());
+    // The lift becomes part of the accepted result; later cancels must not
+    // drop the model back onto its new supports.
+    autoSupportLiftRef.current = null;
     setAutoSupportPreview(null);
   }, [autoSupportPreview]);
 
-  const handleCancelAutoSupports = React.useCallback(() => setAutoSupportPreview(null), []);
+  const handleCancelAutoSupports = React.useCallback(() => {
+    restoreAutoSupportLift();
+    setAutoSupportPreview(null);
+  }, [restoreAutoSupportLift]);
 
   // 5. Supports
   const supports = useSupportInteractionManager({ mode: scene.mode });

@@ -24,7 +24,9 @@ Two toggles refine what gets planned:
 
 ## 3) Generate
 
-Click **Generate Auto Supports**. Progress runs through phases:
+Click **Generate Auto Supports**. If the model is resting on the build plate, it is first lifted to 5 mm of clearance so the area that was touching the plate gets supports too — after applying, the model prints on its supports rather than directly on the plate. Cancel restores the original height; Apply keeps the lift.
+
+Progress runs through phases:
 
 - **Scanning**: island analysis of the model.
 - **Planning**: raw detections are consolidated into logical unsupported regions; regions resting on the build plate or already covered by existing supports are excluded.
