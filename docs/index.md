@@ -1,4 +1,5 @@
 ---
+title: DragonFruit Slicer
 description: Open-Source & High Performance Slicer for Resin 3D Printers
 social:
   cards_layout: default/only/image
