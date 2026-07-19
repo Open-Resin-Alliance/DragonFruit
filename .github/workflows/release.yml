@@ -221,6 +221,10 @@ jobs:
 
       - name: Embed QuickLook extension + verify universal bundle
         if: matrix.platform == 'macos-latest'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: MHNF3GA2MM
         run: |
           node scripts/macos-embed-appex.mjs --target ${{ matrix.df_build_triple }}
           node scripts/verify-universal-bundle.mjs
