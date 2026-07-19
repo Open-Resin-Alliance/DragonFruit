@@ -6,7 +6,8 @@ import { resolveModelMeshModifiers } from '@/features/mesh-modifiers/meshModifie
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
 import { buildSupportExportFromStores, serializeVoxlDocumentV2 } from '@/features/scene/voxl';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
-import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
+import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, spliceFullResMeshIntoStageFile, writeChunkedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
+import { resolveOutputGeometrySource } from '@/features/mesh-modifiers/prepareModelGeometry';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getSnapshot } from '@/supports/state';
 import { getRaftSettings, getRaftSettingsForModel } from '@/supports/Rafts/Crenelated/RaftState';
@@ -250,8 +251,13 @@ export class ExportManager {
     return mat.transparent && mat.opacity === 0;
   }
 
-  /** Counts export triangles across Mesh and InstancedMesh nodes, skipping hitboxes. */
-  private static countExportTriangles(objects: THREE.Object3D[]): number {
+  /** Counts export triangles across Mesh and InstancedMesh nodes, skipping hitboxes.
+   *  `excludeGeometries` (Phase-1 full-res routing) skips meshes whose geometry is
+   *  staged Rust-side from the original file instead of from the scene. */
+  private static countExportTriangles(
+    objects: THREE.Object3D[],
+    excludeGeometries?: Set<THREE.BufferGeometry>,
+  ): number {
     let count = 0;
     const perGeo = (geo: THREE.BufferGeometry) => {
       const idx = geo.getIndex();
@@ -263,11 +269,13 @@ export class ExportManager {
       obj.traverse((node) => {
         if (node instanceof THREE.InstancedMesh) {
           if (this.isMaterialHitbox(node.material)) return;
+          if (excludeGeometries?.has(node.geometry)) return;
           count += perGeo(node.geometry) * node.count;
           return;
         }
         if (!(node instanceof THREE.Mesh) || !(node.geometry instanceof THREE.BufferGeometry)) return;
         if (this.isMaterialHitbox(node.material)) return;
+        if (excludeGeometries?.has(node.geometry)) return;
         count += perGeo(node.geometry);
       });
     }
@@ -289,9 +297,17 @@ export class ExportManager {
   private static async stageRawGeometry(
     objects: THREE.Object3D[],
     stagingPath: string,
+    excludeGeometries?: Set<THREE.BufferGeometry>,
   ): Promise<number> {
-    const triCount = this.countExportTriangles(objects);
-    if (triCount === 0) throw new Error('Cannot export: no triangle geometry found.');
+    const triCount = this.countExportTriangles(objects, excludeGeometries);
+    if (triCount === 0) {
+      if (excludeGeometries && excludeGeometries.size > 0) {
+        // Everything staged from this pass is routed Rust-side (full-res
+        // splice); nothing for the WebView to write.
+        return 0;
+      }
+      throw new Error('Cannot export: no triangle geometry found.');
+    }
 
     // 9 floats per triangle, 4 bytes each = 36 bytes/tri
     const buf = new Float32Array(triCount * 9);
@@ -325,6 +341,7 @@ export class ExportManager {
       obj.traverse((node) => {
         if (node instanceof THREE.InstancedMesh) {
           if (node.count === 0 || this.isMaterialHitbox(node.material)) return;
+          if (excludeGeometries?.has(node.geometry)) return;
           for (let i = 0; i < node.count; i++) {
             node.getMatrixAt(i, tmpMat);
             comMat.multiplyMatrices(node.matrixWorld, tmpMat);
@@ -334,6 +351,7 @@ export class ExportManager {
         }
         if (!(node instanceof THREE.Mesh) || !(node.geometry instanceof THREE.BufferGeometry)) return;
         if (this.isMaterialHitbox(node.material)) return;
+        if (excludeGeometries?.has(node.geometry)) return;
         processGeo(node.geometry, node.matrixWorld);
       });
     }
@@ -343,6 +361,60 @@ export class ExportManager {
     await writeChunkedToNativePath(stagingPath, bytes);
 
     return off / 9; // actual triangle count
+  }
+
+  /** Degrade surface (Phase-1 full-res routing): the page shell routes this
+   *  event to the operation-error toast so degradation is never silent. */
+  private static emitFullResExportDegradeWarning(modelName: string, reason: string): void {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('dragonfruit:fullres-degraded', {
+      detail: {
+        message: `"${modelName}": ${reason} — exported the reduced preview instead.`,
+      },
+    }));
+  }
+
+  private static describeFullResSpliceError(raw: string): string {
+    if (raw.includes('FULLRES_SOURCE_MISSING')) return 'the original file is missing or unreadable';
+    if (raw.includes('FULLRES_SOURCE_STALE')) return 'the original file changed since import';
+    return raw;
+  }
+
+  /** Native-preview models whose ORIGINAL file should be spliced into the
+   *  export staging file Rust-side (Phase-1 full-res routing). Models whose
+   *  import frame datum is missing degrade immediately (with a warning) and
+   *  are NOT returned, so their preview geometry stays in the WebView pass. */
+  private static collectFullResExportTargets(models: LoadedModel[]): Array<{
+    model: LoadedModel;
+    sourcePath: string;
+    cPre: [number, number, number];
+    fingerprint: { sizeBytes: number; mtimeMs: number } | null;
+  }> {
+    const targets: Array<{
+      model: LoadedModel;
+      sourcePath: string;
+      cPre: [number, number, number];
+      fingerprint: { sizeBytes: number; mtimeMs: number } | null;
+    }> = [];
+    for (const model of models) {
+      const source = resolveOutputGeometrySource(model);
+      if (source.kind !== 'fullres-source-file') continue;
+      if (!source.cPre) {
+        console.warn(
+          `[ExportFullRes] "${model.name}" has no stored import frame datum (cPre) — `
+          + 'exporting the reduced preview instead.',
+        );
+        this.emitFullResExportDegradeWarning(model.name, 'its import frame datum was not stored');
+        continue;
+      }
+      targets.push({
+        model,
+        sourcePath: source.sourcePath,
+        cPre: source.cPre,
+        fingerprint: source.fingerprint,
+      });
+    }
+    return targets;
   }
 
   /**
@@ -1075,7 +1147,68 @@ export class ExportManager {
     if (prePickedNativePath && useNativeWrite) {
       try {
         const stagingPath = await allocateMeshStagePath();
-        await this.stageRawGeometry(exportObjects, stagingPath);
+
+        // Phase-1 full-res export routing: native-preview models are staged
+        // Rust-side from their ORIGINAL file (streamed raw-f32 append; bytes
+        // never enter the WebView) instead of from the reduced scene
+        // preview. On a splice failure the model degrades to the preview
+        // with a user-visible warning and the WebView staging pass restarts
+        // without that model's exclusion — the chunked writer truncates on
+        // restart, so the staging file stays consistent (splice failures
+        // themselves truncate their partial append Rust-side).
+        let spliceTargets = options.includeModel
+          ? this.collectFullResExportTargets(sceneContext?.models ?? [])
+          : [];
+
+        for (;;) {
+          const excludeGeometries = spliceTargets.length > 0
+            ? new Set(spliceTargets.map((target) => target.model.geometry.geometry))
+            : undefined;
+          await this.stageRawGeometry(exportObjects, stagingPath, excludeGeometries);
+
+          let failedTarget: (typeof spliceTargets)[number] | null = null;
+          for (const target of spliceTargets) {
+            try {
+              // The exact matrix buildModelGroup's group produces: the
+              // splice must reproject with the same world transform the
+              // WebView bake would have applied.
+              const transform = target.model.transform;
+              const matrix = new THREE.Matrix4().compose(
+                transform.position,
+                new THREE.Quaternion().setFromEuler(transform.rotation),
+                transform.scale,
+              );
+              const summary = await spliceFullResMeshIntoStageFile({
+                sourcePath: target.sourcePath,
+                stageFilePath: stagingPath,
+                matrix16: Array.from(matrix.elements),
+                cPre: target.cPre,
+                expectedSizeBytes: target.fingerprint?.sizeBytes ?? null,
+                expectedMtimeMs: target.fingerprint?.mtimeMs ?? null,
+              });
+              console.warn(
+                `[ExportFullRes] staged full-res source for "${target.model.name}": `
+                + `${summary.stagedTriangleCount.toLocaleString()} triangles from `
+                + `${target.sourcePath} in ${summary.spliceMs.toFixed(1)} ms.`,
+              );
+            } catch (spliceError) {
+              const raw = this.getErrorMessage(spliceError);
+              console.warn(
+                `[ExportFullRes] full-res splice failed for "${target.model.name}" — `
+                + `exporting the reduced preview instead: ${raw}`,
+              );
+              this.emitFullResExportDegradeWarning(
+                target.model.name,
+                this.describeFullResSpliceError(raw),
+              );
+              failedTarget = target;
+              break;
+            }
+          }
+          if (!failedTarget) break;
+          spliceTargets = spliceTargets.filter((target) => target !== failedTarget);
+        }
+
         const format = options.format === '3mf' ? '3mf' : 'stl';
         await exportMeshFile(stagingPath, prePickedNativePath, format);
         return prePickedNativePath;
@@ -1148,6 +1281,13 @@ export class ExportManager {
             color: string;
             polygonCount: number;
             fileSizeBytes: number;
+            sourcePath?: string;
+            nativePreview?: {
+              originalTriangleCount: number;
+              previewTriangleCount: number;
+              cPre?: [number, number, number];
+              sourceFingerprint?: { sizeBytes: number; mtimeMs: number };
+            };
             transform: {
               position: { x: number; y: number; z: number };
               rotation: { x: number; y: number; z: number };
@@ -1178,6 +1318,16 @@ export class ExportManager {
               color: model.color,
               polygonCount: model.polygonCount,
               fileSizeBytes: model.fileSizeBytes ?? 0,
+              // Phase-1 full-res linkage: the embedded payload of a
+              // native-preview model is the reduced preview — persist the
+              // original source path + import frame datum + fingerprint so a
+              // reload can re-link full-resolution output (plan §C.3).
+              ...(typeof model.sourcePath === 'string' && model.sourcePath.trim().length > 0
+                ? { sourcePath: model.sourcePath }
+                : {}),
+              ...(model.geometry.nativePreview
+                ? { nativePreview: { ...model.geometry.nativePreview } }
+                : {}),
               transform: {
                 position: {
                   x: model.transform.position.x,

@@ -1309,6 +1309,477 @@ fn replace_staging_with_mesh(mesh: &IndexedMesh) -> Result<(), String> {
     Ok(())
 }
 
+// --- Phase 1: full-resolution output splice (STL import decimation remediation) ---
+//
+// >6M-triangle binary STL imports are represented in the scene by a decimated
+// preview; output paths (slicing staging, mesh export) must NOT consume that
+// preview. These commands re-read the ORIGINAL file from disk, reproject each
+// raw vertex by `w = M · (v_raw − C_pre)` (f64 math, f32 output — decision memo
+// `agents/Claude/STL-import-perf/20260718-P0-Decision-memo-fullres-sourcing.md`
+// §2.2/§4.3), and write the result directly into the staging surface the
+// output path consumes. The bytes never enter the WebView (plan §C.2).
+//
+// `C_pre` is the STORED import-time pre-centering bbox center captured by the
+// frontend at import. It must never be recomputed from the full mesh here —
+// the islands sideload's frame bug came from substituting a scene-side center
+// (memo §2.3).
+
+/// Byte size of one binary-STL triangle record.
+const STL_RECORD_BYTES: usize = 50;
+/// Triangles processed per streaming chunk (~2.25 MB of f32 world floats).
+const FULLRES_SPLICE_CHUNK_TRIANGLES: usize = 65_536;
+
+/// Typed-error prefixes the frontend matches on to drive the degrade-to-preview
+/// warning path. Never silently fall back Rust-side.
+pub(crate) const FULLRES_SOURCE_MISSING_PREFIX: &str = "FULLRES_SOURCE_MISSING";
+pub(crate) const FULLRES_SOURCE_STALE_PREFIX: &str = "FULLRES_SOURCE_STALE";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FullResQuantizationBounds {
+    pub min_x: f32,
+    pub min_y: f32,
+    pub min_z: f32,
+    pub max_x: f32,
+    pub max_y: f32,
+    pub max_z: f32,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceFileStat {
+    pub size_bytes: u64,
+    pub mtime_ms: f64,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FullResSpliceSummary {
+    pub staged_triangle_count: u64,
+    pub world_min: [f32; 3],
+    pub world_max: [f32; 3],
+    pub splice_ms: f64,
+}
+
+fn stat_file_fingerprint(path: &std::path::Path) -> Result<SourceFileStat, String> {
+    let meta = std::fs::metadata(path).map_err(|e| {
+        format!(
+            "{FULLRES_SOURCE_MISSING_PREFIX}: cannot stat '{}': {e}",
+            path.display()
+        )
+    })?;
+    let mtime_ms = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as f64)
+        .unwrap_or(0.0);
+    Ok(SourceFileStat {
+        size_bytes: meta.len(),
+        mtime_ms: mtime_ms,
+    })
+}
+
+/// Returns the on-disk size + mtime for an import source file, captured by the
+/// frontend at import time as the staleness fingerprint for full-res re-reads.
+#[tauri::command]
+pub async fn stat_source_file(file_path: String) -> Result<SourceFileStat, String> {
+    stat_file_fingerprint(std::path::Path::new(&file_path))
+}
+
+pub(crate) struct FullResSpliceParams<'a> {
+    pub source_path: &'a std::path::Path,
+    /// Scene transform matrix, column-major (THREE.Matrix4.elements order),
+    /// `M = T·R·S` exactly as the WebView bake composes it.
+    pub matrix16_col_major: [f64; 16],
+    /// Import-time pre-centering bbox center, raw-file frame (memo §2.2).
+    pub c_pre: [f64; 3],
+    /// Expected (size, mtimeMs) captured at import. `None` skips the staleness
+    /// comparison (file existence is still required).
+    pub expected_fingerprint: Option<(u64, f64)>,
+    /// Reproduce the JS bake's winding flip for negative-determinant
+    /// transforms (rasterLayerZipExport.ts appendModelTrianglesInRange, #334).
+    /// Slicing passes true; mesh export (which never flips) passes false.
+    pub flip_winding_on_negative_determinant: bool,
+}
+
+struct FullResSpliceStats {
+    triangle_count: u64,
+    world_min: [f32; 3],
+    world_max: [f32; 3],
+}
+
+/// Streams the binary STL at `source_path`, reprojects every vertex by
+/// `w = M · (v_raw − C_pre)` in f64, and hands world-space f32 triangle chunks
+/// (9 floats per triangle) to `sink`. O(chunk) memory; the full soup is never
+/// materialised. `sample` receives (triangle_index, world_triangle) for any
+/// index listed in `sample_indices` (R2 verification seam).
+fn splice_fullres_stl_stream(
+    params: &FullResSpliceParams<'_>,
+    sample_indices: &[u64],
+    mut sample: impl FnMut(u64, [[f32; 3]; 3]),
+    mut sink: impl FnMut(&[f32]) -> Result<(), String>,
+) -> Result<FullResSpliceStats, String> {
+    let path = params.source_path;
+    let actual = stat_file_fingerprint(path)?;
+    if let Some((expected_size, expected_mtime_ms)) = params.expected_fingerprint {
+        // mtime tolerance: FAT/zip round-trips can quantise to 2 s; the
+        // frontend captures ms from the same stat call, so exact match is the
+        // norm — allow sub-2s drift only when the size matches exactly.
+        let mtime_delta_ms = (actual.mtime_ms - expected_mtime_ms).abs();
+        if actual.size_bytes != expected_size || mtime_delta_ms > 2_000.0 {
+            return Err(format!(
+                "{FULLRES_SOURCE_STALE_PREFIX}: '{}' changed since import \
+                 (size {} -> {}, mtime {:.0} -> {:.0})",
+                path.display(),
+                expected_size,
+                actual.size_bytes,
+                expected_mtime_ms,
+                actual.mtime_ms,
+            ));
+        }
+    }
+
+    let file = std::fs::File::open(path).map_err(|e| {
+        format!(
+            "{FULLRES_SOURCE_MISSING_PREFIX}: cannot open '{}': {e}",
+            path.display()
+        )
+    })?;
+    let mut reader = BufReader::with_capacity(8 * 1024 * 1024, file);
+    let mut header = [0u8; 84];
+    reader
+        .read_exact(&mut header)
+        .map_err(|e| format!("Failed reading STL header '{}': {e}", path.display()))?;
+    let triangle_count = u32::from_le_bytes(header[80..84].try_into().unwrap()) as u64;
+    let expected_binary_size = 84u64.saturating_add(triangle_count.saturating_mul(50));
+    if triangle_count == 0 || expected_binary_size != actual.size_bytes {
+        // Preview models can only originate from binary STLs (the >6M gate
+        // lives in the binary branch of load_stl_file), so a non-binary file
+        // here means the source was replaced — the stale class, not a format
+        // we silently accept.
+        return Err(format!(
+            "{FULLRES_SOURCE_STALE_PREFIX}: '{}' is not the binary STL that was imported \
+             (header count {} does not match {} bytes on disk)",
+            path.display(),
+            triangle_count,
+            actual.size_bytes,
+        ));
+    }
+
+    let m = &params.matrix16_col_major;
+    // Column-major: m[0] m[4] m[8]  m[12]
+    //               m[1] m[5] m[9]  m[13]
+    //               m[2] m[6] m[10] m[14]
+    let det3 = m[0] * (m[5] * m[10] - m[6] * m[9]) - m[4] * (m[1] * m[10] - m[2] * m[9])
+        + m[8] * (m[1] * m[6] - m[2] * m[5]);
+    let flip_winding = params.flip_winding_on_negative_determinant && det3 < 0.0;
+    let c_pre = params.c_pre;
+
+    let transform = |v: [f32; 3]| -> [f32; 3] {
+        let x = v[0] as f64 - c_pre[0];
+        let y = v[1] as f64 - c_pre[1];
+        let z = v[2] as f64 - c_pre[2];
+        [
+            (m[0] * x + m[4] * y + m[8] * z + m[12]) as f32,
+            (m[1] * x + m[5] * y + m[9] * z + m[13]) as f32,
+            (m[2] * x + m[6] * y + m[10] * z + m[14]) as f32,
+        ]
+    };
+
+    let mut world_min = [f32::INFINITY; 3];
+    let mut world_max = [f32::NEG_INFINITY; 3];
+    let mut chunk: Vec<f32> = Vec::with_capacity(FULLRES_SPLICE_CHUNK_TRIANGLES * 9);
+    let mut record = [0u8; STL_RECORD_BYTES];
+    let mut sample_cursor = 0usize;
+
+    for triangle_index in 0..triangle_count {
+        reader.read_exact(&mut record).map_err(|e| {
+            format!(
+                "Truncated binary STL '{}' at triangle {triangle_index}: {e}",
+                path.display()
+            )
+        })?;
+        let raw = [
+            read_binary_stl_vertex(&record, 12),
+            read_binary_stl_vertex(&record, 24),
+            read_binary_stl_vertex(&record, 36),
+        ];
+        let world = [
+            transform([raw[0].x, raw[0].y, raw[0].z]),
+            transform([raw[1].x, raw[1].y, raw[1].z]),
+            transform([raw[2].x, raw[2].y, raw[2].z]),
+        ];
+        for vertex in &world {
+            for axis in 0..3 {
+                if vertex[axis] < world_min[axis] {
+                    world_min[axis] = vertex[axis];
+                }
+                if vertex[axis] > world_max[axis] {
+                    world_max[axis] = vertex[axis];
+                }
+            }
+        }
+
+        if sample_cursor < sample_indices.len() && sample_indices[sample_cursor] == triangle_index
+        {
+            sample(triangle_index, world);
+            sample_cursor += 1;
+        }
+
+        let ordered: [[f32; 3]; 3] = if flip_winding {
+            [world[0], world[2], world[1]]
+        } else {
+            world
+        };
+        for vertex in &ordered {
+            chunk.extend_from_slice(vertex);
+        }
+        if chunk.len() >= FULLRES_SPLICE_CHUNK_TRIANGLES * 9 {
+            sink(&chunk)?;
+            chunk.clear();
+        }
+    }
+    if !chunk.is_empty() {
+        sink(&chunk)?;
+    }
+
+    Ok(FullResSpliceStats {
+        triangle_count,
+        world_min,
+        world_max,
+    })
+}
+
+fn parse_matrix16(matrix16: &[f64]) -> Result<[f64; 16], String> {
+    <[f64; 16]>::try_from(matrix16)
+        .map_err(|_| format!("matrix16 must have 16 elements, got {}", matrix16.len()))
+}
+
+fn parse_vec3_f64(values: &[f64], label: &str) -> Result<[f64; 3], String> {
+    <[f64; 3]>::try_from(values)
+        .map_err(|_| format!("{label} must have 3 elements, got {}", values.len()))
+}
+
+/// Quantizes world-space f32 floats into u16 LE bytes with exactly the same
+/// arithmetic as the WebView transport (`quantizeMeshChunkToUint16`,
+/// sliceExportOrchestrator.ts): f64 normalize → clamp 0..1 → round × 65535.
+fn quantize_world_floats_to_u16_bytes(
+    floats: &[f32],
+    bounds: &FullResQuantizationBounds,
+    out: &mut Vec<u8>,
+) {
+    let mins = [bounds.min_x as f64, bounds.min_y as f64, bounds.min_z as f64];
+    let spans = [
+        (bounds.max_x as f64 - bounds.min_x as f64).max(0.0),
+        (bounds.max_y as f64 - bounds.min_y as f64).max(0.0),
+        (bounds.max_z as f64 - bounds.min_z as f64).max(0.0),
+    ];
+    out.reserve(floats.len() * 2);
+    for (index, value) in floats.iter().enumerate() {
+        let axis = index % 3;
+        let span = spans[axis];
+        let q: u16 = if !span.is_finite() || span <= 0.0 {
+            0
+        } else {
+            let normalized = ((*value as f64) - mins[axis]) / span;
+            (normalized.clamp(0.0, 1.0) * 65_535.0).round() as u16
+        };
+        out.extend_from_slice(&q.to_le_bytes());
+    }
+}
+
+/// Slicing splice: streams the original STL from `source_path`, reprojects to
+/// world space, quantizes with the job's transport bounds, and APPENDS directly
+/// into the in-memory staged mesh (`STAGED_MESH`). The orchestrator must have
+/// called `stage_mesh_binary_start` first and must splice BEFORE streaming the
+/// remaining models' chunks so model triangles stay contiguous at the front of
+/// the staged buffer (model_triangle_count contract). Atomic per model: on any
+/// failure the staged buffer is truncated back to its pre-splice length.
+#[tauri::command]
+pub async fn stage_fullres_mesh_from_source(
+    source_path: String,
+    matrix16: Vec<f64>,
+    c_pre: Vec<f64>,
+    expected_size_bytes: Option<u64>,
+    expected_mtime_ms: Option<f64>,
+    quantization: FullResQuantizationBounds,
+) -> Result<FullResSpliceSummary, String> {
+    let started = std::time::Instant::now();
+    let params = FullResSpliceParams {
+        source_path: std::path::Path::new(&source_path),
+        matrix16_col_major: parse_matrix16(&matrix16)?,
+        c_pre: parse_vec3_f64(&c_pre, "cPre")?,
+        expected_fingerprint: expected_size_bytes
+            .and_then(|size| expected_mtime_ms.map(|mtime| (size, mtime))),
+        flip_winding_on_negative_determinant: true,
+    };
+
+    let baseline_len = {
+        let staged = staged_mesh()
+            .lock()
+            .map_err(|e| format!("staged mesh lock poisoned: {e}"))?;
+        staged
+            .as_ref()
+            .map(|vec| vec.len())
+            .ok_or("Staged mesh not started. Call stage_mesh_binary_start before the full-res splice.")?
+    };
+
+    let mut quantized_chunk: Vec<u8> = Vec::new();
+    let result = splice_fullres_stl_stream(
+        &params,
+        &[],
+        |_, _| {},
+        |floats| {
+            quantized_chunk.clear();
+            quantize_world_floats_to_u16_bytes(floats, &quantization, &mut quantized_chunk);
+            let mut staged = staged_mesh()
+                .lock()
+                .map_err(|e| format!("staged mesh lock poisoned: {e}"))?;
+            let vec = staged
+                .as_mut()
+                .ok_or("Staged mesh buffer disappeared during full-res splice.")?;
+            vec.extend_from_slice(&quantized_chunk);
+            Ok(())
+        },
+    );
+
+    match result {
+        Ok(stats) => {
+            let splice_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            log::info!(
+                "[stage_fullres_mesh_from_source] spliced {} full-res triangles from '{}' in {:.1} ms (world z {:.3}..{:.3})",
+                stats.triangle_count,
+                source_path,
+                splice_ms,
+                stats.world_min[2],
+                stats.world_max[2],
+            );
+            Ok(FullResSpliceSummary {
+                staged_triangle_count: stats.triangle_count,
+                world_min: stats.world_min,
+                world_max: stats.world_max,
+                splice_ms,
+            })
+        }
+        Err(error) => {
+            // Atomicity: drop any partial append so a degrade-to-preview
+            // retry can restage this model through the WebView path.
+            if let Ok(mut staged) = staged_mesh().lock() {
+                if let Some(vec) = staged.as_mut() {
+                    vec.truncate(baseline_len);
+                }
+            }
+            Err(error)
+        }
+    }
+}
+
+/// Mesh-export splice: streams the original STL, reprojects to world space,
+/// and APPENDS raw f32 LE triangles (36 bytes each) to the export staging file
+/// consumed by `export_mesh_file`. Called after the WebView finishes writing
+/// the non-preview geometry (triangle order in the staging file is
+/// irrelevant to STL/3MF serialization).
+#[tauri::command]
+pub async fn splice_fullres_mesh_into_stage_file(
+    source_path: String,
+    stage_file_path: String,
+    matrix16: Vec<f64>,
+    c_pre: Vec<f64>,
+    expected_size_bytes: Option<u64>,
+    expected_mtime_ms: Option<f64>,
+) -> Result<FullResSpliceSummary, String> {
+    let started = std::time::Instant::now();
+    let params = FullResSpliceParams {
+        source_path: std::path::Path::new(&source_path),
+        matrix16_col_major: parse_matrix16(&matrix16)?,
+        c_pre: parse_vec3_f64(&c_pre, "cPre")?,
+        expected_fingerprint: expected_size_bytes
+            .and_then(|size| expected_mtime_ms.map(|mtime| (size, mtime))),
+        // The JS export bake applies matrixWorld verbatim without a winding
+        // flip — mirror that exactly.
+        flip_winding_on_negative_determinant: false,
+    };
+
+    // Release any WebView chunk appender still holding this staging file so
+    // the append below starts from the fully-flushed state (same protocol as
+    // export_mesh_file).
+    {
+        let mut lock = staged_mesh_file_appender()
+            .lock()
+            .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
+        let matches = lock
+            .as_ref()
+            .map_or(false, |appender| appender.path == stage_file_path);
+        if matches {
+            if let Some(appender) = lock.as_mut() {
+                appender
+                    .writer
+                    .flush()
+                    .map_err(|e| format!("Failed flushing staging appender: {e}"))?;
+            }
+            *lock = None;
+        }
+    }
+
+    let stage_path = std::path::PathBuf::from(&stage_file_path);
+    if let Some(parent) = stage_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed creating mesh stage directory: {e}"))?;
+    }
+    let baseline_len = std::fs::metadata(&stage_path).map(|m| m.len()).unwrap_or(0);
+    let stage_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&stage_path)
+        .map_err(|e| format!("Failed opening mesh stage file '{stage_file_path}': {e}"))?;
+    let mut writer = BufWriter::with_capacity(8 * 1024 * 1024, stage_file);
+
+    let result = splice_fullres_stl_stream(
+        &params,
+        &[],
+        |_, _| {},
+        |floats| {
+            writer
+                .write_all(bytemuck::cast_slice::<f32, u8>(floats))
+                .map_err(|e| format!("Failed appending full-res export bytes: {e}"))
+        },
+    )
+    .and_then(|stats| {
+        writer
+            .flush()
+            .map_err(|e| format!("Failed flushing full-res export bytes: {e}"))?;
+        Ok(stats)
+    });
+
+    match result {
+        Ok(stats) => {
+            let splice_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            log::info!(
+                "[splice_fullres_mesh_into_stage_file] spliced {} full-res triangles from '{}' into '{}' in {:.1} ms",
+                stats.triangle_count,
+                source_path,
+                stage_file_path,
+                splice_ms,
+            );
+            Ok(FullResSpliceSummary {
+                staged_triangle_count: stats.triangle_count,
+                world_min: stats.world_min,
+                world_max: stats.world_max,
+                splice_ms,
+            })
+        }
+        Err(error) => {
+            // Atomicity: trim any partial append off the staging file.
+            drop(writer);
+            if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&stage_path) {
+                let _ = file.set_len(baseline_len);
+            }
+            Err(error)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1496,6 +1967,11 @@ mod p0_fullres_red_harness {
     /// size matches; the repo temp sweeper only matches `dragonfruit-slice-*`,
     /// so these survive until manually deleted.
     fn ensure_lattice_stl(label: &str, target_triangles: u64) -> (PathBuf, u32, u64) {
+        // Several un-ignored P1 tests share the cached 8M asset and may run
+        // concurrently on the test threadpool — serialize the check+generate
+        // so a half-written file is never picked up as reusable.
+        static LATTICE_GEN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LATTICE_GEN_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let grid = lattice_grid_for_target(target_triangles);
         let total = lattice_triangle_count(grid);
         let expected_bytes = 84 + 50 * total;
@@ -1663,13 +2139,91 @@ mod p0_fullres_red_harness {
 
     type FullResSplice = fn(&FullResSpliceRequest) -> Result<FullResSpliceOutcome, String>;
 
-    /// Phase 1 wires the real splice command core (the
-    /// `stage_fullres_segment`-shaped command of memo §4.3) into this seam,
-    /// un-ignores `r2_*` below, captures its red run FIRST, then implements.
-    /// Until then there is nothing to call — the returned `None` makes the
-    /// test fail with an explicit deferred-red marker when force-run.
+    /// Column-major `M = T·R·S` (THREE.Matrix4.elements order) from the
+    /// decomposed transform R2 supplies — the same composition the WebView
+    /// bake performs (`composeModelMatrix`, rasterLayerZipExport.ts).
+    fn matrix16_col_major_from_trs(
+        translation: [f64; 3],
+        quat_xyzw: [f64; 4],
+        scale: [f64; 3],
+    ) -> [f64; 16] {
+        let [qx, qy, qz, qw] = quat_xyzw;
+        let (xx, yy, zz) = (qx * qx, qy * qy, qz * qz);
+        let (xy, xz, yz) = (qx * qy, qx * qz, qy * qz);
+        let (wx, wy, wz) = (qw * qx, qw * qy, qw * qz);
+        // Rotation columns (column-major).
+        let r0 = [1.0 - 2.0 * (yy + zz), 2.0 * (xy + wz), 2.0 * (xz - wy)];
+        let r1 = [2.0 * (xy - wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz + wx)];
+        let r2 = [2.0 * (xz + wy), 2.0 * (yz - wx), 1.0 - 2.0 * (xx + yy)];
+        [
+            r0[0] * scale[0], r0[1] * scale[0], r0[2] * scale[0], 0.0,
+            r1[0] * scale[1], r1[1] * scale[1], r1[2] * scale[1], 0.0,
+            r2[0] * scale[2], r2[1] * scale[2], r2[2] * scale[2], 0.0,
+            translation[0], translation[1], translation[2], 1.0,
+        ]
+    }
+
+    /// Phase 1 wiring (landed): routes the contract test through the
+    /// PRODUCTION splice core — `splice_fullres_stl_stream` feeding the
+    /// production u16 staging quantizer, exactly the pipeline
+    /// `stage_fullres_mesh_from_source` runs. The staged triangle count is
+    /// measured from the bytes the production sink encoding actually emitted
+    /// (18 bytes per staged quantized triangle), never trusted from the
+    /// source header. Sampled vertices are captured at the stream's
+    /// pre-quantization seam, matching the R2 contract's own documented
+    /// terms: its 1e-4 mm tolerance was specified PRE-quantization
+    /// (quantized-u16 transport adds ~2-3 µm, covered by the separate
+    /// Phase-1 frame-delta test).
     fn phase1_fullres_splice() -> Option<FullResSplice> {
-        None
+        Some(|request| {
+            let matrix16 = matrix16_col_major_from_trs(
+                request.translation,
+                request.rotation_quat_xyzw,
+                request.scale,
+            );
+            let params = FullResSpliceParams {
+                source_path: request.source_stl,
+                matrix16_col_major: matrix16,
+                c_pre: request.c_pre,
+                expected_fingerprint: None,
+                flip_winding_on_negative_determinant: true,
+            };
+            // Build-volume-style transport bounds generously covering the
+            // transformed lattice (bounds correctness itself is exercised by
+            // the quantizer-parity + frame-delta tests).
+            let bounds = FullResQuantizationBounds {
+                min_x: -300.0,
+                min_y: -300.0,
+                min_z: -300.0,
+                max_x: 300.0,
+                max_y: 300.0,
+                max_z: 300.0,
+            };
+            let mut sampled: Vec<[[f32; 3]; 3]> = Vec::new();
+            let mut staged_bytes: u64 = 0;
+            let mut scratch: Vec<u8> = Vec::new();
+            let stats = splice_fullres_stl_stream(
+                &params,
+                request.sample_triangle_indices,
+                |_, world| sampled.push(world),
+                |floats| {
+                    scratch.clear();
+                    quantize_world_floats_to_u16_bytes(floats, &bounds, &mut scratch);
+                    staged_bytes += scratch.len() as u64;
+                    Ok(())
+                },
+            )?;
+            assert_eq!(staged_bytes % 18, 0, "staged bytes must be whole u16 triangles");
+            let staged_triangle_count = staged_bytes / 18;
+            assert_eq!(
+                staged_triangle_count, stats.triangle_count,
+                "sink-measured staged count must match the stream's triangle count",
+            );
+            Ok(FullResSpliceOutcome {
+                staged_triangle_count,
+                sampled_world_triangles: sampled,
+            })
+        })
     }
 
     fn rotate_quat_f64(v: [f64; 3], q: [f64; 4]) -> [f64; 3] {
@@ -1712,12 +2266,12 @@ mod p0_fullres_red_harness {
     /// the ~2M preview) and sampled vertices must land on
     /// `M · (v_raw − C_pre)` within 1e-4 mm (pre-quantization).
     ///
-    /// DEFERRED RED (recorded plan §D1 deviation): the splice command does
-    /// not exist before Phase 1, so this cannot red-RUN today — it is
-    /// compile-ready against the contract and fails with an explicit marker
-    /// if force-run. Its red proof is owed at Phase-1 start.
+    /// Red run captured at Phase-1 start with the stub unwired (panic at the
+    /// deferred-red marker, orchestrator-recorded); GREEN as of the Phase-1
+    /// wiring above. Un-ignored: this is now a standing contract test for the
+    /// production splice core (it lazily generates/reuses the cached ~8M
+    /// lattice asset in %TEMP% on first run).
     #[test]
-    #[ignore = "red until Phase 1 lands the full-res splice command (stage_fullres_segment seam)"]
     fn r2_fullres_splice_preserves_count_and_reprojects_within_100nm() {
         let splice = match phase1_fullres_splice() {
             Some(f) => f,
@@ -1781,5 +2335,396 @@ mod p0_fullres_red_harness {
                 );
             }
         }
+    }
+
+    // --- Phase 1: golden encoding parity ---------------------------------
+
+    /// The Rust splice quantizer must be byte-compatible with the WebView
+    /// transport quantizer (`quantizeMeshChunkToUint16`,
+    /// sliceExportOrchestrator.ts): f64 normalize → clamp 0..1 → round ×
+    /// 65535, u16 LE. Expected values below are the JS formula evaluated by
+    /// hand, including the half-way rounding case (JS `Math.round(32767.5)`
+    /// = 32768; after the clamp all inputs are non-negative, so Rust's
+    /// round-half-away-from-zero agrees). This pins the SPLICED path's
+    /// staged bytes to what the scene-geometry path would have produced for
+    /// identical world floats.
+    #[test]
+    fn p1_splice_quantizer_matches_webview_transport_encoding() {
+        let bounds = FullResQuantizationBounds {
+            min_x: -100.0,
+            min_y: -50.0,
+            min_z: 0.0,
+            max_x: 100.0,
+            max_y: 50.0,
+            max_z: 200.0,
+        };
+        let floats: [f32; 12] = [
+            -100.0, -50.0, 0.0, // exact minimums → 0
+            100.0, 50.0, 200.0, // exact maximums → 65535
+            0.0, 0.0, 100.0, // exact mid-spans → the 32767.5 rounding case
+            -150.0, 75.0, 250.0, // out-of-bounds → clamped
+        ];
+        let mut out = Vec::new();
+        quantize_world_floats_to_u16_bytes(&floats, &bounds, &mut out);
+        let quantized: Vec<u16> = out
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        assert_eq!(
+            quantized,
+            vec![0, 0, 0, 65535, 65535, 65535, 32768, 32768, 32768, 0, 65535, 65535],
+        );
+
+        // Degenerate span → 0 (same as the JS guard).
+        let degenerate = FullResQuantizationBounds {
+            min_x: 5.0,
+            min_y: 0.0,
+            min_z: 0.0,
+            max_x: 5.0,
+            max_y: 1.0,
+            max_z: 1.0,
+        };
+        let mut degenerate_out = Vec::new();
+        quantize_world_floats_to_u16_bytes(&[5.0, 0.5, 0.5], &degenerate, &mut degenerate_out);
+        assert_eq!(degenerate_out[0..2], [0, 0]);
+    }
+
+    // --- Phase 1: frame-delta test (spliced vs preview-path bounds) ------
+
+    /// Records the world-space bounds delta between the full-res spliced
+    /// staging and the preview path on the off-origin 8M lattice, under the
+    /// same non-trivial transform and the SAME stored C_pre datum (the
+    /// preview bbox center — the value the scene actually uses). Invariant
+    /// asserted: meshopt keeps a subset of original vertices, so the preview
+    /// world bounds must be contained in the spliced full-res world bounds
+    /// (within f32 tolerance). The recorded deltas feed the Phase-4 punch
+    /// `centerNorm` migration.
+    #[test]
+    fn p1_frame_delta_spliced_bounds_contain_preview_bounds() {
+        let (path, _grid, total) = ensure_lattice_stl("8m", 8_000_000);
+        assert!(total > P0C_PREVIEW_GATE_TRIANGLES);
+
+        // Preview path: exactly the import core `load_stl_file` runs.
+        let preview = load_binary_stl_preview(&path, total as u32, 2_000_000)
+            .expect("preview import core");
+
+        // The stored import datum: the preview's own pre-centering bbox
+        // center (what processGeometry measures and Phase 1 persists).
+        let mut raw_min = [f64::INFINITY; 3];
+        let mut raw_max = [f64::NEG_INFINITY; 3];
+        for position in &preview.positions {
+            for (axis, value) in [position.x, position.y, position.z].into_iter().enumerate() {
+                let value = value as f64;
+                if value < raw_min[axis] {
+                    raw_min[axis] = value;
+                }
+                if value > raw_max[axis] {
+                    raw_max[axis] = value;
+                }
+            }
+        }
+        let c_pre = [
+            (raw_min[0] + raw_max[0]) * 0.5,
+            (raw_min[1] + raw_max[1]) * 0.5,
+            (raw_min[2] + raw_max[2]) * 0.5,
+        ];
+
+        // Same non-trivial transform as R2.
+        let half_angle = 30.0_f64.to_radians() / 2.0;
+        let quat = [0.0, 0.0, half_angle.sin(), half_angle.cos()];
+        let scale = [1.25, 1.0, 0.8];
+        let translation = [10.0, -4.0, 2.5];
+        let matrix16 = matrix16_col_major_from_trs(translation, quat, scale);
+
+        // Preview-path world bounds: transform every preview vertex with the
+        // same formula the bake applies.
+        let transform_vertex = |v: [f32; 3]| -> [f32; 3] {
+            let x = v[0] as f64 - c_pre[0];
+            let y = v[1] as f64 - c_pre[1];
+            let z = v[2] as f64 - c_pre[2];
+            let m = &matrix16;
+            [
+                (m[0] * x + m[4] * y + m[8] * z + m[12]) as f32,
+                (m[1] * x + m[5] * y + m[9] * z + m[13]) as f32,
+                (m[2] * x + m[6] * y + m[10] * z + m[14]) as f32,
+            ]
+        };
+        let mut preview_min = [f32::INFINITY; 3];
+        let mut preview_max = [f32::NEG_INFINITY; 3];
+        for position in &preview.positions {
+            let world = transform_vertex([position.x, position.y, position.z]);
+            for axis in 0..3 {
+                if world[axis] < preview_min[axis] {
+                    preview_min[axis] = world[axis];
+                }
+                if world[axis] > preview_max[axis] {
+                    preview_max[axis] = world[axis];
+                }
+            }
+        }
+        drop(preview);
+
+        // Spliced path: the production streaming core, same datum.
+        let params = FullResSpliceParams {
+            source_path: &path,
+            matrix16_col_major: matrix16,
+            c_pre,
+            expected_fingerprint: None,
+            flip_winding_on_negative_determinant: true,
+        };
+        let stats = splice_fullres_stl_stream(&params, &[], |_, _| {}, |_| Ok(()))
+            .expect("full-res splice stream");
+        assert_eq!(stats.triangle_count, total);
+
+        // Containment invariant (subset-of-vertices ⇒ subset-of-bounds).
+        const EPS: f32 = 1e-3;
+        for axis in 0..3 {
+            assert!(
+                stats.world_min[axis] <= preview_min[axis] + EPS,
+                "axis {axis}: spliced min {} must not exceed preview min {}",
+                stats.world_min[axis],
+                preview_min[axis],
+            );
+            assert!(
+                stats.world_max[axis] >= preview_max[axis] - EPS,
+                "axis {axis}: spliced max {} must not fall below preview max {}",
+                stats.world_max[axis],
+                preview_max[axis],
+            );
+        }
+
+        // Recorded deltas (run with --nocapture to view; quoted in the P1
+        // AAR and consumed by the Phase-4 punch-migration design).
+        let center = |min: &[f32; 3], max: &[f32; 3], axis: usize| {
+            (min[axis] as f64 + max[axis] as f64) * 0.5
+        };
+        let extent =
+            |min: &[f32; 3], max: &[f32; 3], axis: usize| max[axis] as f64 - min[axis] as f64;
+        eprintln!("[p1][frame-delta] spliced-vs-preview world bounds on the 8M lattice:");
+        for (axis, label) in ["x", "y", "z"].iter().enumerate() {
+            eprintln!(
+                "[p1][frame-delta]   {label}: center Δ {:+.6} mm, extent Δ {:+.6} mm (spliced {:.6}..{:.6}, preview {:.6}..{:.6})",
+                center(&stats.world_min, &stats.world_max, axis)
+                    - center(&preview_min, &preview_max, axis),
+                extent(&stats.world_min, &stats.world_max, axis)
+                    - extent(&preview_min, &preview_max, axis),
+                stats.world_min[axis],
+                stats.world_max[axis],
+                preview_min[axis],
+                preview_max[axis],
+            );
+        }
+        eprintln!(
+            "[p1][frame-delta]   z-range: spliced {:.6}..{:.6} vs preview {:.6}..{:.6} (top Δ {:+.6} mm)",
+            stats.world_min[2],
+            stats.world_max[2],
+            preview_min[2],
+            preview_max[2],
+            stats.world_max[2] as f64 - preview_max[2] as f64,
+        );
+    }
+
+    // --- Phase 1: splice wall-time measurement ----------------------------
+
+    /// Measures the full production splice cost (streaming re-read +
+    /// reprojection + u16 staging quantization) on the 12M asset — the
+    /// output-time price of Option A. Companion to the §D9 import baseline.
+    ///
+    /// ```text
+    /// cargo test p1_splice_wall_time_12m -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "P1 splice wall-time measurement — run explicitly with --ignored --nocapture"]
+    fn p1_splice_wall_time_12m_lattice() {
+        let (path, _grid, total) = ensure_lattice_stl("12m", 12_000_000);
+        let c_pre = [100.0, 85.0, 2.88];
+        let matrix16 = matrix16_col_major_from_trs(
+            [0.0, 0.0, 2.88],
+            [0.0, 0.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+        );
+        let bounds = FullResQuantizationBounds {
+            min_x: -100.0,
+            min_y: -100.0,
+            min_z: 0.0,
+            max_x: 100.0,
+            max_y: 100.0,
+            max_z: 150.0,
+        };
+        let params = FullResSpliceParams {
+            source_path: &path,
+            matrix16_col_major: matrix16,
+            c_pre,
+            expected_fingerprint: None,
+            flip_winding_on_negative_determinant: true,
+        };
+        let mut staged_bytes = 0u64;
+        let mut scratch: Vec<u8> = Vec::new();
+        let started = Instant::now();
+        let stats = splice_fullres_stl_stream(
+            &params,
+            &[],
+            |_, _| {},
+            |floats| {
+                scratch.clear();
+                quantize_world_floats_to_u16_bytes(floats, &bounds, &mut scratch);
+                staged_bytes += scratch.len() as u64;
+                Ok(())
+            },
+        )
+        .expect("12M splice");
+        let elapsed = started.elapsed();
+        assert_eq!(stats.triangle_count, total);
+        eprintln!(
+            "[p1][splice-wall-time] {} triangles ({:.1} MB staged) in {:.3}s",
+            total,
+            staged_bytes as f64 / 1_048_576.0,
+            elapsed.as_secs_f64(),
+        );
+    }
+
+    // --- Phase 1: structural floor test ----------------------------------
+
+    /// End-to-end structural assert for the reported defect class: splice
+    /// the 8M off-origin lattice through the PRODUCTION path (streaming
+    /// re-read → reproject → u16 staging encoding), decode the staged bytes
+    /// exactly as the engine transport does, and rasterize the floor-contact
+    /// layer with the real slicing engine. Every support column must have
+    /// nonzero floor pixels beneath it (the generator knows its column
+    /// positions).
+    #[test]
+    fn p1_floor_contact_layer_covers_support_columns_after_splice() {
+        let (path, grid, total) = ensure_lattice_stl("8m", 8_000_000);
+
+        // Scene-style placement: bottom on the plate (world z = raw z), XY
+        // centered on the build plate.
+        let c_pre = [100.0, 85.0, 2.88];
+        let translation = [0.0, 0.0, 2.88];
+        let matrix16 =
+            matrix16_col_major_from_trs(translation, [0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0]);
+        let bounds = FullResQuantizationBounds {
+            min_x: -100.0,
+            min_y: -100.0,
+            min_z: 0.0,
+            max_x: 100.0,
+            max_y: 100.0,
+            max_z: 150.0,
+        };
+
+        // Splice through the production stream + staging quantizer.
+        let params = FullResSpliceParams {
+            source_path: &path,
+            matrix16_col_major: matrix16,
+            c_pre,
+            expected_fingerprint: None,
+            flip_winding_on_negative_determinant: true,
+        };
+        let mut staged: Vec<u8> = Vec::with_capacity((total as usize) * 18);
+        let mut scratch: Vec<u8> = Vec::new();
+        let stats = splice_fullres_stl_stream(
+            &params,
+            &[],
+            |_, _| {},
+            |floats| {
+                scratch.clear();
+                quantize_world_floats_to_u16_bytes(floats, &bounds, &mut scratch);
+                staged.extend_from_slice(&scratch);
+                Ok(())
+            },
+        )
+        .expect("full-res splice stream");
+        assert_eq!(stats.triangle_count, total);
+        assert_eq!(staged.len() as u64, total * 18);
+
+        // Decode the staged u16 stream the way the engine transport does.
+        let mins = [bounds.min_x as f64, bounds.min_y as f64, bounds.min_z as f64];
+        let spans = [
+            (bounds.max_x - bounds.min_x) as f64,
+            (bounds.max_y - bounds.min_y) as f64,
+            (bounds.max_z - bounds.min_z) as f64,
+        ];
+        let mut world_floats: Vec<f32> = Vec::with_capacity((total as usize) * 9);
+        for (index, pair) in staged.chunks_exact(2).enumerate() {
+            let axis = index % 3;
+            let q = u16::from_le_bytes([pair[0], pair[1]]) as f64;
+            world_floats.push((mins[axis] + (q / 65_535.0) * spans[axis]) as f32);
+        }
+        drop(staged);
+
+        let mut triangles = dragonfruit_slicing_engine::geometry::parse_triangles(&world_floats);
+        drop(world_floats);
+
+        let job: dragonfruit_slicing_engine::SliceJobV3 = serde_json::from_value(serde_json::json!({
+            "output_format": ".png",
+            "source_width_px": 2000u32,
+            "source_height_px": 2000u32,
+            "width_px": 2000u32,
+            "height_px": 2000u32,
+            "build_width_mm": 200.0f32,
+            "build_depth_mm": 200.0f32,
+            "layer_height_mm": 0.05f32,
+            "total_layers": 120u32,
+            "model_triangle_count": total as u32,
+            // Parsed-triangle input is passed to the rasterizer directly;
+            // the job's own flat soup is unused here but non-optional.
+            "triangles_xyz": Vec::<f32>::new(),
+            "metadata_json": "{}",
+        }))
+        .expect("floor-test slice job");
+        dragonfruit_slicing_engine::geometry::project_triangles_inplace(&mut triangles, &job);
+
+        // Floor-contact layer: z = 0.025 mm (layer 0), inside the 1 mm slab.
+        let layer_z = 0.5_f32 * 0.05;
+        let layer_indices: Vec<usize> = triangles
+            .iter()
+            .enumerate()
+            .filter(|(_, tri)| tri.z_min <= layer_z && layer_z <= tri.z_max)
+            .map(|(index, _)| index)
+            .collect();
+        assert!(!layer_indices.is_empty(), "floor layer must have candidate triangles");
+
+        let mask =
+            dragonfruit_slicing_engine::raster::rasterize_layer(&job, &triangles, &layer_indices, 0);
+        let width = job.effective_render_width_px() as usize;
+        let height = job.source_height_px as usize;
+        assert_eq!(mask.len(), width * height);
+
+        // World mm → pixel, mirroring project_triangles_inplace (no mirror).
+        let to_px = |x_mm: f32, y_mm: f32| -> (usize, usize) {
+            let tx = (x_mm + 100.0) / 200.0;
+            let ty = (y_mm + 100.0) / 200.0;
+            let px = (tx * (width as f32 - 1.0)).round().clamp(0.0, width as f32 - 1.0) as usize;
+            let py = ((1.0 - ty) * (height as f32 - 1.0))
+                .round()
+                .clamp(0.0, height as f32 - 1.0) as usize;
+            (px, py)
+        };
+
+        // Every sampled support column must have floor pixels beneath it.
+        let stride = (grid / 24).max(1);
+        let mut checked = 0usize;
+        for i in (0..grid).step_by(stride as usize) {
+            for j in (0..grid).step_by(stride as usize) {
+                let (strut, _tip) = lattice_cell_boxes(grid, i, j);
+                let cx = (strut[0][0] + strut[1][0]) * 0.5 - 100.0;
+                let cy = (strut[0][1] + strut[1][1]) * 0.5 - 85.0;
+                let (px, py) = to_px(cx, cy);
+                assert!(
+                    mask[py * width + px] > 0,
+                    "floor-contact layer has NO pixels under support column ({i},{j}) at world ({cx:.3},{cy:.3}) — the import-decimation defect signature",
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 4, "column sampling must cover the plate");
+
+        // Sanity: outside the plate stays void.
+        let (out_px, out_py) = to_px(-90.0, -90.0);
+        assert_eq!(mask[out_py * width + out_px], 0, "pixels outside the plate must stay void");
+
+        let nonzero = mask.iter().filter(|value| **value > 0).count();
+        eprintln!(
+            "[p1][floor-test] {checked} sampled support columns all have floor coverage; nonzero floor pixels: {nonzero}",
+        );
     }
 }

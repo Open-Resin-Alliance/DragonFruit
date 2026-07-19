@@ -1,7 +1,7 @@
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
-import { prepareLoadedModelsForOutput } from '@/features/mesh-modifiers/prepareModelGeometry';
+import { buildSolidSliceMeshForWasm, composeModelMatrix, type FullResSplicedModel } from './rasterLayerZipExport';
+import { prepareLoadedModelsForOutput, resolveOutputGeometrySource } from '@/features/mesh-modifiers/prepareModelGeometry';
 import { resolveOutputFormatVersion, resolveOutputSettingsMode, resolveSlicingFormatDefinition } from './formats/registry';
 import { getSavedSlicingPerformanceSettings, type PngCompressionStrategy } from '@/components/settings/performancePreferences';
 import {
@@ -71,6 +71,37 @@ type StageMeshChunkAck = {
     appendNs: number;
     appendNsTotal: number;
 };
+
+/** Response of the Rust `stage_fullres_mesh_from_source` command. */
+type FullResSpliceSummary = {
+    stagedTriangleCount: number;
+    worldMin: [number, number, number];
+    worldMax: [number, number, number];
+    spliceMs: number;
+};
+
+/** Bytes per staged quantized-u16 triangle (9 components × 2 bytes). */
+const QUANTIZED_U16_BYTES_PER_TRIANGLE = 18;
+
+function describeFullResSpliceError(raw: string): string {
+    if (raw.includes('FULLRES_SOURCE_MISSING')) return 'the original file is missing or unreadable';
+    if (raw.includes('FULLRES_SOURCE_STALE')) return 'the original file changed since import';
+    return raw;
+}
+
+/**
+ * Surfaces a degrade-to-preview event to the editor shell's toast subsystem
+ * (listener in page.tsx routes it to the operation-error toast). Never
+ * silent: silently slicing the preview is the exact defect Phase 1 fixes.
+ */
+function emitFullResDegradeWarning(modelName: string, reason: string): void {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('dragonfruit:fullres-degraded', {
+        detail: {
+            message: `"${modelName}": ${reason} — sliced the reduced preview instead.`,
+        },
+    }));
+}
 
 function logDebug(...args: unknown[]): void {
     if (typeof console === 'undefined' || typeof console.debug !== 'function') return;
@@ -508,17 +539,40 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         modelCount: options.models.length,
     });
 
+    const visibleModels = options.models.filter((model) => model.visible);
+
+    // Phase-1 full-res routing: native-preview models with a retained source
+    // path are staged Rust-side from the ORIGINAL file (bytes never enter
+    // the WebView). The splice appends into the in-memory staged buffer, so
+    // any candidate forces streamed staging (`stage_mesh_binary_start` +
+    // chunk appends) even when the size estimate would have picked
+    // single-shot or file-backed. No candidates ⇒ the decision below is
+    // byte-identical to before.
+    const fullResCandidateIds = new Set(
+        visibleModels
+            .filter((model) => resolveOutputGeometrySource(model).kind === 'fullres-source-file')
+            .map((model) => model.id),
+    );
+
     const initialMeshStagingBytes = estimateInitialMeshStagingBytes(options.models);
     const meshTransportBytesEstimate = Math.ceil(initialMeshStagingBytes / 2);
     const meshTransportEncoding: 'raw_f32' | 'quantized_u16' = MESH_TRANSPORT_ENCODING;
     const meshTransportQuantization = resolveMeshTransportQuantizationBounds(options.printerProfile);
     const meshChunkTargetBytes = resolveMeshChunkTargetBytes(meshTransportBytesEstimate);
-    const meshTransferMode: 'single-shot' | 'streamed' | 'file-backed' = meshTransportBytesEstimate >= STAGE_MESH_FILE_BACKED_MIN_BYTES
-        ? 'file-backed'
-        : meshTransportBytesEstimate <= STAGE_MESH_SINGLE_SHOT_MAX_BYTES
-            ? 'single-shot'
-            : 'streamed';
+    const meshTransferMode: 'single-shot' | 'streamed' | 'file-backed' = fullResCandidateIds.size > 0
+        ? 'streamed'
+        : meshTransportBytesEstimate >= STAGE_MESH_FILE_BACKED_MIN_BYTES
+            ? 'file-backed'
+            : meshTransportBytesEstimate <= STAGE_MESH_SINGLE_SHOT_MAX_BYTES
+                ? 'single-shot'
+                : 'streamed';
     let meshStageFilePath: string | null = null;
+
+    if (fullResCandidateIds.size > 0) {
+        logDebug('Full-res splice candidates force streamed staging', {
+            fullResCandidateCount: fullResCandidateIds.size,
+        });
+    }
 
     if (meshTransferMode === 'streamed') {
         // Tell Rust to reserve a realistic staging buffer before chunks arrive.
@@ -611,7 +665,6 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         }
     };
 
-    const visibleModels = options.models.filter((model) => model.visible);
     const modifierBakeStartMs = performance.now();
     options.onProgress?.(0, 1, 'Baking Modifiers');
     const preparedModelsForOutput = await prepareLoadedModelsForOutput(visibleModels);
@@ -641,6 +694,69 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         modifiedModelCount: preparedModelsForOutput.modifiedModelCount,
         modifierBakeMs,
     });
+
+    // Phase-1 full-res splice: stage each candidate's ORIGINAL file
+    // Rust-side BEFORE the collector streams any chunk, so the full-res
+    // triangles sit contiguously at the front of the staged buffer (the
+    // model_triangle_count contract). Failure is never silent: the model
+    // degrades to the existing preview path with a user-visible warning.
+    const fullResSplices = new Map<string, FullResSplicedModel>();
+    if (fullResCandidateIds.size > 0) {
+        for (const model of preparedModelsForOutput.models) {
+            if (!fullResCandidateIds.has(model.id)) continue;
+            const source = resolveOutputGeometrySource(model);
+            if (source.kind !== 'fullres-source-file') continue;
+
+            if (!source.cPre) {
+                console.warn(
+                    `[SlicingFullRes] "${model.name}" has no stored import frame datum (cPre) — `
+                    + 'slicing the reduced preview instead.',
+                );
+                emitFullResDegradeWarning(model.name, 'its import frame datum was not stored');
+                continue;
+            }
+
+            throwIfAborted(options.abortSignal);
+            options.onProgress?.(0, 1, 'Staging Full-Resolution Mesh');
+            const spliceInvokeStart = performance.now();
+            try {
+                const matrix = composeModelMatrix(model.transform);
+                const summary = await invoke<FullResSpliceSummary>('stage_fullres_mesh_from_source', {
+                    sourcePath: source.sourcePath,
+                    matrix16: Array.from(matrix.elements),
+                    cPre: source.cPre,
+                    expectedSizeBytes: source.fingerprint?.sizeBytes ?? null,
+                    expectedMtimeMs: source.fingerprint?.mtimeMs ?? null,
+                    quantization: meshTransportQuantization,
+                });
+                stageMeshIpcMs += performance.now() - spliceInvokeStart;
+                fullResSplices.set(model.id, {
+                    triangleCount: summary.stagedTriangleCount,
+                    worldMin: summary.worldMin,
+                    worldMax: summary.worldMax,
+                });
+                cumulativeBytesStage += summary.stagedTriangleCount * QUANTIZED_U16_BYTES_PER_TRIANGLE;
+                console.warn(
+                    `[SlicingFullRes] staged full-res source for "${model.name}": `
+                    + `${summary.stagedTriangleCount.toLocaleString()} triangles from `
+                    + `${source.sourcePath} in ${summary.spliceMs.toFixed(1)} ms `
+                    + `(scene preview holds ${model.geometry.nativePreview?.previewTriangleCount?.toLocaleString() ?? '?'} triangles).`,
+                );
+            } catch (spliceError) {
+                stageMeshIpcMs += performance.now() - spliceInvokeStart;
+                const rawMessage = spliceError instanceof Error ? spliceError.message : String(spliceError);
+                const reason = describeFullResSpliceError(rawMessage);
+                console.warn(
+                    `[SlicingFullRes] full-res splice failed for "${model.name}" — slicing the reduced preview instead: ${rawMessage}`,
+                );
+                emitFullResDegradeWarning(model.name, reason);
+                // Not registered in fullResSplices ⇒ the collector stages the
+                // preview geometry exactly as before (Rust truncated any
+                // partial append).
+            }
+        }
+    }
+
     const meshPrepStartMs = performance.now();
     let solidMesh: Awaited<ReturnType<typeof buildSolidSliceMeshForWasm>>;
     try {
@@ -655,6 +771,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                     ? handleMeshFileChunk
                     : undefined,
             meshChunkTargetBytes,
+            ...(fullResSplices.size > 0 ? { fullResSplices } : {}),
         });
     } finally {
         preparedModelsForOutput.dispose();

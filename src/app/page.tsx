@@ -823,6 +823,23 @@ export default function Home() {
     sceneImportReport: scene.sceneImportReport,
   });
 
+  // Full-res output degradation (STL-import remediation Phase 1): when a
+  // slice/export cannot re-read a native-preview model's original file
+  // (missing/stale source), the orchestrator degrades to the reduced preview
+  // and dispatches this event — surface it through the operation-error toast
+  // so the degradation is never silent.
+  React.useEffect(() => {
+    const onFullResDegraded = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: string }>).detail;
+      showOperationError(
+        detail?.message
+        ?? 'Full-resolution source unavailable — the reduced preview was used instead.',
+      );
+    };
+    window.addEventListener('dragonfruit:fullres-degraded', onFullResDegraded);
+    return () => window.removeEventListener('dragonfruit:fullres-degraded', onFullResDegraded);
+  }, [showOperationError]);
+
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const [interiorView, setInteriorView] = React.useState(false);
   const isSupportSpotlightHoldActive = useActionActive('SUPPORTS', 'TEMP_SPOTLIGHT_HOLD');

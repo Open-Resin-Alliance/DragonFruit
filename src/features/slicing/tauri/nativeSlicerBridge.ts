@@ -852,6 +852,45 @@ export async function exportMeshFile(
   });
 }
 
+/**
+ * Phase-1 full-res mesh export splice: streams a native-preview model's
+ * ORIGINAL STL from `sourcePath` Rust-side, reprojects `w = M · (v_raw −
+ * cPre)`, and APPENDS raw f32 triangles to the export staging file consumed
+ * by `export_mesh_file`. The full-resolution bytes never enter the WebView.
+ *
+ * Throws with a `FULLRES_SOURCE_MISSING`/`FULLRES_SOURCE_STALE`-prefixed
+ * message when the source cannot be used; Rust truncates any partial append
+ * before rejecting, so the staging file stays consistent for a degrade
+ * retry.
+ */
+export async function spliceFullResMeshIntoStageFile(args: {
+  sourcePath: string;
+  stageFilePath: string;
+  /** Column-major elements of the model's world matrix (THREE convention). */
+  matrix16: number[];
+  cPre: [number, number, number];
+  expectedSizeBytes?: number | null;
+  expectedMtimeMs?: number | null;
+}): Promise<{
+  stagedTriangleCount: number;
+  worldMin: [number, number, number];
+  worldMax: [number, number, number];
+  spliceMs: number;
+}> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('spliceFullResMeshIntoStageFile is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+  return core.invoke('splice_fullres_mesh_into_stage_file', {
+    sourcePath: args.sourcePath,
+    stageFilePath: args.stageFilePath,
+    matrix16: args.matrix16,
+    cPre: args.cPre,
+    expectedSizeBytes: args.expectedSizeBytes ?? null,
+    expectedMtimeMs: args.expectedMtimeMs ?? null,
+  });
+}
+
 export async function readPrintArtifactBytesFromPath(sourcePath: string): Promise<Uint8Array> {
   const core = await loadTauriCore();
   if (!core) {

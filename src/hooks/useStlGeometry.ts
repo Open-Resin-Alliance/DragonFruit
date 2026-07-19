@@ -55,7 +55,28 @@ export type GeometryWithBounds = {
   nativePreview?: {
     originalTriangleCount: number;
     previewTriangleCount: number;
+    /**
+     * C_pre — the pre-centering 3-D bbox center `processGeometry` subtracts
+     * at import, measured in raw-file coordinates (STL-import remediation
+     * P0 memo §2.2). Output paths reproject the ORIGINAL file with
+     * `w = M · (v_raw − C_pre)`; this stored value must be used verbatim,
+     * never recomputed from the full mesh (the islands sideload's frame bug
+     * came from substituting a scene-side center).
+     */
+    cPre?: [number, number, number];
+    /** Import-time staleness fingerprint of the source file (`stat_source_file`). */
+    sourceFingerprint?: {
+      sizeBytes: number;
+      mtimeMs: number;
+    };
   };
+  /**
+   * Internal hand-off from `processGeometry` to `loadStlGeometry`: the
+   * pre-centering bbox center captured at the centering site for
+   * native-preview loads. Folded into `nativePreview.cPre` by the caller.
+   * @internal
+   */
+  _nativePreviewCPre?: [number, number, number];
 };
 
 /**
@@ -455,6 +476,18 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   const preBBox = geometry.boundingBox ? geometry.boundingBox.clone() : new THREE.Box3();
   const preCenter = preBBox.getCenter(new THREE.Vector3());
 
+  // C_pre capture (STL-import remediation Phase 1): for native-preview
+  // models, record the pre-centering bbox center so output paths can
+  // reproject the ORIGINAL file into the scene frame (`w = M·(v_raw −
+  // C_pre)`). Exact by construction: measured from the very geometry the
+  // centering below uses (post-sanitize, post-classify), whether or not the
+  // translate actually runs — when it does, translate + stored post-center
+  // sum to exactly this value; when it does not, the stored center IS this
+  // value.
+  const nativePreviewCPre: [number, number, number] | undefined = options._isNativePreview
+    ? [preCenter.x, preCenter.y, preCenter.z]
+    : undefined;
+
   // Normalize: center X/Z at 0 and set bottom (minY) to 0 in local space
   if (options.center) {
     geometry.translate(-preCenter.x, -preBBox.min.y, -preCenter.z);
@@ -519,7 +552,16 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   }
 
   const shouldSurfaceDefects = meshDefects.hasDefects || meshDefects.nativeRepairReport != null;
-  return { geometry, bbox, center, size, flatteningPlanes, edgeGeometry, ...(shouldSurfaceDefects ? { meshDefects } : {}) };
+  return {
+    geometry,
+    bbox,
+    center,
+    size,
+    flatteningPlanes,
+    edgeGeometry,
+    ...(shouldSurfaceDefects ? { meshDefects } : {}),
+    ...(nativePreviewCPre ? { _nativePreviewCPre: nativePreviewCPre } : {}),
+  };
 }
 
 /** Number of bytes per triangle in a binary STL: 12 byte normal + 36 byte vertices + 2 byte attribute */
@@ -783,9 +825,36 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
         ...(nativeResult.isPreview ? { nativeProcessingMode: 'none' as const } : {}),
       });
       if (nativeResult.isPreview) {
+        // C_pre captured at the centering site inside processGeometry.
+        const cPre = processed._nativePreviewCPre;
+        delete processed._nativePreviewCPre;
+
+        // Staleness fingerprint for output-time full-res re-reads. The DFST
+        // response carries no stat data, so one sub-millisecond stat IPC is
+        // the least-invasive capture. Non-fatal: without it the splice still
+        // runs, it only skips the changed-on-disk comparison.
+        let sourceFingerprint: { sizeBytes: number; mtimeMs: number } | undefined;
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const stat = await invoke<{ sizeBytes: number; mtimeMs: number }>('stat_source_file', {
+            filePath: options.filePath,
+          });
+          if (stat && Number.isFinite(stat.sizeBytes) && Number.isFinite(stat.mtimeMs)) {
+            sourceFingerprint = { sizeBytes: stat.sizeBytes, mtimeMs: stat.mtimeMs };
+          }
+        } catch (statError) {
+          console.warn(
+            '[loadStlGeometry] Could not fingerprint the preview source file; ' +
+            'full-res output will skip the staleness check.',
+            statError,
+          );
+        }
+
         processed.nativePreview = {
           originalTriangleCount: nativeResult.originalTriangleCount,
           previewTriangleCount: nativeResult.previewTriangleCount,
+          ...(cPre ? { cPre } : {}),
+          ...(sourceFingerprint ? { sourceFingerprint } : {}),
         };
       }
       return processed;

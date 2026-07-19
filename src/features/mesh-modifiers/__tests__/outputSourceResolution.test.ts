@@ -35,14 +35,11 @@ import { prepareLoadedModelsForOutput } from '../prepareModelGeometry';
  *    routing so the prepared model no longer presents the preview
  *    BufferGeometry as its staging geometry (the fallback branch below).
  *
- * SKIPPED IN-TREE because it FAILS today by design (red-first, plan §D1) and
- * the pinned `npm test` baseline (237/237/0) must gain skips only. Red proof:
- * flip `skip` to false locally, run
- * `node --import tsx --test src/features/mesh-modifiers/__tests__/outputSourceResolution.test.ts`,
- * capture the failure, re-skip. The captured run is quoted in the P0c report.
+ * UN-SKIPPED at Phase 1: `resolveOutputGeometrySource` is exported from
+ * prepareModelGeometry.ts (the preferred seam above) and the slicing
+ * orchestrator + mesh export consume it. The red proof (staging resolved to
+ * the ~2M preview) was captured pre-Phase-1 and is quoted in the P0c report.
  */
-const R1_SKIP_REASON =
-  'red until Phase 1 (full-res output routing for native-preview models) — un-skip locally for the red proof';
 
 function buildNativePreviewMockModel(): { model: LoadedModel; previewGeometry: THREE.BufferGeometry } {
   // Stand-in for the ~2M-triangle preview: what matters is that it is the
@@ -93,7 +90,6 @@ function buildNativePreviewMockModel(): { model: LoadedModel; previewGeometry: T
 
 test(
   'R1: staging source for a native-preview model resolves to full resolution, not the preview',
-  { skip: R1_SKIP_REASON },
   async () => {
     const { model, previewGeometry } = buildNativePreviewMockModel();
 
@@ -146,3 +142,68 @@ test(
     }
   },
 );
+
+/**
+ * Golden invariance (Phase 1): the scene-geometry path must be untouched.
+ * A non-preview model resolves to its EXACT scene BufferGeometry object, and
+ * `prepareLoadedModelsForOutput` passes the same object through — so every
+ * downstream staged byte for ≤6M models is produced by the identical code on
+ * the identical buffers (byte-identity by object identity).
+ */
+test('golden: a non-preview model resolves to its exact scene geometry, unchanged', async () => {
+  const { model, previewGeometry } = buildNativePreviewMockModel();
+  // Strip the preview marker: this is now an ordinary model.
+  delete (model.geometry as { nativePreview?: unknown }).nativePreview;
+
+  try {
+    const moduleExports = prepareModelGeometryModule as Record<string, unknown>;
+    const resolveOutputGeometrySource = moduleExports['resolveOutputGeometrySource'] as (
+      model: LoadedModel,
+    ) => { kind: string; geometry?: THREE.BufferGeometry };
+    assert.equal(typeof resolveOutputGeometrySource, 'function');
+
+    const resolved = resolveOutputGeometrySource(model);
+    assert.equal(resolved.kind, 'scene-geometry');
+    assert.equal(
+      resolved.geometry,
+      previewGeometry,
+      'non-preview models must stage the exact scene BufferGeometry object (byte-identical path)',
+    );
+
+    const prepared = await prepareLoadedModelsForOutput([model]);
+    try {
+      assert.equal(prepared.models.length, 1);
+      assert.equal(
+        prepared.models[0].geometry.geometry,
+        previewGeometry,
+        'prepareLoadedModelsForOutput must pass unmodified models through untouched',
+      );
+    } finally {
+      prepared.dispose();
+    }
+  } finally {
+    previewGeometry.dispose();
+  }
+});
+
+/**
+ * Bounded Phase-1 scope: a native-preview model with a sourcePath but WITHOUT
+ * a stored cPre still resolves to the full-res source — the consumer is
+ * responsible for degrading (with a user-visible warning) when the frame
+ * datum is missing, and the descriptor says so via `cPre: null`.
+ */
+test('a native-preview model without a stored cPre resolves full-res with cPre null', () => {
+  const { model, previewGeometry } = buildNativePreviewMockModel();
+  try {
+    const moduleExports = prepareModelGeometryModule as Record<string, unknown>;
+    const resolveOutputGeometrySource = moduleExports['resolveOutputGeometrySource'] as (
+      model: LoadedModel,
+    ) => { kind: string; cPre?: unknown; fingerprint?: unknown };
+    const resolved = resolveOutputGeometrySource(model);
+    assert.equal(resolved.kind, 'fullres-source-file');
+    assert.equal(resolved.cPre, null);
+    assert.equal(resolved.fingerprint, null);
+  } finally {
+    previewGeometry.dispose();
+  }
+});

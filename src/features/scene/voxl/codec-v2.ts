@@ -178,6 +178,15 @@ export async function serializeVoxlDocumentV2(
         typeof m.fileSizeBytes === 'number' && Number.isFinite(m.fileSizeBytes)
           ? Math.max(0, Math.floor(m.fileSizeBytes))
           : undefined,
+      // Phase-1 full-res linkage (STL-import remediation): additive JSON
+      // fields inside the MODL chunk — no container-version bump needed
+      // (older readers ignore unknown fields; the versioning convention
+      // reserves bumps for changes that would make old readers WRONG, like
+      // the dedup chunk sharing above).
+      ...(typeof m.sourcePath === 'string' && m.sourcePath.trim().length > 0
+        ? { sourcePath: m.sourcePath }
+        : {}),
+      ...(m.nativePreview ? { nativePreview: m.nativePreview } : {}),
       transform: {
         position: { x: m.transform.position.x, y: m.transform.position.y, z: m.transform.position.z },
         rotation: { x: m.transform.rotation.x, y: m.transform.rotation.y, z: m.transform.rotation.z },

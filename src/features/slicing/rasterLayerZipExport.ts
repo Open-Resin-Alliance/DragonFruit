@@ -30,6 +30,19 @@ const DEFAULT_MESH_CHUNK_TARGET_BYTES = 64 * 1024 * 1024;
 const MIN_MESH_CHUNK_TARGET_BYTES = 16 * 1024 * 1024;
 const MAX_MESH_CHUNK_TARGET_BYTES = 256 * 1024 * 1024;
 
+/**
+ * A model whose full-resolution geometry was already staged Rust-side by the
+ * Phase-1 splice (`stage_fullres_mesh_from_source`) BEFORE the collector
+ * streams. The collector must skip the model's (preview) geometry while the
+ * model stays part of the job for supports/rafts, the manifest, and the
+ * layer-count derivation (via the splice's world bounds).
+ */
+export type FullResSplicedModel = {
+  triangleCount: number;
+  worldMin: [number, number, number];
+  worldMax: [number, number, number];
+};
+
 export type RasterLayerZipExportOptions = {
   models: LoadedModel[];
   printerProfile: PrinterProfile;
@@ -40,6 +53,8 @@ export type RasterLayerZipExportOptions = {
   onProgress?: (done: number, total: number, phase: string) => void;
   flushBinaryMeshChunk?: (chunk: Uint8Array) => Promise<void>;
   meshChunkTargetBytes?: number;
+  /** Keyed by model id; absent/empty means the legacy (byte-identical) path. */
+  fullResSplices?: Map<string, FullResSplicedModel>;
 };
 
 function normalizeMeshChunkTargetBytes(value: number | null | undefined): number {
@@ -524,7 +539,12 @@ class TriangleFloatCollector {
   }
 }
 
-function composeModelMatrix(transform: LoadedModel['transform']): THREE.Matrix4 {
+/**
+ * The scene transform matrix `M = T·R·S` exactly as the slicing bake composes
+ * it. Exported for the Phase-1 full-res splice: the Rust-side reprojection
+ * must use the IDENTICAL matrix the WebView bake would have applied.
+ */
+export function composeModelMatrix(transform: LoadedModel['transform']): THREE.Matrix4 {
   const q = quaternionFromGlobalEuler(transform.rotation);
   return new THREE.Matrix4().compose(transform.position, q, transform.scale);
 }
@@ -2306,7 +2326,26 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   const settings = resolveEffectiveSettings(options);
   const perfSettings = getSavedSlicingPerformanceSettings();
 
-  const modelTriangleCount = countModelWorldTriangles(visibleModels);
+  // Phase-1 full-res splice bookkeeping: spliced models were already staged
+  // Rust-side (at the FRONT of the staged buffer) before this function runs.
+  // They contribute their FULL-RES triangle count to the job's model split
+  // and their splice-reported world bounds to the layer-count derivation,
+  // but their preview geometry must never enter the collector. Absent map ⇒
+  // the legacy path, byte-identical to before.
+  const fullResSplices = options.fullResSplices && options.fullResSplices.size > 0
+    ? options.fullResSplices
+    : undefined;
+  const collectorModels = fullResSplices
+    ? visibleModels.filter((model) => !fullResSplices.has(model.id))
+    : visibleModels;
+  const splicedTriangleCount = fullResSplices
+    ? visibleModels.reduce(
+        (sum, model) => sum + (fullResSplices.get(model.id)?.triangleCount ?? 0),
+        0,
+      )
+    : 0;
+  const collectorModelTriangleCount = countModelWorldTriangles(collectorModels);
+  const modelTriangleCount = collectorModelTriangleCount + splicedTriangleCount;
   console.warn('[SupportAA] collector input partitions', {
     models: visibleModels.map((model) => {
       const totalTriangles = getModelTriangleCount(model);
@@ -2324,25 +2363,31 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
         position: model.transform.position.toArray(),
         rotation: model.transform.rotation.toArray().slice(0, 3),
         scale: model.transform.scale.toArray(),
+        ...(fullResSplices?.has(model.id)
+          ? { fullResSplicedTriangles: fullResSplices.get(model.id)!.triangleCount }
+          : {}),
       };
     }),
     modelTriangleCount,
+    splicedTriangleCount,
   });
   const collector = new TriangleFloatCollector(
-    modelTriangleCount + 4096,
+    collectorModelTriangleCount + 4096,
     options.flushBinaryMeshChunk,
     options.meshChunkTargetBytes,
   );
 
   // Push model-only triangles first (across all models), then support-only.
   // This produces the same collector layout as manually splitting before slicing.
-  for (const model of visibleModels) {
+  // Spliced models are skipped: their full-res triangles are already staged
+  // ahead of every collector chunk, keeping the model block contiguous.
+  for (const model of collectorModels) {
     const modelTriCount = effectiveModelTriangleCount(model);
     if (modelTriCount > 0) {
       appendModelTrianglesInRange(model, collector, 0, modelTriCount);
     }
   }
-  for (const model of visibleModels) {
+  for (const model of collectorModels) {
     const totalTris = getModelTriangleCount(model);
     const modelTriCount = effectiveModelTriangleCount(model);
     if (modelTriCount < totalTris) {
@@ -2360,13 +2405,23 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     triangleCountAfterSupports: collector.triangleCount,
   });
 
-  if (collector.triangleCount === 0) {
+  if (collector.triangleCount === 0 && splicedTriangleCount === 0) {
     throw new Error('Unable to prepare world-space triangles from visible models.');
   }
 
-  const maxZ = Number.isFinite(collector.maxZ)
-    ? Math.max(0, collector.maxZ)
-    : 0;
+  // The job z-range must cover the FULL-RES mesh when spliced: the splice
+  // summary's world bounds stand in for the vertices the collector never saw
+  // (consumer census row 17 — preview-derived z-range vs full-res staging).
+  let splicedMaxZ = -Infinity;
+  if (fullResSplices) {
+    for (const spliced of fullResSplices.values()) {
+      if (spliced.worldMax[2] > splicedMaxZ) {
+        splicedMaxZ = spliced.worldMax[2];
+      }
+    }
+  }
+  const collectorMaxZ = Number.isFinite(collector.maxZ) ? collector.maxZ : -Infinity;
+  const maxZ = Math.max(0, Math.max(collectorMaxZ, splicedMaxZ));
 
   const buildHeight = maxZ;
   const maxBuildHeight = Math.max(0, Number(options.printerProfile.buildVolumeMm.height) || 0);
@@ -2376,8 +2431,9 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   const trianglesXYZ = await collector.finalize();
   console.warn('[SupportAA] collector finalized', {
     modelTriangleCount,
-    totalTriangleCount: collector.triangleCount,
-    supportTriangleCount: Math.max(0, collector.triangleCount - modelTriangleCount),
+    splicedTriangleCount,
+    totalTriangleCount: collector.triangleCount + splicedTriangleCount,
+    supportTriangleCount: Math.max(0, collector.triangleCount - collectorModelTriangleCount),
     triangleFloatCount: trianglesXYZ.length,
     streamed: options.flushBinaryMeshChunk != null,
     modelFloatFingerprint: fingerprintTriangleFloats(
@@ -2483,7 +2539,19 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     totalLayers,
     tallestObjectHeightMm,
     trianglesXYZ,
-    meshBounds: collector.meshBounds,
+    meshBounds: (() => {
+      if (!fullResSplices) return collector.meshBounds;
+      const merged = { ...collector.meshBounds };
+      for (const spliced of fullResSplices.values()) {
+        merged.minX = Math.min(merged.minX, spliced.worldMin[0]);
+        merged.minY = Math.min(merged.minY, spliced.worldMin[1]);
+        merged.minZ = Math.min(merged.minZ, spliced.worldMin[2]);
+        merged.maxX = Math.max(merged.maxX, spliced.worldMax[0]);
+        merged.maxY = Math.max(merged.maxY, spliced.worldMax[1]);
+        merged.maxZ = Math.max(merged.maxZ, spliced.worldMax[2]);
+      }
+      return merged;
+    })(),
     metadataJson: JSON.stringify(manifest),
   };
 }

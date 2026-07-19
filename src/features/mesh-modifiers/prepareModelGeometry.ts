@@ -21,6 +21,81 @@ export type PreparedModelGeometry = {
   disposeAfterUse: boolean;
 };
 
+/**
+ * The output-source contract for output-bearing consumers (slicing staging,
+ * mesh export) — STL-import decimation remediation Phase 1.
+ *
+ * `fullres-source-file`: the model's scene geometry is a reduced native
+ * preview of an oversized import; outputs must NOT consume it. The Rust-side
+ * splice re-reads `sourcePath` and reprojects `w = M · (v_raw − cPre)` —
+ * bytes never enter the WebView (plan §C.2).
+ *
+ * `scene-geometry`: stage the scene BufferGeometry exactly as before
+ * (byte-identical path for every non-preview model).
+ */
+export type OutputGeometrySource =
+  | {
+      kind: 'fullres-source-file';
+      sourcePath: string;
+      /**
+       * Stored import-time pre-centering bbox center (raw-file frame).
+       * `null` when the datum was never captured (e.g. models mocked or
+       * persisted before Phase 1) — consumers must then degrade to the
+       * preview path WITH a user-visible warning, never guess a center.
+       */
+      cPre: [number, number, number] | null;
+      /** Import-time staleness fingerprint; `null` skips the stat compare. */
+      fingerprint: { sizeBytes: number; mtimeMs: number } | null;
+      originalTriangleCount: number;
+    }
+  | {
+      kind: 'scene-geometry';
+      geometry: THREE.BufferGeometry;
+    };
+
+/**
+ * Resolves the staging source for an output-bearing consumer. Native-preview
+ * models with a retained source path route to the full-resolution file; all
+ * other models (and preview models carrying unbaked modifiers — bounded
+ * Phase-1 scope, full-res modifier routing is Phase 4) stay on the scene
+ * geometry.
+ */
+export function resolveOutputGeometrySource(model: LoadedModel): OutputGeometrySource {
+  const nativePreview = model.geometry.nativePreview;
+  const sourcePath = typeof model.sourcePath === 'string' && model.sourcePath.trim().length > 0
+    ? model.sourcePath
+    : null;
+
+  if (nativePreview && sourcePath) {
+    // Unbaked hollowing is baked WebView-side from the scene geometry; a
+    // full-res splice would silently drop the modifier. Keep such models on
+    // the preview path (recorded Phase-4 carryover) rather than lose the
+    // user's hollowing.
+    const modifiers = resolveModelMeshModifiers(model);
+    const hasUnbakedHollowing = Boolean(
+      modifiers?.hollowing?.enabled && !modifiers.hollowing.bakedIntoGeometry,
+    );
+    if (hasUnbakedHollowing) {
+      console.warn(
+        `[resolveOutputGeometrySource] "${model.name}" is a native preview with unbaked `
+        + 'hollowing — staging the preview so the modifier applies (full-res modifier '
+        + 'routing is Phase 4).',
+      );
+      return { kind: 'scene-geometry', geometry: model.geometry.geometry };
+    }
+
+    return {
+      kind: 'fullres-source-file',
+      sourcePath,
+      cPre: nativePreview.cPre ?? null,
+      fingerprint: nativePreview.sourceFingerprint ?? null,
+      originalTriangleCount: nativePreview.originalTriangleCount,
+    };
+  }
+
+  return { kind: 'scene-geometry', geometry: model.geometry.geometry };
+}
+
 export type PreparedLoadedModelsForOutput = {
   models: LoadedModel[];
   modifiedModelCount: number;

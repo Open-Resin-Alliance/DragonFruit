@@ -4230,7 +4230,32 @@ export function useSceneCollectionManager() {
           existingIds.add(resolvedId);
           idMap.set(model.id, resolvedId);
 
-          const polygonCount = geometry.geometry.getAttribute('position').count / 3;
+          // Phase-1 full-res linkage hydration (STL-import remediation): the
+          // embedded payload of a native-preview model is the reduced
+          // preview. Restore the persisted marker + frame datum + source
+          // path so output paths can re-link the ORIGINAL file. Staleness is
+          // re-checked at splice time; a missing/changed source degrades to
+          // the preview with a user-visible warning. Older files carry none
+          // of these fields and load exactly as before.
+          const persistedPreview = model.nativePreview;
+          const persistedSourcePath = typeof model.sourcePath === 'string' && model.sourcePath.trim().length > 0
+            ? model.sourcePath
+            : undefined;
+          if (
+            persistedPreview
+            && Number.isFinite(persistedPreview.originalTriangleCount)
+            && persistedPreview.originalTriangleCount > 0
+          ) {
+            // The wrapper is per-model (fresh build or per-model clone), so
+            // this never leaks onto another model's geometry.
+            geometry.nativePreview = { ...persistedPreview };
+          }
+
+          // Mirror the import-time convention: preview models report the
+          // ORIGINAL count (pre-Phase-2 concealment behavior, and the count
+          // the staging-size estimator needs for full-res output).
+          const polygonCount = geometry.nativePreview?.originalTriangleCount
+            ?? geometry.geometry.getAttribute('position').count / 3;
           const color = clampHexColor(model.color, DEFAULT_MESH_COLOR);
 
           importedModels.push({
@@ -4238,6 +4263,7 @@ export function useSceneCollectionManager() {
             name: sanitizeImportedModelDisplayName(model.name),
             fileUrl: '',
             fileSizeBytes: model.fileSizeBytes,
+            sourcePath: persistedSourcePath,
             geometry,
             transform: {
               position: new THREE.Vector3(model.transform.position.x, model.transform.position.y, model.transform.position.z),

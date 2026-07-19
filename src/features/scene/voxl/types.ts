@@ -40,6 +40,27 @@ export type VoxlMeshRef = {
   chunkIndex?: number;
 };
 
+/**
+ * Native-preview linkage persisted with a model entry (STL-import
+ * decimation remediation Phase 1). The embedded mesh payload of a >6M
+ * import is the reduced preview; these fields let a reload re-link the
+ * ORIGINAL on-disk source so output paths (slicing, mesh export) can stage
+ * full resolution again. Additive + optional: files without them (and
+ * older readers, which ignore unknown JSON fields) are unaffected.
+ */
+export type VoxlNativePreviewRef = {
+  originalTriangleCount: number;
+  previewTriangleCount: number;
+  /** Import-time pre-centering bbox center (raw-file frame) — the frame
+   *  datum for `w = M · (v_raw − cPre)` reprojection. */
+  cPre?: [number, number, number];
+  /** Import-time staleness fingerprint of the source file. */
+  sourceFingerprint?: {
+    sizeBytes: number;
+    mtimeMs: number;
+  };
+};
+
 export type VoxlModelEntry = {
   id: string;
   name: string;
@@ -47,6 +68,9 @@ export type VoxlModelEntry = {
   color: string;
   polygonCount: number;
   fileSizeBytes?: number;
+  /** Absolute on-disk path of the original import (native-preview models). */
+  sourcePath?: string;
+  nativePreview?: VoxlNativePreviewRef;
   transform: VoxlModelTransform;
   mesh: VoxlMeshRef;
   meshModifiers?: ModelMeshModifiers;
@@ -100,6 +124,8 @@ export type VoxlModelRuntimeLike = {
   color: string;
   polygonCount: number;
   fileSizeBytes?: number;
+  sourcePath?: string;
+  nativePreview?: VoxlNativePreviewRef;
   transform: {
     position: { x: number; y: number; z: number };
     rotation: { x: number; y: number; z: number };
