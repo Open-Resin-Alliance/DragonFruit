@@ -17,6 +17,11 @@ No manual island scan is required — generation runs its own analysis when need
 
 Presets also scale support strength: regions above a mass threshold automatically get thicker structural supports, while tiny details (claw tips, spikes) get slim detail supports that fit where full-size geometry cannot.
 
+Two toggles refine what gets planned:
+
+- **Struts resting on the model** (on by default): allows short struts anchored on the model itself for regions no plate support can reach, such as an arm held over the torso. Turn it off for multi-part miniatures where cross-part struts are unwelcome — those regions get reported for manual work instead.
+- **Overhang surface fill** (on by default): the density grid over steep undersides. Turn it off for islands-only planning when you prefer to hand-place overhang coverage.
+
 ## 3) Generate
 
 Click **Generate Auto Supports**. Progress runs through phases:
@@ -42,8 +47,8 @@ Nothing is committed while previewing. Re-run with a different preset at any tim
 ## 5) Apply
 
 - **Apply N** commits the whole plan as a single undoable action — one undo removes every generated support.
-- **Auto-brace after apply** (on by default) cross-connects the new supports with braces in the same action, stiffening tall columns for printing.
-- **Cancel** discards the preview.
+- **Auto-brace after apply** (on by default) cross-connects the new supports with braces in the same action, stiffening tall columns for printing. It can be changed right up until Apply.
+- **Cancel** discards the preview. Moving or rotating the model also discards it — a plan is only valid for the position it was made at.
 
 Generated supports are ordinary trunks and sticks: edit, move, or delete them individually like any manually placed support.
 

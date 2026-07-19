@@ -14,21 +14,27 @@ import type {
 } from './types';
 
 const MAX_STICK_LENGTH_MM = 35;
+// Tilted struts get a much shorter reach: long diagonals read as bridges
+// between unrelated parts of the model and are ugly to clean up.
+const MAX_TILTED_STICK_LENGTH_MM = 12;
 
 // Vertical first, then rings of gently tilted directions. A strut anchored at
 // both ends prints fine slightly off-vertical, and a tilt often reaches a flat
 // anchor when the surface straight below is too steep to seat a cone on.
-const ANCHOR_DIRECTIONS: THREE.Vector3[] = [
-  new THREE.Vector3(0, 0, -1),
+const ANCHOR_DIRECTIONS: Array<{ direction: THREE.Vector3; maxLengthMm: number }> = [
+  { direction: new THREE.Vector3(0, 0, -1), maxLengthMm: MAX_STICK_LENGTH_MM },
   ...[15, 30].flatMap((tiltDeg) => {
     const tilt = (tiltDeg * Math.PI) / 180;
     return Array.from({ length: 12 }, (_, index) => {
       const azimuth = (index * Math.PI) / 6;
-      return new THREE.Vector3(
-        Math.cos(azimuth) * Math.sin(tilt),
-        Math.sin(azimuth) * Math.sin(tilt),
-        -Math.cos(tilt),
-      );
+      return {
+        direction: new THREE.Vector3(
+          Math.cos(azimuth) * Math.sin(tilt),
+          Math.sin(azimuth) * Math.sin(tilt),
+          -Math.cos(tilt),
+        ),
+        maxLengthMm: MAX_TILTED_STICK_LENGTH_MM,
+      };
     });
   }),
 ];
@@ -51,6 +57,16 @@ export async function routeStickFallback(args: {
   onProgress?: (progress: AutoSupportProgress) => void;
   overrides?: StickBuildInput['overrides'];
 }): Promise<{ supports: PlannedAutoSupport[]; failures: AutoSupportRouteFailure[] }> {
+  if (!args.settings.allowOnModelStruts) {
+    return {
+      supports: [],
+      failures: args.contacts.map((contact) => ({
+        contactId: contact.id,
+        volumeId: contact.volumeId,
+        reason: 'no_surface' as const,
+      })),
+    };
+  }
   const supports: PlannedAutoSupport[] = [];
   const failures: AutoSupportRouteFailure[] = [];
   const usedSurfacePoints = (args.existingTipPoints ?? []).map((point) => point.clone());
@@ -69,8 +85,8 @@ export async function routeStickFallback(args: {
         failureReason = 'tip_spacing';
         continue;
       }
-      for (const direction of ANCHOR_DIRECTIONS) {
-        const below = resolveAnchorSurfaceAlong(args.mesh, surface.point, direction, MAX_STICK_LENGTH_MM);
+      for (const { direction, maxLengthMm } of ANCHOR_DIRECTIONS) {
+        const below = resolveAnchorSurfaceAlong(args.mesh, surface.point, direction, maxLengthMm);
         if (!below) continue;
         const built = buildStick({
           modelId: args.modelId,

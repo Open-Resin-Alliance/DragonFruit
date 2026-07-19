@@ -17,6 +17,10 @@ export interface AutoSupportPlannerSettings {
   maxSurfaceContacts: number;
   /** Volumes at or above this mass get beefed-up structural supports. */
   structuralVolumeMm3: number;
+  /** Allow struts anchored on the model when no plate route exists. */
+  allowOnModelStruts: boolean;
+  /** Grid-fill steep overhangs with supports beyond island detection. */
+  allowSurfaceFill: boolean;
 }
 
 export interface UnsupportedVolume {

@@ -34,6 +34,7 @@ export interface AutoSupportPipelineWorker {
     scanMinZ: number;
     layerHeightMm: number;
     preset: AutoSupportPreset;
+    settings?: AutoSupportPlannerSettings;
     modelId: string;
     mesh: THREE.Mesh;
     existingTipPoints: Point[];
@@ -208,6 +209,7 @@ export function createAutoSupportRouteWorker(args: {
         scanMinZ: planArgs.scanMinZ,
         layerHeightMm: planArgs.layerHeightMm,
         preset: planArgs.preset,
+        plannerSettings: planArgs.settings,
         existingTipPoints: planArgs.existingTipPoints,
       }, { signal: planArgs.signal, onProgress: planArgs.onProgress });
       if (result !== null) return result as AutoSupportPlanPreview;

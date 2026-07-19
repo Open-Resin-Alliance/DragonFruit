@@ -13,6 +13,8 @@ export const AUTO_SUPPORT_PRESETS: Record<AutoSupportPreset, AutoSupportPlannerS
     overhangNormalZMax: -0.82,
     maxSurfaceContacts: 90,
     structuralVolumeMm3: 300,
+    allowOnModelStruts: true,
+    allowSurfaceFill: true,
   },
   normal: {
     contactSpacingMm: 7,
@@ -26,6 +28,8 @@ export const AUTO_SUPPORT_PRESETS: Record<AutoSupportPreset, AutoSupportPlannerS
     overhangNormalZMax: -0.71,
     maxSurfaceContacts: 180,
     structuralVolumeMm3: 180,
+    allowOnModelStruts: true,
+    allowSurfaceFill: true,
   },
   heavy: {
     contactSpacingMm: 5,
@@ -39,5 +43,7 @@ export const AUTO_SUPPORT_PRESETS: Record<AutoSupportPreset, AutoSupportPlannerS
     overhangNormalZMax: -0.57,
     maxSurfaceContacts: 380,
     structuralVolumeMm3: 120,
+    allowOnModelStruts: true,
+    allowSurfaceFill: true,
   },
 };

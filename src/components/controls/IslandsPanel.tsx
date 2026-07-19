@@ -58,6 +58,28 @@ function describeAutoSupportPreview(preview: AutoSupportPlanPreview): string {
   return parts.join(' ');
 }
 
+function ToggleSwitch({ label, checked, disabled, onChange }: {
+  label: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <div className={`mt-2.5 flex items-center justify-between gap-2 ${disabled ? 'opacity-50' : ''}`}>
+      <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>{label}</span>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors shrink-0"
+        style={{ background: checked ? 'var(--accent)' : 'var(--surface-2)' }}
+      >
+        <span className={`w-4 h-4 rounded-full bg-white shadow transform transition-transform ${checked ? 'translate-x-4' : 'translate-x-0'}`} />
+      </button>
+    </div>
+  );
+}
+
 function SectionHeader({ title }: { title: string }) {
   return (
     <div className="pb-1.5 text-[10px] font-semibold uppercase tracking-wide text-center" style={{ color: 'var(--text-strong)' }}>
@@ -105,6 +127,7 @@ interface IslandsPanelProps {
   onPlanAutoSupports?: (
     preset: AutoSupportPreset,
     onProgress: (progress: AutoSupportProgress) => void,
+    options?: { onModelStruts?: boolean; surfaceFill?: boolean },
   ) => Promise<AutoSupportPlanPreview | null>;
   onAbortAutoSupportRun?: () => void;
   onAcceptAutoSupports?: (options?: { brace?: boolean }) => void;
@@ -126,6 +149,8 @@ export function IslandsPanel({
   const [autoSupporting, setAutoSupporting] = React.useState(false);
   const [autoSupportPreset, setAutoSupportPreset] = React.useState<AutoSupportPreset>('normal');
   const [braceAfterApply, setBraceAfterApply] = React.useState(true);
+  const [onModelStruts, setOnModelStruts] = React.useState(true);
+  const [surfaceFill, setSurfaceFill] = React.useState(true);
   const [autoSupportProgress, setAutoSupportProgress] = React.useState<AutoSupportProgress | null>(null);
   const [supportStatus, setSupportStatus] = React.useState<{ ok: boolean; message: string } | null>(null);
 
@@ -196,7 +221,7 @@ export function IslandsPanel({
     setSelectedMarkerId(null);
     autoSupportCancelledRef.current = false;
     try {
-      const preview = await onPlanAutoSupports(autoSupportPreset, setAutoSupportProgress);
+      const preview = await onPlanAutoSupports(autoSupportPreset, setAutoSupportProgress, { onModelStruts, surfaceFill });
       if (!preview) {
         setSupportStatus(autoSupportCancelledRef.current
           ? { ok: true, message: 'Auto supports cancelled. No changes were made.' }
@@ -219,7 +244,7 @@ export function IslandsPanel({
     } finally {
       setAutoSupporting(false);
     }
-  }, [autoSupportPreset, autoSupporting, hasGeometry, onPlanAutoSupports, setSelectedMarkerId]);
+  }, [autoSupportPreset, autoSupporting, hasGeometry, onModelStruts, onPlanAutoSupports, setSelectedMarkerId, surfaceFill]);
 
   const [cancelling, setCancelling] = React.useState(false);
 
@@ -341,8 +366,26 @@ export function IslandsPanel({
                   </button>
                 ))}
               </div>
+              <ToggleSwitch
+                label="Struts resting on the model"
+                checked={onModelStruts}
+                disabled={autoSupporting || !!autoSupportPreview}
+                onChange={setOnModelStruts}
+              />
+              <ToggleSwitch
+                label="Overhang surface fill"
+                checked={surfaceFill}
+                disabled={autoSupporting || !!autoSupportPreview}
+                onChange={setSurfaceFill}
+              />
+              <ToggleSwitch
+                label="Auto-brace after apply"
+                checked={braceAfterApply}
+                disabled={autoSupporting}
+                onChange={setBraceAfterApply}
+              />
               {autoSupporting ? (
-                <div className="mt-2 grid grid-cols-[1fr_auto] gap-1.5">
+                <div className="mt-2.5 grid grid-cols-[1fr_auto] gap-1.5">
                   <div
                     className="flex h-8 items-center justify-center rounded border text-[11px] font-semibold"
                     style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-0)' }}
@@ -368,7 +411,7 @@ export function IslandsPanel({
                   type="button"
                   onClick={() => { void handleAutoSupport(); }}
                   disabled={!hasGeometry || !onPlanAutoSupports}
-                  className="ui-button mt-2 w-full !h-8 text-[11px] disabled:opacity-50"
+                  className="ui-button mt-2.5 w-full !h-8 text-[11px] disabled:opacity-50"
                   style={{
                     borderColor: 'var(--accent)',
                     background: 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
@@ -378,7 +421,7 @@ export function IslandsPanel({
                   Generate Auto Supports
                 </button>
               ) : (
-                <div className="mt-2 grid grid-cols-2 gap-1.5">
+                <div className="mt-2.5 grid grid-cols-2 gap-1.5">
                   <button
                     type="button"
                     onClick={onCancelAutoSupports}
@@ -391,26 +434,20 @@ export function IslandsPanel({
                     type="button"
                     onClick={() => onAcceptAutoSupports?.({ brace: braceAfterApply })}
                     disabled={autoSupportPreview.supports.length === 0}
-                    className="ui-button h-8 text-[11px] disabled:opacity-50"
+                    className="h-8 rounded border text-[11px] font-semibold transition-colors disabled:opacity-50"
+                    style={{
+                      borderColor: 'var(--accent)',
+                      background: 'var(--accent)',
+                      color: 'white',
+                    }}
                   >
                     Apply {autoSupportPreview.supports.length}
                   </button>
-                  <label
-                    className="col-span-2 flex cursor-pointer items-center gap-1.5 text-[10px]"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={braceAfterApply}
-                      onChange={(event) => setBraceAfterApply(event.target.checked)}
-                    />
-                    Auto-brace after apply
-                  </label>
                 </div>
               )}
               {supportStatus && (
                 <div
-                  className="mt-1.5 text-[10px] leading-tight"
+                  className="mt-2.5 text-[10px] leading-tight"
                   role="status"
                   style={{ color: supportStatus.ok ? 'var(--accent)' : 'var(--danger)' }}
                 >

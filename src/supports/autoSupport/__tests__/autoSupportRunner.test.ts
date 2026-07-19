@@ -457,6 +457,30 @@ test('repair routing walks the rescue ladder and keeps only real failures pendin
   assert.equal(supports.length, 2);
 });
 
+test('skips surface fill when disallowed', async () => {
+  const scan = scanFromLayers([[1, 1]], 2, 1);
+  let sampleCalls = 0;
+
+  const preview = await runAutoSupportPlan({
+    scan,
+    scanMinZ: 10,
+    layerHeightMm: 1,
+    preset: 'normal',
+    settings: { ...SETTINGS, allowSurfaceFill: false },
+    modelId: 'model',
+    mesh: FAKE_MESH,
+    routeContacts: async ({ contacts }) => ({ supports: contacts.map(plannedSupport), failures: [] }),
+    routeSticks: failSticks,
+    sampleSurface: () => {
+      sampleCalls += 1;
+      return [];
+    },
+  });
+
+  assert.equal(sampleCalls, 0);
+  assert.equal(preview.unresolvedVolumeIds.length, 0);
+});
+
 test('produces identical previews for identical inputs', async () => {
   const scan = scanFromLayers([
     [1, 1, 1, 0, 1, 1],

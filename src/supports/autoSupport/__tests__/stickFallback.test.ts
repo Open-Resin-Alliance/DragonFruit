@@ -101,6 +101,24 @@ test('detail-size overrides shape the built stick geometry', async () => {
   }
 });
 
+test('plans no sticks when on-model struts are disallowed', async () => {
+  const { geom, mesh } = overhangScene();
+  try {
+    const result = await routeStickFallback({
+      contacts: [{ id: '1:0', volumeId: 1, position: { x: 0, y: 0, z: 4.5 } }],
+      settings: { ...AUTO_SUPPORT_PRESETS.normal, allowOnModelStruts: false },
+      modelId: 'model-no-struts',
+      mesh,
+    });
+
+    assert.equal(result.supports.length, 0);
+    assert.equal(result.failures.length, 1);
+  } finally {
+    disposeIslandSupportMesh(mesh);
+    geom.geometry.dispose();
+  }
+});
+
 test('skips sticks whose tip would crowd an existing support tip', async () => {
   const { geom, mesh } = overhangScene();
   try {

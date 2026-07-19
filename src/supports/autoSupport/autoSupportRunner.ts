@@ -319,11 +319,16 @@ export async function runAutoSupportPlan(args: AutoSupportRunArgs): Promise<Auto
   // the downward-facing surface on the spacing grid and route best-effort —
   // a failed fill sample leans on its neighbors, so failures are not
   // reported as unresolved regions.
-  const surfaceContacts = sampleSurface({
+  // Fill floor: below the root's own height a plate trunk degenerates into a
+  // bare root cone, and undersides that close to the raft don't need density
+  // fill anyway. Island contacts may still go lower (they shrink the root).
+  const rootSettings = getSupportSettings().roots;
+  const fillFloorZ = rootSettings.diskHeightMm + rootSettings.coneHeightMm + 0.4;
+  const surfaceContacts = !settings.allowSurfaceFill ? [] : sampleSurface({
     mesh: args.mesh,
     spacingMm: settings.contactSpacingMm,
     maxDownNormalZ: settings.overhangNormalZMax,
-    minZ: args.scanMinZ + args.layerHeightMm * 1.5,
+    minZ: Math.max(args.scanMinZ + args.layerHeightMm * 1.5, fillFloorZ),
     exclusions: toExclusions([...existingTips, ...supports.flatMap(plannedTipPoints)], settings.contactSpacingMm),
     maxSamples: settings.maxSurfaceContacts,
   });

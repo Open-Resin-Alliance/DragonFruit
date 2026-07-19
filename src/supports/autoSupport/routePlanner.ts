@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getSettings as getSupportSettings } from '@/supports/Settings/state';
 import { buildTrunkData, type TrunkBuildInput } from '@/supports/SupportTypes/Trunk/trunkBuilder';
 import { resolveIslandSupportSurface } from './islandSupportSurface';
 import type {
@@ -49,6 +50,23 @@ export async function routeAutoSupportContacts(args: {
   const minimumSpacingSq = Math.max(0.5, args.settings.contactSpacingMm * 0.45) ** 2;
   const phase = args.progressPhase ?? 'route';
 
+  // A tip below the root's own height would produce a degenerate support:
+  // all root, no shaft, contact buried inside the cone. Shrink the root for
+  // low tips; below the absolute minimum, skip — the raft holds that zone.
+  const rootSettings = getSupportSettings().roots;
+  const tipClearanceMm = 0.4;
+  const minRootMm = { disk: 0.3, cone: 0.2 };
+  const absoluteMinTipZ = minRootMm.disk + minRootMm.cone + tipClearanceMm;
+  const lowTipOverrides = (tipZ: number): TrunkBuildInput['overrides'] | undefined => {
+    const defaultRootsTop = (args.overrides?.rootsDiskHeightMm ?? rootSettings.diskHeightMm)
+      + (args.overrides?.rootsConeHeightMm ?? rootSettings.coneHeightMm);
+    if (tipZ >= defaultRootsTop + tipClearanceMm) return args.overrides;
+    const budget = tipZ - tipClearanceMm;
+    const disk = Math.max(minRootMm.disk, Math.min(rootSettings.diskHeightMm, budget * 0.4));
+    const cone = Math.max(minRootMm.cone, budget - disk);
+    return { ...args.overrides, rootsDiskHeightMm: disk, rootsConeHeightMm: cone };
+  };
+
   for (let contactIndex = 0; contactIndex < args.contacts.length; contactIndex++) {
     if (args.signal?.aborted) throw new DOMException('Auto support routing aborted', 'AbortError');
     const contact = args.contacts[contactIndex];
@@ -58,6 +76,10 @@ export async function routeAutoSupportContacts(args: {
     for (const target of buildSearchTargets(contact, args.settings)) {
       const surface = resolveIslandSupportSurface(args.mesh, target, args.settings.surfaceSearchRadiusMm + 1);
       if (!surface) continue;
+      if (surface.point.z < absoluteMinTipZ) {
+        failureReason = 'OUT_OF_BOUNDS';
+        continue;
+      }
       if (usedSurfacePoints.some((point) => point.distanceToSquared(surface.point) < minimumSpacingSq)) {
         failureReason = 'tip_spacing';
         continue;
@@ -68,7 +90,7 @@ export async function routeAutoSupportContacts(args: {
         modelId: args.modelId,
         mesh: args.mesh,
         maxExpansions: args.maxExpansions,
-        overrides: args.overrides,
+        overrides: lowTipOverrides(surface.point.z),
       });
       if (built.error) {
         failureReason = built.error;

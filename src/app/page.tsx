@@ -12313,16 +12313,24 @@ export default function Home() {
   const autoSupportAbortRef = React.useRef<AbortController | null>(null);
   const autoSupportWorkerRef = React.useRef<{ key: string; worker: AutoSupportPipelineWorker } | null>(null);
 
-  // Scan data, any pending plan, and the pipeline worker's mesh all describe
-  // one specific model; they are stale the moment the active model changes.
+  // Scan data, any pending plan, and the pipeline worker's mesh are all in
+  // world space for one specific model; they are stale the moment the active
+  // model changes OR its transform does. Without this, generating after a
+  // move plans against the old position, and applying a preview after a move
+  // commits supports at stale coordinates — floating in air.
   const clearIslandScanData = islands.clearScanData;
+  const activeTransformKey = [
+    transformMgr.transform.position.toArray(),
+    transformMgr.transform.rotation.toArray(),
+    transformMgr.transform.scale.toArray(),
+  ].flat().join(',');
   React.useEffect(() => {
     clearIslandScanData();
     autoSupportAbortRef.current?.abort();
     setAutoSupportPreview(null);
     autoSupportWorkerRef.current?.worker.dispose();
     autoSupportWorkerRef.current = null;
-  }, [clearIslandScanData, scene.activeModel?.id]);
+  }, [clearIslandScanData, scene.activeModel?.id, activeTransformKey]);
   React.useEffect(() => () => {
     autoSupportWorkerRef.current?.worker.dispose();
     autoSupportWorkerRef.current = null;
@@ -12331,10 +12339,16 @@ export default function Home() {
   const handlePlanAutoSupports = React.useCallback(async (
     preset: AutoSupportPreset,
     onProgress: (progress: AutoSupportProgress) => void,
+    options?: { onModelStruts?: boolean; surfaceFill?: boolean },
   ): Promise<AutoSupportPlanPreview | null> => {
     const geom = scene.geom;
     const modelId = scene.activeModel?.id;
     if (!geom || !modelId) return null;
+    const plannerSettings = {
+      ...AUTO_SUPPORT_PRESETS[preset],
+      allowOnModelStruts: options?.onModelStruts ?? true,
+      allowSurfaceFill: options?.surfaceFill ?? true,
+    };
 
     setAutoSupportPreview(null);
     autoSupportAbortRef.current?.abort();
@@ -12381,6 +12395,7 @@ export default function Home() {
         scanMinZ: scanBBox.min.z,
         layerHeightMm: slicing.layerHeightMm,
         preset,
+        settings: plannerSettings,
         modelId,
         mesh,
         existingTipPoints: supportTips.map((tip) => ({ x: tip.x, y: tip.y, z: tip.z })),
@@ -12412,7 +12427,7 @@ export default function Home() {
               scan: verificationScan.scanData,
               scanMinZ: verificationScan.scanBBox.min.z,
               layerHeightMm: slicing.layerHeightMm,
-              settings: AUTO_SUPPORT_PRESETS[preset],
+              settings: plannerSettings,
             };
             return routeWorker
               ? await routeWorker.evaluateCoverage(evaluateArgs)
@@ -12455,7 +12470,7 @@ export default function Home() {
         if (realRemainders.length > 0 && !abortController.signal.aborted) {
           const repairArgs = {
             contacts: realRemainders,
-            settings: AUTO_SUPPORT_PRESETS[preset],
+            settings: plannerSettings,
             modelId,
             mesh,
             existingTipPoints: supportTips.map((tip) => ({ x: tip.x, y: tip.y, z: tip.z })),

@@ -39,6 +39,7 @@ export interface RouteWorkerPlanMessage {
   scanMinZ: number;
   layerHeightMm: number;
   preset: AutoSupportPreset;
+  plannerSettings?: AutoSupportPlannerSettings;
   existingTipPoints: Array<{ x: number; y: number; z: number }>;
 }
 
@@ -158,6 +159,7 @@ self.onmessage = (event: MessageEvent<RouteWorkerRequest>) => {
       scanMinZ: message.scanMinZ,
       layerHeightMm: message.layerHeightMm,
       preset: message.preset,
+      settings: message.plannerSettings,
       modelId,
       mesh: workerMesh,
       existingTipPoints: message.existingTipPoints,
