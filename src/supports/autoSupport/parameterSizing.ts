@@ -119,8 +119,10 @@ export function sizeParameters(
     const effectiveArea = Math.max(totalSupportedAreaMm2 ?? candidate.islandAreaMm2, 0.01);
     const peelForceN = effectiveArea * PEEL_FORCE_N_PER_MM2;
 
-    // Total load: weight (converted to N) + peel force.
-    const loadN = carriedWeightG * 0.0098 + peelForceN;
+    // Total load.  Mesh minima are point contacts — 1.5× factor
+    // because peel stress concentrates at a single sharp tip.
+    const rawLoadN = carriedWeightG * 0.0098 + peelForceN;
+    const loadN = candidate.source === 'minima' ? rawLoadN * 1.5 : rawLoadN;
 
     // Shaft diameter: scales with sqrt(load), floored at MIN.
     const shaftDiameterMm = round(
