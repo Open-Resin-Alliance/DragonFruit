@@ -214,7 +214,7 @@ import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 // agents/Claude/20260613-1404-Implementation-dev-islands-islands-panel-...md.
 import { useIslands } from '@/volumeAnalysis/Islands/useIslands';
 import { IslandsPanel } from '@/components/controls/IslandsPanel';
-import { AutoSupportPanel, autoSupportBusy, autoSupportDrivingScan } from '@/components/controls/AutoSupportPanel';
+import { AutoSupportPanel, getAutoSupportBusy, subscribeAutoSupportBusy, autoSupportDrivingScan } from '@/components/controls/AutoSupportPanel';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { useSupportInteractionManager } from '@/features/supports/useSupportInteractionManager';
 import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
@@ -6669,6 +6669,9 @@ export default function Home() {
     updateSupportTips();
     return subscribeSupportState(updateSupportTips);
   }, [scene.activeModel?.id]);
+
+  const [autoSupportBusy, setAutoSupportBusyState] = React.useState(() => getAutoSupportBusy());
+  React.useEffect(() => subscribeAutoSupportBusy(() => setAutoSupportBusyState(getAutoSupportBusy())), []);
 
   const islandsPoc = useIslands({
     geom: scene.geom,

@@ -12,7 +12,21 @@ import { getSettings, updateAutoSupportSettings } from '@/supports/Settings/stat
 /** Set to true while auto-support is busy (scanning or placing).
  *  Page-level overlay reads this to show the "Generating Supports"
  *  full-screen modal, matching the native island-scan modal style. */
-export let autoSupportBusy = false;
+let _autoSupportBusy = false;
+const _busyListeners = new Set<() => void>();
+
+export function getAutoSupportBusy(): boolean { return _autoSupportBusy; }
+export function subscribeAutoSupportBusy(fn: () => void): () => void {
+  _busyListeners.add(fn);
+  return () => _busyListeners.delete(fn);
+}
+function setAutoSupportBusy(v: boolean) {
+  if (_autoSupportBusy !== v) {
+    _autoSupportBusy = v;
+    for (const fn of _busyListeners) fn();
+  }
+}
+
 /** Set to true while auto-support is driving its own scan, so the
  *  native island-scan overlay can be suppressed. */
 export let autoSupportDrivingScan = false;
@@ -87,11 +101,11 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
       try {
         runAutoPlace(list, activeModelId!, s.autoSupport);
       } finally {
-        autoSupportBusy = false;
+        setAutoSupportBusy(false);
         setBusy(false);
       }
     } else {
-      autoSupportBusy = false;
+      setAutoSupportBusy(false);
       setBusy(false);
     }
   }, [islands.scanning, islands.filteredIslands, activeModelId]);
@@ -103,7 +117,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
     // Need to scan first?
     if (list.length === 0 && islands.voxelIslands.length === 0 && islands.minimaIslands.length === 0) {
       setBusy(true);
-      autoSupportBusy = true;
+      setAutoSupportBusy(true);
       pendingRef.current = true;
       autoSupportDrivingScan = true;
       void islands.onRunScan();
@@ -112,13 +126,13 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
     // Already have data — show modal, then run.
     if (list.length > 0 && s.autoSupport.enabled) {
       setBusy(true);
-      autoSupportBusy = true;
+      setAutoSupportBusy(true);
       // Yield to let React render the modal before blocking work.
       setTimeout(() => {
         try {
           runAutoPlace(list, activeModelId, s.autoSupport);
         } finally {
-          autoSupportBusy = false;
+          setAutoSupportBusy(false);
           setBusy(false);
         }
       }, 50);
