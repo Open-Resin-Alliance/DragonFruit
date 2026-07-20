@@ -62,6 +62,9 @@ export function sizeParameters(
     candidate: CandidatePoint,
     ctx?: ModelSizingContext,
     baseSettings?: SupportSettings,
+    /** For core trunks: total area of all candidates this trunk supports
+     *  (own area + branches + leaves).  For standalone trunks: own area. */
+    totalSupportedAreaMm2?: number,
 ): SizeOverrides {
     // ── Baseline from user settings ───────────────────────────────
     const shaftBase = baseSettings?.shaft?.diameterMm ?? 1.0;
@@ -106,9 +109,11 @@ export function sizeParameters(
     const weightFraction = zHeight / modelZMax; // 1.0 at top, ~0 at bottom
     const carriedWeightG = modelWeightG * weightFraction;
 
-    // Peel force from island area.
-    const islandArea = Math.max(candidate.islandAreaMm2, 0.01);
-    const peelForceN = islandArea * PEEL_FORCE_N_PER_MM2;
+    // Peel force from the total supported area (cluster total for core
+    // trunks, own area for standalone).  A core trunk supporting a
+    // cluster of islands must be thicker than a standalone one.
+    const effectiveArea = Math.max(totalSupportedAreaMm2 ?? candidate.islandAreaMm2, 0.01);
+    const peelForceN = effectiveArea * PEEL_FORCE_N_PER_MM2;
 
     // Total load: weight (converted to N) + peel force.
     const loadN = carriedWeightG * 0.0098 + peelForceN;
@@ -118,8 +123,9 @@ export function sizeParameters(
         clamp(shaftBase * clamp(Math.sqrt(loadN) * 1.2, 0.8, 2.0), MIN_SHAFT_DIAMETER_MM, MAX_SHAFT_DIAMETER_MM),
     3);
 
-    // Tip contact: scales with island area, bounded by shaft.
-    const tipScale = clampStretch(islandArea, 0.05, 1.0, 0.5, 1.2);
+    // Tip contact: scales with this specific island's area.
+    const ownArea = Math.max(candidate.islandAreaMm2, 0.01);
+    const tipScale = clampStretch(ownArea, 0.05, 1.0, 0.5, 1.2);
     const tipContactDiameterMm = round(Math.min(tipContactBase * tipScale, shaftDiameterMm * 0.6), 3);
     const tipBodyDiameterMm = shaftDiameterMm;
 

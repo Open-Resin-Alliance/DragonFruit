@@ -309,6 +309,7 @@ function placeOneCandidate(
     candidate: CandidatePoint,
     _settingsOverride: Partial<AutoSupportSettings> | undefined,
     modelCtx?: ModelSizingContext,
+    totalArea?: number,
 ): { kind: string; rejectedReason?: RejectReason; preset?: 'detail' | 'structure' | 'anchor'; entityId?: string; stickCount?: number } {
     const supportSettings = getSettings();
     const snapshot = getSnapshot();
@@ -459,7 +460,7 @@ function placeOneCandidate(
     }
 
     // Dynamic physics-based sizing using model context + user settings.
-    const overrides = sizeParameters(candidate, modelCtx, supportSettings);
+    const overrides = sizeParameters(candidate, modelCtx, supportSettings, totalArea);
 
     const trunkResult = buildTrunkData({
         tipPos,
@@ -689,9 +690,28 @@ export function runAutoPlace(
     const presets = { detail: 0, structure: 0, anchor: 0 };
     const rejectionReasons: Record<string, number> = {};
 
+    // Pre-compute cluster totals: for each candidate, sum the areas
+    // of all candidates within merge radius.  Core trunks get sized
+    // for their full cluster, not just their own tiny island.
+    const clusterTotal = new Map<string, number>();
+    const mergeR2 = GRIDLESS_MERGE_RADIUS_MM * GRIDLESS_MERGE_RADIUS_MM;
+    for (const c of candidates) {
+        let total = c.islandAreaMm2;
+        for (const other of candidates) {
+            if (other.id === c.id) continue;
+            const dx = c.tipPos.x - other.tipPos.x;
+            const dy = c.tipPos.y - other.tipPos.y;
+            const dz = c.tipPos.z - other.tipPos.z;
+            if (dx * dx + dy * dy + dz * dz <= mergeR2) {
+                total += other.islandAreaMm2;
+            }
+        }
+        clusterTotal.set(c.id, total);
+    }
+
     for (const candidate of candidates) {
         try {
-            const result = placeOneCandidate(candidate, settingsOverride, modelCtx);
+            const result = placeOneCandidate(candidate, settingsOverride, modelCtx, clusterTotal.get(candidate.id));
             switch (result.kind) {
                 case 'trunk':   placedTrunks++; break;
                 case 'anchor':  placedAnchors++; break;
@@ -772,40 +792,39 @@ export function runAutoPlace(
 
     // ── Sizing debug info ───────────────────────────────────────────
     let sizingDebug: AutoPlaceAnalytics['sizingDebug'];
-    if (modelCtx) {
-        const avgArea = candidates.length > 0
-            ? candidates.reduce((s, c) => s + c.islandAreaMm2, 0) / candidates.length
-            : 0;
+    if (modelCtx && candidates.length > 0) {
         const weightG = modelCtx.modelVolumeMm3 * 0.0011;
-        const weightPerG = weightG / Math.max(modelCtx.totalCandidates, 1);
-        const avgPeelN = avgArea * 0.05;
-        // Sample the sizing function with average values to show typical range.
-        const avgCandidate: CandidatePoint = {
-            ...candidates[0] ?? {
-                id: 'avg', tipPos: { x: 0, y: 0, z: 0 }, tipNormal: { x: 0, y: 0, z: -1 },
-                modelId: '', source: 'voxel', islandAreaMm2: avgArea,
-                zHeight: candidates.reduce((s, c) => s + c.zHeight, 0) / Math.max(candidates.length, 1),
-                overhangAngleDeg: 45, priority: 0,
-            },
-            islandAreaMm2: avgArea,
-        };
-        const sample = sizeParameters(avgCandidate, modelCtx, getSettings());
+        const areas = candidates.map(c => c.islandAreaMm2);
+        areas.sort((a, b) => a - b);
+        const minArea = areas[0];
+        const maxArea = areas[areas.length - 1];
+        const avgArea = areas.reduce((s, a) => s + a, 0) / areas.length;
+        const zMax = Math.max(...candidates.map(c => c.zHeight), 1);
+        // Sample min/max/avg candidates for shaft diameter range.
+        const makeSample = (area: number, z: number): CandidatePoint => ({
+            id: 'dbg', tipPos: { x: 0, y: 0, z: 0 }, tipNormal: { x: 0, y: 0, z: -1 },
+            modelId: '', source: 'voxel', islandAreaMm2: area,
+            zHeight: z, overhangAngleDeg: 45, priority: 0,
+        });
+        const sMin = sizeParameters(makeSample(minArea, 10), modelCtx, getSettings());
+        const sMax = sizeParameters(makeSample(maxArea, zMax), modelCtx, getSettings());
+        const sAvg = sizeParameters(makeSample(avgArea, zMax / 2), modelCtx, getSettings());
         sizingDebug = {
             modelVolumeMm3: Math.round(modelCtx.modelVolumeMm3),
             estimatedWeightG: round2(weightG),
             totalCandidates: modelCtx.totalCandidates,
-            weightPerSupportG: round2(weightPerG),
+            weightPerSupportG: round2(weightG * (zMax / 2) / zMax), // mid-height support
             avgIslandAreaMm2: round2(avgArea),
-            avgPeelForceN: round2(avgPeelN),
+            avgPeelForceN: round2(maxArea * 0.2), // worst-case peel force
             shaftDiameterRange: {
-                min: round2(sample.shaftDiameterMm ?? 0),
-                max: round2(sample.shaftDiameterMm ?? 0),
-                avg: round2(sample.shaftDiameterMm ?? 0),
+                min: round2(sMin.shaftDiameterMm ?? 0),
+                max: round2(sMax.shaftDiameterMm ?? 0),
+                avg: round2(sAvg.shaftDiameterMm ?? 0),
             },
             tipContactRange: {
-                min: round2(sample.tipContactDiameterMm ?? 0),
-                max: round2(sample.tipContactDiameterMm ?? 0),
-                avg: round2(sample.tipContactDiameterMm ?? 0),
+                min: round2(sMin.tipContactDiameterMm ?? 0),
+                max: round2(sMax.tipContactDiameterMm ?? 0),
+                avg: round2(sAvg.tipContactDiameterMm ?? 0),
             },
         };
     }
