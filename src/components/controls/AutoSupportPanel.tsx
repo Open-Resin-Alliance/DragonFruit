@@ -8,6 +8,7 @@ import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack
 import type { UseIslandsReturn } from '@/volumeAnalysis/Islands/useIslands';
 import { runAutoPlace } from '@/supports/autoSupport';
 import { getSettings, updateAutoSupportSettings } from '@/supports/Settings/state';
+import { getSnapshot, setSnapshot } from '@/supports/state';
 
 /** Set to true while auto-support is busy (scanning or placing).
  *  Page-level overlay reads this to show the "Generating Supports"
@@ -74,6 +75,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const [busy, setBusy] = React.useState(false);
   const [showSettings, setShowSettings] = React.useState(false);
+  const [showReplaceDialog, setShowReplaceDialog] = React.useState(false);
 
   const settings = getSettings().autoSupport;
   const [draft, setDraft] = React.useState(settings);
@@ -110,34 +112,77 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
     }
   }, [islands.scanning, islands.filteredIslands, activeModelId]);
 
-  const handleRun = React.useCallback(() => {
-    if (!activeModelId || busy) return;
-    const s = getSettings();
+  const doRun = React.useCallback((replace: boolean) => {
+    if (!activeModelId) return;
+    if (replace) {
+      const snap = getSnapshot();
+      const next = { ...snap };
+      // Clear all supports for this model.
+      for (const id of Object.keys(snap.trunks)) {
+        if (snap.trunks[id].modelId === activeModelId) {
+          delete next.trunks[id];
+          delete next.roots[snap.trunks[id].rootId];
+        }
+      }
+      for (const id of Object.keys(snap.branches)) {
+        if (snap.branches[id].modelId === activeModelId) delete next.branches[id];
+      }
+      for (const id of Object.keys(snap.leaves)) {
+        if (snap.leaves[id].modelId === activeModelId) delete next.leaves[id];
+      }
+      for (const id of Object.keys(snap.anchors)) {
+        if (snap.anchors[id].modelId === activeModelId) delete next.anchors[id];
+      }
+      setSnapshot(next);
+    }
+    setBusy(true);
+    setAutoSupportBusy(true);
     const list = islands.filteredIslands;
     // Need to scan first?
     if (list.length === 0 && islands.voxelIslands.length === 0 && islands.minimaIslands.length === 0) {
-      setBusy(true);
-      setAutoSupportBusy(true);
       pendingRef.current = true;
       autoSupportDrivingScan = true;
       void islands.onRunScan();
       return;
     }
-    // Already have data — show modal, then run.
-    if (list.length > 0 && s.autoSupport.enabled) {
-      setBusy(true);
-      setAutoSupportBusy(true);
-      // Yield to let React render the modal before blocking work.
+    // Let React flush the busy state and the browser paint the modal
+    // before the heavy synchronous work blocks the main thread.
+    requestAnimationFrame(() => {
       setTimeout(() => {
         try {
-          runAutoPlace(list, activeModelId, s.autoSupport);
+          const s = getSettings();
+          if (list.length > 0 && s.autoSupport.enabled) {
+            runAutoPlace(list, activeModelId, s.autoSupport);
+          }
         } finally {
           setAutoSupportBusy(false);
           setBusy(false);
         }
-      }, 50);
+      }, 0);
+    });
+  }, [activeModelId, islands.filteredIslands, islands.voxelIslands.length, islands.minimaIslands.length]);
+
+  const handleRun = React.useCallback(() => {
+    if (!activeModelId || busy) return;
+    const s = getSettings();
+    const list = islands.filteredIslands;
+    // Check for existing supports.
+    const snap = getSnapshot();
+    let hasSupports = false;
+    for (const t of Object.values(snap.trunks)) {
+      if (t.modelId === activeModelId) { hasSupports = true; break; }
     }
-  }, [activeModelId, busy, islands.filteredIslands, islands.voxelIslands.length, islands.minimaIslands.length]);
+    if (!hasSupports) {
+      for (const b of Object.values(snap.branches)) {
+        if (b.modelId === activeModelId) { hasSupports = true; break; }
+      }
+    }
+    if (hasSupports) {
+      setShowReplaceDialog(true);
+      return;
+    }
+    doRun(false);
+  }, [activeModelId, busy, islands.filteredIslands, islands.voxelIslands.length, islands.minimaIslands.length, doRun]);
 
   const canRun = hasGeometry && !!activeModelId && !busy && !islands.scanning;
 
@@ -294,6 +339,30 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
               })}
             </div>
           </div>
+        </div>
+      </StructuredDialogModal>
+
+      {/* Replace / Add dialog */}
+      <StructuredDialogModal
+        open={showReplaceDialog}
+        ariaLabel="Existing supports detected"
+        title="Existing Supports Detected"
+        subtitle="This model already has supports. How would you like to proceed?"
+        iconTone="neutral"
+        onClose={() => setShowReplaceDialog(false)}
+        onBackdropClick={() => setShowReplaceDialog(false)}
+        actions={
+          <>
+            <Button onClick={() => setShowReplaceDialog(false)} variant="secondary" size="sm" className="!h-9 text-[12px]">Cancel</Button>
+            <Button onClick={() => { setShowReplaceDialog(false); doRun(false); }} variant="secondary" size="sm" className="!h-9 text-[12px]">Add to existing</Button>
+            <Button onClick={() => { setShowReplaceDialog(false); doRun(true); }} variant="primary" size="sm" className="!h-9 text-[12px]">Replace all</Button>
+          </>
+        }
+      >
+        <div className="rounded-md border p-3" style={SECTION_CARD}>
+          <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            You can replace all existing supports with auto-placed ones, or incorporate your existing supports and fill in the gaps.
+          </p>
         </div>
       </StructuredDialogModal>
     </>

@@ -9947,16 +9947,12 @@ export default function Home() {
                 <p>Layer {islandsPoc.scanProgress.done} of {islandsPoc.scanProgress.total}</p>
               )}
             </div>
-            {islandsPoc.scanning && (
-              <>
-                <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
-                  Elapsed: {islandsPoc.elapsedLabel}
-                </div>
-                <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                  Processing 1 model
-                </div>
-              </>
-            )}
+            <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
+              Elapsed: {islandsPoc.scanning ? islandsPoc.elapsedLabel : '…'}
+            </div>
+            <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Processing 1 model
+            </div>
             <div className="ui-loading-track mt-3 h-2.5 w-full rounded-full" style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}>
               <div className="ui-loading-indicator" style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }} />
             </div>
