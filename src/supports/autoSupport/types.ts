@@ -69,6 +69,20 @@ export interface AutoPlaceAnalytics {
     rejectionReasons: Partial<Record<RejectReason, number>>;
     /** Area coverage: sum of covered island areas / total island area (0–1). */
     areaCoverage: number;
+    /** Debug sizing info from the physics calculations. */
+    sizingDebug?: SizingDebugInfo;
+}
+
+/** Physics-based sizing debug data. */
+export interface SizingDebugInfo {
+    modelVolumeMm3: number;
+    estimatedWeightG: number;
+    totalCandidates: number;
+    weightPerSupportG: number;
+    avgIslandAreaMm2: number;
+    avgPeelForceN: number;
+    shaftDiameterRange: { min: number; max: number; avg: number };
+    tipContactRange: { min: number; max: number; avg: number };
 }
 
 /** Result returned by the auto-place orchestrator. */

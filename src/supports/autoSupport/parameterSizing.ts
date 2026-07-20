@@ -1,107 +1,20 @@
 import type { CandidatePoint } from './types';
 import type { SupportSettings } from '../Settings/types';
-import { createDefaultSettings } from '../Settings/types';
 
 // ---------------------------------------------------------------------------
-// Preset definitions — mirrors the built-in presets from
-// src/supports/Settings/presets.ts.  Inlined so auto-placement doesn't
-// depend on the preset store / React runtime.
+// Physics constants
 // ---------------------------------------------------------------------------
 
-/** Thin supports for fine details and small islands (≤ 0.15 mm²). */
-const DETAIL_SETTINGS: SupportSettings = {
-    ...createDefaultSettings(),
-    tip: {
-        shape: 'cone',
-        type: 'disk',
-        contactDiameterMm: 0.22,
-        bodyDiameterMm: 0.8,
-        lengthMm: 2.5,
-        penetrationMm: 0,
-        coneAngleMode: 'adaptive',
-        adaptiveConeAngleOffsetDeg: 60,
-        coneAngleDeg: 100,
-        breakpointMm: 0,
-    },
-    shaft: {
-        shape: 'cylinder',
-        diameterMm: 0.8,
-        secondaryDiameterMm: 0.8,
-        isStraight: true,
-        maxAngleDeg: 80,
-    },
-    roots: {
-        shape: 'cylinder',
-        diameterMm: 2.0,
-        diskHeightMm: 0.5,
-        coneHeightMm: 1.0,
-        neckDiameterMm: 0.8,
-        neckBlend: 0.7,
-    },
-    baseFlare: {
-        enabled: true,
-        diameterMm: 2.5,
-        heightMm: 1.2,
-    },
-};
-
-/** Balanced supports for medium islands (0.15 – 0.50 mm²). */
-const STRUCTURE_SETTINGS: SupportSettings = {
-    ...createDefaultSettings(),
-    tip: {
-        ...createDefaultSettings().tip,
-        contactDiameterMm: 0.28,
-        lengthMm: 2.5,
-    },
-    shaft: {
-        ...createDefaultSettings().shaft,
-        diameterMm: 1.0,
-        secondaryDiameterMm: 1.0,
-    },
-    roots: {
-        ...createDefaultSettings().roots,
-        diameterMm: 2.0,
-        diskHeightMm: 0.5,
-        coneHeightMm: 1.0,
-    },
-};
-
-/** Heavy supports for large overhangs (> 0.50 mm²). */
-const ANCHOR_SETTINGS: SupportSettings = {
-    ...createDefaultSettings(),
-    tip: {
-        shape: 'cone',
-        type: 'disk',
-        contactDiameterMm: 0.4,
-        bodyDiameterMm: 1.2,
-        lengthMm: 2.5,
-        penetrationMm: 0,
-        coneAngleMode: 'adaptive',
-        adaptiveConeAngleOffsetDeg: 60,
-        coneAngleDeg: 100,
-        breakpointMm: 0,
-    },
-    shaft: {
-        shape: 'cylinder',
-        diameterMm: 1.2,
-        secondaryDiameterMm: 1.2,
-        isStraight: true,
-        maxAngleDeg: 80,
-    },
-    roots: {
-        shape: 'cylinder',
-        diameterMm: 2.0,
-        diskHeightMm: 0.5,
-        coneHeightMm: 1.0,
-        neckDiameterMm: 1.5,
-        neckBlend: 0.7,
-    },
-    baseFlare: {
-        enabled: true,
-        diameterMm: 4.0,
-        heightMm: 2.0,
-    },
-};
+/** Typical SLA resin density (g/mm³).  ~1.1 g/cm³. */
+const RESIN_DENSITY_G_PER_MM3 = 0.0011;
+/** Approximate peel force per mm² of cross-section (N/mm²).
+ *  Real measured values are 0.1–0.5 N/mm² for typical resins. */
+const PEEL_FORCE_N_PER_MM2 = 0.2;
+/** Base shaft diameter floor (mm).  Supports thinner than this
+ *  are too fragile for any practical load. */
+const MIN_SHAFT_DIAMETER_MM = 1.0;
+/** Maximum shaft diameter (mm). */
+const MAX_SHAFT_DIAMETER_MM = 2.5;
 
 // ---------------------------------------------------------------------------
 // Override type
@@ -118,44 +31,138 @@ export interface SizeOverrides {
     rootsConeHeightMm?: number;
 }
 
-// ---------------------------------------------------------------------------
-// Thresholds
-// ---------------------------------------------------------------------------
-
-const DETAIL_MAX_AREA_MM2 = 0.15;
-const STRUCTURE_MAX_AREA_MM2 = 0.50;
+/** Context passed from the orchestrator for model-level sizing. */
+export interface ModelSizingContext {
+    /** Estimated model volume in mm³ (from bounding box or mesh). */
+    modelVolumeMm3: number;
+    /** Total number of candidates being placed (for weight distribution). */
+    totalCandidates: number;
+}
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 /**
- * Select support dimensions using the same presets as the manual
- * placement toolbar (Detail / Structure / Anchor).
+ * Compute support dimensions dynamically using physics-informed scaling.
  *
- * | Island area       | Preset    | Tip Ø  | Shaft Ø | Use case        |
- * |-------------------|-----------|--------|---------|-----------------|
- * | ≤ 0.15 mm²        | Detail    | 0.22   | 0.8     | fine features   |
- * | 0.15 – 0.50 mm²   | Structure | 0.28   | 1.0     | general use     |
- * | > 0.50 mm²        | Anchor    | 0.40   | 1.2     | large overhangs |
+ * Shaft diameter scales with estimated load (model weight per support +
+ * peel force from island area).  Tip diameter scales with island area.
+ * Root diameter and base flare scale with trunk height.
+ *
+ * Falls back to preset-based sizing when no model context is available.
+ *
+ * @param candidate  - The island to size supports for.
+ * @param ctx        - Optional model-level context for dynamic sizing.
+ *                     When omitted, falls back to heuristic scaling from
+ *                     island area alone.
+ * @param baseSettings - The user's current support settings (baseline).
  */
-export function sizeParameters(candidate: CandidatePoint): SizeOverrides {
-    const settings = selectPreset(candidate);
+export function sizeParameters(
+    candidate: CandidatePoint,
+    ctx?: ModelSizingContext,
+    baseSettings?: SupportSettings,
+): SizeOverrides {
+    // ── Baseline from user settings ───────────────────────────────
+    const shaftBase = baseSettings?.shaft?.diameterMm ?? 1.0;
+    const tipContactBase = baseSettings?.tip?.contactDiameterMm ?? 0.3;
+    const tipLengthBase = baseSettings?.tip?.lengthMm ?? 2.5;
+    const tipPenBase = baseSettings?.tip?.penetrationMm ?? 0.1;
+    const rootsDiaBase = baseSettings?.roots?.diameterMm ?? 2.0;
+
+    if (!ctx) {
+        // No model context — use island-area-based heuristic scaling.
+        const area = Math.max(candidate.islandAreaMm2, 0.01);
+        const areaScale = clampStretch(area, 0.1, 2.0, 0.8, 1.5);
+        const shaft = round(shaftBase * areaScale, 3);
+        return {
+            shaftDiameterMm: shaft,
+            tipContactDiameterMm: round(Math.min(tipContactBase * areaScale, shaft * 0.6), 3),
+            tipBodyDiameterMm: shaft,
+            tipLengthMm: round(tipLengthBase, 3),
+            tipPenetrationMm: round(tipPenBase, 3),
+            rootsDiameterMm: round(rootsDiaBase * clamp(areaScale * 0.8, 1.0, 1.5), 3),
+            rootsDiskHeightMm: baseSettings?.roots?.diskHeightMm ?? 0.5,
+            rootsConeHeightMm: baseSettings?.roots?.coneHeightMm ?? 1.0,
+        };
+    }
+
+    // ── Dynamic physics-based sizing (upside-down printing) ───────
+    // In bottom-up SLA the model hangs from the build plate.  The
+    // build plate moves UP (+Z), so layers with higher Z are printed
+    // earlier and carry the weight of all layers above them.
+    //
+    // A support at Z=30 must hold everything from Z=0..30.
+    // A support at Z=10 only holds Z=0..10.
+
+    const modelWeightG = ctx.modelVolumeMm3 * RESIN_DENSITY_G_PER_MM3;
+
+    // Total model height (from bounding box or candidate Z range).
+    const modelZMax = Math.max(candidate.zHeight, 30); // fallback 30mm
+
+    // This support carries weight proportional to its Z position.
+    // Higher Z = more layers above = more weight.
+    const zHeight = Math.max(candidate.zHeight, 1);
+    const weightFraction = zHeight / modelZMax; // 1.0 at top, ~0 at bottom
+    const carriedWeightG = modelWeightG * weightFraction;
+
+    // Peel force from island area.
+    const islandArea = Math.max(candidate.islandAreaMm2, 0.01);
+    const peelForceN = islandArea * PEEL_FORCE_N_PER_MM2;
+
+    // Total load: weight (converted to N) + peel force.
+    const loadN = carriedWeightG * 0.0098 + peelForceN;
+
+    // Shaft diameter: scales with sqrt(load), floored at MIN.
+    const shaftDiameterMm = round(
+        clamp(shaftBase * clamp(Math.sqrt(loadN) * 1.2, 0.8, 2.0), MIN_SHAFT_DIAMETER_MM, MAX_SHAFT_DIAMETER_MM),
+    3);
+
+    // Tip contact: scales with island area, bounded by shaft.
+    const tipScale = clampStretch(islandArea, 0.05, 1.0, 0.5, 1.2);
+    const tipContactDiameterMm = round(Math.min(tipContactBase * tipScale, shaftDiameterMm * 0.6), 3);
+    const tipBodyDiameterMm = shaftDiameterMm;
+
+    // Tip length: slightly longer for taller supports.
+    const tipLengthMm = round(tipLengthBase * clamp(1 + (zHeight - 10) / 100, 0.9, 1.3), 3);
+
+    // Penetration: proportional to tip size.
+    const tipPenetrationMm = round(Math.max(tipPenBase, tipContactDiameterMm * 0.25), 3);
+
+    // Root diameter: wider for taller/heavier supports.
+    const rootScale = clamp(Math.sqrt(loadN) * 0.6, 0.8, 1.8);
+    const rootsDiameterMm = round(clamp(rootsDiaBase * rootScale, rootsDiaBase, 4.0), 3);
+
     return {
-        shaftDiameterMm: settings.shaft.diameterMm,
-        tipContactDiameterMm: settings.tip.contactDiameterMm,
-        tipBodyDiameterMm: settings.tip.bodyDiameterMm,
-        tipLengthMm: settings.tip.lengthMm,
-        tipPenetrationMm: settings.tip.penetrationMm,
-        rootsDiameterMm: settings.roots.diameterMm,
-        rootsDiskHeightMm: settings.roots.diskHeightMm,
-        rootsConeHeightMm: settings.roots.coneHeightMm,
+        shaftDiameterMm,
+        tipContactDiameterMm,
+        tipBodyDiameterMm,
+        tipLengthMm,
+        tipPenetrationMm,
+        rootsDiameterMm,
+        rootsDiskHeightMm: baseSettings?.roots?.diskHeightMm ?? 0.5,
+        rootsConeHeightMm: baseSettings?.roots?.coneHeightMm ?? 1.0,
     };
 }
 
-function selectPreset(candidate: CandidatePoint): SupportSettings {
-    const area = candidate.islandAreaMm2;
-    if (area <= DETAIL_MAX_AREA_MM2) return DETAIL_SETTINGS;
-    if (area <= STRUCTURE_MAX_AREA_MM2) return STRUCTURE_SETTINGS;
-    return ANCHOR_SETTINGS;
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function clamp(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
+}
+
+/** Clamp a value after linear remapping from [loIn, hiIn] to [loOut, hiOut]. */
+function clampStretch(
+    value: number,
+    loIn: number, hiIn: number,
+    loOut: number, hiOut: number,
+): number {
+    const t = (value - loIn) / (hiIn - loIn);
+    return clamp(loOut + t * (hiOut - loOut), loOut, hiOut);
+}
+
+function round(value: number, decimals: number): number {
+    return Number(value.toFixed(decimals));
 }

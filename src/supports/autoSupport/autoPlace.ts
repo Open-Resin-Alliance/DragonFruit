@@ -1,9 +1,12 @@
 import * as THREE from 'three';
 import type { CandidatePoint, AutoPlaceResult, AutoPlaceAnalytics, RejectReason } from './types';
+
+function round2(v: number): number { return Math.round(v * 100) / 100; }
 import type { AutoSupportSettings } from './settings';
 import { normalizeAutoSupportSettings } from './settings';
 import { generateCandidates, deduplicateCandidates } from './candidateGeneration';
 import { sizeParameters } from './parameterSizing';
+import type { ModelSizingContext } from './parameterSizing';
 import { getSettings } from '../Settings/state';
 import { getSnapshot, addRoot, addTrunk, addBranch, addLeaf, addKnot, addAnchor, addStick, addTwig } from '../state';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
@@ -305,6 +308,7 @@ function findMergeHost(
 function placeOneCandidate(
     candidate: CandidatePoint,
     _settingsOverride: Partial<AutoSupportSettings> | undefined,
+    modelCtx?: ModelSizingContext,
 ): { kind: string; rejectedReason?: RejectReason; preset?: 'detail' | 'structure' | 'anchor'; entityId?: string; stickCount?: number } {
     const supportSettings = getSettings();
     const snapshot = getSnapshot();
@@ -454,8 +458,8 @@ function placeOneCandidate(
         }
     }
 
-    // Size parameters based on island area preset (Detail/Structure/Anchor).
-    const overrides = sizeParameters(candidate);
+    // Dynamic physics-based sizing using model context + user settings.
+    const overrides = sizeParameters(candidate, modelCtx, supportSettings);
 
     const trunkResult = buildTrunkData({
         tipPos,
@@ -662,6 +666,18 @@ export function runAutoPlace(
     console.log(LOG_PREFIX,
         `Grid mode: ${gridEnabled ? 'ENABLED (supports share grid nodes, branch/leaf fan-out active)' : 'DISABLED (all supports become standalone trunks)'}`);
 
+    // ── Model sizing context ────────────────────────────────────────
+    let modelCtx: ModelSizingContext | undefined;
+    if (mesh) {
+        const bbox = new THREE.Box3().setFromObject(mesh);
+        const size = new THREE.Vector3();
+        bbox.getSize(size);
+        modelCtx = {
+            modelVolumeMm3: size.x * size.y * size.z,
+            totalCandidates: candidates.length,
+        };
+    }
+
     let placedTrunks = 0;
     let placedAnchors = 0;
     let placedBranches = 0;
@@ -675,7 +691,7 @@ export function runAutoPlace(
 
     for (const candidate of candidates) {
         try {
-            const result = placeOneCandidate(candidate, settingsOverride);
+            const result = placeOneCandidate(candidate, settingsOverride, modelCtx);
             switch (result.kind) {
                 case 'trunk':   placedTrunks++; break;
                 case 'anchor':  placedAnchors++; break;
@@ -754,12 +770,53 @@ export function runAutoPlace(
         }
     }
 
+    // ── Sizing debug info ───────────────────────────────────────────
+    let sizingDebug: AutoPlaceAnalytics['sizingDebug'];
+    if (modelCtx) {
+        const avgArea = candidates.length > 0
+            ? candidates.reduce((s, c) => s + c.islandAreaMm2, 0) / candidates.length
+            : 0;
+        const weightG = modelCtx.modelVolumeMm3 * 0.0011;
+        const weightPerG = weightG / Math.max(modelCtx.totalCandidates, 1);
+        const avgPeelN = avgArea * 0.05;
+        // Sample the sizing function with average values to show typical range.
+        const avgCandidate: CandidatePoint = {
+            ...candidates[0] ?? {
+                id: 'avg', tipPos: { x: 0, y: 0, z: 0 }, tipNormal: { x: 0, y: 0, z: -1 },
+                modelId: '', source: 'voxel', islandAreaMm2: avgArea,
+                zHeight: candidates.reduce((s, c) => s + c.zHeight, 0) / Math.max(candidates.length, 1),
+                overhangAngleDeg: 45, priority: 0,
+            },
+            islandAreaMm2: avgArea,
+        };
+        const sample = sizeParameters(avgCandidate, modelCtx, getSettings());
+        sizingDebug = {
+            modelVolumeMm3: Math.round(modelCtx.modelVolumeMm3),
+            estimatedWeightG: round2(weightG),
+            totalCandidates: modelCtx.totalCandidates,
+            weightPerSupportG: round2(weightPerG),
+            avgIslandAreaMm2: round2(avgArea),
+            avgPeelForceN: round2(avgPeelN),
+            shaftDiameterRange: {
+                min: round2(sample.shaftDiameterMm ?? 0),
+                max: round2(sample.shaftDiameterMm ?? 0),
+                avg: round2(sample.shaftDiameterMm ?? 0),
+            },
+            tipContactRange: {
+                min: round2(sample.tipContactDiameterMm ?? 0),
+                max: round2(sample.tipContactDiameterMm ?? 0),
+                avg: round2(sample.tipContactDiameterMm ?? 0),
+            },
+        };
+    }
+
     const analytics: AutoPlaceAnalytics = {
         islandsCovered: supportedIds.size,
         islandsUncovered: islands.length - supportedIds.size,
         presets,
         rejectionReasons,
         areaCoverage: totalArea > 0 ? coveredArea / totalArea : 0,
+        sizingDebug,
     };
 
     console.log(LOG_PREFIX,

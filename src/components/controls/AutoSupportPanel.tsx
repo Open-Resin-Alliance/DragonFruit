@@ -7,6 +7,7 @@ import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import type { UseIslandsReturn } from '@/volumeAnalysis/Islands/useIslands';
 import { runAutoPlace } from '@/supports/autoSupport';
+import type { SizingDebugInfo } from '@/supports/autoSupport';
 import { getSettings, updateAutoSupportSettings } from '@/supports/Settings/state';
 import { getSnapshot, setSnapshot } from '@/supports/state';
 
@@ -76,6 +77,8 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
   const [busy, setBusy] = React.useState(false);
   const [showSettings, setShowSettings] = React.useState(false);
   const [showReplaceDialog, setShowReplaceDialog] = React.useState(false);
+  const [showSizingDebug, setShowSizingDebug] = React.useState(false);
+  const [sizingDebug, setSizingDebugState] = React.useState<SizingDebugInfo | null>(null);
 
   const settings = getSettings().autoSupport;
   const [draft, setDraft] = React.useState(settings);
@@ -101,7 +104,8 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
     const list = islands.filteredIslands;
     if (list.length > 0 && s.autoSupport.enabled) {
       try {
-        runAutoPlace(list, activeModelId!, s.autoSupport);
+        const result = runAutoPlace(list, activeModelId!, s.autoSupport);
+        if (result.analytics?.sizingDebug) setSizingDebugState(result.analytics.sizingDebug);
       } finally {
         setAutoSupportBusy(false);
         setBusy(false);
@@ -152,7 +156,8 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
         try {
           const s = getSettings();
           if (list.length > 0 && s.autoSupport.enabled) {
-            runAutoPlace(list, activeModelId, s.autoSupport);
+            const result = runAutoPlace(list, activeModelId, s.autoSupport);
+            if (result.analytics?.sizingDebug) setSizingDebugState(result.analytics.sizingDebug);
           }
         } finally {
           setAutoSupportBusy(false);
@@ -254,6 +259,30 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
                 ))}
               </div>
             </div>
+
+            {/* Sizing debug */}
+            {sizingDebug && (
+              <div className="rounded-md border p-2" style={SECTION_CARD}>
+                <button type="button" onClick={() => setShowSizingDebug(!showSizingDebug)}
+                  className="w-full text-[10px] font-semibold uppercase tracking-wide text-center"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  {showSizingDebug ? '▼' : '▶'} Sizing Debug
+                </button>
+                {showSizingDebug && (
+                  <div className="mt-1.5 space-y-0.5 text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
+                    <div className="flex justify-between"><span>Model volume</span><span style={{ color: 'var(--text-strong)' }}>{(sizingDebug.modelVolumeMm3 / 1000).toFixed(1)} cm³</span></div>
+                    <div className="flex justify-between"><span>Est. weight</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.estimatedWeightG.toFixed(1)} g</span></div>
+                    <div className="flex justify-between"><span>Candidates</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.totalCandidates}</span></div>
+                    <div className="flex justify-between"><span>Weight / support</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.weightPerSupportG.toFixed(2)} g</span></div>
+                    <div className="flex justify-between"><span>Avg island area</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.avgIslandAreaMm2.toFixed(2)} mm²</span></div>
+                    <div className="flex justify-between"><span>Avg peel force</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.avgPeelForceN.toFixed(3)} N</span></div>
+                    <div className="flex justify-between"><span>Shaft Ø</span><span style={{ color: 'var(--text-strong)' }}>~{sizingDebug.shaftDiameterRange.avg.toFixed(2)} mm</span></div>
+                    <div className="flex justify-between"><span>Tip contact Ø</span><span style={{ color: 'var(--text-strong)' }}>~{sizingDebug.tipContactRange.avg.toFixed(2)} mm</span></div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {!hasGeometry && (
               <div className="text-[10px] italic text-center" style={{ color: 'var(--text-muted)' }}>

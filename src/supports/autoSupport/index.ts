@@ -4,6 +4,7 @@ export type {
   SupportPlan,
   AutoPlaceResult,
   AutoPlaceAnalytics,
+  SizingDebugInfo,
   RejectReason,
 } from "./types";
 
