@@ -53,6 +53,42 @@ export type OutputGeometrySource =
       geometry: THREE.BufferGeometry;
     };
 
+/** The full-res arm of {@link OutputGeometrySource}. */
+export type FullResSourceFile = Extract<OutputGeometrySource, { kind: 'fullres-source-file' }>;
+
+/**
+ * Core native-preview → full-resolution-source resolution, WITHOUT the
+ * slice-time unbaked-hollowing carve-out below. Returns the full-res file
+ * descriptor for a native-preview model that still retains its original
+ * `sourcePath`, else `null`.
+ *
+ * The Phase-4 permanent mutators (hollow apply/preview, repair-in-place,
+ * hole-punch apply) route on THIS, not on `resolveOutputGeometrySource`: the
+ * carve-out is specific to slice-time modifier BAKING
+ * (`prepareModelGeometryForOutput`, which bakes an unbaked hollowing modifier
+ * onto the staged geometry) — a mutator's Apply IS the bake, so it must consume
+ * full resolution even when an unbaked modifier is present. The nativePreview
+ * marker's presence also guarantees no prior full-res mutation has baked (those
+ * clear the marker), so the original file is the correct source. (Known edge:
+ * if a full-res mutation DEGRADED to the preview — missing/stale source, user
+ * warned — the marker is retained and a subsequent mutation would re-source the
+ * original; documented Phase-4 limitation.)
+ */
+export function resolveFullResSourceForModel(model: LoadedModel): FullResSourceFile | null {
+  const nativePreview = model.geometry.nativePreview;
+  const sourcePath = typeof model.sourcePath === 'string' && model.sourcePath.trim().length > 0
+    ? model.sourcePath
+    : null;
+  if (!nativePreview || !sourcePath) return null;
+  return {
+    kind: 'fullres-source-file',
+    sourcePath,
+    cPre: nativePreview.cPre ?? null,
+    fingerprint: nativePreview.sourceFingerprint ?? null,
+    originalTriangleCount: nativePreview.originalTriangleCount,
+  };
+}
+
 /**
  * Resolves the staging source for an output-bearing consumer. Native-preview
  * models with a retained source path route to the full-resolution file; all
@@ -61,12 +97,8 @@ export type OutputGeometrySource =
  * geometry.
  */
 export function resolveOutputGeometrySource(model: LoadedModel): OutputGeometrySource {
-  const nativePreview = model.geometry.nativePreview;
-  const sourcePath = typeof model.sourcePath === 'string' && model.sourcePath.trim().length > 0
-    ? model.sourcePath
-    : null;
-
-  if (nativePreview && sourcePath) {
+  const fullRes = resolveFullResSourceForModel(model);
+  if (fullRes) {
     // Unbaked hollowing is baked WebView-side from the scene geometry; a
     // full-res splice would silently drop the modifier. Keep such models on
     // the preview path (recorded Phase-4 carryover) rather than lose the
@@ -84,13 +116,7 @@ export function resolveOutputGeometrySource(model: LoadedModel): OutputGeometryS
       return { kind: 'scene-geometry', geometry: model.geometry.geometry };
     }
 
-    return {
-      kind: 'fullres-source-file',
-      sourcePath,
-      cPre: nativePreview.cPre ?? null,
-      fingerprint: nativePreview.sourceFingerprint ?? null,
-      originalTriangleCount: nativePreview.originalTriangleCount,
-    };
+    return fullRes;
   }
 
   return { kind: 'scene-geometry', geometry: model.geometry.geometry };

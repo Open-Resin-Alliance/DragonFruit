@@ -1,4 +1,9 @@
 import * as THREE from 'three';
+import {
+  describeFullResMutatorSpliceError,
+  stageFullResMutatorSource,
+  type FullResMutatorSource,
+} from '@/utils/fullResMutatorStaging';
 
 type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown> | ArrayBuffer | ArrayBufferView, opts?: { headers?: Record<string, string> }) => Promise<T>;
 
@@ -141,21 +146,64 @@ export async function punchFromGeometry(
   return { report, positions };
 }
 
+/** Outcome of staging the punch source (Phase 4 full-res routing). */
+export interface PunchSourceStageResult {
+  /** False only outside the Tauri runtime (browser fallback). */
+  staged: boolean;
+  /** True when the full-resolution ORIGINAL file was staged (→ the caller must
+   *  clear the native-preview marker; the output is full-res-derived). */
+  usedFullRes: boolean;
+  /** Present when full-res was requested but the source was missing/stale and
+   *  staging fell back to the preview geometry (the user should be warned). */
+  degraded?: { reason: string };
+}
+
+/**
+ * Stages the punch source into the shared staged mesh + captures it as the
+ * punch source. When `fullResSource` is provided (a native-preview model with a
+ * stored frame datum), the ORIGINAL file is spliced Rust-side in the local
+ * frame so the punch consumes full resolution — bytes never enter the WebView
+ * (plan §C.2). A missing/stale source degrades to the preview geometry with a
+ * reason (never silent). Cached by an effective source key.
+ */
 export async function stagePunchSource(
   geometry: THREE.BufferGeometry,
   sourceKey: string,
-): Promise<boolean> {
+  fullResSource?: FullResMutatorSource | null,
+): Promise<PunchSourceStageResult> {
   const core = await loadTauriCore();
-  if (!core) return false;
+  if (!core) return { staged: false, usedFullRes: false };
 
-  if (stagedPunchSourceKey === sourceKey) {
-    return true;
+  const effectiveKey = fullResSource
+    ? `fullres::${fullResSource.sourcePath}::${fullResSource.originalTriangleCount}::${sourceKey}`
+    : sourceKey;
+  if (stagedPunchSourceKey === effectiveKey) {
+    return { staged: true, usedFullRes: Boolean(fullResSource) };
+  }
+
+  if (fullResSource) {
+    try {
+      await stageFullResMutatorSource(core.invoke, fullResSource);
+      await core.invoke('mesh_punch_capture_staged_source');
+      stagedPunchSourceKey = effectiveKey;
+      return { staged: true, usedFullRes: true };
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      const reason = describeFullResMutatorSpliceError(raw);
+      console.warn(
+        `[PunchFullRes] full-res source splice failed — punching the reduced preview instead: ${raw}`,
+      );
+      await stageGeometryToStagedMesh(core.invoke, geometry);
+      await core.invoke('mesh_punch_capture_staged_source');
+      stagedPunchSourceKey = sourceKey;
+      return { staged: true, usedFullRes: false, degraded: { reason } };
+    }
   }
 
   await stageGeometryToStagedMesh(core.invoke, geometry);
   await core.invoke('mesh_punch_capture_staged_source');
-  stagedPunchSourceKey = sourceKey;
-  return true;
+  stagedPunchSourceKey = effectiveKey;
+  return { staged: true, usedFullRes: false };
 }
 
 export async function punchFromCapturedSource(

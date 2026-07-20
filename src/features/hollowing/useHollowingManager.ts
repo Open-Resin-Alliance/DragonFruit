@@ -24,6 +24,7 @@ import {
   type HollowOptions,
   type HollowReport,
 } from '@/utils/meshHollowing';
+import { planMutatorFullResStaging } from '@/utils/fullResMutatorStaging';
 import { centerCavityPositions } from '@/features/hollowing/cavityCentering';
 import { getRotationQuatTuple, resolveBlockedVoxelValidity } from '@/features/mesh-modifiers/hollowingGrid';
 import { toPersistedHolePunchPlacements } from '@/features/hole-punching/holePunchPersistence';
@@ -223,12 +224,24 @@ export function useHollowingManager({
           rotationQuat: [applyQuat.x, applyQuat.y, applyQuat.z, applyQuat.w],
         };
         const sourceGeometryKey = buildGeometryVersionKey(sourceGeometry);
-        const staged = await stageHollowPreviewSource(
+        // Phase 4: route a native-preview model's hollowing to full resolution
+        // (splice the ORIGINAL file into staging Rust-side). Hollowing
+        // permanently replaces the geometry, so consuming the ~2M preview would
+        // bake decimation forever — the permanence-urgent case.
+        const fullResPlan = planMutatorFullResStaging(activeModel);
+        const stageResult = await stageHollowPreviewSource(
           sourceGeometry,
           `${activeModel.id}::${sourceGeometryKey}`,
+          fullResPlan,
         );
+        if (fullResPlan && stageResult.degraded) {
+          deps.current.showOperationError(
+            `Hollowing used the reduced preview because ${stageResult.degraded.reason}.`,
+          );
+        }
+        const usedFullRes = stageResult.usedFullRes;
 
-        const result = staged
+        const result = stageResult.staged
           ? await hollowApplyFromCapturedSource(options)
           : await hollowFromGeometry(sourceGeometry, options);
         if (!result) {
@@ -287,6 +300,9 @@ export function useHollowingManager({
           activeModel.id,
           nextGeometry,
           `${modeLabel} (${result.report.outputTriangleCount.toLocaleString()} tris)`,
+          // Full-res hollow output is no longer decimation-derived — clear the
+          // native-preview marker so the preview badge stops firing (Phase 4).
+          { clearNativePreview: usedFullRes },
         );
         if (!replaced) {
           nextGeometry.dispose();
@@ -1059,11 +1075,14 @@ export function useHollowingManager({
 
     hollowPreviewWarmupKeyRef.current = previewKey;
     try {
-      const staged = await stageHollowPreviewSource(
+      // Phase 4: preview against the SAME source Apply will use — full-res for
+      // a native preview — so the cavity the user accepts matches the output.
+      const stageResult = await stageHollowPreviewSource(
         sourceGeometry,
         `${activeModel.id}::${sourceGeometryKey}`,
+        planMutatorFullResStaging(activeModel),
       );
-      if (!staged) {
+      if (!stageResult.staged) {
         return;
       }
 
@@ -1159,11 +1178,12 @@ export function useHollowingManager({
         return;
       }
 
-      const staged = await stageHollowPreviewSource(
+      const stageResult = await stageHollowPreviewSource(
         sourceGeometry,
         `${activeModel.id}::${sourceGeometryKey}`,
+        planMutatorFullResStaging(activeModel),
       );
-      if (!staged) {
+      if (!stageResult.staged) {
         if (notifyUnavailable) {
           deps.current.showOperationError('Hollowing preview is available in DragonFruit Desktop only.');
         }

@@ -28,6 +28,7 @@ import {
 import { buildGeometryVersionKey, disposeHollowPreviewCacheEntry } from '@/features/hollowing/hollowingPreviewCache';
 import type { HollowPreviewCacheEntry, HollowingSourceEntry } from '@/features/hollowing/hollowingPreviewTypes';
 import { punchFromCapturedSource, stagePunchSource, type PunchOptions } from '@/utils/meshPunching';
+import { planMutatorFullResStaging } from '@/utils/fullResMutatorStaging';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 
 const HOLE_PUNCH_OUTSIDE_PROTRUSION_MM = 3;
@@ -1170,14 +1171,29 @@ export function useHolePunchManager({
           ? `${activeModel.id}::hole-source:${activeModel.meshModifiers?.holePunchSourcePositionCount ?? 0}:${activeModel.meshModifiers?.holePunchSourcePositionsBase64?.length ?? 0}`
           : `${activeModel.id}::geom:${buildGeometryVersionKey(activeModel.geometry.geometry)}`;
 
-        const staged = await stagePunchSource(sourceGeometry, punchSourceKey);
-        if (!staged) {
+        // Phase 4: route a FRESH punch on a native-preview model to full
+        // resolution — the first punch PERMANENTLY replaces the geometry, so
+        // punching the ~2M preview would bake decimation forever. The
+        // append-only fast path and stored-snapshot re-apply operate on prior
+        // mutated/snapshotted state (NOT the original import), so they stay on
+        // that source; only the fresh-source `else` branch re-sources full-res.
+        const punchFullResPlan = (!useAppendOnlyFastPath && !hasStoredPunchSource)
+          ? planMutatorFullResStaging(activeModel)
+          : null;
+        const stageResult = await stagePunchSource(sourceGeometry, punchSourceKey, punchFullResPlan);
+        if (!stageResult.staged) {
           if (ownsSourceGeometry) {
             sourceGeometry.dispose();
           }
           showOperationError('Hole punching is available in DragonFruit Desktop only.');
           return;
         }
+        if (punchFullResPlan && stageResult.degraded) {
+          showOperationError(
+            `Hole punch used the reduced preview because ${stageResult.degraded.reason}.`,
+          );
+        }
+        const punchUsedFullRes = stageResult.usedFullRes;
 
         const result = await punchFromCapturedSource(punchOptions);
         if (!result) {
@@ -1219,6 +1235,9 @@ export function useHolePunchManager({
           activeModel.id,
           nextGeometry,
           `Hole Punching (${result.report.outputTriangleCount.toLocaleString()} tris)`,
+          // Full-res punch output is no longer decimation-derived — clear the
+          // native-preview marker so the preview badge stops firing (Phase 4).
+          { clearNativePreview: punchUsedFullRes },
         );
         if (!replaced) {
           if (ownsSourceGeometry) {

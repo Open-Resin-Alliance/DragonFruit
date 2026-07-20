@@ -2056,6 +2056,114 @@ pub async fn splice_fullres_mesh_into_stage_file(
     }
 }
 
+// --- Phase 4: full-resolution routing for the permanent mutators -------------
+//
+// hollowing apply/preview, manual repair-in-place, and hole-punch apply all
+// PERMANENTLY replace the scene geometry with an output built from whatever
+// they are handed. For a `_isNativePreview` model that input is the ~2M
+// decimated preview — so today mutating a >budget import bakes the decimation
+// forever (unlike slicing, which re-reads per job). This command re-sources the
+// ORIGINAL file for those mutators, exactly as P1 does for slicing/export, but
+// in the frame + encoding the mutators consume.
+//
+// FRAME: the mutators stage the model's centered LOCAL geometry soup
+// (`stageGeometryToStagedMesh` → the un-transformed `model.geometry.geometry`
+// position buffer, which at import is `v_raw − C_pre`); rotation/scale are
+// supplied to the mutators separately (hollow `rotationQuat`, mm-param scaling).
+// So the reprojection here is `v_local = I · (v_raw − C_pre)` — P1's world-space
+// formula with an identity matrix and no winding flip.
+//
+// ENCODING: the mutators read `STAGED_MESH` via `io::staged::load_positions_le`
+// (raw f32 LE, 9 per triangle) — the `stage_mesh_binary_set` encoding, NOT the
+// slicing u16 transport `stage_fullres_mesh_from_source` writes. This command
+// therefore emits raw f32 and REPLACES the staged buffer (fresh set), mirroring
+// `stage_mesh_binary_set`. Full-res bytes never enter the WebView (plan §C.2);
+// only the mutation output returns as the new scene geometry.
+
+/// Column-major identity matrix (THREE.Matrix4.elements order).
+const IDENTITY_MATRIX16: [f64; 16] = [
+    1.0, 0.0, 0.0, 0.0, //
+    0.0, 1.0, 0.0, 0.0, //
+    0.0, 0.0, 1.0, 0.0, //
+    0.0, 0.0, 0.0, 1.0, //
+];
+
+/// Mutator splice: streams the original binary STL, reprojects to the local
+/// centered frame (`v_local = v_raw − C_pre`), and REPLACES the in-memory
+/// staged mesh (`STAGED_MESH`) with raw f32 LE triangle soup that the
+/// `*_staged` mutator commands read. Atomic: on any failure the previously
+/// staged buffer is left untouched (the frontend degrades to re-staging the
+/// preview geometry).
+#[tauri::command]
+pub async fn stage_fullres_mesh_into_staged(
+    source_path: String,
+    c_pre: Vec<f64>,
+    expected_size_bytes: Option<u64>,
+    expected_mtime_ms: Option<f64>,
+) -> Result<FullResSpliceSummary, String> {
+    let started = std::time::Instant::now();
+    let params = FullResSpliceParams {
+        source_path: std::path::Path::new(&source_path),
+        matrix16_col_major: IDENTITY_MATRIX16,
+        c_pre: parse_vec3_f64(&c_pre, "cPre")?,
+        expected_fingerprint: expected_size_bytes
+            .and_then(|size| expected_mtime_ms.map(|mtime| (size, mtime))),
+        // Identity transform → positive determinant → no winding flip; the
+        // mutator soup preserves the source triangle winding exactly.
+        flip_winding_on_negative_determinant: false,
+    };
+
+    // Accumulate the full raw-f32 soup in Rust memory, then publish it as the
+    // staged mesh only on success (`?` below aborts before the publish block, so
+    // a missing/stale source leaves the prior staged buffer intact). The soup is
+    // the same materialization the mutator performs anyway when it loads the
+    // staged positions — no extra WebView residency (plan §C.2).
+    let mut soup_bytes: Vec<u8> = Vec::new();
+    let stats = splice_fullres_stl_stream(
+        &params,
+        &[],
+        |_, _| {},
+        |floats| {
+            soup_bytes.extend_from_slice(bytemuck::cast_slice::<f32, u8>(floats));
+            Ok(())
+        },
+    )?;
+
+    // Publish (replace) the staged mesh; clear any file-backed staging so the
+    // mutator reads this in-memory buffer via `read_staging_bytes`.
+    *staged_mesh_file_appender()
+        .lock()
+        .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))? = None;
+    *staged_mesh_file_path()
+        .lock()
+        .map_err(|e| format!("staged mesh file-path lock poisoned: {e}"))? = None;
+    *staged_mesh_stats()
+        .lock()
+        .map_err(|e| format!("staged mesh stats lock poisoned: {e}"))? = StageMeshStats {
+        chunks_received: 1,
+        append_ns_total: 0,
+    };
+    *staged_mesh()
+        .lock()
+        .map_err(|e| format!("staged mesh lock poisoned: {e}"))? = Some(soup_bytes);
+
+    let splice_ms = started.elapsed().as_secs_f64() * 1_000.0;
+    log::info!(
+        "[stage_fullres_mesh_into_staged] spliced {} full-res triangles from '{}' into the staged mesh in {:.1} ms (local z {:.3}..{:.3})",
+        stats.triangle_count,
+        source_path,
+        splice_ms,
+        stats.world_min[2],
+        stats.world_max[2],
+    );
+    Ok(FullResSpliceSummary {
+        staged_triangle_count: stats.triangle_count,
+        world_min: stats.world_min,
+        world_max: stats.world_max,
+        splice_ms,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3001,6 +3109,151 @@ mod p0_fullres_red_harness {
         let nonzero = mask.iter().filter(|value| **value > 0).count();
         eprintln!(
             "[p1][floor-test] {checked} sampled support columns all have floor coverage; nonzero floor pixels: {nonzero}",
+        );
+    }
+
+    // --- Phase 4: full-res routing for the permanent mutators -------------
+    //
+    // CONTRACT (plan Phase 4, this brief CP1): the permanent mutators
+    // (hollow apply/preview, repair-in-place, hole-punch apply) stage the
+    // model's LOCAL centered geometry soup into `STAGED_MESH` as raw f32 and
+    // read it back via `io::staged::load_positions_le`. For a `_isNativePreview`
+    // model the scene geometry is the ~2M decimated preview, so today a mutation
+    // bakes the decimation forever. `stage_fullres_mesh_into_staged` re-sources
+    // the ORIGINAL file into that same buffer in the local frame
+    // (`v_local = v_raw − C_pre`, identity orientation, raw f32).
+
+    /// Structural CP1 proof: the mutator splice stages the FULL-RES triangle
+    /// count (not the ~2M preview) and reprojects into the model's local
+    /// centered frame `v_local = v_raw − C_pre`. The RED counterpart — what a
+    /// mutator consumes TODAY — is the preview core below, which yields far
+    /// fewer than `total` triangles; this test pins the difference.
+    #[test]
+    fn p4_mutator_splice_stages_full_resolution_local_frame() {
+        let (path, grid, total) = ensure_lattice_stl("8m", 8_000_000);
+        assert!(total > P0C_PREVIEW_GATE_TRIANGLES, "asset must take the >6M preview path");
+
+        // RED baseline: what the mutator gets WITHOUT full-res routing — the
+        // decimated preview the scene geometry actually holds.
+        let preview = load_binary_stl_preview(&path, total as u32, 2_000_000)
+            .expect("preview import core");
+        let preview_tris = preview.triangles.len() as u64;
+        drop(preview);
+        assert!(
+            preview_tris < total,
+            "the preview a mutator consumes today ({preview_tris}) must be fewer than \
+             the original {total} — otherwise there is nothing to fix"
+        );
+
+        // Stored import datum: the analytic full-lattice bbox center (x 40..160,
+        // y 25..145, z 0..5.76). The mutator splice uses the LOCAL frame — an
+        // identity matrix, no scene transform, no winding flip.
+        let c_pre = [100.0, 85.0, 2.88];
+        let params = FullResSpliceParams {
+            source_path: &path,
+            matrix16_col_major: IDENTITY_MATRIX16,
+            c_pre,
+            expected_fingerprint: None,
+            flip_winding_on_negative_determinant: false,
+        };
+
+        let samples = [0u64, total / 2, total - 1];
+        let mut sampled: Vec<[[f32; 3]; 3]> = Vec::new();
+        let mut staged_f32_bytes: u64 = 0;
+        let stats = splice_fullres_stl_stream(
+            &params,
+            &samples,
+            |_, world| sampled.push(world),
+            |floats| {
+                staged_f32_bytes += (floats.len() * 4) as u64;
+                Ok(())
+            },
+        )
+        .expect("mutator full-res splice stream");
+
+        // Raw f32 soup: 36 bytes per triangle (9 floats). Count must equal the
+        // ORIGINAL, so the mutator operates on full resolution.
+        assert_eq!(staged_f32_bytes % 36, 0, "staged bytes must be whole f32 triangles");
+        assert_eq!(
+            staged_f32_bytes / 36,
+            total,
+            "the mutator staged input must carry the ORIGINAL triangle count ({total}), \
+             not the {preview_tris}-triangle preview"
+        );
+        assert_eq!(stats.triangle_count, total);
+
+        // Local-frame reprojection: identity means v_local = v_raw − C_pre.
+        for (sample_index, &tri_index) in samples.iter().enumerate() {
+            let raw = lattice_triangle(grid, tri_index);
+            let staged = sampled[sample_index];
+            for (vertex_index, &v_raw) in raw.iter().enumerate() {
+                let want = [
+                    v_raw[0] as f64 - c_pre[0],
+                    v_raw[1] as f64 - c_pre[1],
+                    v_raw[2] as f64 - c_pre[2],
+                ];
+                let got = staged[vertex_index];
+                let distance = ((got[0] as f64 - want[0]).powi(2)
+                    + (got[1] as f64 - want[1]).powi(2)
+                    + (got[2] as f64 - want[2]).powi(2))
+                .sqrt();
+                assert!(
+                    distance <= 1e-4,
+                    "triangle {tri_index} vertex {vertex_index}: staged {got:?} is \
+                     {distance:.6} mm from v_raw − C_pre = {want:?} (tolerance 1e-4 mm)"
+                );
+            }
+        }
+    }
+
+    /// Heavy CP2/CP4 structural check: hollow the 8M off-origin lattice through
+    /// the mutator splice → `HollowReport.source_triangle_count` reflects the
+    /// ORIGINAL count, not the decimated preview. Ignored (voxelizes 8M
+    /// triangles; heavy-asset convention) — run explicitly:
+    ///   cargo test p4_hollow_consumes_full_resolution -- --ignored --nocapture
+    #[test]
+    #[ignore = "P4 heavy asset — run with --ignored --nocapture"]
+    fn p4_hollow_consumes_full_resolution_source() {
+        let (path, _grid, total) = ensure_lattice_stl("8m", 8_000_000);
+        assert!(total > P0C_PREVIEW_GATE_TRIANGLES);
+
+        let c_pre = [100.0, 85.0, 2.88];
+        let params = FullResSpliceParams {
+            source_path: &path,
+            matrix16_col_major: IDENTITY_MATRIX16,
+            c_pre,
+            expected_fingerprint: None,
+            flip_winding_on_negative_determinant: false,
+        };
+        let mut soup: Vec<f32> = Vec::with_capacity((total as usize) * 9);
+        splice_fullres_stl_stream(&params, &[], |_, _| {}, |floats| {
+            soup.extend_from_slice(floats);
+            Ok(())
+        })
+        .expect("mutator full-res splice stream");
+
+        let mesh = io::staged::load_positions_le(bytemuck::cast_slice::<f32, u8>(&soup))
+            .expect("load staged full-res positions");
+        drop(soup);
+
+        let options = HollowOptions {
+            // Coarse grid to keep the heavy run tractable; the source count is
+            // resolution-independent.
+            voxel_resolution: 48,
+            preview_cavity_only: true,
+            preview_voxel_spheres: true,
+            internal_chamfer_passes: 0,
+            smooth_internal_surfaces: false,
+            ..HollowOptions::default()
+        };
+        let outcome = hollow_voxel(mesh, &options);
+        eprintln!(
+            "[p4][hollow] source_triangle_count = {} (original {total}, preview would be ~2M)",
+            outcome.report.source_triangle_count,
+        );
+        assert_eq!(
+            outcome.report.source_triangle_count, total as usize,
+            "hollow must consume the full-res source, not the decimated preview"
         );
     }
 

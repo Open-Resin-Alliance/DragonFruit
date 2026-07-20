@@ -18,6 +18,7 @@ import {
   type MeshAnalysisJson,
   type MeshHealthReport,
 } from '@/utils/meshRepair';
+import type { FullResMutatorSource } from '@/utils/fullResMutatorStaging';
 
 export type MeshDefects = {
   /** Whether any non-finite vertex position values were found */
@@ -86,6 +87,14 @@ export type GeometryWithBounds = {
    * @internal
    */
   _nativePreviewCPre?: [number, number, number];
+  /**
+   * Internal hand-off from `processGeometry` to `repairModelInPlace`: whether
+   * the in-place repair consumed the full-resolution ORIGINAL (Phase 4). When
+   * true the caller clears the native-preview marker (the output is full-res-
+   * derived); when false/absent it carries the marker forward.
+   * @internal
+   */
+  _repairUsedFullRes?: boolean;
 };
 
 /**
@@ -155,6 +164,14 @@ export interface ProcessGeometryOptions {
   _skipComputeNormals?: boolean;
   /** Skip nonessential analysis for a native reduced-detail preview. @internal */
   _isNativePreview?: boolean;
+  /**
+   * Phase 4 (STL-import remediation): when repairing a native-preview model in
+   * place, splice this ORIGINAL-file source into staging Rust-side instead of
+   * the ~2M preview geometry, so the permanent repair consumes full resolution.
+   * Consulted only in the `nativeProcessingMode === 'repair'` path.
+   * @internal
+   */
+  fullResSource?: FullResMutatorSource | null;
 }
 
 // Cloning extremely large position buffers can require hundreds of MB and can
@@ -303,6 +320,9 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   // In the browser we fall back to the legacy Manifold WASM path (which only
   // activates when NaN defects were detected).
   let nativeModifiedGeometry = false;
+  // Phase 4: set when an in-place repair spliced the full-res ORIGINAL (so the
+  // caller clears the native-preview marker). Only the 'repair' path can set it.
+  let repairUsedFullRes = false;
   if (isTauriRuntime()) {
     const nativeMode = options.nativeProcessingMode ?? 'auto';
     const skipAutoNativeProcessingForSize = nativeMode === 'auto'
@@ -353,8 +373,11 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
       const nativeStart = performance.now();
       const result = classifyOnly
         ? await classifyFromGeometry(geometry)
-        : await repairFromGeometry(geometry);
+        : await repairFromGeometry(geometry, {}, forceRepair ? options.fullResSource : null);
       if (result) {
+        if (!classifyOnly && result.usedFullRes) {
+          repairUsedFullRes = true;
+        }
         let effectiveResult = result;
         let usedFallbackClassification = false;
         let shouldApplyPositions = true;
@@ -570,6 +593,7 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
     edgeGeometry,
     ...(shouldSurfaceDefects ? { meshDefects } : {}),
     ...(nativePreviewCPre ? { _nativePreviewCPre: nativePreviewCPre } : {}),
+    ...(repairUsedFullRes ? { _repairUsedFullRes: true } : {}),
   };
 }
 

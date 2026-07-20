@@ -21,6 +21,7 @@ import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
 import { generateUuid } from '@/utils/uuid';
 import { resolveDisplayPolygonCount, carryPreviewMarkerForward } from '@/utils/previewGeometryDisplay';
+import { planMutatorFullResStaging } from '@/utils/fullResMutatorStaging';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
 import { getKickstandSnapshot, setKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import type { KickstandState } from '@/supports/SupportTypes/Kickstand/types';
@@ -4668,14 +4669,35 @@ export function useSceneCollectionManager() {
     const model = modelsRef.current.find(m => m.id === modelId);
     if (!model) return false;
     try {
+      // Phase 4: route a native-preview model's repair to full resolution —
+      // repair-in-place PERMANENTLY replaces the geometry, so repairing the ~2M
+      // preview would bake decimation forever (census finding 2, the 4th
+      // permanent mutator). processGeometry splices the ORIGINAL file into
+      // staging Rust-side when this source is present.
+      const fullResSource = planMutatorFullResStaging(model);
       const processed = await processGeometry(model.geometry.geometry, {
         center: false,
         nativeProcessingMode: 'repair',
+        fullResSource,
       });
-      // Badge-lifecycle rule (Phase 2b, census finding 3): repair-in-place runs
-      // on the preview and swaps in a fresh wrapper — carry the marker forward
-      // so the badge/honest count survive (default-safe: no prior marker → none).
-      const carriedPreview = carryPreviewMarkerForward(model.geometry);
+      const usedFullRes = processed._repairUsedFullRes === true;
+      // Never silent: full-res requested but the source could not be re-read.
+      if (fullResSource && !usedFullRes) {
+        emitSceneImportReport(
+          `${model.name}: repaired the reduced preview — the full-resolution source could not be re-read.`,
+          'warning',
+          { durationMs: 6_000 },
+        );
+      }
+      // Strip the transient hand-off so it never leaks into scene state.
+      delete processed._repairUsedFullRes;
+      // Badge-lifecycle rule (Phase 2b, census finding 3): repair-in-place on a
+      // preview swaps in a fresh wrapper — carry the marker forward so the badge
+      // / honest count survive, UNLESS the repair consumed full resolution, in
+      // which case the output is full-res-derived and the marker is cleared.
+      const carriedPreview = carryPreviewMarkerForward(model.geometry, {
+        clearNativePreview: usedFullRes,
+      });
       if (carriedPreview) processed.nativePreview = carriedPreview;
       const polygonCount = resolveDisplayPolygonCount(processed);
       const repairReport = processed.meshDefects?.nativeRepairReport ?? null;

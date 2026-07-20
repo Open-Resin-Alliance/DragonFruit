@@ -17,6 +17,10 @@
  * the WASM Manifold repair path.
  */
 import * as THREE from 'three';
+import {
+  stageFullResMutatorSource,
+  type FullResMutatorSource,
+} from '@/utils/fullResMutatorStaging';
 
 export interface MeshAnalysisJson {
   triangle_count: number;
@@ -78,6 +82,13 @@ export interface MeshRepairResult {
   report: MeshHealthReport;
   /** Repaired positions buffer — ready to drop into a THREE.BufferGeometry */
   positions: Float32Array;
+  /**
+   * Phase 4 (STL-import remediation): true when the full-resolution ORIGINAL
+   * file was spliced into staging instead of the ~2M preview geometry, so the
+   * permanent repair consumed full resolution. The caller clears the
+   * native-preview marker only when this is true.
+   */
+  usedFullRes?: boolean;
 }
 
 type UnknownRecord = Record<string, unknown>;
@@ -312,6 +323,7 @@ export function isHeavyRepair(analysis: MeshAnalysisJson): boolean {
 export async function repairFromGeometry(
   geometry: THREE.BufferGeometry,
   options: MeshRepairOptions = {},
+  fullResSource?: FullResMutatorSource | null,
 ): Promise<MeshRepairResult | null> {
   const core = await loadTauriCore();
   if (!core) return null;
@@ -319,14 +331,25 @@ export async function repairFromGeometry(
   const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | null;
   if (!posAttr) throw new Error('repairFromGeometry: geometry has no position attribute');
 
-  // Normalize to a contiguous Float32Array (handle indexed geometry by
-  // expanding to triangle soup).
-  const soup = expandGeometryToTriangleSoup(geometry);
-  const bytes = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
-
-  await core.invoke('stage_mesh_binary_set', bytes, {
-    headers: { 'Content-Type': 'application/octet-stream' },
-  });
+  // Phase 4: for a native-preview model, splice the ORIGINAL file into staging
+  // Rust-side so the permanent repair consumes full resolution — bytes never
+  // enter the WebView (plan §C.2). A missing/stale source degrades to staging
+  // the preview geometry (never silent — the manager surfaces the reason).
+  let usedFullRes = false;
+  if (fullResSource) {
+    try {
+      await stageFullResMutatorSource(core.invoke, fullResSource);
+      usedFullRes = true;
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[RepairFullRes] full-res source splice failed — repairing the reduced preview instead: ${raw}`,
+      );
+      await stageGeometrySoupToStagedMesh(core.invoke, geometry);
+    }
+  } else {
+    await stageGeometrySoupToStagedMesh(core.invoke, geometry);
+  }
 
   const optionsJson = JSON.stringify(options);
   const reportJson = await core.invoke<string>('mesh_repair_staged', {
@@ -334,7 +357,19 @@ export async function repairFromGeometry(
   });
   const report = normalizeMeshHealthReport(JSON.parse(reportJson));
   const positions = await readStagedPositions(core.invoke);
-  return { report, positions };
+  return { report, positions, usedFullRes };
+}
+
+/** Stages a geometry's triangle soup into the shared staged mesh (raw f32). */
+async function stageGeometrySoupToStagedMesh(
+  invoke: TauriInvoke,
+  geometry: THREE.BufferGeometry,
+): Promise<void> {
+  const soup = expandGeometryToTriangleSoup(geometry);
+  const bytes = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
+  await invoke('stage_mesh_binary_set', bytes, {
+    headers: { 'Content-Type': 'application/octet-stream' },
+  });
 }
 
 /**
