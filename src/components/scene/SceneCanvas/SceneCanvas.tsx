@@ -354,9 +354,7 @@ export function SceneCanvas({
   onTransformStart,
   onGizmoTransformCommit,
   onGizmoTransformGroupCommit,
-  onTransformChangeEnd, // Was onTransformEnd in previous code, checking usage
   onTransformEnd,
-  pxMm,
   showIslandIdLabels,
   mode,
   onSupportClick,
@@ -490,13 +488,11 @@ export function SceneCanvas({
       after: ModelTransform;
     }>;
   }) => void;
-  onTransformChangeEnd?: (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => void;
   onTransformEnd?: (
     operation: 'move' | 'rotate' | 'scale',
     finalTransform?: ModelTransform,
     options?: { skipStoreCommit?: boolean },
   ) => void;
-  pxMm?: number;
   showIslandIdLabels?: boolean;
   mode?: SupportMode;
   onSupportClick?: (hit: THREE.Intersection) => void;
