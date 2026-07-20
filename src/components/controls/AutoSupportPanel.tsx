@@ -9,6 +9,14 @@ import type { UseIslandsReturn } from '@/volumeAnalysis/Islands/useIslands';
 import { runAutoPlace } from '@/supports/autoSupport';
 import { getSettings, updateAutoSupportSettings } from '@/supports/Settings/state';
 
+/** Set to true while auto-support is busy (scanning or placing).
+ *  Page-level overlay reads this to show the "Generating Supports"
+ *  full-screen modal, matching the native island-scan modal style. */
+export let autoSupportBusy = false;
+/** Set to true while auto-support is driving its own scan, so the
+ *  native island-scan overlay can be suppressed. */
+export let autoSupportDrivingScan = false;
+
 const SECTION_CARD: React.CSSProperties = {
   borderColor: 'var(--border-subtle)',
   background: 'var(--surface-1)',
@@ -66,21 +74,56 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
     setShowSettings(false);
   }, [draft]);
 
-  const handleRun = React.useCallback(() => {
-    if (!activeModelId || busy) return;
-    setBusy(true);
-    try {
-      const s = getSettings();
-      const list = islands.filteredIslands;
-      if (list.length > 0 && s.autoSupport.enabled) {
-        runAutoPlace(list, activeModelId, s.autoSupport);
+  const pendingRef = React.useRef(false);
+
+  // When scanning finishes after an auto-support trigger, run auto-support.
+  React.useEffect(() => {
+    if (!pendingRef.current || islands.scanning) return;
+    pendingRef.current = false;
+    autoSupportDrivingScan = false;
+    const s = getSettings();
+    const list = islands.filteredIslands;
+    if (list.length > 0 && s.autoSupport.enabled) {
+      try {
+        runAutoPlace(list, activeModelId!, s.autoSupport);
+      } finally {
+        autoSupportBusy = false;
+        setBusy(false);
       }
-    } catch (err) {
-      console.error('[AutoSupport]', err);
-    } finally {
+    } else {
+      autoSupportBusy = false;
       setBusy(false);
     }
-  }, [activeModelId, busy, islands.filteredIslands]);
+  }, [islands.scanning, islands.filteredIslands, activeModelId]);
+
+  const handleRun = React.useCallback(() => {
+    if (!activeModelId || busy) return;
+    const s = getSettings();
+    const list = islands.filteredIslands;
+    // Need to scan first?
+    if (list.length === 0 && islands.voxelIslands.length === 0 && islands.minimaIslands.length === 0) {
+      setBusy(true);
+      autoSupportBusy = true;
+      pendingRef.current = true;
+      autoSupportDrivingScan = true;
+      void islands.onRunScan();
+      return;
+    }
+    // Already have data — show modal, then run.
+    if (list.length > 0 && s.autoSupport.enabled) {
+      setBusy(true);
+      autoSupportBusy = true;
+      // Yield to let React render the modal before blocking work.
+      setTimeout(() => {
+        try {
+          runAutoPlace(list, activeModelId, s.autoSupport);
+        } finally {
+          autoSupportBusy = false;
+          setBusy(false);
+        }
+      }, 50);
+    }
+  }, [activeModelId, busy, islands.filteredIslands, islands.voxelIslands.length, islands.minimaIslands.length]);
 
   const canRun = hasGeometry && !!activeModelId && !busy && !islands.scanning;
 
@@ -116,6 +159,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
           )}
           hideDivider={!expanded}
         />
+
 
         {expanded && (
           <div className="px-2.5 pb-3 space-y-2.5">
