@@ -40,7 +40,7 @@ function makeIsland(overrides: Partial<DetectedIsland> = {}): DetectedIsland {
 // Tests
 // ---------------------------------------------------------------------------
 
-test('generateCandidates filters supported islands', () => {
+test('generateCandidates does not filter by supported flag (handled by filterAlreadySupported)', () => {
     const islands = [
         makeIsland({ id: 'a' }),
         makeIsland({ id: 'b', supported: true }),
@@ -49,11 +49,7 @@ test('generateCandidates filters supported islands', () => {
     const settings = createDefaultAutoSupportSettings();
     const candidates = generateCandidates(islands, settings);
 
-    assert.equal(candidates.length, 2);
-    const ids = candidates.map((c) => c.id);
-    assert.ok(ids.includes('a'));
-    assert.ok(ids.includes('c'));
-    assert.ok(!ids.includes('b'));
+    assert.equal(candidates.length, 3);
 });
 
 test('generateCandidates filters grounded islands', () => {

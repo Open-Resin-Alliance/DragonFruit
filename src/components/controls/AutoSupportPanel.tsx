@@ -7,7 +7,7 @@ import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import type { UseIslandsReturn } from '@/volumeAnalysis/Islands/useIslands';
 import { runAutoPlace } from '@/supports/autoSupport';
-import type { SizingDebugInfo } from '@/supports/autoSupport';
+import type { SizingDebugInfo, AutoSupportSettings } from '@/supports/autoSupport';
 import { getSettings, updateAutoSupportSettings } from '@/supports/Settings/state';
 import { getSnapshot, setSnapshot } from '@/supports/state';
 
@@ -72,6 +72,24 @@ const KNOBS: KnobDef[] = [
   { key: 'densityFactor',         label: 'Density Factor',        min: 0.5,  max: 3,    step: 0.1,  unit: '×',   hint: 'Scaling multiplier for overall support density' },
 ];
 
+const PRESETS = {
+  light: {
+    minIslandAreaMm2: 0.05, tipInfluenceRadiusMm: 2.0, clusterRadiusMm: 15,
+    maxBranchReachMm: 20, maxBranchAngleDeg: 45, minTrunkSeparationMm: 8,
+    densityFactor: 1.0,
+  },
+  medium: {
+    minIslandAreaMm2: 0.02, tipInfluenceRadiusMm: 0.5, clusterRadiusMm: 20,
+    maxBranchReachMm: 25, maxBranchAngleDeg: 50, minTrunkSeparationMm: 6,
+    densityFactor: 1.0,
+  },
+  heavy: {
+    minIslandAreaMm2: 0.0, tipInfluenceRadiusMm: 0.1, clusterRadiusMm: 25,
+    maxBranchReachMm: 30, maxBranchAngleDeg: 55, minTrunkSeparationMm: 4,
+    densityFactor: 1.5,
+  },
+} satisfies Record<string, Partial<AutoSupportSettings>>;
+
 export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSupportPanelProps) {
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const [busy, setBusy] = React.useState(false);
@@ -79,6 +97,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
   const [showReplaceDialog, setShowReplaceDialog] = React.useState(false);
   const [showSizingDebug, setShowSizingDebug] = React.useState(false);
   const [sizingDebug, setSizingDebugState] = React.useState<SizingDebugInfo | null>(null);
+  const [activePreset, setActivePreset] = React.useState<string | null>(null);
 
   const settings = getSettings().autoSupport;
   const [draft, setDraft] = React.useState(settings);
@@ -94,10 +113,15 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
   }, [draft]);
 
   const pendingRef = React.useRef(false);
+  const islandsRef = React.useRef(islands);
+  islandsRef.current = islands;
 
-  // When scanning finishes after an auto-support trigger, run auto-support.
+  // Deferred run: fires after React flushes state changes (scan complete
+  // or snapshot clear).  Incrementing deferredRunRef triggers a re-render,
+  // which gives us fresh islands.filteredIslands.
   React.useEffect(() => {
-    if (!pendingRef.current || islands.scanning) return;
+    if (!pendingRef.current) return;
+    if (islands.scanning) return;
     pendingRef.current = false;
     autoSupportDrivingScan = false;
     const s = getSettings();
@@ -158,10 +182,27 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
         if (snap.sticks[id].modelId === activeModelId) delete next.sticks[id];
       }
       setSnapshot(next);
-      // Re-scan so `supported` flags reflect the cleared state.
-      pendingRef.current = true;
-      autoSupportDrivingScan = true;
-      void islands.onRunScan();
+      // rAF fires after React flushes the snapshot, giving us
+      // fresh islands.filteredIslands with updated supported flags.
+      requestAnimationFrame(() => {
+        setBusy(true);
+        setAutoSupportBusy(true);
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            try {
+              const s = getSettings();
+              const list = islandsRef.current.filteredIslands;
+              if (list.length > 0 && s.autoSupport.enabled) {
+                const result = runAutoPlace(list, activeModelId, s.autoSupport);
+                if (result.analytics?.sizingDebug) setSizingDebugState(result.analytics.sizingDebug);
+              }
+            } finally {
+              setAutoSupportBusy(false);
+              setBusy(false);
+            }
+          }, 0);
+        });
+      });
       return;
     }
     setBusy(true);
@@ -264,7 +305,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
                 color: 'var(--accent)',
               }}
             >
-              {busy ? 'Running…' : 'Run Auto-Supports'}
+              {busy ? 'Running…' : 'Generate Supports'}
             </button>
 
             {/* Island counts */}
@@ -285,25 +326,51 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
               </div>
             </div>
 
+            {/* Preset quick-select */}
+            <div className="rounded-md border p-2" style={SECTION_CARD}>
+              <div className="grid grid-cols-3 gap-1.5">
+                {(['light', 'medium', 'heavy'] as const).map((key) => (
+                  <button key={key} type="button"
+                    onClick={() => {
+                      updateAutoSupportSettings(PRESETS[key]);
+                      setActivePreset(key);
+                    }}
+                    className="h-8 rounded-md border text-[11px] font-semibold capitalize transition-colors"
+                    style={activePreset === key
+                      ? { borderColor: 'color-mix(in srgb, var(--accent), white 10%)', background: 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)', color: 'var(--accent)' }
+                      : { borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+                  >{key}</button>
+                ))}
+              </div>
+            </div>
+
             {/* Sizing debug */}
             {sizingDebug && (
-              <div className="rounded-md border p-2" style={SECTION_CARD}>
+              <div className="rounded-md border" style={SECTION_CARD}>
                 <button type="button" onClick={() => setShowSizingDebug(!showSizingDebug)}
-                  className="w-full text-[10px] font-semibold uppercase tracking-wide text-center"
+                  className="w-full flex items-center justify-between px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide"
                   style={{ color: 'var(--text-muted)' }}
                 >
-                  {showSizingDebug ? '▼' : '▶'} Sizing Debug
+                  <span>Sizing Debug</span>
+                  <svg className="w-3 h-3 transition-transform" style={{ transform: showSizingDebug ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                    fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
                 </button>
                 {showSizingDebug && (
-                  <div className="mt-1.5 space-y-0.5 text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
-                    <div className="flex justify-between"><span>Model volume</span><span style={{ color: 'var(--text-strong)' }}>{(sizingDebug.modelVolumeMm3 / 1000).toFixed(1)} cm³</span></div>
+                  <div className="px-2.5 pb-2 space-y-1 text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
+                    <div className="flex justify-between border-t pt-1.5" style={{ borderColor: 'var(--border-subtle)' }}>
+                      <span>Model volume</span><span style={{ color: 'var(--text-strong)' }}>{(sizingDebug.modelVolumeMm3 / 1000).toFixed(1)} cm³</span>
+                    </div>
                     <div className="flex justify-between"><span>Est. weight</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.estimatedWeightG.toFixed(1)} g</span></div>
                     <div className="flex justify-between"><span>Candidates</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.totalCandidates}</span></div>
                     <div className="flex justify-between"><span>Weight / support</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.weightPerSupportG.toFixed(2)} g</span></div>
                     <div className="flex justify-between"><span>Avg island area</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.avgIslandAreaMm2.toFixed(2)} mm²</span></div>
-                    <div className="flex justify-between"><span>Avg peel force</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.avgPeelForceN.toFixed(3)} N</span></div>
-                    <div className="flex justify-between"><span>Shaft Ø</span><span style={{ color: 'var(--text-strong)' }}>~{sizingDebug.shaftDiameterRange.avg.toFixed(2)} mm</span></div>
-                    <div className="flex justify-between"><span>Tip contact Ø</span><span style={{ color: 'var(--text-strong)' }}>~{sizingDebug.tipContactRange.avg.toFixed(2)} mm</span></div>
+                    <div className="flex justify-between"><span>Peel force (max)</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.avgPeelForceN.toFixed(3)} N</span></div>
+                    <div className="flex justify-between" style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 2, marginTop: 2 }}>
+                      <span>Shaft Ø range</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.shaftDiameterRange.min.toFixed(2)}–{sizingDebug.shaftDiameterRange.max.toFixed(2)} mm</span>
+                    </div>
+                    <div className="flex justify-between"><span>Tip Ø range</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.tipContactRange.min.toFixed(2)}–{sizingDebug.tipContactRange.max.toFixed(2)} mm</span></div>
                   </div>
                 )}
               </div>

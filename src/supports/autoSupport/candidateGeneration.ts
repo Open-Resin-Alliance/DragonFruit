@@ -15,7 +15,6 @@ export function generateCandidates(
 
     // Filter
     const eligible = islands.filter(island => {
-        if (island.supported === true) return false;
         if (island.grounded === true) return false;
         // Minima islands don't have area — they represent sharp geometric
         // features that need support regardless of size.
