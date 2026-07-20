@@ -170,6 +170,52 @@ const LEAF_FAN_RADIUS_MM = 5.0;
 const LEAF_FAN_MAX_ANGLE_DEG = 60;
 
 // ---------------------------------------------------------------------------
+// Leaf cone triangle collision
+// ---------------------------------------------------------------------------
+
+const _leafRaycaster = new THREE.Raycaster();
+
+/** Check whether a leaf cone from `knotPos` to `cone` intersects the model.
+ *  Raycasts from the knot toward a point just before the tip (offset inward
+ *  along the surface normal), excluding the tip contact itself.  Returns true
+ *  if the ray hits a model triangle before reaching the offset point. */
+function leafConeCollides(
+    knotPos: { x: number; y: number; z: number },
+    cone: { pos: { x: number; y: number; z: number }; surfaceNormal?: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number } },
+    mesh: THREE.Mesh,
+): boolean {
+    // Ray from knot toward tip. The tip is ON the surface — the first
+    // hit should be the tip surface at ~totalDist.  If the first hit
+    // is significantly closer, there's geometry between shaft and tip.
+    const dx = cone.pos.x - knotPos.x;
+    const dy = cone.pos.y - knotPos.y;
+    const dz = cone.pos.z - knotPos.z;
+    const totalDist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (totalDist < 0.01) return false;
+    const dir = new THREE.Vector3(dx / totalDist, dy / totalDist, dz / totalDist);
+
+    // Cast two offset rays to account for cone thickness (~0.25mm).
+    const n = cone.surfaceNormal ?? cone.normal;
+    const perpX = dir.y * n.z - dir.z * n.y;
+    const perpY = dir.z * n.x - dir.x * n.z;
+    const perpZ = dir.x * n.y - dir.y * n.x;
+    const perpLen = Math.sqrt(perpX * perpX + perpY * perpY + perpZ * perpZ);
+    const offsets = perpLen > 0.001
+        ? [0, 0.25, -0.25]
+        : [0];
+
+    for (const off of offsets) {
+        const sx = knotPos.x + (perpX / perpLen) * off;
+        const sy = knotPos.y + (perpY / perpLen) * off;
+        const sz = knotPos.z + (perpZ / perpLen) * off;
+        _leafRaycaster.set(new THREE.Vector3(sx, sy, sz), dir);
+        const hits = _leafRaycaster.intersectObject(mesh, false);
+        if (hits.length > 0 && hits[0].distance < totalDist - 0.5) return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // Post-build collision verification
 // ---------------------------------------------------------------------------
 
@@ -359,6 +405,9 @@ function placeOneCandidate(
                         if (sd.error) {
                             console.log(LOG_PREFIX,
                                 `Leaf (merge) ${candidate.id}: sd.error, trying branch...`);
+                        } else if (mesh && leafConeCollides(parentKnot.pos, leaf.contactCone, mesh)) {
+                            console.log(LOG_PREFIX,
+                                `Leaf (merge) ${candidate.id}: triangle collision, trying branch...`);
                         } else {
                             addKnot(parentKnot);
                             addLeaf(leaf);
