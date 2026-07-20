@@ -286,21 +286,30 @@ function placeOneCandidate(
             let bestKnotPos: { x: number; y: number; z: number } | null = null;
             let bestKnotSegmentId = '';
 
-            if (hostTrunk) {
-                // Walk segments looking for the lowest joint below the tip.
-                // Lower attachment = more natural-looking branch angle.
+            // Best attachment: the junction where the shaft meets the
+            // contact cone — the topJoint of the topmost segment.
+            // For straight trunks this is just below the tip; for routed
+            // trunks it's the socket joint before the cone.
+            if (hostTrunk && hostTrunk.segments.length > 0) {
+                const topSeg = hostTrunk.segments[hostTrunk.segments.length - 1];
+                const jp = topSeg.topJoint?.pos;
+                if (jp && jp.z < tipPos.z) {
+                    bestKnotPos = jp;
+                    bestKnotSegmentId = topSeg.id;
+                }
+            }
+            // Fallback: any shaft joint below the tip.
+            if (!bestKnotPos && hostTrunk) {
                 for (const seg of hostTrunk.segments) {
                     const jp = seg.bottomJoint?.pos ?? seg.topJoint?.pos;
                     if (jp && jp.z < tipPos.z) {
-                        if (!bestKnotPos || jp.z < bestKnotPos.z) {
+                        if (!bestKnotPos || jp.z > bestKnotPos.z) {
                             bestKnotPos = jp;
                             bestKnotSegmentId = seg.id;
                         }
                     }
                 }
             }
-
-            // Fallback: use the host position if no shaft joint found.
             const knotPos = bestKnotPos ?? host.tipPos;
             let knotDiameter = 1.0;
             if (hostTrunk && bestKnotSegmentId) {
@@ -319,20 +328,19 @@ function placeOneCandidate(
                 (tipPos.y - knotPos.y) ** 2 +
                 (tipPos.z - knotPos.z) ** 2,
             );
-            // Require a clean upward angle: the branch/leaf must go
-            // upward from knot to tip, not horizontally or downward.
-            const MAX_AUTO_LEAF_SPAN_MM = 2.5;
+            // Require a clean upward angle.
+            const MAX_AUTO_LEAF_SPAN_MM = 12.0;
             const hDist = Math.sqrt(
                 (tipPos.x - knotPos.x) ** 2 + (tipPos.y - knotPos.y) ** 2,
             );
             const vDist = tipPos.z - knotPos.z;
-            // Angle check: must go upward from knot to tip.
-            const mergeAngleDeg = (Math.atan2(hDist, vDist) * 180) / Math.PI;
-            if (vDist <= 0 || mergeAngleDeg > 50) {
-                // Knot is above the tip — can't branch upward.
-                // Fall through to trunk path.
+            if (vDist <= 0) {
+                console.log(LOG_PREFIX,
+                    `Merge skip ${candidate.id}: knot above tip (kZ=${knotPos.z.toFixed(1)} tZ=${tipPos.z.toFixed(1)})`);
             } else if (spanMm <= MAX_AUTO_LEAF_SPAN_MM) {
-                // Close enough for a CTRL-ALT style leaf — just a cone.
+                // CTRL-ALT style leaf.  buildLeafData does its own
+                // collision detection via recomputeContactConeForMovedDisk.
+                // If that fails, fall through to branch.
                 try {
                     const { leaf, supportData: sd } = buildLeafData({
                         tipPos,
@@ -345,38 +353,42 @@ function placeOneCandidate(
                     if (!sd.error) {
                         addKnot(parentKnot);
                         addLeaf(leaf);
+                        const la = (Math.atan2(hDist, vDist) * 180) / Math.PI;
                         console.log(LOG_PREFIX,
                             `Leaf (merge) ${candidate.id} → host ${host.trunkId} ` +
-                            `span=${spanMm.toFixed(1)}mm knotZ=${knotPos.z.toFixed(1)}mm`);
+                            `span=${spanMm.toFixed(1)}mm angle=${la.toFixed(0)}° kZ=${knotPos.z.toFixed(1)}`);
                         return { kind: 'leaf', preset };
                     }
+                    console.log(LOG_PREFIX,
+                        `Leaf (merge) ${candidate.id}: sd.error, trying branch...`);
                 } catch (_) {}
-            } else try {
-                const { branch, supportData: sd } = buildBranchData({
-                    tipPos,
-                    tipNormal,
-                    modelId: candidate.modelId,
-                    parentKnot,
-                    mesh,
-                });
-                // Post-build SDF check: verify each segment of the actual
-                // branch geometry doesn't intersect the model.
-                const collides = sd.error || (mesh && branchCollidesWithSDF(branch, mesh));
-                if (collides) {
+            } else {
+                // Branch: requires steeper upward angle (≤50° from vertical).
+                const mergeAngleDeg = (Math.atan2(hDist, vDist) * 180) / Math.PI;
+                if (mergeAngleDeg > 50) {
                     console.log(LOG_PREFIX,
-                        `Branch (merge) ${candidate.id}: collision, falling back`);
-                } else {
-                    addKnot(parentKnot);
-                    addBranch(branch);
+                        `Merge skip ${candidate.id}: angle too steep (${mergeAngleDeg.toFixed(0)}° > 50°) span=${spanMm.toFixed(1)}mm`);
+                } else try {
+                    const { branch, supportData: sd } = buildBranchData({
+                        tipPos, tipNormal, modelId: candidate.modelId, parentKnot, mesh,
+                    });
+                    const collides = sd.error || (mesh && branchCollidesWithSDF(branch, mesh));
+                    if (collides) {
+                        console.log(LOG_PREFIX, `Branch (merge) ${candidate.id}: collision, falling back`);
+                    } else {
+                        addKnot(parentKnot);
+                        addBranch(branch);
+                        const ma = (Math.atan2(hDist, vDist) * 180) / Math.PI;
+                        console.log(LOG_PREFIX,
+                            `Branch (merge) ${candidate.id} → host ${host.trunkId} ` +
+                            `span=${spanMm.toFixed(1)}mm angle=${ma.toFixed(0)}° kZ=${knotPos.z.toFixed(1)}`);
+                        return { kind: 'branch', preset };
+                    }
+                } catch (e) {
                     console.log(LOG_PREFIX,
-                        `Branch (merge) ${candidate.id} → host ${host.trunkId} ` +
-                        `span=${spanMm.toFixed(1)}mm knotZ=${knotPos.z.toFixed(1)}mm`);
-                    return { kind: 'branch', preset };
+                        `Merge branch failed for ${candidate.id}, falling back to trunk: ` +
+                        `${e instanceof Error ? e.message : String(e)}`);
                 }
-            } catch (e) {
-                console.log(LOG_PREFIX,
-                    `Merge branch failed for ${candidate.id}, falling back to trunk: ` +
-                    `${e instanceof Error ? e.message : String(e)}`);
             }
         }
     }
