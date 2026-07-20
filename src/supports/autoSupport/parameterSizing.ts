@@ -35,8 +35,11 @@ export interface SizeOverrides {
 export interface ModelSizingContext {
     /** Estimated model volume in mm³ (from bounding box or mesh). */
     modelVolumeMm3: number;
-    /** Total number of candidates being placed (for weight distribution). */
+    /** Total number of candidates being placed. */
     totalCandidates: number;
+    /** Number of candidates at or below this candidate's Z height.
+     *  These share the weight of layers above this Z. */
+    candidatesBelowZ: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +83,7 @@ export function sizeParameters(
         const shaft = round(shaftBase * areaScale, 3);
         return {
             shaftDiameterMm: shaft,
-            tipContactDiameterMm: round(Math.min(tipContactBase * areaScale, shaft * 0.6), 3),
+            tipContactDiameterMm: round(clamp(tipContactBase * areaScale, shaft * 0.3, shaft * 0.6), 3),
             tipBodyDiameterMm: shaft,
             tipLengthMm: round(tipLengthBase, 3),
             tipPenetrationMm: round(tipPenBase, 3),
@@ -92,32 +95,23 @@ export function sizeParameters(
 
     // ── Dynamic physics-based sizing (upside-down printing) ───────
     // In bottom-up SLA the model hangs from the build plate (Z=0).
-    // The plate starts at the FEP and moves UP (+Z) as layers print.
-    // Low-Z supports (near plate) are printed first and carry the
-    // weight of everything printed later (higher Z).
+    // Supports at low Z are printed first and carry everything above.
     //
-    // A support at Z=5 holds ~87% of the model (layers Z=5..30).
-    // A support at Z=30 (the tip) holds almost nothing.
+    // Weight is distributed simply: the N supports at or below Z
+    // share the weight of all layers remaining above Z.
 
     const modelWeightG = ctx.modelVolumeMm3 * RESIN_DENSITY_G_PER_MM3;
-
-    // Total model height (from bounding box or candidate Z range).
-    const modelZMax = Math.max(candidate.zHeight, 30); // fallback 30mm
-
-    // In bottom-up SLA the model hangs from the build plate (Z=0).
-    // Layers at low Z are printed first and carry the weight of
-    // everything printed later (higher Z).  A support at Z=5mm holds
-    // ~87% of the model; a support at the tip (Z=30mm) holds ~0%.
     const zHeight = Math.max(candidate.zHeight, 1);
-    const weightFraction = (modelZMax - zHeight) / modelZMax; // 1.0 near plate, ~0 at tip
-    // Load is shared across all supports.
-    const carriedWeightG = (modelWeightG * weightFraction) / Math.max(Math.sqrt(ctx.totalCandidates), 1);
+    const modelZMax = Math.max(candidate.zHeight, 30);
 
-    // Peel force from the total supported area (cluster total for core
-    // trunks, own area for standalone).  A core trunk supporting a
-    // cluster of islands must be thicker than a standalone one.
-    const effectiveArea = Math.max(totalSupportedAreaMm2 ?? candidate.islandAreaMm2, 0.01);
-    const peelForceN = effectiveArea * PEEL_FORCE_N_PER_MM2;
+    // Count supports at or below this Z (including this one).
+    const supportsBelow = ctx.candidatesBelowZ ?? ctx.totalCandidates;
+    const weightFraction = (modelZMax - zHeight) / modelZMax;
+    const carriedWeightG = (modelWeightG * weightFraction) / Math.max(supportsBelow, 1);
+
+    // Peel force from the supported area.
+    const effArea = Math.max(totalSupportedAreaMm2 ?? candidate.islandAreaMm2, 0.01);
+    const peelForceN = effArea * PEEL_FORCE_N_PER_MM2;
 
     // Total load.  Mesh minima are point contacts — 1.5× factor
     // because peel stress concentrates at a single sharp tip.
@@ -129,10 +123,13 @@ export function sizeParameters(
         clamp(shaftBase * clamp(Math.sqrt(loadN) * 1.2, 0.8, 2.0), MIN_SHAFT_DIAMETER_MM, MAX_SHAFT_DIAMETER_MM),
     3);
 
-    // Tip contact: scales with this specific island's area.
+    // Tip contact: scaled by island area, but never thinner than 30%
+    // of the shaft — a thick shaft needs a decent tip to transfer load.
     const ownArea = Math.max(candidate.islandAreaMm2, 0.01);
     const tipScale = clampStretch(ownArea, 0.05, 1.0, 0.5, 1.2);
-    const tipContactDiameterMm = round(Math.min(tipContactBase * tipScale, shaftDiameterMm * 0.6), 3);
+    const tipContactDiameterMm = round(
+        clamp(tipContactBase * tipScale, shaftDiameterMm * 0.3, shaftDiameterMm * 0.6),
+    3);
     const tipBodyDiameterMm = shaftDiameterMm;
 
     // Tip length: slightly longer for taller supports.

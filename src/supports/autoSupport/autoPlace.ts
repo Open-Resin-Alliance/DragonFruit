@@ -658,7 +658,7 @@ export function runAutoPlace(
     // subsequent candidates see existing supports (enabling organic
     // tree fan-out via grid occupancy).
 
-    const mesh = getModelMesh(modelId);
+    const mesh: THREE.Mesh | undefined = getModelMesh(modelId) ?? undefined;
     if (mesh) mesh.updateMatrixWorld();
     console.log(LOG_PREFIX,
         `Mesh for ${modelId}: ${mesh ? 'available (pathfinding + SDF active)' : 'UNAVAILABLE (supports route straight, no collision avoidance)'}`);
@@ -668,6 +668,13 @@ export function runAutoPlace(
         `Grid mode: ${gridEnabled ? 'ENABLED (supports share grid nodes, branch/leaf fan-out active)' : 'DISABLED (all supports become standalone trunks)'}`);
 
     // ── Model sizing context ────────────────────────────────────────
+    // Pre-sort candidates by Z for weight distribution counting.
+    const sortedByZ = [...candidates].sort((a, b) => a.zHeight - b.zHeight);
+    const belowCount = new Map<string, number>();
+    for (let i = 0; i < sortedByZ.length; i++) {
+        belowCount.set(sortedByZ[i].id, i + 1);
+    }
+
     let modelCtx: ModelSizingContext | undefined;
     if (mesh) {
         const bbox = new THREE.Box3().setFromObject(mesh);
@@ -676,6 +683,7 @@ export function runAutoPlace(
         modelCtx = {
             modelVolumeMm3: size.x * size.y * size.z,
             totalCandidates: candidates.length,
+            candidatesBelowZ: 0, // placeholder — filled per-candidate below
         };
     }
 
@@ -711,7 +719,10 @@ export function runAutoPlace(
 
     for (const candidate of candidates) {
         try {
-            const result = placeOneCandidate(candidate, settingsOverride, modelCtx, clusterTotal.get(candidate.id));
+            const ctx: ModelSizingContext | undefined = modelCtx
+                ? { ...modelCtx, candidatesBelowZ: belowCount.get(candidate.id) ?? candidates.length }
+                : undefined;
+            const result = placeOneCandidate(candidate, settingsOverride, ctx, clusterTotal.get(candidate.id));
             switch (result.kind) {
                 case 'trunk':   placedTrunks++; break;
                 case 'anchor':  placedAnchors++; break;
@@ -977,6 +988,110 @@ export function runAutoPlace(
                 `${skippedAngle} angle too steep (>${LEAF_FAN_MAX_ANGLE_DEG}°), ` +
                 `${skippedSameZ} same Z (can't attach).`);
             break;
+        }
+    }
+
+    // ── Overhang surface coverage ──────────────────────────────────
+    // Large flat overhangs need more than one support to distribute
+    // peel forces evenly.  Use the island's contactVoxels footprint
+    // to place additional supports across the surface.
+    const OVERHANG_AREA_THRESHOLD_MM2 = 1.5;
+    const OVERHANG_GRID_SPACING_MM = 2.5;
+
+    const islandById = new Map(islands.map(i => [i.id, i]));
+    let overhangSupportsPlaced = 0;
+
+    for (const [tid, trunk] of Object.entries(snapshot.trunks)) {
+        // Find which island this trunk was placed for by matching tip
+        // proximity to island contact positions.
+        const tip = trunk.contactCone?.pos;
+        if (!tip) continue;
+        let bestIsland: DetectedIsland | null = null;
+        let bestDist2 = Infinity;
+        for (const island of islands) {
+            const dx = tip.x - island.contact.x;
+            const dy = tip.y - island.contact.y;
+            const dz = tip.z - island.contact.z;
+            const d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < bestDist2) { bestDist2 = d2; bestIsland = island; }
+        }
+        if (!bestIsland) continue;
+
+        const area = bestIsland.areaMm2 ?? 0;
+        const voxels = bestIsland.contactVoxels;
+        if (area < OVERHANG_AREA_THRESHOLD_MM2 || !voxels || voxels.length < 3) continue;
+
+        // Compute bounding box of contact voxels.
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const v of voxels) {
+            if (v.x < minX) minX = v.x;
+            if (v.y < minY) minY = v.y;
+            if (v.x > maxX) maxX = v.x;
+            if (v.y > maxY) maxY = v.y;
+        }
+        const width = maxX - minX;
+        const height = maxY - minY;
+        if (width < OVERHANG_GRID_SPACING_MM && height < OVERHANG_GRID_SPACING_MM) continue;
+
+        // Place a grid of support points across the footprint.
+        const cols = Math.max(2, Math.round(width / OVERHANG_GRID_SPACING_MM));
+        const rows = Math.max(2, Math.round(height / OVERHANG_GRID_SPACING_MM));
+
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const gx = minX + (width * (c + 0.5)) / cols;
+                const gy = minY + (height * (r + 0.5)) / rows;
+
+                // Check if this grid point is within the voxel footprint
+                // (simple containment: near any contact voxel).
+                let inFootprint = false;
+                for (const v of voxels) {
+                    const dx = gx - v.x;
+                    const dy = gy - v.y;
+                    if (dx * dx + dy * dy <= OVERHANG_GRID_SPACING_MM * OVERHANG_GRID_SPACING_MM) {
+                        inFootprint = true;
+                        break;
+                    }
+                }
+                if (!inFootprint) continue;
+
+                // Skip the centroid (already covered by the trunk tip).
+                const cDist = (gx - bestIsland.contact.x) ** 2 + (gy - bestIsland.contact.y) ** 2;
+                if (cDist < 1.0) continue;
+
+                // Place as a branch from the existing trunk.
+                try {
+                    const overhangTip = { x: gx, y: gy, z: bestIsland.contact.z };
+                    const resolved = resolveSurfaceNormal(overhangTip, mesh);
+                    const knotPos = trunk.segments[trunk.segments.length - 1]?.topJoint?.pos ?? tip;
+                    const parentKnot = {
+                        id: `auto-overhang-${bestIsland.id}-${r}-${c}`,
+                        parentShaftId: tid,
+                        pos: knotPos,
+                        diameter: (trunk.segments[trunk.segments.length - 1]?.diameter ?? 1.0) + 0.1,
+                    };
+                    const bm: THREE.Mesh | undefined = mesh ?? undefined;
+                    const { branch, supportData: sd } = buildBranchData({
+                        tipPos: resolved.point,
+                        tipNormal: resolved.normal,
+                        modelId,
+                        parentKnot,
+                        mesh: bm,
+                    });
+                    if (!sd.error) {
+                        addKnot(parentKnot);
+                        addBranch(branch);
+                        overhangSupportsPlaced++;
+                    }
+                } catch (_) {
+                    // Skip this grid point.
+                }
+            }
+        }
+
+        if (overhangSupportsPlaced > 0) {
+            console.log(LOG_PREFIX,
+                `Overhang coverage: ${overhangSupportsPlaced} additional branches placed for flat surfaces.`);
         }
     }
 
