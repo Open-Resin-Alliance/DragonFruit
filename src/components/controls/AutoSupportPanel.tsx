@@ -120,8 +120,18 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
     if (!activeModelId) return;
     if (replace) {
       const snap = getSnapshot();
-      const next = { ...snap };
-      // Clear all supports for this model.
+      const next = {
+        ...snap,
+        trunks: { ...snap.trunks },
+        roots: { ...snap.roots },
+        branches: { ...snap.branches },
+        leaves: { ...snap.leaves },
+        anchors: { ...snap.anchors },
+        braces: { ...snap.braces },
+        knots: { ...snap.knots },
+        twigs: { ...snap.twigs },
+        sticks: { ...snap.sticks },
+      };
       for (const id of Object.keys(snap.trunks)) {
         if (snap.trunks[id].modelId === activeModelId) {
           delete next.trunks[id];
@@ -137,7 +147,22 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
       for (const id of Object.keys(snap.anchors)) {
         if (snap.anchors[id].modelId === activeModelId) delete next.anchors[id];
       }
+      // Clean up braces and knots (no modelId — delete all).
+      for (const id of Object.keys(snap.braces)) delete next.braces[id];
+      for (const id of Object.keys(snap.knots)) delete next.knots[id];
+      // Clean up twigs and sticks if they reference this model.
+      for (const id of Object.keys(snap.twigs)) {
+        if (snap.twigs[id].modelId === activeModelId) delete next.twigs[id];
+      }
+      for (const id of Object.keys(snap.sticks)) {
+        if (snap.sticks[id].modelId === activeModelId) delete next.sticks[id];
+      }
       setSnapshot(next);
+      // Re-scan so `supported` flags reflect the cleared state.
+      pendingRef.current = true;
+      autoSupportDrivingScan = true;
+      void islands.onRunScan();
+      return;
     }
     setBusy(true);
     setAutoSupportBusy(true);

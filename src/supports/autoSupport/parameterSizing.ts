@@ -12,7 +12,7 @@ const RESIN_DENSITY_G_PER_MM3 = 0.0011;
 const PEEL_FORCE_N_PER_MM2 = 0.2;
 /** Base shaft diameter floor (mm).  Supports thinner than this
  *  are too fragile for any practical load. */
-const MIN_SHAFT_DIAMETER_MM = 1.0;
+const MIN_SHAFT_DIAMETER_MM = 0.75;
 /** Maximum shaft diameter (mm). */
 const MAX_SHAFT_DIAMETER_MM = 2.5;
 
