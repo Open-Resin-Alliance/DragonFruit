@@ -2490,19 +2490,6 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   };
 }
 
-export function buildProjectedCrossSectionLoopsAtZ(options: {
-  models: LoadedModel[];
-  zMm: number;
-}): THREE.Vector2[][] {
-  const context = buildProjectedCrossSectionContext(options.models);
-  if (!context) return [];
-
-  return buildProjectedCrossSectionLoopsAtZFromContext({
-    context,
-    zMm: options.zMm,
-  });
-}
-
 export function buildProjectedCrossSectionContext(models: LoadedModel[]): ProjectedCrossSectionContext | null {
   const visibleModels = models.filter((model) => model.visible);
   if (visibleModels.length === 0) return null;

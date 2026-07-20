@@ -356,7 +356,6 @@ export function SceneCanvas({
   onGizmoTransformGroupCommit,
   onTransformChangeEnd, // Was onTransformEnd in previous code, checking usage
   onTransformEnd,
-  crossSectionMode,
   pxMm,
   showIslandIdLabels,
   mode,
@@ -497,7 +496,6 @@ export function SceneCanvas({
     finalTransform?: ModelTransform,
     options?: { skipStoreCommit?: boolean },
   ) => void;
-  crossSectionMode?: 'smooth' | 'rasterized';
   pxMm?: number;
   showIslandIdLabels?: boolean;
   mode?: SupportMode;
