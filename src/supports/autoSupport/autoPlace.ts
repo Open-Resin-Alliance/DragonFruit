@@ -322,52 +322,64 @@ function placeOneCandidate(
                 pos: knotPos,
                 diameter: knotDiameter + 0.1,
             };
-            // Decide leaf vs branch based on span distance.
-            const spanMm = Math.sqrt(
-                (tipPos.x - knotPos.x) ** 2 +
-                (tipPos.y - knotPos.y) ** 2 +
-                (tipPos.z - knotPos.z) ** 2,
+            // Leaf decision: use tip-to-tip distance (host contact cone →
+            // candidate tip), not shaft-knot distance.  This is the visual
+            // span the leaf would bridge.
+            const hostTip = hostTrunk?.contactCone?.pos ?? knotPos;
+            const tipSpanMm = Math.sqrt(
+                (tipPos.x - hostTip.x) ** 2 +
+                (tipPos.y - hostTip.y) ** 2 +
+                (tipPos.z - hostTip.z) ** 2,
             );
-            // Require a clean upward angle.
-            const MAX_AUTO_LEAF_SPAN_MM = 12.0;
-            const hDist = Math.sqrt(
-                (tipPos.x - knotPos.x) ** 2 + (tipPos.y - knotPos.y) ** 2,
-            );
-            const vDist = tipPos.z - knotPos.z;
-            if (vDist <= 0) {
-                console.log(LOG_PREFIX,
-                    `Merge skip ${candidate.id}: knot above tip (kZ=${knotPos.z.toFixed(1)} tZ=${tipPos.z.toFixed(1)})`);
-            } else if (spanMm <= MAX_AUTO_LEAF_SPAN_MM) {
-                // CTRL-ALT style leaf.  buildLeafData does its own
-                // collision detection via recomputeContactConeForMovedDisk.
-                // If that fails, fall through to branch.
-                try {
-                    const { leaf, supportData: sd } = buildLeafData({
-                        tipPos,
-                        surfaceNormal: tipNormal,
-                        modelId: candidate.modelId,
-                        parentKnot,
-                        hostDiameterMm: parentKnot.diameter ?? 1.0,
-                        mesh,
-                    });
-                    if (!sd.error) {
-                        addKnot(parentKnot);
-                        addLeaf(leaf);
-                        const la = (Math.atan2(hDist, vDist) * 180) / Math.PI;
-                        console.log(LOG_PREFIX,
-                            `Leaf (merge) ${candidate.id} → host ${host.trunkId} ` +
-                            `span=${spanMm.toFixed(1)}mm angle=${la.toFixed(0)}° kZ=${knotPos.z.toFixed(1)}`);
-                        return { kind: 'leaf', preset };
-                    }
+            const MAX_AUTO_LEAF_SPAN_MM = 8.0;
+            if (tipSpanMm <= MAX_AUTO_LEAF_SPAN_MM) {
+                // Knot attachment is on the shaft; angle check uses the
+                // actual knot-to-tip geometry for the leaf cone.
+                const hDist = Math.sqrt(
+                    (tipPos.x - knotPos.x) ** 2 + (tipPos.y - knotPos.y) ** 2,
+                );
+                const vDist = tipPos.z - knotPos.z;
+                if (vDist <= 0) {
                     console.log(LOG_PREFIX,
-                        `Leaf (merge) ${candidate.id}: sd.error, trying branch...`);
-                } catch (_) {}
-            } else {
-                // Branch: requires steeper upward angle (≤50° from vertical).
-                const mergeAngleDeg = (Math.atan2(hDist, vDist) * 180) / Math.PI;
+                        `Merge skip ${candidate.id}: knot above tip (kZ=${knotPos.z.toFixed(1)} tZ=${tipPos.z.toFixed(1)})`);
+                } else if (vDist < 1.5) {
+                    // Too shallow — fall through to branch.
+                    console.log(LOG_PREFIX,
+                        `Leaf (merge) ${candidate.id}: too shallow (vDist=${vDist.toFixed(1)}mm), trying branch...`);
+                } else {
+                    try {
+                        const { leaf, supportData: sd } = buildLeafData({
+                            tipPos,
+                            surfaceNormal: tipNormal,
+                            modelId: candidate.modelId,
+                            parentKnot,
+                            hostDiameterMm: parentKnot.diameter ?? 1.0,
+                            mesh,
+                        });
+                        if (sd.error) {
+                            console.log(LOG_PREFIX,
+                                `Leaf (merge) ${candidate.id}: sd.error, trying branch...`);
+                        } else {
+                            addKnot(parentKnot);
+                            addLeaf(leaf);
+                            const la = (Math.atan2(hDist, vDist) * 180) / Math.PI;
+                            console.log(LOG_PREFIX,
+                                `Leaf (merge) ${candidate.id} → host ${host.trunkId} ` +
+                                `span=${tipSpanMm.toFixed(1)}mm angle=${la.toFixed(0)}° kZ=${knotPos.z.toFixed(1)}`);
+                            return { kind: 'leaf', preset };
+                        }
+                    } catch (_) {}
+                }
+            } else if (tipSpanMm > MAX_AUTO_LEAF_SPAN_MM) {
+                // Branch: requires upward angle from knot to tip.
+                const hDist2 = Math.sqrt(
+                    (tipPos.x - knotPos.x) ** 2 + (tipPos.y - knotPos.y) ** 2,
+                );
+                const vDist2 = tipPos.z - knotPos.z;
+                const mergeAngleDeg = (Math.atan2(hDist2, vDist2) * 180) / Math.PI;
                 if (mergeAngleDeg > 50) {
                     console.log(LOG_PREFIX,
-                        `Merge skip ${candidate.id}: angle too steep (${mergeAngleDeg.toFixed(0)}° > 50°) span=${spanMm.toFixed(1)}mm`);
+                        `Merge skip ${candidate.id}: angle too steep (${mergeAngleDeg.toFixed(0)}° > 50°) span=${tipSpanMm.toFixed(1)}mm`);
                 } else try {
                     const { branch, supportData: sd } = buildBranchData({
                         tipPos, tipNormal, modelId: candidate.modelId, parentKnot, mesh,
@@ -378,10 +390,10 @@ function placeOneCandidate(
                     } else {
                         addKnot(parentKnot);
                         addBranch(branch);
-                        const ma = (Math.atan2(hDist, vDist) * 180) / Math.PI;
+                        const ma = (Math.atan2(hDist2, vDist2) * 180) / Math.PI;
                         console.log(LOG_PREFIX,
                             `Branch (merge) ${candidate.id} → host ${host.trunkId} ` +
-                            `span=${spanMm.toFixed(1)}mm angle=${ma.toFixed(0)}° kZ=${knotPos.z.toFixed(1)}`);
+                            `span=${tipSpanMm.toFixed(1)}mm angle=${ma.toFixed(0)}° kZ=${knotPos.z.toFixed(1)}`);
                         return { kind: 'branch', preset };
                     }
                 } catch (e) {
