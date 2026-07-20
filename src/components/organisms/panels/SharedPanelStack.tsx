@@ -207,10 +207,8 @@ export function SharedPanelStack({
           onLayerIndexChange={slicing.setLayerIndex}
           onScrubStart={handleSceneLayerScrubStart}
           onScrubEnd={handleSceneLayerScrubEnd}
-          onCrossSectionModeChange={slicing.setCrossSectionMode}
           currentHeightMm={slicing.currentHeightMm}
           maxHeightMm={slicing.heightMm}
-          crossSectionMode={slicing.crossSectionMode}
           lowerLayerIndex={slicing.lowerLayerIndex}
           onLowerLayerIndexChange={slicing.setLowerLayerIndex}
           lowerCurrentHeightMm={slicing.lowerCurrentHeightMm}

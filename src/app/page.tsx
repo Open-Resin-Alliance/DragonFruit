@@ -9392,7 +9392,6 @@ export default function Home() {
             hoverColor={scene.hoverColor}
             hoverTintStrength={effectiveHoverTintStrengthForScene}
             selectedTintStrength={effectiveSelectedTintStrengthForScene}
-            crossSectionMode={slicing.crossSectionMode}
             pxMm={islands.pxMm}
             supportsRef={supportsRef}
             supportDragGroupRef={supportDragGroupRef}
@@ -9581,7 +9580,6 @@ export default function Home() {
             handlePrintingLayerScrubEnd={handlePrintingLayerScrubEnd}
             printingCurrentHeightMm={printingCurrentHeightMm}
             slicingHeightMm={slicing.heightMm}
-            crossSectionMode={slicing.crossSectionMode}
             printingPreviewViewportRef={printingPreviewViewportRef}
             printingPreviewCursor={printingPreviewCursor}
             handlePrintingPreviewWheel={handlePrintingPreviewWheel}
