@@ -97,7 +97,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
   const [showReplaceDialog, setShowReplaceDialog] = React.useState(false);
   const [showSizingDebug, setShowSizingDebug] = React.useState(false);
   const [sizingDebug, setSizingDebugState] = React.useState<SizingDebugInfo | null>(null);
-  const [activePreset, setActivePreset] = React.useState<string | null>(null);
+  const [activePreset, setActivePreset] = React.useState<string | null>('medium');
 
   const settings = getSettings().autoSupport;
   const [draft, setDraft] = React.useState(settings);

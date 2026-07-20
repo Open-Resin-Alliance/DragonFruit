@@ -91,23 +91,27 @@ export function sizeParameters(
     }
 
     // ── Dynamic physics-based sizing (upside-down printing) ───────
-    // In bottom-up SLA the model hangs from the build plate.  The
-    // build plate moves UP (+Z), so layers with higher Z are printed
-    // earlier and carry the weight of all layers above them.
+    // In bottom-up SLA the model hangs from the build plate (Z=0).
+    // The plate starts at the FEP and moves UP (+Z) as layers print.
+    // Low-Z supports (near plate) are printed first and carry the
+    // weight of everything printed later (higher Z).
     //
-    // A support at Z=30 must hold everything from Z=0..30.
-    // A support at Z=10 only holds Z=0..10.
+    // A support at Z=5 holds ~87% of the model (layers Z=5..30).
+    // A support at Z=30 (the tip) holds almost nothing.
 
     const modelWeightG = ctx.modelVolumeMm3 * RESIN_DENSITY_G_PER_MM3;
 
     // Total model height (from bounding box or candidate Z range).
     const modelZMax = Math.max(candidate.zHeight, 30); // fallback 30mm
 
-    // This support carries weight proportional to its Z position.
-    // Higher Z = more layers above = more weight.
+    // In bottom-up SLA the model hangs from the build plate (Z=0).
+    // Layers at low Z are printed first and carry the weight of
+    // everything printed later (higher Z).  A support at Z=5mm holds
+    // ~87% of the model; a support at the tip (Z=30mm) holds ~0%.
     const zHeight = Math.max(candidate.zHeight, 1);
-    const weightFraction = zHeight / modelZMax; // 1.0 at top, ~0 at bottom
-    const carriedWeightG = modelWeightG * weightFraction;
+    const weightFraction = (modelZMax - zHeight) / modelZMax; // 1.0 near plate, ~0 at tip
+    // Load is shared across all supports.
+    const carriedWeightG = (modelWeightG * weightFraction) / Math.max(Math.sqrt(ctx.totalCandidates), 1);
 
     // Peel force from the total supported area (cluster total for core
     // trunks, own area for standalone).  A core trunk supporting a
