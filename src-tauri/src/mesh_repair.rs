@@ -1397,7 +1397,13 @@ fn decimate_indexed_to_budget(
     };
 
     let target_index_count = budget_tris.max(1).saturating_mul(3).min(indices.len());
-    let soft_ceiling_tris = budget_tris.saturating_mul(SOFT_CEILING_BUDGET_MULTIPLE);
+    // The error-bound-binds soft ceiling (2× budget) must itself never exceed
+    // the absolute preview cap: a decimation-resistant model whose error bound
+    // holds above budget must still not be accepted above MAX (else it re-opens
+    // the import-OOM regression the governor ceiling closes).
+    let soft_ceiling_tris = budget_tris
+        .saturating_mul(SOFT_CEILING_BUDGET_MULTIPLE)
+        .min(crate::stl_budget::MAX_BUDGET_TRIANGLES as usize);
 
     let mut selected: Vec<u32> = Vec::new();
     let mut achieved_error = 1.0f32;
