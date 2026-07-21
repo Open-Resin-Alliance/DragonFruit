@@ -87,18 +87,26 @@ pub async fn check_updates(
 
     use tauri_plugin_updater::UpdaterExt;
 
-    let updater = app_handle
+    let mut builder = app_handle
         .updater_builder()
         .endpoints(vec![endpoint_url])
         .map_err(|e| {
             warn!("[updater] Failed to set updater endpoints: {e}");
             format!("Failed to set updater endpoints: {e}")
-        })?
-        .build()
-        .map_err(|e| {
-            warn!("[updater] Failed to build updater: {e}");
-            format!("Failed to build updater: {e}")
         })?;
+
+    // We ship a single universal macOS binary, so the plugin's default
+    // arch-sniffing ("darwin-aarch64"/"darwin-x86_64") never matches the
+    // "darwin-universal" key in the updater feed — force it explicitly.
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.target("darwin-universal");
+    }
+
+    let updater = builder.build().map_err(|e| {
+        warn!("[updater] Failed to build updater: {e}");
+        format!("Failed to build updater: {e}")
+    })?;
 
     let update = updater
         .check()
