@@ -1,4 +1,4 @@
-name: PR macOS Build Follow-up
+name: PR macOS build follow-up
 
 on:
   workflow_run:
