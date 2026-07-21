@@ -111,6 +111,10 @@ jobs:
           args: --target universal-apple-darwin --bundles app,dmg
 
       - name: Embed QuickLook extension + verify universal bundle
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: MHNF3GA2MM
         run: |
           node scripts/macos-embed-appex.mjs --target universal-apple-darwin
           node scripts/verify-universal-bundle.mjs
