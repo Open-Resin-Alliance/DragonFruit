@@ -1,4 +1,4 @@
-name: PR macOS Build Check
+name: PR macOS build check
 
 on:
   pull_request:
