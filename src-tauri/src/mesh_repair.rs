@@ -858,7 +858,7 @@ pub async fn load_stl_file(
         .map(|value| value as u64)
         .unwrap_or(0);
     let make_budget = |source_triangles: u64| {
-        let budget = crate::stl_budget::compute_triangle_budget(&crate::stl_budget::BudgetInputs {
+        let inputs = crate::stl_budget::BudgetInputs {
             ram_total_bytes: ram_total,
             ram_available_bytes: ram_available,
             heap_limit_bytes: heap_limit,
@@ -866,16 +866,22 @@ pub async fn load_stl_file(
             // Per-model today; plate-level rebalancing is a documented
             // follow-up (imports are per-file at this boundary).
             concurrent_model_count: 1,
-        });
+        };
+        let budget = crate::stl_budget::compute_triangle_budget(&inputs);
+        // Log `ram_total_bytes` + `source_triangles` off the struct itself (not
+        // the `ram_total` / `source_triangles` locals) so their documented
+        // "logged for diagnosis" purpose is a genuine field read — otherwise
+        // dead-code analysis flags both fields as never-read in the production
+        // binary (P6 hygiene).
         log::info!(
             "[STL budget governor] budget={} tris, reason={}, inputs{{ram_total={}, ram_avail={}, heap_limit={}, bytes_per_tri={}, source_tris={}}}",
             budget.budget_tris,
             budget.reason.as_str(),
-            ram_total,
+            inputs.ram_total_bytes,
             ram_available,
             heap_limit,
             crate::stl_budget::BYTES_PER_TRIANGLE_HEAP,
-            source_triangles,
+            inputs.source_triangles,
         );
         budget
     };
@@ -1063,14 +1069,24 @@ fn read_binary_stl_vertex(record: &[u8; 50], offset: usize) -> Vec3 {
     Vec3::new(read_f32(offset), read_f32(offset + 4), read_f32(offset + 8))
 }
 
+// STL-import P6 hygiene: the streamed-bucketed preview loader below (and its
+// three helpers) was orphaned from production by P2a's query-first governor,
+// which replaced it, but is KEPT for the legacy baseline tests in
+// `stl_preview_tests` / `p0_fullres_red_harness`. Gated to test builds so it no
+// longer emits dead-code warnings in the production binary while the tests that
+// exercise it still compile. (`read_binary_stl_vertex` above stays un-gated — it
+// has production callers in `load_binary_stl_soup` / `splice_fullres_stl_stream`.)
+#[cfg(test)]
 struct PreviewTempDir(PathBuf);
 
+#[cfg(test)]
 impl Drop for PreviewTempDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
+#[cfg(test)]
 fn binary_stl_bounds(path: &std::path::Path, triangle_count: u32) -> Result<(Vec3, Vec3), String> {
     let file =
         std::fs::File::open(path).map_err(|e| format!("Failed to open STL preview source: {e}"))?;
@@ -1094,6 +1110,7 @@ fn binary_stl_bounds(path: &std::path::Path, triangle_count: u32) -> Result<(Vec
     Ok((min, max))
 }
 
+#[cfg(test)]
 fn simplify_preview_region(
     path: &std::path::Path,
     triangle_count: usize,
@@ -1152,6 +1169,7 @@ fn simplify_preview_region(
     Ok(output)
 }
 
+#[cfg(test)]
 fn load_binary_stl_preview(
     path: &std::path::Path,
     triangle_count: u32,

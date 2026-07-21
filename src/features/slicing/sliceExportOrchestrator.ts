@@ -108,13 +108,32 @@ function logDebug(...args: unknown[]): void {
     console.debug(DEBUG_PREFIX, ...args);
 }
 
-function estimateInitialMeshStagingBytes(models: LoadedModel[]): number {
+function estimateInitialMeshStagingBytes(
+    models: LoadedModel[],
+    fullResCandidateIds: Set<string>,
+): number {
     const visibleModelTriangles = models.reduce((sum, model) => {
         if (!model.visible) return sum;
-        const triangleCount = Number.isFinite(model.polygonCount)
-            ? Math.max(0, Math.floor(model.polygonCount))
-            : 0;
-        return sum + triangleCount;
+        // Full-res splice candidates (P1) are staged Rust-side straight from the
+        // ORIGINAL file — their bytes never enter the WebView — so the reserve
+        // must reflect the full-resolution `polygonCount`, unchanged.
+        if (fullResCandidateIds.has(model.id)) {
+            const originalCount = Number.isFinite(model.polygonCount)
+                ? Math.max(0, Math.floor(model.polygonCount))
+                : 0;
+            return sum + originalCount;
+        }
+        // STL-import P6 hygiene (audit §2d): the reduced preview geometry is what
+        // actually streams through the WebView on the preview-staging path, so
+        // estimate from its ACTUAL staged position count — not the source
+        // `polygonCount`, which over-promises `stage_mesh_binary_start` totalBytes
+        // for decimated previews. For a full-resolution (non-preview) model the
+        // two are equal, so this is a no-op there.
+        const position = model.geometry.geometry.getAttribute('position');
+        const stagedTriangles = Math.floor(
+            (model.geometry.geometry.getIndex()?.count ?? position?.count ?? 0) / 3,
+        );
+        return sum + stagedTriangles;
     }, 0);
 
     if (visibleModelTriangles <= 0) {
@@ -554,7 +573,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
             .map((model) => model.id),
     );
 
-    const initialMeshStagingBytes = estimateInitialMeshStagingBytes(options.models);
+    const initialMeshStagingBytes = estimateInitialMeshStagingBytes(options.models, fullResCandidateIds);
     const meshTransportBytesEstimate = Math.ceil(initialMeshStagingBytes / 2);
     const meshTransportEncoding: 'raw_f32' | 'quantized_u16' = MESH_TRANSPORT_ENCODING;
     const meshTransportQuantization = resolveMeshTransportQuantizationBounds(options.printerProfile);

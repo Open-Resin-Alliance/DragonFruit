@@ -131,11 +131,17 @@ function sanitizePositionAttribute(geometry: THREE.BufferGeometry): MeshDefects 
 export interface ProcessGeometryOptions {
   center?: boolean;
   /**
-   * Controls native Tauri mesh processing behavior:
-   * - `auto` (default): standard flow; may run repair path.
-   * - `classify-only`: lightweight shell split classification (no heavy repair).
-    * - `none`: skip native repair/classification entirely.
-   * - `repair`: force full repair/classification path.
+   * Controls native Tauri mesh processing behavior. Every mode EXCEPT `repair`
+   * is additionally size-gated: native processing is skipped above
+   * `AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD` (≥ 3M triangles), matching the
+   * existing auto-repair skip convention.
+   * - `auto` (default): standard flow; may run the repair path (size-gated).
+   * - `classify-only`: lightweight shell-split classification, no heavy repair
+   *   (size-gated).
+   * - `none`: skip heavy repair, but — below the size gate — STILL run the
+   *   classify-only shell-split pass for support-geometry detection. It does
+   *   NOT skip native processing entirely.
+   * - `repair`: force the full repair/classification path (never size-gated).
    */
     nativeProcessingMode?: 'auto' | 'classify-only' | 'none' | 'repair';
   /**
@@ -328,19 +334,27 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   let repairUsedFullRes = false;
   if (isTauriRuntime()) {
     const nativeMode = options.nativeProcessingMode ?? 'auto';
-    const skipAutoNativeProcessingForSize = nativeMode === 'auto'
+    // STL-import P6 hygiene (audit §2c): native processing — the auto-repair
+    // path AND the classify-only shell-split pass — stages the whole mesh to
+    // Rust and back. On very large meshes that round-trip is expensive wasted
+    // work, so skip it above the same ≥3M threshold auto-repair already used,
+    // for every mode EXCEPT the explicit manual `repair` force path (user
+    // opt-in, never size-gated). Previously only `auto` was gated, so a default
+    // import (mode=`none`, autoRepair off) still classified at any size. Small
+    // meshes (< threshold) keep classifying, so support-geometry detection is
+    // unaffected for the common case.
+    const skipNativeProcessingForSize = nativeMode !== 'repair'
       && sourceTriangleEstimate >= AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD;
 
-    if (nativeMode === 'none') {
-      console.log('[processGeometry] Native repair skipped (mode=none) — running classification for support geometry detection');
-    }
-
-    if (skipAutoNativeProcessingForSize) {
+    if (skipNativeProcessingForSize) {
       console.warn(
-        `[processGeometry] Skipping native auto repair/classification for gigantic mesh (` +
-        `${sourceTriangleEstimate.toLocaleString()} triangles). Use manual Repair to force.`
+        `[processGeometry] Skipping native repair/classification for large mesh (` +
+        `${sourceTriangleEstimate.toLocaleString()} triangles ≥ ${AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD.toLocaleString()} threshold). Use manual Repair to force.`
       );
     } else try {
+      if (nativeMode === 'none') {
+        console.log('[processGeometry] Native repair skipped (mode=none) — running classification for support geometry detection');
+      }
       let classifyOnly = nativeMode === 'classify-only' || nativeMode === 'none';
       const forceRepair = nativeMode === 'repair';
       // P5-2 / D5: convex-hull rescue is opt-in. Only ever true when the user
