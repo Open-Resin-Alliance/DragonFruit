@@ -1347,6 +1347,9 @@ export function SupportSidebar() {
                                                             autoBracing: {
                                                                 ...current.autoBracing,
                                                             },
+                                                            autoSupport: {
+                                                                ...current.autoSupport,
+                                                            },
                                                         };
                                                         editSessionLatestSettingsRef.current = nextSettings;
                                                         setSettings(nextSettings);
