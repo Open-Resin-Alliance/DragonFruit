@@ -144,6 +144,9 @@ struct RepairOptionsDto {
     solidify_fragmented_components: Option<bool>,
     solidify_component_threshold: Option<usize>,
     solidify_self_intersection_threshold: Option<usize>,
+    /// P5-2 (D5): opt-in for the lossy Tier-3 convex-hull rescue. The frontend
+    /// sets this from the multi-component consent dialog. Default false.
+    allow_hull_rescue: Option<bool>,
 }
 
 impl From<RepairOptionsDto> for RepairOptions {
@@ -172,6 +175,7 @@ impl From<RepairOptionsDto> for RepairOptions {
             solidify_self_intersection_threshold: dto
                 .solidify_self_intersection_threshold
                 .unwrap_or(defaults.solidify_self_intersection_threshold),
+            allow_hull_rescue: dto.allow_hull_rescue.unwrap_or(defaults.allow_hull_rescue),
         }
     }
 }

@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::MeshAnalysis;
+use crate::quality::MeshQualityScore;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeshHealthReport {
@@ -11,6 +12,15 @@ pub struct MeshHealthReport {
     pub source_path: Option<String>,
     pub pre: MeshAnalysis,
     pub post: MeshAnalysis,
+    /// Compact before/after quality scorecard (plan §Phase 5 step 4). Projected
+    /// from `pre`/`post` plus a sliver pass over the corresponding mesh; the
+    /// repair pipeline overwrites both with geometry-aware scores. `#[serde(
+    /// default)]` keeps the JSON contract backward-compatible for the frontend
+    /// "Mesh Health" UI.
+    #[serde(default)]
+    pub quality_pre: MeshQualityScore,
+    #[serde(default)]
+    pub quality_post: MeshQualityScore,
     pub steps: Vec<RepairStepReport>,
     /// Heuristic flag indicating this imported mesh is likely support-only or
     /// strongly support-dominant geometry.
@@ -41,9 +51,12 @@ impl MeshHealthReport {
     pub const VERSION: u32 = 1;
 
     pub fn new(pre: MeshAnalysis) -> Self {
+        let quality = MeshQualityScore::from(&pre);
         Self {
             version: Self::VERSION,
             source_path: None,
+            quality_pre: quality,
+            quality_post: quality,
             pre: pre.clone(),
             post: pre,
             steps: Vec::new(),

@@ -75,6 +75,12 @@ export interface MeshRepairOptions {
   solidifyFragmentedComponents?: boolean;
   solidifyComponentThreshold?: number;
   solidifySelfIntersectionThreshold?: number;
+  /**
+   * P5-2 (decision D5): opt in to the lossy Tier-3 convex-hull rescue for
+   * unrepairable support bodies. Serialized as `allowHullRescue` and consumed
+   * by the Rust `RepairOptionsDto`. Defaults to false (skip) on the Rust side.
+   */
+  allowHullRescue?: boolean;
 }
 
 export interface MeshRepairResult {

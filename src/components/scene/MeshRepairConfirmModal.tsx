@@ -1,12 +1,13 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { Wrench, X, AlertTriangle } from 'lucide-react';
 import type { MeshRepairConfirmPrompt } from '@/features/scene/useSceneCollectionManager';
 
 type Props = {
   prompt: MeshRepairConfirmPrompt;
-  onRepair: () => void;
+  /** P5-2 / D5: carries the convex-hull rescue consent captured below. */
+  onRepair: (allowHullRescue: boolean) => void;
   onLoadAsIs: () => void;
   onCancelImport: () => void;
 };
@@ -24,6 +25,8 @@ function StatRow({ label, value }: { label: string; value: string | number }) {
 
 export function MeshRepairConfirmModal({ prompt, onRepair, onLoadAsIs, onCancelImport }: Props) {
   const { fileName, analysis } = prompt;
+  // P5-2 / D5: hull rescue is opt-in and defaults to off.
+  const [allowHullRescue, setAllowHullRescue] = useState(false);
 
   return (
     <div
@@ -120,6 +123,27 @@ export function MeshRepairConfirmModal({ prompt, onRepair, onLoadAsIs, onCancelI
             </div>
           </div>
 
+          {/* Convex-hull rescue consent (P5-2 / D5) */}
+          <label
+            className="flex items-start gap-2.5 rounded-md border px-3 py-2 cursor-pointer"
+            style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+          >
+            <input
+              type="checkbox"
+              className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[color:var(--accent)]"
+              checked={allowHullRescue}
+              onChange={(event) => setAllowHullRescue(event.target.checked)}
+            />
+            <span className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+              <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Allow convex-hull rescue
+              </span>{' '}
+              of support bodies that cannot be repaired. This closes stubborn
+              geometry but replaces those bodies with their convex hull (lossy).
+              Leave off to keep the original geometry untouched.
+            </span>
+          </label>
+
           {/* Actions */}
           <div className="grid grid-cols-2 gap-2 pt-1">
             <button
@@ -132,7 +156,7 @@ export function MeshRepairConfirmModal({ prompt, onRepair, onLoadAsIs, onCancelI
             <button
               type="button"
               className="ui-button ui-button-accent !h-9 w-full px-3 text-xs flex items-center justify-center gap-1.5"
-              onClick={onRepair}
+              onClick={() => onRepair(allowHullRescue)}
             >
               <Wrench className="h-3.5 w-3.5" />
               Repair

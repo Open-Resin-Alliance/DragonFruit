@@ -23,6 +23,7 @@ use crate::arrangement::corefine_self_intersections;
 use crate::core::bvh::Bvh;
 use crate::core::halfedge::{edge_key, Topology};
 use crate::core::mesh::{IndexedMesh, Vec3};
+use crate::quality::MeshQualityScore;
 use crate::report::{MeshHealthReport, RepairStepReport};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +57,15 @@ pub struct RepairOptions {
     /// Minimum self-intersection-triangle count in the *pre* analysis required
     /// for `solidify_fragmented_components` to auto-trigger.
     pub solidify_self_intersection_threshold: usize,
+    /// P5-2 (decision D5): opt-in for the Tier-3 convex-hull rescue inside the
+    /// manifold solidify path. The hull rescue replaces a component that cannot
+    /// be made manifold with its convex hull — a lossy geometric approximation.
+    /// For multi-component (support-heavy) inputs this can silently reshape
+    /// support bodies, so it is now off by default and requires explicit
+    /// user consent (the frontend confirm dialog). When `false`, unrepairable
+    /// components are appended verbatim (Tier-4) instead of being hull-rescued.
+    #[serde(default)]
+    pub allow_hull_rescue: bool,
 }
 
 impl Default for RepairOptions {
@@ -73,6 +83,9 @@ impl Default for RepairOptions {
             solidify_fragmented_components: true,
             solidify_component_threshold: 256,
             solidify_self_intersection_threshold: 128,
+            // Off by default (decision D5): hull rescue is lossy; the frontend
+            // must obtain explicit consent for multi-component inputs.
+            allow_hull_rescue: false,
         }
     }
 }
@@ -87,14 +100,16 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     let t_start = std::time::Instant::now();
 
     let pre = analyze(&mesh);
-    let auto_fragmented_solidify = options.solidify_fragmented_components
-        && pre.connected_components >= options.solidify_component_threshold
-        && pre.self_intersection_triangles >= options.solidify_self_intersection_threshold;
+    let auto_fragmented_solidify = should_auto_solidify(&pre, options);
     let run_self_intersection_path = options.resolve_self_intersections || auto_fragmented_solidify;
     let mut applied_self_intersection_path = false;
     let mut skip_final_orientation = false;
     let mut solidify_rollback_reason: Option<String> = None;
     let mut report = MeshHealthReport::new(pre);
+    // Geometry-aware "before" score (adds the net-new sliver count that the
+    // pure `From<&MeshAnalysis>` projection cannot see). Mesh is still the
+    // unmodified input here.
+    report.quality_pre = MeshQualityScore::from_analysis_and_mesh(&report.pre, &mesh);
 
     if auto_fragmented_solidify {
         report.steps.push(RepairStepReport {
@@ -179,13 +194,14 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
         {
             let analysis_before_fast = analyze(&mesh);
             let t = std::time::Instant::now();
-            match try_solidify_via_manifold_union(&mesh) {
+            match try_solidify_via_manifold_union(&mesh, options.allow_hull_rescue) {
                 Some((
                     unioned,
                     manifold_accepted,
                     fallback_rescued,
                     fallback_kept,
                     fallback_dropped,
+                    fallback_hull_skipped,
                     likely_support_geometry,
                     model_tri_count,
                 )) => {
@@ -221,7 +237,8 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
                                 .unsigned_abs() as u32,
                             notes: Some(format!(
                                 "components:{}->{} tris:{}->{} si:{}->{} watertight:{} \
-                                 unioned={} rescued={} fallback_kept={} fallback_dropped={}",
+                                 unioned={} rescued={} fallback_kept={} fallback_dropped={} \
+                                 hull_rescue={} hull_skipped={}",
                                 n_comps_before,
                                 n_comps_after,
                                 analysis_before_fast.triangle_count,
@@ -233,6 +250,8 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
                                 fallback_rescued,
                                 fallback_kept,
                                 fallback_dropped,
+                                if options.allow_hull_rescue { "allowed" } else { "off" },
+                                fallback_hull_skipped,
                             )),
                             elapsed_ms,
                         });
@@ -334,13 +353,14 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
             #[cfg(feature = "manifold")]
             {
                 let t = std::time::Instant::now();
-                match try_solidify_via_manifold_union(&mesh) {
+                match try_solidify_via_manifold_union(&mesh, options.allow_hull_rescue) {
                     Some((
                         unioned,
                         manifold_accepted,
                         fallback_rescued,
                         fallback_kept,
                         fallback_dropped,
+                        fallback_hull_skipped,
                         likely_support_geometry,
                         model_tri_count,
                     )) => {
@@ -386,7 +406,8 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
                                     .unsigned_abs() as u32,
                                 notes: Some(format!(
                                     "components:{}->{} tris:{}->{} si:{}->{} watertight:{} \
-                                     unioned={} rescued={} fallback_kept={} fallback_dropped={}",
+                                     unioned={} rescued={} fallback_kept={} fallback_dropped={} \
+                                     hull_rescue={} hull_skipped={}",
                                     n_comps_before,
                                     n_comps_after,
                                     analysis_before_solidify.triangle_count,
@@ -398,6 +419,8 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
                                     fallback_rescued,
                                     fallback_kept,
                                     fallback_dropped,
+                                    if options.allow_hull_rescue { "allowed" } else { "off" },
+                                    fallback_hull_skipped,
                                 )),
                                 elapsed_ms,
                             });
@@ -692,6 +715,7 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
 
     // Post-analysis.
     report.post = analyze(&mesh);
+    report.quality_post = MeshQualityScore::from_analysis_and_mesh(&report.post, &mesh);
 
     // Surface residual issues.
     let mut residuals: Vec<String> = Vec::new();
@@ -933,9 +957,11 @@ fn compute_likely_support_geometry(
 ///
 /// Requires the `manifold` Cargo feature.
 #[cfg(feature = "manifold")]
+#[allow(clippy::type_complexity)]
 fn try_solidify_via_manifold_union(
     mesh: &IndexedMesh,
-) -> Option<(IndexedMesh, usize, usize, usize, usize, bool, usize)> {
+    allow_hull_rescue: bool,
+) -> Option<(IndexedMesh, usize, usize, usize, usize, usize, bool, usize)> {
     use manifold_csg::Manifold;
 
     let components = triangle_components(mesh);
@@ -1155,6 +1181,9 @@ fn try_solidify_via_manifold_union(
     let mut fallback_kept = 0usize;
     let mut fallback_rescued = 0usize;
     let mut fallback_dropped = 0usize;
+    // P5-2 (D5): components that WOULD have been convex-hull rescued but were
+    // skipped because the opt-in was off. Surfaced in the per-tier report.
+    let mut fallback_hull_skipped = 0usize;
 
     for (mut fb, group) in fallback_meshes {
         // Truly degenerate micro-shard — nothing to save.
@@ -1264,7 +1293,7 @@ fn try_solidify_via_manifold_union(
             }
         }
 
-        if !rescued {
+        if !rescued && allow_hull_rescue {
             // ── Tier-3 rescue: convex hull approximation ──────────────────────
             //
             // If the component is still not manifold-able after aggressive
@@ -1273,6 +1302,11 @@ fn try_solidify_via_manifold_union(
             // reasonable geometric approximation that covers the same spatial
             // region without introducing intersecting open-surface bodies into
             // the output that would cause the slicer to glitch.
+            //
+            // P5-2 (D5): this tier is now opt-in — it reshapes a component into
+            // its hull (lossy). It runs only after explicit user consent
+            // (`allow_hull_rescue`); otherwise the component is preserved
+            // verbatim by the Tier-4 fallback below.
             let pts: Vec<[f64; 3]> = fb
                 .positions
                 .iter()
@@ -1287,6 +1321,10 @@ fn try_solidify_via_manifold_union(
                     }
                 }
             }
+        } else if !rescued {
+            // Hull rescue skipped (opt-in off). Counted for the per-tier report;
+            // the Tier-4 fallback preserves the component verbatim.
+            fallback_hull_skipped += 1;
         }
 
         if !rescued {
@@ -1334,9 +1372,35 @@ fn try_solidify_via_manifold_union(
         fallback_rescued,
         fallback_kept,
         fallback_dropped,
+        fallback_hull_skipped,
         likely_support_geometry,
         model_triangles_out,
     ))
+}
+
+/// Decide whether the destructive auto-solidify (structural) path should run
+/// for a heavily fragmented input, based purely on the *pre* analysis.
+///
+/// The historical trigger fired on `components >= threshold &&
+/// self_intersections >= threshold` alone. A healthy pre-supported plate
+/// (hundreds of closed support bodies + many benign support-support contacts
+/// read as self-intersections) trips both trivially, so the destructive path
+/// became the *normal* path for those files — the P5 defect.
+///
+/// P5-3 second signal (decision D3): also require an openness signal —
+/// `boundary_edges > 0` — before the structural/solidify tiers auto-run. A
+/// watertight-per-component plate (bodies closed, so `boundary_edges == 0`)
+/// no longer auto-triggers structural edits. This gates only the *auto*
+/// trigger: an explicit `resolve_self_intersections = true` still runs the
+/// full path via `run_self_intersection_path`, so a watertight-but-
+/// self-intersecting mesh the user asked to repair is untouched by this gate.
+/// Precedent in-file: the `skip_fill_holes_fast` fast-path keys on exactly
+/// `boundary_edges == 0`.
+fn should_auto_solidify(pre: &MeshAnalysis, options: &RepairOptions) -> bool {
+    options.solidify_fragmented_components
+        && pre.connected_components >= options.solidify_component_threshold
+        && pre.self_intersection_triangles >= options.solidify_self_intersection_threshold
+        && pre.boundary_edges > 0
 }
 
 fn solidify_regression_reason(before: &MeshAnalysis, after: &MeshAnalysis) -> Option<String> {
@@ -2138,6 +2202,33 @@ fn prune_open_fragments(mesh: &mut IndexedMesh) {
         }
     }
 
+    // P5-1: size-relative fragment-prune floor. The historical flat `128`
+    // absolute floor was calibrated for large models and eats support geometry
+    // — a pre-supported plate is made of many small closed/near-closed bodies
+    // (struts, tips, contact pads / floor shards), each far below 128 tris.
+    // Scale the floor to the component-size distribution so real support
+    // fragments survive while numeric seam shards (a handful of tris left by
+    // CDT failures) are still pruned. `median/8` tracks the typical body size:
+    // on a support plate the median body is tiny so the floor drops to the
+    // absolute-min seam-shard guard; on a big model the median is huge so the
+    // floor saturates at the historical 128. Capped at 128 so the new rule is
+    // never MORE aggressive than before → no model-side regression.
+    const FRAGMENT_FLOOR_ABS_MIN: usize = 8; // below this ≈ numeric seam shard
+    const FRAGMENT_FLOOR_MEDIAN_DIVISOR: usize = 8;
+    const FRAGMENT_FLOOR_ABS_MAX: usize = 128; // historical flat floor = ceiling now
+    let fragment_floor = {
+        let mut counts: Vec<usize> = comp_tri_count.iter().copied().filter(|&c| c > 0).collect();
+        let median_tris = if counts.is_empty() {
+            0
+        } else {
+            counts.sort_unstable();
+            counts[counts.len() / 2]
+        };
+        (median_tris / FRAGMENT_FLOOR_MEDIAN_DIVISOR)
+            .max(FRAGMENT_FLOOR_ABS_MIN)
+            .min(FRAGMENT_FLOOR_ABS_MAX)
+    };
+
     let mut keep_comp = vec![false; n_comps];
     for c in 0..n_comps {
         let tris = comp_tri_count[c];
@@ -2148,7 +2239,7 @@ fn prune_open_fragments(mesh: &mut IndexedMesh) {
         let closed = boundary == 0;
         // Near-closed: modest absolute boundary and small relative leak.
         let near_closed = boundary <= 64 && boundary.saturating_mul(8) <= tris;
-        if closed || (near_closed && tris >= 128) {
+        if closed || (near_closed && tris >= fragment_floor) {
             keep_comp[c] = true;
         }
     }
@@ -2644,6 +2735,315 @@ mod tests {
             is_oriented: false,
             timings_ms: crate::analysis::AnalysisTimings::default(),
         }
+    }
+
+    // ── CP1: crate-local deterministic geometry generators (P5, decision D4) ──
+    //
+    // The crate shipped no real-geometry builders — the `analysis()` helper
+    // above fabricates synthetic MeshAnalysis structs, and the only lattice
+    // generator lived in src-tauri's #[ignore]d p0 harness. These build actual
+    // IndexedMeshes on known topology so the MeshQualityScore units and the
+    // fragment-prune guardrail can be exercised directly in `--lib`.
+
+    fn push_tri(soup: &mut Vec<f32>, a: [f32; 3], b: [f32; 3], c: [f32; 3]) {
+        soup.extend_from_slice(&a);
+        soup.extend_from_slice(&b);
+        soup.extend_from_slice(&c);
+    }
+
+    /// Triangle `t` (0..12) of an axis-aligned box, fixed winding (mirror of
+    /// the vetted src-tauri `box_tri`). Faces: 0,1 = z-min; 2,3 = z-max;
+    /// 4,5 = y-min; 6,7 = y-max; 8,9 = x-min; 10,11 = x-max.
+    fn box_tri(min: [f32; 3], max: [f32; 3], t: usize) -> [[f32; 3]; 3] {
+        let [x0, y0, z0] = min;
+        let [x1, y1, z1] = max;
+        match t {
+            0 => [[x0, y0, z0], [x1, y1, z0], [x1, y0, z0]],
+            1 => [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0]],
+            2 => [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1]],
+            3 => [[x0, y0, z1], [x1, y1, z1], [x0, y1, z1]],
+            4 => [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1]],
+            5 => [[x0, y0, z0], [x1, y0, z1], [x0, y0, z1]],
+            6 => [[x0, y1, z0], [x1, y1, z1], [x1, y1, z0]],
+            7 => [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1]],
+            8 => [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1]],
+            9 => [[x0, y0, z0], [x0, y1, z1], [x0, y1, z0]],
+            10 => [[x1, y0, z0], [x1, y1, z1], [x1, y0, z1]],
+            _ => [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1]],
+        }
+    }
+
+    /// All 12 box triangles, except any face-triangle index listed in `skip`.
+    fn push_box(soup: &mut Vec<f32>, min: [f32; 3], max: [f32; 3], skip: &[usize]) {
+        for t in 0..12 {
+            if skip.contains(&t) {
+                continue;
+            }
+            let [a, b, c] = box_tri(min, max, t);
+            push_tri(soup, a, b, c);
+        }
+    }
+
+    fn add3(o: [f32; 3], u: [f32; 3], s: f32) -> [f32; 3] {
+        [o[0] + u[0] * s, o[1] + u[1] * s, o[2] + u[2] * s]
+    }
+
+    /// Tessellate a planar face (origin + full edge vectors u,v) into n×n quads
+    /// (2 tris each). Shared box-edge subdivisions match from both sides.
+    fn push_quad_grid(soup: &mut Vec<f32>, origin: [f32; 3], u: [f32; 3], v: [f32; 3], n: usize) {
+        let inv = 1.0 / n as f32;
+        let corner = |s: f32, t: f32| add3(add3(origin, u, s), v, t);
+        for i in 0..n {
+            for j in 0..n {
+                let (s0, s1) = (i as f32 * inv, (i + 1) as f32 * inv);
+                let (t0, t1) = (j as f32 * inv, (j + 1) as f32 * inv);
+                let p00 = corner(s0, t0);
+                let p10 = corner(s1, t0);
+                let p11 = corner(s1, t1);
+                let p01 = corner(s0, t1);
+                push_tri(soup, p00, p10, p11);
+                push_tri(soup, p00, p11, p01);
+            }
+        }
+    }
+
+    /// A closed axis-aligned box whose 6 faces are each tessellated into n×n
+    /// quads (12·n² triangles), a closed 2-manifold (boundary_edges == 0).
+    fn subdiv_box_soup(min: [f32; 3], max: [f32; 3], n: usize) -> Vec<f32> {
+        let [x0, y0, z0] = min;
+        let [x1, y1, z1] = max;
+        let dx = [x1 - x0, 0.0, 0.0];
+        let dy = [0.0, y1 - y0, 0.0];
+        let dz = [0.0, 0.0, z1 - z0];
+        let mut s = Vec::new();
+        push_quad_grid(&mut s, [x0, y0, z0], dx, dy, n); // z-min
+        push_quad_grid(&mut s, [x0, y0, z1], dx, dy, n); // z-max
+        push_quad_grid(&mut s, [x0, y0, z0], dx, dz, n); // y-min
+        push_quad_grid(&mut s, [x0, y1, z0], dx, dz, n); // y-max
+        push_quad_grid(&mut s, [x0, y0, z0], dy, dz, n); // x-min
+        push_quad_grid(&mut s, [x1, y0, z0], dy, dz, n); // x-max
+        s
+    }
+
+    fn cube_soup(min: [f32; 3], max: [f32; 3]) -> Vec<f32> {
+        let mut s = Vec::new();
+        push_box(&mut s, min, max, &[]);
+        s
+    }
+
+    /// A cube with its z-min face (triangles 0,1) removed → one rectangular
+    /// boundary loop (4 boundary edges, 1 hole).
+    fn holed_cube_soup() -> Vec<f32> {
+        let mut s = Vec::new();
+        push_box(&mut s, [0.0, 0.0, 0.0], [10.0, 10.0, 10.0], &[0, 1]);
+        s
+    }
+
+    /// Two disjoint cubes → two shells.
+    fn two_cube_soup() -> Vec<f32> {
+        let mut s = Vec::new();
+        push_box(&mut s, [0.0, 0.0, 0.0], [5.0, 5.0, 5.0], &[]);
+        push_box(&mut s, [20.0, 0.0, 0.0], [25.0, 5.0, 5.0], &[]);
+        s
+    }
+
+    /// A single thin, non-zero-area triangle (base 10 mm, height 10 µm) — a
+    /// sliver, not a zero-area degenerate.
+    fn sliver_soup() -> Vec<f32> {
+        let mut s = Vec::new();
+        push_tri(&mut s, [0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [5.0, 0.01, 0.0]);
+        s
+    }
+
+    /// Pre-supported-plate-like mesh (decision D4): a base slab + detached
+    /// struts + tiny detached tip boxes (all closed) + open contact pads /
+    /// floor shards (near-closed, 47 tris each, 3 boundary edges). The open
+    /// pads are the pieces the flat `tris >= 128` prune floor eats today and
+    /// that the P5-1 size-relative floor must preserve.
+    fn pre_supported_plate_soup() -> Vec<f32> {
+        let mut s = Vec::new();
+        // Base slab: closed subdivided box (48 tris).
+        s.extend_from_slice(&subdiv_box_soup([0.0, 0.0, 0.0], [20.0, 20.0, 1.0], 2));
+        // Struts: 6 tall closed boxes (12 tris each), detached above the slab.
+        for k in 0..6u32 {
+            let x = 2.0 + k as f32 * 3.0;
+            push_box(&mut s, [x, 2.0, 1.5], [x + 0.6, 2.6, 5.0], &[]);
+        }
+        // Tips: 3 tiny closed boxes (12 tris each) hovering above struts.
+        for k in 0..3u32 {
+            let x = 2.0 + k as f32 * 3.0;
+            push_box(&mut s, [x - 0.05, 1.95, 5.06], [x + 0.65, 2.65, 5.36], &[]);
+        }
+        // Open contact pads / floor shards: near-closed subdiv boxes with one
+        // triangle removed (47 tris, 3-edge hole) — <128 tris, so today's flat
+        // prune floor eats them.
+        for k in 0..3u32 {
+            let x = 3.0 + k as f32 * 4.0;
+            let mut pad = subdiv_box_soup([x, 12.0, 1.1], [x + 1.2, 13.2, 1.5], 2);
+            pad.truncate(pad.len() - 9); // drop one triangle → 3-edge boundary loop
+            s.extend_from_slice(&pad);
+        }
+        s
+    }
+
+    #[test]
+    fn prune_open_fragments_preserves_support_floor_shards() {
+        // Guardrail red (P5-1): a pre-supported plate's open contact pads /
+        // floor shards (near-closed, <128 tris) must survive fragment pruning.
+        let soup = pre_supported_plate_soup();
+        let mut mesh = IndexedMesh::from_triangle_soup(&soup, 1e-5);
+        let before_tris = mesh.triangles.len();
+        let comps_before = triangle_components(&mesh);
+        let n_before = comps_before.iter().copied().max().unwrap_or(0) as usize + 1;
+        assert_eq!(n_before, 13, "plate should have 13 disjoint bodies");
+
+        prune_open_fragments(&mut mesh);
+
+        assert_eq!(
+            mesh.triangles.len(),
+            before_tris,
+            "prune eliminated support geometry: {} of {} triangles dropped \
+             (open contact pads / floor shards eaten)",
+            before_tris - mesh.triangles.len(),
+            before_tris,
+        );
+    }
+
+    #[test]
+    fn repair_leaves_watertight_cube_unchanged() {
+        // Golden (no-regression): a clean watertight cube must pass through the
+        // full repair pipeline untouched — same triangle count, still one
+        // watertight shell.
+        let soup = cube_soup([0.0, 0.0, 0.0], [10.0, 10.0, 10.0]);
+        let mesh = IndexedMesh::from_triangle_soup(&soup, 1e-5);
+        let before_tris = mesh.triangles.len();
+        assert_eq!(before_tris, 12, "cube has 12 triangles");
+
+        let outcome = repair(mesh, &RepairOptions::default());
+
+        assert!(outcome.report.pre.is_watertight, "input cube is watertight");
+        assert!(
+            outcome.report.post.is_watertight,
+            "repaired cube stays watertight"
+        );
+        assert_eq!(outcome.report.post.connected_components, 1);
+        assert_eq!(
+            outcome.mesh.triangles.len(),
+            before_tris,
+            "repair altered a clean watertight cube"
+        );
+    }
+
+    #[test]
+    fn repair_holed_cube_improves_quality_score() {
+        // Before/after MeshQualityScore demonstration: a cube missing one face
+        // (one 4-edge hole) is repaired to a watertight solid. The report
+        // carries the scorecard on both ends.
+        let mesh = IndexedMesh::from_triangle_soup(&holed_cube_soup(), 1e-5);
+        let outcome = repair(mesh, &RepairOptions::default());
+        let pre = outcome.report.quality_pre;
+        let post = outcome.report.quality_post;
+
+        assert!(!pre.is_watertight);
+        assert_eq!(pre.boundary_edges, 4);
+        assert_eq!(pre.hole_count, 1);
+        assert_eq!(pre.shell_count, 1);
+
+        assert!(post.is_watertight, "hole filled → watertight");
+        assert_eq!(post.hole_count, 0);
+        assert_eq!(post.boundary_edges, 0);
+    }
+
+    #[test]
+    fn auto_solidify_skips_watertight_fragmented_plate() {
+        // D3: a watertight-per-component plate (>=256 shells, >=128 self-
+        // intersections, but boundary_edges == 0) must NOT auto-trigger the
+        // destructive structural path.
+        let options = RepairOptions::default();
+        let watertight_plate = analysis(0, 0, 300, 200);
+        assert!(
+            !should_auto_solidify(&watertight_plate, &options),
+            "watertight support plate must not auto-solidify (D3 second signal)"
+        );
+    }
+
+    #[test]
+    fn auto_solidify_fires_on_broken_fragmented_mesh() {
+        // A genuinely broken fragmented mesh (open boundaries present) still
+        // auto-triggers.
+        let options = RepairOptions::default();
+        let broken = analysis(512, 4, 300, 200);
+        assert!(
+            should_auto_solidify(&broken, &options),
+            "broken fragmented mesh with open boundaries should auto-solidify"
+        );
+    }
+
+    #[test]
+    fn auto_solidify_respects_component_and_si_thresholds() {
+        let options = RepairOptions::default();
+        // Below the component threshold — no trigger even with open boundaries.
+        assert!(!should_auto_solidify(&analysis(512, 0, 100, 200), &options));
+        // Below the self-intersection threshold — no trigger.
+        assert!(!should_auto_solidify(&analysis(512, 0, 300, 10), &options));
+    }
+
+    #[test]
+    fn score_watertight_cube() {
+        let mesh = IndexedMesh::from_triangle_soup(&cube_soup([0.0, 0.0, 0.0], [10.0, 10.0, 10.0]), 1e-5);
+        let score = crate::quality::MeshQualityScore::from_mesh(&mesh);
+        assert!(score.is_watertight);
+        assert_eq!(score.boundary_edges, 0);
+        assert_eq!(score.shell_count, 1);
+        assert_eq!(score.hole_count, 0);
+        assert_eq!(score.degenerate_triangles, 0);
+        assert_eq!(score.sliver_triangles, 0);
+    }
+
+    #[test]
+    fn score_holed_cube_reports_boundary_and_hole() {
+        let mesh = IndexedMesh::from_triangle_soup(&holed_cube_soup(), 1e-5);
+        let score = crate::quality::MeshQualityScore::from_mesh(&mesh);
+        assert!(!score.is_watertight);
+        assert!(score.boundary_edges > 0);
+        assert_eq!(score.hole_count, 1);
+        assert_eq!(score.shell_count, 1);
+    }
+
+    #[test]
+    fn score_two_cube_soup_reports_two_shells() {
+        let mesh = IndexedMesh::from_triangle_soup(&two_cube_soup(), 1e-5);
+        let score = crate::quality::MeshQualityScore::from_mesh(&mesh);
+        assert_eq!(score.shell_count, 2);
+    }
+
+    #[test]
+    fn score_detects_sliver_triangle() {
+        let mesh = IndexedMesh::from_triangle_soup(&sliver_soup(), 1e-5);
+        let score = crate::quality::MeshQualityScore::from_mesh(&mesh);
+        assert_eq!(
+            score.degenerate_triangles, 0,
+            "sliver is non-zero-area, not degenerate"
+        );
+        assert!(
+            score.sliver_triangles >= 1,
+            "thin non-zero-area triangle flagged as sliver"
+        );
+    }
+
+    #[test]
+    fn score_projects_from_analysis() {
+        // From<&MeshAnalysis> reuses the 6 existing metrics (sliver defaults 0).
+        let mesh = IndexedMesh::from_triangle_soup(&holed_cube_soup(), 1e-5);
+        let a = analyze(&mesh);
+        let score = crate::quality::MeshQualityScore::from(&a);
+        assert_eq!(score.boundary_edges, a.boundary_edges);
+        assert_eq!(score.non_manifold_edges, a.non_manifold_edges);
+        assert_eq!(score.self_intersections, a.self_intersection_triangles);
+        assert_eq!(score.shell_count, a.connected_components);
+        assert_eq!(score.hole_count, a.boundary_loops);
+        assert_eq!(score.degenerate_triangles, a.degenerate_triangles);
+        assert_eq!(score.sliver_triangles, 0);
     }
 
     #[test]

@@ -55,6 +55,10 @@ enum Command {
         solidify_component_threshold: usize,
         #[arg(long, default_value_t = 128)]
         solidify_self_intersection_threshold: usize,
+        /// Opt in to the lossy Tier-3 convex-hull rescue (P5-2 / D5). Off by
+        /// default; when off, unrepairable components are preserved verbatim.
+        #[arg(long, default_value_t = false)]
+        allow_hull_rescue: bool,
     },
 }
 
@@ -84,6 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             solidify_fragmented_components,
             solidify_component_threshold,
             solidify_self_intersection_threshold,
+            allow_hull_rescue,
         } => {
             let options = RepairOptions {
                 weld_epsilon,
@@ -94,6 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 solidify_fragmented_components,
                 solidify_component_threshold,
                 solidify_self_intersection_threshold,
+                allow_hull_rescue,
             };
             let outcome = repair_path(&input, &options)?;
             if let Some(p) = &out_stl {

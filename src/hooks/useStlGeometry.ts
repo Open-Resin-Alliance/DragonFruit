@@ -139,11 +139,14 @@ export interface ProcessGeometryOptions {
    */
     nativeProcessingMode?: 'auto' | 'classify-only' | 'none' | 'repair';
   /**
-   * Called when analysis indicates a heavy solidification repair is needed.
-   * Return true to proceed with repair, false to skip repair and load as-is.
-   * Only invoked when running under Tauri.
+   * Called when analysis indicates a heavy solidification repair is needed on a
+   * multi-component mesh. Returns whether to proceed with repair and — the P5-2
+   * / D5 consent — whether to allow the lossy convex-hull rescue of otherwise
+   * unrepairable support bodies. Only invoked when running under Tauri.
    */
-  onConfirmHeavyRepair?: (analysis: MeshAnalysisJson) => Promise<boolean>;
+  onConfirmHeavyRepair?: (
+    analysis: MeshAnalysisJson,
+  ) => Promise<{ proceed: boolean; allowHullRescue: boolean }>;
   /**
    * Optional status callback for native mesh processing stages.
    * Useful for surfacing progress text in import loading overlays.
@@ -340,6 +343,10 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
     } else try {
       let classifyOnly = nativeMode === 'classify-only' || nativeMode === 'none';
       const forceRepair = nativeMode === 'repair';
+      // P5-2 / D5: convex-hull rescue is opt-in. Only ever true when the user
+      // explicitly consents in the multi-component confirm dialog below; single-
+      // component / watertight meshes never prompt, so this stays false.
+      let allowHullRescue = false;
 
       // If a confirmation callback is wired up, run a quick pre-repair analysis
       // so we can ask the user before committing to a heavy solidification pass.
@@ -353,10 +360,12 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
               `[processGeometry] Heavy repair detected (components=${analysis.component_count}, ` +
               `self_intersections=${analysis.self_intersections}). Requesting user confirmation.`,
             );
-            const confirmed = await options.onConfirmHeavyRepair(analysis);
-            if (!confirmed) {
+            const decision = await options.onConfirmHeavyRepair(analysis);
+            if (!decision.proceed) {
               console.log('[processGeometry] User declined heavy repair — running classify-only shell split pass.');
               classifyOnly = true;
+            } else {
+              allowHullRescue = decision.allowHullRescue;
             }
           }
         } catch (analysisErr) {
@@ -373,7 +382,7 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
       const nativeStart = performance.now();
       const result = classifyOnly
         ? await classifyFromGeometry(geometry)
-        : await repairFromGeometry(geometry, {}, forceRepair ? options.fullResSource : null);
+        : await repairFromGeometry(geometry, { allowHullRescue }, forceRepair ? options.fullResSource : null);
       if (result) {
         if (!classifyOnly && result.usedFullRes) {
           repairUsedFullRes = true;

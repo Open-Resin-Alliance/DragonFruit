@@ -9,6 +9,7 @@ pub mod arrangement;
 pub mod core;
 pub mod hollowing;
 pub mod io;
+pub mod quality;
 pub mod repair;
 pub mod report;
 
@@ -19,6 +20,7 @@ pub use crate::hollowing::{
     HolePunchReport, HolePunchSpec, HollowMode, HollowOptions, HollowOutcome, HollowReport,
     HollowSession, OpenFace,
 };
+pub use crate::quality::{count_sliver_triangles, MeshQualityScore};
 pub use crate::repair::{classify_support_split, repair, RepairOptions, RepairOutcome};
 pub use crate::report::MeshHealthReport;
 

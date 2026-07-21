@@ -63,7 +63,7 @@ export function MeshRepairModals({
       {scene.meshRepairConfirmPrompt && (
         <MeshRepairConfirmModal
           prompt={scene.meshRepairConfirmPrompt}
-          onRepair={() => scene.resolveMeshRepairConfirmPrompt('repair')}
+          onRepair={(allowHullRescue) => scene.resolveMeshRepairConfirmPrompt('repair', allowHullRescue)}
           onLoadAsIs={() => scene.resolveMeshRepairConfirmPrompt('load_as_is')}
           onCancelImport={() => scene.resolveMeshRepairConfirmPrompt('cancel_import')}
         />

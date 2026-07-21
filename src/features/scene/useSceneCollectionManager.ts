@@ -958,6 +958,12 @@ export type MeshRepairConfirmPrompt = {
 
 type MeshRepairConfirmChoice = 'repair' | 'load_as_is' | 'cancel_import';
 
+/** The user's choice plus the P5-2 / D5 convex-hull rescue consent. */
+type MeshRepairConfirmResult = {
+  choice: MeshRepairConfirmChoice;
+  allowHullRescue: boolean;
+};
+
 type ModelClipboardEntry = {
   sourceId: string;
   name: string;
@@ -1057,7 +1063,7 @@ export function useSceneCollectionManager() {
   const [pendingMeshRepairReports, setPendingMeshRepairReports] = useState<MeshRepairReportEntry[]>([]);
   const sceneImportReportTimeoutRef = useRef<number | null>(null);
   const sceneImportPlacementResolveRef = useRef<((choice: SceneImportPlacementChoice) => void) | null>(null);
-  const meshRepairConfirmResolveRef = useRef<((choice: MeshRepairConfirmChoice) => void) | null>(null);
+  const meshRepairConfirmResolveRef = useRef<((result: MeshRepairConfirmResult) => void) | null>(null);
 
   const isDebugModelName = useCallback((name: string) => name.startsWith('[Debug]'), []);
   const deferredAccelerationQueueRef = useRef<THREE.BufferGeometry[]>([]);
@@ -1138,27 +1144,30 @@ export function useSceneCollectionManager() {
     resolve?.(choice);
   }, []);
 
-  const resolveMeshRepairConfirmPrompt = useCallback((choice: MeshRepairConfirmChoice) => {
-    const resolve = meshRepairConfirmResolveRef.current;
-    meshRepairConfirmResolveRef.current = null;
-    setMeshRepairConfirmPrompt(null);
-    resolve?.(choice);
-  }, []);
+  const resolveMeshRepairConfirmPrompt = useCallback(
+    (choice: MeshRepairConfirmChoice, allowHullRescue = false) => {
+      const resolve = meshRepairConfirmResolveRef.current;
+      meshRepairConfirmResolveRef.current = null;
+      setMeshRepairConfirmPrompt(null);
+      resolve?.({ choice, allowHullRescue });
+    },
+    [],
+  );
 
   const requestMeshRepairConfirmation = useCallback(async (
     prompt: MeshRepairConfirmPrompt,
-  ): Promise<MeshRepairConfirmChoice> => {
-    if (typeof window === 'undefined') return 'repair';
+  ): Promise<MeshRepairConfirmResult> => {
+    if (typeof window === 'undefined') return { choice: 'repair', allowHullRescue: false };
 
     if (meshRepairConfirmResolveRef.current) {
       // Fail-safe: resolve a stale unresolved prompt so imports never deadlock.
-      meshRepairConfirmResolveRef.current('repair');
+      meshRepairConfirmResolveRef.current({ choice: 'repair', allowHullRescue: false });
       meshRepairConfirmResolveRef.current = null;
     }
 
     setMeshRepairConfirmPrompt(prompt);
 
-    return new Promise<MeshRepairConfirmChoice>((resolve) => {
+    return new Promise<MeshRepairConfirmResult>((resolve) => {
       meshRepairConfirmResolveRef.current = resolve;
     });
   }, []);
@@ -2149,7 +2158,7 @@ export function useSceneCollectionManager() {
               }
             },
             onConfirmHeavyRepair: async (analysis: MeshAnalysisJson) => {
-              const choice = await requestMeshRepairConfirmation({ fileName: file.name, analysis });
+              const { choice, allowHullRescue } = await requestMeshRepairConfirmation({ fileName: file.name, analysis });
               if (choice === 'cancel_import') {
                 throw new Error('MESH_IMPORT_CANCELLED_BY_USER');
               }
@@ -2164,7 +2173,7 @@ export function useSceneCollectionManager() {
                   progress: null,
                 });
               }
-              return choice === 'repair';
+              return { proceed: choice === 'repair', allowHullRescue };
             },
           } satisfies ProcessGeometryOptions;
 
