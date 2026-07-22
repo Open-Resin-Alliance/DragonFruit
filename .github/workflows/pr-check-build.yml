@@ -101,16 +101,41 @@ jobs:
       - name: Generate plugin registry
         run: node scripts/generate-plugin-registry.mjs
 
+      - name: Check for Tauri updater signing secret
+        id: tauri_signing
+        shell: bash
+        run: echo "available=${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Export Tauri updater signing key
+        # Tauri updater signing — set these as repo secrets:
+        # TAURI_SIGNING_PRIVATE_KEY — content of .tauri/app.key
+        # TAURI_SIGNING_PRIVATE_KEY_PASSWORD — optional password set during key gen
+        # Only exported when present: tauri-action treats the env var as
+        # "signing enabled" merely by being set, even to an empty string,
+        # so an unavailable secret (e.g. fork PRs) must leave it unset
+        # rather than exported empty.
+        if: steps.tauri_signing.outputs.available == 'true'
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY<<TAURI_SIGNING_PRIVATE_KEY_EOF"
+            echo "$TAURI_SIGNING_PRIVATE_KEY"
+            echo "TAURI_SIGNING_PRIVATE_KEY_EOF"
+          } >> "$GITHUB_ENV"
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD<<TAURI_SIGNING_PRIVATE_KEY_PASSWORD_EOF"
+            echo "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD_EOF"
+          } >> "$GITHUB_ENV"
+
       - name: Build Tauri universal macOS bundle
         uses: tauri-apps/tauri-action@v0
         env:
           CMAKE_OSX_ARCHITECTURES: "arm64;x86_64"
           DF_BUILD_TARGET_TRIPLE: universal-apple-darwin
-          # Tauri updater signing — set these as repo secrets:
-          # TAURI_SIGNING_PRIVATE_KEY — content of .tauri/app.key
-          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD — optional password set during key gen
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tauriScript: npx tauri
           args: --target universal-apple-darwin --bundles app,dmg
