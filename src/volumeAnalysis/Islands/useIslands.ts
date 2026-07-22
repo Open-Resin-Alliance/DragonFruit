@@ -234,7 +234,14 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
           {
             filePath: sideloadFrame.filePath,
             matrix: matrixElements,
-            center: centerCoords,
+            // The import frame datum (w = M · (v_raw − cPre)); the Rust param
+            // is named c_pre so a scene-side center can't be passed unnoticed.
+            cPre: centerCoords,
+            // Import-time staleness fingerprint; null skips the compare and a
+            // changed/missing source is refused with FULLRES_SOURCE_STALE /
+            // _MISSING (surfaced via the degrade toast in the catch below).
+            expectedSizeBytes: sideloadFrame.fingerprint?.sizeBytes ?? null,
+            expectedMtimeMs: sideloadFrame.fingerprint?.mtimeMs ?? null,
             layerHeightMm,
             pxMm,
             supportBufferMm: supportBufMm,

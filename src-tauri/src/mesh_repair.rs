@@ -1701,6 +1701,36 @@ pub async fn stat_source_file(file_path: String) -> Result<SourceFileStat, Strin
     stat_file_fingerprint(std::path::Path::new(&file_path))
 }
 
+/// Verifies the file at `path` still matches an import-time fingerprint.
+/// `None` skips the comparison (existence is still required — a missing or
+/// unreadable file is always `FULLRES_SOURCE_MISSING`). Returns the actual
+/// stat on success. Extracted from the P1 splice so the islands sideload
+/// (mesh_minima.rs, CP3) shares one comparison and one error convention.
+pub(crate) fn verify_source_fingerprint(
+    path: &std::path::Path,
+    expected: Option<(u64, f64)>,
+) -> Result<SourceFileStat, String> {
+    let actual = stat_file_fingerprint(path)?;
+    if let Some((expected_size, expected_mtime_ms)) = expected {
+        // mtime tolerance: FAT/zip round-trips can quantise to 2 s; the
+        // frontend captures ms from the same stat call, so exact match is the
+        // norm — allow sub-2s drift only when the size matches exactly.
+        let mtime_delta_ms = (actual.mtime_ms - expected_mtime_ms).abs();
+        if actual.size_bytes != expected_size || mtime_delta_ms > 2_000.0 {
+            return Err(format!(
+                "{FULLRES_SOURCE_STALE_PREFIX}: '{}' changed since import \
+                 (size {} -> {}, mtime {:.0} -> {:.0})",
+                path.display(),
+                expected_size,
+                actual.size_bytes,
+                expected_mtime_ms,
+                actual.mtime_ms,
+            ));
+        }
+    }
+    Ok(actual)
+}
+
 pub(crate) struct FullResSpliceParams<'a> {
     pub source_path: &'a std::path::Path,
     /// Scene transform matrix, column-major (THREE.Matrix4.elements order),
@@ -1735,24 +1765,7 @@ fn splice_fullres_stl_stream(
     mut sink: impl FnMut(&[f32]) -> Result<(), String>,
 ) -> Result<FullResSpliceStats, String> {
     let path = params.source_path;
-    let actual = stat_file_fingerprint(path)?;
-    if let Some((expected_size, expected_mtime_ms)) = params.expected_fingerprint {
-        // mtime tolerance: FAT/zip round-trips can quantise to 2 s; the
-        // frontend captures ms from the same stat call, so exact match is the
-        // norm — allow sub-2s drift only when the size matches exactly.
-        let mtime_delta_ms = (actual.mtime_ms - expected_mtime_ms).abs();
-        if actual.size_bytes != expected_size || mtime_delta_ms > 2_000.0 {
-            return Err(format!(
-                "{FULLRES_SOURCE_STALE_PREFIX}: '{}' changed since import \
-                 (size {} -> {}, mtime {:.0} -> {:.0})",
-                path.display(),
-                expected_size,
-                actual.size_bytes,
-                expected_mtime_ms,
-                actual.mtime_ms,
-            ));
-        }
-    }
+    let actual = verify_source_fingerprint(path, params.expected_fingerprint)?;
 
     let file = std::fs::File::open(path).map_err(|e| {
         format!(

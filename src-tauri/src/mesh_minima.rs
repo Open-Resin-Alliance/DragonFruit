@@ -270,18 +270,38 @@ pub async fn scan_mesh_minima(
     .map_err(|e| format!("Minima scan task panicked: {e}"))?
 }
 
+/// Loads the mesh at `file_path` and reprojects RAW FILE coordinates into
+/// world space: `w = M · (v_raw − c_pre)`.
+///
+/// `c_pre` MUST be the import-time pre-centering bbox center stored on the
+/// model (`GeometryWithBounds.cPre` / `nativePreview.cPre`, captured by
+/// `processGeometry`; P0 memo §2.2). It is NOT the post-centering scene bbox
+/// center (`model.geometry.center`) — that value is only meaningful against
+/// SCENE geometry, and substituting it displaces the result by
+/// `M_linear · T_center` for any source file not already origin-centered.
+/// That substitution was the islands sideload frame bug (fixed 2026-07-20);
+/// `islands_frame_red_harness` below pins both the formula and the
+/// displacement magnitude. The parameter was previously named `center`,
+/// which is exactly how the wrong datum got passed — keep the name `c_pre`.
+///
+/// `expected_fingerprint`: import-time `(size_bytes, mtime_ms)` of the source
+/// file. `Some` refuses a changed-on-disk source with `FULLRES_SOURCE_STALE`;
+/// a missing/unreadable file is always `FULLRES_SOURCE_MISSING` (the shared
+/// P1 convention — `verify_source_fingerprint` in mesh_repair.rs).
 fn load_and_transform_mesh(
     file_path: &str,
     matrix: [f32; 16],
-    center: [f32; 3],
+    c_pre: [f32; 3],
+    expected_fingerprint: Option<(u64, f64)>,
 ) -> Result<IndexedMesh, String> {
     let path = std::path::Path::new(file_path);
+    crate::mesh_repair::verify_source_fingerprint(path, expected_fingerprint)?;
     let mut mesh = dragonfruit_mesh_repair::io::load_mesh_from_path(path)
         .map_err(|e| format!("Failed to load mesh from path {}: {:?}", file_path, e))?;
 
-    // Transform vertices: p_world = matrix * (p_local - center)
+    // Transform vertices: p_world = matrix * (p_raw - c_pre)
     for pos in &mut mesh.positions {
-        let centered = Vec3::new(pos.x - center[0], pos.y - center[1], pos.z - center[2]);
+        let centered = Vec3::new(pos.x - c_pre[0], pos.y - c_pre[1], pos.z - c_pre[2]);
 
         let x =
             matrix[0] * centered.x + matrix[4] * centered.y + matrix[8] * centered.z + matrix[12];
@@ -310,11 +330,18 @@ fn load_and_transform_mesh(
 pub async fn scan_mesh_minima_from_path(
     file_path: String,
     matrix: [f32; 16],
-    center: [f32; 3],
+    c_pre: [f32; 3],
+    expected_size_bytes: Option<u64>,
+    expected_mtime_ms: Option<f64>,
     k: Option<usize>,
 ) -> Result<Vec<LocalMinimum>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mesh = load_and_transform_mesh(&file_path, matrix, center)?;
+        let mesh = load_and_transform_mesh(
+            &file_path,
+            matrix,
+            c_pre,
+            expected_size_bytes.zip(expected_mtime_ms),
+        )?;
         let tri_count = mesh.triangle_count();
         let vert_count = mesh.vertex_count();
 
@@ -347,7 +374,9 @@ pub struct VoxelIsland {
 pub async fn scan_voxel_islands_from_path(
     file_path: String,
     matrix: [f32; 16],
-    center: [f32; 3],
+    c_pre: [f32; 3],
+    expected_size_bytes: Option<u64>,
+    expected_mtime_ms: Option<f64>,
     layer_height_mm: f64,
     px_mm: f64,
     support_buffer_mm: f64,
@@ -355,7 +384,12 @@ pub async fn scan_voxel_islands_from_path(
 ) -> Result<Vec<VoxelIsland>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         // 1. Load and transform mesh
-        let mesh = load_and_transform_mesh(&file_path, matrix, center)?;
+        let mesh = load_and_transform_mesh(
+            &file_path,
+            matrix,
+            c_pre,
+            expected_size_bytes.zip(expected_mtime_ms),
+        )?;
 
         // 2. Convert to flat triangle soup and parse into slicing engine triangles
         let soup = mesh.to_triangle_soup();
@@ -604,7 +638,9 @@ pub struct CombinedIslandScanResult {
 pub async fn scan_islands_from_path(
     file_path: String,
     matrix: [f32; 16],
-    center: [f32; 3],
+    c_pre: [f32; 3],
+    expected_size_bytes: Option<u64>,
+    expected_mtime_ms: Option<f64>,
     layer_height_mm: f64,
     px_mm: f64,
     support_buffer_mm: f64,
@@ -614,7 +650,12 @@ pub async fn scan_islands_from_path(
     tauri::async_runtime::spawn_blocking(move || {
         // ── 1. Load and transform mesh ONCE ──────────────────────────────
         log::info!("[islands-combined] Loading mesh from {}", file_path);
-        let mesh = load_and_transform_mesh(&file_path, matrix, center)?;
+        let mesh = load_and_transform_mesh(
+            &file_path,
+            matrix,
+            c_pre,
+            expected_size_bytes.zip(expected_mtime_ms),
+        )?;
         let tri_count = mesh.triangle_count();
         let vert_count = mesh.vertex_count();
         log::info!(
@@ -1150,8 +1191,9 @@ mod tests {
 /// it is handed, so the Rust side cannot fail today. The genuine reds live on
 /// the caller (R-I1/R-I2, `src/volumeAnalysis/Islands/__tests__/islandScanFrame.test.ts`).
 /// What these lock is the ORACLE those reds are measured against, so a future
-/// change to the helper cannot silently move the frame. `staleness_contract_is_red`
-/// is the one deferred red here, owed by CP3.
+/// change to the helper cannot silently move the frame. The staleness
+/// contract (CP0's deferred red, wired GREEN at CP3) locks the shared
+/// MISSING/STALE refusal alongside them.
 ///
 /// OFF-ORIGIN BY CONSTRUCTION: the asset's bbox min corner sits at (40, 25, 0).
 /// This defect survived precisely because origin-centred test meshes make
@@ -1307,6 +1349,7 @@ mod islands_frame_red_harness {
             path.to_str().unwrap(),
             translation_matrix(translate),
             c_pre(),
+            None,
         )
         .expect("load off-origin STL");
 
@@ -1343,10 +1386,10 @@ mod islands_frame_red_harness {
         let path = write_off_origin_stl("displacement");
         let matrix = rot_z90_scale2_matrix();
 
-        let correct = load_and_transform_mesh(path.to_str().unwrap(), matrix, c_pre())
+        let correct = load_and_transform_mesh(path.to_str().unwrap(), matrix, c_pre(), None)
             .expect("load with C_pre");
-        let buggy = load_and_transform_mesh(path.to_str().unwrap(), matrix, scene_center())
-            .expect("load with the scene centre (today's caller)");
+        let buggy = load_and_transform_mesh(path.to_str().unwrap(), matrix, scene_center(), None)
+            .expect("load with the scene centre (the pre-fix caller)");
 
         // M_linear · T_center for R_z(90°)∘scale(2): (x,y,z) → (−2y, 2x, 2z).
         let t = t_center();
@@ -1378,19 +1421,47 @@ mod islands_frame_red_harness {
         );
     }
 
-    /// DEFERRED RED — owed by CP3 (§E). The islands sideload has no staleness
-    /// check: slicing and the mutators raise `FULLRES_SOURCE_MISSING` /
-    /// `FULLRES_SOURCE_STALE` via `stat_source_file` (`mesh_repair.rs`), so a
-    /// moved or edited source scans silently wrong (§B3). CP3 adds the
-    /// `expected_size_bytes` / `expected_mtime_ms` parameters and this test
-    /// asserts a mismatched fingerprint is refused. Red-run captured in the
-    /// CP0 AAR; un-ignore and wire at CP3.
+    /// The staleness contract, GREEN since CP3 (landed at CP0 as the
+    /// deferred-red stub `staleness_contract_is_red`; red run captured in the
+    /// CP0 AAR). Shares P1's `verify_source_fingerprint` + error prefixes, so
+    /// the islands sideload degrades exactly like slicing and the mutators.
     #[test]
-    #[ignore = "red until CP3 (islands sideload staleness contract)"]
-    fn staleness_contract_is_red() {
-        panic!(
-            "RED (deferred): load_and_transform_mesh takes no fingerprint; a \
-             stale/missing source is not refused. Wire at CP3."
+    fn staleness_contract_refuses_stale_and_missing_sources() {
+        let path = write_off_origin_stl("staleness");
+        let matrix = translation_matrix([0.0, 0.0, 0.0]);
+
+        // Matching fingerprint → loads.
+        let actual = crate::mesh_repair::verify_source_fingerprint(&path, None)
+            .expect("stat the generated asset");
+        load_and_transform_mesh(
+            path.to_str().unwrap(),
+            matrix,
+            c_pre(),
+            Some((actual.size_bytes, actual.mtime_ms)),
+        )
+        .expect("matching fingerprint must load");
+
+        // Changed-on-disk (size mismatch) → refused as STALE, never scanned.
+        let err = load_and_transform_mesh(
+            path.to_str().unwrap(),
+            matrix,
+            c_pre(),
+            Some((actual.size_bytes + 1, actual.mtime_ms)),
+        )
+        .expect_err("size mismatch must be refused");
+        assert!(
+            err.contains("FULLRES_SOURCE_STALE"),
+            "stale error must carry the shared prefix, got: {err}"
+        );
+
+        // Missing file → MISSING, with or without a fingerprint.
+        let gone = std::env::temp_dir().join("dragonfruit-islands-frame-nonexistent.stl");
+        let _ = std::fs::remove_file(&gone);
+        let err = load_and_transform_mesh(gone.to_str().unwrap(), matrix, c_pre(), None)
+            .expect_err("missing file must be refused");
+        assert!(
+            err.contains("FULLRES_SOURCE_MISSING"),
+            "missing error must carry the shared prefix, got: {err}"
         );
     }
 }
