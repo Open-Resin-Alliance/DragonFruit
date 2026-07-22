@@ -19,7 +19,7 @@ export function ManifoldWarningModal({
     <StructuredDialogModal
       open={isOpen}
       ariaLabel="Possible mesh manifold issues"
-      title="Mesh Manifold Warning"
+      title="Warning: Non-manifold mesh"
       subtitle="This mesh may not be a valid solid"
       icon={<AlertTriangle className="h-4 w-4" />}
       iconTone="warning"
