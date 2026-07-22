@@ -735,9 +735,97 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
 
     report.fully_repaired = residuals.is_empty();
     report.residual_issues = residuals;
+
+    // Final validity gate: feed the model section (everything before the
+    // support split, or the whole mesh when there is no split) through the
+    // manifold_csg backend and inspect its status — the same check hollowing
+    // and hole-punching rely on. Any non-manifold status (not just a
+    // non-closed mesh) flags the model, and the frontend renders it red instead
+    // of the usual model color.
+    #[cfg(feature = "manifold")]
+    record_model_manifold_status(&mesh, &mut report);
+
     report.total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
     RepairOutcome { mesh, report }
+}
+
+/// Extract the model section — the first `model_tri_count` triangles, or every
+/// triangle when there is no split — into a standalone [`IndexedMesh`] with
+/// compacted (zero-based) vertex indices so it can be fed to `manifold_csg`.
+#[cfg(feature = "manifold")]
+fn extract_model_section_submesh(mesh: &IndexedMesh, model_tri_count: Option<usize>) -> IndexedMesh {
+    let tri_end = model_tri_count
+        .map(|n| n.min(mesh.triangles.len()))
+        .unwrap_or(mesh.triangles.len());
+
+    let mut vert_map: AHashMap<u32, u32> = AHashMap::new();
+    let mut new_verts: Vec<Vec3> = Vec::new();
+    let new_tris: Vec<[u32; 3]> = mesh.triangles[..tri_end]
+        .iter()
+        .map(|tri| {
+            tri.map(|gi| {
+                let next = new_verts.len() as u32;
+                *vert_map.entry(gi).or_insert_with(|| {
+                    new_verts.push(mesh.positions[gi as usize]);
+                    next
+                })
+            })
+        })
+        .collect();
+
+    IndexedMesh {
+        positions: new_verts,
+        triangles: new_tris,
+    }
+}
+
+/// Runs the model section through the manifold_csg backend and returns its
+/// status. `manifold_csg::Manifold::from_mesh_f32` rejects *any* mesh the CSG
+/// backend flags — not only open/non-closed geometry but also `NotManifold`,
+/// `NonFiniteVertex`, `VertexOutOfBounds`, etc. — returning
+/// `Err(CsgError::ManifoldStatus(..))`, which is exactly the gate the hollowing
+/// and hole-punching paths rely on. `Ok(())` means a valid, non-empty manifold;
+/// `Err(reason)` carries the specific CSG status string.
+#[cfg(feature = "manifold")]
+fn model_section_manifold_status(
+    mesh: &IndexedMesh,
+    model_tri_count: Option<usize>,
+) -> Result<(), String> {
+    use manifold_csg::Manifold;
+
+    let model = extract_model_section_submesh(mesh, model_tri_count);
+    if model.triangles.is_empty() || model.positions.is_empty() {
+        return Err("empty model section".into());
+    }
+
+    let positions: Vec<f32> = model.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
+    let indices: Vec<u32> = model.triangles.iter().flat_map(|t| *t).collect();
+
+    // Any non-`NoError` CSG status surfaces here as `Err` and is treated as a
+    // failed manifold check, regardless of which non-manifold condition it is.
+    let model = Manifold::from_mesh_f32(&positions, 3, &indices).map_err(|e| e.to_string())?;
+    if model.is_empty() || model.num_tri() == 0 {
+        return Err("manifold became empty".into());
+    }
+    Ok(())
+}
+
+/// Records the model section's manifold status onto `report`
+/// (`model_is_manifold` + `model_manifold_status`). Shared by the full repair
+/// routine and the lightweight classify pass.
+#[cfg(feature = "manifold")]
+fn record_model_manifold_status(mesh: &IndexedMesh, report: &mut MeshHealthReport) {
+    match model_section_manifold_status(mesh, report.model_triangle_count) {
+        Ok(()) => {
+            report.model_is_manifold = Some(true);
+            report.model_manifold_status = None;
+        }
+        Err(reason) => {
+            report.model_is_manifold = Some(false);
+            report.model_manifold_status = Some(reason);
+        }
+    }
 }
 
 /// Lightweight model/support section classification pass.
@@ -793,6 +881,13 @@ pub fn classify_support_split(mut mesh: IndexedMesh) -> RepairOutcome {
     report.post = minimal_analysis(&mesh, component_count);
     report.fully_repaired = true;
     report.residual_issues = Vec::new();
+
+    // Same final manifold-status gate as the full repair routine: feed the
+    // model section through manifold_csg and flag any non-manifold status so
+    // the frontend can render a non-manifold model red.
+    #[cfg(feature = "manifold")]
+    record_model_manifold_status(&mesh, &mut report);
+
     report.total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
     RepairOutcome { mesh, report }

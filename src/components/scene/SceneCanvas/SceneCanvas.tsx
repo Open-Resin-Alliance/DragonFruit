@@ -5454,6 +5454,13 @@ export function SceneCanvas({
                 if (shouldHideDuplicateSourceModel) return null;
                 if (arrangeArraySourceModelIdSet.has(model.id)) return null;
 
+                // The native repair/classify routines end with a manifold_csg
+                // status check on the model section. When the CSG backend reports
+                // any non-manifold status, render the model red instead of its
+                // usual color.
+                const modelClosedCheckFailed =
+                  model.geometry.meshDefects?.nativeRepairReport?.model_is_manifold === false;
+
                 return (
                   <React.Fragment key={model.id}>
                     <StlMesh
@@ -5461,7 +5468,7 @@ export function SceneCanvas({
                       geometry={model.geometry.geometry}
                       clipLower={clipLower}
                       clipUpper={clipUpper}
-                      meshColor={model.color || meshColor} // Use model color
+                      meshColor={modelClosedCheckFailed ? '#ff0000' : (model.color || meshColor)} // Red when the mesh fails the manifold closed check; otherwise model color
                       meshRef={meshGroupRefCallback}
                       actualMeshRef={actualMeshRefCallback}
                       materialRoughness={materialRoughness}
