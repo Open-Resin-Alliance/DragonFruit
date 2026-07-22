@@ -1753,6 +1753,9 @@ export function useSceneCollectionManager() {
           center: plane.center.clone(),
         })),
         meshDefects: source.meshDefects,
+        // A clone shares the source file, geometry and centering, so the
+        // import frame datum stays valid (duplicates keep `sourcePath` too).
+        ...(source.cPre ? { cPre: source.cPre } : {}),
       };
     }
 
@@ -1784,6 +1787,9 @@ export function useSceneCollectionManager() {
         center: plane.center.clone(),
       })),
       meshDefects: source.meshDefects,
+      // A clone shares the source file, geometry and centering, so the import
+      // frame datum stays valid (duplicates keep `sourcePath` too).
+      ...(source.cPre ? { cPre: source.cPre } : {}),
     };
   }, []);
 
@@ -2577,6 +2583,17 @@ export function useSceneCollectionManager() {
       clearNativePreview: options?.clearNativePreview,
     });
 
+    // FRAME-DATUM INVALIDATION (islands sideload fix): `cPre` is deliberately
+    // NOT carried forward. It describes the ORIGINAL FILE's frame, and this
+    // geometry no longer corresponds to that file — a hollow/punch/repair has
+    // replaced it, and `center` above was just recomputed from the new mesh, so
+    // the `T_center = cPre − center` relationship is broken too. `sourcePath`
+    // survives mutation (only the split path nulls it), so any consumer that
+    // re-reads the source must be gated on `cPre`, not on the path. Dropping it
+    // here is what makes that gate correct.
+    //
+    // Do NOT "simplify" this into a `...target.geometry` spread — that would
+    // silently reintroduce a stale frame datum.
     const nextGeometry: GeometryWithBounds = {
       geometry: nextBufferGeometry,
       bbox,

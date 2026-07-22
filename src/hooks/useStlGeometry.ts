@@ -81,12 +81,38 @@ export type GeometryWithBounds = {
     budgetTriangles?: number;
   };
   /**
-   * Internal hand-off from `processGeometry` to `loadStlGeometry`: the
-   * pre-centering bbox center captured at the centering site for
-   * native-preview loads. Folded into `nativePreview.cPre` by the caller.
+   * C_pre — the pre-centering 3-D bbox center this geometry was built around,
+   * expressed in its SOURCE FILE's coordinate frame (P0 memo §2.2). Any
+   * consumer that RE-READS the original file must reproject with
+   * `w = M · (v_raw − cPre)`; the post-centering `center` above is valid only
+   * against the scene geometry. Substituting one for the other displaces the
+   * result by `M_linear · T_center` — the islands sideload frame bug.
+   *
+   * PRECONDITION — present ONLY when this geometry was built directly from a
+   * file still re-readable at the model's `sourcePath`. Deliberately ABSENT
+   * for VOXL reloads (which re-run `processGeometry` over the EMBEDDED,
+   * already-centered mesh, so a center captured there describes embedded
+   * coordinates, not the original file's) and for 3MF/OBJ (a multi-body 3MF
+   * yields several models sharing one path, so a re-read returns the wrong
+   * geometry). Absent ⇒ consumers must fall back to the scene geometry.
+   * NEVER substitute a scene-side center.
+   *
+   * `nativePreview.cPre` carries this same datum for decimated imports
+   * (Phase 1) and is populated from this same single capture — one mechanism,
+   * two exposures, divergence impossible.
+   */
+  cPre?: [number, number, number];
+  /**
+   * Internal hand-off from `processGeometry` to the file-backed loaders: the
+   * pre-centering bbox center captured at the centering site, for EVERY
+   * centered load. `loadStlGeometry` promotes it to the public `cPre` (only
+   * when the load came from a re-readable path) and folds it into
+   * `nativePreview.cPre` for decimated imports, stripping it either way.
+   * Loaders that never promote (3MF/OBJ) may leave it present; it is inert —
+   * no consumer reads it, and the public `cPre` is the only contract.
    * @internal
    */
-  _nativePreviewCPre?: [number, number, number];
+  _importCPre?: [number, number, number];
   /**
    * Internal hand-off from `processGeometry` to `repairModelInPlace`: whether
    * the in-place repair consumed the full-resolution ORIGINAL (Phase 4). When
@@ -531,17 +557,21 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   const preBBox = geometry.boundingBox ? geometry.boundingBox.clone() : new THREE.Box3();
   const preCenter = preBBox.getCenter(new THREE.Vector3());
 
-  // C_pre capture (STL-import remediation Phase 1): for native-preview
-  // models, record the pre-centering bbox center so output paths can
-  // reproject the ORIGINAL file into the scene frame (`w = M·(v_raw −
-  // C_pre)`). Exact by construction: measured from the very geometry the
-  // centering below uses (post-sanitize, post-classify), whether or not the
-  // translate actually runs — when it does, translate + stored post-center
-  // sum to exactly this value; when it does not, the stored center IS this
-  // value.
-  const nativePreviewCPre: [number, number, number] | undefined = options._isNativePreview
-    ? [preCenter.x, preCenter.y, preCenter.z]
-    : undefined;
+  // C_pre capture (STL-import remediation Phase 1; generalized for the islands
+  // sideload fix): record the pre-centering bbox center so consumers that
+  // RE-READ the original file can reproject it into the scene frame
+  // (`w = M·(v_raw − C_pre)`). Exact by construction: measured from the very
+  // geometry the centering below uses (post-sanitize, post-classify), whether
+  // or not the translate actually runs — when it does, translate + stored
+  // post-center sum to exactly this value; when it does not, the stored center
+  // IS this value.
+  //
+  // Captured UNCONDITIONALLY (Phase 1 captured it for native previews only).
+  // The datum is equally required by any raw-file re-read, and the islands
+  // sideload's population is dominated by ordinary NON-decimated imports, which
+  // had no datum at all. Promotion to the public `cPre` is gated by the loader
+  // on the load actually coming from a re-readable file path.
+  const importCPre: [number, number, number] = [preCenter.x, preCenter.y, preCenter.z];
 
   // Normalize: center X/Z at 0 and set bottom (minY) to 0 in local space
   if (options.center) {
@@ -615,7 +645,7 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
     flatteningPlanes,
     edgeGeometry,
     ...(shouldSurfaceDefects ? { meshDefects } : {}),
-    ...(nativePreviewCPre ? { _nativePreviewCPre: nativePreviewCPre } : {}),
+    _importCPre: importCPre,
     ...(repairUsedFullRes ? { _repairUsedFullRes: true } : {}),
   };
 }
@@ -897,6 +927,31 @@ async function loadStlViaTauri(filePath: string): Promise<NativeStlLoadResult | 
   }
 }
 
+/**
+ * Strips the internal `_importCPre` hand-off, promoting it to the public
+ * `cPre` only when this geometry's source is genuinely re-readable at
+ * `reReadableSourcePath`.
+ *
+ * That gate IS the safety property: a captured center is only a valid
+ * subtrahend for raw-file coordinates when the geometry was built from that
+ * very file. A VOXL reload re-runs `processGeometry` over the EMBEDDED,
+ * already-centered mesh with no path — its captured center describes embedded
+ * coordinates, and promoting it would manufacture exactly the frame bug this
+ * work exists to remove (the reload restores `sourcePath`, so a raw-file
+ * consumer would otherwise happily use it).
+ */
+function finalizeImportFrameDatum(
+  processed: GeometryWithBounds,
+  reReadableSourcePath: string | undefined,
+): GeometryWithBounds {
+  const captured = processed._importCPre;
+  delete processed._importCPre;
+  if (captured && typeof reReadableSourcePath === 'string' && reReadableSourcePath.trim().length > 0) {
+    processed.cPre = captured;
+  }
+  return processed;
+}
+
 export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryOptions = {}): Promise<GeometryWithBounds> {
   // In Tauri with a file path, use the Rust-side STL parser.
   // It reads the file directly from disk, computes normals, and avoids
@@ -913,8 +968,8 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
       });
       if (nativeResult.isPreview) {
         // C_pre captured at the centering site inside processGeometry.
-        const cPre = processed._nativePreviewCPre;
-        delete processed._nativePreviewCPre;
+        // Stripped by finalizeImportFrameDatum on the way out.
+        const cPre = processed._importCPre;
 
         // Staleness fingerprint for output-time full-res re-reads. The DFST
         // response carries no stat data, so one sub-millisecond stat IPC is
@@ -950,7 +1005,7 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
             : {}),
         };
       }
-      return processed;
+      return finalizeImportFrameDatum(processed, options.filePath);
     }
   }
 
@@ -958,7 +1013,7 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
   const streamed = await loadStlBinaryStreaming(fileUrl);
   if (streamed) {
     console.log(`[${new Date().toISOString()}] [loadStlGeometry] Streaming parser succeeded, processing geometry.`);
-    return processGeometry(streamed, options);
+    return finalizeImportFrameDatum(await processGeometry(streamed, options), options.filePath);
   }
 
   // Fall back to Three.js STLLoader (handles ASCII STL, edge cases, etc.)
@@ -971,7 +1026,9 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
       fileUrl,
       (bufferGeometry) => {
         console.log(`[${new Date().toISOString()}] [loadStlGeometry] STLLoader finished. Took ${(performance.now() - startLoad).toFixed(2)}ms`);
-        processGeometry(bufferGeometry, options).then(resolve).catch(reject);
+        processGeometry(bufferGeometry, options)
+          .then((processed) => resolve(finalizeImportFrameDatum(processed, options.filePath)))
+          .catch(reject);
       },
       undefined,
       (error) => {

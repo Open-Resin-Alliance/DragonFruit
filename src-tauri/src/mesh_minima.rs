@@ -1136,3 +1136,261 @@ mod tests {
         assert!(!kept_minima.contains(&index_v17));
     }
 }
+
+/// CP0 RED HARNESS — islands sideload frame + source fidelity (plan:
+/// `agents/Claude/STL-import-perf/20260720-Implementation-Plan-islands-sideload-frame-fix.md`).
+///
+/// Locks the reprojection formula `w = M · (v_raw − C_pre)` that
+/// `load_and_transform_mesh` implements, and pins the magnitude of the live
+/// frame defect (§B1): the frontend passes the POST-centering scene bbox
+/// center `c` where the raw-file frame requires `C_pre`.
+///
+/// **These are characterization tests, not reds.** `load_and_transform_mesh`
+/// is a pure function of its arguments — it faithfully applies whatever centre
+/// it is handed, so the Rust side cannot fail today. The genuine reds live on
+/// the caller (R-I1/R-I2, `src/volumeAnalysis/Islands/__tests__/islandScanFrame.test.ts`).
+/// What these lock is the ORACLE those reds are measured against, so a future
+/// change to the helper cannot silently move the frame. `staleness_contract_is_red`
+/// is the one deferred red here, owed by CP3.
+///
+/// OFF-ORIGIN BY CONSTRUCTION: the asset's bbox min corner sits at (40, 25, 0).
+/// This defect survived precisely because origin-centred test meshes make
+/// `c` and `C_pre` numerically identical (decision memo §2.3) — an asset for
+/// this bug must never be origin-centred.
+///
+/// Deliberately a small self-contained box rather than the P0 lattice
+/// (`mesh_repair.rs` `p0_fullres_red_harness`): those helpers are private to
+/// that module and their triangle enumeration order is a pinned contract for
+/// P1's R2. A frame test needs off-origin-ness, not scale.
+#[cfg(test)]
+mod islands_frame_red_harness {
+    use super::*;
+    use std::io::{BufWriter, Write};
+    use std::path::PathBuf;
+
+    // Raw-file (off-origin) bbox of the generated asset.
+    const RAW_MIN: [f32; 3] = [40.0, 25.0, 0.0];
+    const RAW_MAX: [f32; 3] = [60.0, 31.0, 12.0];
+
+    /// `C_pre` — the full 3-D bbox centre `processGeometry` captures before
+    /// centring (`useStlGeometry.ts`, "C_pre capture"). The CORRECT subtrahend.
+    fn c_pre() -> [f32; 3] {
+        [
+            (RAW_MIN[0] + RAW_MAX[0]) * 0.5,
+            (RAW_MIN[1] + RAW_MAX[1]) * 0.5,
+            (RAW_MIN[2] + RAW_MAX[2]) * 0.5,
+        ]
+    }
+
+    /// `T_center` — what import actually translates by: X/Z centred, Y bottom
+    /// to zero (`geometry.translate(-preCenter.x, -preBBox.min.y, -preCenter.z)`).
+    fn t_center() -> [f32; 3] {
+        [
+            (RAW_MIN[0] + RAW_MAX[0]) * 0.5,
+            RAW_MIN[1],
+            (RAW_MIN[2] + RAW_MAX[2]) * 0.5,
+        ]
+    }
+
+    /// `c` — the stored POST-centring `model.geometry.center`, i.e. the bbox
+    /// centre of `raw − T_center`. This is the value `useIslands` wrongly sends.
+    fn scene_center() -> [f32; 3] {
+        let t = t_center();
+        [
+            (RAW_MIN[0] + RAW_MAX[0]) * 0.5 - t[0],
+            (RAW_MIN[1] + RAW_MAX[1]) * 0.5 - t[1],
+            (RAW_MIN[2] + RAW_MAX[2]) * 0.5 - t[2],
+        ]
+    }
+
+    fn box_tri(min: [f32; 3], max: [f32; 3], t: u64) -> [[f32; 3]; 3] {
+        let [x0, y0, z0] = min;
+        let [x1, y1, z1] = max;
+        match t {
+            0 => [[x0, y0, z0], [x1, y1, z0], [x1, y0, z0]],
+            1 => [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0]],
+            2 => [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1]],
+            3 => [[x0, y0, z1], [x1, y1, z1], [x0, y1, z1]],
+            4 => [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1]],
+            5 => [[x0, y0, z0], [x1, y0, z1], [x0, y0, z1]],
+            6 => [[x0, y1, z0], [x1, y1, z1], [x1, y1, z0]],
+            7 => [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1]],
+            8 => [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1]],
+            9 => [[x0, y0, z0], [x0, y1, z1], [x0, y1, z0]],
+            10 => [[x1, y0, z0], [x1, y1, z1], [x1, y0, z1]],
+            _ => [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1]],
+        }
+    }
+
+    /// Writes the deterministic off-origin box as a binary STL (zeroed normals
+    /// — every DragonFruit reader derives normals from vertices).
+    ///
+    /// `label` gives each test its OWN file. Cargo runs tests on a parallel
+    /// threadpool, so a single shared path lets one test's `File::create`
+    /// truncate the asset while another is mid-read — observed as an
+    /// intermittent failure during CP1 verification. Per-test paths remove the
+    /// shared mutable state outright (the P0 lattice harness instead guards a
+    /// deliberately *cached* asset with a mutex; these files are 684 bytes, so
+    /// there is nothing to cache and nothing to lock).
+    fn write_off_origin_stl(label: &str) -> PathBuf {
+        let path = std::env::temp_dir()
+            .join(format!("dragonfruit-islands-frame-offorigin-{label}.stl"));
+        let file = std::fs::File::create(&path).expect("create off-origin STL");
+        let mut out = BufWriter::new(file);
+        out.write_all(&[0u8; 80]).unwrap();
+        out.write_all(&12u32.to_le_bytes()).unwrap();
+        let mut record = [0u8; 50];
+        for index in 0..12 {
+            let tri = box_tri(RAW_MIN, RAW_MAX, index);
+            let mut at = 12;
+            for vertex in tri {
+                for component in vertex {
+                    record[at..at + 4].copy_from_slice(&component.to_le_bytes());
+                    at += 4;
+                }
+            }
+            out.write_all(&record).unwrap();
+            record[12..48].fill(0);
+        }
+        out.flush().unwrap();
+        path
+    }
+
+    /// Column-major (three.js `Matrix4.elements`) translation-only matrix.
+    fn translation_matrix(t: [f32; 3]) -> [f32; 16] {
+        [
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0, //
+            t[0], t[1], t[2], 1.0,
+        ]
+    }
+
+    /// Column-major R_z(90°) ∘ scale(2): (x, y, z) → (−2y, 2x, 2z).
+    fn rot_z90_scale2_matrix() -> [f32; 16] {
+        [
+            0.0, 2.0, 0.0, 0.0, //
+            -2.0, 0.0, 0.0, 0.0, //
+            0.0, 0.0, 2.0, 0.0, //
+            0.0, 0.0, 0.0, 1.0,
+        ]
+    }
+
+    fn assert_close(actual: f32, expected: f32, what: &str) {
+        assert!(
+            (actual - expected).abs() < 1e-3,
+            "{what}: expected {expected}, got {actual}"
+        );
+    }
+
+    /// The algebraic core of the whole fix: `T_center + c == C_pre`. If this
+    /// identity ever breaks (e.g. the import centring convention changes), the
+    /// stored datum stops being the correct subtrahend for a raw-file re-read
+    /// and every full-res consumer — slicing, mutators, islands — is wrong.
+    #[test]
+    fn t_center_plus_scene_center_equals_c_pre() {
+        let t = t_center();
+        let c = scene_center();
+        let expected = c_pre();
+        for axis in 0..3 {
+            assert_close(t[axis] + c[axis], expected[axis], "T_center + c == C_pre");
+        }
+    }
+
+    /// With the CORRECT subtrahend the re-read file lands exactly where the
+    /// scene bake puts it: `w = M · (v_raw − C_pre)`.
+    #[test]
+    fn c_pre_reproduces_the_scene_bake_frame() {
+        let path = write_off_origin_stl("scene-bake");
+        let translate = [100.0f32, 200.0, 300.0];
+        let mesh = load_and_transform_mesh(
+            path.to_str().unwrap(),
+            translation_matrix(translate),
+            c_pre(),
+        )
+        .expect("load off-origin STL");
+
+        let bbox = mesh.bbox();
+        let cp = c_pre();
+        for (axis, (got_min, got_max)) in [
+            (bbox.min.x, bbox.max.x),
+            (bbox.min.y, bbox.max.y),
+            (bbox.min.z, bbox.max.z),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_close(
+                got_min,
+                RAW_MIN[axis] - cp[axis] + translate[axis],
+                "world bbox min",
+            );
+            assert_close(
+                got_max,
+                RAW_MAX[axis] - cp[axis] + translate[axis],
+                "world bbox max",
+            );
+        }
+    }
+
+    /// Pins the LIVE DEFECT's magnitude (§B1). Passing the scene centre `c`
+    /// instead of `C_pre` displaces the entire sideloaded mesh by exactly
+    /// `M_linear · T_center` — the import translation, rotated/scaled into
+    /// world space. Asserted non-zero so the off-origin asset is proven to
+    /// actually expose the bug (an origin-centred asset would not).
+    #[test]
+    fn wrong_center_displaces_by_m_linear_times_t_center() {
+        let path = write_off_origin_stl("displacement");
+        let matrix = rot_z90_scale2_matrix();
+
+        let correct = load_and_transform_mesh(path.to_str().unwrap(), matrix, c_pre())
+            .expect("load with C_pre");
+        let buggy = load_and_transform_mesh(path.to_str().unwrap(), matrix, scene_center())
+            .expect("load with the scene centre (today's caller)");
+
+        // M_linear · T_center for R_z(90°)∘scale(2): (x,y,z) → (−2y, 2x, 2z).
+        let t = t_center();
+        let expected_delta = [-2.0 * t[1], 2.0 * t[0], 2.0 * t[2]];
+
+        let cb = correct.bbox();
+        let bb = buggy.bbox();
+        let actual_delta = [
+            bb.min.x - cb.min.x,
+            bb.min.y - cb.min.y,
+            bb.min.z - cb.min.z,
+        ];
+
+        for axis in 0..3 {
+            assert_close(
+                actual_delta[axis],
+                expected_delta[axis],
+                "sideload displacement (buggy − correct)",
+            );
+        }
+
+        let magnitude = (actual_delta[0].powi(2)
+            + actual_delta[1].powi(2)
+            + actual_delta[2].powi(2))
+        .sqrt();
+        assert!(
+            magnitude > 1.0,
+            "off-origin asset must expose a real displacement, got {magnitude} mm"
+        );
+    }
+
+    /// DEFERRED RED — owed by CP3 (§E). The islands sideload has no staleness
+    /// check: slicing and the mutators raise `FULLRES_SOURCE_MISSING` /
+    /// `FULLRES_SOURCE_STALE` via `stat_source_file` (`mesh_repair.rs`), so a
+    /// moved or edited source scans silently wrong (§B3). CP3 adds the
+    /// `expected_size_bytes` / `expected_mtime_ms` parameters and this test
+    /// asserts a mismatched fingerprint is refused. Red-run captured in the
+    /// CP0 AAR; un-ignore and wire at CP3.
+    #[test]
+    #[ignore = "red until CP3 (islands sideload staleness contract)"]
+    fn staleness_contract_is_red() {
+        panic!(
+            "RED (deferred): load_and_transform_mesh takes no fingerprint; a \
+             stale/missing source is not refused. Wire at CP3."
+        );
+    }
+}
