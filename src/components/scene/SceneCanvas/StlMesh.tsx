@@ -215,6 +215,7 @@ function StlMeshComponent({
   isExternallyHovered,
   deferExternalTransformUpdates,
   supportSectionGeometry,
+  nonManifold = false,
   higherContrastModelEdges = false,
   edgeGeometry,
   blockerEditMode = false,
@@ -296,6 +297,9 @@ function StlMeshComponent({
   /** When present (model+support mixed import), this geometry contains only the support-section
    *  triangles and is rendered as an orange overlay on top of the main mesh. */
   supportSectionGeometry?: THREE.BufferGeometry | null;
+  /** When true, the model failed the manifold_csg status check (any non-manifold
+   *  status). A red/clear checkerboard pattern is overlaid on the mesh to flag it. */
+  nonManifold?: boolean;
   children?: React.ReactNode;
 }) {
   // Access GPU picking state to detect gizmo hover
@@ -825,6 +829,56 @@ if (uDitherAmount > 0.0) {
     supportPlacementGuidePlaneZ,
   ]);
 
+  // Red/clear checkerboard overlay flagging a non-manifold model (failed the
+  // manifold_csg status check). World-space checker so the pattern stays fixed
+  // on the surface; clear cells discard so the underlying model shows through.
+  const nonManifoldCheckerMaterial = React.useMemo(() => {
+    if (!nonManifold) return null;
+
+    return new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      clippingPlanes: planes,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+      uniforms: {
+        uCellSizeMm: { value: 1.6 },
+        uColor: { value: new THREE.Color('#ff0000') },
+        uOpacity: { value: 0.72 },
+      },
+      vertexShader: `
+        varying vec3 vWorldPos;
+        void main() {
+          vec4 worldPos = modelMatrix * vec4(position, 1.0);
+          vWorldPos = worldPos.xyz;
+          gl_Position = projectionMatrix * viewMatrix * worldPos;
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vWorldPos;
+        uniform float uCellSizeMm;
+        uniform vec3 uColor;
+        uniform float uOpacity;
+
+        void main() {
+          vec3 cell = floor(vWorldPos / uCellSizeMm);
+          float checker = mod(cell.x + cell.y + cell.z, 2.0);
+          if (checker < 0.5) discard; // clear squares
+          gl_FragColor = vec4(uColor, uOpacity);
+        }
+      `,
+    });
+  }, [nonManifold, planes]);
+
+  React.useEffect(() => {
+    return () => {
+      nonManifoldCheckerMaterial?.dispose();
+    };
+  }, [nonManifoldCheckerMaterial]);
+
   React.useEffect(() => {
     return () => {
       outOfBoundsMaterial?.dispose();
@@ -1340,6 +1394,12 @@ if (uDitherAmount > 0.0) {
       {supportPlacementGuideEnabled && supportPlacementGuideMaterial && (
         <mesh geometry={geometry} position={meshLocalOffset} renderOrder={4} raycast={() => null}>
           <primitive object={supportPlacementGuideMaterial} attach="material" />
+        </mesh>
+      )}
+
+      {nonManifoldCheckerMaterial && (
+        <mesh geometry={geometry} position={meshLocalOffset} renderOrder={5} raycast={() => null}>
+          <primitive object={nonManifoldCheckerMaterial} attach="material" />
         </mesh>
       )}
 

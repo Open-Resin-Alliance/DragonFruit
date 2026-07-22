@@ -5456,9 +5456,9 @@ export function SceneCanvas({
 
                 // The native repair/classify routines end with a manifold_csg
                 // status check on the model section. When the CSG backend reports
-                // any non-manifold status, render the model red instead of its
-                // usual color.
-                const modelClosedCheckFailed =
+                // any non-manifold status, overlay a red checkerboard pattern on
+                // the model to flag it.
+                const modelIsNonManifold =
                   model.geometry.meshDefects?.nativeRepairReport?.model_is_manifold === false;
 
                 return (
@@ -5468,7 +5468,8 @@ export function SceneCanvas({
                       geometry={model.geometry.geometry}
                       clipLower={clipLower}
                       clipUpper={clipUpper}
-                      meshColor={modelClosedCheckFailed ? '#ff0000' : (model.color || meshColor)} // Red when the mesh fails the manifold closed check; otherwise model color
+                      meshColor={model.color || meshColor} // Use model color
+                      nonManifold={modelIsNonManifold} // Red checkerboard overlay when the model fails the manifold status check
                       meshRef={meshGroupRefCallback}
                       actualMeshRef={actualMeshRefCallback}
                       materialRoughness={materialRoughness}
