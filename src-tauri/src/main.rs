@@ -290,11 +290,25 @@ fn allocate_mesh_stage_file_path() -> Result<std::path::PathBuf, String> {
         )
     })?;
 
+    // nanos alone is NOT unique: Windows SystemTime granularity is coarse
+    // enough that two concurrent allocations can land in the same tick and
+    // return the same path — and the consumer (`append_mesh_stage_chunk`)
+    // opens with create+append, so two writers would silently interleave
+    // into one stage file. Same mechanism observed concretely 2026-07-20 in
+    // `mesh_repair.rs::load_binary_stl_preview` (os error 183) and fixed the
+    // same way: pid + a process-wide counter makes uniqueness deterministic.
+    // The `dragonfruit-mesh-stage-` prefix must stay byte-identical — audit
+    // and cleanup tooling key on it.
+    static MESH_STAGE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    dir.push(format!("dragonfruit-mesh-stage-{stamp}.bin"));
+    dir.push(format!(
+        "dragonfruit-mesh-stage-{}-{stamp}-{}.bin",
+        std::process::id(),
+        MESH_STAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    ));
     Ok(dir)
 }
 
@@ -3433,4 +3447,50 @@ fn main() {
                 window_state::save(app_handle);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    /// Two same-tick allocations used to return the SAME stage path (nanos-only
+    /// name), and the append-mode consumer would interleave both writers into
+    /// one file with no error. The barrier maximizes same-tick pressure; the
+    /// process-wide sequence must keep every path distinct regardless.
+    #[test]
+    fn mesh_stage_paths_are_unique_under_concurrent_allocation() {
+        const THREADS: usize = 8;
+        const ALLOCS_PER_THREAD: usize = 64;
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    (0..ALLOCS_PER_THREAD)
+                        .map(|_| {
+                            super::allocate_mesh_stage_file_path()
+                                .expect("stage path allocation failed")
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        let mut all_paths = std::collections::HashSet::new();
+        for handle in handles {
+            for path in handle.join().expect("allocator thread panicked") {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .expect("stage path has a UTF-8 file name")
+                    .to_string();
+                assert!(
+                    name.starts_with("dragonfruit-mesh-stage-") && name.ends_with(".bin"),
+                    "stage file name lost its contract: {name}"
+                );
+                assert!(all_paths.insert(path), "duplicate stage path allocated");
+            }
+        }
+        assert_eq!(all_paths.len(), THREADS * ALLOCS_PER_THREAD);
+    }
 }
