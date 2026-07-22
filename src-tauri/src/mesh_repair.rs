@@ -1179,13 +1179,23 @@ fn load_binary_stl_preview(
     let bucket_count = bucket_divisions * bucket_divisions * bucket_divisions;
     let (bbox_min, bbox_max) = binary_stl_bounds(path, triangle_count)?;
     let extent = bbox_max.sub(bbox_min);
+    // pid + nanos alone is NOT unique: Windows SystemTime granularity is
+    // coarse enough that two calls on the parallel test threadpool land in
+    // the same tick, collide on the name, and the second `create_dir` fails
+    // with os error 183 (observed intermittently 2026-07-20, islands CP1
+    // verification). A process-wide counter makes uniqueness deterministic.
+    // NOTE: `allocate_mesh_stage_path` (main.rs) has the same latent pattern
+    // in PRODUCTION — tracked as a separate task, not fixed here.
+    static PREVIEW_WORKSPACE_SEQ: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
     let temp_path = std::env::temp_dir().join(format!(
-        "dragonfruit-stl-preview-{}-{}",
+        "dragonfruit-stl-preview-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_nanos()
+            .as_nanos(),
+        PREVIEW_WORKSPACE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
     ));
     std::fs::create_dir(&temp_path)
         .map_err(|e| format!("Failed creating STL preview workspace: {e}"))?;

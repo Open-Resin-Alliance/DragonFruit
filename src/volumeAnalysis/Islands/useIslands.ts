@@ -12,6 +12,11 @@ import {
 import { clusterWalkOrder } from './ordering';
 import { buildIslandPucks, markerIdFor } from './islandPuckMarkers';
 import { scanMeshMinima } from './meshMinima';
+import {
+  describeIslandScanSourceError,
+  emitIslandScanDegradeWarning,
+  resolveIslandScanFrame,
+} from './islandScanSource';
 import { type DetectedIsland, type TipInfo, SUPPORTED_RADIUS_MM } from './types';
 import { classifyIntersection } from './intersection';
 import { getSnapshot } from '@/supports/state';
@@ -33,6 +38,31 @@ import { SpatialHashGrid2D } from './spatialHashGrid2D';
  * visual via getScanVisualPosition(); THIS hook emits true world-space markers,
  * so its IslandOverlay layers are mounted with NO transform (identity group).
  */
+
+/**
+ * Scan-cache key. Results are WORLD-space, so a cached scan is only valid for
+ * the exact (source, frame datum, transform) it was computed under — keying by
+ * `sourcePath` alone could restore a scan into a different frame (plan D3).
+ * The `cPre` component also splits sideloaded (raw-file) scans from
+ * client-side (scene-geometry) scans of the same model.
+ */
+function buildScanCacheKey(
+  sourcePath: string | null | undefined,
+  geom: GeometryWithBounds | null,
+  transform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
+): string | null {
+  if (!sourcePath) return null;
+  const frame = resolveIslandScanFrame({ sourcePath, geometry: geom });
+  const frameTag = frame ? frame.cPre.join(',') : 'scene';
+  const t = transform;
+  return [
+    sourcePath,
+    frameTag,
+    t.position.x, t.position.y, t.position.z,
+    t.rotation.x, t.rotation.y, t.rotation.z,
+    t.scale.x, t.scale.y, t.scale.z,
+  ].join('|');
+}
 
 export interface UseIslandsInput {
   geom: GeometryWithBounds | null;
@@ -173,15 +203,19 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     await new Promise((resolve) => setTimeout(resolve, 0));
     let usedSideload = false;
 
-    if (sourcePath && geom) {
+    // Sideload only with a trustworthy import frame datum (islands frame fix,
+    // CP2): the Rust command reprojects RAW file coordinates, so the center it
+    // is handed must be the stored C_pre (`w = M · (v_raw − cPre)`). The scene
+    // bbox center this block used to send is only valid against SCENE
+    // geometry — substituting it displaced the whole scan by
+    // `M_linear · T_center` for off-origin source files. No datum (pre-fix
+    // import, VOXL reload without one, geometry mutated since import) ⇒
+    // resolver returns null ⇒ frame-correct client-side path below.
+    const sideloadFrame = resolveIslandScanFrame({ sourcePath, geometry: geom });
+
+    if (sideloadFrame && geom) {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-
-        if (!geom.geometry.boundingBox) {
-          geom.geometry.computeBoundingBox();
-        }
-        const bb = geom.geometry.boundingBox!;
-        const center = bb.getCenter(new THREE.Vector3());
 
         const matrix = new THREE.Matrix4().compose(
           transform.position.clone(),
@@ -190,15 +224,15 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         );
 
         const matrixElements = Array.from(matrix.elements);
-        const centerCoords = [center.x, center.y, center.z];
+        const centerCoords = [...sideloadFrame.cPre];
 
         setScanProgress({ done: 0, total: 100 });
 
-        console.log(`[Islands] Sideloading combined island scan from path: ${sourcePath}`);
+        console.log(`[Islands] Sideloading combined island scan from path: ${sideloadFrame.filePath}`);
         const combined = await invoke<{ voxelIslands: any[]; minimaIslands: any[] }>(
           'scan_islands_from_path',
           {
-            filePath: sourcePath,
+            filePath: sideloadFrame.filePath,
             matrix: matrixElements,
             center: centerCoords,
             layerHeightMm,
@@ -232,14 +266,31 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         setMinimaIslands(minimaMapped);
 
         // Cache the scan results for this model
-        if (sourcePath) {
-          scanCacheRef.current.set(sourcePath, { voxel: voxelMapped, minima: minimaMapped });
+        const cacheKey = buildScanCacheKey(sourcePath, geom, transform);
+        if (cacheKey) {
+          scanCacheRef.current.set(cacheKey, { voxel: voxelMapped, minima: minimaMapped });
         }
 
         usedSideload = true;
       } catch (err) {
         console.warn('[Islands] Sideloaded Rust scan failed, falling back to client-side...', err);
+        // Never a silent quality loss: a resolved sideload that fails means the
+        // full-resolution source was expected and not delivered (mirrors the
+        // slicing/mutator degrade convention).
+        emitIslandScanDegradeWarning(
+          sideloadFrame.filePath,
+          describeIslandScanSourceError(err instanceof Error ? err.message : String(err)),
+        );
       }
+    } else if (sourcePath && geom?.nativePreview) {
+      // A decimated preview with no trustworthy frame datum: the client-side
+      // fallback below scans the ~preview-quality scene geometry. That IS a
+      // quality degrade for this model class — surface it (an ordinary model's
+      // client scan is same-fidelity and stays quiet).
+      emitIslandScanDegradeWarning(
+        sourcePath,
+        'no import frame datum for the full-resolution sideload (preview-quality scan)',
+      );
     }
 
     if (!usedSideload) {
@@ -268,14 +319,16 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
           const minima = await scanMeshMinima(world.positions, minimaK);
           setMinimaIslands(minima);
           // Cache the scan results for this model
-          if (sourcePath) {
-            scanCacheRef.current.set(sourcePath, { voxel, minima });
+          const cacheKey = buildScanCacheKey(sourcePath, geom, transform);
+          if (cacheKey) {
+            scanCacheRef.current.set(cacheKey, { voxel, minima });
           }
         } catch (err) {
           console.error('[Islands] mesh-minima scan failed', err);
           setMinimaIslands([]);
-          if (sourcePath) {
-            scanCacheRef.current.set(sourcePath, { voxel, minima: [] });
+          const cacheKey = buildScanCacheKey(sourcePath, geom, transform);
+          if (cacheKey) {
+            scanCacheRef.current.set(cacheKey, { voxel, minima: [] });
           }
         }
       } finally {
@@ -572,7 +625,8 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     setSelectedMarkerId(null);
   }, []);
 
-  // Per-model scan cache: sourcePath → { voxel, minima }
+  // Per-model scan cache: composite (source, frame, transform) key → results
+  // (see buildScanCacheKey — sourcePath alone could restore a wrong-frame scan).
   const scanCacheRef = useRef<Map<string, { voxel: DetectedIsland[]; minima: DetectedIsland[] }>>(new Map());
   const prevSourcePathRef = useRef<string | null | undefined>(undefined);
 
@@ -582,7 +636,8 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     prevSourcePathRef.current = sourcePath;
     if (!sourcePath || prev === sourcePath) return;
 
-    const cached = scanCacheRef.current.get(sourcePath);
+    const cacheKey = buildScanCacheKey(sourcePath, geom, transform);
+    const cached = cacheKey ? scanCacheRef.current.get(cacheKey) : undefined;
     if (cached) {
       setVoxelIslands(cached.voxel);
       setMinimaIslands(cached.minima);
@@ -592,7 +647,8 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
 
     // No cache entry — clear for new model
     clear();
-  }, [sourcePath, clear]);
+    // prev-tracking above makes extra geom/transform firings no-ops.
+  }, [sourcePath, geom, transform, clear]);
 
   // On transform/geom change: always clear (scan is invalidated)
   useEffect(() => {

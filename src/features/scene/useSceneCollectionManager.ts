@@ -4285,6 +4285,19 @@ export function useSceneCollectionManager() {
             // The wrapper is per-model (fresh build or per-model clone), so
             // this never leaks onto another model's geometry.
             geometry.nativePreview = { ...persistedPreview };
+
+            // Islands frame fix (CP2): promote the PERSISTED frame datum to
+            // the public top-level `cPre` so raw-file consumers (islands
+            // sideload) can reproject the original. Valid here — and ONLY
+            // here — because the persisted value was captured at the
+            // ORIGINAL import against this same source file, and this
+            // reload path does not re-center the embedded mesh (no `center`
+            // option on its loadMeshGeometry call), so the scene frame is
+            // unchanged. The datum RECOMPUTED during reload processing is
+            // embedded-frame and is correctly NOT promoted (no filePath).
+            if (persistedPreview.cPre && persistedSourcePath) {
+              geometry.cPre = [...persistedPreview.cPre] as [number, number, number];
+            }
           }
 
           // Preview-honest count (Phase 2b): report the ACTUAL embedded
