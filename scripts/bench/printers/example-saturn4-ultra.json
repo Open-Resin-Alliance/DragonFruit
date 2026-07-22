@@ -1,0 +1,15 @@
+{
+  "id": "example-saturn4-ultra-12k",
+  "name": "Example 12K Mono (Saturn 4 Ultra-like)",
+  "manufacturer": "Example",
+  "bitDepth": { "bits": 3, "description": "3-bit mono panel — forces dithering on, gray3_div2 packing" },
+  "pixelSize": { "x": 19.0, "y": 20.0 },
+  "buildVolumeMm": { "width": 218.88, "depth": 122.904, "height": 220.0 },
+  "display": {
+    "resolutionX": 11520,
+    "resolutionY": 5120,
+    "outputFormat": "nanodlp",
+    "mirrorX": true,
+    "mirrorY": false
+  }
+}
