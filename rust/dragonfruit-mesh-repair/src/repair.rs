@@ -741,9 +741,22 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     // manifold_csg backend and inspect its status — the same check hollowing
     // and hole-punching rely on. Any non-manifold status (not just a
     // non-closed mesh) flags the model, and the frontend renders it red instead
-    // of the usual model color.
+    // of the usual model color. If the model is still not a valid manifold after
+    // repair, the repair is reported as unsuccessful in the summary.
     #[cfg(feature = "manifold")]
-    record_model_manifold_status(&mesh, &mut report);
+    {
+        record_model_manifold_status(&mesh, &mut report);
+        if report.model_is_manifold == Some(false) {
+            let detail = report
+                .model_manifold_status
+                .clone()
+                .unwrap_or_else(|| "non-manifold model".into());
+            report
+                .residual_issues
+                .push(format!("model is still not a valid manifold after repair ({detail})"));
+            report.fully_repaired = false;
+        }
+    }
 
     report.total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
