@@ -89,12 +89,26 @@ use plugin_registry::GENERATED_BUILTIN_PLUGIN_SCENE_FILE_EXTENSIONS as BUILTIN_P
 
 fn temp_artifact_path(extension: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
+    // nanos alone is NOT unique: Windows SystemTime granularity is coarse
+    // enough that two concurrent allocations can land in the same tick and
+    // return the same path — the export writer creates/truncates, so one
+    // finished export would silently replace the other. Same mechanism as
+    // `allocate_mesh_stage_file_path` below and the 2026-07-20
+    // `mesh_repair.rs::load_binary_stl_preview` fix: pid + a process-wide
+    // counter makes uniqueness deterministic. The `dragonfruit-slice-`
+    // prefix must stay byte-identical — `is_dragonfruit_temp_artifact`
+    // gates both temp sweepers on it.
+    static TEMP_ARTIFACT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let clean_ext = extension.trim_start_matches('.');
-    path.push(format!("dragonfruit-slice-{stamp}.{clean_ext}"));
+    path.push(format!(
+        "dragonfruit-slice-{}-{stamp}-{}.{clean_ext}",
+        std::process::id(),
+        TEMP_ARTIFACT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    ));
     path
 }
 
@@ -3489,6 +3503,52 @@ mod tests {
                     "stage file name lost its contract: {name}"
                 );
                 assert!(all_paths.insert(path), "duplicate stage path allocated");
+            }
+        }
+        assert_eq!(all_paths.len(), THREADS * ALLOCS_PER_THREAD);
+    }
+
+    /// Same collision geometry as the mesh-stage race, clobber-flavored: the
+    /// slice-export writer creates/truncates, so two same-tick allocations
+    /// sharing a nanos-only name would silently replace one export with the
+    /// other. Also locks the sweeper contract: every generated path must stay
+    /// recognizable to `is_dragonfruit_temp_artifact`, or exports stop being
+    /// cleaned up.
+    #[test]
+    fn temp_artifact_paths_are_unique_under_concurrent_allocation() {
+        const THREADS: usize = 8;
+        const ALLOCS_PER_THREAD: usize = 64;
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    (0..ALLOCS_PER_THREAD)
+                        .map(|_| super::temp_artifact_path("goo"))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        let mut all_paths = std::collections::HashSet::new();
+        for handle in handles {
+            for path in handle.join().expect("allocator thread panicked") {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .expect("artifact path has a UTF-8 file name")
+                    .to_string();
+                assert!(
+                    name.starts_with("dragonfruit-slice-") && name.ends_with(".goo"),
+                    "artifact file name lost its contract: {name}"
+                );
+                assert!(
+                    super::is_dragonfruit_temp_artifact(&path),
+                    "temp sweeper no longer recognizes artifact: {name}"
+                );
+                assert!(all_paths.insert(path), "duplicate artifact path allocated");
             }
         }
         assert_eq!(all_paths.len(), THREADS * ALLOCS_PER_THREAD);
