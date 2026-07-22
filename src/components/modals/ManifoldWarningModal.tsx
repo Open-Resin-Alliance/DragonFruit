@@ -36,14 +36,14 @@ export function ManifoldWarningModal({
       )}
     >
       <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-        Failed manifold validation. It is recommended this mesh be repaired before continuing.
+        Failed manifold validation. Recommend mesh repair before continuing.
       </p>
       <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-        This may cause issues with supports and printability, including issues with support placement
-        and slicing. Some issues may not be immediately visible (e.g. slicing defects).
+        This may cause issues with printability including support placement and slicing. Some may not
+        be immediately visible (e.g. slicing defects, etc.).
       </p>
       <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-        The red overlay indicates components for multi-component imports which failed validation.
+        Red overlay indicates individual components failing validation.
       </p>
     </StructuredDialogModal>
   );
