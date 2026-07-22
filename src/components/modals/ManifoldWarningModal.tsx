@@ -39,13 +39,14 @@ export function ManifoldWarningModal({
     >
       <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
         <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{modelName}</strong>{' '}
-        may have manifold issues &mdash; it did not pass our closed-solid validity check. Meshes that
-        are not watertight, valid solids can lead to problems further in the workflow, such as during
-        support generation, slicing, or export.
+        failed manifold validation. It is recommended this mesh be repaired before continuing.
       </p>
       <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-        This is why the mesh is shown with a red striped overlay in the viewport. You can continue
-        working with it, but results may be unreliable until the mesh is repaired.
+        This may cause issues with supports and printability, including issues with support placement
+        and slicing. Some issues may not be immediately visible (e.g. slicing defects).
+      </p>
+      <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+        The red overlay indicates components for multi-component imports which failed validation.
       </p>
     </StructuredDialogModal>
   );
