@@ -830,8 +830,10 @@ if (uDitherAmount > 0.0) {
   ]);
 
   // Red/clear striped overlay flagging a non-manifold model (failed the
-  // manifold_csg status check). World-space stripes along X so the pattern stays
-  // fixed on the surface; clear stripes discard so the underlying model shows through.
+  // manifold_csg status check). Uses the SAME world-space stripe seed and
+  // frequency as the out-of-bounds overlay (see outOfBoundsMaterial above) so
+  // the red stripes land directly on the green out-of-bounds stripes and, being
+  // translucent, blend with them where the two overlap.
   const nonManifoldCheckerMaterial = React.useMemo(() => {
     if (!nonManifold) return null;
 
@@ -845,7 +847,8 @@ if (uDitherAmount > 0.0) {
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,
       uniforms: {
-        uStripeWidthMm: { value: 1.6 },
+        // Match the out-of-bounds overlay's stripe frequency so the patterns coincide.
+        uStripeFreq: { value: 0.22 },
         uColor: { value: new THREE.Color('#ff0000') },
         uOpacity: { value: 0.72 },
       },
@@ -859,13 +862,16 @@ if (uDitherAmount > 0.0) {
       `,
       fragmentShader: `
         varying vec3 vWorldPos;
-        uniform float uStripeWidthMm;
+        uniform float uStripeFreq;
         uniform vec3 uColor;
         uniform float uOpacity;
 
         void main() {
-          float stripe = mod(floor(vWorldPos.x / uStripeWidthMm), 2.0);
-          if (stripe < 0.5) discard; // clear stripes
+          // Identical seed to the out-of-bounds shader; its green (colorA) band
+          // is where step(0.5, fract(seed)) == 0, so draw red there to overlap it.
+          float stripeSeed = (vWorldPos.x + vWorldPos.y + vWorldPos.z) * uStripeFreq;
+          float band = step(0.5, fract(stripeSeed));
+          if (band > 0.5) discard; // clear on the non-green bands
           gl_FragColor = vec4(uColor, uOpacity);
         }
       `,
