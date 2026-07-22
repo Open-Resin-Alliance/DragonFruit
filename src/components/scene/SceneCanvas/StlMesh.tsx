@@ -829,9 +829,9 @@ if (uDitherAmount > 0.0) {
     supportPlacementGuidePlaneZ,
   ]);
 
-  // Red/clear checkerboard overlay flagging a non-manifold model (failed the
-  // manifold_csg status check). World-space checker so the pattern stays fixed
-  // on the surface; clear cells discard so the underlying model shows through.
+  // Red/clear striped overlay flagging a non-manifold model (failed the
+  // manifold_csg status check). World-space stripes along X so the pattern stays
+  // fixed on the surface; clear stripes discard so the underlying model shows through.
   const nonManifoldCheckerMaterial = React.useMemo(() => {
     if (!nonManifold) return null;
 
@@ -845,7 +845,7 @@ if (uDitherAmount > 0.0) {
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,
       uniforms: {
-        uCellSizeMm: { value: 1.6 },
+        uStripeWidthMm: { value: 1.6 },
         uColor: { value: new THREE.Color('#ff0000') },
         uOpacity: { value: 0.72 },
       },
@@ -859,14 +859,13 @@ if (uDitherAmount > 0.0) {
       `,
       fragmentShader: `
         varying vec3 vWorldPos;
-        uniform float uCellSizeMm;
+        uniform float uStripeWidthMm;
         uniform vec3 uColor;
         uniform float uOpacity;
 
         void main() {
-          vec3 cell = floor(vWorldPos / uCellSizeMm);
-          float checker = mod(cell.x + cell.y + cell.z, 2.0);
-          if (checker < 0.5) discard; // clear squares
+          float stripe = mod(floor(vWorldPos.x / uStripeWidthMm), 2.0);
+          if (stripe < 0.5) discard; // clear stripes
           gl_FragColor = vec4(uColor, uOpacity);
         }
       `,
