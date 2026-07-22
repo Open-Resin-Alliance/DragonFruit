@@ -6,13 +6,11 @@ import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 
 type ManifoldWarningModalProps = {
   isOpen: boolean;
-  modelName: string;
   onAcknowledge: () => void;
 };
 
 export function ManifoldWarningModal({
   isOpen,
-  modelName,
   onAcknowledge,
 }: ManifoldWarningModalProps) {
   return (
@@ -38,8 +36,7 @@ export function ManifoldWarningModal({
       )}
     >
       <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-        <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{modelName}</strong>{' '}
-        failed manifold validation. It is recommended this mesh be repaired before continuing.
+        Failed manifold validation. It is recommended this mesh be repaired before continuing.
       </p>
       <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
         This may cause issues with supports and printability, including issues with support placement

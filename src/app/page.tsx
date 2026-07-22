@@ -492,22 +492,22 @@ export default function Home() {
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
 
-  // Warn once (per model) when an imported mesh fails the manifold_csg validity
-  // check — the same models shown with the red striped overlay in the viewport.
+  // Warn when an imported mesh fails the manifold_csg validity check — the same
+  // models shown with the red striped overlay in the viewport. Only a single
+  // warning is shown per import job: as soon as any newly-imported model is
+  // flagged, every currently-flagged model is marked as warned so the rest of
+  // the batch does not pop additional modals.
   const warnedManifoldModelIdsRef = React.useRef<Set<string>>(new Set());
-  const [manifoldWarningModelName, setManifoldWarningModelName] = React.useState<string | null>(null);
+  const [showManifoldWarning, setShowManifoldWarning] = React.useState(false);
   React.useEffect(() => {
-    if (manifoldWarningModelName) return; // one warning shown at a time
-    const next = scene.models.find(
-      (model) =>
-        model.geometry?.meshDefects?.nativeRepairReport?.model_is_manifold === false &&
-        !warnedManifoldModelIdsRef.current.has(model.id),
+    const flagged = scene.models.filter(
+      (model) => model.geometry?.meshDefects?.nativeRepairReport?.model_is_manifold === false,
     );
-    if (next) {
-      warnedManifoldModelIdsRef.current.add(next.id);
-      setManifoldWarningModelName(next.name || 'This model');
-    }
-  }, [scene.models, manifoldWarningModelName]);
+    const hasUnwarned = flagged.some((model) => !warnedManifoldModelIdsRef.current.has(model.id));
+    if (!hasUnwarned) return;
+    for (const model of flagged) warnedManifoldModelIdsRef.current.add(model.id);
+    setShowManifoldWarning(true);
+  }, [scene.models]);
   const importSceneFile = scene.importSceneFile;
   const importSceneFiles = scene.importSceneFiles;
   const recentOpenedFiles = scene.recentOpenedFiles;
@@ -9866,9 +9866,8 @@ export default function Home() {
       />
 
       <ManifoldWarningModal
-        isOpen={manifoldWarningModelName != null}
-        modelName={manifoldWarningModelName ?? ''}
-        onAcknowledge={() => setManifoldWarningModelName(null)}
+        isOpen={showManifoldWarning}
+        onAcknowledge={() => setShowManifoldWarning(false)}
       />
 
       <MeshRepairModals
