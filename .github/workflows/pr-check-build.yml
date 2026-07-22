@@ -131,6 +131,25 @@ jobs:
             echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD_EOF"
           } >> "$GITHUB_ENV"
 
+      - name: Disable updater artifact signing if no signing key is available
+        # tauri.conf.json has createUpdaterArtifacts: true and a pubkey
+        # configured, so `tauri build` unconditionally tries to produce a
+        # signed .app.tar.gz — and hard-fails ("public key has been found,
+        # but no private key") if TAURI_SIGNING_PRIVATE_KEY isn't set. Fork
+        # PRs never get that secret, so skip updater artifact generation
+        # entirely for this compile-check build; it doesn't need to be
+        # updater-installable, just to prove the app builds.
+        if: steps.tauri_signing.outputs.available != 'true'
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const p = 'src-tauri/tauri.conf.json';
+            const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+            cfg.bundle.createUpdaterArtifacts = false;
+            fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n');
+          "
+
       - name: Build Tauri universal macOS bundle
         uses: tauri-apps/tauri-action@v0
         env:
