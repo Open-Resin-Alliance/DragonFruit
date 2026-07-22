@@ -320,6 +320,7 @@ import { useSceneAutosave, suppressSceneAutosave } from '@/hooks/useSceneAutosav
 import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
 import { MeshRepairReportModal } from '@/components/scene/MeshRepairReportModal';
 import { MeshRepairConfirmModal } from '@/components/scene/MeshRepairConfirmModal';
+import { ManifoldWarningModal } from '@/components/modals/ManifoldWarningModal';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
@@ -490,6 +491,23 @@ export default function Home() {
   const { stage, sproutParentingLockHeld } = useLeafPlacementState();
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
+
+  // Warn once (per model) when an imported mesh fails the manifold_csg validity
+  // check — the same models shown with the red striped overlay in the viewport.
+  const warnedManifoldModelIdsRef = React.useRef<Set<string>>(new Set());
+  const [manifoldWarningModelName, setManifoldWarningModelName] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (manifoldWarningModelName) return; // one warning shown at a time
+    const next = scene.models.find(
+      (model) =>
+        model.geometry?.meshDefects?.nativeRepairReport?.model_is_manifold === false &&
+        !warnedManifoldModelIdsRef.current.has(model.id),
+    );
+    if (next) {
+      warnedManifoldModelIdsRef.current.add(next.id);
+      setManifoldWarningModelName(next.name || 'This model');
+    }
+  }, [scene.models, manifoldWarningModelName]);
   const importSceneFile = scene.importSceneFile;
   const importSceneFiles = scene.importSceneFiles;
   const recentOpenedFiles = scene.recentOpenedFiles;
@@ -9845,6 +9863,12 @@ export default function Home() {
         showModifierApplyBlockingOverlay={showModifierApplyBlockingOverlay}
         showUnappliedHolePunchModal={showUnappliedHolePunchModal}
         unappliedHolePunchResolveRef={unappliedHolePunchResolveRef}
+      />
+
+      <ManifoldWarningModal
+        isOpen={manifoldWarningModelName != null}
+        modelName={manifoldWarningModelName ?? ''}
+        onAcknowledge={() => setManifoldWarningModelName(null)}
       />
 
       <MeshRepairModals
