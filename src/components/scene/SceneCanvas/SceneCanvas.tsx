@@ -5454,6 +5454,13 @@ export function SceneCanvas({
                 if (shouldHideDuplicateSourceModel) return null;
                 if (arrangeArraySourceModelIdSet.has(model.id)) return null;
 
+                // The native repair/classify routines end with a manifold_csg
+                // status check on the model section. When the CSG backend reports
+                // any non-manifold status, overlay a red stripe pattern on
+                // the model to flag it.
+                const modelIsNonManifold =
+                  model.geometry.meshDefects?.nativeRepairReport?.model_is_manifold === false;
+
                 return (
                   <React.Fragment key={model.id}>
                     <StlMesh
@@ -5462,6 +5469,7 @@ export function SceneCanvas({
                       clipLower={clipLower}
                       clipUpper={clipUpper}
                       meshColor={model.color || meshColor} // Use model color
+                      nonManifold={modelIsNonManifold} // Red checkerboard overlay when the model fails the manifold status check
                       meshRef={meshGroupRefCallback}
                       actualMeshRef={actualMeshRefCallback}
                       materialRoughness={materialRoughness}
@@ -5526,6 +5534,7 @@ export function SceneCanvas({
                         && (isGizmoDragging || isPostGizmoInteractionGuardActive)
                       }
                       supportSectionGeometry={model.geometry.meshDefects?.supportSectionGeometry ?? null}
+                      modelSectionGeometry={model.geometry.meshDefects?.modelSectionGeometry ?? null}
                       onHolePunchClick={onHolePunchClick}
                       onHolePunchHover={onHolePunchHover}
                     >

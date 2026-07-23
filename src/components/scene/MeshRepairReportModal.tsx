@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { CheckCircle2, AlertTriangle, X, Wrench, ClipboardCopy, ChevronDown, ChevronRight } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, XCircle, X, Wrench, ClipboardCopy, ChevronDown, ChevronRight } from 'lucide-react';
 import type { MeshRepairReportEntry } from '@/features/scene/useSceneCollectionManager';
 import type { MeshAnalysisJson } from '@/utils/meshRepair';
 
@@ -94,9 +94,17 @@ export function MeshRepairReportModal({ reports, presentation = 'default', onDis
       ? reports[0].modelName
       : `${reports.length} meshes · ${formatMs(totals.totalMs)} · ${totals.repaired} clean · ${totals.residual} with issues`;
 
-  const headerTitle = effectivePresentation === 'optimistic' ? 'Repair Complete' : 'Mesh Repair Report';
-  const headerToneColor = effectivePresentation === 'optimistic' ? '#22c55e' : toneColor;
+  // On the optimistic "Repair Complete" page, an unsuccessful repair (mesh still
+  // not valid) is flagged with a red cross instead of the green check.
+  const optimisticFailed = effectivePresentation === 'optimistic' && hasResidual;
+  const headerTitle = effectivePresentation === 'optimistic'
+    ? (optimisticFailed ? 'Repair Incomplete' : 'Repair Complete')
+    : 'Mesh Repair Report';
+  const headerToneColor = optimisticFailed
+    ? '#ef4444'
+    : effectivePresentation === 'optimistic' ? '#22c55e' : toneColor;
   const headerHasWarningTone = effectivePresentation !== 'optimistic' && hasResidual;
+  const headerAccentColor = optimisticFailed ? '#ef4444' : headerHasWarningTone ? '#d97706' : '#22c55e';
   const panelMaxWidthClassName = effectivePresentation === 'optimistic' ? 'max-w-2xl' : 'max-w-3xl';
   const headerClassName = effectivePresentation === 'optimistic'
     ? 'flex items-center justify-between gap-4 border-b px-4 py-3'
@@ -126,16 +134,16 @@ export function MeshRepairReportModal({ reports, presentation = 'default', onDis
             <span
               className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
               style={{
-                borderColor: headerHasWarningTone
-                  ? 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)'
-                  : 'color-mix(in srgb, #22c55e, var(--border-subtle) 50%)',
-                background: headerHasWarningTone
-                  ? 'color-mix(in srgb, #d97706, var(--surface-1) 85%)'
-                  : 'color-mix(in srgb, #22c55e, var(--surface-1) 85%)',
+                borderColor: `color-mix(in srgb, ${headerAccentColor}, var(--border-subtle) 50%)`,
+                background: `color-mix(in srgb, ${headerAccentColor}, var(--surface-1) 85%)`,
                 color: headerToneColor,
               }}
             >
-              {headerHasWarningTone ? <AlertTriangle className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}
+              {optimisticFailed
+                ? <XCircle className="h-4 w-4" />
+                : headerHasWarningTone
+                  ? <AlertTriangle className="h-4 w-4" />
+                  : <CheckCircle2 className="h-4 w-4" />}
             </span>
             <div className="min-w-0 pr-2">
               <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
@@ -215,30 +223,34 @@ function OptimisticReportBody({ entry }: { entry: MeshRepairReportEntry }) {
 
   const summaryText = report.fully_repaired
     ? 'DragonFruit repaired this mesh and replaced the model in your current scene.'
-    : 'DragonFruit repaired this mesh and improved the main issues it found.';
+    : 'DragonFruit could not fully repair this mesh — it is still not a valid manifold and may cause problems later in your workflow.';
+
+  const summaryAccent = report.fully_repaired ? '#22c55e' : '#ef4444';
 
   return (
     <div className="space-y-2.5">
       <div
         className="rounded-lg border px-3 py-2.5"
         style={{
-          borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 50%)',
-          background: 'color-mix(in srgb, #22c55e, var(--surface-1) 90%)',
+          borderColor: `color-mix(in srgb, ${summaryAccent}, var(--border-subtle) 50%)`,
+          background: `color-mix(in srgb, ${summaryAccent}, var(--surface-1) 90%)`,
         }}
       >
         <div className="flex items-start gap-2.5">
-          <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: '#22c55e' }} />
+          {report.fully_repaired
+            ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: summaryAccent }} />
+            : <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: summaryAccent }} />}
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Repair finished
+                {report.fully_repaired ? 'Repair finished' : 'Repair incomplete'}
               </div>
               <span
                 className="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold tabular-nums"
                 style={{
                   color: 'var(--text-strong)',
-                  borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)',
-                  background: 'color-mix(in srgb, #22c55e, transparent 86%)',
+                  borderColor: `color-mix(in srgb, ${summaryAccent}, var(--border-subtle) 45%)`,
+                  background: `color-mix(in srgb, ${summaryAccent}, transparent 86%)`,
                 }}
               >
                 {formatMs(report.total_ms)}

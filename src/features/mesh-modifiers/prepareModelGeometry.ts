@@ -161,10 +161,12 @@ function splitClassifiedModelForOutput(model: LoadedModel): {
     ...sourceDefects,
     nativeRepairReport: undefined,
     supportSectionGeometry: undefined,
+    modelSectionGeometry: undefined,
   } : undefined;
   const supportDefects = sourceDefects ? {
     ...sourceDefects,
     supportSectionGeometry: undefined,
+    modelSectionGeometry: undefined,
     nativeRepairReport: report ? {
       ...report,
       model_triangle_count: null,
