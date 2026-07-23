@@ -67,6 +67,10 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             key: 'q',
             description: 'Hold to force placing support'
         },
+        AUTO_BRACING: {
+            key: 'g',
+            description: 'Generate auto bracing while the Bracing settings page is open'
+        },
         SPROUTED_PARENTING_LOCK: {
             key: 'w',
             description: 'Hold to enter Sprouted Leaf Fanning Mode'

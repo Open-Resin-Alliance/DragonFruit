@@ -46,6 +46,8 @@ import { SupportAnatomyPreviewSlot } from './AnatomyPreview/SupportAnatomyPrevie
 import { AutoBracingSettingsCard } from '../autoBracing/AutoBracingSettingsCard';
 import { CurveSettingsCard, getCurveSettingsSelection } from '../Curves/CurveSettingsCard';
 import { runAutoBracing } from '../autoBracing/autoBrace';
+import { shouldRunAutoBracingHotkey } from '../autoBracing/autoBracingHotkey';
+import { useActionActive } from '@/hotkeys/hotkeyStore';
 import { setAnatomyPreviewActiveSettingKey, subscribeToAnatomyPreviewState, getAnatomyPreviewState } from './AnatomyPreview/previewState';
 import {
     getSupportKindSnapshot,
@@ -208,6 +210,7 @@ function applySettingsToAllSelectedSupports(settings: SupportSettings): void {
  */
 export function SupportSidebar() {
     usePresetHotkeys();
+    const autoBracingHotkeyActive = useActionActive('SUPPORTS', 'AUTO_BRACING');
     const settings = useSyncExternalStore(subscribeToSettings, getSettings, getSettings);
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
     const [presetSaveTrigger, setPresetSaveTrigger] = useState(0);
@@ -217,6 +220,7 @@ export function SupportSidebar() {
     const [devToolsOpen, setDevToolsOpen] = useState(false);
     const saveStatusTimeoutRef = React.useRef<number | null>(null);
     const autoBraceStatusTimeoutRef = React.useRef<number | null>(null);
+    const autoBracingHotkeyWasActiveRef = React.useRef(false);
     const isAdaptiveConeAngle = (settings.tip.coneAngleMode ?? 'normal') === 'adaptive';
     const supportKindState = React.useSyncExternalStore(subscribeToSupportKindState, getSupportKindSnapshot, getSupportKindSnapshot);
     const activeKind = supportKindState.kind;
@@ -641,6 +645,24 @@ export function SupportSidebar() {
             autoBraceStatusTimeoutRef.current = null;
         }, 2800);
     }, []);
+
+    useEffect(() => {
+        if (shouldRunAutoBracingHotkey({
+            active: autoBracingHotkeyActive,
+            wasActive: autoBracingHotkeyWasActiveRef.current,
+            sidebarExpanded: expanded,
+            activeSupportKind: activeKind,
+            curvePageVisible: showCurvePage,
+            modalOpen: document.querySelector('[role="dialog"][aria-modal="true"]') !== null,
+        })) {
+            // This effect translates the centralized hotkey's rising edge into
+            // the same UI action as clicking the Auto Brace button.
+            // eslint-disable-next-line react-hooks/set-state-in-effect
+            handleAutoBrace();
+        }
+
+        autoBracingHotkeyWasActiveRef.current = autoBracingHotkeyActive;
+    }, [activeKind, autoBracingHotkeyActive, expanded, handleAutoBrace, showCurvePage]);
 
     const getInputProps = React.useCallback((key: string, baseClass: string) => {
         const isActive = activeKey === key;
