@@ -125,3 +125,11 @@ The plugin submodules under `plugins/` are licensed separately under **MIT**. Ea
 ## Contact
 
 If you have questions, feedback, or ideas, join us on the [Open Resin Alliance Discord](https://discord.gg/beFeTaPH6v).
+
+## Setup
+
+Copy the example environment file and adjust values:
+
+```bash
+cp .env.example .env
+```
