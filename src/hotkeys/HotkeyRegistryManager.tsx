@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { getPrimaryModifierKey, hotkeyStore, isActionActiveSync } from './hotkeyStore';
 import { useHotkeyConfig } from './HotkeyContext';
+import { openSettingsModal } from '@/components/settings/settingsModalEvents';
 
 // Monkey-patch EventTarget.prototype.addEventListener to block/warn keydown/keyup listeners from forbidden paths
 let selfChunkName = '';
@@ -123,10 +124,21 @@ function isCanvasElement(element: EventTarget | null): boolean {
 
 export function setupHotkeyListeners() {
     const handleKeyDown = (e: KeyboardEvent) => {
+        const key = e.key.toLowerCase();
+        const isMacSettingsShortcut = e.metaKey
+            && !e.ctrlKey
+            && !e.shiftKey
+            && !e.altKey
+            && key === ',';
+        if (isMacSettingsShortcut) {
+            e.preventDefault();
+            openSettingsModal();
+            return;
+        }
+
         if (isTextInput(e.target)) return;
 
         const isPrimaryModifier = getPrimaryModifierKey() === 'meta' ? e.metaKey : e.ctrlKey;
-        const key = e.key.toLowerCase();
         
         // Prevent browser default behaviors
         if (

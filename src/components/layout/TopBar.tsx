@@ -22,6 +22,7 @@ import {
   dispatchProfileSettingsModalOpenChange,
   type ProfileSettingsTab,
 } from '@/components/settings/profileModalEvents';
+import { OPEN_SETTINGS_MODAL_EVENT } from '@/components/settings/settingsModalEvents';
 import { OPEN_SETTINGS_ABOUT_EVENT } from '@/features/updater/updateNotificationEvents';
 import {
   getActivePrinterProfile,
@@ -487,6 +488,20 @@ export function TopBar({
     window.addEventListener(OPEN_PROFILE_SETTINGS_MODAL_EVENT, handleOpenProfileModal as EventListener);
     return () => {
       window.removeEventListener(OPEN_PROFILE_SETTINGS_MODAL_EVENT, handleOpenProfileModal as EventListener);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleOpenSettings = () => {
+      setSettingsInitialTab('general');
+      setIsSettingsOpen(true);
+    };
+
+    window.addEventListener(OPEN_SETTINGS_MODAL_EVENT, handleOpenSettings);
+    return () => {
+      window.removeEventListener(OPEN_SETTINGS_MODAL_EVENT, handleOpenSettings);
     };
   }, []);
 

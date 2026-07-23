@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { hotkeyStore, isKeyPressedSync, isActionActiveSync } from '../hotkeyStore';
 import { setupHotkeyListeners } from '../HotkeyRegistryManager';
+import { OPEN_SETTINGS_MODAL_EVENT } from '@/components/settings/settingsModalEvents';
 
 // Mock global window and HTMLElement if running in Node.js without DOM
 const listeners = new Map<string, Set<Function>>();
@@ -128,6 +129,44 @@ test('Hotkey Registry: clears all active keys on window blur', () => {
     assert.equal(isKeyPressedSync('w'), false, 'Keys should be cleared on blur');
     assert.equal(isKeyPressedSync('Shift'), false, 'Keys should be cleared on blur');
 
+    cleanup();
+});
+
+test('Hotkey Registry: Cmd+, opens settings and suppresses the native shortcut', () => {
+    hotkeyStore.getState().clearKeys();
+    const cleanup = setupHotkeyListeners();
+    const divTarget = new HTMLElement();
+    let openSettingsEvents = 0;
+    const handleOpenSettings = () => { openSettingsEvents += 1; };
+    window.addEventListener(OPEN_SETTINGS_MODAL_EVENT, handleOpenSettings);
+
+    const cmdCommaEvent = {
+        key: ',',
+        target: divTarget,
+        metaKey: true,
+        ctrlKey: false,
+        shiftKey: false,
+        altKey: false,
+        preventDefaultCalled: false,
+        preventDefault() { this.preventDefaultCalled = true; },
+    };
+    dispatchWindowEvent('keydown', cmdCommaEvent);
+
+    assert.equal(openSettingsEvents, 1, 'Cmd+, should request the Settings modal');
+    assert.equal(cmdCommaEvent.preventDefaultCalled, true, 'Cmd+, should suppress the native shortcut');
+
+    const ctrlCommaEvent = {
+        ...cmdCommaEvent,
+        metaKey: false,
+        ctrlKey: true,
+        preventDefaultCalled: false,
+    };
+    dispatchWindowEvent('keydown', ctrlCommaEvent);
+
+    assert.equal(openSettingsEvents, 1, 'Ctrl+, should not trigger the macOS Settings shortcut');
+    assert.equal(ctrlCommaEvent.preventDefaultCalled, false);
+
+    window.removeEventListener(OPEN_SETTINGS_MODAL_EVENT, handleOpenSettings);
     cleanup();
 });
 
@@ -297,5 +336,3 @@ test('macOS uses Command, not Control, for primary-modifier shortcuts', () => {
         }
     }
 });
-
-
