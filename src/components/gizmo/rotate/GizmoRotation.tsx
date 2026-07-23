@@ -49,6 +49,14 @@ interface GizmoRotationProps {
    * convention like displayY = -cutterY in HolePunchGizmo).
    */
   axisVisualFlip?: number;
+  /**
+   * The object's current rotation about this ring's axis, in radians.
+   *
+   * Required, not optional: the dial and angle spoke render against it, and an
+   * omitted value would silently draw a spoke at 0 degrees — which still lands
+   * on a real tick and so reads as correct rather than missing.
+   */
+  currentAngleRad: number;
   onDragStart: () => boolean | void;
   onDrag: (angle: number) => void;
   onDragEnd: () => void;
@@ -90,6 +98,7 @@ export function GizmoRotation({
   handleScale = 1.0,
   worldAxisDir,
   axisVisualFlip = 1,
+  currentAngleRad,
   onDragStart,
   onDrag,
   onDragEnd,

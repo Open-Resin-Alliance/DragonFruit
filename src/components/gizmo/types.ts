@@ -62,6 +62,12 @@ export interface GizmoSizes {
   ringMajorRadius: number;
   ringMinorRadius: number;
   ringDiamondRadius: number;
+  /** Protractor dial circle, inside ringMajorRadius so ticks read clear of the ring. */
+  dialRadius: number;
+  /** Length of a major dial tick, measured outward from dialRadius. Lesser tiers scale down. */
+  dialTickLength: number;
+  /** Where the angle spoke starts, clear of centerRadius. */
+  spokeInnerRadius: number;
   scaleLineLength: number;
   scaleHexagonRadius: number;
   scaleHexagonDepth: number;
