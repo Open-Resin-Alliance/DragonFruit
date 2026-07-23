@@ -62,6 +62,7 @@ import {
 } from '../Rafts/Crenelated/RaftState';
 import { DEFAULT_RAFT_SETTINGS } from '../Rafts/Crenelated/RaftDefaults';
 import type { SupportKind } from './supportKindState';
+import { resetSupportSettingsScrollForTabChange } from './supportSidebarScroll';
 
 const INPUT_CLASS = 'ui-input h-8 w-full px-2.5 text-xs sm:text-sm text-center no-spinners';
 const SECTION_CARD_STYLE: React.CSSProperties = {
@@ -1213,6 +1214,11 @@ export function SupportSidebar() {
                                     <SupportKindTabs
                                         value={tabKind}
                                         onChange={(kind) => {
+                                            resetSupportSettingsScrollForTabChange(
+                                                scrollViewportRef.current,
+                                                tabKind,
+                                                kind,
+                                            );
                                             setAnatomyPreviewActiveSettingKey(null);
                                             setActiveSupportKind(kind);
                                         }}
