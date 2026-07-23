@@ -120,31 +120,14 @@ function appendStraightOrBezierShafts(
   start: Vec3,
   end: Vec3,
 ) {
-  if (segment.type === 'bezier') {
-    const points = bezierToLineSegments(
-      start,
-      segment.controlPoint1,
-      segment.controlPoint2,
-      end,
-      segment.resolution,
-    );
-    for (let i = 0; i < points.length - 1; i += 1) {
-      const shaft = SupportGeometryGenerator.generateShaftMesh(
-        new THREE.Vector3(points[i].x, points[i].y, points[i].z),
-        new THREE.Vector3(points[i + 1].x, points[i + 1].y, points[i + 1].z),
-        segment.diameter,
-      );
-      if (shaft) group.add(shaft);
-    }
-    return;
-  }
-
-  const shaft = SupportGeometryGenerator.generateShaftMesh(
+  const meshes = SupportGeometryGenerator.generateSegmentShaftMeshes(
+    segment,
     new THREE.Vector3(start.x, start.y, start.z),
     new THREE.Vector3(end.x, end.y, end.z),
-    segment.diameter,
   );
-  if (shaft) group.add(shaft);
+  for (const mesh of meshes) {
+    group.add(mesh);
+  }
 }
 
 function buildAnchorGroup(anchor: Anchor, modelId: string | null | undefined): THREE.Group {
