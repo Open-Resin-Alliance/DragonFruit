@@ -1,3 +1,5 @@
+import type { GizmoAxis } from '../types';
+
 /** Snap angle to nearest increment using Math.round quantization. */
 export function snapAngle(angle: number, increment: number): number {
   return Math.round(angle / increment) * increment;
@@ -89,4 +91,32 @@ export function ringLocalAngle(
   // later as a baffling mismatch in a Map key or a strict assertion, so collapse
   // it here rather than making every caller defend against it.
   return Object.is(flipped, -0) ? 0 : flipped;
+}
+
+/**
+ * Position on the dial circle for a ring-local angle.
+ *
+ * Every ring is drawn in its own local XY plane and oriented by the group euler
+ * from `ringGroupEuler`, so this mapping is the same for all three axes — the
+ * per-axis difference lives in the group transform, not here. Dial ticks, the
+ * angle spoke and click resolution all route through this one function so they
+ * cannot disagree.
+ */
+export function polarToLocal(
+  angleRad: number,
+  radius: number,
+): [number, number, number] {
+  return [Math.cos(angleRad) * radius, Math.sin(angleRad) * radius, 0];
+}
+
+/**
+ * Euler orienting a ring's local frame onto its world axis.
+ *
+ * Mirrors the rotation GizmoRotation already applies to each ring, so dial and
+ * spoke land in the same frame as the ring they annotate.
+ */
+export function ringGroupEuler(axis: GizmoAxis): [number, number, number] {
+  if (axis === 'x') return [0, Math.PI / 2, 0];
+  if (axis === 'y') return [-Math.PI / 2, 0, 0];
+  return [0, 0, 0];
 }
