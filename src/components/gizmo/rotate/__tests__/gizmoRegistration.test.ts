@@ -230,3 +230,61 @@ describe("the registration guard actually detects camera-derived drift", () => {
     );
   });
 });
+
+describe("the spoke tracks the object's real rotation", () => {
+  /**
+   * Ground truth, independent of the formulas under test.
+   *
+   * A point fixed to the object is rotated by THREE itself, then measured back
+   * in the ring's local frame. Whatever angle it lands at is where the spoke
+   * must be. This is the one thing the registration sweep structurally cannot
+   * check: that sweep compares the spoke against the ticks, so a dial that is
+   * globally mirrored satisfies every assertion in it.
+   */
+  function observedRingAngle(axis: GizmoAxis, objectAngleRad: number): number {
+    const euler = new THREE.Euler(...ringGroupEuler(axis));
+    const ringQuat = new THREE.Quaternion().setFromEuler(euler);
+
+    // A marker fixed to the object, starting at ring-local angle 0.
+    const start = new THREE.Vector3(
+      ...polarToLocal(0, GIZMO_SIZES.dialRadius),
+    ).applyQuaternion(ringQuat);
+
+    const objectGroup = new THREE.Group();
+    objectGroup.rotation[axis] = objectAngleRad;
+    const marker = new THREE.Object3D();
+    marker.position.copy(start);
+    objectGroup.add(marker);
+    objectGroup.updateMatrixWorld(true);
+
+    // Measure where it ended up, back in the ring's local frame.
+    const local = marker
+      .getWorldPosition(new THREE.Vector3())
+      .applyQuaternion(ringQuat.clone().invert());
+    return Math.atan2(local.y, local.x);
+  }
+
+  function angularGap(a: number, b: number): number {
+    const TWO_PI = Math.PI * 2;
+    let d = (a - b) % TWO_PI;
+    if (d > Math.PI) d -= TWO_PI;
+    if (d < -Math.PI) d += TWO_PI;
+    return Math.abs(d);
+  }
+
+  it("puts the spoke where a point fixed to the object actually travels", () => {
+    for (const axis of AXES) {
+      for (const degree of [15, 45, 90, 180, 270, -30, -120]) {
+        const objectAngle = (degree * Math.PI) / 180;
+        const observed = observedRingAngle(axis, objectAngle);
+        const predicted = spokeRingAngle(objectAngle, 1);
+        assert.ok(
+          angularGap(observed, predicted) < 1e-9,
+          `axis ${axis}, object at ${degree}deg: the object's own point lands at ` +
+            `${((observed * 180) / Math.PI).toFixed(2)}deg but the spoke is drawn at ` +
+            `${((predicted * 180) / Math.PI).toFixed(2)}deg — the dial is mirrored`,
+        );
+      }
+    }
+  });
+});

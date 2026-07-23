@@ -285,12 +285,15 @@ describe("spokeRingAngle / objectAngleForRingAngle", () => {
     }
   });
 
-  it("matches the drag path's sign convention", () => {
-    // The drag handler applies visualDelta = objectDelta * axisSign * flip with
-    // axisSign = -1. A positive object rotation must therefore move the spoke
-    // negatively when flip is +1, or the spoke would travel opposite the handle.
-    assert.ok(spokeRingAngle(deg(30), 1) < 0);
-    assert.ok(spokeRingAngle(deg(30), -1) > 0);
+  it("follows the object's rotation direction", () => {
+    // A positive object rotation moves the spoke positively in the ring frame.
+    // Ground truth for this lives in the registration suite, which rotates a
+    // point with THREE and measures where it lands. Do NOT borrow the drag
+    // path's -1 axisSign here: that compensates for the model applying an
+    // emitted delta with the opposite sign, and currentAngleRad is already an
+    // actual rotation, so applying it again mirrors the dial.
+    assert.ok(spokeRingAngle(deg(30), 1) > 0);
+    assert.ok(spokeRingAngle(deg(30), -1) < 0);
   });
 
   it("sends a clicked tick to an object angle that lands back on that tick", () => {

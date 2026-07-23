@@ -165,12 +165,19 @@ export function shortestAngleDelta(fromRad: number, toRad: number): number {
 /**
  * Sign relating an object-space rotation to its ring-local visual angle.
  *
- * The drag path computes `visualDelta = objectDelta * axisSign * axisVisualFlip`
- * with `axisSign = -1` (see GizmoRotation's global pointermove handler). The
- * dial spoke has to travel the same way the handle does during a drag, so it
- * adopts the same sign rather than inventing its own.
+ * This is +1: a point fixed to the object, rotated by the object's Euler about
+ * this ring's axis, lands at that same angle in the ring's local frame. Verified
+ * against THREE's own rotation in the registration suite rather than reasoned
+ * from the surrounding code.
+ *
+ * It is tempting to borrow the -1 `axisSign` from the drag path, which computes
+ * `visualDelta = objectDelta * axisSign * axisVisualFlip`. Don't. That -1
+ * compensates for the model applying an EMITTED DELTA with the opposite sign, so
+ * it converts emitted-delta space into actual-rotation space. `currentAngleRad`
+ * is already the object's actual rotation, so applying it again mirrors the
+ * whole dial — which is exactly the bug the fiducial test now catches.
  */
-const RING_VISUAL_AXIS_SIGN = -1;
+const RING_VISUAL_AXIS_SIGN = 1;
 
 /** Ring-local angle at which the spoke sits for a given object rotation. */
 export function spokeRingAngle(
