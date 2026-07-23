@@ -5456,7 +5456,7 @@ export function SceneCanvas({
 
                 // The native repair/classify routines end with a manifold_csg
                 // status check on the model section. When the CSG backend reports
-                // any non-manifold status, overlay a red checkerboard pattern on
+                // any non-manifold status, overlay a red stripe pattern on
                 // the model to flag it.
                 const modelIsNonManifold =
                   model.geometry.meshDefects?.nativeRepairReport?.model_is_manifold === false;
