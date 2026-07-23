@@ -10,6 +10,7 @@ import {
   shortestAngleDelta,
   spokeRingAngle,
   objectAngleForRingAngle,
+  parseSnapTickConfig,
   DEFAULT_SNAP_TICK_CONFIG,
   type SnapTickConfig,
 } from "../snapRotation";
@@ -332,5 +333,61 @@ describe("transition tolerance", () => {
       error <= halfFine + 1e-10,
       `Quantization error ${error} exceeds half-increment ${halfFine}`,
     );
+  });
+});
+
+describe("parseSnapTickConfig", () => {
+  it("falls back to the default when nothing is stored", () => {
+    assert.deepEqual(parseSnapTickConfig(null), DEFAULT_SNAP_TICK_CONFIG);
+    assert.deepEqual(parseSnapTickConfig(""), DEFAULT_SNAP_TICK_CONFIG);
+  });
+
+  it("falls back rather than throwing on malformed json", () => {
+    // A corrupt value must not brick the gizmo on load.
+    assert.deepEqual(parseSnapTickConfig("{not json"), DEFAULT_SNAP_TICK_CONFIG);
+    assert.deepEqual(parseSnapTickConfig("[]"), DEFAULT_SNAP_TICK_CONFIG);
+    assert.deepEqual(parseSnapTickConfig("null"), DEFAULT_SNAP_TICK_CONFIG);
+  });
+
+  it("accepts a well-formed config", () => {
+    assert.deepEqual(
+      parseSnapTickConfig(
+        JSON.stringify({ majorDeg: 90, mediumDeg: 30, minorDeg: 10 }),
+      ),
+      { majorDeg: 90, mediumDeg: 30, minorDeg: 10 },
+    );
+  });
+
+  it("rejects a minor increment that getSnapTicks would throw on", () => {
+    // 7 does not divide 360. Storing it would make every ring throw on render.
+    assert.deepEqual(
+      parseSnapTickConfig(
+        JSON.stringify({ majorDeg: 45, mediumDeg: 15, minorDeg: 7 }),
+      ),
+      DEFAULT_SNAP_TICK_CONFIG,
+    );
+    assert.deepEqual(
+      parseSnapTickConfig(
+        JSON.stringify({ majorDeg: 45, mediumDeg: 15, minorDeg: 0 }),
+      ),
+      DEFAULT_SNAP_TICK_CONFIG,
+    );
+  });
+
+  it("rejects non-numeric or missing fields", () => {
+    assert.deepEqual(
+      parseSnapTickConfig(JSON.stringify({ majorDeg: "45", mediumDeg: 15, minorDeg: 5 })),
+      DEFAULT_SNAP_TICK_CONFIG,
+    );
+    assert.deepEqual(
+      parseSnapTickConfig(JSON.stringify({ majorDeg: 45 })),
+      DEFAULT_SNAP_TICK_CONFIG,
+    );
+  });
+
+  it("always returns a config getSnapTicks can consume", () => {
+    for (const raw of [null, "{}", "garbage", JSON.stringify({ minorDeg: 7 })]) {
+      assert.doesNotThrow(() => getSnapTicks(parseSnapTickConfig(raw)));
+    }
   });
 });

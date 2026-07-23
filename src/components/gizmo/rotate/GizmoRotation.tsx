@@ -13,6 +13,10 @@ import {
   nearestTickRad,
   shortestAngleDelta,
   objectAngleForRingAngle,
+  parseSnapTickConfig,
+  SNAP_TICK_CONFIG_STORAGE_KEY,
+  DEFAULT_SNAP_TICK_CONFIG,
+  type SnapTickConfig,
 } from './snapRotation';
 import { SnapTickDial } from './SnapTickDial';
 import { AngleSpoke } from './AngleSpoke';
@@ -121,6 +125,14 @@ export function GizmoRotation({
   const dialPointerDownRef = useRef<{ x: number; y: number } | null>(null);
   /** Ring-local angle of the tick under the cursor, for hover highlighting. */
   const [hoveredTickRad, setHoveredTickRad] = useState<number | null>(null);
+  /** Persisted tier intervals (#104). Parsed defensively — see parseSnapTickConfig. */
+  const [tickConfig, setTickConfig] = useState<SnapTickConfig>(() => {
+    try {
+      return parseSnapTickConfig(localStorage.getItem(SNAP_TICK_CONFIG_STORAGE_KEY));
+    } catch {
+      return DEFAULT_SNAP_TICK_CONFIG;
+    }
+  });
   const positiveAxisMidpointAngle = getPositiveAxisMidpointAngle(axis);
   const handleAngleRef = useRef<number>(positiveAxisMidpointAngle);
   const targetHandleAngleRef = useRef<number>(positiveAxisMidpointAngle);
@@ -144,6 +156,21 @@ export function GizmoRotation({
     onDragRef.current = onDrag;
     onDragEndRef.current = onDragEnd;
   }, [onDrag, onDragEnd]);
+
+  // Follow live edits from the settings panel, mirroring how the snap toggle
+  // broadcasts. invalidate() because under demand mode nothing else would draw.
+  useEffect(() => {
+    const reload = () => {
+      try {
+        setTickConfig(parseSnapTickConfig(localStorage.getItem(SNAP_TICK_CONFIG_STORAGE_KEY)));
+      } catch {
+        setTickConfig(DEFAULT_SNAP_TICK_CONFIG);
+      }
+      invalidate();
+    };
+    window.addEventListener('dragonfruit:tick-config-change', reload);
+    return () => window.removeEventListener('dragonfruit:tick-config-change', reload);
+  }, [invalidate]);
 
   const computeShouldFlip = useCallback(() => {
     if (worldAxisDir) {
@@ -364,7 +391,7 @@ export function GizmoRotation({
     if (hit === null) return;
 
     const targetObjectAngle = objectAngleForRingAngle(
-      nearestTickRad(hit),
+      nearestTickRad(hit, tickConfig),
       axisVisualFlip,
     );
     const delta = shortestAngleDelta(currentAngleRad, targetObjectAngle);
@@ -380,7 +407,7 @@ export function GizmoRotation({
   const handleDialPointerMove = (e: ThreeEvent<PointerEvent>) => {
     if (!interactionsEnabled || isHidden) return;
     const hit = dialHitAngle(e);
-    const next = hit === null ? null : nearestTickRad(hit);
+    const next = hit === null ? null : nearestTickRad(hit, tickConfig);
     if (next !== hoveredTickRad) {
       setHoveredTickRad(next);
       invalidate();
@@ -640,6 +667,7 @@ export function GizmoRotation({
             hovered={!!effectiveHovered}
             active={ringIsActive}
             opacityScale={opacityScale}
+            config={tickConfig}
             highlightRad={hoveredTickRad}
           />
           <AngleSpoke

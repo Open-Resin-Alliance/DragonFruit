@@ -2,7 +2,13 @@ import React, { useState } from 'react';
 import * as THREE from 'three';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Card, CardHeader, IconButton } from '@/components/atoms';
-import { SNAP_STORAGE_KEY } from '@/components/gizmo/rotate/snapRotation';
+import {
+  SNAP_STORAGE_KEY,
+  SNAP_TICK_CONFIG_STORAGE_KEY,
+  DEFAULT_SNAP_TICK_CONFIG,
+  parseSnapTickConfig,
+  type SnapTickConfig,
+} from '@/components/gizmo/rotate/snapRotation';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 interface SectionHeaderProps {
@@ -78,6 +84,28 @@ export function TransformControls({
   const [snapEnabled, setSnapEnabled] = useState(() => {
     try { return localStorage.getItem(SNAP_STORAGE_KEY) === 'true'; } catch { return false; }
   });
+
+  const [tickConfig, setTickConfig] = useState<SnapTickConfig>(() => {
+    try {
+      return parseSnapTickConfig(localStorage.getItem(SNAP_TICK_CONFIG_STORAGE_KEY));
+    } catch {
+      return DEFAULT_SNAP_TICK_CONFIG;
+    }
+  });
+
+  const handleTickIntervalChange = (tier: keyof SnapTickConfig, raw: string) => {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return;
+    const next = { ...tickConfig, [tier]: parsed };
+    // Reject anything the dial could not render rather than persisting it and
+    // letting every ring throw. parseSnapTickConfig is the same gate the gizmo
+    // reads through, so a value that survives here is safe there.
+    const usable = parseSnapTickConfig(JSON.stringify(next));
+    if (usable.minorDeg !== next.minorDeg) return;
+    setTickConfig(next);
+    try { localStorage.setItem(SNAP_TICK_CONFIG_STORAGE_KEY, JSON.stringify(next)); } catch {}
+    window.dispatchEvent(new CustomEvent('dragonfruit:tick-config-change'));
+  };
 
   const handleSnapToggle = () => {
     const next = !snapEnabled;
@@ -334,11 +362,39 @@ export function TransformControls({
                         color: 'var(--text-muted)',
                       }}
                 >
-                  Snap
+                  Snap drag
                 </button>
               </div>
             </div>
             <div className="pt-1.5 space-y-2">
+              {/* Tick intervals (#104). Labelled "drag" above on purpose: the
+                  toggle governs dragging only, and clicking a dial tick always
+                  rotates to that angle whether it is on or off. */}
+              <div className="grid grid-cols-3 gap-1 min-w-0">
+                {([
+                  ['majorDeg', 'Major'],
+                  ['mediumDeg', 'Med'],
+                  ['minorDeg', 'Minor'],
+                ] as const).map(([key, label]) => (
+                  <label key={key} className="min-w-0 flex flex-col gap-0.5">
+                    <span className="text-[9px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                      {label}
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={180}
+                      step={1}
+                      value={tickConfig[key]}
+                      onChange={(e) => handleTickIntervalChange(key, e.target.value)}
+                      title={key === 'minorDeg'
+                        ? 'Smallest tick spacing, in degrees. Must divide 360.'
+                        : `${label} tick spacing, in degrees. 0 hides this tier.`}
+                      className={valueInputClass}
+                    />
+                  </label>
+                ))}
+              </div>
                 <div className="grid grid-cols-3 gap-1 min-w-0">
                   <div className="min-w-0">
                     <label className="ui-meta mb-1 block text-center" style={{ color: '#f87171' }}>X</label>

@@ -199,3 +199,40 @@ export function objectAngleForRingAngle(
 ): number {
   return RING_VISUAL_AXIS_SIGN * ringLocalAngle(ringAngleRad, axisVisualFlip);
 }
+
+/** localStorage key for the persisted tick tier config (#104). */
+export const SNAP_TICK_CONFIG_STORAGE_KEY = 'dragonfruit:rotation-tick-config';
+
+/** True when a config can be rendered without getSnapTicks throwing. */
+function isUsableTickConfig(value: unknown): value is SnapTickConfig {
+  if (typeof value !== 'object' || value === null) return false;
+  const { majorDeg, mediumDeg, minorDeg } = value as Record<string, unknown>;
+  if (
+    typeof majorDeg !== 'number' ||
+    typeof mediumDeg !== 'number' ||
+    typeof minorDeg !== 'number'
+  ) {
+    return false;
+  }
+  return Number.isInteger(minorDeg) && minorDeg > 0 && 360 % minorDeg === 0;
+}
+
+/**
+ * Read a persisted tick config, falling back to the default on anything
+ * unusable.
+ *
+ * Deliberately total: a corrupt or hand-edited localStorage value must not make
+ * every rotation ring throw on render. Validation mirrors getSnapTicks' own
+ * precondition so a parsed config is always safe to pass straight to it.
+ */
+export function parseSnapTickConfig(raw: string | null): SnapTickConfig {
+  if (!raw) return DEFAULT_SNAP_TICK_CONFIG;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isUsableTickConfig(parsed)
+      ? { majorDeg: parsed.majorDeg, mediumDeg: parsed.mediumDeg, minorDeg: parsed.minorDeg }
+      : DEFAULT_SNAP_TICK_CONFIG;
+  } catch {
+    return DEFAULT_SNAP_TICK_CONFIG;
+  }
+}
