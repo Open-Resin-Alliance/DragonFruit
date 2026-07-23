@@ -5534,6 +5534,7 @@ export function SceneCanvas({
                         && (isGizmoDragging || isPostGizmoInteractionGuardActive)
                       }
                       supportSectionGeometry={model.geometry.meshDefects?.supportSectionGeometry ?? null}
+                      modelSectionGeometry={model.geometry.meshDefects?.modelSectionGeometry ?? null}
                       onHolePunchClick={onHolePunchClick}
                       onHolePunchHover={onHolePunchHover}
                     >

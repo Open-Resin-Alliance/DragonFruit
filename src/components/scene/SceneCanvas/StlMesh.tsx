@@ -215,6 +215,7 @@ function StlMeshComponent({
   isExternallyHovered,
   deferExternalTransformUpdates,
   supportSectionGeometry,
+  modelSectionGeometry,
   nonManifold = false,
   higherContrastModelEdges = false,
   edgeGeometry,
@@ -297,8 +298,12 @@ function StlMeshComponent({
   /** When present (model+support mixed import), this geometry contains only the support-section
    *  triangles and is rendered as an orange overlay on top of the main mesh. */
   supportSectionGeometry?: THREE.BufferGeometry | null;
+  /** When present (model+support mixed import), this geometry contains only the model-section
+   *  (part) triangles. The non-manifold red overlay is scoped to this so it never stripes the
+   *  supports. Falls back to the full geometry when there is no split (whole mesh is the part). */
+  modelSectionGeometry?: THREE.BufferGeometry | null;
   /** When true, the model failed the manifold_csg status check (any non-manifold
-   *  status). A red/clear checkerboard pattern is overlaid on the mesh to flag it. */
+   *  status). A red/clear checkerboard pattern is overlaid on the part to flag it. */
   nonManifold?: boolean;
   children?: React.ReactNode;
 }) {
@@ -1403,7 +1408,15 @@ if (uDitherAmount > 0.0) {
       )}
 
       {nonManifoldCheckerMaterial && (
-        <mesh geometry={geometry} position={meshLocalOffset} renderOrder={5} raycast={() => null}>
+        // Scope the red flag to the model section (the part) so supports are never
+        // striped. Falls back to the full geometry when there is no model/support
+        // split, in which case the whole mesh is the part.
+        <mesh
+          geometry={modelSectionGeometry ?? geometry}
+          position={meshLocalOffset}
+          renderOrder={5}
+          raycast={() => null}
+        >
           <primitive object={nonManifoldCheckerMaterial} attach="material" />
         </mesh>
       )}
