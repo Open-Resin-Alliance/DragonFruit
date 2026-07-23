@@ -43,6 +43,23 @@
 #                        Records validation:{status,method,...} on the row.
 #   --require-golden     treat a missing golden reference as a case failure (ok=false)
 #
+#  Hardware sweep (run the whole matrix under several simulated machines):
+#   --hw-configs LIST    ';'-separated hardware envelopes, each "name:cpus=N,mem=SIZE", OR a
+#                        built-in preset group referenced as "@name". Presets: @pis (a few
+#                        Raspberry Pis), @pcs (low-end→workstation), @common (= @pis;@pcs).
+#                        e.g.  "@common"  or  "@pis; workstation:cpus=16,mem=32G".
+#                        cpus=N pins the run to N cores via `taskset` (the slicing engine sizes
+#                        its rayon pools from available_parallelism(), so it genuinely behaves
+#                        like an N-core box). mem=SIZE imposes a hard RAM ceiling via a transient
+#                        systemd user scope (MemoryMax + no swap); a breach OOM-kills the slice and
+#                        is logged as a failure for that machine. Either key may be omitted (a
+#                        config with neither = the unconstrained host). Every row is tagged
+#                        hw / hw_cpus / hw_mem.
+#                        DEFAULT: "@common" — the whole matrix is swept across common PC + Pi
+#                        machines. Pass "--hw-configs host" for a single unconstrained run, or an
+#                        explicit list. (If the host can't enforce the caps, the default degrades
+#                        to a single "host" run with a warning; an explicit list hard-fails.)
+#
 # Output format per case follows the printer profile's display.outputFormat (nanodlp/ctb/goo/…);
 # nanodlp is a zip of layer PNGs (fully introspectable), the others are proprietary binary
 # containers (correctness gate falls back to a non-empty-file check — see --validate for content).
@@ -72,6 +89,7 @@ INSTALL_DEPS=0
 OVERLAY=0
 VALIDATE_DIR=""
 REQUIRE_GOLDEN=0
+HW_CONFIGS=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -91,19 +109,143 @@ while [[ $# -gt 0 ]]; do
     --overlay-uncommitted) OVERLAY=1; shift;;
     --validate) VALIDATE_DIR="$2"; shift 2;;
     --require-golden) REQUIRE_GOLDEN=1; shift;;
+    --hw-configs) HW_CONFIGS="$2"; shift 2;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
 
 MESH_DIR="${MESH_DIR:-$FIXTURES}"
 
+# Expose V8's gc() to the TS "frontend" so it can actively reclaim the merged
+# geometry after handing positions.bin to the Rust slicer — the slice then runs
+# with the node process holding ~nothing, keeping the measurement to purely the
+# slicing engine's footprint. (The Rust CLI already measures itself via
+# getrusage(RUSAGE_SELF); this keeps the whole process tree honest too.)
+export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--expose-gc"
+
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 if [[ -n "$VALIDATE_DIR" ]]; then
   command -v sha256sum >/dev/null || { echo "sha256sum is required for --validate" >&2; exit 1; }
   # unzip is only needed for zip-format (.nanodlp) goldens; binary formats fall back to
-  # whole-file sha256 (see validate_case), so its absence is not fatal.
+  # whole-file sha256 (see validate_case), so its absence is not fatal. But WITHOUT unzip a
+  # zip golden also degrades to whole-file sha256, which is timestamp-sensitive and will
+  # report a spurious "mismatch" — warn so the degradation isn't silent.
+  command -v unzip >/dev/null || echo "WARN: unzip not found; .nanodlp goldens will be compared by whole-file sha256 (timestamp-sensitive), not per-layer content" >&2
   [[ -d "$VALIDATE_DIR" ]] || { echo "--validate dir not found: $VALIDATE_DIR" >&2; exit 1; }
 fi
+
+# ---------------------------------------------------------------------------
+# Hardware sweep: parse --hw-configs into parallel arrays HW_LABEL/HW_CPUS/HW_MEM.
+# Each config re-runs the whole matrix inside an imposed hardware envelope:
+#   cpus=N  -> `taskset -c 0-(N-1)` gives the process (and its Rust slice child) a
+#             real N-core affinity mask. The engine derives its rayon pool sizes from
+#             std::thread::available_parallelism() (= sched affinity), so this is true
+#             core emulation, not an env-var hint.
+#   mem=SIZE-> a transient `systemd-run --user --scope` with a hard MemoryMax + no swap.
+#             Exceeding it OOM-kills the slice (surfaced as a case failure for that machine).
+#
+# Built-in preset groups (referenced as @name; approximate real machines). Pi core counts
+# reflect current quad-core boards; RAM is the imposed ceiling. PCs span a low-end mini-PC to
+# a workstation. cpus are later clamped to the host's nproc. @common is the default sweep.
+# ---------------------------------------------------------------------------
+declare -A HW_PRESETS=(
+  [pis]="rpi-zero2:cpus=4,mem=512M; rpi3b:cpus=4,mem=1G; rpi4:cpus=4,mem=4G; rpi5:cpus=4,mem=8G"
+  [pcs]="pc-lowend:cpus=2,mem=4G; pc-budget:cpus=4,mem=8G; pc-mainstream:cpus=8,mem=16G; pc-workstation:cpus=16,mem=32G"
+)
+HW_PRESETS[common]="${HW_PRESETS[pis]}; ${HW_PRESETS[pcs]}"
+
+# Expand any @preset tokens in a raw --hw-configs string into concrete "name:spec" entries.
+expand_hw_presets() { # <raw-hw-configs> -> expanded ';'-joined string
+  local out="" part key
+  local IFS=';'; read -ra _parts <<< "$1"
+  for part in "${_parts[@]}"; do
+    part="$(echo "$part" | tr -d '[:space:]')"; [[ -n "$part" ]] || continue
+    if [[ "$part" == @* ]]; then
+      key="${part#@}"
+      [[ -n "${HW_PRESETS[$key]:-}" ]] || { echo "unknown hw preset '@$key' (known: ${!HW_PRESETS[*]})" >&2; exit 2; }
+      out="${out:+$out; }${HW_PRESETS[$key]}"
+    else
+      out="${out:+$out; }$part"
+    fi
+  done
+  printf '%s' "$out"
+}
+
+declare -a HW_LABEL HW_CPUS HW_MEM
+HOST_CPUS="$(nproc 2>/dev/null || echo 1)"
+need_taskset=0; need_systemd=0
+# Default to the common PC + Pi sweep; remember it was defaulted so we can degrade gracefully
+# (rather than hard-fail) if this host can't actually enforce the caps.
+HW_IS_DEFAULT=0
+[[ -z "$HW_CONFIGS" ]] && { HW_CONFIGS="@common"; HW_IS_DEFAULT=1; }
+HW_CONFIGS="$(expand_hw_presets "$HW_CONFIGS")"
+
+IFS=';' read -ra _hwentries <<< "$HW_CONFIGS"
+for entry in "${_hwentries[@]}"; do
+  entry="$(echo "$entry" | tr -d '[:space:]')"; [[ -n "$entry" ]] || continue
+  local_name="${entry%%:*}"; spec=""
+  [[ "$entry" == *:* ]] && spec="${entry#*:}"
+  cpus=""; mem=""
+  if [[ -n "$spec" ]]; then
+    IFS=',' read -ra _kvs <<< "$spec"
+    for kv in "${_kvs[@]}"; do
+      case "$kv" in
+        cpus=*) cpus="${kv#cpus=}";;
+        mem=*)  mem="${kv#mem=}";;
+        "" ) ;;
+        *) echo "WARN: hw-config '$local_name': ignoring unknown key '$kv' (want cpus= / mem=)" >&2;;
+      esac
+    done
+  fi
+  if [[ -n "$cpus" ]]; then
+    [[ "$cpus" =~ ^[0-9]+$ && "$cpus" -ge 1 ]] || { echo "hw-config '$local_name': cpus must be a positive integer" >&2; exit 2; }
+    if (( cpus > HOST_CPUS )); then
+      echo "WARN: hw-config '$local_name': cpus=$cpus > host cores ($HOST_CPUS); clamping to $HOST_CPUS" >&2
+      cpus="$HOST_CPUS"
+    fi
+    need_taskset=1
+  fi
+  [[ -n "$mem" ]] && need_systemd=1
+  HW_LABEL+=("$local_name"); HW_CPUS+=("$cpus"); HW_MEM+=("$mem")
+done
+[[ ${#HW_LABEL[@]} -gt 0 ]] || { echo "--hw-configs parsed to zero configs" >&2; exit 2; }
+
+# Probe whether this host can actually enforce the requested constraints.
+hw_can_taskset=1; hw_can_mem=1
+[[ "$need_taskset" == 1 ]] && { command -v taskset >/dev/null || hw_can_taskset=0; }
+if [[ "$need_systemd" == 1 ]]; then
+  if ! command -v systemd-run >/dev/null \
+     || ! systemd-run --user --scope --quiet -p MemoryMax=64M -p MemorySwapMax=0 -- true >/dev/null 2>&1; then
+    hw_can_mem=0   # no systemd-run, or the memory cgroup controller isn't delegated to the user manager
+  fi
+fi
+
+if { [[ "$need_taskset" == 1 && "$hw_can_taskset" == 0 ]]; } \
+   || { [[ "$need_systemd" == 1 && "$hw_can_mem" == 0 ]]; }; then
+  if [[ "$HW_IS_DEFAULT" == 1 ]]; then
+    echo "WARN: the default hardware sweep (@common) needs taskset + an enforceable systemd --user" >&2
+    echo "      MemoryMax; this host can't provide them, so falling back to a single unconstrained" >&2
+    echo "      'host' run. Install util-linux/systemd (with the memory cgroup delegated), or pass" >&2
+    echo "      --hw-configs explicitly to force the sweep." >&2
+    HW_LABEL=("host"); HW_CPUS=(""); HW_MEM=(""); need_taskset=0; need_systemd=0
+  else
+    [[ "$need_taskset" == 1 && "$hw_can_taskset" == 0 ]] && echo "taskset (util-linux) is required for hw-configs with cpus=" >&2
+    [[ "$need_systemd" == 1 && "$hw_can_mem" == 0 ]] && echo "an enforceable systemd --user MemoryMax is required for hw-configs with mem= (is the memory cgroup controller delegated to your user manager?)" >&2
+    exit 1
+  fi
+fi
+
+# Emit the command-prefix tokens imposing one hardware config's constraints (may be empty).
+# Order matters: the systemd scope wraps everything, taskset sets affinity on the wrapped cmd.
+hw_prefix_for() { # <cpus-or-empty> <mem-or-empty> -> prints prefix tokens
+  local cpus="$1" mem="$2" pre=""
+  [[ -n "$mem" ]] && pre="systemd-run --user --scope --quiet -p MemoryMax=$mem -p MemorySwapMax=0 --"
+  if [[ -n "$cpus" ]]; then
+    local list; (( cpus <= 1 )) && list="0" || list="0-$((cpus-1))"
+    pre="${pre:+$pre }taskset -c $list"
+  fi
+  printf '%s' "$pre"
+}
 
 # Map a printer profile's output format to the archive extension the way the app /
 # TS CLI does (outputFormatToExt): ctb/nanodlp are named; anything else passes through.
@@ -137,11 +279,10 @@ runs=0; fails=0
 # total_s is closest to the mean (a representative run for over-time diagnosis).
 read -r -d '' AVG_JQ <<'JQ' || true
 def avg(f): (map(f) | add) / length;
-(avg(.total_s)) as $mean
-| (min_by((.total_s - $mean) | if . < 0 then -. else . end)) as $rep
-| [.[].perf] as $ps
+[.[].perf] as $ps
 | {
     ref: .[0].ref, git_sha: .[0].git_sha,
+    hw: .[0].hw, hw_cpus: .[0].hw_cpus, hw_mem: .[0].hw_mem,
     voxl: .[0].voxl, printer: .[0].printer, format: .[0].format,
     layer_height: .[0].layer_height,
     aa_preset: .[0].aa_preset, x_packing_mode: .[0].x_packing_mode,
@@ -157,8 +298,14 @@ def avg(f): (map(f) | add) / length;
     peak_sample_cpu_percent: avg(.peak_sample_cpu_percent),
     peak_rss_mb: avg(.peak_rss_mb), end_rss_mb: avg(.end_rss_mb),
     perf: (($ps[0] | keys_unsorted) | reduce .[] as $k ({}; . + { ($k): (($ps | map(.[$k]) | add) / ($ps | length)) })),
-    samples_from_run: $rep.run,
-    samples: $rep.samples
+    # Every repeat kept separate and un-averaged: its own timing, CPU, peak RSS, full
+    # perf block and RSS/CPU sample series. The scalars above are just a convenience
+    # summary — `runs[]` is the source of truth for "how it ran under this config".
+    runs: [ .[] | {
+      run, ok, total_s, wall_s, layers_per_second,
+      cpu_total_s, cpu_percent, peak_sample_cpu_percent,
+      peak_rss_mb, end_rss_mb, perf, samples
+    } ]
   }
 JQ
 
@@ -353,13 +500,22 @@ fi
 # target (one version of the software). Rows are tagged with ref/git_sha, and
 # optionally carry a validation:{...} block vs a known-good archive.
 # ---------------------------------------------------------------------------
-run_matrix() { # <label> <sha> <ts-cmd> <rust-binary>
-  local REF="$1" SHA="$2" TS="$3" RUST="$4"
+run_matrix() { # <label> <sha> <ts-cmd> <rust-binary> <hw-label> <hw-cpus> <hw-mem>
+  local REF="$1" SHA="$2" TS="$3" RUST="$4" HWL="$5" HWC="$6" HWM="$7"
   local prefix=""
   [[ ${#TARGET_LABEL[@]} -gt 1 || "$REF" != "working-tree" ]] && prefix="[$REF] "
+  [[ ${#HW_LABEL[@]} -gt 1 ]] && prefix="${prefix}{$HWL} "
 
-  local voxl printer lh aa vname pname pext repfile ok_repeats r tmp errf res insp fsize row
-  local valjson valfile
+  # Command prefix that imposes this machine's CPU/RAM envelope on the slice (and its
+  # Rust child). Empty for the unconstrained host. The systemd scope, when present, caps
+  # the whole process subtree's RAM — the TS frontend already wipes its heap before the
+  # blocking slice, so the cap effectively bounds the slicing engine's footprint.
+  local HWPRE; HWPRE="$(hw_prefix_for "$HWC" "$HWM")"
+
+  local voxl printer lh aa vname pname pext repfile ok_repeats r tmp errf res insp fsize row rc
+  local valjson valfile hwcjson hwmjson
+  hwcjson="$([[ -n "$HWC" ]] && printf '%s' "$HWC" || printf 'null')"
+  hwmjson="$([[ -n "$HWM" ]] && printf '"%s"' "$HWM" || printf 'null')"
   for voxl in "${voxls[@]}"; do
    for printer in "${printers[@]}"; do
     pext="$(printer_ext "$printer")"        # output format follows the printer profile
@@ -369,7 +525,7 @@ run_matrix() { # <label> <sha> <ts-cmd> <rust-binary>
       repfile="$(mktemp)"; ok_repeats=0; valjson=""; valfile=""
       for ((r=1; r<=REPEATS; r++)); do
         tmp="$(mktemp -u --suffix="$pext")"; errf="$(mktemp)"
-        if res="$($TS scene slice "$voxl" --o "$tmp" --mesh-dir "$MESH_DIR" \
+        if res="$($HWPRE $TS scene slice "$voxl" --o "$tmp" --mesh-dir "$MESH_DIR" \
                    --printer "$printer" --layer-height "$lh" --aa-preset "$aa" \
                    --json 2>"$errf")"; then
           # print inspect is zip-only; on binary formats (.ctb/.goo/…) it fails and
@@ -379,10 +535,12 @@ run_matrix() { # <label> <sha> <ts-cmd> <rust-binary>
           jq -c -n --argjson s "$res" --argjson i "$insp" \
                 --arg voxl "$vname" --arg printer "$pname" --arg fmt "$pext" \
                 --arg lh "$lh" --arg aa "$aa" --argjson r "$r" --argjson fsize "$fsize" \
-                --arg ref "$REF" --arg sha "$SHA" '
+                --arg ref "$REF" --arg sha "$SHA" \
+                --arg hw "$HWL" --argjson hwc "$hwcjson" --argjson hwm "$hwmjson" '
             ($i.numeric_layer_count) as $nlc
             | {
             ref:$ref, git_sha:$sha,
+            hw:$hw, hw_cpus:$hwc, hw_mem:$hwm,
             voxl:$voxl, printer:$printer, format:$fmt,
             layer_height:($lh|tonumber), aa_preset:$aa, run:$r,
             layers:$s.layers, layer_count:($i.layer_count // null),
@@ -404,8 +562,15 @@ run_matrix() { # <label> <sha> <ts-cmd> <rust-binary>
           # good archive for the content comparison, delete the rest.
           if [[ -n "$VALIDATE_DIR" && -z "$valfile" ]]; then valfile="$tmp"; else rm -f "$tmp"; fi
         else
+          rc=$?
           fails=$((fails+1))
-          echo "  ${prefix}FAILED: $vname / $pname lh=$lh preset=$aa (run $r/$REPEATS)" >&2
+          # Under a mem cap, a cgroup OOM tears the systemd scope down and the slice exits via a
+          # signal (137=SIGKILL or 143=SIGTERM, i.e. rc>128) — a genuine slice error would exit
+          # with a small code instead. Flag it so the failure reads as "didn't fit this machine's
+          # RAM" rather than a generic error.
+          local why=""
+          [[ -n "$HWM" && "$rc" -gt 128 ]] && why=" — likely OOM (mem cap=$HWM)"
+          echo "  ${prefix}FAILED: $vname / $pname lh=$lh preset=$aa (run $r/$REPEATS, exit $rc)$why" >&2
           tail -n 3 "$errf" | sed 's/^/      | /' >&2
           rm -f "$tmp"
         fi
@@ -432,7 +597,8 @@ run_matrix() { # <label> <sha> <ts-cmd> <rust-binary>
       else
         jq -c -n --arg ref "$REF" --arg sha "$SHA" --arg voxl "$vname" --arg printer "$pname" \
           --arg fmt "$pext" --arg lh "$lh" --arg aa "$aa" \
-          '{ref:$ref,git_sha:$sha,voxl:$voxl,printer:$printer,format:$fmt,layer_height:($lh|tonumber),aa_preset:$aa,error:"all repeats failed"}' >> "$OUT"
+          --arg hw "$HWL" --argjson hwc "$hwcjson" --argjson hwm "$hwmjson" \
+          '{ref:$ref,git_sha:$sha,hw:$hw,hw_cpus:$hwc,hw_mem:$hwm,voxl:$voxl,printer:$printer,format:$fmt,layer_height:($lh|tonumber),aa_preset:$aa,error:"all repeats failed"}' >> "$OUT"
         printf '  %s%-14s %-20s lh=%-5s preset=%-9s ERROR (all %s repeats failed)\n' "$prefix" "$vname" "$pname" "$lh" "$aa" "$REPEATS" >&2
       fi
       rm -f "$repfile"
@@ -442,9 +608,17 @@ run_matrix() { # <label> <sha> <ts-cmd> <rust-binary>
   done
 }
 
+# Build once per git target, then sweep every hardware envelope under it (the software
+# is fixed per ref; only the imposed CPU/RAM machine changes between hw configs).
 for ti in "${!TARGET_LABEL[@]}"; do
   [[ ${#TARGET_LABEL[@]} -gt 1 ]] && echo "==> benchmarking ${TARGET_LABEL[$ti]} (${TARGET_SHA[$ti]})" >&2
-  run_matrix "${TARGET_LABEL[$ti]}" "${TARGET_SHA[$ti]}" "${TARGET_TS[$ti]}" "${TARGET_RUST[$ti]}"
+  for hi in "${!HW_LABEL[@]}"; do
+    if [[ ${#HW_LABEL[@]} -gt 1 || -n "${HW_CPUS[$hi]}${HW_MEM[$hi]}" ]]; then
+      echo "==> hw config '${HW_LABEL[$hi]}' (cpus=${HW_CPUS[$hi]:-host} mem=${HW_MEM[$hi]:-unbounded})" >&2
+    fi
+    run_matrix "${TARGET_LABEL[$ti]}" "${TARGET_SHA[$ti]}" "${TARGET_TS[$ti]}" "${TARGET_RUST[$ti]}" \
+               "${HW_LABEL[$hi]}" "${HW_CPUS[$hi]}" "${HW_MEM[$hi]}"
+  done
 done
 
-echo "==> ${#TARGET_LABEL[@]} target(s), $runs cases, $fails failed repeats -> $OUT" >&2
+echo "==> ${#TARGET_LABEL[@]} target(s) × ${#HW_LABEL[@]} hw config(s), $runs cases, $fails failed repeats -> $OUT" >&2

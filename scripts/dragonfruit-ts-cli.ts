@@ -1284,6 +1284,21 @@ function writePositionsBin(path: string, positions: Float32Array): void {
   writeFileSync(path, Buffer.from(positions.buffer, positions.byteOffset, positions.byteLength));
 }
 
+/** Shared zero-length array to overwrite a reference we want dropped without a fresh alloc. */
+const EMPTY_F32 = new Float32Array(0);
+
+/**
+ * Best-effort hand of freed memory back to V8/OS. Only actually does anything when
+ * node was started with --expose-gc (the benchmark driver sets that via NODE_OPTIONS);
+ * otherwise it's a no-op and V8 reclaims dropped references on its own under pressure.
+ * Used to keep the CLI's heap small on low-resource machines — geometry buffers are
+ * released the moment the slicing engine no longer needs them.
+ */
+function releaseHeap(): void {
+  const g = (globalThis as { gc?: () => void }).gc;
+  if (typeof g === 'function') g();
+}
+
 // ---------------------------------------------------------------------------
 // NOTE: the functions below (packing, dither policy, pixel pitch) are ported
 // from the UI rather than imported. Reusing the originals directly is deferred
@@ -1548,14 +1563,22 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
     totalTriangles += positions.length / 9;
   }
 
-  // Phase 2: Merge into single positions buffer
+  // Phase 2: Merge into single positions buffer, releasing each per-model source
+  // array the moment it has been copied. Peak heap is then ~one merged copy plus
+  // the single model being copied, not (all sources + merged) — matters on
+  // low-resource machines where the scene's geometry may already be a large slice
+  // of available RAM.
   const totalFloats = allPositions.reduce((sum, p) => sum + p.length, 0);
-  const merged = new Float32Array(totalFloats);
+  let merged: Float32Array = new Float32Array(totalFloats);
   let writeOffset = 0;
-  for (const p of allPositions) {
+  for (let i = 0; i < allPositions.length; i++) {
+    const p = allPositions[i];
     merged.set(p, writeOffset);
     writeOffset += p.length;
+    allPositions[i] = EMPTY_F32; // drop the per-model copy immediately
   }
+  allPositions.length = 0;
+  releaseHeap();
 
   // Phase 3: Write merged positions.bin
   const tmpDir = `/tmp/df-scene-slice-${Date.now()}`;
@@ -1563,6 +1586,13 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
   const mergedPath = resolve(tmpDir, 'positions.bin');
   writePositionsBin(mergedPath, merged);
   console.error(`  merged: ${totalTriangles} triangles -> ${mergedPath}`);
+
+  // Hand-off complete: positions.bin on disk now owns the geometry, and the
+  // slicing engine (Rust) reads it from there — node holds nothing the engine
+  // needs. Drop the merged copy (the last large buffer) before shelling out so
+  // the process sits near-idle in RAM during the blocking slice.
+  merged = EMPTY_F32;
+  releaseHeap();
 
   // Phase 4: Shell out to Rust slicer
   const rustCli = resolve(dirname(new URL(import.meta.url).pathname), '../rust/dragonfruit-cli/target/release/dragonfruit-cli');
