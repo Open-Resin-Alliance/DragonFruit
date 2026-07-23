@@ -70,6 +70,12 @@ const KNOBS: KnobDef[] = [
   { key: 'maxBranchAngleDeg',     label: 'Max Branch Angle',      min: 20,   max: 60,   step: 1,    unit: '°',   hint: 'Steepest angle a branch can leave the trunk' },
   { key: 'minTrunkSeparationMm',  label: 'Min Trunk Separation',  min: 3,    max: 30,   step: 0.5,  unit: 'mm',  hint: 'Minimum XY distance between independent trunks' },
   { key: 'densityFactor',         label: 'Density Factor',        min: 0.5,  max: 3,    step: 0.1,  unit: '×',   hint: 'Scaling multiplier for overall support density' },
+  { key: 'maxAttachmentsPerTrunk',         label: 'Max Attachments / Trunk',   min: 2,  max: 50, step: 1,   unit: '',   hint: 'Max combined branches + leaves per trunk' },
+  { key: 'maxVerticalAttachmentDistanceMm', label: 'Max Vertical Attach Dist', min: 5, max: 80, step: 1,   unit: 'mm', hint: 'Max vertical distance from knot to tip' },
+  { key: 'maxHorizontalAttachmentDistanceMm', label: 'Max Horizontal Attach Dist', min: 2, max: 40, step: 0.5, unit: 'mm', hint: 'Max horizontal distance from knot to tip' },
+  { key: 'minHorizontalLeafAngleDeg',       label: 'Min Horiz Leaf Angle',     min: 10, max: 60, step: 1,   unit: '°',  hint: 'Min angle from horizontal for leaf attachment' },
+  { key: 'verticalKnotSpacingMm', label: 'Vertical Knot Spacing', min: 0.5, max: 10, step: 0.5, unit: 'mm', hint: 'Vertical spacing between knots on same shaft' },
+  { key: 'maxConeAngleDevDeg',   label: 'Max Cone Angle Deviation', min: 5, max: 60, step: 1, unit: '°', hint: 'Max cone angle deviation for clearance search' },
 ];
 
 const PRESETS = {
@@ -77,18 +83,43 @@ const PRESETS = {
     minIslandAreaMm2: 0.05, tipInfluenceRadiusMm: 2.0, clusterRadiusMm: 15,
     maxBranchReachMm: 20, maxBranchAngleDeg: 45, minTrunkSeparationMm: 8,
     densityFactor: 1.0,
+    maxAttachmentsPerTrunk: 8, maxVerticalAttachmentDistanceMm: 35,
+    maxHorizontalAttachmentDistanceMm: 12, minHorizontalLeafAngleDeg: 35,
+    verticalKnotSpacingMm: 4, maxConeAngleDevDeg: 25,
   },
   medium: {
     minIslandAreaMm2: 0.02, tipInfluenceRadiusMm: 0.5, clusterRadiusMm: 20,
     maxBranchReachMm: 25, maxBranchAngleDeg: 50, minTrunkSeparationMm: 6,
     densityFactor: 1.0,
+    maxAttachmentsPerTrunk: 12, maxVerticalAttachmentDistanceMm: 40,
+    maxHorizontalAttachmentDistanceMm: 15, minHorizontalLeafAngleDeg: 30,
+    verticalKnotSpacingMm: 3, maxConeAngleDevDeg: 30,
   },
   heavy: {
     minIslandAreaMm2: 0.0, tipInfluenceRadiusMm: 0.1, clusterRadiusMm: 25,
     maxBranchReachMm: 30, maxBranchAngleDeg: 55, minTrunkSeparationMm: 4,
     densityFactor: 1.5,
+    maxAttachmentsPerTrunk: 20, maxVerticalAttachmentDistanceMm: 50,
+    maxHorizontalAttachmentDistanceMm: 20, minHorizontalLeafAngleDeg: 20,
+    verticalKnotSpacingMm: 2, maxConeAngleDevDeg: 40,
   },
 } satisfies Record<string, Partial<AutoSupportSettings>>;
+
+function SliderRow({ knob, draft, setDraft }: { knob: KnobDef; draft: AutoSupportSettings; setDraft: React.Dispatch<React.SetStateAction<AutoSupportSettings>> }) {
+  const value = (draft as any)[knob.key] as number;
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }} title={knob.hint}>{knob.label}</span>
+        <span className="text-[11px] tabular-nums font-semibold" style={{ color: 'var(--text-strong)' }}>{knob.step < 1 ? value.toFixed(1) : value}{knob.unit}</span>
+      </div>
+      <input type="range" min={knob.min} max={knob.max} step={knob.step} value={value}
+        onChange={(e) => setDraft((d) => ({ ...d, [knob.key]: parseFloat(e.target.value) }))}
+        className="ui-range w-full"
+      />
+    </div>
+  );
+}
 
 export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSupportPanelProps) {
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
@@ -392,6 +423,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
         title="Auto Supports (Beta) Settings"
         subtitle="Tune candidate generation, clustering, and fan-out"
         iconTone="neutral"
+        maxWidthClassName="max-w-2xl"
         onClose={() => setShowSettings(false)}
         onBackdropClick={() => setShowSettings(false)}
         actions={
@@ -402,62 +434,74 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
         }
       >
         <div className="space-y-3">
+          {/* ── Toggles row — full width ────────────────────────── */}
           <div className="rounded-md border p-2.5" style={SECTION_CARD}>
-            <SectionHeader title="General" />
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-4 gap-2">
               {([
-                { key: 'enabled' as const, label: 'Enabled', hint: 'Enable auto-support placement' },
-                { key: 'prioritizeIntersection' as const, label: 'Prioritize Dual-Detect', hint: '1.5× priority for islands confirmed by both detectors' },
-              ]).map((t) => (
-                <button key={t.key} type="button"
-                  onClick={() => setDraft((d) => ({ ...d, [t.key]: !d[t.key] }))}
-                  className="min-h-[36px] w-full rounded-md border px-2 text-[11px] font-semibold uppercase tracking-wide transition-colors flex items-center justify-center gap-1.5"
-                  style={(draft as any)[t.key]
-                    ? { borderColor: 'color-mix(in srgb, var(--accent-secondary), white 10%)', background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 84%)', color: 'color-mix(in srgb, var(--accent-secondary), var(--text-strong) 25%)' }
-                    : { borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-                  title={t.hint}
-                >{t.label}</button>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-md border p-2.5" style={SECTION_CARD}>
-            <SectionHeader title="Debug" />
-            <div className="grid grid-cols-2 gap-2">
-              {([
-                { key: 'debugSkipAutoBracing' as const, label: 'Skip Auto-Brace', hint: 'Skip auto-bracing after placement' },
-                { key: 'debugClusterColorsEnabled' as const, label: 'Cluster Colors', hint: 'Color-code supports by cluster group' },
+                { key: 'enabled' as const, label: 'Enabled' },
+                { key: 'prioritizeIntersection' as const, label: 'Prioritize Dual' },
+                { key: 'debugSkipAutoBracing' as const, label: 'Skip Brace' },
+                { key: 'debugClusterColorsEnabled' as const, label: 'Cluster Colors' },
               ]).map((t) => (
                 <button key={t.key} type="button"
                   onClick={() => setDraft((d) => ({ ...d, [t.key]: !(d as any)[t.key] }))}
-                  className="min-h-[36px] w-full rounded-md border px-2 text-[11px] font-semibold uppercase tracking-wide transition-colors flex items-center justify-center gap-1.5"
+                  className="min-h-[36px] w-full rounded-md border px-2 text-[11px] font-semibold uppercase tracking-wide transition-colors flex items-center justify-center"
                   style={(draft as any)[t.key]
                     ? { borderColor: 'color-mix(in srgb, var(--accent-secondary), white 10%)', background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 84%)', color: 'color-mix(in srgb, var(--accent-secondary), var(--text-strong) 25%)' }
                     : { borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-                  title={t.hint}
                 >{t.label}</button>
               ))}
             </div>
           </div>
 
-          <div className="rounded-md border p-2.5" style={SECTION_CARD}>
-            <SectionHeader title="Placement" />
+          {/* ── Two-column settings body ─────────────────────────── */}
+          <div className="grid grid-cols-2 gap-3">
+            {/* LEFT COLUMN */}
             <div className="space-y-3">
-              {KNOBS.map((knob) => {
-                const value = (draft as any)[knob.key] as number;
-                return (
-                  <div key={knob.key}>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }} title={knob.hint}>{knob.label}</span>
-                      <span className="text-[11px] tabular-nums font-semibold" style={{ color: 'var(--text-strong)' }}>{knob.step < 1 ? value.toFixed(1) : value}{knob.unit}</span>
-                    </div>
-                    <input type="range" min={knob.min} max={knob.max} step={knob.step} value={value}
-                      onChange={(e) => setDraft((d) => ({ ...d, [knob.key]: parseFloat(e.target.value) }))}
-                      className="ui-range w-full"
-                    />
-                  </div>
-                );
-              })}
+              <div className="rounded-md border p-2.5" style={SECTION_CARD}>
+                <SectionHeader title="Detection" />
+                <div className="space-y-2.5">
+                  {KNOBS.filter(k => ['minIslandAreaMm2', 'tipInfluenceRadiusMm', 'densityFactor'].includes(k.key)).map(knob => (
+                    <SliderRow key={knob.key} knob={knob} draft={draft} setDraft={setDraft} />
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-md border p-2.5" style={SECTION_CARD}>
+                <SectionHeader title="Clustering" />
+                <div className="space-y-2.5">
+                  {KNOBS.filter(k => ['clusterRadiusMm', 'minTrunkSeparationMm'].includes(k.key)).map(knob => (
+                    <SliderRow key={knob.key} knob={knob} draft={draft} setDraft={setDraft} />
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-md border p-2.5" style={SECTION_CARD}>
+                <SectionHeader title="Branching" />
+                <div className="space-y-2.5">
+                  {KNOBS.filter(k => ['maxBranchReachMm', 'maxBranchAngleDeg'].includes(k.key)).map(knob => (
+                    <SliderRow key={knob.key} knob={knob} draft={draft} setDraft={setDraft} />
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* RIGHT COLUMN */}
+            <div className="space-y-3">
+              <div className="rounded-md border p-2.5" style={SECTION_CARD}>
+                <SectionHeader title="Attachment Limits" />
+                <div className="space-y-2.5">
+                  {KNOBS.filter(k => ['maxAttachmentsPerTrunk', 'maxVerticalAttachmentDistanceMm', 'maxHorizontalAttachmentDistanceMm', 'minHorizontalLeafAngleDeg'].includes(k.key)).map(knob => (
+                    <SliderRow key={knob.key} knob={knob} draft={draft} setDraft={setDraft} />
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-md border p-2.5" style={SECTION_CARD}>
+                <SectionHeader title="Quality" />
+                <div className="space-y-2.5">
+                  {KNOBS.filter(k => ['verticalKnotSpacingMm', 'maxConeAngleDevDeg'].includes(k.key)).map(knob => (
+                    <SliderRow key={knob.key} knob={knob} draft={draft} setDraft={setDraft} />
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         </div>

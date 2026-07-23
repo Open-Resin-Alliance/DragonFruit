@@ -8,6 +8,18 @@ export interface AutoSupportSettings {
     densityFactor: number;
     tipInfluenceRadiusMm: number;
     prioritizeIntersection: boolean;
+    /** Max combined leaves + branches that can attach to a single trunk. */
+    maxAttachmentsPerTrunk: number;
+    /** Max vertical distance from knot to tip for a valid branch/leaf attachment. */
+    maxVerticalAttachmentDistanceMm: number;
+    /** Max horizontal distance from knot to tip for a valid branch/leaf attachment. */
+    maxHorizontalAttachmentDistanceMm: number;
+    /** Min angle from horizontal for a leaf attachment to be valid. */
+    minHorizontalLeafAngleDeg: number;
+    /** Vertical spacing between knots along the same trunk shaft. */
+    verticalKnotSpacingMm: number;
+    /** Max deviation for cone angle when searching for a clear attachment axis. */
+    maxConeAngleDevDeg: number;
     debugClusterColorsEnabled: boolean;
     debugSkipAutoBracing: boolean;
 }
@@ -27,7 +39,13 @@ type NumericAutoSupportSettingKey =
     | 'maxBranchAngleDeg'
     | 'minTrunkSeparationMm'
     | 'densityFactor'
-    | 'tipInfluenceRadiusMm';
+    | 'tipInfluenceRadiusMm'
+    | 'maxAttachmentsPerTrunk'
+    | 'maxVerticalAttachmentDistanceMm'
+    | 'maxHorizontalAttachmentDistanceMm'
+    | 'minHorizontalLeafAngleDeg'
+    | 'verticalKnotSpacingMm'
+    | 'maxConeAngleDevDeg';
 
 export const AUTO_SUPPORT_CONSTRAINTS = {
     minIslandAreaMm2: { min: 0.01, max: 10, step: 0.01, defaultValue: 0.02 },
@@ -37,6 +55,12 @@ export const AUTO_SUPPORT_CONSTRAINTS = {
     minTrunkSeparationMm: { min: 3, max: 30, step: 0.5, defaultValue: 6 },
     densityFactor: { min: 0.5, max: 3.0, step: 0.1, defaultValue: 1.0 },
     tipInfluenceRadiusMm: { min: 0.1, max: 10, step: 0.1, defaultValue: 0.5 },
+    maxAttachmentsPerTrunk: { min: 2, max: 50, step: 1, defaultValue: 12, integer: true },
+    maxVerticalAttachmentDistanceMm: { min: 5, max: 80, step: 1, defaultValue: 40 },
+    maxHorizontalAttachmentDistanceMm: { min: 2, max: 40, step: 0.5, defaultValue: 15 },
+    minHorizontalLeafAngleDeg: { min: 10, max: 60, step: 1, defaultValue: 30 },
+    verticalKnotSpacingMm: { min: 0.5, max: 10, step: 0.5, defaultValue: 3 },
+    maxConeAngleDevDeg: { min: 5, max: 60, step: 1, defaultValue: 30 },
 } satisfies Record<NumericAutoSupportSettingKey, NumericConstraint>;
 
 export const AUTO_SUPPORT_HARD_RULES = {
@@ -86,6 +110,12 @@ export function createDefaultAutoSupportSettings(): AutoSupportSettings {
         densityFactor: AUTO_SUPPORT_CONSTRAINTS.densityFactor.defaultValue,
         tipInfluenceRadiusMm: AUTO_SUPPORT_CONSTRAINTS.tipInfluenceRadiusMm.defaultValue,
         prioritizeIntersection: false,
+        maxAttachmentsPerTrunk: AUTO_SUPPORT_CONSTRAINTS.maxAttachmentsPerTrunk.defaultValue,
+        maxVerticalAttachmentDistanceMm: AUTO_SUPPORT_CONSTRAINTS.maxVerticalAttachmentDistanceMm.defaultValue,
+        maxHorizontalAttachmentDistanceMm: AUTO_SUPPORT_CONSTRAINTS.maxHorizontalAttachmentDistanceMm.defaultValue,
+        minHorizontalLeafAngleDeg: AUTO_SUPPORT_CONSTRAINTS.minHorizontalLeafAngleDeg.defaultValue,
+        verticalKnotSpacingMm: AUTO_SUPPORT_CONSTRAINTS.verticalKnotSpacingMm.defaultValue,
+        maxConeAngleDevDeg: AUTO_SUPPORT_CONSTRAINTS.maxConeAngleDevDeg.defaultValue,
         debugClusterColorsEnabled: false,
         debugSkipAutoBracing: false,
     };
@@ -105,6 +135,12 @@ export function normalizeAutoSupportSettings(input?: Partial<AutoSupportSettings
         densityFactor: clampNumeric(source.densityFactor, AUTO_SUPPORT_CONSTRAINTS.densityFactor),
         tipInfluenceRadiusMm: clampNumeric(source.tipInfluenceRadiusMm, AUTO_SUPPORT_CONSTRAINTS.tipInfluenceRadiusMm),
         prioritizeIntersection: normalizeBoolean(source.prioritizeIntersection, defaults.prioritizeIntersection),
+        maxAttachmentsPerTrunk: clampNumeric(source.maxAttachmentsPerTrunk, AUTO_SUPPORT_CONSTRAINTS.maxAttachmentsPerTrunk),
+        maxVerticalAttachmentDistanceMm: clampNumeric(source.maxVerticalAttachmentDistanceMm, AUTO_SUPPORT_CONSTRAINTS.maxVerticalAttachmentDistanceMm),
+        maxHorizontalAttachmentDistanceMm: clampNumeric(source.maxHorizontalAttachmentDistanceMm, AUTO_SUPPORT_CONSTRAINTS.maxHorizontalAttachmentDistanceMm),
+        minHorizontalLeafAngleDeg: clampNumeric(source.minHorizontalLeafAngleDeg, AUTO_SUPPORT_CONSTRAINTS.minHorizontalLeafAngleDeg),
+        verticalKnotSpacingMm: clampNumeric(source.verticalKnotSpacingMm, AUTO_SUPPORT_CONSTRAINTS.verticalKnotSpacingMm),
+        maxConeAngleDevDeg: clampNumeric(source.maxConeAngleDevDeg, AUTO_SUPPORT_CONSTRAINTS.maxConeAngleDevDeg),
         debugClusterColorsEnabled: normalizeBoolean(source.debugClusterColorsEnabled, defaults.debugClusterColorsEnabled),
         debugSkipAutoBracing: normalizeBoolean(source.debugSkipAutoBracing, defaults.debugSkipAutoBracing),
     };

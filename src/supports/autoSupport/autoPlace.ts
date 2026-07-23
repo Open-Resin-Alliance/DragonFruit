@@ -239,6 +239,38 @@ function branchCollidesWithSDF(
 }
 
 // ---------------------------------------------------------------------------
+// Attachment capacity
+// ---------------------------------------------------------------------------
+
+/**
+ * Count how many knots (branches + leaves) are attached to a trunk.
+ * Does NOT count brace knots (they use braceSegment: prefix).
+ */
+function countAttachmentsOnTrunk(trunkId: string): number {
+    const snapshot = getSnapshot();
+    const trunk = snapshot.trunks[trunkId];
+    if (!trunk) return 0;
+
+    const segmentIds = new Set(trunk.segments.map(s => s.id));
+    // Also match legacy knots that reference the trunk ID directly.
+    segmentIds.add(trunkId);
+
+    let count = 0;
+    for (const knot of Object.values(snapshot.knots)) {
+        if (segmentIds.has(knot.parentShaftId)) {
+            count++;
+        }
+    }
+    return count;
+}
+
+/** Returns true if the trunk has reached its attachment capacity. */
+function isTrunkAtAttachmentCapacity(trunkId: string, limit: number): boolean {
+    if (limit <= 0) return false;
+    return countAttachmentsOnTrunk(trunkId) >= limit;
+}
+
+// ---------------------------------------------------------------------------
 // Nearby-trunk merge
 // ---------------------------------------------------------------------------
 
@@ -414,13 +446,20 @@ function placeOneCandidate(
                             console.log(LOG_PREFIX,
                                 `Leaf (merge) ${candidate.id}: triangle collision, trying branch...`);
                         } else {
-                            addKnot(parentKnot);
-                            addLeaf(leaf);
-                            const la = (Math.atan2(hDist, vDist) * 180) / Math.PI;
-                            console.log(LOG_PREFIX,
-                                `Leaf (merge) ${candidate.id} → host ${host.trunkId} ` +
-                                `span=${tipSpanMm.toFixed(1)}mm angle=${la.toFixed(0)}° kZ=${knotPos.z.toFixed(1)}`);
-                            return { kind: 'leaf', preset };
+                            const cap = supportSettings.autoSupport?.maxAttachmentsPerTrunk ?? 12;
+                            if (isTrunkAtAttachmentCapacity(host.trunkId, cap)) {
+                                console.log(LOG_PREFIX,
+                                    `Merge skip ${candidate.id}: host ${host.trunkId} at capacity (${cap} attachments)`);
+                                // fall through to standalone trunk
+                            } else {
+                                addKnot(parentKnot);
+                                addLeaf(leaf);
+                                const la = (Math.atan2(hDist, vDist) * 180) / Math.PI;
+                                console.log(LOG_PREFIX,
+                                    `Leaf (merge) ${candidate.id} → host ${host.trunkId} ` +
+                                    `span=${tipSpanMm.toFixed(1)}mm angle=${la.toFixed(0)}° kZ=${knotPos.z.toFixed(1)}`);
+                                return { kind: 'leaf', preset };
+                            }
                         }
                     } catch (_) {}
                 }
@@ -442,13 +481,20 @@ function placeOneCandidate(
                     if (collides) {
                         console.log(LOG_PREFIX, `Branch (merge) ${candidate.id}: collision, falling back`);
                     } else {
-                        addKnot(parentKnot);
-                        addBranch(branch);
-                        const ma = (Math.atan2(hDist2, vDist2) * 180) / Math.PI;
-                        console.log(LOG_PREFIX,
-                            `Branch (merge) ${candidate.id} → host ${host.trunkId} ` +
-                            `span=${tipSpanMm.toFixed(1)}mm angle=${ma.toFixed(0)}° kZ=${knotPos.z.toFixed(1)}`);
-                        return { kind: 'branch', preset };
+                        const cap = supportSettings.autoSupport?.maxAttachmentsPerTrunk ?? 12;
+                        if (isTrunkAtAttachmentCapacity(host.trunkId, cap)) {
+                            console.log(LOG_PREFIX,
+                                `Merge skip ${candidate.id}: host ${host.trunkId} at capacity (${cap} attachments)`);
+                            // fall through to standalone trunk
+                        } else {
+                            addKnot(parentKnot);
+                            addBranch(branch);
+                            const ma = (Math.atan2(hDist2, vDist2) * 180) / Math.PI;
+                            console.log(LOG_PREFIX,
+                                `Branch (merge) ${candidate.id} → host ${host.trunkId} ` +
+                                `span=${tipSpanMm.toFixed(1)}mm angle=${ma.toFixed(0)}° kZ=${knotPos.z.toFixed(1)}`);
+                            return { kind: 'branch', preset };
+                        }
                     }
                 } catch (e) {
                     console.log(LOG_PREFIX,
@@ -528,21 +574,35 @@ function placeOneCandidate(
             console.log(LOG_PREFIX, `Anchor ${candidate.id} Z=${candidate.zHeight.toFixed(1)}mm`);
             return { kind: 'anchor', preset };
 
-        case 'place_branch':
+        case 'place_branch': {
+            const cap = supportSettings.autoSupport?.maxAttachmentsPerTrunk ?? 12;
+            if (isTrunkAtAttachmentCapacity(decision.hostTrunkId, cap)) {
+                console.log(LOG_PREFIX,
+                    `Grid skip ${candidate.id}: host ${decision.hostTrunkId} at capacity (${cap})`);
+                return { kind: 'reject', rejectedReason: 'grid_reject_other', preset };
+            }
             addKnot(decision.knot);
             addBranch(decision.branch);
             console.log(LOG_PREFIX,
                 `Branch ${candidate.id} → host ${decision.hostTrunkId} ` +
                 `grid ${decision.nodeKey}`);
             return { kind: 'branch', preset };
+        }
 
-        case 'place_leaf':
+        case 'place_leaf': {
+            const cap = supportSettings.autoSupport?.maxAttachmentsPerTrunk ?? 12;
+            if (isTrunkAtAttachmentCapacity(decision.hostTrunkId, cap)) {
+                console.log(LOG_PREFIX,
+                    `Grid skip ${candidate.id}: host ${decision.hostTrunkId} at capacity (${cap})`);
+                return { kind: 'reject', rejectedReason: 'grid_reject_other', preset };
+            }
             addKnot(decision.knot);
             addLeaf(decision.leaf);
             console.log(LOG_PREFIX,
                 `Leaf ${candidate.id} → host ${decision.hostTrunkId} ` +
                 `grid ${decision.nodeKey}`);
             return { kind: 'leaf', preset };
+        }
 
         case 'replace_trunk':
             // The old trunk gets removed by the caller (or we accept overwrite).
@@ -960,6 +1020,11 @@ export function runAutoPlace(
                     mesh: leafMesh ?? undefined,
                 });
                 if (sd.error) continue;
+                const fanCap = autoSettings.maxAttachmentsPerTrunk;
+                if (isTrunkAtAttachmentCapacity(sp.trunkId, fanCap)) {
+                    // Trunk full — skip this island for this pass.
+                    continue;
+                }
                 addKnot(parentKnot);
                 addLeaf(leaf);
                 fannedCount++;
@@ -1079,6 +1144,10 @@ export function runAutoPlace(
                         mesh: bm,
                     });
                     if (!sd.error) {
+                        const ohCap = autoSettings.maxAttachmentsPerTrunk;
+                        if (isTrunkAtAttachmentCapacity(tid, ohCap)) {
+                            continue;
+                        }
                         addKnot(parentKnot);
                         addBranch(branch);
                         overhangSupportsPlaced++;
