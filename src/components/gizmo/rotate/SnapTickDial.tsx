@@ -22,6 +22,8 @@ interface SnapTickDialProps {
   opacityScale?: number;
   /** Tier intervals. Defaults to 45/15/5; the settings surface supplies #104's config. */
   config?: SnapTickConfig;
+  /** Ring-local angle of the tick under the cursor, drawn emphasised. */
+  highlightRad?: number | null;
 }
 
 /** Tick length as a fraction of dialTickLength, longest tier first. */
@@ -63,6 +65,7 @@ export function SnapTickDial({
   active,
   opacityScale = 1,
   config = DEFAULT_SNAP_TICK_CONFIG,
+  highlightRad = null,
 }: SnapTickDialProps) {
   const segmentsByTier = useMemo(() => {
     const ticks = getSnapTicks(config);
@@ -79,6 +82,13 @@ export function SnapTickDial({
       return { tier, points };
     });
   }, [config]);
+
+  const highlightPoints = useMemo(() => {
+    if (highlightRad === null) return null;
+    const inner = GIZMO_SIZES.dialRadius;
+    const outer = inner + GIZMO_SIZES.dialTickLength * 1.25;
+    return [polarToLocal(highlightRad, inner), polarToLocal(highlightRad, outer)];
+  }, [highlightRad]);
 
   const opacity = (active ? 0.85 : hovered ? 0.45 : 0) * opacityScale;
   if (opacity <= 0) return null;
@@ -99,6 +109,19 @@ export function SnapTickDial({
             toneMapped={false}
           />
         ) : null,
+      )}
+      {highlightPoints && (
+        // The tick the cursor would land on. With 72 targets on a dial that is
+        // small at default zoom, a click with no aim feedback is a coin toss.
+        <Line
+          points={highlightPoints}
+          color="#ffffff"
+          lineWidth={2.4}
+          transparent
+          opacity={Math.min(1, opacity + 0.35)}
+          depthTest={false}
+          toneMapped={false}
+        />
       )}
     </group>
   );

@@ -5,7 +5,15 @@ import * as THREE from 'three';
 import { ThreeEvent, useThree, useFrame } from '@react-three/fiber';
 import { Line } from '@react-three/drei';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
-import { snapAngle, SNAP_COARSE, SNAP_FINE, SNAP_STORAGE_KEY } from './snapRotation';
+import {
+  snapAngle,
+  SNAP_COARSE,
+  SNAP_FINE,
+  SNAP_STORAGE_KEY,
+  nearestTickRad,
+  shortestAngleDelta,
+  objectAngleForRingAngle,
+} from './snapRotation';
 import { SnapTickDial } from './SnapTickDial';
 import { AngleSpoke } from './AngleSpoke';
 import type { GizmoAxis } from '../types';
@@ -13,6 +21,7 @@ import {
   getCachedConeGeometry,
   getCachedRotationArcGeometry,
   getCachedRotationArcPoints,
+  getCachedRingGeometry,
   getCachedSphereGeometry,
 } from '../gizmoGeometryCache';
 import { usePicking } from '@/components/picking';
@@ -108,6 +117,10 @@ export function GizmoRotation({
   onPointerLeave,
 }: GizmoRotationProps) {
   const [isDragging, setIsDragging] = useState(false);
+  /** Pointer-down screen position on the dial, used to tell a click from a drag. */
+  const dialPointerDownRef = useRef<{ x: number; y: number } | null>(null);
+  /** Ring-local angle of the tick under the cursor, for hover highlighting. */
+  const [hoveredTickRad, setHoveredTickRad] = useState<number | null>(null);
   const positiveAxisMidpointAngle = getPositiveAxisMidpointAngle(axis);
   const handleAngleRef = useRef<number>(positiveAxisMidpointAngle);
   const targetHandleAngleRef = useRef<number>(positiveAxisMidpointAngle);
@@ -125,7 +138,7 @@ export function GizmoRotation({
   const handleRootRef = useRef<THREE.Group>(null);
   const billboardGroupRef = useRef<THREE.Group>(null);
   const pointLightRef = useRef<THREE.PointLight>(null);
-  const { camera, gl } = useThree();
+  const { camera, gl, invalidate } = useThree();
 
   useEffect(() => {
     onDragRef.current = onDrag;
@@ -317,6 +330,71 @@ export function GizmoRotation({
     setIsDragging(true);
   };
 
+  // --- Dial click-to-rotate -------------------------------------------------
+  // A click on a tick rotates to that absolute angle. This is ALWAYS available
+  // and deliberately does not consult SNAP_STORAGE_KEY: that toggle governs
+  // drag snapping only. Ticks being inert unless a mode was first enabled is
+  // what made them read as decoration.
+
+  /** Pointer travel below this is a click; above it the gesture belongs to the camera. */
+  const DIAL_CLICK_SLOP_PX = 4;
+
+  /** Ring-local angle of a pointer hit on the dial band, or null at the centre. */
+  const dialHitAngle = useCallback((e: ThreeEvent<PointerEvent>): number | null => {
+    const local = e.object.worldToLocal(e.point.clone());
+    if (local.x === 0 && local.y === 0) return null;
+    return Math.atan2(local.y, local.x);
+  }, []);
+
+  const handleDialPointerDown = (e: ThreeEvent<PointerEvent>) => {
+    if (!interactionsEnabled || isHidden) return;
+    // Deliberately NOT stopPropagation. A drag that begins on the dial still
+    // belongs to the camera — only a click rotates. Swallowing the gesture here
+    // would make the dial a second, undocumented drag surface.
+    dialPointerDownRef.current = { x: e.clientX, y: e.clientY };
+  };
+
+  const handleDialPointerUp = (e: ThreeEvent<PointerEvent>) => {
+    const start = dialPointerDownRef.current;
+    dialPointerDownRef.current = null;
+    if (!start || !interactionsEnabled || isHidden) return;
+    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > DIAL_CLICK_SLOP_PX) return;
+
+    const hit = dialHitAngle(e);
+    if (hit === null) return;
+
+    const targetObjectAngle = objectAngleForRingAngle(
+      nearestTickRad(hit),
+      axisVisualFlip,
+    );
+    const delta = shortestAngleDelta(currentAngleRad, targetObjectAngle);
+    if (delta === 0) return;
+
+    // Emit the full gesture triad through the existing drag callbacks so a click
+    // produces exactly one undo entry, shaped identically to a drag.
+    if (onDragStart() === false) return;
+    onDrag(delta);
+    onDragEnd();
+  };
+
+  const handleDialPointerMove = (e: ThreeEvent<PointerEvent>) => {
+    if (!interactionsEnabled || isHidden) return;
+    const hit = dialHitAngle(e);
+    const next = hit === null ? null : nearestTickRad(hit);
+    if (next !== hoveredTickRad) {
+      setHoveredTickRad(next);
+      invalidate();
+    }
+  };
+
+  const handleDialPointerLeave = () => {
+    dialPointerDownRef.current = null;
+    if (hoveredTickRad !== null) {
+      setHoveredTickRad(null);
+      invalidate();
+    }
+  };
+
   const handlePointerEnterLocal = (e: ThreeEvent<PointerEvent>) => {
     if (!interactionsEnabled) return;
     e.stopPropagation();
@@ -490,6 +568,19 @@ export function GizmoRotation({
   // (The handleAngle already calculated above is what we need)
 
   const arcGeometry = useMemo(() => getCachedRotationArcGeometry(axis), [axis]);
+  /** One merged pick surface for the whole dial band. 72 separate tick meshes
+   *  would multiply the pick surface count per ring and undo ADR-0002's
+   *  off-loop picking cache; the angle is resolved from the hit point instead. */
+  const dialPickGeometry = useMemo(
+    () =>
+      getCachedRingGeometry(
+        GIZMO_SIZES.dialRadius - GIZMO_SIZES.dialTickLength * 0.6,
+        GIZMO_SIZES.dialRadius + GIZMO_SIZES.dialTickLength * 1.6,
+        72,
+      ),
+    [],
+  );
+
   const pickGeometry = useMemo(
     () => getCachedSphereGeometry(Math.max(0.18, GIZMO_SIZES.ringDiamondRadius * 0.9 * handleScale), 16, 16),
     [handleScale],
@@ -533,11 +624,23 @@ export function GizmoRotation({
           indicator drift apart off-axis. */}
       {!isHidden && !isDimmed && (
         <>
+          {interactionsEnabled && (
+            <mesh
+              geometry={dialPickGeometry}
+              onPointerDown={handleDialPointerDown}
+              onPointerUp={handleDialPointerUp}
+              onPointerMove={handleDialPointerMove}
+              onPointerLeave={handleDialPointerLeave}
+            >
+              <meshBasicMaterial visible={false} side={THREE.DoubleSide} />
+            </mesh>
+          )}
           <SnapTickDial
             color={ringColors.ring}
             hovered={!!effectiveHovered}
             active={ringIsActive}
             opacityScale={opacityScale}
+            highlightRad={hoveredTickRad}
           />
           <AngleSpoke
             color={ringColors.ring}

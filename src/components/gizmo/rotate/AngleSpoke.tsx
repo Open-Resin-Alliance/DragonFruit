@@ -3,7 +3,7 @@
 import React, { useMemo } from 'react';
 import { Line } from '@react-three/drei';
 import { GIZMO_SIZES } from '../constants';
-import { polarToLocal, ringLocalAngle } from './snapRotation';
+import { polarToLocal, spokeRingAngle } from './snapRotation';
 
 interface AngleSpokeProps {
   /** Axis ring colour. */
@@ -43,7 +43,9 @@ export function AngleSpoke({
   opacityScale = 1,
 }: AngleSpokeProps) {
   const points = useMemo(() => {
-    const angle = ringLocalAngle(currentAngleRad, axisVisualFlip);
+    // spokeRingAngle carries the drag path's sign convention, so the spoke
+    // travels the same way the handle does rather than mirroring it.
+    const angle = spokeRingAngle(currentAngleRad, axisVisualFlip);
     return [
       polarToLocal(angle, GIZMO_SIZES.spokeInnerRadius),
       polarToLocal(angle, GIZMO_SIZES.dialRadius),

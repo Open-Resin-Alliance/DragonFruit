@@ -6,6 +6,10 @@ import {
   SNAP_FINE,
   getSnapTicks,
   ringLocalAngle,
+  nearestTickRad,
+  shortestAngleDelta,
+  spokeRingAngle,
+  objectAngleForRingAngle,
   DEFAULT_SNAP_TICK_CONFIG,
   type SnapTickConfig,
 } from "../snapRotation";
@@ -193,6 +197,113 @@ describe("ringLocalAngle", () => {
     assert.ok(
       Math.abs(ringLocalAngle(ringLocalAngle(angle, -1), -1) - angle) < 1e-12,
     );
+  });
+});
+
+const deg = (d: number) => (d * Math.PI) / 180;
+const closeTo = (actual: number, expected: number, tol = 1e-9) =>
+  Math.abs(actual - expected) < tol;
+
+describe("nearestTickRad", () => {
+  it("returns the tick itself when the angle is already on one", () => {
+    assert.ok(closeTo(nearestTickRad(deg(0), DEFAULT_SNAP_TICK_CONFIG), deg(0)));
+    assert.ok(closeTo(nearestTickRad(deg(45), DEFAULT_SNAP_TICK_CONFIG), deg(45)));
+  });
+
+  it("snaps to the nearer neighbour", () => {
+    assert.ok(closeTo(nearestTickRad(deg(2), DEFAULT_SNAP_TICK_CONFIG), deg(0)));
+    assert.ok(closeTo(nearestTickRad(deg(3), DEFAULT_SNAP_TICK_CONFIG), deg(5)));
+    assert.ok(closeTo(nearestTickRad(deg(47), DEFAULT_SNAP_TICK_CONFIG), deg(45)));
+  });
+
+  it("wraps forward past the last tick rather than snapping backwards", () => {
+    // 358 is nearer to 360 (= 0) than to 355.
+    assert.ok(closeTo(nearestTickRad(deg(358), DEFAULT_SNAP_TICK_CONFIG), deg(0)));
+  });
+
+  it("normalises negative angles into one revolution", () => {
+    assert.ok(closeTo(nearestTickRad(deg(-3), DEFAULT_SNAP_TICK_CONFIG), deg(355)));
+    assert.ok(closeTo(nearestTickRad(deg(-2), DEFAULT_SNAP_TICK_CONFIG), deg(0)));
+  });
+
+  it("always lands on a real tick from the same set", () => {
+    const tickDegrees = new Set(
+      getSnapTicks(DEFAULT_SNAP_TICK_CONFIG).map((t) => t.deg),
+    );
+    for (let d = -720; d <= 720; d += 7) {
+      const landed = nearestTickRad(deg(d), DEFAULT_SNAP_TICK_CONFIG);
+      const landedDeg = Math.round((landed * 180) / Math.PI) % 360;
+      assert.ok(
+        tickDegrees.has(landedDeg),
+        `input ${d}deg landed on ${landedDeg}deg, which is not a tick`,
+      );
+    }
+  });
+});
+
+describe("shortestAngleDelta", () => {
+  it("is zero between identical angles", () => {
+    assert.equal(shortestAngleDelta(deg(30), deg(30)), 0);
+  });
+
+  it("takes the short way across the wrap boundary", () => {
+    // 350 -> 10 is +20, not -340.
+    assert.ok(closeTo(shortestAngleDelta(deg(350), deg(10)), deg(20)));
+    assert.ok(closeTo(shortestAngleDelta(deg(10), deg(350)), deg(-20)));
+  });
+
+  it("is signed by direction", () => {
+    assert.ok(shortestAngleDelta(deg(0), deg(90)) > 0);
+    assert.ok(shortestAngleDelta(deg(90), deg(0)) < 0);
+  });
+
+  it("never exceeds half a revolution", () => {
+    for (let a = -360; a <= 360; a += 13) {
+      for (let b = -360; b <= 360; b += 29) {
+        const d = shortestAngleDelta(deg(a), deg(b));
+        assert.ok(
+          Math.abs(d) <= Math.PI + 1e-9,
+          `${a} -> ${b} produced ${d}, longer than half a revolution`,
+        );
+      }
+    }
+  });
+});
+
+describe("spokeRingAngle / objectAngleForRingAngle", () => {
+  it("round-trips an object angle through the ring frame and back", () => {
+    for (const flip of [1, -1]) {
+      for (let d = -350; d <= 350; d += 17) {
+        const object = deg(d);
+        const ring = spokeRingAngle(object, flip);
+        const back = objectAngleForRingAngle(ring, flip);
+        assert.ok(
+          closeTo(back, object, 1e-12),
+          `flip ${flip}, ${d}deg round-tripped to ${(back * 180) / Math.PI}deg`,
+        );
+      }
+    }
+  });
+
+  it("matches the drag path's sign convention", () => {
+    // The drag handler applies visualDelta = objectDelta * axisSign * flip with
+    // axisSign = -1. A positive object rotation must therefore move the spoke
+    // negatively when flip is +1, or the spoke would travel opposite the handle.
+    assert.ok(spokeRingAngle(deg(30), 1) < 0);
+    assert.ok(spokeRingAngle(deg(30), -1) > 0);
+  });
+
+  it("sends a clicked tick to an object angle that lands back on that tick", () => {
+    for (const flip of [1, -1]) {
+      for (const tickDeg of [0, 45, 90, 175, 270, 355]) {
+        const target = objectAngleForRingAngle(deg(tickDeg), flip);
+        const landed = nearestTickRad(spokeRingAngle(target, flip));
+        assert.ok(
+          closeTo(landed, deg(tickDeg), 1e-9),
+          `flip ${flip}: clicking ${tickDeg}deg landed on ${(landed * 180) / Math.PI}deg`,
+        );
+      }
+    }
   });
 });
 

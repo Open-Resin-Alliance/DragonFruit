@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import * as THREE from "three";
 import {
   getSnapTicks,
-  ringLocalAngle,
+  spokeRingAngle,
+  objectAngleForRingAngle,
   polarToLocal,
   ringGroupEuler,
   DEFAULT_SNAP_TICK_CONFIG,
@@ -93,7 +94,7 @@ function buildRing(axis: GizmoAxis, objectAngleRad: number, axisVisualFlip: numb
 
   const spokeTip = new THREE.Object3D();
   const [sx, sy, sz] = polarToLocal(
-    ringLocalAngle(objectAngleRad, axisVisualFlip),
+    spokeRingAngle(objectAngleRad, axisVisualFlip),
     radius,
   );
   spokeTip.position.set(sx, sy, sz);
@@ -111,7 +112,9 @@ describe("dial registration across camera poses", () => {
         for (const elevation of ELEVATIONS_DEG) {
           const camera = makeCamera(azimuth, elevation);
           for (const degree of SAMPLE_DEGREES) {
-            const objectAngle = (degree * Math.PI) / 180;
+            // Derive the object rotation that should put the spoke on this tick,
+            // rather than assuming object degrees and ring degrees coincide.
+            const objectAngle = objectAngleForRingAngle((degree * Math.PI) / 180, 1);
             const { tickByDegree, spokeTip } = buildRing(axis, objectAngle, 1);
             const tick = tickByDegree.get(degree);
             assert.ok(tick, `no tick at ${degree} degrees`);
@@ -135,12 +138,13 @@ describe("dial registration across camera poses", () => {
 
   it("registers under an inverted axis, as HolePunchGizmo uses", () => {
     // HolePunchGizmo passes axisVisualFlip={{ y: -1 }} because displayY = -cutterY.
-    // The object angle is negated, so the spoke must still land on +degree.
+    // The object angle that reaches a given tick is negated relative to the
+    // unflipped case, and the spoke must still land on that tick.
     for (const azimuth of AZIMUTHS_DEG) {
       for (const elevation of ELEVATIONS_DEG) {
         const camera = makeCamera(azimuth, elevation);
         for (const degree of SAMPLE_DEGREES) {
-          const objectAngle = (-degree * Math.PI) / 180;
+          const objectAngle = objectAngleForRingAngle((degree * Math.PI) / 180, -1);
           const { tickByDegree, spokeTip } = buildRing("y", objectAngle, -1);
           const tick = tickByDegree.get(degree);
           assert.ok(tick, `no tick at ${degree} degrees`);

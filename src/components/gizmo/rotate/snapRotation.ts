@@ -120,3 +120,75 @@ export function ringGroupEuler(axis: GizmoAxis): [number, number, number] {
   if (axis === 'y') return [-Math.PI / 2, 0, 0];
   return [0, 0, 0];
 }
+
+const TWO_PI = Math.PI * 2;
+
+/**
+ * Ring-local angle of the tick nearest a given angle.
+ *
+ * Resolves a pointer hit on the dial to the tick it landed on. Quantisation is
+ * done in whole degrees, matching getSnapTicks, so the result is exactly a
+ * member of that tick set rather than a float that merely rounds to one.
+ * Normalised into one revolution, so 358 degrees resolves forward to 0 rather
+ * than backwards to 355.
+ */
+export function nearestTickRad(
+  angleRad: number,
+  config: SnapTickConfig = DEFAULT_SNAP_TICK_CONFIG,
+): number {
+  const { minorDeg } = config;
+  if (!Number.isInteger(minorDeg) || minorDeg <= 0 || 360 % minorDeg !== 0) {
+    throw new Error(
+      `nearestTickRad: minorDeg must be a positive whole divisor of 360, got ${minorDeg}`,
+    );
+  }
+
+  const degrees = (angleRad * 180) / Math.PI;
+  const normalised = ((degrees % 360) + 360) % 360;
+  const snapped = (Math.round(normalised / minorDeg) * minorDeg) % 360;
+  return (snapped * Math.PI) / 180;
+}
+
+/**
+ * Signed delta from one angle to another, taking the short way round.
+ *
+ * A tick click is applied as a delta through the existing drag callbacks, so
+ * clicking 350 degrees while sitting at 10 must rotate -20, not +340.
+ */
+export function shortestAngleDelta(fromRad: number, toRad: number): number {
+  let delta = (toRad - fromRad) % TWO_PI;
+  if (delta > Math.PI) delta -= TWO_PI;
+  if (delta < -Math.PI) delta += TWO_PI;
+  return Object.is(delta, -0) ? 0 : delta;
+}
+
+/**
+ * Sign relating an object-space rotation to its ring-local visual angle.
+ *
+ * The drag path computes `visualDelta = objectDelta * axisSign * axisVisualFlip`
+ * with `axisSign = -1` (see GizmoRotation's global pointermove handler). The
+ * dial spoke has to travel the same way the handle does during a drag, so it
+ * adopts the same sign rather than inventing its own.
+ */
+const RING_VISUAL_AXIS_SIGN = -1;
+
+/** Ring-local angle at which the spoke sits for a given object rotation. */
+export function spokeRingAngle(
+  objectAngleRad: number,
+  axisVisualFlip: number,
+): number {
+  return ringLocalAngle(RING_VISUAL_AXIS_SIGN * objectAngleRad, axisVisualFlip);
+}
+
+/**
+ * Object-space angle that puts the spoke on a given ring-local angle.
+ *
+ * Exact inverse of `spokeRingAngle`, which is what makes clicking a tick land
+ * the spoke on that tick.
+ */
+export function objectAngleForRingAngle(
+  ringAngleRad: number,
+  axisVisualFlip: number,
+): number {
+  return RING_VISUAL_AXIS_SIGN * ringLocalAngle(ringAngleRad, axisVisualFlip);
+}
