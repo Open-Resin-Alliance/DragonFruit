@@ -218,7 +218,7 @@ import { AutoSupportPanel, getAutoSupportBusy, subscribeAutoSupportBusy, autoSup
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { useSupportInteractionManager } from '@/features/supports/useSupportInteractionManager';
 import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
-import { hotkeyStore, useActionActive, isActionActiveSync } from '@/hotkeys/hotkeyStore';
+import { hotkeyStore, useActionActive, isActionActiveSync, isPrimaryModifierPressed } from '@/hotkeys/hotkeyStore';
 import { useDeleteHotkey } from '@/features/delete/useDeleteHotkey';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { useCameraProjectionHotkey } from '@/hotkeys/useCameraProjectionHotkey';
@@ -321,6 +321,7 @@ import { useSceneAutosave, suppressSceneAutosave } from '@/hooks/useSceneAutosav
 import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
 import { MeshRepairReportModal } from '@/components/scene/MeshRepairReportModal';
 import { MeshRepairConfirmModal } from '@/components/scene/MeshRepairConfirmModal';
+import { ManifoldWarningModal } from '@/components/modals/ManifoldWarningModal';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
@@ -491,6 +492,23 @@ export default function Home() {
   const { stage, sproutParentingLockHeld } = useLeafPlacementState();
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
+
+  // Warn when an imported mesh fails the manifold_csg validity check — the same
+  // models shown with the red striped overlay in the viewport. Only a single
+  // warning is shown per import job: as soon as any newly-imported model is
+  // flagged, every currently-flagged model is marked as warned so the rest of
+  // the batch does not pop additional modals.
+  const warnedManifoldModelIdsRef = React.useRef<Set<string>>(new Set());
+  const [showManifoldWarning, setShowManifoldWarning] = React.useState(false);
+  React.useEffect(() => {
+    const flagged = scene.models.filter(
+      (model) => model.geometry?.meshDefects?.nativeRepairReport?.model_is_manifold === false,
+    );
+    const hasUnwarned = flagged.some((model) => !warnedManifoldModelIdsRef.current.has(model.id));
+    if (!hasUnwarned) return;
+    for (const model of flagged) warnedManifoldModelIdsRef.current.add(model.id);
+    setShowManifoldWarning(true);
+  }, [scene.models]);
   const importSceneFile = scene.importSceneFile;
   const importSceneFiles = scene.importSceneFiles;
   const recentOpenedFiles = scene.recentOpenedFiles;
@@ -8555,11 +8573,11 @@ export default function Home() {
 
     const unsubscribe = hotkeyStore.subscribe((state) => {
       const active = state.activeKeys;
-      const isCtrlOrMeta = active.has('ctrl') || active.has('meta') || active.has('control');
-      const isAPressed = active.has('a') && isCtrlOrMeta;
-      const isCPressed = active.has('c') && isCtrlOrMeta;
-      const isVPressed = active.has('v') && isCtrlOrMeta;
-      const isSPressed = active.has('s') && isCtrlOrMeta;
+      const hasPrimaryModifier = isPrimaryModifierPressed(active);
+      const isAPressed = active.has('a') && hasPrimaryModifier;
+      const isCPressed = active.has('c') && hasPrimaryModifier;
+      const isVPressed = active.has('v') && hasPrimaryModifier;
+      const isSPressed = active.has('s') && hasPrimaryModifier;
 
       const isAJustPressed = isAPressed && !wasAPressed;
       const isCJustPressed = isCPressed && !wasCPressed;
@@ -9402,8 +9420,6 @@ export default function Home() {
             hoverColor={scene.hoverColor}
             hoverTintStrength={effectiveHoverTintStrengthForScene}
             selectedTintStrength={effectiveSelectedTintStrengthForScene}
-            crossSectionMode={slicing.crossSectionMode}
-            pxMm={islands.pxMm}
             supportsRef={supportsRef}
             supportDragGroupRef={supportDragGroupRef}
             holdSupportDragDelta={holdSupportDragDeltaUntilSupportSync}
@@ -9591,7 +9607,6 @@ export default function Home() {
             handlePrintingLayerScrubEnd={handlePrintingLayerScrubEnd}
             printingCurrentHeightMm={printingCurrentHeightMm}
             slicingHeightMm={slicing.heightMm}
-            crossSectionMode={slicing.crossSectionMode}
             printingPreviewViewportRef={printingPreviewViewportRef}
             printingPreviewCursor={printingPreviewCursor}
             handlePrintingPreviewWheel={handlePrintingPreviewWheel}
@@ -9858,6 +9873,11 @@ export default function Home() {
         showModifierApplyBlockingOverlay={showModifierApplyBlockingOverlay}
         showUnappliedHolePunchModal={showUnappliedHolePunchModal}
         unappliedHolePunchResolveRef={unappliedHolePunchResolveRef}
+      />
+
+      <ManifoldWarningModal
+        isOpen={showManifoldWarning}
+        onAcknowledge={() => setShowManifoldWarning(false)}
       />
 
       <MeshRepairModals

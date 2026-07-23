@@ -79,7 +79,36 @@ function makeSupportState(): SupportState {
         },
       },
     },
-    twigs: {},
+    twigs: {
+      'twig-a': {
+        id: 'twig-a',
+        modelId: 'model-a',
+        segments: [{
+          id: 'twig-a-seg',
+          diameter: 0.5,
+          bottomJoint: { id: 'twig-a-joint-a', pos: { x: 2, y: 0, z: 10 }, diameter: 0.6 },
+          topJoint: { id: 'twig-a-joint-b', pos: { x: 4, y: 0, z: 10 }, diameter: 0.6 },
+        }],
+        contactDiskA: {
+          id: 'twig-a-disk-a',
+          pos: { x: 1.7, y: 0, z: 10 },
+          surfaceNormal: { x: 1, y: 0, z: 0 },
+          coneAxis: { x: 1, y: 0, z: 0 },
+          diskLengthOverride: 0.3,
+          contactDiameterMm: 0.6,
+          profile: { type: 'disk', diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 },
+        },
+        contactDiskB: {
+          id: 'twig-a-disk-b',
+          pos: { x: 4.3, y: 0, z: 10 },
+          surfaceNormal: { x: -1, y: 0, z: 0 },
+          coneAxis: { x: -1, y: 0, z: 0 },
+          diskLengthOverride: 0.3,
+          contactDiameterMm: 0.6,
+          profile: { type: 'disk', diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 },
+        },
+      },
+    },
     sticks: {},
     braces: {
       'brace-a': {
@@ -248,6 +277,70 @@ test('export cone mesh uses the visible contact-side sphere instead of a socket 
   const sphereMeshes = coneGroup.children.filter((child) => (child as THREE.Mesh).geometry?.type === 'SphereGeometry');
   assert.equal(sphereMeshes.length, 1);
   assert.equal(sphereMeshes[0]?.position.z, 9.5);
+});
+
+test('twig disk tips export with finite geometry (no NaN radius)', () => {
+  // Regression: a twig's ContactDiskProfile has no contactDiameterMm (it lives
+  // on the disk object), so reading the diameter from the profile produced a
+  // NaN radius and the disk tip silently vanished from the STL export.
+  const disk = {
+    pos: { x: 0, y: 0, z: 10 },
+    normal: { x: 0, y: 0, z: -1 },
+    surfaceNormal: { x: 0, y: 0, z: -1 },
+    diskLengthOverride: 0.3,
+    contactDiameterMm: 0.6,
+    profile: { type: 'disk', diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 },
+  };
+
+  const group = SupportGeometryGenerator.generateContactDiskMesh(disk);
+  assert.ok(group.children.length > 0);
+
+  group.traverse((node) => {
+    const geo = (node as THREE.Mesh).geometry;
+    if (!geo) return;
+    const position = geo.getAttribute('position');
+    if (!position) return;
+    for (let i = 0; i < position.count; i += 1) {
+      assert.ok(
+        Number.isFinite(position.getX(i))
+        && Number.isFinite(position.getY(i))
+        && Number.isFinite(position.getZ(i)),
+        'twig disk geometry must not contain NaN vertices',
+      );
+    }
+  });
+});
+
+test('scoped twig export contains disk tip geometry for the requested model', () => {
+  const supportState = makeSupportState();
+  const kickstandState = makeKickstandState();
+  const group = buildScopedSupportGeometryGroup(supportState, kickstandState, ['model-a']);
+
+  const twigGroup = group.children.find((child) => child.name === 'Twig_twig-a');
+  assert.ok(twigGroup, 'expected a Twig_ group in the scoped export');
+
+  // The disk tips are the two CylinderGeometry meshes (shaft) that must survive
+  // to the STL. Before the fix their radius was NaN, so assert both the tip
+  // cylinders exist and that no vertex anywhere in the twig is NaN.
+  let diskShaftCylinders = 0;
+  twigGroup!.traverse((node) => {
+    const geo = (node as THREE.Mesh).geometry;
+    if (!geo) return;
+    if (geo.type === 'CylinderGeometry') diskShaftCylinders += 1;
+    const position = geo.getAttribute('position');
+    if (!position) return;
+    for (let i = 0; i < position.count; i += 1) {
+      assert.ok(
+        Number.isFinite(position.getX(i))
+        && Number.isFinite(position.getY(i))
+        && Number.isFinite(position.getZ(i)),
+        'twig export geometry must not contain NaN vertices',
+      );
+    }
+  });
+
+  // One shaft cylinder + two disk-tip cylinders (disk A and disk B).
+  assert.ok(diskShaftCylinders >= 3, `expected >= 3 cylinders (shaft + 2 disk tips), got ${diskShaftCylinders}`);
 });
 
 test('kickstand export does not add a host-knot sphere affordance', () => {

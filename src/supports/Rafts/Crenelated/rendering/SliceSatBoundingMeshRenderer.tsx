@@ -44,14 +44,6 @@ type TriangleSliceProxy = {
   maxZ: number;
 };
 
-function pushUniquePoint(points: THREE.Vector2[], point: THREE.Vector2, eps: number) {
-  const epsSq = eps * eps;
-  for (const existing of points) {
-    if (existing.distanceToSquared(point) <= epsSq) return;
-  }
-  points.push(point);
-}
-
 function pushUniquePointHashed(
   points: THREE.Vector2[],
   keys: Set<string>,

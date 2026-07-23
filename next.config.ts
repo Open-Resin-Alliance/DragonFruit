@@ -28,6 +28,12 @@ const gitDirty = gitCommit && git("git status --porcelain") !== "" ? "-dirty" : 
 const gitBranch = git("git rev-parse --abbrev-ref HEAD").replace(/^HEAD$/, "");
 const gitRef = git("git describe --tags --exact-match") || gitBranch;
 
+// OS/arch of the build machine, same values scripts/tauri-build.mjs uses to
+// resolve the Rust target triple — lets a bug report tell binaries built for
+// different platforms apart even when version and git commit match.
+const buildOs = process.platform;
+const buildArch = process.arch;
+
 const nextConfig: NextConfig = {
   turbopack: {},
   experimental: {
@@ -40,6 +46,8 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_BUILD_CHANNEL: buildChannel,
     NEXT_PUBLIC_GIT_COMMIT: gitCommit ? `${gitCommit}${gitDirty}` : "",
     NEXT_PUBLIC_GIT_REF: gitRef,
+    NEXT_PUBLIC_BUILD_OS: buildOs,
+    NEXT_PUBLIC_BUILD_ARCH: buildArch,
   },
   reactCompiler: true,
   allowedDevOrigins: ['127.0.0.1', '::1'],

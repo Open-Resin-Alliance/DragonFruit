@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { redo, undo } from '@/history/historyStore';
-import { hotkeyStore } from './hotkeyStore';
+import { hotkeyStore, isPrimaryModifierPressed } from './hotkeyStore';
 
 export function useUndoRedoHotkeys({ disabled = false }: { disabled?: boolean } = {}) {
   useEffect(() => {
@@ -11,7 +11,7 @@ export function useUndoRedoHotkeys({ disabled = false }: { disabled?: boolean } 
 
     const unsubscribe = hotkeyStore.subscribe((state) => {
       const active = state.activeKeys;
-      const hasCtrl = active.has('ctrl') || active.has('meta') || active.has('control');
+      const hasPrimaryModifier = isPrimaryModifierPressed(active);
       const hasShift = active.has('shift');
       const hasZ = active.has('z');
       const hasY = active.has('y');
@@ -19,7 +19,7 @@ export function useUndoRedoHotkeys({ disabled = false }: { disabled?: boolean } 
       const isZJustPressed = hasZ && !wasZPressed;
       const isYJustPressed = hasY && !wasYPressed;
 
-      if (hasCtrl) {
+      if (hasPrimaryModifier) {
         if (isYJustPressed) {
           redo();
         } else if (isZJustPressed) {

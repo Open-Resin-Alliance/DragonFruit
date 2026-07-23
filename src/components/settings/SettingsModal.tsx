@@ -134,9 +134,16 @@ const DRAGONFRUIT_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? '0.0.0';
 const DRAGONFRUIT_BUILD_CHANNEL = (process.env.NEXT_PUBLIC_BUILD_CHANNEL ?? 'mainline').trim().toLowerCase();
 const DRAGONFRUIT_GIT_COMMIT = process.env.NEXT_PUBLIC_GIT_COMMIT ?? '';
 const DRAGONFRUIT_GIT_REF = process.env.NEXT_PUBLIC_GIT_REF ?? '';
-// e.g. "dev @ 62e80c79b" — identifies the exact build behind a version number.
+const BUILD_OS_LABELS: Record<string, string> = { darwin: 'macOS', win32: 'Windows', linux: 'Linux' };
+const DRAGONFRUIT_BUILD_OS = process.env.NEXT_PUBLIC_BUILD_OS ?? '';
+const DRAGONFRUIT_BUILD_ARCH = process.env.NEXT_PUBLIC_BUILD_ARCH ?? '';
+// e.g. "macOS/arm64" — platform the binary was built for.
+const DRAGONFRUIT_BUILD_PLATFORM = DRAGONFRUIT_BUILD_OS
+  ? `${BUILD_OS_LABELS[DRAGONFRUIT_BUILD_OS] ?? DRAGONFRUIT_BUILD_OS}${DRAGONFRUIT_BUILD_ARCH ? `/${DRAGONFRUIT_BUILD_ARCH}` : ''}`
+  : '';
+// e.g. "dev @ 62e80c79b · macOS/arm64" — identifies the exact build behind a version number.
 const DRAGONFRUIT_GIT_BUILD_LABEL = DRAGONFRUIT_GIT_COMMIT
-  ? `${DRAGONFRUIT_GIT_REF ? `${DRAGONFRUIT_GIT_REF} @ ` : ''}${DRAGONFRUIT_GIT_COMMIT}`
+  ? `${DRAGONFRUIT_GIT_REF ? `${DRAGONFRUIT_GIT_REF} @ ` : ''}${DRAGONFRUIT_GIT_COMMIT}${DRAGONFRUIT_BUILD_PLATFORM ? ` · ${DRAGONFRUIT_BUILD_PLATFORM}` : ''}`
   : '';
 const ORA_LOGO_DARK_URL = '/dragonfruit_assets/branding/open_resin_alliance_logo_darkmode.png';
 const DRAGONFRUIT_REPO_URL = 'https://github.com/Open-Resin-Alliance/DragonFruit';

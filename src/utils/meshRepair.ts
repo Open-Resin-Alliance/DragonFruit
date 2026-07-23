@@ -57,6 +57,14 @@ export interface MeshHealthReport {
   /** When present, the first N triangles in the repaired mesh are model body;
    *  the remainder are support geometry. Used to bake per-triangle vertex colors. */
   model_triangle_count?: number | null;
+  /** Result of the final manifold_csg status check on the model section, run at
+   *  the end of the native repair and classify routines. `false` means the CSG
+   *  backend reported some non-manifold status (open mesh, non-finite vertices,
+   *  out-of-bounds indices, etc.) and the model should render red;
+   *  `null`/undefined means the check did not run (manifold backend disabled). */
+  model_is_manifold?: boolean | null;
+  /** Specific manifold_csg status string when `model_is_manifold` is false. */
+  model_manifold_status?: string | null;
   residual_issues: string[];
   fully_repaired: boolean;
   total_ms: number;
@@ -120,6 +128,8 @@ interface RawMeshHealthReport extends UnknownRecord {
   likely_support_geometry?: unknown;
   likelySupportGeometry?: unknown;
   model_triangle_count?: unknown;
+  model_is_manifold?: unknown;
+  model_manifold_status?: unknown;
   residual_issues?: unknown;
   fully_repaired?: unknown;
   total_ms?: unknown;
@@ -207,6 +217,8 @@ function normalizeMeshHealthReport(input: unknown): MeshHealthReport {
     model_triangle_count: typeof raw.model_triangle_count === 'number' && raw.model_triangle_count > 0
       ? raw.model_triangle_count
       : null,
+    model_is_manifold: typeof raw.model_is_manifold === 'boolean' ? raw.model_is_manifold : null,
+    model_manifold_status: typeof raw.model_manifold_status === 'string' ? raw.model_manifold_status : null,
     residual_issues: asStringArray(raw.residual_issues),
     fully_repaired: asBoolean(raw.fully_repaired),
     total_ms: asNumber(raw.total_ms),

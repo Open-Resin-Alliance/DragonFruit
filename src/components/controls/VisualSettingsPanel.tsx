@@ -10,10 +10,8 @@ type VisualSettingsPanelProps = {
   onLayerIndexChange: (value: number) => void;
   onScrubStart?: () => void;
   onScrubEnd?: () => void;
-  onCrossSectionModeChange?: (mode: 'smooth' | 'rasterized') => void;
   currentHeightMm?: number;
   maxHeightMm?: number;
-  crossSectionMode: 'smooth' | 'rasterized';
   lowerLayerIndex?: number;
   onLowerLayerIndexChange?: (value: number) => void;
   lowerCurrentHeightMm?: number;
@@ -28,10 +26,8 @@ export function VisualSettingsPanel({
   onLayerIndexChange,
   onScrubStart,
   onScrubEnd,
-  onCrossSectionModeChange,
   currentHeightMm,
   maxHeightMm,
-  crossSectionMode,
   lowerLayerIndex,
   onLowerLayerIndexChange,
   lowerCurrentHeightMm,
@@ -55,15 +51,12 @@ export function VisualSettingsPanel({
             onChange={handleLayerChange}
             onScrubStart={onScrubStart}
             onScrubEnd={onScrubEnd}
-            onCrossSectionModeChange={onCrossSectionModeChange}
             currentHeightMm={currentHeightMm}
             maxHeightMm={maxHeightMm}
             showValue={true}
-            crossSectionMode={crossSectionMode}
             lowerValue={lowerLayerIndex}
             onLowerChange={onLowerLayerIndexChange}
             lowerCurrentHeightMm={lowerCurrentHeightMm}
-            showModeIndicator={false}
             crossSectionEnabled={crossSectionEnabled}
             onToggleCrossSection={onToggleCrossSection}
             layerHeightMm={layerHeightMm}
