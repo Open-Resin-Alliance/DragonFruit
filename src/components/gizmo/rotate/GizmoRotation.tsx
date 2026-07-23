@@ -6,6 +6,8 @@ import { ThreeEvent, useThree, useFrame } from '@react-three/fiber';
 import { Line } from '@react-three/drei';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
 import { snapAngle, SNAP_COARSE, SNAP_FINE, SNAP_STORAGE_KEY } from './snapRotation';
+import { SnapTickDial } from './SnapTickDial';
+import { AngleSpoke } from './AngleSpoke';
 import type { GizmoAxis } from '../types';
 import {
   getCachedConeGeometry,
@@ -447,6 +449,12 @@ export function GizmoRotation({
 
   const baseOpacity = isHidden ? 0 : isDimmed ? 0.15 : ringIsActive ? 0.95 : 0.72;
   const opacity = baseOpacity * opacityScale;
+  // The dial fades in on hover and is strongest during a drag. While it shows,
+  // damp the arc gradient so the ring carries one dominant read rather than
+  // four competing layers — the reported problem was that the ring is already
+  // hard to read, so the dial has to displace something, not just pile on.
+  const dialVisible = !isHidden && !isDimmed && (effectiveHovered || ringIsActive);
+  const arcOpacity = dialVisible ? opacity * 0.4 : opacity;
   const dimmedColor = '#cccccc'; // Light grey for dimmed state
   const diamondPrimaryColor = isDimmed
     ? dimmedColor
@@ -519,14 +527,37 @@ export function GizmoRotation({
         depthTest={false}
       />
       
+      {/* Protractor dial and true-angle spoke. Mounted in the ring's local frame,
+          NOT inside the camera-following arc group below — pairing fixed angular
+          positions with a camera-following frame is what made ticks and the
+          indicator drift apart off-axis. */}
+      {!isHidden && !isDimmed && (
+        <>
+          <SnapTickDial
+            color={ringColors.ring}
+            hovered={!!effectiveHovered}
+            active={ringIsActive}
+            opacityScale={opacityScale}
+          />
+          <AngleSpoke
+            color={ringColors.ring}
+            currentAngleRad={currentAngleRad}
+            axisVisualFlip={axisVisualFlip}
+            hovered={!!effectiveHovered}
+            active={ringIsActive}
+            opacityScale={opacityScale}
+          />
+        </>
+      )}
+
       {/* Rotating group to keep colored arc facing camera - uses same angle as handle */}
       <group ref={rotatingArcRef}>
         {/* Front arc with gradient - pure color at center, lighter at ends */}
         <mesh geometry={arcGeometry} scale={ringIsActive ? 1.02 : 1.0}>
-          <meshBasicMaterial 
+          <meshBasicMaterial
             vertexColors={!isDimmed}
             color={isDimmed ? dimmedColor : ringColor}
-            opacity={opacity}
+            opacity={arcOpacity}
             transparent
             depthTest={false} 
             toneMapped={false} 
@@ -538,7 +569,7 @@ export function GizmoRotation({
           color={isDimmed ? dimmedColor : ringColor}
           lineWidth={0.92}
           transparent
-          opacity={Math.max(0, opacity * 0.38)}
+          opacity={Math.max(0, arcOpacity * 0.38)}
           depthTest={false}
         />
 
