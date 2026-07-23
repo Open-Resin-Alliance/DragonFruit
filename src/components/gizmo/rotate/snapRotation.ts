@@ -84,5 +84,9 @@ export function ringLocalAngle(
   objectAngleRad: number,
   axisVisualFlip: number,
 ): number {
-  return axisVisualFlip < 0 ? -objectAngleRad : objectAngleRad;
+  const flipped = axisVisualFlip < 0 ? -objectAngleRad : objectAngleRad;
+  // Negating 0 yields -0, which is not Object.is-equal to 0. That would surface
+  // later as a baffling mismatch in a Map key or a strict assertion, so collapse
+  // it here rather than making every caller defend against it.
+  return Object.is(flipped, -0) ? 0 : flipped;
 }

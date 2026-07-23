@@ -136,6 +136,21 @@ describe("getSnapTicks", () => {
     assert.equal(byDeg.get(45), undefined, "45 is not a multiple of 10");
   });
 
+  it("treats a zero major interval as that tier being disabled", () => {
+    const ticks = getSnapTicks({ majorDeg: 0, mediumDeg: 15, minorDeg: 5 });
+    assert.equal(ticks.length, 72);
+    assert.equal(ticks.filter((t) => t.tier === "major").length, 0);
+    // The positions that would have been major fall back to medium.
+    assert.equal(ticks.find((t) => t.deg === 45)?.tier, "medium");
+  });
+
+  it("treats a zero medium interval as that tier being disabled", () => {
+    const ticks = getSnapTicks({ majorDeg: 45, mediumDeg: 0, minorDeg: 5 });
+    assert.equal(ticks.filter((t) => t.tier === "medium").length, 0);
+    assert.equal(ticks.find((t) => t.deg === 45)?.tier, "major");
+    assert.equal(ticks.find((t) => t.deg === 15)?.tier, "minor");
+  });
+
   it("rejects a non-positive minor increment rather than looping forever", () => {
     assert.throws(() =>
       getSnapTicks({ majorDeg: 45, mediumDeg: 15, minorDeg: 0 }),
@@ -165,6 +180,12 @@ describe("ringLocalAngle", () => {
     // Without this the dial mirrors and clicking +45 rotates -45.
     assert.equal(ringLocalAngle(Math.PI / 4, -1), -Math.PI / 4);
     assert.equal(ringLocalAngle(-Math.PI / 3, -1), Math.PI / 3);
+  });
+
+  it("collapses negative zero so a flipped 0 stays Object.is-equal to 0", () => {
+    // -0 would not compare equal under Object.is, which node:assert/strict uses.
+    assert.equal(ringLocalAngle(0, -1), 0);
+    assert.ok(!Object.is(ringLocalAngle(0, -1), -0));
   });
 
   it("round-trips through a flip back to the original angle", () => {
