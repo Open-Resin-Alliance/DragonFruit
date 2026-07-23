@@ -95,9 +95,15 @@ and prerelease identifier, so the tag doesn't need to encode it separately.
 ### Regular dev release
 
 ```
-# on dev, version already odd (e.g. currently 0.1.9)
-bump package.json / tauri.conf.json / Cargo.toml → 0.1.10
-git commit -m "chore: release 0.1.10"
+# on dev, MINOR version already odd (e.g. currently 0.1.9)
+# Thanks to scripts/sync-app-version.mjs, this bumps the version in:
+#  package-lock.json, package.json, src-tauri/Cargo.lock,
+#  src-tauri/Cargo.toml and src-tauri/tauri.conf.json
+npm version 0.1.10 --no-git-tag-version
+# Generate the bitmap for the NSIS installer.
+./scripts/gen_nsis_images.py
+
+git commit -a -m "chore: release 0.1.10"
 git push origin dev
 ```
 
@@ -115,7 +121,8 @@ stabilizes what's already there.
 git checkout main
 git merge --ff-only v0.1.11        # or whatever the last dev tag was
 # bump version → 0.2.0-rc.1
-git commit -m "chore: release 0.2.0-rc.1"
+npm version 0.2.0-rc.1 --no-git-tag-version
+git commit -a -m "chore: release 0.2.0-rc.1"
 git push origin main
 ```
 
@@ -126,7 +133,8 @@ When satisfied:
 
 ```
 # bump version → 0.2.0 (drop the -rc suffix)
-git commit -m "chore: release 0.2.0"
+npm version 0.2.0 --no-git-tag-version
+git commit -a -m "chore: release 0.2.0"
 git push origin main
 ```
 
