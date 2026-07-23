@@ -286,7 +286,12 @@ export class SupportGeometryGenerator {
     const pos = coneData.pos;
     const surfaceNormal = coneData.surfaceNormal || coneData.normal; // Fallback to cone normal
     const coneAxis = coneData.normal;
-    const contactDiameterMm = profile.contactDiameterMm;
+    // Twig disks carry contactDiameterMm on the disk object; cone profiles
+    // (SupportTipProfile) carry it inside the profile. Prefer the object-level
+    // value so twig disks — whose ContactDiskProfile has no contactDiameterMm —
+    // don't build a NaN-radius cylinder/sphere that silently drops the tip from
+    // the STL export.
+    const contactDiameterMm = coneData.contactDiameterMm ?? profile.contactDiameterMm;
     const overrideThickness = coneData.diskLengthOverride;
     
     // Calculate geometry based on angle between Surface Normal and Cone Axis

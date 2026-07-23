@@ -299,6 +299,7 @@ function buildTwigGroup(twig: Twig, modelId: string | null | undefined): THREE.G
     surfaceNormal: twig.contactDiskA.surfaceNormal,
     diskLengthOverride: twig.contactDiskA.diskLengthOverride,
     profile: twig.contactDiskA.profile,
+    contactDiameterMm: twig.contactDiskA.contactDiameterMm,
   });
   const diskB = SupportGeometryGenerator.generateContactDiskMesh({
     pos: twig.contactDiskB.pos,
@@ -306,6 +307,7 @@ function buildTwigGroup(twig: Twig, modelId: string | null | undefined): THREE.G
     surfaceNormal: twig.contactDiskB.surfaceNormal,
     diskLengthOverride: twig.contactDiskB.diskLengthOverride,
     profile: twig.contactDiskB.profile,
+    contactDiameterMm: twig.contactDiskB.contactDiameterMm,
   });
   if (diskA.children.length > 0) group.add(diskA);
   if (diskB.children.length > 0) group.add(diskB);
