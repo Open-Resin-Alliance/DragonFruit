@@ -14,8 +14,9 @@ export function generateCandidates(
     if (!islands || islands.length === 0) return [];
 
     // Filter
+    // Note: grounded/plate-contact filtering is handled upstream by the
+    // Islands panel's Plate toggle — filteredIslands already reflects it.
     const eligible = islands.filter(island => {
-        if (island.grounded === true) return false;
         // Minima islands don't have area — they represent sharp geometric
         // features that need support regardless of size.
         const isMinima = island.source === 'minima' && island.class === 'minimaOnly';

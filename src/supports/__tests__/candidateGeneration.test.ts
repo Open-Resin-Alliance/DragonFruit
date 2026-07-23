@@ -52,7 +52,7 @@ test('generateCandidates does not filter by supported flag (handled by filterAlr
     assert.equal(candidates.length, 3);
 });
 
-test('generateCandidates filters grounded islands', () => {
+test('generateCandidates does not filter grounded islands (handled upstream by Plate toggle)', () => {
     const islands = [
         makeIsland({ id: 'a' }),
         makeIsland({ id: 'b', grounded: true }),
@@ -61,11 +61,9 @@ test('generateCandidates filters grounded islands', () => {
     const settings = createDefaultAutoSupportSettings();
     const candidates = generateCandidates(islands, settings);
 
-    assert.equal(candidates.length, 2);
-    const ids = candidates.map((c) => c.id);
-    assert.ok(ids.includes('a'));
-    assert.ok(ids.includes('c'));
-    assert.ok(!ids.includes('b'));
+    // Grounded filtering is the caller's responsibility — applyFilter()
+    // in the Islands panel already respects the Plate toggle.
+    assert.equal(candidates.length, 3);
 });
 
 test('generateCandidates filters by minIslandAreaMm2', () => {
