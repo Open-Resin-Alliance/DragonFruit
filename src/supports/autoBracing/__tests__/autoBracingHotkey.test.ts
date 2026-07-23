@@ -65,7 +65,7 @@ test('auto bracing ignores presses outside its visible settings context', () => 
     }), false, 'a modal must suppress actions on the obscured Bracing page');
 });
 
-test('the Q shortcut preserves the existing Q bindings', () => {
+test('G activates auto bracing without taking over the existing B or Q bindings', () => {
     const originalState = hotkeyStore.getState();
 
     try {
@@ -73,9 +73,23 @@ test('the Q shortcut preserves the existing Q bindings', () => {
             activeKeys: new Set<string>(),
             config: DEFAULT_KEYBINDINGS,
         });
-        hotkeyStore.getState().pressKey('q');
+        hotkeyStore.getState().pressKey('g');
 
         assert.equal(isActionActiveSync('SUPPORTS', 'AUTO_BRACING'), true);
+        assert.equal(isActionActiveSync('SUPPORTS', 'FORCE_PLACE_SUPPORT'), false);
+        assert.equal(isActionActiveSync('CANVAS', 'TOOL_SELECT'), false);
+
+        hotkeyStore.getState().releaseKey('g');
+        hotkeyStore.getState().pressKey('b');
+
+        assert.equal(isActionActiveSync('SUPPORTS', 'AUTO_BRACING'), false);
+        assert.equal(isActionActiveSync('SUPPORTS', 'FORCE_PLACE_SUPPORT'), false);
+        assert.equal(isActionActiveSync('CANVAS', 'TOOL_SELECT'), false);
+
+        hotkeyStore.getState().releaseKey('b');
+        hotkeyStore.getState().pressKey('q');
+
+        assert.equal(isActionActiveSync('SUPPORTS', 'AUTO_BRACING'), false);
         assert.equal(isActionActiveSync('SUPPORTS', 'FORCE_PLACE_SUPPORT'), true);
         assert.equal(isActionActiveSync('CANVAS', 'TOOL_SELECT'), true);
     } finally {

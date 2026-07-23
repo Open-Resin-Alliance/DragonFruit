@@ -68,8 +68,8 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             description: 'Hold to force placing support'
         },
         AUTO_BRACING: {
-            key: 'q',
-            description: 'Run auto bracing while the Bracing settings page is open'
+            key: 'g',
+            description: 'Generate auto bracing while the Bracing settings page is open'
         },
         SPROUTED_PARENTING_LOCK: {
             key: 'w',
