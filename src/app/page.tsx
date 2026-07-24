@@ -294,14 +294,31 @@ import {
   getSavedUvToolsSettings,
   resolveUvToolsExecutablePath,
 } from '@/components/settings/uvToolsPreferences';
-import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, toggleSegmentCurve, transformSupportsForModel, updateTrunk, updateBranch, updateTwig, updateStick } from '@/supports/state';
+import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, toggleSegmentCurve, transformSupportsForModel, updateTrunk, updateBranch, updateTwig, updateStick, updateKnot } from '@/supports/state';
 import {
   getKickstandSnapshot,
   subscribeToKickstandStore,
 } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { bracePlacementStore } from '@/supports/SupportTypes/Brace/bracePlacementState';
 import { splitShaft, splitBranchShaft, splitTwigShaft, splitStickShaft } from '@/supports/SupportPrimitives/Joint/jointUtils';
+import type { KnotSplitRemap } from '@/supports/SupportPrimitives/Knot/knotUtils';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '@/supports/history/supportEditHistory';
+
+/**
+ * Apply knot re-anchor patches from a segment split BEFORE the host update runs,
+ * so attached branches/leaves keep their world position when a joint is inserted
+ * (issue #204). Mirror of the helper in useJointCreation for the context-menu
+ * "Add joint" path.
+ */
+function applyJointSplitKnotRemaps(remaps: KnotSplitRemap[]) {
+    if (remaps.length === 0) return;
+    const knots = getSupportSnapshot().knots;
+    for (const remap of remaps) {
+        const knot = knots[remap.knotId];
+        if (!knot) continue;
+        updateKnot({ ...knot, parentShaftId: remap.parentShaftId, t: remap.t });
+    }
+}
 import { getRaftSettings, subscribeToRaftStore } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
@@ -5500,7 +5517,8 @@ export default function Home() {
               const projected = segment.type === 'bezier'
                 ? projectBezierSplitPoint(start, segment.controlPoint1, segment.controlPoint2, end, splitTargetPoint)
                 : projectSplitPoint(start, end, splitTargetPoint);
-              const updated = splitShaft(trunk, segmentId, projected.point, projected.t, root);
+              const { trunk: updated, knotRemaps } = splitShaft(trunk, segmentId, projected.point, projected.t, root, state.knots);
+              applyJointSplitKnotRemaps(knotRemaps);
               updateTrunk(updated);
               pushSupportEditHistory('Create trunk joint', beforeSnapshot, captureSupportEditSnapshot());
             }
@@ -5525,7 +5543,8 @@ export default function Home() {
               const projected = segment.type === 'bezier'
                 ? projectBezierSplitPoint(start, segment.controlPoint1, segment.controlPoint2, end, splitTargetPoint)
                 : projectSplitPoint(start, end, splitTargetPoint);
-              const updated = splitBranchShaft(branch, segmentId, projected.point, projected.t, parentKnot);
+              const { branch: updated, knotRemaps } = splitBranchShaft(branch, segmentId, projected.point, projected.t, parentKnot, state.knots);
+              applyJointSplitKnotRemaps(knotRemaps);
               updateBranch(updated);
               pushSupportEditHistory('Create branch joint', beforeSnapshot, captureSupportEditSnapshot());
             }
@@ -5547,7 +5566,8 @@ export default function Home() {
               const projected = segment.type === 'bezier'
                 ? projectBezierSplitPoint(start, segment.controlPoint1, segment.controlPoint2, end, splitTargetPoint)
                 : projectSplitPoint(start, end, splitTargetPoint);
-              const updated = splitTwigShaft(twig, segmentId, projected.point, projected.t);
+              const { twig: updated, knotRemaps } = splitTwigShaft(twig, segmentId, projected.point, projected.t, state.knots);
+              applyJointSplitKnotRemaps(knotRemaps);
               updateTwig(updated);
               pushSupportEditHistory('Create twig joint', beforeSnapshot, captureSupportEditSnapshot());
             }
@@ -5569,7 +5589,8 @@ export default function Home() {
               const projected = segment.type === 'bezier'
                 ? projectBezierSplitPoint(start, segment.controlPoint1, segment.controlPoint2, end, splitTargetPoint)
                 : projectSplitPoint(start, end, splitTargetPoint);
-              const updated = splitStickShaft(stick, segmentId, projected.point, projected.t);
+              const { stick: updated, knotRemaps } = splitStickShaft(stick, segmentId, projected.point, projected.t, state.knots);
+              applyJointSplitKnotRemaps(knotRemaps);
               updateStick(updated);
               pushSupportEditHistory('Create stick joint', beforeSnapshot, captureSupportEditSnapshot());
             }

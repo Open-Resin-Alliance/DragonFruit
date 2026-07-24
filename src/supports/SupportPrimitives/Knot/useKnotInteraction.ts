@@ -6,7 +6,7 @@ import { getBranches, getKnotById, getLeaves, getRootById, getTrunks, getTwigs, 
 import { Branch, Brace, Knot, Roots, Trunk, Twig, Stick, Vec3 } from '../../types';
 import { getKickstandSnapshot } from '../../SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
-import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints, projectOntoSegment } from './knotUtils';
+import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints, projectOntoSegment, shouldStayOnCurrentSegment } from './knotUtils';
 import { getSettings } from '../../Settings';
 import { solveKnotConstraint } from '../../PlacementLogic/JointConstraintSolver';
 import { ElasticChainInitialState, ElasticChainResult, solveElasticChain } from '../../PlacementLogic/ElasticChainSolver';
@@ -1079,12 +1079,21 @@ export function useKnotInteraction(enabled: boolean = true) {
                     }
                 }
 
-                // Prefer staying on the current segment if distances are extremely close (reduce flicker at joints)
+                // Prefer staying on the current segment when distances are extremely
+                // close, to reduce flicker mid-segment. This bias is applied ONLY while
+                // the projection is interior to the current segment. Right at a joint the
+                // current segment's closest point saturates at its shared endpoint, so a
+                // blanket bias there would pin the knot to the joint and refuse to hand
+                // off to the neighbour until it won by >5% — that is the "knot hangs on
+                // the joint" bug. At the ends we drop the bias and let closest-wins move
+                // the knot across the joint as soon as the neighbour is genuinely closer.
+                const CURRENT_SEGMENT_STICKINESS = 1.05;
+                const INTERIOR_EPS = 1e-3; // t within this of 0/1 counts as "at the joint end"
                 const current = candidates.find(c => c.segmentId === host.segmentId);
                 if (current) {
                     if (current.bezier) {
                         const proj = projectOntoBezierCurve(raycaster.ray, current.start, current.end, current.bezier.control1, current.bezier.control2, BEZIER_PROJECTION_STEPS);
-                        if (proj.distSq <= bestDistSq * 1.05) {
+                        if (shouldStayOnCurrentSegment(proj.t, proj.distSq, bestDistSq, CURRENT_SEGMENT_STICKINESS, INTERIOR_EPS)) {
                             bestSegmentId = current.segmentId;
                             bestDiameter = current.diameter;
                             bestPoint = proj.point;
@@ -1095,7 +1104,7 @@ export function useKnotInteraction(enabled: boolean = true) {
                         const pointOnRay = new THREE.Vector3();
                         const pointOnSeg = new THREE.Vector3();
                         const currentDistSq = raycaster.ray.distanceSqToSegment(current.start, current.end, pointOnRay, pointOnSeg);
-                        if (currentDistSq <= bestDistSq * 1.05) {
+                        if (shouldStayOnCurrentSegment(pr.t, currentDistSq, bestDistSq, CURRENT_SEGMENT_STICKINESS, INTERIOR_EPS)) {
                             bestSegmentId = current.segmentId;
                             bestDiameter = current.diameter;
                             bestPoint = pr.point;

@@ -434,7 +434,9 @@ export function computeAndApplyTrunkDiameterProfile(
         const splitPoint = knot.pos;
         const segIdToSplit = seg.id;
 
-        const trunkAfterSplit = splitShaft(nextTrunk, segIdToSplit, splitPoint, splitT, root);
+        // This caller performs its own knot rehosting below, so it does not pass
+        // knots into splitShaft (no remaps are produced) and only consumes the trunk.
+        const { trunk: trunkAfterSplit } = splitShaft(nextTrunk, segIdToSplit, splitPoint, splitT, root);
         const bottomSegIndex = trunkAfterSplit.segments.findIndex((s) => s.id === segIdToSplit);
         if (bottomSegIndex === -1) {
             nextTrunk = trunkAfterSplit;
