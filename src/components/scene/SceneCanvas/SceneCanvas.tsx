@@ -364,6 +364,7 @@ export function SceneCanvas({
   onActiveModelChange,
   onMarqueeSelectionChange,
   trunkPlacementPreview,
+  autoSupportPreviews,
   branchPlacementPreview,
   leafPlacementPreview,
   bracePlacementPreview,
@@ -502,6 +503,7 @@ export function SceneCanvas({
   onActiveModelChange?: (id: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => void;
   onMarqueeSelectionChange?: (ids: string[]) => void;
   trunkPlacementPreview?: SupportData | null;
+  autoSupportPreviews?: SupportData[];
   branchPlacementPreview?: SupportData | null;
   leafPlacementPreview?: SupportData | null;
   bracePlacementPreview?: import('@/supports/SupportTypes/Brace/bracePlacementState').BracePreviewData | null;
@@ -5881,6 +5883,7 @@ export function SceneCanvas({
                   outOfBoundsMax={shaderOutOfBoundsBounds?.max ?? null}
                   outOfBoundsStripeColor={outOfBoundsStripeColor}
                   trunkPlacementPreview={trunkPlacementPreviewForRenderer}
+                  autoSupportPreviews={autoSupportPreviews}
                   branchPlacementPreview={branchPlacementPreviewForRenderer}
                   leafPlacementPreview={leafPlacementPreviewForRenderer}
                   bracePlacementPreview={bracePlacementPreviewForRenderer}

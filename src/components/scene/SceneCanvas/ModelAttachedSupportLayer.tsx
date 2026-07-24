@@ -43,6 +43,7 @@ export type ModelAttachedSupportLayerProps = {
   outOfBoundsMax?: THREE.Vector3 | null;
   outOfBoundsStripeColor?: string;
   trunkPlacementPreview?: SupportData | null;
+  autoSupportPreviews?: SupportData[];
   branchPlacementPreview?: SupportData | null;
   leafPlacementPreview?: SupportData | null;
   bracePlacementPreview?: BracePreviewData | null;
@@ -93,6 +94,7 @@ export function ModelAttachedSupportLayer({
   outOfBoundsMax,
   outOfBoundsStripeColor,
   trunkPlacementPreview = null,
+  autoSupportPreviews = [],
   branchPlacementPreview = null,
   leafPlacementPreview = null,
   bracePlacementPreview = null,
@@ -219,6 +221,7 @@ export function ModelAttachedSupportLayer({
             ghostRenderOrder={ghostRenderOrder}
             passive={passive}
             trunkPlacementPreview={trunkPlacementPreview}
+            autoSupportPreviews={autoSupportPreviews}
             branchPlacementPreview={branchPlacementPreview}
             leafPlacementPreview={leafPlacementPreview}
             bracePlacementPreview={bracePlacementPreview}

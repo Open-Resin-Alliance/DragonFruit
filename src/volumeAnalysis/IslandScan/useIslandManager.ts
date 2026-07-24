@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { runIslandScan, runScanlineScan, type ScanResults } from './ScanOrchestrator';
 import { runIslandScanNative } from './nativeIslandScan';
 import { computeIslandMarkers, type IslandMarker } from './islandOverlayLogic';
@@ -92,9 +93,9 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
   }, [geom, transform]);
 
   const onRunIslandScan = useCallback(async () => {
-    if (!geom) return;
+    if (!geom) return null;
     const transformedGeom = prepareTransformedGeom();
-    if (!transformedGeom) return;
+    if (!transformedGeom) return null;
 
     setScanning(true);
     const transformedBBox = transformedGeom.boundingBox!;
@@ -118,6 +119,7 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
         (done, total) => setScanProgress({ done, total })
       );
       setScanData(res);
+      return { scanData: res, scanBBox: transformedBBox };
     } finally {
       setScanning(false);
     }
@@ -159,9 +161,9 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
   }, [geom, prepareTransformedGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minIslandAreaMm2, minOverlapPx, overlapNeighborhoodPx, useSurfaceContiguity]);
 
   const onRunNativeIslandScan = useCallback(async () => {
-    if (!geom) return;
+    if (!geom) return null;
     const transformedGeom = prepareTransformedGeom();
-    if (!transformedGeom) return;
+    if (!transformedGeom) return null;
 
     setScanning(true);
     const transformedBBox = transformedGeom.boundingBox!;
@@ -188,19 +190,67 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
       const endTime = performance.now();
       console.log(`Native Island Scan took ${(endTime - startTime).toFixed(2)}ms`);
       setScanData(res);
+      return { scanData: res, scanBBox: transformedBBox };
     } finally {
       setScanning(false);
     }
   }, [geom, prepareTransformedGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minIslandAreaMm2, minOverlapPx, overlapNeighborhoodPx]);
 
+  // Scan the model, optionally merged with extra geometry (e.g. planned
+  // supports), without touching the panel's scan state. Used for coverage
+  // verification and for auto-support planning scans — support planning works
+  // in millimetres, so it runs at a coarse grid instead of marker-grade
+  // resolution.
+  const onRunCoverageScan = useCallback(async (
+    extraGeometry: THREE.BufferGeometry | null,
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<{ scanData: ScanResults; scanBBox: THREE.Box3 } | null> => {
+    if (!geom) return null;
+    const transformedGeom = prepareTransformedGeom();
+    if (!transformedGeom) return null;
+
+    const modelOnly = transformedGeom.index ? transformedGeom.toNonIndexed() : transformedGeom;
+    for (const name of Object.keys(modelOnly.attributes)) {
+      if (name !== 'position') modelOnly.deleteAttribute(name);
+    }
+    const merged = extraGeometry ? mergeGeometries([modelOnly, extraGeometry], false) : modelOnly;
+    if (!merged) return null;
+    merged.computeBoundingBox();
+    const mergedBBox = merged.boundingBox!;
+
+    const params = {
+      // Verification needs "is this region supported", not marker-grade
+      // detail; a coarser grid is ~4x faster and less prone to sub-pixel
+      // linkage artifacts at support contacts.
+      px_mm: Math.max(pxMm, 0.2),
+      support_buffer_mm: supportBufMm,
+      connectivity,
+      min_island_area_mm2: minIslandAreaMm2,
+      min_overlap_px: minOverlapPx,
+      overlap_neighborhood_px: overlapNeighborhoodPx,
+    };
+    const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+    try {
+      const res = isTauriRuntime
+        ? await runIslandScanNative({ geometry: merged, bbox: mergedBBox }, layerHeightMm, params, onProgress)
+        : await runIslandScan({ geometry: merged, bbox: mergedBBox }, layerHeightMm, params, onProgress);
+      return { scanData: res, scanBBox: mergedBBox };
+    } catch (error) {
+      if (String(error).includes('cancelled')) return null;
+      throw error;
+    } finally {
+      merged.dispose();
+    }
+  }, [geom, prepareTransformedGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minIslandAreaMm2, minOverlapPx, overlapNeighborhoodPx]);
+
   // Compute markers
-  const islandMarkers = useMemo<IslandMarker[]>(() => {
+  const islandMarkers = useMemo<Array<IslandMarker & { type: number; islandId: number }>>(() => {
     if (!scanData || !scanBBox) return [];
     const raw = computeIslandMarkers(scanData, scanBBox, layerHeightMm, overlayTaper);
     return raw.map(m => {
       const area = m.pixelCount * pxMm * pxMm;
       const radius = area > 0 ? Math.max(0.1, Math.sqrt(area / Math.PI)) : 0.1;
-      return { ...m, radius, type: 0, islandId: m.id } as any;
+      return { ...m, radius, type: 0, islandId: m.id };
     });
   }, [scanData, scanBBox, layerHeightMm, overlayTaper, pxMm]);
 
@@ -243,6 +293,7 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
     onRunIslandScan,
     onRunScanlineScan,
     onRunNativeIslandScan,
+    onRunCoverageScan,
     useNativeScan, setUseNativeScan,
     clearScanData
   };

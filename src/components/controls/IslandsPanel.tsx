@@ -7,6 +7,7 @@ import { NumberInput } from '@/components/ui/NumberInput';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
+import type { AutoSupportPlanPreview, AutoSupportPreset, AutoSupportProgress } from '@/supports/autoSupport/types';
 import type { UseIslandsReturn } from '@/volumeAnalysis/Islands/useIslands';
 import { ISLAND_LAYER_COLORS, markerIdFor } from '@/volumeAnalysis/Islands/islandPuckMarkers';
 
@@ -14,6 +15,70 @@ const SECTION_CARD: React.CSSProperties = {
   borderColor: 'var(--border-subtle)',
   background: 'var(--surface-1)',
 };
+
+const AUTO_SUPPORT_PHASE_LABELS: Record<AutoSupportProgress['phase'], string> = {
+  scan: 'Scanning',
+  plan: 'Planning',
+  route: 'Routing',
+  verify: 'Verifying',
+};
+
+const AUTO_SUPPORT_FAILURE_LABELS: Record<string, string> = {
+  no_surface: 'no printable surface',
+  tip_spacing: 'too close to another tip',
+  COLLISION_WITH_MODEL: 'route collides with model',
+  ANGLE_TOO_STEEP: 'route angle too steep',
+  TOO_CLOSE_TO_EXISTING: 'too close to existing support',
+  OUT_OF_BOUNDS: 'outside the build area',
+  KNOT_ABOVE_TIP: 'invalid attachment height',
+};
+
+function describeAutoSupportPreview(preview: AutoSupportPlanPreview): string {
+  const stickCount = preview.supports.filter((support) => support.kind === 'stick').length;
+  const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
+  const parts = [
+    stickCount > 0
+      ? `Previewing ${plural(preview.supports.length, 'support')} (${plural(stickCount, 'on-model strut')}) across ${plural(preview.eligibleVolumeCount, 'region')}.`
+      : `Previewing ${plural(preview.supports.length, 'support')} across ${plural(preview.eligibleVolumeCount, 'region')}.`,
+  ];
+  if (preview.coveredVolumeCount > 0) parts.push(`${preview.coveredVolumeCount} already covered.`);
+  const unresolved = preview.unresolvedVolumeIds.length;
+  if (unresolved > 0) {
+    const reasons = Object.entries(preview.failureReasonCounts)
+      .sort((left, right) => right[1] - left[1])
+      .map(([reason, count]) => `${count}× ${AUTO_SUPPORT_FAILURE_LABELS[reason] ?? reason.toLowerCase()}`)
+      .join(', ');
+    parts.push(`${unresolved} ${unresolved === 1 ? 'region needs' : 'regions need'} manual work${reasons ? ` (${reasons})` : ''}.`);
+  }
+  if (preview.verification) {
+    parts.push(preview.verification.remainingVolumeCount === 0
+      ? 'Verified: no unsupported regions remain.'
+      : `Verification still sees ${preview.verification.remainingVolumeCount} unsupported ${preview.verification.remainingVolumeCount === 1 ? 'region' : 'regions'}.`);
+  }
+  return parts.join(' ');
+}
+
+function ToggleSwitch({ label, checked, disabled, onChange }: {
+  label: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <div className={`mt-2.5 flex items-center justify-between gap-2 ${disabled ? 'opacity-50' : ''}`}>
+      <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>{label}</span>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors shrink-0"
+        style={{ background: checked ? 'var(--accent)' : 'var(--surface-2)' }}
+      >
+        <span className={`w-4 h-4 rounded-full bg-white shadow transform transition-transform ${checked ? 'translate-x-4' : 'translate-x-0'}`} />
+      </button>
+    </div>
+  );
+}
 
 function SectionHeader({ title }: { title: string }) {
   return (
@@ -58,11 +123,36 @@ interface IslandsPanelProps {
   islands: UseIslandsReturn;
   hasGeometry: boolean;
   bottomClearancePx?: number;
+  autoSupportPreview?: AutoSupportPlanPreview | null;
+  onPlanAutoSupports?: (
+    preset: AutoSupportPreset,
+    onProgress: (progress: AutoSupportProgress) => void,
+    options?: { onModelStruts?: boolean; surfaceFill?: boolean },
+  ) => Promise<AutoSupportPlanPreview | null>;
+  onAbortAutoSupportRun?: () => void;
+  onAcceptAutoSupports?: (options?: { brace?: boolean }) => void;
+  onCancelAutoSupports?: () => void;
 }
 
-export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: IslandsPanelProps) {
+export function IslandsPanel({
+  islands,
+  hasGeometry,
+  bottomClearancePx = 88,
+  autoSupportPreview = null,
+  onPlanAutoSupports,
+  onAbortAutoSupportRun,
+  onAcceptAutoSupports,
+  onCancelAutoSupports,
+}: IslandsPanelProps) {
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const [showSettings, setShowSettings] = React.useState(false);
+  const [autoSupporting, setAutoSupporting] = React.useState(false);
+  const [autoSupportPreset, setAutoSupportPreset] = React.useState<AutoSupportPreset>('normal');
+  const [braceAfterApply, setBraceAfterApply] = React.useState(true);
+  const [onModelStruts, setOnModelStruts] = React.useState(true);
+  const [surfaceFill, setSurfaceFill] = React.useState(true);
+  const [autoSupportProgress, setAutoSupportProgress] = React.useState<AutoSupportProgress | null>(null);
+  const [supportStatus, setSupportStatus] = React.useState<{ ok: boolean; message: string } | null>(null);
 
   const {
     scanning,
@@ -77,6 +167,7 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
     setFilterToggles,
     orderedIslands,
     selectedMarkerId,
+    setSelectedMarkerId,
     selectPrev,
     selectNext,
     tableStats,
@@ -118,6 +209,50 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
   const currentIslandLabel = selectedIndex >= 0
     ? orderedIslands[selectedIndex].id.replace(/^\D+/, '')
     : null;
+
+  const autoSupportCancelledRef = React.useRef(false);
+
+  const handleAutoSupport = React.useCallback(async () => {
+    if (!hasGeometry || !onPlanAutoSupports || autoSupporting) return;
+    setAutoSupporting(true);
+    setCancelling(false);
+    setAutoSupportProgress({ phase: 'scan', completed: 0, total: 1 });
+    setSupportStatus(null);
+    setSelectedMarkerId(null);
+    autoSupportCancelledRef.current = false;
+    try {
+      const preview = await onPlanAutoSupports(autoSupportPreset, setAutoSupportProgress, { onModelStruts, surfaceFill });
+      if (!preview) {
+        setSupportStatus(autoSupportCancelledRef.current
+          ? { ok: true, message: 'Auto supports cancelled. No changes were made.' }
+          : { ok: false, message: 'Auto-support planning did not produce a preview.' });
+      } else if (preview.supports.length === 0 && preview.eligibleVolumeCount === 0) {
+        setSupportStatus({
+          ok: true,
+          message: preview.coveredVolumeCount > 0
+            ? `All ${preview.coveredVolumeCount} regions are already covered by existing supports.`
+            : 'No unsupported regions need supports at this preset.',
+        });
+      } else if (preview.supports.length === 0) {
+        setSupportStatus({ ok: false, message: 'No safe support routes were found. Try a heavier preset or review the model orientation.' });
+      } else {
+        setSupportStatus({ ok: true, message: describeAutoSupportPreview(preview) });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setSupportStatus({ ok: false, message: `Auto support failed: ${message}` });
+    } finally {
+      setAutoSupporting(false);
+    }
+  }, [autoSupportPreset, autoSupporting, hasGeometry, onModelStruts, onPlanAutoSupports, setSelectedMarkerId, surfaceFill]);
+
+  const [cancelling, setCancelling] = React.useState(false);
+
+  const handleAbortAutoSupport = React.useCallback(() => {
+    autoSupportCancelledRef.current = true;
+    setCancelling(true);
+    onAbortAutoSupportRun?.();
+  }, [onAbortAutoSupportRun]);
 
   const computedBottomClearance = Math.max(140, Math.round(bottomClearancePx));
 
@@ -212,6 +347,114 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                 />
               </div>
             )}
+
+            <div className="rounded-md border p-2" style={SECTION_CARD}>
+              <SectionHeader title="Auto Supports" />
+              <div className="grid grid-cols-3 gap-1">
+                {(['light', 'normal', 'heavy'] as const).map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => setAutoSupportPreset(preset)}
+                    disabled={autoSupporting || !!autoSupportPreview}
+                    className="h-7 rounded border text-[10px] font-semibold capitalize disabled:opacity-50"
+                    style={autoSupportPreset === preset
+                      ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'color-mix(in srgb, var(--accent), var(--surface-0) 88%)' }
+                      : { borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-0)' }}
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+              <ToggleSwitch
+                label="Struts resting on the model"
+                checked={onModelStruts}
+                disabled={autoSupporting || !!autoSupportPreview}
+                onChange={setOnModelStruts}
+              />
+              <ToggleSwitch
+                label="Overhang surface fill"
+                checked={surfaceFill}
+                disabled={autoSupporting || !!autoSupportPreview}
+                onChange={setSurfaceFill}
+              />
+              <ToggleSwitch
+                label="Auto-brace after apply"
+                checked={braceAfterApply}
+                disabled={autoSupporting}
+                onChange={setBraceAfterApply}
+              />
+              {autoSupporting ? (
+                <div className="mt-2.5 grid grid-cols-[1fr_auto] gap-1.5">
+                  <div
+                    className="flex h-8 items-center justify-center rounded border text-[11px] font-semibold"
+                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-0)' }}
+                  >
+                    {cancelling
+                      ? 'Cancelling… (finishing current step)'
+                      : autoSupportProgress
+                        ? `${AUTO_SUPPORT_PHASE_LABELS[autoSupportProgress.phase]}… ${autoSupportProgress.completed}/${autoSupportProgress.total}`
+                        : 'Working…'}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAbortAutoSupport}
+                    disabled={cancelling}
+                    className="h-8 rounded border px-3 text-[11px] font-semibold disabled:opacity-50"
+                    style={{ borderColor: 'var(--danger)', color: 'var(--danger)', background: 'var(--surface-0)' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : !autoSupportPreview ? (
+                <button
+                  type="button"
+                  onClick={() => { void handleAutoSupport(); }}
+                  disabled={!hasGeometry || !onPlanAutoSupports}
+                  className="ui-button mt-2.5 w-full !h-8 text-[11px] disabled:opacity-50"
+                  style={{
+                    borderColor: 'var(--accent)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
+                    color: 'var(--accent)',
+                  }}
+                >
+                  Generate Auto Supports
+                </button>
+              ) : (
+                <div className="mt-2.5 grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={onCancelAutoSupports}
+                    className="h-8 rounded border text-[11px] font-semibold"
+                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-0)' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onAcceptAutoSupports?.({ brace: braceAfterApply })}
+                    disabled={autoSupportPreview.supports.length === 0}
+                    className="h-8 rounded border text-[11px] font-semibold transition-colors disabled:opacity-50"
+                    style={{
+                      borderColor: 'var(--accent)',
+                      background: 'var(--accent)',
+                      color: 'white',
+                    }}
+                  >
+                    Apply {autoSupportPreview.supports.length}
+                  </button>
+                </div>
+              )}
+              {supportStatus && (
+                <div
+                  className="mt-2.5 text-[10px] leading-tight"
+                  role="status"
+                  style={{ color: supportStatus.ok ? 'var(--accent)' : 'var(--danger)' }}
+                >
+                  {supportStatus.message}
+                </div>
+              )}
+            </div>
 
             {/* --- Post-scan content --- */}
             {hasData && !scanning && (

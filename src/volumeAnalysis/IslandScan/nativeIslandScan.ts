@@ -80,6 +80,21 @@ function toRleLabels(native: NativeRleLabels): RleLabels {
   };
 }
 
+function labelsToMask(labels: RleLabels): RleMask {
+  return {
+    rows: labels.rows.map((row) => {
+      const spans = new Int32Array((row.length / 3) * 2);
+      for (let sourceIndex = 0, targetIndex = 0; sourceIndex < row.length; sourceIndex += 3, targetIndex += 2) {
+        spans[targetIndex] = row[sourceIndex];
+        spans[targetIndex + 1] = row[sourceIndex + 1];
+      }
+      return spans;
+    }),
+    width: labels.width,
+    height: labels.height,
+  };
+}
+
 function toIsland(native: NativeIsland): Island {
   const perLayerAreaMm2 = new Map<number, number>();
   for (const [k, v] of Object.entries(native.perLayerAreaMm2)) {
@@ -112,6 +127,15 @@ function toIsland(native: NativeIsland): Island {
 // Public API
 // ---------------------------------------------------------------------------
 
+/** Request cancellation of an in-flight native island scan. */
+export async function cancelIslandScanNative(): Promise<void> {
+  try {
+    await core.invoke('cancel_island_scan_native');
+  } catch {
+    // Not running under Tauri, or no scan in flight — nothing to cancel.
+  }
+}
+
 /**
  * Run island scan on the Rust backend via Tauri IPC.
  *
@@ -128,9 +152,11 @@ export async function runIslandScanNative(
   const positions = geom.geometry.getAttribute('position').array as Float32Array;
   const meshBytes = new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength);
 
+  const stageStart = performance.now();
   await core.invoke('stage_mesh_binary_set', meshBytes, {
     headers: { 'Content-Type': 'application/octet-stream' },
   });
+  const stageMs = performance.now() - stageStart;
 
   // Step 2: Listen for progress events
   let unlisten: UnlistenFn | null = null;
@@ -159,14 +185,16 @@ export async function runIslandScanNative(
       bbox_max_z: bb.max.z,
     });
 
+    const invokeStart = performance.now();
     const native = await core.invoke<NativeIslandScanResult>('run_island_scan_native', {
       paramsJson,
     });
+    const invokeMs = performance.now() - invokeStart;
 
     console.log(
-      `[native island scan] rasterize=${native.rasterizeMs.toFixed(0)}ms ` +
-      `scan=${native.scanMs.toFixed(0)}ms total=${native.totalMs.toFixed(0)}ms ` +
-      `islands=${native.islands.length}`
+      `[native island scan] stage=${stageMs.toFixed(0)}ms invoke=${invokeMs.toFixed(0)}ms ` +
+      `(rust: rasterize=${native.rasterizeMs.toFixed(0)}ms scan=${native.scanMs.toFixed(0)}ms ` +
+      `total=${native.totalMs.toFixed(0)}ms) islands=${native.islands.length}`
     );
 
     // Step 4: Convert to ScanResults (frontend-compatible)
@@ -183,7 +211,7 @@ export async function runIslandScanNative(
 
     // Build per-layer results (overlay painter reads islandLabels from layers[])
     const layers: ScanLayerResult[] = islandLabelsPerLayer.map((labels) => ({
-      islandMaskRle: { rows: [], width: grid.width, height: grid.height } as RleMask,
+      islandMaskRle: labelsToMask(labels),
       islandCount: 0,
       islandLabels: labels,
     }));

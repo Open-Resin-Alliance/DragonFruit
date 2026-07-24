@@ -286,6 +286,6 @@ export function loadSettingsFromLocalStorage(): boolean {
 
 // --- Initialize ---
 
-if (typeof window !== 'undefined') {
+if ((globalThis as { window?: unknown }).window) {
     loadSettingsFromLocalStorage();
 }

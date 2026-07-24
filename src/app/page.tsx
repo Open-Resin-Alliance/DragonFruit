@@ -294,7 +294,9 @@ import {
   getSavedUvToolsSettings,
   resolveUvToolsExecutablePath,
 } from '@/components/settings/uvToolsPreferences';
-import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, toggleSegmentCurve, transformSupportsForModel, updateTrunk, updateBranch, updateTwig, updateStick } from '@/supports/state';
+import { addRoot, addStick, addTrunk, beginSupportStateBatch, endSupportStateBatch, subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, setSnapshot as setSupportSnapshot, toggleSegmentCurve, transformSupportsForModel, updateTrunk, updateBranch, updateTwig, updateStick } from '@/supports/state';
+import { buildAutoBracedSnapshot } from '@/supports/autoBracing/autoBrace';
+import { getSettings as getSupportSettings } from '@/supports/Settings/state';
 import {
   getKickstandSnapshot,
   subscribeToKickstandStore,
@@ -313,6 +315,18 @@ import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
 import { getSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
 import { buildProjectedCrossSectionZRange } from '@/features/slicing/rasterLayerZipExport';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
+import { clearSDFCacheForMesh } from '@/supports/PlacementLogic/Pathfinding';
+import {
+  createIslandSupportMesh,
+  disposeIslandSupportMesh,
+} from '@/supports/autoSupport/islandSupportSurface';
+import { routeRepairSupports, runAutoSupportPlan } from '@/supports/autoSupport/autoSupportRunner';
+import { createAutoSupportRouteWorker, extractRouteWorkerMeshPayload, type AutoSupportPipelineWorker } from '@/supports/autoSupport/workerRouter';
+import { cancelIslandScanNative } from '@/volumeAnalysis/IslandScan/nativeIslandScan';
+import { AUTO_SUPPORT_PRESETS } from '@/supports/autoSupport/presets';
+import { collectSupportGeometry, collectSupportSegments, contactWeldGroup, distanceToSegmentSq, evaluateCoverageScan, plannedContactPoints, plannedSupportGroup } from '@/supports/autoSupport/verifyCoverage';
+import { buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
+import type { AutoSupportPlanPreview, AutoSupportPreset, AutoSupportProgress } from '@/supports/autoSupport/types';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
 import type { ModelTransform, TransformMode } from '@/hooks/useModelTransform';
@@ -354,6 +368,10 @@ interface ShaftHoverDebugDetail {
 type PendingModifierResetAction = 'hollowing' | 'hole_punch' | 'clear_hollowing';
 
 const EMPTY_SUPPORT_BOUNDS_BY_MODEL_ID = new Map<string, THREE.Box3>();
+
+// Auto-support lift target: high enough that the former plate-contact area
+// clears the surface-fill floor and full-size roots fit beneath it.
+const AUTO_SUPPORT_LIFT_MM = 5;
 
 function countRecordEntries(record: Record<string, unknown>): number {
   let count = 0;
@@ -6697,6 +6715,288 @@ export default function Home() {
     activeTab: scene.mode,
   });
 
+  const [autoSupportPreview, setAutoSupportPreview] = React.useState<AutoSupportPlanPreview | null>(null);
+  const autoSupportAbortRef = React.useRef<AbortController | null>(null);
+  const autoSupportWorkerRef = React.useRef<{ key: string; worker: AutoSupportPipelineWorker } | null>(null);
+  const autoSupportLiftRef = React.useRef<{ modelId: string; originalZ: number } | null>(null);
+  const pendingAutoSupportRunRef = React.useRef<{
+    preset: AutoSupportPreset;
+    onProgress: (progress: AutoSupportProgress) => void;
+    options?: { onModelStruts?: boolean; surfaceFill?: boolean };
+    resolve: (preview: AutoSupportPlanPreview | null) => void;
+  } | null>(null);
+
+  const restoreAutoSupportLift = React.useCallback(() => {
+    const lift = autoSupportLiftRef.current;
+    autoSupportLiftRef.current = null;
+    if (!lift || scene.activeModel?.id !== lift.modelId) return;
+    const position = transformMgr.transform.position;
+    transformMgr.transformHook.setPosition(position.x, position.y, lift.originalZ);
+  }, [scene.activeModel?.id, transformMgr]);
+
+  // Scan data, any pending plan, and the pipeline worker's mesh are all in
+  // world space for one specific model; they are stale the moment the active
+  // model changes OR its transform does. Without this, generating after a
+  // move plans against the old position, and applying a preview after a move
+  // commits supports at stale coordinates — floating in air.
+  const clearIslandScanData = islands.clearScanData;
+  const activeTransformKey = [
+    transformMgr.transform.position.toArray(),
+    transformMgr.transform.rotation.toArray(),
+    transformMgr.transform.scale.toArray(),
+  ].flat().join(',');
+  React.useEffect(() => {
+    clearIslandScanData();
+    autoSupportAbortRef.current?.abort();
+    setAutoSupportPreview(null);
+    autoSupportWorkerRef.current?.worker.dispose();
+    autoSupportWorkerRef.current = null;
+  }, [clearIslandScanData, scene.activeModel?.id, activeTransformKey]);
+  React.useEffect(() => () => {
+    autoSupportWorkerRef.current?.worker.dispose();
+    autoSupportWorkerRef.current = null;
+  }, []);
+
+  const handlePlanAutoSupports = React.useCallback(async (
+    preset: AutoSupportPreset,
+    onProgress: (progress: AutoSupportProgress) => void,
+    options?: { onModelStruts?: boolean; surfaceFill?: boolean },
+    resumedAfterLift = false,
+  ): Promise<AutoSupportPlanPreview | null> => {
+    const geom = scene.geom;
+    const modelId = scene.activeModel?.id;
+    if (!geom || !modelId) return null;
+    const plannerSettings = {
+      ...AUTO_SUPPORT_PRESETS[preset],
+      allowOnModelStruts: options?.onModelStruts ?? true,
+      allowSurfaceFill: options?.surfaceFill ?? true,
+    };
+
+    // Lift the model off the plate first so its plate-contact area gets
+    // supports too, leaving only supports touching the plate. Without the
+    // lift there is nowhere to put supports under the resting footprint, so
+    // this is unconditional. The transform flows through React state, so
+    // generation resumes on the next render via pendingAutoSupportRunRef once
+    // the lifted transform has propagated.
+    if (!resumedAfterLift) {
+      const lowestWorldZ = transformMgr.getLowestWorldZ();
+      if (lowestWorldZ !== null && lowestWorldZ < AUTO_SUPPORT_LIFT_MM - 0.01) {
+        const position = transformMgr.transform.position;
+        autoSupportLiftRef.current = { modelId, originalZ: position.z };
+        return new Promise<AutoSupportPlanPreview | null>((resolve) => {
+          pendingAutoSupportRunRef.current = { preset, onProgress, options, resolve };
+          transformMgr.transformHook.setPosition(position.x, position.y, position.z + (AUTO_SUPPORT_LIFT_MM - lowestWorldZ));
+        });
+      }
+    }
+
+    setAutoSupportPreview(null);
+    autoSupportAbortRef.current?.abort();
+    const abortController = new AbortController();
+    autoSupportAbortRef.current = abortController;
+    abortController.signal.addEventListener('abort', () => { void cancelIslandScanNative(); }, { once: true });
+
+    let scanData = islands.scanData;
+    let scanBBox = islands.scanBBox;
+    if (!scanData || !scanBBox) {
+      onProgress({ phase: 'scan', completed: 0, total: 1 });
+      // Planning works in millimetres — a coarse dedicated scan is ~4x faster
+      // than the panel's marker-grade scan and leaves the panel state alone.
+      const scanned = await islands.onRunCoverageScan(null);
+      if (!scanned || abortController.signal.aborted) return null;
+      scanData = scanned.scanData;
+      scanBBox = scanned.scanBBox;
+      onProgress({ phase: 'scan', completed: 1, total: 1 });
+    }
+
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    const mesh = createIslandSupportMesh(geom, transformMgr.transform, modelId);
+    // Run the whole pipeline (hierarchy, planning, routing, coverage
+    // evaluation) off the main thread when workers are available; on dense
+    // meshes these otherwise block the viewport for the entire generation.
+    // The worker persists across generations — its mesh, BVH, and SDF cache
+    // are only invalidated when the model or its transform changes.
+    const workerKey = `${modelId}:${mesh.matrixWorld.elements.join(',')}`;
+    let routeWorker = autoSupportWorkerRef.current?.key === workerKey
+      ? autoSupportWorkerRef.current.worker
+      : null;
+    if (!routeWorker) {
+      autoSupportWorkerRef.current?.worker.dispose();
+      autoSupportWorkerRef.current = null;
+      const workerMesh = extractRouteWorkerMeshPayload(mesh);
+      routeWorker = workerMesh
+        ? createAutoSupportRouteWorker({ mesh: workerMesh.payload, transfers: workerMesh.transfers, modelId, settings: getSupportSettings() })
+        : null;
+      if (routeWorker) autoSupportWorkerRef.current = { key: workerKey, worker: routeWorker };
+    }
+    try {
+      const planArgs = {
+        scan: scanData,
+        scanMinZ: scanBBox.min.z,
+        layerHeightMm: slicing.layerHeightMm,
+        preset,
+        settings: plannerSettings,
+        modelId,
+        mesh,
+        existingTipPoints: supportTips.map((tip) => ({ x: tip.x, y: tip.y, z: tip.z })),
+        signal: abortController.signal,
+        onProgress,
+      };
+      const preview = routeWorker
+        ? await routeWorker.planAutoSupports(planArgs)
+        : await runAutoSupportPlan(planArgs);
+
+      // Verify empirically: re-scan the model merged with the planned and
+      // committed supports; any volume still passing the significance
+      // thresholds is genuinely unsupported. One repair round routes supports
+      // for whatever the first verification still sees, then re-verifies.
+      if (preview.supports.length > 0 && !abortController.signal.aborted) {
+        const runVerificationScan = async () => {
+          const plannedGroups = preview.supports.map(plannedSupportGroup);
+          const committedGroup = buildScopedSupportGeometryGroup(getSupportSnapshot(), getKickstandSnapshot(), [modelId]);
+          const weldGroup = contactWeldGroup([
+            ...plannedContactPoints(preview.supports),
+            ...supportTips.map((tip) => ({ x: tip.x, y: tip.y, z: tip.z })),
+          ]);
+          const supportGeometry = collectSupportGeometry([...plannedGroups, committedGroup, weldGroup]);
+          if (!supportGeometry) return null;
+          try {
+            const verificationScan = await islands.onRunCoverageScan(supportGeometry);
+            if (!verificationScan || abortController.signal.aborted) return null;
+            const evaluateArgs = {
+              scan: verificationScan.scanData,
+              scanMinZ: verificationScan.scanBBox.min.z,
+              layerHeightMm: slicing.layerHeightMm,
+              settings: plannerSettings,
+            };
+            return routeWorker
+              ? await routeWorker.evaluateCoverage(evaluateArgs)
+              : evaluateCoverageScan(evaluateArgs);
+          } finally {
+            supportGeometry.dispose();
+          }
+        };
+
+        // Flagged spots with a support tip fused within reach are scan
+        // artifacts (voxel linkage, self-intersecting source geometry), not
+        // missing supports. Filtering them BEFORE deciding to repair means a
+        // steady-state generation pays one verification scan, not two plus a
+        // repair wave for the same recurring artifacts.
+        const fusedRadiusSq = 3 * 3;
+        const shaftRadiusSq = 2 * 2;
+        const realRemaindersOf = (contacts: typeof preview.supports[number]['contact'][]) => {
+          const allTips = [
+            ...plannedContactPoints(preview.supports),
+            ...supportTips.map((tip) => ({ x: tip.x, y: tip.y, z: tip.z })),
+          ];
+          const snapshot = getSupportSnapshot();
+          const shaftSegments = collectSupportSegments(preview.supports, snapshot, modelId);
+          return contacts.filter((contact) => {
+            const nearTip = allTips.some((tip) => {
+              const dx = tip.x - contact.position.x;
+              const dy = tip.y - contact.position.y;
+              const dz = tip.z - contact.position.z;
+              return dx * dx + dy * dy + dz * dz < fusedRadiusSq;
+            });
+            if (nearTip) return false;
+            return !shaftSegments.some((segment) => distanceToSegmentSq(contact.position, segment.a, segment.b) < shaftRadiusSq);
+          });
+        };
+
+        onProgress({ phase: 'verify', completed: 0, total: 2 });
+        let verification = await runVerificationScan();
+        let realRemainders = verification ? realRemaindersOf(verification.repairContacts) : [];
+        onProgress({ phase: 'verify', completed: 1, total: 2 });
+        if (realRemainders.length > 0 && !abortController.signal.aborted) {
+          const repairArgs = {
+            contacts: realRemainders,
+            settings: plannerSettings,
+            modelId,
+            mesh,
+            existingTipPoints: supportTips.map((tip) => ({ x: tip.x, y: tip.y, z: tip.z })),
+            signal: abortController.signal,
+            onProgress,
+          };
+          const repairs = routeWorker
+            ? await routeWorker.repairSupports(repairArgs)
+            : await routeRepairSupports(repairArgs);
+          if (repairs.length > 0) {
+            preview.supports.push(...repairs);
+            verification = (await runVerificationScan()) ?? verification;
+            realRemainders = verification ? realRemaindersOf(verification.repairContacts) : realRemainders;
+          }
+        }
+        onProgress({ phase: 'verify', completed: 2, total: 2 });
+        if (verification) {
+          preview.verification = { remainingVolumeCount: realRemainders.length };
+        }
+      }
+
+      if (preview.supports.length === 0) restoreAutoSupportLift();
+      setAutoSupportPreview(preview.supports.length > 0 ? preview : null);
+      return preview;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        restoreAutoSupportLift();
+        return null;
+      }
+      restoreAutoSupportLift();
+      throw error;
+    } finally {
+      clearSDFCacheForMesh(mesh.uuid);
+      disposeIslandSupportMesh(mesh);
+      if (autoSupportAbortRef.current === abortController) autoSupportAbortRef.current = null;
+    }
+  }, [islands, restoreAutoSupportLift, scene.activeModel?.id, scene.geom, slicing.layerHeightMm, supportTips, transformMgr.transform]);
+
+  // Resume a generation that paused to lift the model: once the lifted
+  // transform has propagated through a render, handlePlanAutoSupports gets a
+  // new identity and this effect picks the run back up.
+  React.useEffect(() => {
+    const pending = pendingAutoSupportRunRef.current;
+    if (!pending) return;
+    pendingAutoSupportRunRef.current = null;
+    void handlePlanAutoSupports(pending.preset, pending.onProgress, pending.options, true).then(pending.resolve);
+  }, [handlePlanAutoSupports]);
+
+  const handleAbortAutoSupportRun = React.useCallback(() => {
+    autoSupportAbortRef.current?.abort();
+  }, []);
+
+  const handleAcceptAutoSupports = React.useCallback((options?: { brace?: boolean }) => {
+    if (!autoSupportPreview || autoSupportPreview.supports.length === 0) return;
+    const before = captureSupportEditSnapshot();
+    beginSupportStateBatch();
+    try {
+      for (const support of autoSupportPreview.supports) {
+        if (support.kind === 'trunk') {
+          addRoot(support.root);
+          addTrunk(support.trunk);
+        } else {
+          addStick(support.stick);
+        }
+      }
+      if (options?.brace) {
+        // Fold bracing into the same commit so one undo removes the whole
+        // generated structure, supports and braces alike.
+        const braced = buildAutoBracedSnapshot(getSupportSnapshot(), getSupportSettings().autoBracing);
+        if (braced.changed) setSupportSnapshot(braced.snapshot);
+      }
+    } finally {
+      endSupportStateBatch();
+    }
+    pushSupportEditHistory('Generate auto supports', before, captureSupportEditSnapshot());
+    // The lift becomes part of the accepted result; later cancels must not
+    // drop the model back onto its new supports.
+    autoSupportLiftRef.current = null;
+    setAutoSupportPreview(null);
+  }, [autoSupportPreview]);
+
+  const handleCancelAutoSupports = React.useCallback(() => {
+    restoreAutoSupportLift();
+    setAutoSupportPreview(null);
+  }, [restoreAutoSupportLift]);
+
   // 5. Supports
   const supports = useSupportInteractionManager({ mode: scene.mode });
 
@@ -9189,6 +9489,11 @@ export default function Home() {
               islands={islandsPoc}
               hasGeometry={!!scene.geom}
               bottomClearancePx={modelStatsBottomClearancePx}
+              autoSupportPreview={autoSupportPreview}
+              onPlanAutoSupports={handlePlanAutoSupports}
+              onAbortAutoSupportRun={handleAbortAutoSupportRun}
+              onAcceptAutoSupports={handleAcceptAutoSupports}
+              onCancelAutoSupports={handleCancelAutoSupports}
             />
           </>
         ) : scene.mode === 'printing' ? (
@@ -9389,6 +9694,7 @@ export default function Home() {
             onActiveModelChange={handleSceneModelSelection}
             onMarqueeSelectionChange={handleSceneMarqueeSelection}
             trunkPlacementPreview={supports.trunkPlacementV2.previewData}
+            autoSupportPreviews={autoSupportPreview?.supports.map((support) => support.supportData) ?? []}
             branchPlacementPreview={supports.branchPlacement.previewData}
             leafPlacementPreview={supports.leafPlacement.previewData}
             bracePlacementPreview={supports.bracePreview}

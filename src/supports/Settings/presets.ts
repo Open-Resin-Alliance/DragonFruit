@@ -237,7 +237,7 @@ function loadPresetsFromStorage(): PresetCollection {
         activePresetId: 'structure',
     };
 
-    if (typeof window === 'undefined') return defaults;
+    if (!(globalThis as { window?: unknown }).window) return defaults;
 
     try {
         let resolvedActiveFromStorage = false;
@@ -329,7 +329,7 @@ function loadPresetsFromStorage(): PresetCollection {
 }
 
 function savePresetsToStorage() {
-    if (typeof window === 'undefined') return;
+    if (!(globalThis as { window?: unknown }).window) return;
     try {
         localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(presets));
         if (presets.activePresetId) {
