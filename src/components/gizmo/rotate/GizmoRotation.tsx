@@ -663,6 +663,7 @@ export function GizmoRotation({
               onPointerUp={handleDialPointerUp}
               onPointerMove={handleDialPointerMove}
               onPointerLeave={handleDialPointerLeave}
+              onPointerCancel={handleDialPointerLeave}
             >
               <meshBasicMaterial visible={false} side={THREE.DoubleSide} />
             </mesh>
