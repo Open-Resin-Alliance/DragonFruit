@@ -38,6 +38,7 @@ yarn-error.log*
 next-env.d.ts
 
 # local/project-specific
+/.claude/
 /.windsurf/
 /.vscode/
 /*.code-workspace
