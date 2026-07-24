@@ -382,6 +382,40 @@ function isKeyboardTargetEditable(target: EventTarget | null): boolean {
   return Boolean(target.closest('[contenteditable="true"]'));
 }
 
+// Duration label formatters. These MUST stay at module scope. React Compiler
+// rewrites the component body and renames locals (e.g. `minutes` -> `minutes_2`);
+// when that rename lands inside a Lingui `msg` template, the macro bakes the
+// renamed name into the generated message id, which then no longer matches the
+// compiled catalog (extracted from the original names). Lingui only interpolates
+// the fallback message in development, so production builds render raw
+// `{minutes_2}` placeholders. Plain module-scope functions are left untouched by
+// React Compiler, keeping the placeholder names — and thus the ids — stable.
+function formatApproxPrintTimeLabel(translate: (descriptor: MessageDescriptor) => string, totalSec: number): string {
+  const minutes = Math.floor(totalSec / 60);
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours > 0) return translate(msg({ message: `~${hours} h ${mins} min`, comment: 'Approximate estimated print time (the "~" marks it as a rough estimate). {hours}/{mins} are whole-number quantities.' }));
+  return translate(msg({ message: `~${mins} min`, comment: 'Approximate estimated print time under an hour (the "~" marks it as a rough estimate).' }));
+}
+
+function formatProcessingElapsedLabel(translate: (descriptor: MessageDescriptor) => string, elapsedSec: number): string {
+  const total = Math.max(0, elapsedSec);
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  const paddedSeconds = seconds.toString().padStart(2, '0');
+  return translate(msg`${minutes} min ${paddedSeconds} s`);
+}
+
+function formatEstimatedPrintTimeLabel(translate: (descriptor: MessageDescriptor) => string, totalSec: number): string {
+  const wholeSeconds = Math.max(0, Math.floor(totalSec));
+  const hours = Math.floor(wholeSeconds / 3600);
+  const minutes = Math.floor((wholeSeconds % 3600) / 60);
+  const seconds = wholeSeconds % 60;
+  const paddedSeconds = seconds.toString().padStart(2, '0');
+  if (hours > 0) return translate(msg`${hours} h ${minutes} min`);
+  return translate(msg`${minutes} min ${paddedSeconds} s`);
+}
+
 const HOLE_PUNCH_OUTSIDE_PROTRUSION_MM = 3;
 const HOLE_PUNCH_DEPTH_OFFSET_FROM_SHELL_MM = 1;
 const HOLE_PUNCH_AUTO_DEPTH_RAY_START_OFFSET_MM = 0.3;
@@ -3020,11 +3054,7 @@ export default function Home() {
       + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
     );
 
-    const minutes = Math.floor(totalSec / 60);
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    if (hours > 0) return _(msg({ message: `~${hours} h ${mins} min`, comment: 'Approximate estimated print time (the "~" marks it as a rough estimate). {hours}/{mins} are whole-number quantities.' }));
-    return _(msg({ message: `~${mins} min`, comment: 'Approximate estimated print time under an hour (the "~" marks it as a rough estimate).' }));
+    return formatApproxPrintTimeLabel(_, totalSec);
   }, [_, activeMaterialProfile, printingPreviewTotalLayers]);
 
   const canDownloadPrintArtifact = Boolean(printingArtifact);
@@ -3689,11 +3719,7 @@ export default function Home() {
   const printingDialogProgressPercent = Math.max(0, Math.min(100, printingUploadDisplayProgress * 100));
 
   const printingProcessingElapsedLabel = React.useMemo(() => {
-    const total = Math.max(0, printingDeviceProcessingElapsedSec);
-    const minutes = Math.floor(total / 60);
-    const seconds = total % 60;
-    const paddedSeconds = seconds.toString().padStart(2, '0');
-    return _(msg`${minutes} min ${paddedSeconds} s`);
+    return formatProcessingElapsedLabel(_, printingDeviceProcessingElapsedSec);
   }, [_, printingDeviceProcessingElapsedSec]);
 
 
@@ -6347,14 +6373,7 @@ export default function Home() {
       + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
     );
 
-    const wholeSeconds = Math.max(0, Math.floor(totalSec));
-    const hours = Math.floor(wholeSeconds / 3600);
-    const minutes = Math.floor((wholeSeconds % 3600) / 60);
-    const seconds = wholeSeconds % 60;
-    const paddedSeconds = seconds.toString().padStart(2, '0');
-
-    if (hours > 0) return _(msg`${hours} h ${minutes} min`);
-    return _(msg`${minutes} min ${paddedSeconds} s`);
+    return formatEstimatedPrintTimeLabel(_, totalSec);
   }, [_, activeMaterialProfile, estimatedSlicerLayerCount, scene.models]);
 
   const printingCurrentHeightMm = React.useMemo(() => {
