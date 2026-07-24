@@ -83,7 +83,7 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
     CAMERA: {
         FOCUS_PICK: {
             key: 'f',
-            description: 'Press to focus hovered point on selected model, else snap to best visible model'
+            description: 'Press to center the camera on the model point under the cursor'
         },
         TOGGLE_PROJECTION: {
             key: 'o',

@@ -6705,11 +6705,6 @@ export function SceneCanvas({
           <CameraFocusHotkeyController
             hoverPointRef={lastHoveredModelPointRef}
             setOrbitTargetFromPoint={setOrbitTargetFromPoint}
-            models={models}
-            activeModelId={activeModelId}
-            selectedModelIds={selectedModelIds ?? []}
-            hoveredModelId={hoveredModelId}
-            orbitTarget={orbitTarget}
             cameraRef={cameraRef}
             orbitControlsRef={orbitControlsRef as React.MutableRefObject<{ target: THREE.Vector3; update: () => void } | null>}
           />

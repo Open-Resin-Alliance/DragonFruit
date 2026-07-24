@@ -90,12 +90,6 @@ export function CameraProjectionController({ mode }: { mode: CameraProjectionMod
       // app load controls is null, so update() is never called — the camera stays
       // mis-oriented for every pick frame until the first gl.render().
       next.quaternion.copy(camera.quaternion);
-      next.position.copy(camera.position);
-      // Preserve view direction. Without copying quaternion, the new camera has identity
-      // rotation (looking down -Z) until OrbitControls.update() corrects it. At initial
-      // app load controls is null, so update() is never called — the camera stays
-      // mis-oriented for every pick frame until the first gl.render().
-      next.quaternion.copy(camera.quaternion);
       next.up.copy(camera.up);
 
       next.updateProjectionMatrix();
@@ -118,15 +112,15 @@ export function CameraProjectionController({ mode }: { mode: CameraProjectionMod
 
     if (camera instanceof THREE.OrthographicCamera) {
       const span = Math.max(1e-6, (camera.top - camera.bottom) / Math.max(1e-6, camera.zoom));
-      const distance = Math.max(0.001, span / 2);
-      
-      // When switching from ortho to perspective, calculate FOV to match
-      // the ortho zoom level so objects appear the same visual size.
-      // This prevents zoom-out/zoom-in when transitioning between projections.
-      const requiredHalfFov = Math.atan(span / (2 * distance));
-      const calculatedFov = THREE.MathUtils.radToDeg(2 * requiredHalfFov);
-      next.fov = THREE.MathUtils.clamp(calculatedFov, 5, 175);
-      
+      // Keep the natural default FOV and instead solve for the orbit distance
+      // at which that FOV shows the same vertical world span the ortho view
+      // did. This preserves the on-screen size of the model without the
+      // fisheye distortion a wide computed FOV would introduce, and it is the
+      // exact inverse of the perspective→ortho branch above
+      // (worldHalfH = tan(fov/2) · distance), so mode toggles round-trip.
+      const halfFov = THREE.MathUtils.degToRad(next.fov * 0.5);
+      const distance = Math.max(0.001, (span * 0.5) / Math.tan(halfFov));
+
       const direction = camera.position.clone().sub(target);
       if (direction.lengthSq() < 1e-10) direction.set(-1, -1, 1);
       direction.normalize();
