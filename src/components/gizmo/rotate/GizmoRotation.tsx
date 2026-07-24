@@ -385,6 +385,11 @@ export function GizmoRotation({
     const start = dialPointerDownRef.current;
     dialPointerDownRef.current = null;
     if (!start || !interactionsEnabled || isHidden) return;
+    // If the handle claimed this gesture as a drag, do not also fire a click.
+    // The dial does not stopPropagation on pointerdown (so a camera drag started
+    // on it is preserved), which means a ray through both the dial band and the
+    // handle sphere can arm both. isDragging tells us the handle won.
+    if (isDragging) return;
     if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > DIAL_CLICK_SLOP_PX) return;
 
     const hit = dialHitAngle(e);

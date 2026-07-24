@@ -92,17 +92,26 @@ export function TransformControls({
       return DEFAULT_SNAP_TICK_CONFIG;
     }
   });
+  // Bumped on every commit to re-seed the uncontrolled interval inputs, so a
+  // rejected or out-of-range entry snaps back to the committed value.
+  const [tickConfigEpoch, setTickConfigEpoch] = useState(0);
 
-  const handleTickIntervalChange = (tier: keyof SnapTickConfig, raw: string) => {
+  // Commit a tier interval, on blur or Enter rather than per keystroke. Doing it
+  // per keystroke both drove the dial off half-typed values (typing toward 10
+  // transiently built 360 ticks at minorDeg=1) and made multi-digit non-divisors
+  // like 17 untypeable, since each rejected keystroke reverted the controlled
+  // input. A key on tickConfig re-seeds the uncontrolled inputs after a commit.
+  const handleTickIntervalCommit = (tier: keyof SnapTickConfig, raw: string) => {
     const parsed = Number(raw);
-    if (!Number.isFinite(parsed)) return;
+    if (!Number.isFinite(parsed)) { setTickConfigEpoch((n) => n + 1); return; }
     const next = { ...tickConfig, [tier]: parsed };
     // Reject anything the dial could not render rather than persisting it and
     // letting every ring throw. parseSnapTickConfig is the same gate the gizmo
     // reads through, so a value that survives here is safe there.
     const usable = parseSnapTickConfig(JSON.stringify(next));
-    if (usable.minorDeg !== next.minorDeg) return;
+    if (usable.minorDeg !== next.minorDeg) { setTickConfigEpoch((n) => n + 1); return; }
     setTickConfig(next);
+    setTickConfigEpoch((n) => n + 1);
     try { localStorage.setItem(SNAP_TICK_CONFIG_STORAGE_KEY, JSON.stringify(next)); } catch {}
     window.dispatchEvent(new CustomEvent('dragonfruit:tick-config-change'));
   };
@@ -381,12 +390,16 @@ export function TransformControls({
                       {label}
                     </span>
                     <input
+                      key={`${key}-${tickConfigEpoch}`}
                       type="number"
                       min={0}
                       max={180}
                       step={1}
-                      value={tickConfig[key]}
-                      onChange={(e) => handleTickIntervalChange(key, e.target.value)}
+                      defaultValue={tickConfig[key]}
+                      onBlur={(e) => handleTickIntervalCommit(key, e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                      }}
                       title={key === 'minorDeg'
                         ? 'Smallest tick spacing, in degrees. Must divide 360.'
                         : `${label} tick spacing, in degrees. 0 hides this tier.`}
