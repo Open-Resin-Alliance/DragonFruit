@@ -53,6 +53,11 @@ export type PreparePanelStackProps = {
 
   arrangeSpacingMm: number;
   setArrangeSpacingMm: (value: number) => void;
+  onDropSelectionToPlatform: () => void;
+  onLiftSelection: () => void;
+  onCenterSelection: () => void;
+  onResetRotationSelection: () => void;
+  onResetScaleSelection: () => void;
 };
 
 /** PREPARE-mode floating panel group: model manager, transform/smoothing/hollowing/arrange tools. */
@@ -91,6 +96,11 @@ export function PreparePanelStack({
   hasCavityGeometry,
   arrangeSpacingMm,
   setArrangeSpacingMm,
+  onDropSelectionToPlatform,
+  onLiftSelection,
+  onCenterSelection,
+  onResetRotationSelection,
+  onResetScaleSelection,
 }: PreparePanelStackProps) {
   // Invoked inline by Home (not as <JSX/>) so FloatingPanelStack can flatten these keyed panels as direct children for its layout-profile positioning. 'use no memo' keeps React Compiler from injecting a useMemoCache hook (the conditional inline call must stay hook-free).
   'use no memo';
@@ -212,8 +222,20 @@ export function PreparePanelStack({
         <TransformControls
           key="prepare-transform-controls"
           position={transformMgr.transform.position}
-          onPositionChange={transformMgr.transformHook.setPosition}
-          onCenter={transformMgr.transformHook.centerXY}
+          onPositionChange={(x, y, z) => {
+            const current = transformMgr.transform.position;
+            const EPS = 1e-6;
+            const hasMoveDelta = Math.abs(x - current.x) > EPS
+              || Math.abs(y - current.y) > EPS
+              || Math.abs(z - current.z) > EPS;
+            // Stage a pending 'move' entry so the commit has a `before` to delta
+            // from — the whole selection then fans out by that shared delta (§4f).
+            if (hasMoveDelta) {
+              ensurePendingTransformHistoryForActiveModel('move');
+            }
+            transformMgr.transformHook.setPosition(x, y, z);
+          }}
+          onCenter={onCenterSelection}
           onPlatform={transformMgr.transformHook.setPlatformZ}
           rotation={transformMgr.transform.rotation}
           onRotationChange={(x, y, z) => {
@@ -234,7 +256,7 @@ export function PreparePanelStack({
 
             transformMgr.transformHook.setRotation(x, y, z);
           }}
-          onResetRotation={transformMgr.transformHook.resetRotation}
+          onResetRotation={onResetRotationSelection}
           onRotationComplete={handleRotationComplete}
           scale={transformMgr.transform.scale}
           onScaleChange={(x, y, z) => {
@@ -255,7 +277,7 @@ export function PreparePanelStack({
 
             transformMgr.transformHook.setScale(x, y, z);
           }}
-          onResetScale={transformMgr.transformHook.resetScale}
+          onResetScale={onResetScaleSelection}
           uniformScaling={uniformScaling}
           onUniformScalingChange={setUniformScaling}
           modelBBox={scene.geom.bbox}
@@ -263,14 +285,8 @@ export function PreparePanelStack({
           onAutoLiftChange={handleAutoLiftChange}
           liftDistance={transformMgr.liftDistance}
           onLiftDistanceChange={transformMgr.setLiftDistance}
-          onLift={() => {
-            const lowestWorldZ = transformMgr.getLowestWorldZ();
-            if (lowestWorldZ !== null) transformMgr.transformHook.snapToLift(lowestWorldZ, transformMgr.liftDistance);
-          }}
-          onDrop={() => {
-            const lowestWorldZ = transformMgr.getLowestWorldZ();
-            if (lowestWorldZ !== null) transformMgr.transformHook.snapToPlatform(lowestWorldZ);
-          }}
+          onLift={onLiftSelection}
+          onDrop={onDropSelectionToPlatform}
           onTransformCommit={scheduleCommitPendingTransformHistory}
         />
       )}

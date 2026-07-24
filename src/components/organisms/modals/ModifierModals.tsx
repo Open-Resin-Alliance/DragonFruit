@@ -14,7 +14,7 @@ export type ModifierModalsProps = {
   modifierApplyOverlayContent: { title: string; detailLines: string[]; };
   modifierApplyOverlayElapsedLabel: string;
   pendingBlockerResetState: HollowingPanelState | null;
-  pendingDestructiveTransform: { modelId: string; modelName: string; supportCount: number; operationLabel: string; } | null;
+  pendingDestructiveTransform: { modelIds: string[]; modelName: string; supportCount: number; operationLabel: string; } | null;
   pendingModifierResetAction: PendingModifierResetAction | null;
   setPendingBlockerResetState: React.Dispatch<React.SetStateAction<HollowingPanelState | null>>;
   setPendingModifierResetAction: React.Dispatch<React.SetStateAction<PendingModifierResetAction | null>>;

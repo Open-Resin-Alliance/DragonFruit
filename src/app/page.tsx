@@ -209,6 +209,7 @@ import {
 import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
 import { useSlicingManager } from '@/features/slicing/useSlicingManager';
 import { useTransformManager } from '@/features/transform/useTransformManager';
+import { useSelectionTransforms } from '@/features/transform/useSelectionTransforms';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 // Islands PoC (Support-tab unified islands panel). Tab-agnostic + modular — see
 // agents/Claude/20260613-1404-Implementation-dev-islands-islands-panel-...md.
@@ -872,7 +873,7 @@ export default function Home() {
     segmentId: string;
     point: { x: number; y: number; z: number };
   } | null>(null);
-  const [manualRepairModelId, setManualRepairModelId] = React.useState<string | null>(null);
+  const [manualRepairModelIds, setManualRepairModelIds] = React.useState<string[]>([]);
   const [isManualRepairing, setIsManualRepairing] = React.useState(false);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
   const [isSliceMetricsDebugOpen, setIsSliceMetricsDebugOpen] = React.useState(false);
@@ -1369,9 +1370,9 @@ export default function Home() {
   const [supportRenderRefreshNonce, setSupportRenderRefreshNonce] = React.useState(0);
   const [gizmoResetNonce, setGizmoResetNonce] = React.useState(0);
   const [pendingDestructiveTransform, setPendingDestructiveTransform] = React.useState<{
-    modelId: string;
-    modelName: string;
-    supportCount: number;
+    modelIds: string[];
+    modelName: string;      // display summary: single model's name, or "N models"
+    supportCount: number;   // aggregate across all affected models
     operationLabel: string;
   } | null>(null);
   const pendingDestructiveTransformContinueRef = React.useRef<(() => void) | null>(null);
@@ -1860,16 +1861,27 @@ export default function Home() {
 
   const requestDestructiveTransformSupportDeletion = React.useCallback((operationLabel: string) => {
     if (scene.mode !== 'prepare') return true;
-    if (!scene.activeModelId) return true;
     if (pendingDestructiveTransform) return false;
 
-    const supportCount = getSupportPrimitiveCountForModel(scene.activeModelId);
-    if (supportCount <= 0) return true;
+    const candidateIds = scene.selectedModelIds.length > 0
+      ? scene.selectedModelIds
+      : (scene.activeModelId ? [scene.activeModelId] : []);
+    if (candidateIds.length === 0) return true;
+
+    const affected = candidateIds
+      .map((id) => ({ id, count: getSupportPrimitiveCountForModel(id) }))
+      .filter((entry) => entry.count > 0);
+    if (affected.length === 0) return true;
+
+    const totalSupportCount = affected.reduce((sum, entry) => sum + entry.count, 0);
+    const modelName = affected.length === 1
+      ? (scene.models.find((m) => m.id === affected[0].id)?.name ?? affected[0].id).trim()
+      : `${affected.length} models`;
 
     setPendingDestructiveTransform({
-      modelId: scene.activeModelId,
-      modelName: (scene.activeModel?.name ?? scene.activeModelId).trim(),
-      supportCount,
+      modelIds: affected.map((entry) => entry.id),
+      modelName,
+      supportCount: totalSupportCount,
       operationLabel,
     });
     return false;
@@ -1894,7 +1906,7 @@ export default function Home() {
     if (!pending) return;
 
     scene.deleteSupportsForModels(
-      [pending.modelId],
+      pending.modelIds,
       `Delete Supports Before ${pending.operationLabel} ${pending.modelName}`,
     );
 
@@ -4872,7 +4884,7 @@ export default function Home() {
   }, [scene]);
 
   const handleRepairModel = React.useCallback((modelId: string) => {
-    setManualRepairModelId(modelId);
+    setManualRepairModelIds([modelId]);
   }, []);
 
   const handleOpenModelSupportsInfo = React.useCallback((modelId: string) => {
@@ -5587,7 +5599,9 @@ export default function Home() {
         break;
       }
       case 'delete':
-        if (scene.activeModelId) {
+        if (scene.selectedModelIds.length > 0) {
+          scene.deleteModels(scene.selectedModelIds);
+        } else if (scene.activeModelId) {
           scene.deleteModel(scene.activeModelId);
         }
         break;
@@ -5599,7 +5613,13 @@ export default function Home() {
         }
         break;
       case 'cut':
-        if (scene.activeModelId) {
+        if (scene.selectedModelIds.length > 0) {
+          // Snapshot ids before delete mutates the selection (copy then delete,
+          // exactly what single-model cutModel does).
+          const ids = [...scene.selectedModelIds];
+          scene.copySelectedModels();
+          scene.deleteModels(ids);
+        } else if (scene.activeModelId) {
           scene.cutModel(scene.activeModelId);
         }
         break;
@@ -5631,10 +5651,12 @@ export default function Home() {
         break;
       }
       case 'repair': {
-        const targetId = scene.activeModelId;
-        if (targetId) {
+        const ids = scene.selectedModelIds.length > 0
+          ? [...scene.selectedModelIds]
+          : (scene.activeModelId ? [scene.activeModelId] : []);
+        if (ids.length > 0) {
           closeEditorContextMenu();
-          setManualRepairModelId(targetId);
+          setManualRepairModelIds(ids);
           return;
         }
         break;
@@ -7980,6 +8002,46 @@ export default function Home() {
     skipNextTransformEndCommitRef.current = null;
   }, [beginSupportDragSyncTransaction, isFiniteTransform, scene, transformMgr.transformHook]);
 
+  // Selection-aware drop/lift (issue #305) — bodies extracted to a hook to keep
+  // page.tsx thin; they fan out over selectedModelIds via the group-commit path.
+  const {
+    handleDropSelectionToPlatform,
+    handleLiftSelection,
+    applyPanelTransformToSelection,
+    handleCenterSelection,
+    handleResetRotationSelection,
+    handleResetScaleSelection,
+  } = useSelectionTransforms({
+    scene,
+    transformMgr,
+    handleGizmoTransformGroupCommit,
+    requestDestructiveTransformSupportDeletionWithContinuation,
+  });
+
+  // Wrap the panel's commit so a scale OR position change fans out to the whole
+  // selection. (Rotate fans out from handleRotationComplete, which fires first
+  // and clears the pending entry.) Scale is ABSOLUTE; move is a SHARED DELTA.
+  // See §4c / §4f.
+  const handlePanelTransformCommit = React.useCallback((frameDelay?: number) => {
+    const pending = pendingTransformHistoryRef.current;
+    const isScale = pending?.description?.startsWith('transform:scale') ?? false;
+    const isMove = pending?.description?.startsWith('transform:move') ?? false;
+    const activeBefore = pending
+      ? { position: pending.before.position.clone(), rotation: pending.before.rotation.clone(), scale: pending.before.scale.clone() }
+      : null;
+
+    scheduleCommitPendingTransformHistory(frameDelay);
+
+    if ((isScale || isMove) && activeBefore && scene.activeModelId && isFiniteTransform(transformMgr.transform)) {
+      const activeAfter: ModelTransform = {
+        position: transformMgr.transform.position.clone(),
+        rotation: transformMgr.transform.rotation.clone(),
+        scale: transformMgr.transform.scale.clone(),
+      };
+      applyPanelTransformToSelection(isScale ? 'scale' : 'move', activeBefore, activeAfter);
+    }
+  }, [applyPanelTransformToSelection, isFiniteTransform, scene.activeModelId, scheduleCommitPendingTransformHistory, transformMgr.transform]);
+
   const handleAutoLiftChange = React.useCallback((enabled: boolean) => {
     if (scene.activeModelId) {
       scene.setModelManualZMoveOverride(scene.activeModelId, false);
@@ -8117,9 +8179,24 @@ export default function Home() {
       return;
     }
 
+    // Capture the active model's before/after BEFORE commit clears pending, so
+    // the same world-space rotation delta can fan out to the rest of the
+    // selection about each model's own center (§4c).
+    const pending = pendingTransformHistoryRef.current;
+    const activeBefore: ModelTransform | null = pending
+      ? { position: pending.before.position.clone(), rotation: pending.before.rotation.clone(), scale: pending.before.scale.clone() }
+      : null;
+    const activeAfter: ModelTransform | null = pending?.after
+      ? { position: pending.after.position.clone(), rotation: pending.after.rotation.clone(), scale: pending.after.scale.clone() }
+      : null;
+
     islands.clearScanData();
     applyPostRotateLift();
     commitPendingTransformHistory();
+
+    if (activeBefore && activeAfter) {
+      applyPanelTransformToSelection('rotate', activeBefore, activeAfter);
+    }
   };
 
   const handleCameraChange = React.useCallback(() => {
@@ -9132,7 +9209,7 @@ export default function Home() {
               requestDestructiveTransformSupportDeletion: requestDestructiveTransformSupportDeletion,
               handleRotationComplete: handleRotationComplete,
               handleAutoLiftChange: handleAutoLiftChange,
-              scheduleCommitPendingTransformHistory: scheduleCommitPendingTransformHistory,
+              scheduleCommitPendingTransformHistory: handlePanelTransformCommit,
               uniformScaling: uniformScaling,
               setUniformScaling: setUniformScaling,
               isApplyingHolePunch: isApplyingHolePunch,
@@ -9140,6 +9217,11 @@ export default function Home() {
               hasCavityGeometry: hasCavityGeometry,
               arrangeSpacingMm: arrangeSpacingMm,
               setArrangeSpacingMm: setArrangeSpacingMm,
+              onDropSelectionToPlatform: handleDropSelectionToPlatform,
+              onLiftSelection: handleLiftSelection,
+              onCenterSelection: handleCenterSelection,
+              onResetRotationSelection: handleResetRotationSelection,
+              onResetScaleSelection: handleResetScaleSelection,
             })}
           </>
         ) : scene.mode === 'analysis' ? (
@@ -9872,10 +9954,10 @@ export default function Home() {
 
       <MeshRepairModals
         isManualRepairing={isManualRepairing}
-        manualRepairModelId={manualRepairModelId}
+        manualRepairModelIds={manualRepairModelIds}
         scene={scene}
         setIsManualRepairing={setIsManualRepairing}
-        setManualRepairModelId={setManualRepairModelId}
+        setManualRepairModelIds={setManualRepairModelIds}
         setShowDamagedModelDialog={setShowDamagedModelDialog}
         showDamagedModelDialog={showDamagedModelDialog}
       />

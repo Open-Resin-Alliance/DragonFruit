@@ -322,9 +322,13 @@ export function useMirrorManager({
     }
   }, [mirrorToolActive, flushPendingBake]);
 
-  const handleMirror = React.useCallback((axis: MirrorAxis) => {
-    const modelId = scene.activeModelId;
-    if (!modelId) return;
+  // Mirror ONE model about a world axis (the original single-model body). The
+  // destructive support-deletion wrap for Z is NOT here — it is lifted to the
+  // caller so a multi-selection Mirror Z prompts ONCE for the whole group. When
+  // called for a different model than the live session, the prior session is
+  // flushed first, so iterating this over a selection finalizes each member as
+  // the loop advances (the caller flushes the last one). See §5.
+  const mirrorSingleModel = React.useCallback((modelId: string, axis: MirrorAxis) => {
     const model = scene.models.find((m) => m.id === modelId);
     if (!model) return;
 
@@ -351,52 +355,68 @@ export function useMirrorManager({
     const session = mirrorSessionRef.current;
     if (!session) return;
 
-    const performMirror = () => {
-      session.flips[axis] = !session.flips[axis];
+    session.flips[axis] = !session.flips[axis];
 
-      // Reflect the model's transform across the world-space axis through the
-      // model's world bbox center. This produces a true world-space mirror
-      // regardless of the model's existing rotation.
-      const nextTransform = reflectTransformAcrossWorldAxis(
-        model.transform,
-        mirrorLocalOriginRef.current,
+    // Reflect the model's transform across the world-space axis through the
+    // model's world bbox center. This produces a true world-space mirror
+    // regardless of the model's existing rotation.
+    const nextTransform = reflectTransformAcrossWorldAxis(
+      model.transform,
+      mirrorLocalOriginRef.current,
+      axis,
+    );
+    session.previewTransform = {
+      position: nextTransform.position.clone(),
+      rotation: nextTransform.rotation.clone(),
+      scale: nextTransform.scale.clone(),
+    };
+
+    // For X/Y also push supports through the same reflection. Z deletes
+    // supports up-front via the destructive modal (handled by the caller).
+    if (axis !== 'z') {
+      const supportTransforms = buildMirrorSupportTransforms({
+        current: model.transform,
+        modelLocalBboxCenter: mirrorLocalOriginRef.current.clone(),
         axis,
-      );
-      session.previewTransform = {
-        position: nextTransform.position.clone(),
-        rotation: nextTransform.rotation.clone(),
-        scale: nextTransform.scale.clone(),
-      };
-
-      // For X/Y also push supports through the same reflection. Z deletes
-      // supports up-front via the destructive modal.
-      if (axis !== 'z') {
-        const supportTransforms = buildMirrorSupportTransforms({
-          current: model.transform,
-          modelLocalBboxCenter: mirrorLocalOriginRef.current.clone(),
-          axis,
-        });
-        if (supportTransforms) {
-          transformSupportsForModel(modelId, supportTransforms.before, supportTransforms.after);
-        }
+      });
+      if (supportTransforms) {
+        transformSupportsForModel(modelId, supportTransforms.before, supportTransforms.after);
       }
+    }
 
-      scene.setModelTransformRaw(modelId, nextTransform);
-      syncTransformManagerToTransform(nextTransform);
+    scene.setModelTransformRaw(modelId, nextTransform);
+    syncTransformManagerToTransform(nextTransform);
 
-      // Schedule baking in the next task so the visual mirror renders
-      // immediately. The session stays alive until the bake completes.
-      // On mode switch, flushPendingBake() will cancel and run synchronously.
-      scheduleBake();
+    // Schedule baking in the next task so the visual mirror renders
+    // immediately. The session stays alive until the bake completes.
+    // On mode switch, flushPendingBake() will cancel and run synchronously.
+    scheduleBake();
+  }, [scene, flushPendingBake, scheduleBake, syncTransformManagerToTransform]);
+
+  // Fan the mirror out over the whole selection (issue #305). Single-selection is
+  // byte-for-byte the old behavior: one mirrorSingleModel call, no trailing flush,
+  // so the live preview + deferred bake + click-to-toggle stay intact. Multi: the
+  // session flushes each model as the loop reaches the next, and the trailing
+  // flush finalizes the last. Z routes through the (now multi-model, §4b)
+  // destructive modal ONCE before mirroring any model.
+  const handleMirror = React.useCallback((axis: MirrorAxis) => {
+    const ids = scene.selectedModelIds.length > 0
+      ? scene.selectedModelIds
+      : (scene.activeModelId ? [scene.activeModelId] : []);
+    if (ids.length === 0) return;
+
+    const mirrorAll = () => {
+      for (const id of ids) mirrorSingleModel(id, axis);
+      if (ids.length > 1) flushPendingBake();
     };
 
     if (axis === 'z') {
-      const proceedNow = requestDestructiveTransformSupportDeletionWithContinuation('Mirror Z', performMirror);
-      if (proceedNow) performMirror();
+      const proceedNow = requestDestructiveTransformSupportDeletionWithContinuation('Mirror Z', mirrorAll);
+      if (proceedNow) mirrorAll();
     } else {
-      performMirror();
+      mirrorAll();
     }
-  }, [scene, requestDestructiveTransformSupportDeletionWithContinuation, flushPendingBake, scheduleBake, syncTransformManagerToTransform]);
+  }, [scene, requestDestructiveTransformSupportDeletionWithContinuation, flushPendingBake, mirrorSingleModel]);
 
   return { handleMirror, flushPendingBake, mirrorSessionRef };
 }
