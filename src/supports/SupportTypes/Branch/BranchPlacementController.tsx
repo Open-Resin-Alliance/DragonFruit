@@ -19,7 +19,7 @@ import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
 import { subscribe, getSnapshot, addBranch, addKnot, addTwig, addStick } from '../../state';
-import { pushHistory } from '@/history/historyStore';
+import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
 import { SUPPORT_ADD_BRANCH, SUPPORT_ADD_TWIG, SUPPORT_ADD_STICK } from '../../history/actionTypes';
 import { SnapTarget } from '../../interaction/SnappingManager';
@@ -744,7 +744,7 @@ export function BranchPlacementController() {
                         }
                         : twig;
                     addTwig(markedTwig);
-                    pushHistory({
+                    pushSupportHistory({
                         type: SUPPORT_ADD_TWIG,
                         payload: { twig: markedTwig },
                     });
@@ -766,7 +766,7 @@ export function BranchPlacementController() {
                         }
                         : stick;
                     addStick(markedStick);
-                    pushHistory({
+                    pushSupportHistory({
                         type: SUPPORT_ADD_STICK,
                         payload: { stick: markedStick },
                     });
@@ -815,7 +815,7 @@ export function BranchPlacementController() {
             addKnot(parentKnot);
             addBranch(markedBranch);
 
-            pushHistory({
+            pushSupportHistory({
                 type: SUPPORT_ADD_BRANCH,
                 payload: {
                     branch: markedBranch,

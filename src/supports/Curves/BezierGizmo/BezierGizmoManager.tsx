@@ -7,7 +7,7 @@ import type { Kickstand as KickstandEntity } from '../../SupportTypes/Kickstand/
 import { BezierHandle } from './BezierHandle';
 import { calculateControlPoint } from './utils';
 import { useCurveInteractionState, curveInteractionStore } from '../../Curves/curveInteractionState';
-import { pushHistory } from '@/history/historyStore';
+import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
@@ -682,7 +682,7 @@ export function BezierGizmoManager() {
             if (latestTrunk) {
                 // Final exact reconciliation after drag-time fast-path updates.
                 updateTrunk(latestTrunk);
-                pushHistory({
+                pushSupportHistory({
                     type: SUPPORT_UPDATE_TRUNK,
                     description: 'Edit trunk curve',
                     payload: {

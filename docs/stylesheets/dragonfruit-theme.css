@@ -436,7 +436,7 @@
   border: none;
   cursor: pointer;
   font-family: inherit;
-  text-align: left;
+  text-align: center;
   width: 100%;
   border-top: 1px solid color-mix(in srgb, var(--df-accent-primary), transparent 75%);
   color: var(--md-default-fg-color--light);

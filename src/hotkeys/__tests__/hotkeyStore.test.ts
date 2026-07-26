@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { hotkeyStore, isKeyPressedSync, isActionActiveSync } from '../hotkeyStore';
-import { setupHotkeyListeners } from '../HotkeyRegistryManager';
+import { resumeHotkeyDispatch, setupHotkeyListeners, suspendHotkeyDispatch } from '../HotkeyRegistryManager';
+import { OPEN_SETTINGS_MODAL_EVENT } from '@/components/settings/settingsModalEvents';
 
 // Mock global window and HTMLElement if running in Node.js without DOM
 const listeners = new Map<string, Set<Function>>();
@@ -43,6 +44,16 @@ if (typeof global.window === 'undefined') {
         }
     };
 }
+
+// Node populates `navigator.platform` from the host OS (e.g. 'MacIntel' on a
+// macOS runner), which flips the primary modifier to Meta and breaks the tests
+// below that press Control. Pin a Ctrl-primary platform so these platform-
+// agnostic tests are deterministic on any host; the macOS-specific test near the
+// end overrides and restores `navigator` itself.
+Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { platform: 'Win32' },
+});
 
 function dispatchWindowEvent(event: string, detail: any) {
     listeners.get(event)?.forEach(cb => cb(detail));
@@ -128,6 +139,97 @@ test('Hotkey Registry: clears all active keys on window blur', () => {
     assert.equal(isKeyPressedSync('w'), false, 'Keys should be cleared on blur');
     assert.equal(isKeyPressedSync('Shift'), false, 'Keys should be cleared on blur');
 
+    cleanup();
+});
+
+// Regression: recording a shortcut in Settings used to leak the captured key into
+// the app, because this manager's capture listener runs before the recorder's and
+// had already dispatched `app-hotkey-keydown` by the time the recorder called
+// stopPropagation — so Escape closed the whole Settings modal instead of just
+// cancelling the recording.
+test('Hotkey Registry: suspended dispatch swallows keys entirely', () => {
+    hotkeyStore.getState().clearKeys();
+    const cleanup = setupHotkeyListeners();
+
+    const divTarget = new (global as any).HTMLElement('DIV');
+    let appHotkeyEvents = 0;
+    const countAppHotkey = () => { appHotkeyEvents += 1; };
+    window.addEventListener('app-hotkey-keydown', countAppHotkey);
+
+    suspendHotkeyDispatch();
+
+    dispatchWindowEvent('keydown', { key: 'Escape', target: divTarget });
+    assert.equal(appHotkeyEvents, 0, 'Escape must not reach app-hotkey listeners while recording');
+    assert.equal(isKeyPressedSync('Escape'), false, 'Suspended keys must not enter the store');
+
+    dispatchWindowEvent('keydown', { key: 'w', target: divTarget });
+    assert.equal(isKeyPressedSync('w'), false, 'No key may enter the store while suspended');
+    assert.equal(appHotkeyEvents, 0);
+
+    resumeHotkeyDispatch();
+
+    dispatchWindowEvent('keydown', { key: 'w', target: divTarget });
+    assert.equal(isKeyPressedSync('w'), true, 'Resuming must restore normal dispatch');
+    assert.equal(appHotkeyEvents, 1, 'Resumed keys dispatch app-hotkey-keydown again');
+
+    window.removeEventListener('app-hotkey-keydown', countAppHotkey);
+    hotkeyStore.getState().clearKeys();
+    cleanup();
+});
+
+test('Hotkey Registry: resuming clears modifiers held during recording', () => {
+    hotkeyStore.getState().clearKeys();
+    const cleanup = setupHotkeyListeners();
+
+    const divTarget = new (global as any).HTMLElement('DIV');
+    dispatchWindowEvent('keydown', { key: 'Shift', target: divTarget });
+    assert.equal(isKeyPressedSync('Shift'), true);
+
+    // The keyup that ends a recording never reaches the store, so the modifier
+    // would stay latched forever if resuming did not clear it.
+    suspendHotkeyDispatch();
+    resumeHotkeyDispatch();
+
+    assert.equal(isKeyPressedSync('Shift'), false, 'Held modifiers must not survive a recording');
+
+    cleanup();
+});
+
+test('Hotkey Registry: Cmd+, opens settings and suppresses the native shortcut', () => {
+    hotkeyStore.getState().clearKeys();
+    const cleanup = setupHotkeyListeners();
+    const divTarget = new HTMLElement();
+    let openSettingsEvents = 0;
+    const handleOpenSettings = () => { openSettingsEvents += 1; };
+    window.addEventListener(OPEN_SETTINGS_MODAL_EVENT, handleOpenSettings);
+
+    const cmdCommaEvent = {
+        key: ',',
+        target: divTarget,
+        metaKey: true,
+        ctrlKey: false,
+        shiftKey: false,
+        altKey: false,
+        preventDefaultCalled: false,
+        preventDefault() { this.preventDefaultCalled = true; },
+    };
+    dispatchWindowEvent('keydown', cmdCommaEvent);
+
+    assert.equal(openSettingsEvents, 1, 'Cmd+, should request the Settings modal');
+    assert.equal(cmdCommaEvent.preventDefaultCalled, true, 'Cmd+, should suppress the native shortcut');
+
+    const ctrlCommaEvent = {
+        ...cmdCommaEvent,
+        metaKey: false,
+        ctrlKey: true,
+        preventDefaultCalled: false,
+    };
+    dispatchWindowEvent('keydown', ctrlCommaEvent);
+
+    assert.equal(openSettingsEvents, 1, 'Ctrl+, should not trigger the macOS Settings shortcut');
+    assert.equal(ctrlCommaEvent.preventDefaultCalled, false);
+
+    window.removeEventListener(OPEN_SETTINGS_MODAL_EVENT, handleOpenSettings);
     cleanup();
 });
 
@@ -263,5 +365,37 @@ test('Newly migrated configurations: GLOBAL, DEBUG, MESH, NAVIGATION, PRESETS, H
     hotkeyStore.getState().clearKeys();
 });
 
+test('macOS uses Command, not Control, for primary-modifier shortcuts', () => {
+    const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        value: { platform: 'MacIntel' },
+    });
 
+    try {
+        hotkeyStore.getState().clearKeys();
+        hotkeyStore.getState().pressKey('Control');
+        hotkeyStore.getState().pressKey('v');
+        assert.equal(
+            isActionActiveSync('CANVAS', 'PASTE'),
+            false,
+            'macOS Ctrl+V must not activate paste',
+        );
 
+        hotkeyStore.getState().clearKeys();
+        hotkeyStore.getState().pressKey('Meta');
+        hotkeyStore.getState().pressKey('v');
+        assert.equal(
+            isActionActiveSync('CANVAS', 'PASTE'),
+            true,
+            'macOS Cmd+V must activate paste',
+        );
+    } finally {
+        hotkeyStore.getState().clearKeys();
+        if (navigatorDescriptor) {
+            Object.defineProperty(globalThis, 'navigator', navigatorDescriptor);
+        } else {
+            delete (globalThis as { navigator?: unknown }).navigator;
+        }
+    }
+});

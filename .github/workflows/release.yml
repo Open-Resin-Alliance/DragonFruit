@@ -149,7 +149,7 @@ jobs:
             df_build_triple: universal-apple-darwin
           - platform: windows-latest
             build_kind: tauri
-            args: --target x86_64-pc-windows-msvc --bundles nsis
+            args: --target x86_64-pc-windows-msvc --bundles nsis,msi
             artifact_name: dragonfruit-windows-x64
           - platform: ubuntu-22.04
             build_kind: flatpak
@@ -221,6 +221,10 @@ jobs:
 
       - name: Embed QuickLook extension + verify universal bundle
         if: matrix.platform == 'macos-latest'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: MHNF3GA2MM
         run: |
           node scripts/macos-embed-appex.mjs --target ${{ matrix.df_build_triple }}
           node scripts/verify-universal-bundle.mjs

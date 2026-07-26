@@ -18,7 +18,6 @@ export function useSlicingManager({ hasGeometry, zRange, layerHeightMm: controll
     [controlledLayerHeightMm],
   );
   const [uncontrolledLayerHeightMicron, setLayerHeightMicron] = useState<number>(() => controlledLayerHeightMicron ?? 50);
-  const [crossSectionMode, setCrossSectionMode] = useState<'smooth' | 'rasterized'>('smooth');
   const [layerIndex, setLayerIndexState] = useState<number>(0);
   const [lowerLayerIndex, setLowerLayerIndexState] = useState<number>(0);
   const topSliderInitializedRef = useRef(false);
@@ -159,8 +158,6 @@ export function useSlicingManager({ hasGeometry, zRange, layerHeightMm: controll
   return {
     layerHeightMicron,
     setLayerHeightMicron,
-    crossSectionMode,
-    setCrossSectionMode,
     layerIndex,
     setLayerIndex,
     lowerLayerIndex,

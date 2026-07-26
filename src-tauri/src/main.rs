@@ -48,10 +48,6 @@ fn default_z_blend_look_back() -> u32 {
     2
 }
 
-fn default_z_blend_fade_px() -> u32 {
-    20
-}
-
 fn default_z_blend_max_alpha_percent() -> f32 {
     90.0
 }
@@ -451,10 +447,6 @@ struct SliceJobMetadata {
     mirror_y: bool,
     #[serde(default = "default_z_blend_look_back")]
     z_blend_look_back: u32,
-    #[serde(default = "default_z_blend_fade_px")]
-    z_blend_fade_px: u32,
-    #[serde(default)]
-    z_blend_auto_fade: bool,
     #[serde(default)]
     z_blend_minimum_alpha_percent: f32,
     /// Maximum gray level (0–100 %) for z-blend gradient pixels at the inner boundary.
@@ -981,37 +973,6 @@ async fn export_mesh_file(
     Ok(dest_path)
 }
 
-#[tauri::command]
-async fn slice_solid_native(
-    window: DragonFruitWindow,
-    job_json: String,
-) -> Result<Response, String> {
-    let flag = cancel_flag().clone();
-    flag.store(false, Ordering::SeqCst);
-
-    let win = window.clone();
-    let bytes = tauri::async_runtime::spawn_blocking(move || {
-        let job: dragonfruit_slicing_engine::types::SliceJobV3 = serde_json::from_str(&job_json)
-            .map_err(|err| format!("Invalid SliceJobV3 JSON: {err}"))?;
-
-        let progress_cb = make_throttled_progress_cb(win);
-
-        slicer_pool().install(|| -> Result<Vec<u8>, String> {
-            let artifact = dragonfruit_slicing_engine::slice_with_progress_v3(
-                &job,
-                Some(progress_cb),
-                Some(flag.as_ref()),
-            )
-            .map_err(|err| format!("V3 slicing failed: {err}"))?;
-            Ok(artifact.bytes)
-        })
-    })
-    .await
-    .map_err(|err| format!("Native slicer task failed to join: {err}"))??;
-
-    Ok(Response::new(bytes))
-}
-
 /// Receive raw mesh bytes from the frontend via efficient binary IPC in chunks.
 /// The bytes are stored in a pre-allocated memory vector and consumed by the next `slice_solid_native_to_temp_path` call.
 #[tauri::command]
@@ -1410,8 +1371,6 @@ async fn slice_solid_native_to_temp_path(
             mirror_x: meta.mirror_x,
             mirror_y: meta.mirror_y,
             z_blend_look_back: meta.z_blend_look_back,
-            z_blend_fade_px: meta.z_blend_fade_px,
-            z_blend_auto_fade: meta.z_blend_auto_fade,
             z_blend_minimum_alpha_percent: meta.z_blend_minimum_alpha_percent,
             z_blend_max_alpha_percent: meta.z_blend_max_alpha_percent,
             z_blend_custom_lut: meta.z_blend_custom_lut,
@@ -3357,7 +3316,6 @@ fn main() {
 
     builder
         .invoke_handler(tauri::generate_handler![
-            slice_solid_native,
             stage_mesh_binary_start,
             allocate_mesh_stage_path,
             append_mesh_stage_chunk,

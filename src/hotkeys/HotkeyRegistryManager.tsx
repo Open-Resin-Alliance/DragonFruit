@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect } from 'react';
-import { hotkeyStore, isActionActiveSync } from './hotkeyStore';
+import { getPrimaryModifierKey, hotkeyStore, isActionActiveSync } from './hotkeyStore';
 import { useHotkeyConfig } from './HotkeyContext';
+import { openSettingsModal } from '@/components/settings/settingsModalEvents';
 
 // Monkey-patch EventTarget.prototype.addEventListener to block/warn keydown/keyup listeners from forbidden paths
 let selfChunkName = '';
@@ -121,18 +122,50 @@ function isCanvasElement(element: EventTarget | null): boolean {
     return tag === 'canvas';
 }
 
+// While Settings is recording a new binding, the app must stay deaf: this manager
+// registers its capture listener before the recorder's, so by the time the recorder
+// calls stopPropagation the `app-hotkey-*` events have already been dispatched and
+// acted upon (Escape closing the Settings modal, Delete deleting the selection,
+// Cmd+, reopening Settings…). Suspending dispatch at the source is what stops that.
+let dispatchSuspended = false;
+
+export function suspendHotkeyDispatch() {
+    dispatchSuspended = true;
+    hotkeyStore.getState().clearKeys();
+}
+
+export function resumeHotkeyDispatch() {
+    dispatchSuspended = false;
+    // Keys pressed while suspended never reached the store; clear so a modifier held
+    // during recording isn't left latched.
+    hotkeyStore.getState().clearKeys();
+}
+
 export function setupHotkeyListeners() {
     const handleKeyDown = (e: KeyboardEvent) => {
+        if (dispatchSuspended) return;
+
+        const key = e.key.toLowerCase();
+        const isMacSettingsShortcut = e.metaKey
+            && !e.ctrlKey
+            && !e.shiftKey
+            && !e.altKey
+            && key === ',';
+        if (isMacSettingsShortcut) {
+            e.preventDefault();
+            openSettingsModal();
+            return;
+        }
+
         if (isTextInput(e.target)) return;
 
-        const isCtrlOrMeta = e.ctrlKey || e.metaKey;
-        const key = e.key.toLowerCase();
+        const isPrimaryModifier = getPrimaryModifierKey() === 'meta' ? e.metaKey : e.ctrlKey;
         
         // Prevent browser default behaviors
         if (
-            (isCtrlOrMeta && ['s', 'a', 'c', 'v', 'z', 'y'].includes(key)) ||
+            (isPrimaryModifier && ['s', 'a', 'c', 'v', 'z', 'y'].includes(key)) ||
             ['delete', 'backspace', 'arrowup', 'arrowdown'].includes(key) ||
-            (e.shiftKey && isCtrlOrMeta && ['d', 'c', 'x', 'a', 'n', 'm', 'k'].includes(key))
+            (e.shiftKey && isPrimaryModifier && ['d', 'c', 'x', 'a', 'n', 'm', 'k'].includes(key))
         ) {
             e.preventDefault();
         }
@@ -155,6 +188,8 @@ export function setupHotkeyListeners() {
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
+        if (dispatchSuspended) return;
+
         hotkeyStore.getState().releaseKey(e.key);
 
         if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {

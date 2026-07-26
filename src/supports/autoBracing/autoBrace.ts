@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { pushHistory } from '@/history/historyStore';
+import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { getSettings } from '../Settings/state';
 import {
     SUPPORT_AUTO_BRACE_REPLACE,
@@ -949,7 +949,7 @@ export function runAutoBracing(): AutoBraceResult {
     if (!built.changed) return built;
 
     setSnapshot(built.snapshot);
-    pushHistory({
+    pushSupportHistory({
         type: SUPPORT_AUTO_BRACE_REPLACE,
         payload: {
             before,

@@ -1,8 +1,9 @@
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSolidSliceMeshForWasm, composeModelMatrix, type FullResSplicedModel } from './rasterLayerZipExport';
+import { clampSliceJobNumber } from './sliceJobLimits';
 import { prepareLoadedModelsForOutput, resolveOutputGeometrySource } from '@/features/mesh-modifiers/prepareModelGeometry';
-import { resolveOutputFormatVersion, resolveOutputSettingsMode, resolveSlicingFormatDefinition } from './formats/registry';
+import { resolveOutputFileExtension, resolveOutputFormatVersion, resolveOutputSettingsMode, resolveSlicingFormatDefinition } from './formats/registry';
 import { getSavedSlicingPerformanceSettings, type PngCompressionStrategy } from '@/components/settings/performancePreferences';
 import {
     isNativeSlicerAvailable,
@@ -224,8 +225,6 @@ export type SliceExportOrchestratorOptions = {
     zBlurKernel?: 'box' | 'gaussian';
     zBlurSigma?: number;
     zBlendLookBack?: number;
-    zBlendFadePx?: number;
-    zBlendAutoFade?: boolean;
     zBlendMinimumAlphaPercent?: number;
     zBlendMaxAlphaPercent?: number;
     zBlendCustomLut?: number[];
@@ -303,10 +302,8 @@ export type SliceExportResult = {
             widthPx: number;
             heightPx: number;
             xPackingMode: 'none' | 'rgb8_div3' | 'gray3_div2';
-            computeBackend: 'auto' | 'cpu' | 'gpu';
             pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
             containerCompressionLevel: number;
-            bvhAccelerationEnabled: boolean;
             antiAliasingLevel: AntiAliasingLevel;
             antiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
             blurBrushRadiusPx: number;
@@ -885,36 +882,29 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         widthPx: solidMesh.widthPx,
         heightPx: solidMesh.heightPx,
         xPackingMode: solidMesh.xPackingMode,
-        computeBackend: solidMesh.computeBackend,
         pngCompressionStrategy: resolvedPngStrategy,
-        bvhAccelerationEnabled: solidMesh.bvhAccelerationEnabled,
         antiAliasingLevel: options.antiAliasingLevel ?? 'Off',
         antiAliasingMode: options.antiAliasingMode ?? 'Blur',
-        blurBrushRadiusPx: Math.max(1, Math.round(options.blurBrushRadiusPx ?? 1)),
+        blurBrushRadiusPx: clampSliceJobNumber('blurBrushRadiusPx', options.blurBrushRadiusPx),
         blurBrushKernel: options.blurBrushKernel ?? 'gaussian',
-        blurBrushSigmaX: Math.max(0.05, Math.min(16, Number(options.blurBrushSigmaX ?? options.blurBrushSigma ?? 0.5))),
-        blurBrushSigmaY: Math.max(0.05, Math.min(16, Number(options.blurBrushSigmaY ?? options.blurBrushSigma ?? 0.5))),
-        zBlurRadiusLayers: Math.max(0, Math.min(8, Math.round(options.zBlurRadiusLayers ?? 0))),
+        blurBrushSigmaX: clampSliceJobNumber('blurBrushSigmaX', options.blurBrushSigmaX ?? options.blurBrushSigma),
+        blurBrushSigmaY: clampSliceJobNumber('blurBrushSigmaY', options.blurBrushSigmaY ?? options.blurBrushSigma),
+        zBlurRadiusLayers: clampSliceJobNumber('zBlurRadiusLayers', options.zBlurRadiusLayers),
         zBlurKernel: options.zBlurKernel ?? 'box',
-        zBlurSigma: Math.max(0.05, Math.min(16, Number(options.zBlurSigma ?? 0.5))),
-        zBlendLookBack: Math.max(1, Math.round(options.zBlendLookBack ?? 2)),
-        zBlendFadePx: Math.max(1, Math.round(options.zBlendFadePx ?? 20)),
-        zBlendAutoFade: options.zBlendAutoFade !== false,
-        zBlendMinimumAlphaPercent: Math.max(0, Math.min(100, options.zBlendMinimumAlphaPercent ?? 0)),
-        zBlendMaxAlphaPercent: Math.max(0, Math.min(100, options.zBlendMaxAlphaPercent ?? 90)),
+        zBlurSigma: clampSliceJobNumber('zBlurSigma', options.zBlurSigma),
+        zBlendLookBack: clampSliceJobNumber('zBlendLookBack', options.zBlendLookBack),
+        zBlendMinimumAlphaPercent: clampSliceJobNumber('zBlendMinimumAlphaPercent', options.zBlendMinimumAlphaPercent),
+        zBlendMaxAlphaPercent: clampSliceJobNumber('zBlendMaxAlphaPercent', options.zBlendMaxAlphaPercent),
         zBlendCustomLut: options.zBlendCustomLut,
         zaaKernel: options.zaaKernel,
         zaaPattern: options.zaaPattern,
         zaaDuplicateZ: options.zaaDuplicateZ,
         aaOnSupports: options.aaOnSupports ?? (perfSettings.aaOnSupportsExperimental === true),
-        minimumAaAlphaPercent: Math.max(
-            0,
-            Math.min(
-                100,
-                options.minimumAaAlphaPercentOverride
-                ?? options.materialProfile.minimumAaAlphaPercent
-                ?? 50,
-            ),
+        minimumAaAlphaPercent: clampSliceJobNumber(
+            'minimumAaAlphaPercent',
+            options.minimumAaAlphaPercentOverride
+            ?? options.materialProfile.minimumAaAlphaPercent
+            ?? 50,
         ),
         mirrorX: solidMesh.mirrorX,
         mirrorY: solidMesh.mirrorY,
@@ -981,7 +971,10 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     throwIfAborted(options.abortSignal);
     options.onProgress?.(Math.max(progressDone, progressTotal), progressTotal, 'Finalizing');
 
-    const printerExt = options.printerProfile.display.outputFormat.replace(/^\./, '') || format.outputFormat.replace(/^\./, '') || 'slice';
+    const printerExt = resolveOutputFileExtension(
+        options.printerProfile.display.outputFormat,
+        options.printerProfile.display.formatVersion,
+    ) || format.outputFormat.replace(/^\./, '') || 'slice';
     const outputName = `${safeFilenameBase(options.filenameBase)}.${printerExt}`;
 
     const totalElapsedMs = performance.now() - orchestratorStartMs;
@@ -1028,10 +1021,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                 widthPx: nativeJob.widthPx,
                 heightPx: nativeJob.heightPx,
                 xPackingMode: nativeJob.xPackingMode,
-                computeBackend: nativeJob.computeBackend,
                 pngCompressionStrategy: nativeJob.pngCompressionStrategy,
                 containerCompressionLevel: nativeJob.containerCompressionLevel,
-                bvhAccelerationEnabled: nativeJob.bvhAccelerationEnabled,
                 antiAliasingLevel: nativeJob.antiAliasingLevel,
                 antiAliasingMode: nativeJob.antiAliasingMode,
                 blurBrushRadiusPx: nativeJob.blurBrushRadiusPx,

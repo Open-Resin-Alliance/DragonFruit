@@ -1,6 +1,6 @@
 site_name: DragonFruit Slicer
 site_description: Open-source resin slicer and support-authoring environment for practical print preparation.
-site_url: https://slicer.openresin.org/
+site_url: https://dragonfruit-slicer.com/
 repo_name: Open-Resin-Alliance/DragonFruit
 repo_url: https://github.com/Open-Resin-Alliance/DragonFruit
 theme:

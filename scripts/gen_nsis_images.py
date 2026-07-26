@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from PIL import Image, ImageDraw, ImageFont
 import json
 
@@ -20,16 +21,15 @@ def load_font(*paths, size):
     return ImageFont.load_default()
 
 
-# Fonts
-font_bold = load_font("C:/Windows/Fonts/segoeuib.ttf", size=16)
-font_regular = load_font("C:/Windows/Fonts/segoeui.ttf", size=14)
-font_small = load_font("C:/Windows/Fonts/segoeui.ttf", size=12)
-font_footer = load_font(
-    "C:/Windows/Fonts/seguisb.ttf",
-    "C:/Windows/Fonts/segoeuib.ttf",
-    "C:/Windows/Fonts/segoeui.ttf",
-    size=16,
-)
+# Fonts. Selawik is Microsoft's own SIL OFL-licensed, metric-compatible
+# stand-in for Segoe UI (github.com/microsoft/Selawik) — vendored here so
+# this script produces identical output on any OS/CI runner instead of only
+# working where Segoe UI happens to be installed (i.e. Windows).
+FONT_DIR = "src-tauri/nsis/assets/fonts/selawik"
+font_bold = load_font(f"{FONT_DIR}/Selawik-Bold.ttf", size=16)
+font_regular = load_font(f"{FONT_DIR}/Selawik-Regular.ttf", size=14)
+font_small = load_font(f"{FONT_DIR}/Selawik-Regular.ttf", size=12)
+font_footer = load_font(f"{FONT_DIR}/Selawik-Semibold.ttf", size=16)
 
 # Colors
 BG_DARK = (22, 22, 38)        # #161626

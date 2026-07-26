@@ -19,11 +19,11 @@ Each locale is a pair of files directly under `src/locales/`:
 
 ## Local workflow
 
-| Command                | Runs                 | What it (re)generates                                                                                                                                                        |
-| ---------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm run i18n:extract` | `lingui extract`     | Scans the source and **updates every `.po`** (en/es/de/fr). New strings are added with an empty `msgstr`, existing translations are **preserved**, obsolete ones are pruned. |
-| `npm run i18n:compile` | `lingui compile`     | Reads the `.po` files and **regenerates the `.js`** catalogs consumed at runtime. Does not touch the `.po`.                                                                  |
-| `npm run i18n:update`  | `extract && compile` | Both steps in sequence.                                                                                                                                                      |
+| Command                | Runs                     | What it (re)generates                                                                                                                                                                              |
+| ---------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run i18n:extract` | `lingui extract --clean` | Scans the source and **updates every `.po`**. New strings are added with an empty `msgstr`, existing translations are **preserved**, and strings no longer in the source are **deleted**. |
+| `npm run i18n:compile` | `lingui compile`         | Reads the `.po` files and **regenerates the `.js`** catalogs consumed at runtime. Does not touch the `.po`.                                                                                        |
+| `npm run i18n:update`  | `extract && compile`     | Both steps in sequence.                                                                                                                                                                            |
 
 Typical loop: mark new strings → `npm run i18n:extract` → fill in the empty
 `msgstr` values in the `.po` files → `npm run i18n:compile` (or just

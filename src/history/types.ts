@@ -22,7 +22,9 @@ export type HistoryDebugEventKind =
   | 'undo-empty'
   | 'redo-empty'
   | 'undo-handler-missing'
-  | 'redo-handler-missing';
+  | 'redo-handler-missing'
+  | 'undo-declined'
+  | 'redo-declined';
 
 export interface HistoryDebugEvent {
   id: number;

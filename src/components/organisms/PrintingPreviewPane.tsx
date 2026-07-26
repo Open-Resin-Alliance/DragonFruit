@@ -19,7 +19,6 @@ export type PrintingPreviewPaneProps = {
   handlePrintingLayerScrubEnd: () => void;
   printingCurrentHeightMm: number | null;
   slicingHeightMm: number;
-  crossSectionMode: 'smooth' | 'rasterized';
 
   printingPreviewViewportRef: React.RefObject<HTMLDivElement | null>;
   printingPreviewCursor: React.CSSProperties['cursor'];
@@ -55,7 +54,6 @@ export function PrintingPreviewPane({
   handlePrintingLayerScrubEnd,
   printingCurrentHeightMm,
   slicingHeightMm,
-  crossSectionMode,
   printingPreviewViewportRef,
   printingPreviewCursor,
   handlePrintingPreviewWheel,
@@ -97,8 +95,6 @@ export function PrintingPreviewPane({
           currentHeightMm={printingCurrentHeightMm ?? undefined}
           maxHeightMm={slicingHeightMm}
           showValue={true}
-          crossSectionMode={crossSectionMode}
-          showModeIndicator={false}
           compactMinimalRail
           dragBatchMode="raf"
           docked

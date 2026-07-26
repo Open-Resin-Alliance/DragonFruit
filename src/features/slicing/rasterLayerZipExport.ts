@@ -138,9 +138,7 @@ export type SolidSliceMeshForWasm = {
   widthPx: number;
   heightPx: number;
   xPackingMode: 'none' | 'rgb8_div3' | 'gray3_div2';
-  computeBackend: 'auto' | 'cpu' | 'gpu';
   pngCompressionStrategy: PngCompressionStrategy;
-  bvhAccelerationEnabled: boolean;
   mirrorX: boolean;
   mirrorY: boolean;
   modelTriangleCount: number;
@@ -2240,6 +2238,7 @@ async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promis
       buildVolumeMm: options.printerProfile.buildVolumeMm,
       bitDepth: options.printerProfile.bitDepth,
       outputFormat: options.printerProfile.display.outputFormat,
+      formatVersion: options.printerProfile.display.formatVersion,
       mirrorX: options.printerProfile.display.mirrorX === true,
       mirrorY: options.printerProfile.display.mirrorY === true,
     },
@@ -2482,6 +2481,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
       buildVolumeMm: options.printerProfile.buildVolumeMm,
       bitDepth: options.printerProfile.bitDepth,
       outputFormat: options.printerProfile.display.outputFormat,
+      formatVersion: options.printerProfile.display.formatVersion,
       mirrorX: options.printerProfile.display.mirrorX === true,
       mirrorY: options.printerProfile.display.mirrorY === true,
     },
@@ -2526,10 +2526,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     widthPx: settings.widthPx,
     heightPx: settings.heightPx,
     xPackingMode: settings.xPackingMode,
-    // Backend selection is managed internally by the slicing engine.
-    computeBackend: 'auto',
     pngCompressionStrategy: perfSettings.pngCompressionStrategy,
-    bvhAccelerationEnabled: perfSettings.bvhAccelerationEnabled,
     mirrorX: settings.mirrorX,
     mirrorY: settings.mirrorY,
     modelTriangleCount,
@@ -2554,19 +2551,6 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     })(),
     metadataJson: JSON.stringify(manifest),
   };
-}
-
-export function buildProjectedCrossSectionLoopsAtZ(options: {
-  models: LoadedModel[];
-  zMm: number;
-}): THREE.Vector2[][] {
-  const context = buildProjectedCrossSectionContext(options.models);
-  if (!context) return [];
-
-  return buildProjectedCrossSectionLoopsAtZFromContext({
-    context,
-    zMm: options.zMm,
-  });
 }
 
 export function buildProjectedCrossSectionContext(models: LoadedModel[]): ProjectedCrossSectionContext | null {

@@ -1,4 +1,4 @@
-name: PR macOS Build Check
+name: PR macOS build check
 
 on:
   pull_request:
@@ -10,7 +10,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   macos-build:
@@ -40,7 +39,13 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
+      - name: Check for Apple signing secret
+        id: apple_cert
+        shell: bash
+        run: echo "available=${{ secrets.APPLE_CERTIFICATE != '' }}" >> "$GITHUB_OUTPUT"
+
       - name: Install Apple Certificate
+        if: steps.apple_cert.outputs.available == 'true'
         uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
@@ -96,21 +101,69 @@ jobs:
       - name: Generate plugin registry
         run: node scripts/generate-plugin-registry.mjs
 
+      - name: Check for Tauri updater signing secret
+        id: tauri_signing
+        shell: bash
+        run: echo "available=${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Export Tauri updater signing key
+        # Tauri updater signing — set these as repo secrets:
+        # TAURI_SIGNING_PRIVATE_KEY — content of .tauri/app.key
+        # TAURI_SIGNING_PRIVATE_KEY_PASSWORD — optional password set during key gen
+        # Only exported when present: tauri-action treats the env var as
+        # "signing enabled" merely by being set, even to an empty string,
+        # so an unavailable secret (e.g. fork PRs) must leave it unset
+        # rather than exported empty.
+        if: steps.tauri_signing.outputs.available == 'true'
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY<<TAURI_SIGNING_PRIVATE_KEY_EOF"
+            echo "$TAURI_SIGNING_PRIVATE_KEY"
+            echo "TAURI_SIGNING_PRIVATE_KEY_EOF"
+          } >> "$GITHUB_ENV"
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD<<TAURI_SIGNING_PRIVATE_KEY_PASSWORD_EOF"
+            echo "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD_EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Disable updater artifact signing if no signing key is available
+        # tauri.conf.json has createUpdaterArtifacts: true and a pubkey
+        # configured, so `tauri build` unconditionally tries to produce a
+        # signed .app.tar.gz — and hard-fails ("public key has been found,
+        # but no private key") if TAURI_SIGNING_PRIVATE_KEY isn't set. Fork
+        # PRs never get that secret, so skip updater artifact generation
+        # entirely for this compile-check build; it doesn't need to be
+        # updater-installable, just to prove the app builds.
+        if: steps.tauri_signing.outputs.available != 'true'
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const p = 'src-tauri/tauri.conf.json';
+            const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+            cfg.bundle.createUpdaterArtifacts = false;
+            fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n');
+          "
+
       - name: Build Tauri universal macOS bundle
         uses: tauri-apps/tauri-action@v0
         env:
           CMAKE_OSX_ARCHITECTURES: "arm64;x86_64"
           DF_BUILD_TARGET_TRIPLE: universal-apple-darwin
-          # Tauri updater signing — set these as repo secrets:
-          # TAURI_SIGNING_PRIVATE_KEY — content of .tauri/app.key
-          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD — optional password set during key gen
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tauriScript: npx tauri
           args: --target universal-apple-darwin --bundles app,dmg
 
       - name: Embed QuickLook extension + verify universal bundle
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: MHNF3GA2MM
         run: |
           node scripts/macos-embed-appex.mjs --target universal-apple-darwin
           node scripts/verify-universal-bundle.mjs
@@ -133,139 +186,3 @@ jobs:
           name: macos-dmg
           path: src-tauri/target/*/release/bundle/dmg/*_DragonFruit_nightly.dmg
           if-no-files-found: error
-
-  comment-status:
-    name: Comment macOS build status
-    runs-on: ubuntu-latest
-    needs:
-      - macos-build
-    if: always()
-    steps:
-      - name: Upsert PR status comment
-        uses: actions/github-script@v9
-        env:
-          BUILD_RESULT: ${{ needs.macos-build.result }}
-        with:
-          script: |
-            const marker = "<!-- dragonfruit-macos-build-status -->";
-            const result = process.env.BUILD_RESULT;
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const issue_number = context.payload.pull_request.number;
-            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
-
-            const emojiMap = {
-              success: "✅",
-              failure: "❌",
-              cancelled: "⚠️",
-              skipped: "⏭️",
-            };
-
-            const statusMap = {
-              success: {
-                icon: emojiMap.success,
-                title: "Compilation Succeeded",
-                badge: "Passed",
-                color: "brightgreen",
-                body: "The PR compiled successfully for macOS (Universal)."
-              },
-              failure: {
-                icon: emojiMap.failure,
-                title: "Compilation Failed",
-                badge: "Failed",
-                color: "red",
-                body: "The macOS compile check failed. Please inspect the workflow logs for details."
-              },
-              cancelled: {
-                icon: emojiMap.cancelled,
-                title: "Compilation Cancelled",
-                badge: "Cancelled",
-                color: "yellow",
-                body: "The macOS compile check did not finish because the workflow was cancelled."
-              }
-            };
-
-            const status = statusMap[result] ?? {
-              icon: emojiMap.skipped,
-              title: `Compilation Ended: ${result}`,
-              badge: result,
-              color: "grey",
-              body: "The macOS compile check finished with a non-standard result."
-            };
-
-            const commitSha = context.payload.pull_request?.head?.sha?.slice(0, 7) || "unknown";
-            const branch = context.payload.pull_request?.head?.ref || "unknown";
-
-            const body = [
-              marker,
-              `## ${status.icon} macOS Build Check — ${status.title}`,
-              "",
-              `| | |`,
-              `|---|---|`,
-              `| **Result** | ${status.badge} |`,
-              `| **Branch** | \`${branch}\` |`,
-              `| **Commit** | \`${commitSha}\` |`,
-              `| **Workflow** | [View run](${runUrl}) |`,
-              "",
-              `${status.body}`,
-              "",
-              "---",
-              "",
-              "> 💡 This check runs automatically on every push to the PR. The macOS DMG is handed off to the nightly workflow when the `nightly-build` label is set."
-            ].join("\n");
-
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner,
-              repo,
-              issue_number,
-              per_page: 100
-            });
-
-            const existing = comments.find((comment) =>
-              comment.user?.type === "Bot" && comment.body?.includes(marker)
-            );
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner,
-                repo,
-                comment_id: existing.id,
-                body
-              });
-              return;
-            }
-
-            await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number,
-              body
-            });
-
-  dispatch-nightly:
-    name: Dispatch nightly build if labeled
-    needs:
-      - macos-build
-    if: >
-      success() &&
-      contains(github.event.pull_request.labels.*.name, 'nightly-build')
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      pull-requests: write
-      contents: read
-    steps:
-      - name: Dispatch build-nightly workflow
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_BRANCH: ${{ github.head_ref }}
-          BASE_BRANCH: ${{ github.base_ref }}
-          RUN_ID: ${{ github.run_id }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          gh workflow run build-nightly.yml \
-            --repo "${{ github.repository }}" \
-            --ref "$BASE_BRANCH" \
-            -f branch="$HEAD_BRANCH" \
-            -f pr_run_id="$RUN_ID" \
-            -f pr_number="$PR_NUMBER"

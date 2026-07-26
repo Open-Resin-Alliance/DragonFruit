@@ -4,6 +4,13 @@ import React, { useEffect } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { AxisLabels } from '@/components/scene/AxisLabels';
+import { fitFontToWidth } from '@/utils/canvasTextFit';
+
+/**
+ * Front-marker texture is 256px wide; leave 4px either side of the label. Wide
+ * enough that the English "FRONT" still renders at its original 70px.
+ */
+const FRONT_MARKER_MAX_TEXT_WIDTH = 248;
 
 export function EnableLocalClipping({ enabled = true }: { enabled?: boolean }) {
   const { gl } = useThree();
@@ -218,6 +225,7 @@ export function Helpers({
   showGrid,
   showBuildPlate,
   safetyMarginMm,
+  frontLabel = 'Front',
 }: {
   gridWidthMm?: number;
   gridDepthMm?: number;
@@ -227,6 +235,12 @@ export function Helpers({
   showGrid?: boolean;
   showBuildPlate?: boolean;
   safetyMarginMm?: { front: number; back: number; left: number; right: number };
+  /**
+   * Text baked into the build plate's front-edge marker, already translated.
+   * Passed in rather than resolved here: this component runs inside the r3f
+   * reconciler, where the i18n provider is out of scope.
+   */
+  frontLabel?: string;
 }) {
   const nullRaycast = () => null;
   const shouldShowGrid = showGrid ?? true;
@@ -315,17 +329,20 @@ export function Helpers({
     canvas.width = 256;
     canvas.height = 72;
 
+    const label = frontLabel.toUpperCase();
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.fillStyle = frontMarkerColor;
-    context.font = '700 70px Arial';
+    // The plane geometry below is locked to the canvas aspect, so a longer
+    // translation has to shrink into the same texture instead of widening it.
+    context.font = fitFontToWidth(context, '700 70px Arial', label, FRONT_MARKER_MAX_TEXT_WIDTH);
     context.textAlign = 'center';
     context.textBaseline = 'middle';
-    context.fillText('FRONT', canvas.width / 2, canvas.height / 2 + 1);
+    context.fillText(label, canvas.width / 2, canvas.height / 2 + 1);
 
     const texture = new THREE.CanvasTexture(canvas);
     texture.needsUpdate = true;
     return texture;
-  }, [frontMarkerColor]);
+  }, [frontLabel, frontMarkerColor]);
 
   const xAxisGradient = React.useMemo(() => {
     const canvas = document.createElement('canvas');

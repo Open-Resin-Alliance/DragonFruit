@@ -1368,7 +1368,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-desktop"
-version = "0.1.9"
+version = "0.1.11"
 dependencies = [
  "base64 0.22.1",
  "bytemuck",
@@ -1474,6 +1474,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "sysinfo",
  "thiserror 1.0.69",
  "time",
  "time-core",
@@ -3351,6 +3352,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-open-directory"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb82bed227edf5201dfedf072bba4015a33d3d4a98519837295a90f0a23f676d"
+dependencies = [
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-foundation",
+]
+
+[[package]]
 name = "objc2-osa-kit"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5128,6 +5140,7 @@ dependencies = [
  "ntapi",
  "objc2-core-foundation",
  "objc2-io-kit",
+ "objc2-open-directory",
  "windows 0.62.2",
 ]
 

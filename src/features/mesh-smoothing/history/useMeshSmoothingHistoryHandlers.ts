@@ -1,10 +1,9 @@
 import { useEffect } from 'react';
 import * as THREE from 'three';
 
-import { pushHistory, registerHistoryHandler } from '@/history/historyStore';
-import type { HistoryDirection, HistoryAction } from '@/history/types';
+import { createTypedHistory } from '@/history/typedHistory';
 
-import { MESH_SMOOTHING_STROKE, type MeshSmoothingStrokePayload } from './actionTypes';
+import { MESH_SMOOTHING_STROKE, type MeshSmoothingHistoryPayloadMap } from './actionTypes';
 import { getMeshSmoothingGeometryByKey, subscribeToMeshSmoothingStrokeFinalized } from '../meshSmoothingEngine';
 import { getMeshTopology } from '../topologyCache';
 
@@ -92,14 +91,13 @@ function applyUniquePositions(geometry: THREE.BufferGeometry, uniqueIds: Uint32A
   return true;
 }
 
+const meshSmoothingHistory = createTypedHistory<MeshSmoothingHistoryPayloadMap>();
+
 export function useMeshSmoothingHistoryHandlers() {
   useEffect(() => {
-    const unregisterStroke = registerHistoryHandler(
+    const unregisterStroke = meshSmoothingHistory.register(
       MESH_SMOOTHING_STROKE,
-      (action: HistoryAction, direction: HistoryDirection) => {
-        const payload = action.payload as MeshSmoothingStrokePayload | undefined;
-        if (!payload) return false;
-
+      (payload, direction) => {
         const geometry = getMeshSmoothingGeometryByKey(payload.geometryKey);
         if (!geometry) return false;
 
@@ -109,7 +107,7 @@ export function useMeshSmoothingHistoryHandlers() {
     );
 
     const unsubFinalize = subscribeToMeshSmoothingStrokeFinalized((payload) => {
-      pushHistory({ type: MESH_SMOOTHING_STROKE, payload: payload as MeshSmoothingStrokePayload });
+      meshSmoothingHistory.push({ type: MESH_SMOOTHING_STROKE, payload });
     });
 
     return () => {

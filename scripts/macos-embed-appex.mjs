@@ -18,6 +18,13 @@
  * universal .app keeps QuickLook thumbnails working on both Intel and Apple
  * Silicon. `codesign --force --deep` signs fat Mach-O binaries natively.
  *
+ * Re-signing after embed invalidates whatever tauri-action applied earlier
+ * (signature + notarization ticket are hash-bound), so on a Developer ID build
+ * this module also re-notarizes + re-staples the .app, then signs, notarizes,
+ * and staples the rebuilt .dmg — otherwise the shipped disk image fails
+ * Gatekeeper ("Apple could not verify ... malware") even though the original
+ * tauri-action build was notarized correctly.
+ *
  * Usage (import):     import { embedAppex } from "./macos-embed-appex.mjs";
  *                     const { ok, reason } = embedAppex({ targetTriple });
  * Usage (standalone): node scripts/macos-embed-appex.mjs --target <triple>
@@ -89,14 +96,27 @@ export function embedAppex({ targetTriple, repoRoot = DEFAULT_REPO_ROOT } = {}) 
   cpSync(appexSrc, appexDst, { recursive: true, force: true });
 
   // Re-sign: appex first (with sandbox entitlement), then the outer bundle.
-  // Use an Apple Development cert if one is available (gives the extension a
-  // Team ID so the QL system will load it); fall back to ad-hoc ("-") on CI.
-  const identityResult = spawnSync(
-    "bash",
-    ["-c", "security find-identity -v -p codesigning 2>/dev/null | grep 'Apple Development:' | head -1 | awk '{print $2}'"],
-    { encoding: "utf8" }
-  );
-  const signIdentity = identityResult.stdout?.trim() || "-";
+  // Embedding the .appex changes the bundle's contents, so whatever signature
+  // + notarization ticket tauri-action applied before this step ran is no
+  // longer valid for the new hash. Identity search order: Developer ID
+  // Application (CI — matches the distribution cert apple-actions/import-codesign-certs
+  // imported, and is the only kind Apple will notarize) > Apple Development
+  // (local dev machines — gives the extension a Team ID so the QL system will
+  // load it, but can't be notarized) > ad-hoc "-" (no cert available at all —
+  // fine for local/PR-check builds that don't ship).
+  const findIdentity = (label) => {
+    const result = spawnSync(
+      "bash",
+      ["-c", `security find-identity -v -p codesigning 2>/dev/null | grep '${label}' | head -1 | awk '{print $2}'`],
+      { encoding: "utf8" }
+    );
+    return result.stdout?.trim() || null;
+  };
+  const signIdentity =
+    findIdentity("Developer ID Application:") || findIdentity("Apple Development:") || "-";
+  // Only a Developer ID signature can be notarized; re-notarizing after every
+  // re-sign is how we keep the shipped bundle Gatekeeper-clean.
+  const isDeveloperIdSigned = signIdentity !== "-";
   const entitlements = path.join(
     qlExtDir, "Sources", "VoxlThumbnailExtension", "VoxlThumbnailExtension.entitlements"
   );
@@ -105,23 +125,55 @@ export function embedAppex({ targetTriple, repoRoot = DEFAULT_REPO_ROOT } = {}) 
   // load an unsigned extension, and Gatekeeper rejects an unsigned app) is worse
   // than a loud failure. xattr -rc is best-effort (it can fail benignly when
   // there are no extended attributes to clear).
+  // Notarization requires the Hardened Runtime + a secure timestamp on every
+  // piece of signed code. `codesign --force` replaces the whole signature —
+  // including any options baked into it by tauri's original signing — so
+  // those flags must be re-added explicitly, or the notary service rejects
+  // the resubmission with status "Invalid" even though the identity is right.
+  // Only meaningful (and only requested) on a real Developer ID re-sign,
+  // since that's the only case we go on to notarize; skipping it for Apple
+  // Development / ad-hoc keeps local/offline dev builds working (--timestamp
+  // needs network access to Apple's timestamp server).
+  const notarizationFlags = isDeveloperIdSigned ? ["--options", "runtime", "--timestamp"] : [];
+
   spawnSync("xattr", ["-rc", appexDst], { stdio: "pipe" });
   const signAppex = spawnSync(
     "codesign",
-    ["--force", "--sign", signIdentity, "--entitlements", entitlements, appexDst],
+    ["--force", "--sign", signIdentity, ...notarizationFlags, "--entitlements", entitlements, appexDst],
     { encoding: "utf8" }
   );
   if (signAppex.status !== 0) {
     return { ok: false, reason: `codesign of .appex failed: ${(signAppex.stderr || "").trim()}` };
   }
+  // No --deep here: the .appex is already correctly signed (with its own
+  // sandbox entitlement) above, and --deep would re-sign it as a side effect
+  // using the outer app's parameters — silently dropping that entitlement.
+  // Apple's own guidance is nested-code-first, then the outer bundle without
+  // --deep; everything else nested (the externalBin sidecar) is unchanged
+  // from tauri-action's original signing and doesn't need re-touching.
   spawnSync("xattr", ["-rc", appBundle], { stdio: "pipe" });
   const signApp = spawnSync(
     "codesign",
-    ["--force", "--sign", signIdentity, "--deep", appBundle],
+    ["--force", "--sign", signIdentity, ...notarizationFlags, appBundle],
     { encoding: "utf8" }
   );
   if (signApp.status !== 0) {
     return { ok: false, reason: `codesign of .app failed: ${(signApp.stderr || "").trim()}` };
+  }
+
+  if (isDeveloperIdSigned) {
+    const credentials = readNotaryCredentials();
+    if (!credentials) {
+      return {
+        ok: false,
+        reason:
+          "Developer ID identity found but APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID are not set — " +
+          "cannot re-notarize the re-signed .app (its original notarization ticket is now invalid)",
+      };
+    }
+    const notarized = notarizeAndStaple(appBundle, credentials, { zipFirst: true });
+    if (!notarized.ok) return notarized;
+    console.log("[embed-appex] .app re-notarized and stapled after embedding the QuickLook extension.");
   }
 
   // Rebuild the DMG from the updated .app — tauri created it before we embedded
@@ -132,6 +184,7 @@ export function embedAppex({ targetTriple, repoRoot = DEFAULT_REPO_ROOT } = {}) 
     path.join(bundleBase, targetTriple ?? "", "release", "bundle", "dmg"),
     path.join(bundleBase, "release", "bundle", "dmg"),
   ];
+  let finalDmgPath = null;
   for (const dmgDir of dmgSearchDirs) {
     if (!existsSync(dmgDir)) continue;
     const dmgEntry = readdirSync(dmgDir).find((f) => f.endsWith(".dmg"));
@@ -177,6 +230,7 @@ export function embedAppex({ targetTriple, repoRoot = DEFAULT_REPO_ROOT } = {}) 
       }
       rmSync(backupDmgPath, { force: true });
       console.log(`[embed-appex] Bundled ${appBundleName} + ${dmgEntry} with QuickLook extension.`);
+      finalDmgPath = dmgPath;
       break;
     }
 
@@ -204,6 +258,7 @@ export function embedAppex({ targetTriple, repoRoot = DEFAULT_REPO_ROOT } = {}) 
       console.warn(
         `[embed-appex] bundle_dmg.sh failed; fell back to a plain DMG (${path.basename(dmgPath)}).`
       );
+      finalDmgPath = dmgPath;
       break;
     }
 
@@ -216,6 +271,107 @@ export function embedAppex({ targetTriple, repoRoot = DEFAULT_REPO_ROOT } = {}) 
     };
   }
 
+  // The rebuilt DMG is a brand-new file tauri never touched — sign it and, for
+  // a Developer ID build, notarize + staple it too, or Gatekeeper rejects it
+  // outright on open ("Apple could not verify ... malware").
+  if (finalDmgPath && isDeveloperIdSigned) {
+    const credentials = readNotaryCredentials();
+    if (!credentials) {
+      return {
+        ok: false,
+        reason:
+          "Developer ID identity found but APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID are not set — " +
+          "cannot sign/notarize the rebuilt DMG",
+      };
+    }
+    spawnSync("xattr", ["-rc", finalDmgPath], { stdio: "pipe" });
+    const signDmg = spawnSync("codesign", ["--force", "--sign", signIdentity, "--timestamp", finalDmgPath], {
+      encoding: "utf8",
+    });
+    if (signDmg.status !== 0) {
+      return { ok: false, reason: `codesign of .dmg failed: ${(signDmg.stderr || "").trim()}` };
+    }
+    const notarized = notarizeAndStaple(finalDmgPath, credentials);
+    if (!notarized.ok) return notarized;
+    console.log("[embed-appex] .dmg signed, notarized, and stapled.");
+  }
+
+  return { ok: true };
+}
+
+/** Reads Apple notary credentials from the environment, or null if incomplete. */
+function readNotaryCredentials() {
+  const appleId = process.env.APPLE_ID;
+  const applePassword = process.env.APPLE_PASSWORD;
+  const appleTeamId = process.env.APPLE_TEAM_ID;
+  if (!appleId || !applePassword || !appleTeamId) return null;
+  return { appleId, applePassword, appleTeamId };
+}
+
+/**
+ * Submits targetPath (a .app or .dmg) to Apple's notary service and staples
+ * the resulting ticket. notarytool only accepts a zip/dmg/pkg container, so
+ * pass zipFirst:true for a .app (a .dmg is already a valid container).
+ * Stapling always targets targetPath itself, never the zip.
+ */
+function notarizeAndStaple(targetPath, { appleId, applePassword, appleTeamId }, { zipFirst = false } = {}) {
+  let submitPath = targetPath;
+  let zipPath = null;
+  if (zipFirst) {
+    zipPath = `${targetPath}.zip`;
+    rmSync(zipPath, { force: true });
+    const zipResult = spawnSync("ditto", ["-c", "-k", "--keepParent", targetPath, zipPath], {
+      encoding: "utf8",
+    });
+    if (zipResult.status !== 0) {
+      return { ok: false, reason: `ditto zip for notarization failed: ${(zipResult.stderr || "").trim()}` };
+    }
+    submitPath = zipPath;
+  }
+
+  const submitResult = spawnSync(
+    "xcrun",
+    [
+      "notarytool", "submit", submitPath,
+      "--apple-id", appleId,
+      "--password", applePassword,
+      "--team-id", appleTeamId,
+      "--wait",
+    ],
+    { encoding: "utf8" }
+  );
+  if (zipPath) rmSync(zipPath, { force: true });
+  if (submitResult.status !== 0 || !/status: Accepted/.test(submitResult.stdout || "")) {
+    // "Invalid"/"Rejected" from notarytool submit never says why — the actual
+    // reason (missing hardened runtime, unsigned nested code, ...) only shows
+    // up in the per-submission log, so fetch it here rather than making
+    // whoever's debugging a CI failure guess from a bare status line.
+    let detail = "";
+    const idMatch = /id: ([0-9a-f-]{36})/.exec(submitResult.stdout || "");
+    if (idMatch) {
+      const logResult = spawnSync(
+        "xcrun",
+        ["notarytool", "log", idMatch[1], "--apple-id", appleId, "--password", applePassword, "--team-id", appleTeamId],
+        { encoding: "utf8" }
+      );
+      if (logResult.stdout) detail = `\nnotarytool log:\n${logResult.stdout.trim()}`;
+    }
+    return {
+      ok: false,
+      reason:
+        `notarytool submit failed for ${path.basename(targetPath)}: ` +
+        `${(submitResult.stdout || "").trim()} ${(submitResult.stderr || "").trim()}`.trim() +
+        detail,
+    };
+  }
+
+  const stapleResult = spawnSync("xcrun", ["stapler", "staple", targetPath], { encoding: "utf8" });
+  if (stapleResult.status !== 0) {
+    return {
+      ok: false,
+      reason: `stapler staple failed for ${path.basename(targetPath)}: ${(stapleResult.stderr || "").trim()}`,
+    };
+  }
   return { ok: true };
 }
 

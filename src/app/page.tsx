@@ -206,7 +206,8 @@ import {
 } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
 
 // Domain Features
-import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
+import { useSceneCollectionManager, SCENE_SLICED, pushSceneSlicedMarker } from '@/features/scene/useSceneCollectionManager';
+import { useSupportHistoryHandlers } from '@/supports/history/useSupportHistoryHandlers';
 import { useSlicingManager } from '@/features/slicing/useSlicingManager';
 import { useTransformManager } from '@/features/transform/useTransformManager';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
@@ -217,7 +218,7 @@ import { IslandsPanel } from '@/components/controls/IslandsPanel';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { useSupportInteractionManager } from '@/features/supports/useSupportInteractionManager';
 import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
-import { hotkeyStore, useActionActive, isActionActiveSync } from '@/hotkeys/hotkeyStore';
+import { hotkeyStore, useActionActive, isActionActiveSync, isPrimaryModifierPressed } from '@/hotkeys/hotkeyStore';
 import { useDeleteHotkey } from '@/features/delete/useDeleteHotkey';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { useCameraProjectionHotkey } from '@/hotkeys/useCameraProjectionHotkey';
@@ -231,7 +232,6 @@ import {
   getHistoryDebugEvents,
   getRedoCount,
   getUndoCount,
-  pushHistory,
   redo,
   subscribeHistory,
   subscribeHistoryDebug,
@@ -277,6 +277,7 @@ import {
   subscribeToPrinterReachability,
 } from '@/features/network/printerReachabilityStore';
 import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
+import { resolveOutputFileExtension } from '@/features/slicing/formats/registry';
 import {
   cleanupStalePrintTempArtifacts,
   deletePrintTempArtifactPath,
@@ -319,6 +320,7 @@ import { useSceneAutosave, suppressSceneAutosave } from '@/hooks/useSceneAutosav
 import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
 import { MeshRepairReportModal } from '@/components/scene/MeshRepairReportModal';
 import { MeshRepairConfirmModal } from '@/components/scene/MeshRepairConfirmModal';
+import { ManifoldWarningModal } from '@/components/modals/ManifoldWarningModal';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
@@ -378,6 +380,38 @@ function isKeyboardTargetEditable(target: EventTarget | null): boolean {
   if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
   if (target.isContentEditable) return true;
   return Boolean(target.closest('[contenteditable="true"]'));
+}
+
+// Duration label formatters. These MUST stay at module scope. React Compiler
+// rewrites the component body and renames locals (e.g. `minutes` -> `minutes_2`);
+// when that rename lands inside a Lingui `msg` template, the macro bakes the
+// renamed name into the generated message id, which then no longer matches the
+// compiled catalog (extracted from the original names). Lingui only interpolates
+// the fallback message in development, so production builds render raw
+// `{minutes_2}` placeholders. Plain module-scope functions are left untouched by
+// React Compiler, keeping the placeholder names — and thus the ids — stable.
+function formatApproxPrintTimeLabel(translate: (descriptor: MessageDescriptor) => string, totalSec: number): string {
+  const minutes = Math.floor(totalSec / 60);
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours > 0) return translate(msg({ message: `~${hours} h ${mins} min`, comment: 'Approximate estimated print time (the "~" marks it as a rough estimate). {hours}/{mins} are whole-number quantities.' }));
+  return translate(msg({ message: `~${mins} min`, comment: 'Approximate estimated print time under an hour (the "~" marks it as a rough estimate).' }));
+}
+
+function formatProcessingElapsedLabel(translate: (descriptor: MessageDescriptor) => string, elapsedSec: number): string {
+  const total = Math.max(0, elapsedSec);
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return translate(msg`${minutes} min ${seconds} s`);
+}
+
+function formatEstimatedPrintTimeLabel(translate: (descriptor: MessageDescriptor) => string, totalSec: number): string {
+  const wholeSeconds = Math.max(0, Math.floor(totalSec));
+  const hours = Math.floor(wholeSeconds / 3600);
+  const minutes = Math.floor((wholeSeconds % 3600) / 60);
+  const seconds = wholeSeconds % 60;
+  if (hours > 0) return translate(msg`${hours} h ${minutes} min`);
+  return translate(msg`${minutes} min ${seconds} s`);
 }
 
 const HOLE_PUNCH_OUTSIDE_PROTRUSION_MM = 3;
@@ -487,8 +521,29 @@ function createModelTransformKey(modelId: string, transform: ModelTransform): st
 export default function Home() {
   const { _ } = useLingui();
   const { stage, sproutParentingLockHeld } = useLeafPlacementState();
+  // Supports undo/redo handlers register for the lifetime of the app root, not
+  // for the lifetime of a scene renderer. Otherwise Ctrl+Z depends on which
+  // render branch happens to be mounted.
+  useSupportHistoryHandlers();
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
+
+  // Warn when an imported mesh fails the manifold_csg validity check — the same
+  // models shown with the red striped overlay in the viewport. Only a single
+  // warning is shown per import job: as soon as any newly-imported model is
+  // flagged, every currently-flagged model is marked as warned so the rest of
+  // the batch does not pop additional modals.
+  const warnedManifoldModelIdsRef = React.useRef<Set<string>>(new Set());
+  const [showManifoldWarning, setShowManifoldWarning] = React.useState(false);
+  React.useEffect(() => {
+    const flagged = scene.models.filter(
+      (model) => model.geometry?.meshDefects?.nativeRepairReport?.model_is_manifold === false,
+    );
+    const hasUnwarned = flagged.some((model) => !warnedManifoldModelIdsRef.current.has(model.id));
+    if (!hasUnwarned) return;
+    for (const model of flagged) warnedManifoldModelIdsRef.current.add(model.id);
+    setShowManifoldWarning(true);
+  }, [scene.models]);
   const importSceneFile = scene.importSceneFile;
   const importSceneFiles = scene.importSceneFiles;
   const recentOpenedFiles = scene.recentOpenedFiles;
@@ -1989,12 +2044,12 @@ export default function Home() {
     return [
       {
         id: 'supports-toggle-curve' as const,
-        label: msg`Toggle Curve`,
+        label: msg`Toggle curve`,
         icon: RefreshCw,
       },
       {
         id: 'supports-add-joint' as const,
-        label: msg`Add Joint`,
+        label: msg`Add joint`,
         icon: Plus,
       },
     ];
@@ -2187,11 +2242,7 @@ export default function Home() {
     setPrintingArtifactIsInvalid(false);
     setShowPrintingResliceModal(false);
     // Push a "Sliced Scene" marker to history so we can detect changes after this point
-    pushHistory({
-      type: 'SCENE_SLICED',
-      description: 'Scene sliced for printing',
-      payload: {},
-    });
+    pushSceneSlicedMarker();
     setPrintingSendStatusText(null);
     setPrintingSendProgress(0);
     setPrintingSendStageText(null);
@@ -3018,11 +3069,7 @@ export default function Home() {
       + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
     );
 
-    const minutes = Math.floor(totalSec / 60);
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    if (hours > 0) return _(msg({ message: `~${hours} h ${mins} min`, comment: 'Approximate estimated print time (the "~" marks it as a rough estimate). {hours}/{mins} are whole-number quantities.' }));
-    return _(msg({ message: `~${mins} min`, comment: 'Approximate estimated print time under an hour (the "~" marks it as a rough estimate).' }));
+    return formatApproxPrintTimeLabel(_, totalSec);
   }, [_, activeMaterialProfile, printingPreviewTotalLayers]);
 
   const canDownloadPrintArtifact = Boolean(printingArtifact);
@@ -3555,12 +3602,12 @@ export default function Home() {
       .replace(/\.[^.]+$/, '')
       .replace(/[<>:"/\\|?*]+/g, '_')
       .replace(/\s+/g, '_');
-    const outputFormat = (activePrinterProfile?.display.outputFormat ?? '').trim();
-    const ext = outputFormat.length > 0
-      ? (outputFormat.startsWith('.') ? outputFormat : `.${outputFormat}`)
-      : '.print';
-    return `${base || 'slice_export'}${ext}`;
-  }, [activePrinterProfile?.display.outputFormat, activePrinterProfile?.name, scene.activeModel?.name, scene.models]);
+    const ext = resolveOutputFileExtension(
+      activePrinterProfile?.display.outputFormat,
+      activePrinterProfile?.display.formatVersion,
+    );
+    return `${base || 'slice_export'}.${ext}`;
+  }, [activePrinterProfile?.display.outputFormat, activePrinterProfile?.display.formatVersion, activePrinterProfile?.name, scene.activeModel?.name, scene.models]);
   const canPrintNow = Boolean(
     printingReadyPlateId
     && printingTargetDevice?.connected === true,
@@ -3687,11 +3734,7 @@ export default function Home() {
   const printingDialogProgressPercent = Math.max(0, Math.min(100, printingUploadDisplayProgress * 100));
 
   const printingProcessingElapsedLabel = React.useMemo(() => {
-    const total = Math.max(0, printingDeviceProcessingElapsedSec);
-    const minutes = Math.floor(total / 60);
-    const seconds = total % 60;
-    const paddedSeconds = seconds.toString().padStart(2, '0');
-    return _(msg`${minutes} min ${paddedSeconds} s`);
+    return formatProcessingElapsedLabel(_, printingDeviceProcessingElapsedSec);
   }, [_, printingDeviceProcessingElapsedSec]);
 
 
@@ -6345,14 +6388,7 @@ export default function Home() {
       + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
     );
 
-    const wholeSeconds = Math.max(0, Math.floor(totalSec));
-    const hours = Math.floor(wholeSeconds / 3600);
-    const minutes = Math.floor((wholeSeconds % 3600) / 60);
-    const seconds = wholeSeconds % 60;
-    const paddedSeconds = seconds.toString().padStart(2, '0');
-
-    if (hours > 0) return _(msg`${hours} h ${minutes} min`);
-    return _(msg`${minutes} min ${paddedSeconds} s`);
+    return formatEstimatedPrintTimeLabel(_, totalSec);
   }, [_, activeMaterialProfile, estimatedSlicerLayerCount, scene.models]);
 
   const printingCurrentHeightMm = React.useMemo(() => {
@@ -6450,7 +6486,7 @@ export default function Home() {
     // Find the most recent "SCENE_SLICED" marker
     let sliceMarkerIndex = -1;
     for (let i = historyEvents.length - 1; i >= 0; i--) {
-      if (historyEvents[i].actionType === 'SCENE_SLICED') {
+      if (historyEvents[i].actionType === SCENE_SLICED) {
         sliceMarkerIndex = i;
         break;
       }
@@ -6460,7 +6496,7 @@ export default function Home() {
       // Check if there are any OTHER events (non-undo/redo) after the slice marker
       const eventsAfterSlice = historyEvents.slice(sliceMarkerIndex + 1);
       const hasModifications = eventsAfterSlice.some(
-        (e) => e.kind === 'push' && e.actionType !== 'SCENE_SLICED'
+        (e) => e.kind === 'push' && e.actionType !== SCENE_SLICED
       );
       
       if (hasModifications) {
@@ -6480,7 +6516,7 @@ export default function Home() {
       // Find the most recent "SCENE_SLICED" marker
       let sliceMarkerIndex = -1;
       for (let i = historyEvents.length - 1; i >= 0; i--) {
-        if (historyEvents[i].actionType === 'SCENE_SLICED') {
+        if (historyEvents[i].actionType === SCENE_SLICED) {
           sliceMarkerIndex = i;
           break;
         }
@@ -6490,7 +6526,7 @@ export default function Home() {
         // Check if there are any OTHER events (non-undo/redo) after the slice marker
         const eventsAfterSlice = historyEvents.slice(sliceMarkerIndex + 1);
         const hasModifications = eventsAfterSlice.some(
-          (e) => e.kind === 'push' && e.actionType !== 'SCENE_SLICED'
+          (e) => e.kind === 'push' && e.actionType !== SCENE_SLICED
         );
         
         if (hasModifications) {
@@ -8567,11 +8603,11 @@ export default function Home() {
 
     const unsubscribe = hotkeyStore.subscribe((state) => {
       const active = state.activeKeys;
-      const isCtrlOrMeta = active.has('ctrl') || active.has('meta') || active.has('control');
-      const isAPressed = active.has('a') && isCtrlOrMeta;
-      const isCPressed = active.has('c') && isCtrlOrMeta;
-      const isVPressed = active.has('v') && isCtrlOrMeta;
-      const isSPressed = active.has('s') && isCtrlOrMeta;
+      const hasPrimaryModifier = isPrimaryModifierPressed(active);
+      const isAPressed = active.has('a') && hasPrimaryModifier;
+      const isCPressed = active.has('c') && hasPrimaryModifier;
+      const isVPressed = active.has('v') && hasPrimaryModifier;
+      const isSPressed = active.has('s') && hasPrimaryModifier;
 
       const isAJustPressed = isAPressed && !wasAPressed;
       const isCJustPressed = isCPressed && !wasCPressed;
@@ -9408,8 +9444,6 @@ export default function Home() {
             hoverColor={scene.hoverColor}
             hoverTintStrength={effectiveHoverTintStrengthForScene}
             selectedTintStrength={effectiveSelectedTintStrengthForScene}
-            crossSectionMode={slicing.crossSectionMode}
-            pxMm={islands.pxMm}
             supportsRef={supportsRef}
             supportDragGroupRef={supportDragGroupRef}
             holdSupportDragDelta={holdSupportDragDeltaUntilSupportSync}
@@ -9597,7 +9631,6 @@ export default function Home() {
             handlePrintingLayerScrubEnd={handlePrintingLayerScrubEnd}
             printingCurrentHeightMm={printingCurrentHeightMm}
             slicingHeightMm={slicing.heightMm}
-            crossSectionMode={slicing.crossSectionMode}
             printingPreviewViewportRef={printingPreviewViewportRef}
             printingPreviewCursor={printingPreviewCursor}
             handlePrintingPreviewWheel={handlePrintingPreviewWheel}
@@ -9864,6 +9897,11 @@ export default function Home() {
         showModifierApplyBlockingOverlay={showModifierApplyBlockingOverlay}
         showUnappliedHolePunchModal={showUnappliedHolePunchModal}
         unappliedHolePunchResolveRef={unappliedHolePunchResolveRef}
+      />
+
+      <ManifoldWarningModal
+        isOpen={showManifoldWarning}
+        onAcknowledge={() => setShowManifoldWarning(false)}
       />
 
       <MeshRepairModals

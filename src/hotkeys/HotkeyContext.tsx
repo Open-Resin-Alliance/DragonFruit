@@ -8,7 +8,7 @@ const HOTKEY_STORAGE_KEY = 'app-hotkeys-config';
 interface HotkeyContextType {
     config: HotkeyConfig;
     updateHotkey: (category: string, action: string, newBinding: HotkeyBinding) => void;
-    resetToDefaults: () => void;
+    resetCategories: (categories: string[]) => void;
     getHotkey: (category: string, action: string) => HotkeyBinding;
 }
 
@@ -55,8 +55,20 @@ export function HotkeyProvider({ children }: { children: React.ReactNode }) {
         }));
     }, []);
 
-    const resetToDefaults = useCallback(() => {
-        setConfig(DEFAULT_KEYBINDINGS);
+    // Restores every action of the given categories — a Settings card resets all the
+    // categories it displays (e.g. the "Global" card covers GLOBAL, CAMERA, ROTATION).
+    const resetCategories = useCallback((categories: string[]) => {
+        setConfig(prev => {
+            const next = { ...prev };
+            for (const category of categories) {
+                const categoryDefaults = DEFAULT_KEYBINDINGS[category];
+                if (!categoryDefaults) continue;
+                next[category] = Object.fromEntries(
+                    Object.entries(categoryDefaults).map(([action, binding]) => [action, { ...binding }])
+                );
+            }
+            return next;
+        });
     }, []);
 
     const getHotkey = useCallback((category: string, action: string): HotkeyBinding => {
@@ -64,7 +76,7 @@ export function HotkeyProvider({ children }: { children: React.ReactNode }) {
     }, [config]);
 
     return (
-        <HotkeyContext.Provider value={{ config, updateHotkey, resetToDefaults, getHotkey }}>
+        <HotkeyContext.Provider value={{ config, updateHotkey, resetCategories, getHotkey }}>
             {children}
         </HotkeyContext.Provider>
     );

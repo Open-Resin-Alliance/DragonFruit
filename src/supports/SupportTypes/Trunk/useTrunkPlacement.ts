@@ -1,7 +1,7 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { addAnchor, addBranch, addKnot, addLeaf, addRoot, addStick, addTrunk, addTwig, getSnapshot, setSnapshot, updateKnot, updateTrunk } from '../../state';
-import { pushHistory } from '@/history/historyStore';
+import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { SUPPORT_ADD_ANCHOR, SUPPORT_ADD_BRANCH, SUPPORT_ADD_LEAF, SUPPORT_ADD_STICK, SUPPORT_ADD_TRUNK, SUPPORT_ADD_TWIG } from '../../history/actionTypes';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { buildTrunkData } from './trunkBuilder';
@@ -257,7 +257,7 @@ export function useTrunkPlacementV2() {
         const markedBuild = markTrunkBuildPlacementSurface(trunkBuild, placementSurface);
         addRoot(markedBuild.root);
         addTrunk(markedBuild.trunk);
-        pushHistory({
+        pushSupportHistory({
             type: SUPPORT_ADD_TRUNK,
             payload: {
                 trunk: markedBuild.trunk,
@@ -602,14 +602,14 @@ export function useTrunkPlacementV2() {
                     if (cavityStick.kind === 'twig') {
                         const twig = markTwigPlacementSurface(cavityStick.twig, placementSurface);
                         addTwig(twig);
-                        pushHistory({
+                        pushSupportHistory({
                             type: SUPPORT_ADD_TWIG,
                             payload: { twig },
                         });
                     } else {
                         const stick = markStickPlacementSurface(cavityStick.stick, placementSurface);
                         addStick(stick);
-                        pushHistory({
+                        pushSupportHistory({
                             type: SUPPORT_ADD_STICK,
                             payload: { stick },
                         });
@@ -661,7 +661,7 @@ export function useTrunkPlacementV2() {
         if (decision.kind === 'place_anchor') {
             const anchor = markAnchorPlacementSurface(decision.anchor, placementSurface);
             addAnchor(anchor);
-            pushHistory({
+            pushSupportHistory({
                 type: SUPPORT_ADD_ANCHOR,
                 payload: { anchor },
             });
@@ -690,7 +690,7 @@ export function useTrunkPlacementV2() {
                 })()
                 : null;
 
-            pushHistory({
+            pushSupportHistory({
                 type: SUPPORT_ADD_BRANCH,
                 payload: {
                     branch,
@@ -708,7 +708,7 @@ export function useTrunkPlacementV2() {
             addKnot(decision.knot);
             addLeaf(leaf);
 
-            pushHistory({
+            pushSupportHistory({
                 type: SUPPORT_ADD_LEAF,
                 payload: {
                     leaf,
@@ -765,14 +765,14 @@ export function useTrunkPlacementV2() {
                     if (cavityStick.kind === 'twig') {
                         const twig = markTwigPlacementSurface(cavityStick.twig, placementSurface);
                         addTwig(twig);
-                        pushHistory({
+                        pushSupportHistory({
                             type: SUPPORT_ADD_TWIG,
                             payload: { twig },
                         });
                     } else {
                         const stick = markStickPlacementSurface(cavityStick.stick, placementSurface);
                         addStick(stick);
-                        pushHistory({
+                        pushSupportHistory({
                             type: SUPPORT_ADD_STICK,
                             payload: { stick },
                         });

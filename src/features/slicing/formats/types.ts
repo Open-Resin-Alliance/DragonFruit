@@ -25,6 +25,10 @@ export type SlicingFormatDefinition = {
   pluginId?: string;
   xPackingStrategy?: SlicingXPackingStrategy;
   formatVersions?: SlicingFormatVersionOption[];
+  /** When true, the selected formatVersion value is used as the output file extension
+   *  instead of outputFormat. For formats whose outputFormat is a canonical container
+   *  (e.g. .aff/.azf) while each printer variant has its own native extension. */
+  fileExtensionFromVersion?: boolean;
   settingsModes?: SlicingSettingsModeOption[];
   rustModulePath: string;
   wasmExportName: string;

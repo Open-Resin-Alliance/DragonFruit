@@ -2,9 +2,11 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { CloudDownload, Download, Loader2, RotateCcw, ScrollText, X } from 'lucide-react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
 import ReactMarkdown from 'react-markdown';
 import { fetchUpdateInfo, downloadAndInstall, getUpdateChannel, type UpdateInfo, type DownloadProgress, type UpdateChannel } from '@/features/updater/updateBridge';
-import { dispatchOpenSettingsAbout } from '@/features/updater/updateNotificationEvents';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 
 // ---------------------------------------------------------------------------
@@ -27,16 +29,6 @@ const RE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const STORAGE_KEY_SUPPRESSED = 'dragonfruit-update-suppressed-version';
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -48,6 +40,7 @@ function formatBytes(bytes: number): string {
  * Dev shortcut: Ctrl+Shift+U triggers a fake update for testing.
  */
 export function GlobalUpdateIndicator() {
+  const { _, i18n } = useLingui();
   const [state, setState] = useState<IndicatorState>({ status: 'idle' });
   const [showReleaseNotesModal, setShowReleaseNotesModal] = useState(false);
 
@@ -160,19 +153,24 @@ export function GlobalUpdateIndicator() {
   const info = state.status === 'available' ? state.info : null;
   const isDownloading = state.status === 'downloading';
   const isError = state.status === 'error';
+  const pct = state.status === 'downloading' ? state.pct : 0;
 
-  const subtitle = info?.date
-    ? `Released ${new Date(info.date).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}`
-    : undefined;
+  // Format the release date in the app's own locale, not the browser's — the
+  // language switcher must move the whole dialog, dates included.
+  const releaseDate = info?.date
+    ? new Date(info.date).toLocaleDateString(i18n.locale, { year: 'numeric', month: 'long', day: 'numeric' })
+    : null;
+  const subtitle = releaseDate ? _(msg`Released ${releaseDate}`) : undefined;
+  const version = info?.version ?? '?';
 
   return (    <>    <StructuredDialogModal
       open={isModalOpen}
-      ariaLabel="Update available"
+      ariaLabel={_(msg`Update available`)}
       title={isDownloading
-        ? 'Downloading Update'
+        ? _(msg`Downloading update`)
         : isError
-          ? 'Update Failed'
-          : `Update Available — v${info?.version ?? '?'}`}
+          ? _(msg`Update failed`)
+          : _(msg`Update available — v${version}`)}
       subtitle={subtitle}
       icon={isDownloading
         ? <Loader2 className="h-4 w-4 animate-spin" />
@@ -180,7 +178,7 @@ export function GlobalUpdateIndicator() {
       iconTone="accent"
       zIndexClassName="z-[130]"
       maxWidthClassName="max-w-lg"
-      closeAriaLabel="Close update dialog"
+      closeAriaLabel={_(msg`Close update dialog`)}
       onClose={isDownloading ? undefined : handleClose}
       onBackdropClick={isDownloading ? undefined : handleClose}
       actions={isError ? (
@@ -190,7 +188,7 @@ export function GlobalUpdateIndicator() {
             onClick={handleClose}
             className="ui-button ui-button-secondary !h-9 px-3 text-sm"
           >
-            Close
+            <Trans>Close</Trans>
           </button>
           <button
             type="button"
@@ -198,7 +196,7 @@ export function GlobalUpdateIndicator() {
             className="ui-button ui-button-accent !h-9 px-3 text-sm inline-flex items-center gap-1.5"
           >
             <RotateCcw className="w-4 h-4" />
-            Try Again
+            <Trans>Try again</Trans>
           </button>
         </>
       ) : isDownloading ? (
@@ -209,7 +207,7 @@ export function GlobalUpdateIndicator() {
             className="ui-button ui-button-accent !h-9 px-3 text-sm inline-flex items-center gap-1.5 opacity-60"
           >
             <Loader2 className="w-4 h-4 animate-spin" />
-            Downloading… {state.status === 'downloading' ? `${state.pct}%` : ''}
+            <Trans>Downloading… {pct}%</Trans>
           </button>
         </>
       ) : (
@@ -219,7 +217,7 @@ export function GlobalUpdateIndicator() {
             onClick={handleDismiss}
             className="ui-button ui-button-secondary !h-9 px-3 text-sm"
           >
-            Remind Me Later
+            <Trans>Remind me later</Trans>
           </button>
           <button
             type="button"
@@ -227,7 +225,7 @@ export function GlobalUpdateIndicator() {
             className="ui-button ui-button-accent !h-9 px-3 text-sm inline-flex items-center gap-1.5"
           >
             <Download className="w-4 h-4" />
-            Download &amp; Install
+            <Trans>Download &amp; install</Trans>
           </button>
         </>
       )}
@@ -241,7 +239,7 @@ export function GlobalUpdateIndicator() {
             color: 'var(--danger)',
           }}
         >
-          The update download or install failed. Please check your connection and try again.
+          <Trans>The update download or install failed. Please check your connection and try again.</Trans>
         </div>
       )}
 
@@ -254,13 +252,13 @@ export function GlobalUpdateIndicator() {
             <div
               className="h-full rounded-full transition-all duration-200 ease-out"
               style={{
-                width: `${Math.min(state.pct, 100)}%`,
+                width: `${Math.min(pct, 100)}%`,
                 background: 'linear-gradient(90deg, var(--accent), var(--accent-secondary))',
               }}
             />
           </div>
           <div className="text-center text-[11px]" style={{ color: 'var(--text-muted)' }}>
-            {state.pct}% — Downloading update, please wait…
+            <Trans>{pct}% — Downloading update, please wait…</Trans>
           </div>
         </div>
       )}
@@ -274,7 +272,7 @@ export function GlobalUpdateIndicator() {
               style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
             >
               <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                Current Version
+                <Trans>Current version</Trans>
               </div>
               <div className="text-sm font-semibold mt-0.5" style={{ color: 'var(--text-strong)' }}>
                 v{info.currentVersion}
@@ -289,7 +287,7 @@ export function GlobalUpdateIndicator() {
               }}
             >
               <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--accent)' }}>
-                New Version
+                <Trans>New version</Trans>
               </div>
               <div className="text-sm font-semibold mt-0.5" style={{ color: 'var(--accent)' }}>
                 v{info.version}
@@ -311,7 +309,7 @@ export function GlobalUpdateIndicator() {
               <div className="flex items-center gap-2">
                 <ScrollText className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--text-muted)' }} />
                 <span className="text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>
-                  Show Release Notes
+                  <Trans>Show release notes</Trans>
                 </span>
               </div>
             </button>
@@ -355,7 +353,7 @@ export function GlobalUpdateIndicator() {
                 </span>
                 <div className="min-w-0">
                   <h3 className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
-                    Release Notes — v{info.version}
+                    <Trans>Release notes — v{info.version}</Trans>
                   </h3>
                 </div>
               </div>
@@ -368,7 +366,7 @@ export function GlobalUpdateIndicator() {
                   background: 'color-mix(in srgb, var(--surface-1), transparent 6%)',
                   color: 'var(--text-muted)',
                 }}
-                aria-label="Close release notes"
+                aria-label={_(msg`Close release notes`)}
               >
                 <X className="h-4 w-4" />
               </button>

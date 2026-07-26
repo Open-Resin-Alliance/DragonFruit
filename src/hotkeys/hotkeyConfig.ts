@@ -1,23 +1,5 @@
 // Centralized configuration for application hotkeys
 
-// Universal hotkeys are hardcoded system standards and are not intended to be customizable.
-export const UNIVERSAL_HOTKEYS = {
-    DELETE: {
-        keys: ['Delete', 'Backspace'],
-        description: 'Delete selected item'
-    },
-    UNDO: {
-        key: 'z',
-        modifier: 'ctrl', // or meta
-        description: 'Undo last action'
-    },
-    REDO: {
-        key: 'z',
-        modifier: 'ctrl+shift',
-        description: 'Redo last action'
-    }
-} as const;
-
 // Default keybindings for application features.
 // These are intended to be customizable by the user in the future.
 export interface HotkeyBinding {
@@ -66,6 +48,10 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
         FORCE_PLACE_SUPPORT: {
             key: 'q',
             description: 'Hold to force placing support'
+        },
+        AUTO_BRACING: {
+            key: 'g',
+            description: 'Generate auto bracing while the Bracing settings page is open'
         },
         SPROUTED_PARENTING_LOCK: {
             key: 'w',
@@ -167,7 +153,9 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
     },
     GLOBAL: {
         DELETE: {
-            key: 'Delete',
+            // `Delete` is always available as a fixed secondary delete key (see
+            // useDeleteHotkey); this configurable binding defaults to `Backspace`.
+            key: 'Backspace',
             description: 'Delete selected item'
         },
         UNDO: {

@@ -2,7 +2,7 @@ import React, { useSyncExternalStore, useCallback, useRef, useEffect, useLayoutE
 import { ScreenSpaceGizmo } from '@/components/gizmo/ScreenSpaceGizmo';
 import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick, getTrunkById, getBranchById, getTwigById, getStickById } from '../../state';
 import * as THREE from 'three';
-import { pushHistory } from '@/history/historyStore';
+import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { useCurveInteractionState } from '../../Curves/curveInteractionState';
@@ -580,14 +580,17 @@ export function JointGizmo() {
             const committedTrunk = liveTrunkPreviewRef.current ?? getTrunkById(trunk.id);
             if (committedTrunk) {
                 const appliedTrunk = commitJointDragSupport('trunk', committedTrunk);
-                pushHistory({
-                    type: SUPPORT_UPDATE_TRUNK,
-                    description: 'Move trunk joint',
-                    payload: {
-                        before: initialTrunkRef.current,
-                        after: cloneObj(appliedTrunk),
-                    },
-                });
+                const appliedTrunkSnapshot = cloneObj(appliedTrunk);
+                if (appliedTrunkSnapshot) {
+                    pushSupportHistory({
+                        type: SUPPORT_UPDATE_TRUNK,
+                        description: 'Move trunk joint',
+                        payload: {
+                            before: initialTrunkRef.current,
+                            after: appliedTrunkSnapshot,
+                        },
+                    });
+                }
             }
             initialTrunkRef.current = null;
         }

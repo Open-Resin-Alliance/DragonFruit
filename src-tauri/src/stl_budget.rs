@@ -2,6 +2,17 @@
 //! (STL-import decimation remediation, Phase 2a — plan §"Preview honesty +
 //! bounded viewport decimation", decimation-policy redesign).
 //!
+//! ## This is not the app's only RAM arbiter — and must not be merged with the other
+//! `rust/dragonfruit-slicing-engine/src/engine.rs` (`PostTaskGate`, issue #386/#405)
+//! also reads available RAM. It is an *in-flight throttle*: it bounds the count of
+//! outstanding 3DAA post/z-blur tasks in the **native slicer process**, continuously
+//! **during a slice job**, retuning against machine state at dispatch time (so it is
+//! non-deterministic by design). This module is an *admission gate*: it bounds the
+//! triangle count entering the **WebView renderer heap**, exactly once, **before an
+//! import**, as a pure function of its inputs. Different resource, different process,
+//! different phase, different quantity — the apparent duplication is not duplication,
+//! and collapsing them would cost either determinism here or adaptivity there.
+//!
 //! ## Why a governor instead of a constant
 //! The legacy loader replaced any binary STL over a fixed 6,000,000-triangle
 //! gate with a fixed ~2,000,000-triangle preview. That is a 3× fidelity

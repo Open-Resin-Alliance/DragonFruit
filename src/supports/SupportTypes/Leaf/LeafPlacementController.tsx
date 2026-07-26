@@ -3,7 +3,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { subscribe, getSnapshot, addKnot, addLeaf } from '../../state';
-import { pushHistory } from '@/history/historyStore';
+import { pushSupportHistory } from '@/supports/history/supportHistory';
 import type { SnapTarget } from '../../interaction/SnappingManager';
 import type { Vec3, Knot, Joint, Segment } from '../../types';
 import { leafPlacementStore, useLeafPlacementState } from './leafPlacementState';
@@ -697,7 +697,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 addKnot(newParentKnot);
                 leafPlacementStore.setJunctionHub(newParentKnotId, true);
 
-                pushHistory({
+                pushSupportHistory({
                     type: SUPPORT_ADD_LEAF,
                     payload: {
                         leaf: markedLeaf,
@@ -765,7 +765,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 addKnot(parentKnot);
                 addLeaf(markedLeaf);
 
-                pushHistory({
+                pushSupportHistory({
                     type: SUPPORT_ADD_LEAF,
                     payload: {
                         leaf: markedLeaf,
