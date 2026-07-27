@@ -2,7 +2,7 @@ import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profil
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSolidSliceMeshForWasm, composeModelMatrix, type FullResSplicedModel } from './rasterLayerZipExport';
 import { clampSliceJobNumber } from './sliceJobLimits';
-import { prepareLoadedModelsForOutput, resolveOutputGeometrySource } from '@/features/mesh-modifiers/prepareModelGeometry';
+import { isFullResSpliceEligible, prepareLoadedModelsForOutput, resolveOutputGeometrySource } from '@/features/mesh-modifiers/prepareModelGeometry';
 import { resolveOutputFileExtension, resolveOutputFormatVersion, resolveOutputSettingsMode, resolveSlicingFormatDefinition } from './formats/registry';
 import { getSavedSlicingPerformanceSettings, type PngCompressionStrategy } from '@/components/settings/performancePreferences';
 import {
@@ -700,6 +700,14 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     const modifierBakeMs = performance.now() - modifierBakeStartMs;
 
     const survivingCombinedModels = preparedModelsForOutput.models.filter((model) => {
+        // D1 FENCE (Ph1). A splice-eligible model is deliberately left whole:
+        // splitting it would rebuild both halves without `nativePreview` and
+        // silently demote it to preview-fidelity slicing. Its support section
+        // therefore rides along inside the full-res splice exactly as it does
+        // today; Ph3's run-map splice is what finally separates the sections on
+        // this path. Without this exemption the fence would trip the assertion
+        // below and break slicing outright for every ≥budget pre-supported model.
+        if (isFullResSpliceEligible(model)) return false;
         const modelTriangleCount = model.geometry.meshDefects?.nativeRepairReport?.model_triangle_count;
         if (!modelTriangleCount || modelTriangleCount <= 0) return false;
         const position = model.geometry.geometry.getAttribute('position');
@@ -734,7 +742,26 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         for (const model of preparedModelsForOutput.models) {
             if (!fullResCandidateIds.has(model.id)) continue;
             const source = resolveOutputGeometrySource(model);
-            if (source.kind !== 'fullres-source-file') continue;
+            if (source.kind !== 'fullres-source-file') {
+                // D1 rider. This model resolved to the full-res source when the
+                // candidate set was computed (pre-bake) and no longer does, so
+                // something between the two calls dropped its `nativePreview` —
+                // historically the classified-support split, whose halves are
+                // rebuilt from a bare Float32Array. This was the ONLY degrade in
+                // this loop that took a bare `continue`: the model quietly fell
+                // back to preview-fidelity slicing with no log line and no toast,
+                // and the user's only clue was the printed part. Every other arm
+                // here warns; now so does this one.
+                console.warn(
+                    `[SlicingFullRes] "${model.name}" lost its full-resolution marker during `
+                    + 'modifier baking — slicing the reduced preview instead.',
+                );
+                emitFullResDegradeWarning(
+                    model.name,
+                    'its full-resolution marker was lost while preparing the scene',
+                );
+                continue;
+            }
 
             if (!source.cPre) {
                 console.warn(

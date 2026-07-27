@@ -2915,7 +2915,14 @@ export function useSceneCollectionManager() {
       name: `${source.name.replace(/\.3mf$/i, '')} (${i + 1})`,
       fileUrl: source.fileUrl,
       fileSizeBytes: source.fileSizeBytes,
-      sourcePath: source.sourcePath,
+      // D7 (Ph1). A single body is not the file it came out of. Copying the
+      // whole-file path onto all N bodies makes every one of them claim the
+      // entire multi-body 3MF as its full-resolution source — inert only
+      // because 3MF never receives a `cPre` today, and a critical bug the
+      // moment Ph8 gives it a native load path and a splice contract. Same
+      // treatment as `splitSupports` below: split geometry no longer matches
+      // anything on disk, so no consumer may sideload from it.
+      sourcePath: null,
       geometry: bodyGeom,
       transform: {
         position: source.transform.position.clone(),
@@ -2994,7 +3001,9 @@ export function useSceneCollectionManager() {
           component_count: 0,
           self_intersections: 0,
           signed_volume: 0,
-          is_watertight: false,
+          // Ph1 CP3: synthesized for a split half — no topology was measured
+          // here, so the honest value is UNKNOWN, not "has holes".
+          is_watertight: null,
           timings_ms: { topology_ms: 0, self_intersections_ms: 0, components_ms: 0, total_ms: 0 },
         },
         post: {
@@ -3010,7 +3019,9 @@ export function useSceneCollectionManager() {
           component_count: 0,
           self_intersections: 0,
           signed_volume: 0,
-          is_watertight: false,
+          // Ph1 CP3: synthesized for a split half — no topology was measured
+          // here, so the honest value is UNKNOWN, not "has holes".
+          is_watertight: null,
           timings_ms: { topology_ms: 0, self_intersections_ms: 0, components_ms: 0, total_ms: 0 },
         },
         steps: [],
@@ -4845,10 +4856,18 @@ export function useSceneCollectionManager() {
       // permanent mutator). processGeometry splices the ORIGINAL file into
       // staging Rust-side when this source is present.
       const fullResSource = planMutatorFullResStaging(model);
+      // Ph1(e): a manual re-repair must not lose section identity. The first
+      // repair fuses the support components the classifier counts, so a second
+      // pass cannot re-derive `likely_support_geometry` — carry the verdict the
+      // model already holds so the orange tint, the section split, and the
+      // user's support confirmation all stick across repeated repairs.
+      const assumeSupportGeometry =
+        model.geometry.meshDefects?.nativeRepairReport?.likely_support_geometry === true;
       const processed = await processGeometry(model.geometry.geometry, {
         center: false,
         nativeProcessingMode: 'repair',
         fullResSource,
+        assumeSupportGeometry,
       });
       const usedFullRes = processed._repairUsedFullRes === true;
       // Never silent: full-res requested but the source could not be re-read.

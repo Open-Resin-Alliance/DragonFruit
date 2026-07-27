@@ -100,6 +100,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 solidify_component_threshold,
                 solidify_self_intersection_threshold,
                 allow_hull_rescue,
+                // Ph1(e): the CLI repairs a file it was handed, with no prior
+                // report to carry a support verdict forward from.
+                assume_support_geometry: false,
             };
             let outcome = repair_path(&input, &options)?;
             if let Some(p) = &out_stl {

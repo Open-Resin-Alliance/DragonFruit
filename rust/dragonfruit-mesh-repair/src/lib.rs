@@ -21,8 +21,11 @@ pub use crate::hollowing::{
     HollowSession, OpenFace,
 };
 pub use crate::quality::{count_sliver_triangles, MeshQualityScore};
-pub use crate::repair::{classify_support_split, repair, RepairOptions, RepairOutcome};
-pub use crate::report::MeshHealthReport;
+pub use crate::repair::{
+    classify_import, classify_support_split, manifold_check_fits_classify_budget, repair,
+    ClassifyImportOptions, RepairOptions, RepairOutcome, MANIFOLD_CLASSIFY_GUARD_TRIANGLES,
+};
+pub use crate::report::{ImportClassification, MeshHealthReport, SectionStats, TriangleRun};
 
 use std::path::Path;
 

@@ -147,6 +147,11 @@ struct RepairOptionsDto {
     /// P5-2 (D5): opt-in for the lossy Tier-3 convex-hull rescue. The frontend
     /// sets this from the multi-component consent dialog. Default false.
     allow_hull_rescue: Option<bool>,
+    /// Ph1(e): the caller already knows this mesh carries support geometry —
+    /// the frontend forwards the previous report's `likely_support_geometry` on
+    /// a re-repair so the verdict (and the user's support checkbox) survives a
+    /// pass that can no longer re-derive it. Default false.
+    assume_support_geometry: Option<bool>,
 }
 
 impl From<RepairOptionsDto> for RepairOptions {
@@ -176,6 +181,9 @@ impl From<RepairOptionsDto> for RepairOptions {
                 .solidify_self_intersection_threshold
                 .unwrap_or(defaults.solidify_self_intersection_threshold),
             allow_hull_rescue: dto.allow_hull_rescue.unwrap_or(defaults.allow_hull_rescue),
+            assume_support_geometry: dto
+                .assume_support_geometry
+                .unwrap_or(defaults.assume_support_geometry),
         }
     }
 }
@@ -866,6 +874,10 @@ pub async fn load_stl_file(
             // Per-model today; plate-level rebalancing is a documented
             // follow-up (imports are per-file at this boundary).
             concurrent_model_count: 1,
+            // D8: a native STL import keeps exactly one copy of its geometry.
+            // Multi-body 3MF (which retains `merged` + `splitBodies`) does not
+            // reach this governor until Ph8 — that phase sets this to 2.
+            retained_geometry_copies: 1,
         };
         let budget = crate::stl_budget::compute_triangle_budget(&inputs);
         // Log `ram_total_bytes` + `source_triangles` off the struct itself (not
@@ -2243,6 +2255,23 @@ mod tests {
     fn repair_and_punch_options_parsing_reject_malformed_json() {
         assert!(parse_options(r#"{"weldEpsilon": "tiny"}"#).is_err());
         assert!(parse_hole_punch_options(r#"{"punches": {}}"#).is_err());
+    }
+
+    #[test]
+    fn repair_options_carry_the_frontend_support_verdict() {
+        // Ph1(e): the reclassification fix is only reachable if the DTO
+        // actually transports the frontend's flag. Omitting it must keep the
+        // engine default (off) — a fresh import has no prior verdict.
+        let seeded = parse_options(r#"{"assumeSupportGeometry": true}"#)
+            .expect("well-formed JSON parses");
+        assert!(seeded.assume_support_geometry);
+
+        let unseeded =
+            parse_options(r#"{"allowHullRescue": true}"#).expect("well-formed JSON parses");
+        assert!(!unseeded.assume_support_geometry);
+        assert!(!parse_options("")
+            .expect("empty input falls back to defaults")
+            .assume_support_geometry);
     }
 }
 

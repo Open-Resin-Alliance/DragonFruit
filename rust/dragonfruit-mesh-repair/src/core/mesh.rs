@@ -207,6 +207,43 @@ impl IndexedMesh {
         Self::from_triangle_soup_reported(positions, merge_epsilon).0
     }
 
+    /// Ph1 CP4 — like [`from_triangle_soup_reported`](Self::from_triangle_soup_reported)
+    /// but ALSO returns the ascending **source-file** indices of the triangles
+    /// that were dropped for carrying a non-finite coordinate.
+    ///
+    /// Why this exists: the import run map has to address triangles as the
+    /// SOURCE FILE numbers them, because the full-resolution splice re-reads
+    /// that file record by record. Dropping a triangle at intake shifts every
+    /// later welded index by one relative to the file, so a run map built in
+    /// welded space silently addresses the wrong triangles from the first drop
+    /// onward. A count alone (which is all `TriangleSoupStats` carries) cannot
+    /// undo that shift — the POSITIONS of the drops are required.
+    ///
+    /// The returned vector is normally EMPTY (well-formed files drop nothing),
+    /// so this costs an allocation that is never grown in the common case.
+    /// Kept as a separate entry point so `TriangleSoupStats` stays `Copy`.
+    pub fn from_triangle_soup_tracked(
+        positions: &[f32],
+        merge_epsilon: f32,
+    ) -> (Self, TriangleSoupStats, Vec<u32>) {
+        let (mesh, stats) = Self::from_triangle_soup_reported(positions, merge_epsilon);
+        if stats.dropped_nonfinite_triangles == 0 {
+            return (mesh, stats, Vec::new());
+        }
+        // Re-walk only when something WAS dropped: cheap relative to the weld,
+        // and it keeps the hot path allocation-free.
+        let tri_count = positions.len() / 9;
+        let mut dropped = Vec::with_capacity(stats.dropped_nonfinite_triangles);
+        for tri in 0..tri_count {
+            let base = tri * 9;
+            let finite = positions[base..base + 9].iter().all(|c| c.is_finite());
+            if !finite {
+                dropped.push(tri as u32);
+            }
+        }
+        (mesh, stats, dropped)
+    }
+
     /// Like [`from_triangle_soup`](Self::from_triangle_soup) but additionally
     /// returns [`TriangleSoupStats`] input-hygiene diagnostics.
     ///

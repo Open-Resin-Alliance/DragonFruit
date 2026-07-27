@@ -55,27 +55,131 @@
 //!     one undo / history snapshot of positions:    ~36 B/tri
 //! ```
 //!
-//! for a total heap residency of **72 + 48 + 36 = 156 B/tri**. (The GPU vertex
-//! buffer upload — another ~72 B/tri — lives in GPU / native memory, NOT the JS
-//! heap `jsHeapSizeLimit` bounds, so it is deliberately excluded from the
-//! heap-term cost; it is bounded indirectly by the same budget.)
+//! for a subtotal of **72 + 48 + 36 = 156 B/tri**. (The GPU vertex buffer
+//! upload — another ~72 B/tri — lives in GPU / native memory, NOT the JS heap
+//! `jsHeapSizeLimit` bounds, so it is deliberately excluded from the heap-term
+//! cost; it is bounded indirectly by the same budget.)
 //!
 //! Reconciliation vs the P0 datum: this model predicts 6.22M × 72 B = 448 MB
 //! for the raw geometry buffers — matching the ~450 MB measurement to 0.4 %.
 //! The additional 84 B/tri (BVH + one snapshot) is real heap the P0
 //! geometry-only snapshot did not include; it makes the budget deliberately
-//! conservative (a smaller, safer budget), not "wildly" off — total predicted
-//! residency for 6.22M is ~970 MB, ~2× the geometry-only figure, which is the
-//! expected gap between "geometry buffers" and "everything the import keeps
-//! resident". This comment discipline mirrors the in-repo precedent
+//! conservative (a smaller, safer budget), not "wildly" off. This comment
+//! discipline mirrors the in-repo precedent
 //! `src/components/scene/hollowVoxelPreviewLimits.ts`.
+//!
+//! ## Ph1 correction — the 156 B/tri subtotal UNDER-COUNTED the classified path
+//!
+//! `156` predates two costs that are now real:
+//!
+//! **(1) The per-section geometries.** When a repair/classify pass reports a
+//! `model_triangle_count`, `processGeometry` builds two additional
+//! `BufferGeometry`s off the same soup (`src/hooks/useStlGeometry.ts`, the
+//! `report.model_triangle_count != null` branch) and stores BOTH on
+//! `meshDefects` for the lifetime of the model:
+//!
+//! ```text
+//!   modelSectionGeometry   = allPos.slice(0, modelFloatEnd)
+//!                            position only            → 36 B/tri  (model section)
+//!   supportSectionGeometry = allPos.slice(modelFloatEnd)
+//!                            + computeVertexNormals()
+//!                            position + normal        → 72 B/tri  (support section)
+//! ```
+//!
+//! The two sections partition the mesh, so per TOTAL triangle the added cost is
+//! `36·(1−s) + 72·s` for a support fraction `s` — **+36 B/tri** for an
+//! all-model split through **+72 B/tri** for an all-support one. Against a 156
+//! subtotal that is a **23 %–46 % under-count**.
+//!
+//! Why the worst case is the right one to bank: these geometries exist ONLY on
+//! the classified path, and Ph1 makes classification run on the full-res mesh
+//! at import — so "classified" stops being the exception and becomes the normal
+//! case for exactly the pre-supported plate files this arc targets. On those
+//! files the support section DOMINATES (the classifier's own gates require
+//! ≥2 000 support triangles across ≥4 components averaging <⅓ the model's
+//! density, and `likely_support_geometry` additionally wants support ≥ model),
+//! so `s → 1` and the added cost is the full 72. The governor's stated doctrine
+//! is that the memory signals may only ever reduce the budget, and the
+//! regression it exists to prevent is a hard renderer OOM kill — so it banks
+//! the worst case rather than a blend.
+//!
+//! ```text
+//!   72 (soup) + 48 (bvh) + 36 (snapshot) + 36 (section copy) + 36 (section normals)
+//!     = 228 B/tri
+//! ```
+//!
+//! Consequence, stated plainly: the budget on a 2 GB-heap machine falls from
+//! ~2.75M to ~1.88M triangles, and the heap needed to reach the 4M ceiling
+//! rises from ~3.1 GB to ~4.6 GB. That is a real PREVIEW fidelity reduction —
+//! and only a preview one: since P1 the full-resolution source is what slicing,
+//! export, hollowing and repair actually consume, so print output is unaffected.
+//! A smaller preview on a small-heap machine is the correct trade against
+//! reviving the import OOM.
+//!
+//! **(2) D8 — retained multi-body copies.** A multi-body 3MF import keeps the
+//! merged geometry AND an independently-processed copy of every body
+//! (`load3mfGeometryMergedWithSplitData` → `splitBodies`, stored on the model
+//! and never released), so the geometry term is paid TWICE for the whole
+//! session whether or not the user ever splits. Verified scope correction to
+//! the plan's phrasing: the BVH is **not** doubled — it is built lazily per
+//! rendered geometry (`accelerateGeometry` via `deferAccelerateGeometry`), so
+//! the split bodies acquire one only once they become models, at which point
+//! the merged geometry is dropped. The cost is therefore a geometry-copy
+//! multiplier, not a flat doubling of everything.
+//!
+//! 3MF does not reach this governor today (it loads entirely in the WebView),
+//! so [`BudgetInputs::retained_geometry_copies`] defaults to `1` and the term
+//! is a no-op on the live path. It exists now so Ph8 declares the cost when it
+//! routes 3MF through here, instead of rediscovering it as an OOM.
 
 use sysinfo::System;
 
+/// Non-indexed triangle soup handed to the WebView by the DFST loader:
+/// position (3×3 f32) + normal (3×3 f32). Anchored to the P0 450 MB / 6.22M
+/// measurement (see module docs).
+pub const SOUP_BYTES_PER_TRIANGLE: f64 = 72.0;
+
+/// three-mesh-bvh bounds nodes + the index buffer it materializes for a
+/// non-indexed `BufferGeometry`.
+pub const BVH_BYTES_PER_TRIANGLE: f64 = 48.0;
+
+/// One retained undo / history snapshot of the position buffer.
+pub const SNAPSHOT_BYTES_PER_TRIANGLE: f64 = 36.0;
+
+/// Position copy held by `modelSectionGeometry` + `supportSectionGeometry`
+/// together. The two sections partition the mesh, so this is paid once per
+/// triangle on any classified import.
+pub const SECTION_COPY_BYTES_PER_TRIANGLE: f64 = 36.0;
+
+/// Normals `computeVertexNormals()` builds on `supportSectionGeometry`. Paid on
+/// the SUPPORT section only; banked at the full rate because the pre-supported
+/// plate class this governs is support-dominant (see module docs).
+pub const SECTION_NORMAL_BYTES_PER_TRIANGLE: f64 = 36.0;
+
 /// Per-triangle WebView JS-heap residency for a non-indexed native preview.
-/// DERIVED (see module docs): 72 (position+normal buffers, anchored to the P0
-/// 450 MB / 6.22M datum) + 48 (three-mesh-bvh) + 36 (one undo snapshot).
-pub const BYTES_PER_TRIANGLE_HEAP: f64 = 156.0;
+/// DERIVED, never guessed — see the module docs for the full derivation and
+/// for why the section terms are banked at their worst case.
+///
+/// `72 (soup) + 48 (bvh) + 36 (snapshot) + 36 (section copy) + 36 (section
+/// normals) = 228`.
+///
+/// Was `156.0` before Ph1, which omitted both section terms and therefore
+/// under-counted the classified path — the normal case from Ph1 onward — by
+/// 23–46 %.
+pub const BYTES_PER_TRIANGLE_HEAP: f64 = SOUP_BYTES_PER_TRIANGLE
+    + BVH_BYTES_PER_TRIANGLE
+    + SNAPSHOT_BYTES_PER_TRIANGLE
+    + SECTION_COPY_BYTES_PER_TRIANGLE
+    + SECTION_NORMAL_BYTES_PER_TRIANGLE;
+
+/// Per-triangle cost once D8's retained-copy multiplier is applied. Only the
+/// GEOMETRY terms scale with retained copies: an extra retained body copy is a
+/// `processGeometry` output (position + normal), not another BVH, another undo
+/// snapshot, or another pair of section geometries.
+pub fn effective_bytes_per_triangle(retained_geometry_copies: u32) -> f64 {
+    let extra_copies = retained_geometry_copies.max(1).saturating_sub(1) as f64;
+    BYTES_PER_TRIANGLE_HEAP + extra_copies * SOUP_BYTES_PER_TRIANGLE
+}
 
 /// Fraction of the WebView JS heap (`jsHeapSizeLimit`) budgeted for one
 /// model's geometry + ancillaries. **Lowered to 0.20 (from an initial 0.45
@@ -167,6 +271,13 @@ pub struct BudgetInputs {
     /// yet). True plate-level largest-first rebalancing is a documented
     /// follow-up; this divisor is the seam it will use.
     pub concurrent_model_count: u32,
+    /// D8: how many copies of this mesh's geometry the import keeps resident.
+    /// `1` for every caller today. A multi-body 3MF is `2` — the merged
+    /// geometry plus the retained per-body `splitBodies` copies, which together
+    /// re-cover every triangle and are never released. 3MF does not reach this
+    /// governor until Ph8; the field exists so that phase declares the cost
+    /// rather than discovering it as an OOM.
+    pub retained_geometry_copies: u32,
 }
 
 /// The governor's output: a triangle budget and the reason it was chosen.
@@ -214,7 +325,8 @@ pub fn compute_triangle_budget(inputs: &BudgetInputs) -> TriangleBudget {
         }
     };
 
-    let raw = (budget_bytes / BYTES_PER_TRIANGLE_HEAP).floor().max(0.0) as u64;
+    let bytes_per_tri = effective_bytes_per_triangle(inputs.retained_geometry_copies);
+    let raw = (budget_bytes / bytes_per_tri).floor().max(0.0) as u64;
     // Clamp to [FLOOR, MAX]. The ceiling is the safety cap that prevents the
     // import-OOM regression: the memory signals may reduce the budget below
     // MAX but never above it (see MAX_BUDGET_TRIANGLES).
@@ -259,6 +371,7 @@ mod tests {
             heap_limit_bytes: heap,
             source_triangles: 12_000_000,
             concurrent_model_count: 1,
+            retained_geometry_copies: 1,
         }
     }
 
@@ -295,7 +408,7 @@ mod tests {
     /// A tiny heap clamps up to the floor and is labelled as such.
     #[test]
     fn tiny_heap_clamps_to_floor() {
-        // 64 MB heap → 0.20 × 64 MB / 156 ≈ 86k tris, below the 1M floor.
+        // 64 MB heap → 0.20 × 64 MB / 228 ≈ 59k tris, below the 1M floor.
         let budget = compute_triangle_budget(&inputs(64 * 1024 * 1024, 16 * GB));
         assert_eq!(budget.budget_tris, FLOOR_TRIANGLES);
         assert_eq!(budget.reason, BudgetReason::Floor);
@@ -305,14 +418,16 @@ mod tests {
     #[test]
     fn larger_heap_yields_larger_budget() {
         let small = compute_triangle_budget(&inputs(2 * GB, 64 * GB)).budget_tris;
-        let large = compute_triangle_budget(&inputs(4 * GB, 64 * GB)).budget_tris;
-        assert!(large > small, "4 GB heap ({large}) must exceed 2 GB heap ({small})");
-        // 2 GB heap: 0.20 × 2 GB / 156 ≈ 2.75M, below the ceiling.
+        let large = compute_triangle_budget(&inputs(8 * GB, 64 * GB)).budget_tris;
+        assert!(large > small, "8 GB heap ({large}) must exceed 2 GB heap ({small})");
+        // Ph1 governor correction: 0.20 × 2 GB / 228 ≈ 1.88M (was ~2.75M at the
+        // pre-Ph1 156 B/tri, which under-counted the classified path's two
+        // per-section geometries — see the module docs).
         assert!(
-            (2_500_000..=3_000_000).contains(&small),
-            "2 GB-heap budget {small} should be ~2.75M (0.20 × 2 GB / 156)"
+            (1_750_000..=2_000_000).contains(&small),
+            "2 GB-heap budget {small} should be ~1.88M (0.20 × 2 GB / 228)"
         );
-        // 4 GB heap computes ~5.5M but is capped at the absolute ceiling.
+        // 8 GB heap computes ~7.5M but is capped at the absolute ceiling.
         assert_eq!(large, MAX_BUDGET_TRIANGLES);
     }
 
@@ -329,16 +444,38 @@ mod tests {
             heap_limit_bytes: 4_395_630_592,
             source_triangles: 11_239_430,
             concurrent_model_count: 1,
+            retained_geometry_copies: 1,
         };
         let budget = compute_triangle_budget(&inp);
-        assert_eq!(budget.budget_tris, MAX_BUDGET_TRIANGLES);
-        assert_eq!(budget.reason, BudgetReason::Ceiling);
+        // THE load-bearing assertion, unchanged: the budget must land below the
+        // source so the mesh is decimated instead of kept verbatim.
         assert!(
             budget.budget_tris < inp.source_triangles,
             "budget {} must be below the 11.24M source so it decimates \
              (the un-capped governor gave 12,679,703 and kept it verbatim → OOM)",
             budget.budget_tris
         );
+        assert!(budget.budget_tris <= MAX_BUDGET_TRIANGLES);
+        // Ph1 governor correction moved WHICH constraint binds on this exact
+        // machine, and in the safe direction: at 228 B/tri the 4.4 GB heap term
+        // now yields ~3.86M and binds BEFORE the 4M ceiling, so this machine is
+        // held one step further from the OOM than the ceiling alone held it.
+        assert_eq!(budget.reason, BudgetReason::HeapBound);
+        assert!(
+            (3_800_000..MAX_BUDGET_TRIANGLES).contains(&budget.budget_tris),
+            "expected ~3.86M (0.20 × 4.4 GB / 228), got {}",
+            budget.budget_tris
+        );
+    }
+
+    /// The absolute ceiling still binds — it just takes a bigger heap now that
+    /// the per-triangle cost is honest. Companion to the test above, which no
+    /// longer reaches it.
+    #[test]
+    fn ceiling_still_caps_very_large_heaps() {
+        let budget = compute_triangle_budget(&inputs(16 * GB, 256 * GB));
+        assert_eq!(budget.budget_tris, MAX_BUDGET_TRIANGLES);
+        assert_eq!(budget.reason, BudgetReason::Ceiling);
     }
 
     /// The available-RAM cap binds when the heap term would exceed it.
@@ -350,18 +487,92 @@ mod tests {
     }
 
     /// The plate-count divisor shrinks the budget deterministically. Uses a
-    /// 2 GB heap so neither divisor case hits the ceiling (which would break
-    /// the b2 ≈ b1/2 relationship — that is exercised by the ceiling tests).
+    /// 3 GB heap so neither divisor case hits the ceiling OR the floor (either
+    /// clamp would break the b2 ≈ b1/2 relationship — both are exercised by
+    /// their own tests). Ph1 raised the heap needed here from 2 GB to 3 GB
+    /// because the corrected 228 B/tri cost pushed the halved 2 GB budget
+    /// (~942k) under the 1M floor.
     #[test]
     fn plate_divisor_shares_the_budget() {
-        let mut one = inputs(2 * GB, 64 * GB);
+        let mut one = inputs(3 * GB, 64 * GB);
         one.concurrent_model_count = 1;
-        let mut two = inputs(2 * GB, 64 * GB);
+        let mut two = inputs(3 * GB, 64 * GB);
         two.concurrent_model_count = 2;
         let b1 = compute_triangle_budget(&one).budget_tris;
         let b2 = compute_triangle_budget(&two).budget_tris;
         assert!(b1 < MAX_BUDGET_TRIANGLES, "test premise: uncapped");
         assert!(b2 < b1 && b2 >= b1 / 2 - 1 && b2 <= b1 / 2 + 1);
+    }
+
+    /// Ph1 governor correction. The cost model must account for the per-section
+    /// geometries the classified path allocates, and for the retained-copy
+    /// multiplier a multi-body import pays. Written against the DERIVATION, not
+    /// against a magic number, so a future re-derivation has to move the terms
+    /// rather than the assertion.
+    #[test]
+    fn cost_model_accounts_for_section_geometries() {
+        // Base residency, unchanged: soup (position+normal) + BVH + one undo
+        // snapshot. This is what the constant used to be, in full.
+        let base = SOUP_BYTES_PER_TRIANGLE + BVH_BYTES_PER_TRIANGLE + SNAPSHOT_BYTES_PER_TRIANGLE;
+        assert_eq!(base, 156.0, "the pre-Ph1 constant must still be reproducible");
+
+        // The classified path additionally holds a position copy of the model
+        // section and a position+normal copy of the support section. Per total
+        // triangle that is 36·(1−s) + 72·s for a support fraction s — i.e.
+        // +36 B/tri at worst-case-model through +72 B/tri at all-support.
+        assert_eq!(SECTION_COPY_BYTES_PER_TRIANGLE, 36.0);
+        assert_eq!(
+            SECTION_COPY_BYTES_PER_TRIANGLE + SECTION_NORMAL_BYTES_PER_TRIANGLE,
+            72.0
+        );
+
+        assert!(
+            BYTES_PER_TRIANGLE_HEAP >= base + 36.0,
+            "the cost model still under-counts the section geometries by at \
+             least the 23 % floor (constant {BYTES_PER_TRIANGLE_HEAP}, base {base})"
+        );
+        assert!(
+            BYTES_PER_TRIANGLE_HEAP <= base + 72.0,
+            "the cost model over-counts past the all-support worst case \
+             (constant {BYTES_PER_TRIANGLE_HEAP}, base {base})"
+        );
+        assert_eq!(
+            BYTES_PER_TRIANGLE_HEAP,
+            base + SECTION_COPY_BYTES_PER_TRIANGLE + SECTION_NORMAL_BYTES_PER_TRIANGLE,
+            "the constant must equal its own derivation"
+        );
+    }
+
+    /// D8: a multi-body import keeps the merged geometry AND a per-body copy of
+    /// every triangle, for the whole session. The divisor exists so Ph8 can
+    /// declare that cost instead of discovering it as an OOM.
+    #[test]
+    fn retained_copies_shrink_the_budget_proportionally() {
+        let mut single = inputs(2 * GB, 64 * GB);
+        single.retained_geometry_copies = 1;
+        let mut multi = inputs(2 * GB, 64 * GB);
+        multi.retained_geometry_copies = 2;
+
+        let b1 = compute_triangle_budget(&single).budget_tris;
+        let b2 = compute_triangle_budget(&multi).budget_tris;
+        assert!(b1 < MAX_BUDGET_TRIANGLES, "test premise: uncapped");
+        assert!(
+            b2 < b1,
+            "a second retained copy of every triangle must reduce the budget \
+             ({b2} vs {b1})"
+        );
+    }
+
+    /// Behaviour fence: today every caller retains exactly one copy, so the new
+    /// term must be a no-op on the live import path.
+    #[test]
+    fn retained_copies_defaults_to_one_and_is_a_no_op() {
+        let inp = inputs(2 * GB, 64 * GB);
+        assert_eq!(inp.retained_geometry_copies, 1);
+        assert_eq!(
+            effective_bytes_per_triangle(inp.retained_geometry_copies),
+            BYTES_PER_TRIANGLE_HEAP
+        );
     }
 
     /// sysinfo must return a real figure on this build target (not 0/0).

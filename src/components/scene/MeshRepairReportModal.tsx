@@ -577,8 +577,20 @@ function DeltaLine({ pre, post }: { pre: MeshAnalysisJson; post: MeshAnalysisJso
   if (pre.self_intersections !== post.self_intersections) {
     parts.push(`self-int ${pre.self_intersections} → ${post.self_intersections}`);
   }
-  parts.push(post.is_watertight ? 'watertight' : 'not watertight');
+  if (post.is_watertight !== null) {
+    parts.push(post.is_watertight ? 'watertight' : 'not watertight');
+  }
   return <>{parts.join(' · ')}</>;
+}
+
+/**
+ * Ph1 CP3 honesty rule: `null` is UNKNOWN, not "no". The classify-only tier
+ * computes no topology, and rendering its non-verdict as a definite "no"
+ * told users their watertight model had holes.
+ */
+function formatWatertight(value: boolean | null): string {
+  if (value === null) return '—';
+  return value ? 'yes' : 'no';
 }
 
 function AnalysisBlock({ title, analysis }: { title: string; analysis: MeshAnalysisJson }) {
@@ -595,7 +607,7 @@ function AnalysisBlock({ title, analysis }: { title: string; analysis: MeshAnaly
     ['Duplicate tris', analysis.duplicate_triangles],
     ['Self-intersections', analysis.self_intersections],
     ['Signed volume', formatSignedVolume(analysis.signed_volume)],
-    ['Watertight', analysis.is_watertight ? 'yes' : 'no'],
+    ['Watertight', formatWatertight(analysis.is_watertight)],
   ];
 
   return (
@@ -635,7 +647,7 @@ function FlatAnalysisColumn({ title, analysis }: { title: string; analysis: Mesh
     ['Duplicate tris', analysis.duplicate_triangles],
     ['Self-intersections', analysis.self_intersections],
     ['Signed volume', formatSignedVolume(analysis.signed_volume)],
-    ['Watertight', analysis.is_watertight ? 'yes' : 'no'],
+    ['Watertight', formatWatertight(analysis.is_watertight)],
   ];
 
   return (

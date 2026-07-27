@@ -211,6 +211,13 @@ export interface ProcessGeometryOptions {
    * @internal
    */
   fullResSource?: FullResMutatorSource | null;
+  /**
+   * Ph1(e): the model's previously-reported `likely_support_geometry`, carried
+   * into a re-repair so the verdict survives a pass that can no longer derive
+   * it (repair #1 fuses the support components the classifier counts). Only
+   * consulted on the repair path — a classify-only pass measures afresh.
+   */
+  assumeSupportGeometry?: boolean;
 }
 
 // Cloning extremely large position buffers can require hundreds of MB and can
@@ -426,7 +433,15 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
       const nativeStart = performance.now();
       const result = classifyOnly
         ? await classifyFromGeometry(geometry)
-        : await repairFromGeometry(geometry, { allowHullRescue }, forceRepair ? options.fullResSource : null);
+        : await repairFromGeometry(
+            geometry,
+            // Ph1(e): carry the caller's prior support verdict in. Without it a
+            // second repair over a mesh the first one fused reports
+            // `likely_support_geometry: false` and the section identity — the
+            // orange tint, the split, the user's checkbox — is lost.
+            { allowHullRescue, assumeSupportGeometry: options.assumeSupportGeometry === true },
+            forceRepair ? options.fullResSource : null,
+          );
       if (result) {
         if (!classifyOnly && result.usedFullRes) {
           repairUsedFullRes = true;

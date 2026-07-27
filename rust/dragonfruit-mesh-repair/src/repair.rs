@@ -24,7 +24,7 @@ use crate::core::bvh::Bvh;
 use crate::core::halfedge::{edge_key, Topology};
 use crate::core::mesh::{IndexedMesh, Vec3};
 use crate::quality::MeshQualityScore;
-use crate::report::{MeshHealthReport, RepairStepReport};
+use crate::report::{ImportClassification, MeshHealthReport, RepairStepReport, SectionStats, TriangleRun};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepairOptions {
@@ -66,6 +66,22 @@ pub struct RepairOptions {
     /// components are appended verbatim (Tier-4) instead of being hull-rescued.
     #[serde(default)]
     pub allow_hull_rescue: bool,
+    /// Ph1(e) — the caller already knows this mesh contains support geometry.
+    ///
+    /// Section identity is discovered by a component-shaped heuristic
+    /// (`classify_and_reorder_model_support_triangles`), and repair #1's own
+    /// manifold batch-union fuses each group into a single solid. A second
+    /// `repair()` therefore sees two components where the first saw dozens and
+    /// every component-count gate fails — so, because each call starts a fresh
+    /// [`MeshHealthReport`], the verdict silently downgrades to `false`.
+    ///
+    /// Setting this seeds `report.likely_support_geometry` before the pipeline
+    /// runs; the existing within-run latch then prevents the downgrade.
+    /// It is a **latch seed, not an override**: it can only turn the verdict
+    /// on, it never fabricates a `model_triangle_count` split index that was
+    /// not measured, and a pass that classifies on its own is unaffected.
+    #[serde(default)]
+    pub assume_support_geometry: bool,
 }
 
 impl Default for RepairOptions {
@@ -86,6 +102,8 @@ impl Default for RepairOptions {
             // Off by default (decision D5): hull rescue is lossy; the frontend
             // must obtain explicit consent for multi-component inputs.
             allow_hull_rescue: false,
+            // Off by default: a fresh import has no prior verdict to carry.
+            assume_support_geometry: false,
         }
     }
 }
@@ -106,6 +124,13 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     let mut skip_final_orientation = false;
     let mut solidify_rollback_reason: Option<String> = None;
     let mut report = MeshHealthReport::new(pre);
+    // Ph1(e) — seed the support verdict from the caller's prior knowledge
+    // BEFORE any pass runs, so the within-run latch below can only ever turn it
+    // on. Without this, repair #2 over a mesh repair #1 already fused reports
+    // `false` and the frontend's support checkbox stops sticking. Only the
+    // boolean is seeded: `model_triangle_count` stays `None` unless a pass
+    // actually measures a split.
+    report.likely_support_geometry = options.assume_support_geometry;
     // Geometry-aware "before" score (adds the net-new sliver count that the
     // pure `From<&MeshAnalysis>` projection cannot see). Mesh is still the
     // unmodified input here.
@@ -257,7 +282,11 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
                         });
                         mesh = unioned;
                         applied_self_intersection_path = true;
-                        report.likely_support_geometry = likely_support_geometry;
+                        // Latch, never overwrite (Ph1e): the union's own verdict
+                        // can only ADD to a seeded one. A plain assignment here
+                        // would clear `assume_support_geometry` on exactly the
+                        // pass that caused the downgrade in the first place.
+                        report.likely_support_geometry |= likely_support_geometry;
                         if model_tri_count < mesh.triangles.len() {
                             report.model_triangle_count = Some(model_tri_count);
                         }
@@ -426,7 +455,8 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
                             });
                             mesh = unioned;
                             applied_self_intersection_path = true;
-                            report.likely_support_geometry = likely_support_geometry;
+                            // Latch, never overwrite — see the fast-path arm above.
+                            report.likely_support_geometry |= likely_support_geometry;
                             if model_tri_count < mesh.triangles.len() {
                                 report.model_triangle_count = Some(model_tri_count);
                             }
@@ -787,18 +817,20 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     RepairOutcome { mesh, report }
 }
 
-/// Extract the model section — the first `model_tri_count` triangles, or every
-/// triangle when there is no split — into a standalone [`IndexedMesh`] with
-/// compacted (zero-based) vertex indices so it can be fed to `manifold_csg`.
+/// Extract a contiguous triangle range into a standalone [`IndexedMesh`] with
+/// compacted (zero-based) vertex indices, so a section can be measured — or fed
+/// to `manifold_csg` — independently of the rest of the mesh.
 #[cfg(feature = "manifold")]
-fn extract_model_section_submesh(mesh: &IndexedMesh, model_tri_count: Option<usize>) -> IndexedMesh {
-    let tri_end = model_tri_count
-        .map(|n| n.min(mesh.triangles.len()))
-        .unwrap_or(mesh.triangles.len());
+fn extract_triangle_range_submesh(
+    mesh: &IndexedMesh,
+    range: std::ops::Range<usize>,
+) -> IndexedMesh {
+    let start = range.start.min(mesh.triangles.len());
+    let end = range.end.min(mesh.triangles.len()).max(start);
 
     let mut vert_map: AHashMap<u32, u32> = AHashMap::new();
     let mut new_verts: Vec<Vec3> = Vec::new();
-    let new_tris: Vec<[u32; 3]> = mesh.triangles[..tri_end]
+    let new_tris: Vec<[u32; 3]> = mesh.triangles[start..end]
         .iter()
         .map(|tri| {
             tri.map(|gi| {
@@ -815,6 +847,16 @@ fn extract_model_section_submesh(mesh: &IndexedMesh, model_tri_count: Option<usi
         positions: new_verts,
         triangles: new_tris,
     }
+}
+
+/// Extract the model section — the first `model_tri_count` triangles, or every
+/// triangle when there is no split — so it can be fed to `manifold_csg`.
+#[cfg(feature = "manifold")]
+fn extract_model_section_submesh(mesh: &IndexedMesh, model_tri_count: Option<usize>) -> IndexedMesh {
+    let tri_end = model_tri_count
+        .map(|n| n.min(mesh.triangles.len()))
+        .unwrap_or(mesh.triangles.len());
+    extract_triangle_range_submesh(mesh, 0..tri_end)
 }
 
 /// Runs the model section through the manifold_csg backend and returns its
@@ -928,6 +970,428 @@ pub fn classify_support_split(mut mesh: IndexedMesh) -> RepairOutcome {
     report.total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
     RepairOutcome { mesh, report }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ph1 CP3/CP4 — import-time classification
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Ph1 CP3 (#2) — the size above which the `manifold_csg` validity check is
+/// **not** run as part of import classification.
+///
+/// The user's wall-time budget for classify + cheap stats is EXCLUSIVE of dev's
+/// #455 manifold build, which means the manifold build must not be inside the
+/// classify path at all once it stops being cheap. Above this many model-section
+/// triangles the check is skipped and `model_is_manifold` is transported as
+/// `None` — honest-unknown — never `Some(false)`. A mesh nobody looked at is not
+/// a mesh that failed.
+///
+/// Two things this is NOT: it is not a gate on CLASSIFICATION (classification is
+/// structural, and size-gating it is exactly the P6 defect Ph1 undoes), and it
+/// is not a gate on the REPAIR path (a user-invoked repair may take as long as
+/// it takes and must still get a real verdict).
+///
+/// MEASURED, not guessed. `classify_import_wall_time_at_scale` on the ported
+/// off-origin lattice (release, `--features manifold`, Windows workstation):
+///
+/// ```text
+///   triangles   classify+stats (BUDGETED)   manifold check (EXCLUDED)
+///     998 796                   186 ms                      657 ms
+///   2 990 628                   754 ms                    2 075 ms
+///   5 976 036                 1 794 ms                    4 190 ms
+///  11 228 556                 3 774 ms                    8 206 ms
+/// ```
+///
+/// The check runs at ~0.72 ms per 1 000 triangles — comfortably super-linear in
+/// user-visible pain and, at 11.2M, more than twice the entire budgeted tier.
+/// 1.5M is the point where it costs ~1.1 s, i.e. about the same as the whole
+/// budgeted pass at that size: past there it stops being an incidental extra and
+/// starts being the import.
+pub const MANIFOLD_CLASSIFY_GUARD_TRIANGLES: usize = 1_500_000;
+
+/// THE named helper (#2). One place decides whether the manifold build runs
+/// inside the classify path, so the identical patch can be sent upstream.
+pub fn manifold_check_fits_classify_budget(model_triangle_count: usize) -> bool {
+    model_triangle_count <= MANIFOLD_CLASSIFY_GUARD_TRIANGLES
+}
+
+/// Inputs the import path knows and the classifier cannot re-derive.
+#[derive(Debug, Clone, Default)]
+pub struct ClassifyImportOptions {
+    /// Triangle count as the SOURCE FILE numbers them, before non-finite drops.
+    pub source_triangle_count: usize,
+    /// Ascending source-file indices dropped at intake, from
+    /// [`IndexedMesh::from_triangle_soup_tracked`]. Empty for a clean file.
+    pub dropped_file_indices: Vec<u32>,
+    /// Compute the per-section topology stats. Always cheap relative to the
+    /// classify itself; separable so a caller can measure the two halves.
+    pub compute_section_stats: bool,
+}
+
+/// Classify a FULL-RESOLUTION import: partition it into model/support sections,
+/// reorder model-first, emit the source-file run map, and measure cheap
+/// per-section topology stats.
+///
+/// This is the pass P6's `>= 3M` skip-gate starved: classification is
+/// STRUCTURAL — it decides what a triangle IS — and skipping it above a size
+/// threshold silently removed the support tint, the defect chip, the section
+/// split and `likely_support_geometry` for exactly the large pre-supported
+/// imports that need them most. It must never be size-gated again.
+///
+/// Deliberately excluded: the self-intersection sweep (a BVH query per triangle)
+/// and, above [`MANIFOLD_CLASSIFY_GUARD_TRIANGLES`], the manifold validity
+/// check. Both are transported as `None`, never as a measured-looking zero.
+pub fn classify_import(
+    mesh: &mut IndexedMesh,
+    options: &ClassifyImportOptions,
+) -> ImportClassification {
+    let t_classify = std::time::Instant::now();
+
+    let source_triangle_count = if options.source_triangle_count > 0 {
+        options.source_triangle_count
+    } else {
+        mesh.triangles.len() + options.dropped_file_indices.len()
+    };
+
+    let split = classify_and_reorder_detailed(mesh);
+    let classify_ms = t_classify.elapsed().as_secs_f64() * 1000.0;
+
+    let mut out = ImportClassification {
+        source_triangle_count,
+        dropped_nonfinite_triangles: options.dropped_file_indices.len(),
+        classify_ms,
+        ..Default::default()
+    };
+
+    let Some(split) = split else {
+        // No reliable partition. Everything is model — but that is the ABSENCE
+        // of a split, not a split covering everything, so `model_triangle_count`
+        // stays `None` and the run map stays empty. Section stats are still
+        // computed for the whole mesh so the UI has honest numbers to show.
+        if options.compute_section_stats {
+            let t = std::time::Instant::now();
+            out.model_section = Some(section_topology_stats(mesh, 0..mesh.triangles.len(), None));
+            out.section_stats_ms = t.elapsed().as_secs_f64() * 1000.0;
+            out.connected_components = out
+                .model_section
+                .as_ref()
+                .and_then(|s| s.connected_components);
+        }
+        return out;
+    };
+
+    out.model_triangle_count = Some(split.model_triangle_count);
+    out.likely_support_geometry = split.likely_support_geometry;
+    out.connected_components = Some(split.component_count);
+    out.model_runs = welded_runs_to_file_runs(
+        &split.model_runs_welded,
+        &options.dropped_file_indices,
+        mesh.triangles.len(),
+    );
+
+    if options.compute_section_stats {
+        let t = std::time::Instant::now();
+        let total = mesh.triangles.len();
+        let boundary = split.model_triangle_count.min(total);
+        let labels = Some(split.components_reordered.as_slice());
+        out.model_section = Some(section_topology_stats(mesh, 0..boundary, labels));
+        out.support_section = Some(section_topology_stats(mesh, boundary..total, labels));
+        out.section_stats_ms = t.elapsed().as_secs_f64() * 1000.0;
+    }
+
+    record_classify_manifold_status(mesh, &mut out);
+    out
+}
+
+/// Runs — or deliberately declines to run — the model-section manifold check for
+/// the classify path, behind [`manifold_check_fits_classify_budget`].
+#[cfg(feature = "manifold")]
+fn record_classify_manifold_status(mesh: &IndexedMesh, out: &mut ImportClassification) {
+    let model_tris = out.model_triangle_count.unwrap_or(mesh.triangles.len());
+    if !manifold_check_fits_classify_budget(model_tris) {
+        // Honest-unknown. `model_is_manifold` stays `None`.
+        out.manifold_check_size_guarded = true;
+        return;
+    }
+    match model_section_manifold_status(mesh, out.model_triangle_count) {
+        Ok(()) => out.model_is_manifold = Some(true),
+        Err(reason) => {
+            out.model_is_manifold = Some(false);
+            out.model_manifold_status = Some(reason);
+        }
+    }
+}
+
+#[cfg(not(feature = "manifold"))]
+fn record_classify_manifold_status(_mesh: &IndexedMesh, _out: &mut ImportClassification) {
+    // Backend disabled: `model_is_manifold` stays `None`, and
+    // `manifold_check_size_guarded` stays false so the UI can tell the two
+    // reasons apart.
+}
+
+/// Cheap `Topology::build`-tier stats for one contiguous triangle range.
+///
+/// Every field this tier does not compute stays `None`. In particular
+/// `self_intersection_triangles` is `None` BY CONSTRUCTION — the sweep that
+/// would fill it is a BVH query per triangle and has no place in an import
+/// path.
+fn section_topology_stats(
+    mesh: &IndexedMesh,
+    range: std::ops::Range<usize>,
+    component_labels: Option<&[u32]>,
+) -> SectionStats {
+    let t = std::time::Instant::now();
+    let start = range.start.min(mesh.triangles.len());
+    let end = range.end.min(mesh.triangles.len()).max(start);
+    let tris = &mesh.triangles[start..end];
+
+    if tris.is_empty() {
+        return SectionStats {
+            triangle_count: 0,
+            vertex_count: 0,
+            // An empty section has no topology to measure. Reporting
+            // `is_watertight: false` here would be the same lie this type
+            // exists to prevent.
+            elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+            ..Default::default()
+        };
+    }
+
+    // ONE pass over the range. Deliberately NOT `extract_submesh` +
+    // `Topology::build` + `triangle_components`: measured on the 11.24M
+    // workhorse lattice, that composition cost ~8.2 s — nearly 3× the entire
+    // wall-time budget for this tier — because it re-hashes every corner into a
+    // vertex-compaction map, hashes every edge again inside `Topology`, and
+    // then runs a third union-find. This walks the edges once and derives
+    // everything from that.
+    // A closed triangle mesh has ~1.5 edges per triangle; over-reserving here
+    // costs hundreds of MB at import time, which is the exact pressure the
+    // governor exists to relieve.
+    let mut edges: AHashMap<(u32, u32), (u32, u32)> =
+        AHashMap::with_capacity(tris.len() * 3 / 2);
+    // Bitmaps, not hash sets: `used` and the root scan are dense over the
+    // vertex array, and hashing 33M corners was measurably the second-largest
+    // cost in this tier.
+    let mut used_vertices = vec![false; mesh.positions.len()];
+    // The classifier partitions by WHOLE components, so when it hands its
+    // labels over we can count this section's components by marking distinct
+    // ids instead of running a second union-find over every corner.
+    let labels = component_labels.filter(|l| l.len() == mesh.triangles.len());
+    let mut parent: Vec<u32> = if labels.is_some() {
+        Vec::new()
+    } else {
+        (0..mesh.positions.len() as u32).collect()
+    };
+
+    fn find(p: &mut [u32], i: u32) -> u32 {
+        let mut r = i;
+        while p[r as usize] != r {
+            r = p[r as usize];
+        }
+        let mut cur = i;
+        while p[cur as usize] != r {
+            let next = p[cur as usize];
+            p[cur as usize] = r;
+            cur = next;
+        }
+        r
+    }
+    let union = |p: &mut Vec<u32>, a: u32, b: u32| {
+        let (ra, rb) = (find(p, a), find(p, b));
+        if ra != rb {
+            p[ra as usize] = rb;
+        }
+    };
+
+    for tri in tris {
+        for &v in tri {
+            used_vertices[v as usize] = true;
+        }
+        if labels.is_none() {
+            union(&mut parent, tri[0], tri[1]);
+            union(&mut parent, tri[0], tri[2]);
+        }
+        for (a, b) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+            let key = if a < b { (a, b) } else { (b, a) };
+            let slot = edges.entry(key).or_insert((0, 0));
+            slot.0 += 1;
+            // "Forward" = the edge traversed low→high. Two faces sharing an edge
+            // must traverse it in OPPOSITE directions; agreeing means one of
+            // them is wound inconsistently.
+            if a < b {
+                slot.1 += 1;
+            }
+        }
+    }
+
+    let mut boundary_edges = 0usize;
+    let mut non_manifold_edges = 0usize;
+    let mut inconsistent = 0usize;
+    let mut boundary_edge_list: Vec<(u32, u32)> = Vec::new();
+    for (&key, &(count, forward)) in edges.iter() {
+        match count {
+            1 => {
+                boundary_edges += 1;
+                boundary_edge_list.push(key);
+            }
+            2 => {
+                if forward != 1 {
+                    inconsistent += 1;
+                }
+            }
+            _ => non_manifold_edges += 1,
+        }
+    }
+
+    let (boundary_loops, largest_boundary_loop) = assemble_boundary_loops(&boundary_edge_list);
+
+    let mut vertex_count = 0usize;
+    let component_count = if let Some(labels) = labels {
+        let max_label = labels.iter().copied().max().unwrap_or(0) as usize;
+        let mut seen = vec![false; max_label + 1];
+        let mut count = 0usize;
+        for &label in &labels[start..end] {
+            if !std::mem::replace(&mut seen[label as usize], true) {
+                count += 1;
+            }
+        }
+        for v in used_vertices.iter() {
+            if *v {
+                vertex_count += 1;
+            }
+        }
+        count
+    } else {
+        let mut roots: AHashSet<u32> = AHashSet::new();
+        for v in 0..used_vertices.len() {
+            if used_vertices[v] {
+                vertex_count += 1;
+                roots.insert(find(&mut parent, v as u32));
+            }
+        }
+        roots.len()
+    };
+
+    SectionStats {
+        triangle_count: tris.len(),
+        vertex_count,
+        connected_components: Some(component_count),
+        boundary_edges: Some(boundary_edges),
+        boundary_loops: Some(boundary_loops),
+        largest_boundary_loop: Some(largest_boundary_loop),
+        non_manifold_edges: Some(non_manifold_edges),
+        // NOT measured at this tier. The non-manifold-VERTEX test is
+        // O(Σ deg²) per vertex and is not one of the two red-line signals
+        // (#10 = holes + non-manifold EDGES). `None`, never 0 — an unmeasured
+        // field must not read as a clean bill of health.
+        non_manifold_vertices: None,
+        inconsistent_winding_edges: Some(inconsistent),
+        is_watertight: Some(boundary_edges == 0 && non_manifold_edges == 0),
+        // NOT measured at this tier — a BVH query per triangle has no place in
+        // an import path. Never 0.
+        self_intersection_triangles: None,
+        elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
+    }
+}
+
+/// Count boundary loops (and the largest) by walking the boundary-edge graph.
+/// Returns `(loop_count, largest_loop_length)`. The list is empty — and this is
+/// O(1) — for the common closed-section case.
+fn assemble_boundary_loops(boundary_edges: &[(u32, u32)]) -> (usize, usize) {
+    if boundary_edges.is_empty() {
+        return (0, 0);
+    }
+    let mut adjacency: AHashMap<u32, Vec<u32>> = AHashMap::new();
+    for &(a, b) in boundary_edges {
+        adjacency.entry(a).or_default().push(b);
+        adjacency.entry(b).or_default().push(a);
+    }
+    let mut visited: AHashSet<u32> = AHashSet::with_capacity(adjacency.len());
+    let mut loops = 0usize;
+    let mut largest = 0usize;
+    let mut stack: Vec<u32> = Vec::new();
+    for &seed in adjacency.keys() {
+        if visited.contains(&seed) {
+            continue;
+        }
+        // Each connected piece of the boundary graph is one loop (or one open
+        // chain on a non-manifold boundary); size it by flood fill.
+        let mut size = 0usize;
+        stack.clear();
+        stack.push(seed);
+        visited.insert(seed);
+        while let Some(v) = stack.pop() {
+            size += 1;
+            if let Some(neighbors) = adjacency.get(&v) {
+                for &n in neighbors {
+                    if visited.insert(n) {
+                        stack.push(n);
+                    }
+                }
+            }
+        }
+        loops += 1;
+        largest = largest.max(size);
+    }
+    (loops, largest)
+}
+
+/// Translate model runs from WELDED triangle indices into SOURCE-FILE indices.
+///
+/// `from_triangle_soup` silently drops triangles carrying a non-finite
+/// coordinate, so from the first drop onward welded index `w` refers to file
+/// triangle `w + (drops at or before it)`. A run map that ignores this addresses
+/// the wrong triangles — and the splice, which re-reads the file, would stream
+/// the wrong geometry.
+///
+/// A welded-contiguous run can also straddle a dropped file triangle, in which
+/// case it is SPLIT: the file runs must describe the file, not the mesh.
+fn welded_runs_to_file_runs(
+    runs: &[TriangleRun],
+    dropped_file_indices: &[u32],
+    welded_triangle_count: usize,
+) -> Vec<TriangleRun> {
+    if dropped_file_indices.is_empty() {
+        // The overwhelmingly common case: file and welded indices coincide.
+        return runs.to_vec();
+    }
+
+    let mut file_of: Vec<u32> = Vec::with_capacity(welded_triangle_count);
+    let mut file = 0u32;
+    let mut d = 0usize;
+    for _ in 0..welded_triangle_count {
+        while d < dropped_file_indices.len() && dropped_file_indices[d] == file {
+            file += 1;
+            d += 1;
+        }
+        file_of.push(file);
+        file += 1;
+    }
+
+    let mut out: Vec<TriangleRun> = Vec::with_capacity(runs.len());
+    for run in runs {
+        if run.len == 0 {
+            continue;
+        }
+        let mut start = file_of[run.start as usize];
+        let mut prev = start;
+        for k in 1..run.len {
+            let f = file_of[(run.start + k) as usize];
+            if f != prev + 1 {
+                out.push(TriangleRun {
+                    start,
+                    len: prev - start + 1,
+                });
+                start = f;
+            }
+            prev = f;
+        }
+        out.push(TriangleRun {
+            start,
+            len: prev - start + 1,
+        });
+    }
+    out
 }
 
 /// Extract a single connected component into its own [`IndexedMesh`] with
@@ -2483,6 +2947,33 @@ fn cull_interior_components(mesh: &mut IndexedMesh) -> (usize, usize) {
 fn classify_and_reorder_model_support_triangles(
     mesh: &mut IndexedMesh,
 ) -> Option<(usize, bool, usize)> {
+    classify_and_reorder_detailed(mesh).map(|split| {
+        (
+            split.model_triangle_count,
+            split.likely_support_geometry,
+            split.component_count,
+        )
+    })
+}
+
+/// The classifier's full result, including the model RUN MAP (Ph1 CP4).
+pub(crate) struct ClassifySplit {
+    pub model_triangle_count: usize,
+    pub likely_support_geometry: bool,
+    pub component_count: usize,
+    /// Maximal runs of consecutive MODEL triangles, in the mesh's PRE-REORDER
+    /// (welded) index space, ascending and disjoint. Emitted from inside the
+    /// group-assignment walk because the reorder below destroys that order in
+    /// place and it cannot be recovered afterwards.
+    pub model_runs_welded: Vec<TriangleRun>,
+    /// Per-triangle component id, in the POST-REORDER order, so the section
+    /// stats can count components without repeating the union-find. Sound
+    /// because the classifier partitions by WHOLE components — no component
+    /// ever straddles the model/support boundary.
+    pub components_reordered: Vec<u32>,
+}
+
+fn classify_and_reorder_detailed(mesh: &mut IndexedMesh) -> Option<ClassifySplit> {
     if mesh.triangles.len() < 8 || mesh.positions.is_empty() {
         return None;
     }
@@ -2603,12 +3094,31 @@ fn classify_and_reorder_model_support_triangles(
 
     let mut model_tris: Vec<[u32; 3]> = Vec::with_capacity(mesh.triangles.len());
     let mut support_tris: Vec<[u32; 3]> = Vec::with_capacity(mesh.triangles.len());
+    // CP4: the run map is built HERE, during the group-assignment walk, because
+    // the reorder below rewrites `mesh.triangles` in place and the original
+    // ordering is gone the moment it does.
+    let mut model_runs_welded: Vec<TriangleRun> = Vec::new();
+    let mut model_labels: Vec<u32> = Vec::with_capacity(mesh.triangles.len());
+    let mut support_labels: Vec<u32> = Vec::with_capacity(mesh.triangles.len());
 
     for (fi, tri) in mesh.triangles.iter().enumerate() {
         let cid = components[fi] as usize;
         match classify_group(cid) {
-            GeometryGroup::Model => model_tris.push(*tri),
-            GeometryGroup::Support => support_tris.push(*tri),
+            GeometryGroup::Model => {
+                model_tris.push(*tri);
+                model_labels.push(components[fi]);
+                match model_runs_welded.last_mut() {
+                    Some(run) if (run.start + run.len) as usize == fi => run.len += 1,
+                    _ => model_runs_welded.push(TriangleRun {
+                        start: fi as u32,
+                        len: 1,
+                    }),
+                }
+            }
+            GeometryGroup::Support => {
+                support_tris.push(*tri);
+                support_labels.push(components[fi]);
+            }
         }
     }
 
@@ -2632,7 +3142,16 @@ fn classify_and_reorder_model_support_triangles(
         support_input_triangles,
     );
 
-    Some((model_triangles_out, likely_support_geometry, n_comps))
+    let mut components_reordered = model_labels;
+    components_reordered.extend_from_slice(&support_labels);
+
+    Some(ClassifySplit {
+        model_triangle_count: model_triangles_out,
+        likely_support_geometry,
+        component_count: n_comps,
+        model_runs_welded,
+        components_reordered,
+    })
 }
 
 /// Assign a component id to each triangle via union-find over shared edges;
@@ -2840,6 +3359,7 @@ mod tests {
             self_intersection_triangles: self_intersections,
             connected_components: components,
             is_watertight: false,
+            is_watertight_measured: true,
             is_oriented: false,
             timings_ms: crate::analysis::AnalysisTimings::default(),
         }
@@ -2992,6 +3512,557 @@ mod tests {
             s.extend_from_slice(&pad);
         }
         s
+    }
+
+    // ── P0c off-origin lattice generator (Ph1 CP2 — ported from src-tauri) ──
+    //
+    // The generator lived in `src-tauri/src/mesh_repair.rs`'s `#[ignore]`d
+    // `p0_fullres_red_harness`, but Ph1/Ph3/Ph7's classifier, run-map and
+    // per-section decimation work all live in THIS crate — where `--lib` is the
+    // gate. Ported verbatim in shape (the box winding is the crate's existing
+    // `box_tri`, which is a character-identical mirror of the src-tauri one) so
+    // the two harnesses cannot drift.
+    //
+    // Shape: one 120×120×1 mm base slab + a G×G grid of thin vertical struts,
+    // each capped by a small tip box hovering `LATTICE_TIP_GAP_MM` ABOVE the
+    // strut — a DETACHED contact tip, which is precisely the feature class that
+    // unbounded decimation and inflated weld steps destroy. Strut heights vary
+    // deterministically so the simplifier has structure to chew on.
+    //
+    // OFF-ORIGIN BY CONSTRUCTION: the bbox min corner sits at
+    // `LATTICE_ORIGIN_MM` = (40, 25, 0), like a real plate export. The islands
+    // sideload frame bug survived precisely because origin-centred test meshes
+    // hide `center` mix-ups — assets generated here must never be centred.
+    //
+    // Triangle enumeration order is STABLE and part of the contract: slab box
+    // tris 0..12, then per grid cell (row-major i, then j) 12 strut tris then
+    // 12 tip tris.
+
+    const LATTICE_ORIGIN_MM: [f32; 3] = [40.0, 25.0, 0.0];
+    const LATTICE_PLATE_MM: f32 = 120.0;
+    const LATTICE_SLAB_MM: f32 = 1.0;
+    const LATTICE_TIP_GAP_MM: f32 = 0.06; // 60 µm — support-tip-gap scale
+    const LATTICE_TIP_HEIGHT_MM: f32 = 0.3;
+
+    /// Struts per side for a requested total triangle count.
+    fn lattice_grid_for_target(target_triangles: u64) -> u32 {
+        let cells = (target_triangles.saturating_sub(12)) / 24;
+        (((cells as f64).sqrt().floor()) as u32).max(1)
+    }
+
+    fn lattice_triangle_count(grid: u32) -> u64 {
+        12 + 24 * (grid as u64) * (grid as u64)
+    }
+
+    /// (strut box, tip box) for grid cell (i, j), as (min, max) pairs.
+    fn lattice_cell_boxes(grid: u32, i: u32, j: u32) -> ([[f32; 3]; 2], [[f32; 3]; 2]) {
+        let pitch = LATTICE_PLATE_MM / grid as f32;
+        let cx = LATTICE_ORIGIN_MM[0] + (i as f32 + 0.5) * pitch;
+        let cy = LATTICE_ORIGIN_MM[1] + (j as f32 + 0.5) * pitch;
+        let slab_top = LATTICE_ORIGIN_MM[2] + LATTICE_SLAB_MM;
+        // Deterministic height variation, 3.0–4.4 mm in 0.35 mm steps.
+        let h = 3.0 + 0.35 * ((i as u64 * 31 + j as u64 * 17) % 5) as f32;
+        let hw = 0.2 * pitch; // strut half-width
+        let tw = 0.275 * pitch; // tip half-width (slightly wider, like a contact tip)
+        let strut = [
+            [cx - hw, cy - hw, slab_top],
+            [cx + hw, cy + hw, slab_top + h],
+        ];
+        let tip_z0 = slab_top + h + LATTICE_TIP_GAP_MM;
+        let tip = [
+            [cx - tw, cy - tw, tip_z0],
+            [cx + tw, cy + tw, tip_z0 + LATTICE_TIP_HEIGHT_MM],
+        ];
+        (strut, tip)
+    }
+
+    /// Triangle `index` of the lattice in raw-file (off-origin) coordinates.
+    /// Single source of truth for the soup builder and any sampled-vertex
+    /// reprojection reference.
+    fn lattice_triangle(grid: u32, index: u64) -> [[f32; 3]; 3] {
+        if index < 12 {
+            let slab_min = LATTICE_ORIGIN_MM;
+            let slab_max = [
+                LATTICE_ORIGIN_MM[0] + LATTICE_PLATE_MM,
+                LATTICE_ORIGIN_MM[1] + LATTICE_PLATE_MM,
+                LATTICE_ORIGIN_MM[2] + LATTICE_SLAB_MM,
+            ];
+            return box_tri(slab_min, slab_max, index as usize);
+        }
+        let k = index - 12;
+        let cell = k / 24;
+        let within = k % 24;
+        let i = (cell / grid as u64) as u32;
+        let j = (cell % grid as u64) as u32;
+        let (strut, tip) = lattice_cell_boxes(grid, i, j);
+        if within < 12 {
+            box_tri(strut[0], strut[1], within as usize)
+        } else {
+            box_tri(tip[0], tip[1], (within - 12) as usize)
+        }
+    }
+
+    /// Materialize the whole lattice as a triangle soup. The src-tauri harness
+    /// streams to an on-disk STL because it targets 6–12M triangles; in-crate
+    /// tests work on grids small enough to hold in memory.
+    fn lattice_soup(grid: u32) -> Vec<f32> {
+        let total = lattice_triangle_count(grid);
+        let mut soup = Vec::with_capacity(total as usize * 9);
+        for index in 0..total {
+            let [a, b, c] = lattice_triangle(grid, index);
+            push_tri(&mut soup, a, b, c);
+        }
+        soup
+    }
+
+    #[test]
+    fn ported_lattice_matches_the_p0c_contract() {
+        // The port is only useful if it is the SAME asset the src-tauri harness
+        // generates. Four contract properties, all of which a careless port
+        // breaks silently.
+        assert_eq!(lattice_grid_for_target(30_000), 35, "grid sizing formula");
+        assert_eq!(lattice_triangle_count(35), 29_412, "triangle count formula");
+
+        let grid = 4u32;
+        let soup = lattice_soup(grid);
+        assert_eq!(
+            soup.len() as u64 / 9,
+            lattice_triangle_count(grid),
+            "soup length must match the enumerated triangle count"
+        );
+
+        // (1) OFF-ORIGIN: the bbox min corner is the plate origin, never (0,0,0).
+        let min_x = soup.iter().step_by(3).cloned().fold(f32::INFINITY, f32::min);
+        let min_y = soup
+            .iter()
+            .skip(1)
+            .step_by(3)
+            .cloned()
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            (min_x - LATTICE_ORIGIN_MM[0]).abs() < 1e-4
+                && (min_y - LATTICE_ORIGIN_MM[1]).abs() < 1e-4,
+            "lattice must be off-origin ({min_x}, {min_y}) — origin-centred \
+             fixtures hide exactly the `center`/frame mix-ups this asset exists \
+             to catch"
+        );
+
+        // (2) STABLE ENUMERATION: triangles 0..12 are the slab.
+        for index in 0..12u64 {
+            for vertex in lattice_triangle(grid, index) {
+                assert!(
+                    vertex[2] <= LATTICE_ORIGIN_MM[2] + LATTICE_SLAB_MM + 1e-4,
+                    "triangle {index} is not part of the base slab"
+                );
+            }
+        }
+
+        // (3) DETACHED TIPS: every tip box floats above its strut by the tip
+        //     gap. This is the feature class decimation destroys.
+        for i in 0..grid {
+            for j in 0..grid {
+                let (strut, tip) = lattice_cell_boxes(grid, i, j);
+                let gap = tip[0][2] - strut[1][2];
+                assert!(
+                    (gap - LATTICE_TIP_GAP_MM).abs() < 1e-5,
+                    "tip ({i},{j}) is not detached: gap {gap}"
+                );
+            }
+        }
+
+        // (4) The struts really are disjoint bodies after welding — the
+        //     property every component-count assertion downstream relies on.
+        let mesh = IndexedMesh::from_triangle_soup(&soup, 1e-5);
+        let comps = triangle_components(&mesh);
+        let n_comps = comps.iter().copied().max().unwrap_or(0) as usize + 1;
+        assert_eq!(
+            n_comps,
+            1 + 2 * (grid as usize) * (grid as usize),
+            "slab + one strut + one tip per cell must be disjoint components"
+        );
+    }
+
+    /// A plate that the section classifier ACCEPTS: one dense model shell
+    /// floating above 20 detached low-poly struts that all touch the build
+    /// plate. Sized to clear every gate in
+    /// `classify_and_reorder_model_support_triangles` (≥12 components, ≥2 000
+    /// support triangles, ≥3 base-touching support components, and the 3×
+    /// density discriminator) and to satisfy
+    /// `compute_likely_support_geometry`'s strong-density arm.
+    fn classifiable_support_plate_soup() -> Vec<f32> {
+        let mut s = Vec::new();
+        // Model shell: 12·8² = 768 triangles, floating from z=5 to z=15.
+        s.extend_from_slice(&subdiv_box_soup([0.0, 0.0, 5.0], [20.0, 20.0, 15.0], 8));
+        // 20 detached struts, 12·3² = 108 triangles each (2 160 total), each
+        // standing on z=0 and topping out at z=4 — under the model, over the
+        // 2 mm raft cutoff, and well under the 200-triangle model floor.
+        for k in 0..20u32 {
+            let x = 0.5 + k as f32;
+            s.extend_from_slice(&subdiv_box_soup([x, 0.5, 0.0], [x + 0.6, 1.1, 4.0], 3));
+        }
+        s
+    }
+
+    /// The same plate AFTER a manifold batch-union has fused each group into a
+    /// single solid: exactly two components (model + support). Every
+    /// component-count gate in the classifier now fails, which is why a second
+    /// `repair()` cannot re-derive the section identity by itself.
+    fn fused_support_plate_soup() -> Vec<f32> {
+        let mut s = Vec::new();
+        s.extend_from_slice(&subdiv_box_soup([0.0, 0.0, 5.0], [20.0, 20.0, 15.0], 8));
+        s.extend_from_slice(&subdiv_box_soup([0.0, 0.0, 0.0], [20.0, 20.0, 4.0], 8));
+        s
+    }
+
+    #[test]
+    fn classification_survives_two_repairs() {
+        // Ph1(e). Repair #1 classifies the plate and reports it as support
+        // geometry. Repair #1's own manifold batch-union then FUSES each group
+        // into a single solid, so repair #2 sees two components instead of
+        // twenty-one and the classifier's ≥12-component gate fails. Because
+        // every `repair()` starts a fresh `MeshHealthReport`, the verdict is
+        // silently downgraded to `false` — and the user's support checkbox
+        // stops sticking.
+        let first = repair(
+            IndexedMesh::from_triangle_soup(&classifiable_support_plate_soup(), 1e-5),
+            &RepairOptions::default(),
+        );
+        assert!(
+            first.report.likely_support_geometry,
+            "fixture must classify as support geometry on repair #1"
+        );
+        assert!(
+            first.report.model_triangle_count.is_some(),
+            "fixture must produce a model/support split on repair #1"
+        );
+
+        // Characterization: the downgrade is a property of the fused input, not
+        // of the option — repair #2 genuinely cannot re-derive the split.
+        let unseeded = repair(
+            IndexedMesh::from_triangle_soup(&fused_support_plate_soup(), 1e-5),
+            &RepairOptions::default(),
+        );
+        assert!(
+            !unseeded.report.likely_support_geometry,
+            "fused plate is not independently classifiable — the fixture no \
+             longer characterizes the reclassification bug"
+        );
+
+        // The fix: thread repair #1's verdict in so the within-run latch keeps
+        // it. Classification must SURVIVE repeated repairs.
+        let second = repair(
+            IndexedMesh::from_triangle_soup(&fused_support_plate_soup(), 1e-5),
+            &RepairOptions {
+                assume_support_geometry: first.report.likely_support_geometry,
+                ..RepairOptions::default()
+            },
+        );
+        assert!(
+            second.report.likely_support_geometry,
+            "assume_support_geometry did not survive repair #2 — the support \
+             checkbox will not stick"
+        );
+    }
+
+    #[test]
+    fn assume_support_geometry_never_downgrades_a_positive_verdict() {
+        // The seed is a LATCH, not an override: a mesh that classifies on its
+        // own keeps its own positive verdict when the seed is false, and a
+        // seeded verdict is never cleared by a pass that failed to classify.
+        let seeded_false = repair(
+            IndexedMesh::from_triangle_soup(&classifiable_support_plate_soup(), 1e-5),
+            &RepairOptions {
+                assume_support_geometry: false,
+                ..RepairOptions::default()
+            },
+        );
+        assert!(
+            seeded_false.report.likely_support_geometry,
+            "an unseeded repair must still be able to classify on its own"
+        );
+
+        let seeded_true = repair(
+            IndexedMesh::from_triangle_soup(&cube_soup([0.0, 0.0, 0.0], [10.0, 10.0, 10.0]), 1e-5),
+            &RepairOptions {
+                assume_support_geometry: true,
+                ..RepairOptions::default()
+            },
+        );
+        assert!(
+            seeded_true.report.likely_support_geometry,
+            "a seeded verdict must survive a pass that finds no split"
+        );
+        assert!(
+            seeded_true.report.model_triangle_count.is_none(),
+            "the seed must not fabricate a split index it did not measure"
+        );
+    }
+
+    // ── Ph1 CP3/CP4 — import classification, honest stats, run map ──────────
+
+    #[test]
+    fn classify_runs_for_an_over_budget_import() {
+        // The P6 defect this phase undoes: classification was skipped above a
+        // ≥3M size gate, which silently removed the section split, the support
+        // tint, the defect chip and `likely_support_geometry` for exactly the
+        // big pre-supported imports that need them. `classify_import` takes no
+        // size argument AT ALL — there is nowhere to reintroduce the gate.
+        let mut mesh =
+            IndexedMesh::from_triangle_soup(&classifiable_support_plate_soup(), 1e-5);
+        let total = mesh.triangles.len();
+        let result = classify_import(
+            &mut mesh,
+            &ClassifyImportOptions {
+                source_triangle_count: total,
+                dropped_file_indices: Vec::new(),
+                compute_section_stats: true,
+            },
+        );
+
+        let model_tris = result
+            .model_triangle_count
+            .expect("an over-budget pre-supported import must still be classified");
+        assert!(
+            model_tris > 0 && model_tris < total,
+            "model section {model_tris} of {total} must be a real split"
+        );
+        assert!(result.likely_support_geometry);
+
+        // Model-first ordering is the contract every downstream consumer reads.
+        let model = result.model_section.as_ref().expect("model stats");
+        let support = result.support_section.as_ref().expect("support stats");
+        assert_eq!(model.triangle_count, model_tris);
+        assert_eq!(support.triangle_count, total - model_tris);
+
+        // The run map covers exactly the model section.
+        let mapped: u32 = result.model_runs.iter().map(|r| r.len).sum();
+        assert_eq!(mapped as usize, model_tris, "run map must cover the model section");
+    }
+
+    #[test]
+    fn section_stats_mark_unmeasured_fields_unknown() {
+        // The trap: `minimal_analysis` returns `is_watertight: false // not
+        // computed`, which reads as a definite "this mesh has holes". Nothing
+        // at this tier may report an unmeasured field as 0/false.
+        let mut mesh =
+            IndexedMesh::from_triangle_soup(&classifiable_support_plate_soup(), 1e-5);
+        let result = classify_import(
+            &mut mesh,
+            &ClassifyImportOptions {
+                source_triangle_count: mesh_triangle_count(&classifiable_support_plate_soup()),
+                dropped_file_indices: Vec::new(),
+                compute_section_stats: true,
+            },
+        );
+
+        for (name, stats) in [
+            ("model", result.model_section.as_ref().unwrap()),
+            ("support", result.support_section.as_ref().unwrap()),
+        ] {
+            assert_eq!(
+                stats.self_intersection_triangles, None,
+                "{name}: the self-intersection sweep does NOT run at this tier, so \
+                 reporting it as 0 would claim a clean bill of health nobody checked"
+            );
+            // Everything the topology tier DOES compute must be Some — an
+            // Option that is always None is just a slower `false`.
+            assert!(stats.is_watertight.is_some(), "{name}: watertight measured");
+            assert!(stats.boundary_edges.is_some(), "{name}: boundary edges measured");
+            assert!(stats.boundary_loops.is_some(), "{name}: holes measured");
+            assert!(
+                stats.non_manifold_edges.is_some(),
+                "{name}: non-manifold edges measured"
+            );
+            assert!(
+                stats.connected_components.is_some(),
+                "{name}: components measured"
+            );
+        }
+
+        // The model shell is a closed subdivided box; the struts are closed too.
+        assert_eq!(result.model_section.as_ref().unwrap().is_watertight, Some(true));
+        assert_eq!(
+            result.support_section.as_ref().unwrap().boundary_loops,
+            Some(0)
+        );
+
+        // And the source of the trap is itself flagged.
+        let minimal = crate::analysis::minimal_analysis(&mesh, 1);
+        assert!(
+            !minimal.is_watertight_measured,
+            "minimal_analysis computes no topology — it must say so"
+        );
+        assert!(crate::analysis::analyze_lightweight(&mesh).is_watertight_measured);
+    }
+
+    fn mesh_triangle_count(soup: &[f32]) -> usize {
+        soup.len() / 9
+    }
+
+    #[test]
+    fn run_map_is_expressed_in_source_file_indices() {
+        // CP4's load-bearing property. `from_triangle_soup` DROPS triangles with
+        // a non-finite coordinate, so from the first drop onward welded index w
+        // is file index w+1. A run map in welded indices would make the splice —
+        // which re-reads the FILE record by record — stream the wrong triangles.
+        let clean = classifiable_support_plate_soup();
+        let file_triangle_count = mesh_triangle_count(&clean) + 1;
+
+        // Inject one NaN triangle in the middle of the MODEL section (the model
+        // shell is emitted first by the fixture), so the drop lands inside a run.
+        let k = 100usize;
+        let mut poisoned = Vec::with_capacity(clean.len() + 9);
+        poisoned.extend_from_slice(&clean[..k * 9]);
+        poisoned.extend_from_slice(&[f32::NAN; 9]);
+        poisoned.extend_from_slice(&clean[k * 9..]);
+
+        let (mut mesh, stats, dropped) =
+            IndexedMesh::from_triangle_soup_tracked(&poisoned, 1e-5);
+        assert_eq!(stats.dropped_nonfinite_triangles, 1);
+        assert_eq!(dropped, vec![k as u32], "the DROP POSITION is what shifts indices");
+
+        let result = classify_import(
+            &mut mesh,
+            &ClassifyImportOptions {
+                source_triangle_count: file_triangle_count,
+                dropped_file_indices: dropped,
+                compute_section_stats: false,
+            },
+        );
+
+        let model_tris = result.model_triangle_count.expect("fixture must classify");
+        let mapped: u32 = result.model_runs.iter().map(|r| r.len).sum();
+        assert_eq!(
+            mapped as usize, model_tris,
+            "the run map must still cover every model triangle"
+        );
+
+        // No run may address the dropped FILE index, and the runs must be
+        // ascending, disjoint, and inside the FILE's range.
+        let mut last_end = 0u32;
+        for run in &result.model_runs {
+            assert!(run.len > 0);
+            assert!(run.start >= last_end, "runs must be ascending and disjoint");
+            last_end = run.start + run.len;
+            assert!(
+                last_end as usize <= file_triangle_count,
+                "run [{}, {}) exceeds the file's {file_triangle_count} triangles",
+                run.start,
+                last_end
+            );
+            assert!(
+                !(run.start..last_end).contains(&(k as u32)),
+                "a run addresses file triangle {k}, which is the dropped NaN one"
+            );
+        }
+        // The drop split the model's single leading run in two.
+        assert!(
+            result.model_runs.len() >= 2,
+            "a drop inside a run must SPLIT it: {:?}",
+            result.model_runs
+        );
+        assert_eq!(result.dropped_nonfinite_triangles, 1);
+        assert_eq!(result.source_triangle_count, file_triangle_count);
+    }
+
+    #[test]
+    fn run_map_is_identity_for_a_clean_file() {
+        // Regression fence for the fast path: with nothing dropped, file and
+        // welded indices coincide and the runs must pass through untouched.
+        let runs = vec![
+            TriangleRun { start: 0, len: 5 },
+            TriangleRun { start: 9, len: 2 },
+        ];
+        assert_eq!(welded_runs_to_file_runs(&runs, &[], 11), runs);
+    }
+
+    #[test]
+    fn manifold_guard_keeps_classification_ungated() {
+        // #2: the size guard governs the MANIFOLD CHECK only. Classification is
+        // structural and must never be size-gated again — that gate is the
+        // defect this phase undoes.
+        assert!(manifold_check_fits_classify_budget(0));
+        assert!(manifold_check_fits_classify_budget(
+            MANIFOLD_CLASSIFY_GUARD_TRIANGLES
+        ));
+        assert!(!manifold_check_fits_classify_budget(
+            MANIFOLD_CLASSIFY_GUARD_TRIANGLES + 1
+        ));
+
+        // Above the guard the verdict is UNKNOWN — never a false negative.
+        let mut out = ImportClassification {
+            model_triangle_count: Some(MANIFOLD_CLASSIFY_GUARD_TRIANGLES + 1),
+            ..Default::default()
+        };
+        let mesh = IndexedMesh::from_triangle_soup(
+            &cube_soup([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]),
+            1e-5,
+        );
+        record_classify_manifold_status(&mesh, &mut out);
+        assert_eq!(
+            out.model_is_manifold, None,
+            "a mesh nobody checked must be UNKNOWN, never `Some(false)`"
+        );
+        #[cfg(feature = "manifold")]
+        assert!(out.manifold_check_size_guarded);
+    }
+
+    /// The measurement behind [`MANIFOLD_CLASSIFY_GUARD_TRIANGLES`] and behind
+    /// the Ph1 wall-time claim. `#[ignore]`d: it builds multi-million-triangle
+    /// lattices, so it is a deliberate, explicit run, not part of the gate.
+    ///
+    /// ```text
+    /// cargo test -p dragonfruit-mesh-repair --lib --release --features manifold \
+    ///   classify_import_wall_time -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn classify_import_wall_time_at_scale() {
+        for target in [1_000_000u64, 3_000_000, 6_000_000, 11_240_000] {
+            let grid = lattice_grid_for_target(target);
+            let soup = lattice_soup(grid);
+            let actual = mesh_triangle_count(&soup);
+
+            let t_weld = std::time::Instant::now();
+            let (mut mesh, _stats, dropped) =
+                IndexedMesh::from_triangle_soup_tracked(&soup, 1e-5);
+            let weld_ms = t_weld.elapsed().as_secs_f64() * 1000.0;
+            drop(soup);
+
+            let result = classify_import(
+                &mut mesh,
+                &ClassifyImportOptions {
+                    source_triangle_count: actual,
+                    dropped_file_indices: dropped,
+                    compute_section_stats: true,
+                },
+            );
+
+            // The manifold check is EXCLUDED from the budget by decision #1, so
+            // time it separately to show what the guard is buying.
+            let manifold_ms = {
+                #[cfg(feature = "manifold")]
+                {
+                    let t = std::time::Instant::now();
+                    let _ = model_section_manifold_status(&mesh, result.model_triangle_count);
+                    t.elapsed().as_secs_f64() * 1000.0
+                }
+                #[cfg(not(feature = "manifold"))]
+                {
+                    f64::NAN
+                }
+            };
+
+            println!(
+                "[classify budget] tris={actual:>9} weld={weld_ms:>9.1}ms \
+                 classify={:>9.1}ms stats={:>9.1}ms  BUDGETED={:>9.1}ms  \
+                 || manifold(excluded)={manifold_ms:>9.1}ms  guarded={}",
+                result.classify_ms,
+                result.section_stats_ms,
+                result.classify_ms + result.section_stats_ms,
+                result.manifold_check_size_guarded,
+            );
+        }
     }
 
     #[test]

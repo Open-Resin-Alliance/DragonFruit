@@ -29,6 +29,14 @@ pub struct MeshAnalysis {
     pub self_intersection_triangles: usize,
     pub connected_components: usize,
     pub is_watertight: bool,
+    /// Ph1 CP3 — whether the topology tier that decides `is_watertight`
+    /// ACTUALLY RAN. `minimal_analysis` computes no topology at all, so its
+    /// `is_watertight: false` is "not computed", not "has holes" — a reader
+    /// cannot tell those apart from the bool alone, and the UI rendered the
+    /// unmeasured case as a definite "not watertight". Consumers must treat
+    /// `is_watertight` as UNKNOWN when this is false.
+    #[serde(default)]
+    pub is_watertight_measured: bool,
     pub is_oriented: bool,
 
     pub timings_ms: AnalysisTimings,
@@ -135,6 +143,7 @@ pub fn analyze(mesh: &IndexedMesh) -> MeshAnalysis {
         self_intersection_triangles,
         connected_components,
         is_watertight,
+        is_watertight_measured: true,
         is_oriented,
         timings_ms: AnalysisTimings {
             topology_ms,
@@ -236,6 +245,7 @@ pub fn analyze_lightweight(mesh: &IndexedMesh) -> MeshAnalysis {
         self_intersection_triangles,
         connected_components,
         is_watertight,
+        is_watertight_measured: true,
         is_oriented,
         timings_ms: AnalysisTimings {
             topology_ms,
@@ -260,7 +270,9 @@ pub fn minimal_analysis(mesh: &IndexedMesh, component_count: usize) -> MeshAnaly
 
     let total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
-    let is_watertight = false; // not computed
+    // NOT computed at this tier — see `is_watertight_measured`. The value is
+    // meaningless on its own and must never be rendered as a verdict.
+    let is_watertight = false;
     let is_oriented = signed_volume >= 0.0;
 
     MeshAnalysis {
@@ -289,6 +301,7 @@ pub fn minimal_analysis(mesh: &IndexedMesh, component_count: usize) -> MeshAnaly
         self_intersection_triangles: 0,
         connected_components: component_count,
         is_watertight,
+        is_watertight_measured: false,
         is_oriented,
         timings_ms: AnalysisTimings {
             topology_ms: 0.0,

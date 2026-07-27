@@ -35,7 +35,16 @@ export interface MeshAnalysisJson {
   component_count: number;
   self_intersections: number;
   signed_volume: number;
-  is_watertight: boolean;
+  /**
+   * Ph1 CP3 — `null` means UNKNOWN, not "no".
+   *
+   * `minimal_analysis` (the classify-only tier) computes no topology at all and
+   * returned a hardcoded `is_watertight: false`, which the UI rendered as a
+   * definite "not watertight" for perfectly closed meshes. Rust now reports
+   * `is_watertight_measured` alongside the value; when it is false the verdict
+   * is transported as `null` and must be rendered as an em dash, never as "no".
+   */
+  is_watertight: boolean | null;
   timings_ms: {
     topology_ms: number;
     self_intersections_ms: number;
@@ -89,6 +98,17 @@ export interface MeshRepairOptions {
    * by the Rust `RepairOptionsDto`. Defaults to false (skip) on the Rust side.
    */
   allowHullRescue?: boolean;
+  /**
+   * Ph1(e) — forward a model's ALREADY-KNOWN support verdict into a re-repair.
+   *
+   * `likely_support_geometry` is derived from a component-shaped heuristic, and
+   * the first repair's own manifold batch-union fuses the support components
+   * into a single solid. A second repair therefore cannot re-derive the verdict
+   * and — because each `repair()` starts a fresh report — silently downgrades
+   * it to false, which is what makes the support checkbox stop sticking.
+   * Serialized as `assumeSupportGeometry`; seeds the Rust-side latch.
+   */
+  assumeSupportGeometry?: boolean;
 }
 
 export interface MeshRepairResult {
@@ -124,6 +144,7 @@ interface RawMeshAnalysisJson extends UnknownRecord {
   self_intersection_triangles?: unknown;
   signed_volume?: unknown;
   is_watertight?: unknown;
+  is_watertight_measured?: unknown;
   timings_ms?: unknown;
 }
 
@@ -200,7 +221,11 @@ function normalizeMeshAnalysis(input: unknown): MeshAnalysisJson {
     component_count: asNumber(raw.component_count ?? raw.connected_components),
     self_intersections: asNumber(raw.self_intersections ?? raw.self_intersection_triangles),
     signed_volume: asNumber(raw.signed_volume),
-    is_watertight: asBoolean(raw.is_watertight),
+    // UNKNOWN when the topology tier did not run. Older payloads carry no
+    // `is_watertight_measured` field at all; those came from `analyze` /
+    // `analyze_lightweight`, which always measured it, so absence means true.
+    is_watertight:
+      raw.is_watertight_measured === false ? null : asBoolean(raw.is_watertight),
     timings_ms: {
       topology_ms: asNumber(timings.topology_ms),
       self_intersections_ms: asNumber(timings.self_intersections_ms),
@@ -218,6 +243,15 @@ function normalizeMeshRepairStep(input: unknown): MeshRepairStep {
     details: asOptionalString(raw.details ?? raw.notes),
     changed: asNumber(raw.changed),
   };
+}
+
+/**
+ * Test-only seam for the Ph1 CP3 UNKNOWN contract. The normalizer is the single
+ * place the Rust `is_watertight_measured` flag becomes a `null` verdict, and
+ * there is no other way to reach it without a live Tauri `invoke`.
+ */
+export function normalizeMeshHealthReportForTest(input: unknown): MeshHealthReport {
+  return normalizeMeshHealthReport(input);
 }
 
 function normalizeMeshHealthReport(input: unknown): MeshHealthReport {

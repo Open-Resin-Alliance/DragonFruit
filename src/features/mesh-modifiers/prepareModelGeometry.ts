@@ -241,10 +241,35 @@ function createGeometryFromPositions(positions: Float32Array): THREE.BufferGeome
   return geometry;
 }
 
+/**
+ * THE Ph1 D1 FENCE — load-bearing, do not relax without Ph3.
+ *
+ * True when this model's outputs come from the ORIGINAL file via the Rust-side
+ * splice rather than from its scene geometry. Splitting such a model is
+ * destructive: both halves are rebuilt from a bare `Float32Array`
+ * (`buildGeometryWithBounds`) and therefore carry no `nativePreview`, so
+ * `resolveFullResSourceForModel` returns `null` afterwards and the splice loop
+ * drops the model — the >budget pre-supported STL then slices at PREVIEW
+ * fidelity with no signal to the user (defect D1).
+ *
+ * Until Ph3's run-map splice can express `[model runs | support runs]` inside
+ * the spliced stream, splice-eligible models stay whole and keep today's exact
+ * output bytes. This is what makes Ph1's full-res classification behaviour-
+ * neutral instead of a silent fidelity regression on exactly the class of
+ * import this whole effort exists to fix.
+ */
+export function isFullResSpliceEligible(model: LoadedModel): boolean {
+  return resolveOutputGeometrySource(model).kind === 'fullres-source-file';
+}
+
 function splitClassifiedModelForOutput(model: LoadedModel): {
   models: LoadedModel[];
   geometries: THREE.BufferGeometry[];
 } | null {
+  // D1 fence — see `isFullResSpliceEligible`. Ph3 removes this and replaces it
+  // with a section-aware splice.
+  if (isFullResSpliceEligible(model)) return null;
+
   const report = model.geometry.meshDefects?.nativeRepairReport;
   const modelTriangleCount = Math.floor(report?.model_triangle_count ?? 0);
 
