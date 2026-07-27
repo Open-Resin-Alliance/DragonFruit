@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { createStore } from 'zustand';
+import { detectPlatform } from '../hooks/usePlatform';
 import { HotkeyConfig, DEFAULT_KEYBINDINGS } from './hotkeyConfig';
 
 export interface HotkeyState {
@@ -55,6 +56,20 @@ function normalizeKey(key: string): string {
     return normalized;
 }
 
+export function getPrimaryModifierKey(): 'ctrl' | 'meta' {
+    return detectPlatform() === 'mac' ? 'meta' : 'ctrl';
+}
+
+export function isPrimaryModifierPressed(activeKeys: ReadonlySet<string>): boolean {
+    const primaryModifier = getPrimaryModifierKey();
+    for (const key of activeKeys) {
+        if (normalizeKey(key) === primaryModifier) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function getRequiredKeys(binding: { key: string; modifier?: string }): Set<string> {
     const keys = new Set<string>();
     const baseKey = normalizeKey(binding.key);
@@ -63,7 +78,10 @@ function getRequiredKeys(binding: { key: string; modifier?: string }): Set<strin
     }
     if (binding.modifier) {
         binding.modifier.split('+').forEach(m => {
-            const normalizedM = normalizeKey(m);
+            const configuredModifier = normalizeKey(m);
+            const normalizedM = configuredModifier === 'ctrl'
+                ? getPrimaryModifierKey()
+                : configuredModifier;
             if (normalizedM) {
                 keys.add(normalizedM);
             }
@@ -144,5 +162,4 @@ export function useKeyPressed(key: string): boolean {
         () => false
     );
 }
-
 

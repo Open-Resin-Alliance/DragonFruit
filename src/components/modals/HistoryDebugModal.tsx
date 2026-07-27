@@ -86,6 +86,8 @@ export function HistoryDebugModal({
         };
       case 'undo-handler-missing':
       case 'redo-handler-missing':
+      case 'undo-declined':
+      case 'redo-declined':
         return {
           dot: '#fb7185',
           badgeBg: 'color-mix(in srgb, #fb7185, var(--surface-0) 90%)',

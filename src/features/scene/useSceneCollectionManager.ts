@@ -9,8 +9,7 @@ import { clearPaintToBase } from '@/components/analysis/MeshPainter';
 import { getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
-import { pushHistory, registerHistoryHandler } from '@/history/historyStore';
-import type { HistoryAction, HistoryDirection } from '@/history/types';
+import { createTypedHistory } from '@/history/typedHistory';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import type { DragonfruitImportFormat, SupportMode, SupportState } from '@/supports/types';
 import { GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS } from '@/features/plugins/generatedBuiltinComplexPlugins';
@@ -92,7 +91,12 @@ const RECENT_OPENED_FILES_LIMIT = 10;
 const RECENT_FILES_DB_NAME = 'dragonfruit-recent-files';
 const RECENT_FILES_DB_VERSION = 1;
 const RECENT_FILES_STORE_NAME = 'files';
-const SCENE_MODELS_SNAPSHOT_APPLY = 'scene_models_snapshot_apply';
+const SCENE_MODELS_SNAPSHOT_APPLY = 'scene_models_snapshot_apply' as const;
+// A marker pushed after a slice so change-detection can tell whether the scene
+// was edited since. It carries no undo behaviour, but it still lands on the undo
+// stack, so it must have a (pass-through) handler — otherwise undoing onto it
+// would strand the stack. Exported so the push site keys off the same constant.
+export const SCENE_SLICED = 'SCENE_SLICED' as const;
 const SCENE_HISTORY_MAX_SNAPSHOTS = 200;
 // Belt-and-suspenders alongside the count cap above: a handful of
 // full-resolution geometry swaps (e.g. repeated hollowing on a large model)
@@ -101,6 +105,18 @@ const SCENE_HISTORY_MAX_SNAPSHOTS = 200;
 const SCENE_HISTORY_MAX_ESTIMATED_GEOMETRY_BYTES = 300 * 1024 * 1024;
 
 type SceneSnapshotPayload = { key: string };
+
+/** Action→payload map for the scene history domain. */
+type SceneHistoryPayloadMap = {
+  [SCENE_MODELS_SNAPSHOT_APPLY]: SceneSnapshotPayload;
+  [SCENE_SLICED]: Record<string, never>;
+};
+const sceneHistory = createTypedHistory<SceneHistoryPayloadMap>();
+
+/** Push the post-slice marker used to detect edits made after a slice. */
+export function pushSceneSlicedMarker(): void {
+  sceneHistory.push({ type: SCENE_SLICED, description: 'Scene sliced for printing', payload: {} });
+}
 
 type SceneSnapshot = {
   models: LoadedModel[];
@@ -1691,10 +1707,9 @@ export function useSceneCollectionManager() {
   }, []);
 
   useEffect(() => {
-    const unregisterSceneModelsHistory = registerHistoryHandler(
+    const unregisterSceneModelsHistory = sceneHistory.register(
       SCENE_MODELS_SNAPSHOT_APPLY,
-      (action: HistoryAction, direction: HistoryDirection) => {
-        const payload = action.payload as SceneSnapshotPayload | undefined;
+      (payload, direction) => {
         if (!payload?.key) return false;
 
         const pair = sceneSnapshotRegistry.get(payload.key);
@@ -1705,17 +1720,23 @@ export function useSceneCollectionManager() {
       },
     );
 
+    // Pass-through: the slice marker carries no undo behaviour, but registering
+    // it keeps undo/redo moving it between stacks instead of stranding an entry
+    // with no handler.
+    const unregisterSceneSliced = sceneHistory.register(SCENE_SLICED, () => true);
+
     return () => {
       unregisterSceneModelsHistory();
+      unregisterSceneSliced();
     };
   }, [applySceneSnapshot]);
 
   const pushSceneSnapshotHistory = useCallback((before: SceneSnapshot, after: SceneSnapshot, description?: string) => {
     const key = storeSceneSnapshotPair({ before, after });
-    pushHistory({
+    sceneHistory.push({
       type: SCENE_MODELS_SNAPSHOT_APPLY,
       description,
-      payload: { key } satisfies SceneSnapshotPayload,
+      payload: { key },
     });
   }, []);
 

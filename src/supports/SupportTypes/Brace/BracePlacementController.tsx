@@ -4,7 +4,7 @@ import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { subscribe, getSnapshot, addKnot, addBrace } from '../../state';
-import { pushHistory } from '@/history/historyStore';
+import { pushSupportHistory } from '@/supports/history/supportHistory';
 import type { SnapTarget } from '../../interaction/SnappingManager';
 import type { Brace, Knot, Vec3 } from '../../types';
 import { SUPPORT_ADD_BRACE } from '../../history/actionTypes';
@@ -930,7 +930,7 @@ export function BracePlacementController() {
                 addKnot(endKnot);
                 addBrace(brace);
 
-                pushHistory({
+                pushSupportHistory({
                     type: SUPPORT_ADD_BRACE,
                     payload: {
                         brace,
@@ -1004,7 +1004,7 @@ export function BracePlacementController() {
             addKnot(endKnot);
             addBrace(brace);
 
-            pushHistory({
+            pushSupportHistory({
                 type: SUPPORT_ADD_BRACE,
                 payload: {
                     brace,
@@ -1112,7 +1112,7 @@ export function BracePlacementController() {
                 addKnot(endKnot);
                 addBrace(brace);
 
-                pushHistory({
+                pushSupportHistory({
                     type: SUPPORT_ADD_BRACE,
                     payload: {
                         brace,
@@ -1180,7 +1180,7 @@ export function BracePlacementController() {
             addKnot(endKnot);
             addBrace(brace);
 
-            pushHistory({
+            pushSupportHistory({
                 type: SUPPORT_ADD_BRACE,
                 payload: {
                     brace,

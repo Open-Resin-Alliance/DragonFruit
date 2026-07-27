@@ -35,7 +35,6 @@ import { bezierToLineSegments, calculateAdaptiveBezierResolution } from './Curve
 import type { SupportData } from './rendering';
 import type { BracePreviewData } from './SupportTypes/Brace/bracePlacementState';
 import { useJointCreationState } from './SupportPrimitives/Joint/jointCreationState';
-import { useSupportHistoryHandlers } from './history/useSupportHistoryHandlers';
 import { subscribeToSettings, getSettingsSnapshot } from './Settings/state';
 import { emitSupportModelPointerHover, emitSupportModelPointerSelect, handleSupportClick } from './interaction/clickHandlers';
 import { useResolvedSelectionState } from './interaction/shared/selection/resolvedSelectionStore';
@@ -1662,8 +1661,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         hoveredCategoryForVisual,
         hoveredIdForVisual,
     ]);
-
-    useSupportHistoryHandlers(interactionHooksEnabled);
 
     // Backfill Kickstand root/knot into global support state so raft + knot tools include them.
     useEffect(() => {

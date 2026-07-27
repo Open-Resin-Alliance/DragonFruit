@@ -18,9 +18,13 @@ import {
   Wrench,
   Scissors,
 } from 'lucide-react';
+import { useLingui } from '@lingui/react';
+import { msg, plural } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import type { MessageDescriptor } from '@lingui/core';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Card, CardHeader, IconButton } from '@/components/atoms';
-import { formatMeshStatsForDisplay } from '@/utils/meshStatsFormatting';
+import { formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { Tooltip } from '@/components/ui/Tooltip';
 
@@ -72,6 +76,26 @@ type PanelContextMenuState = {
 
 const OUTSIDE_PLATE_GROUP_ID = '__system_outside_plate__';
 
+// Mesh stats shown under a model's name, e.g. "1.37M triangles • 3 shells".
+// Triangle counts are compacted for width, so the plural category comes from the
+// raw number while the compact string is what gets interpolated. The shell count
+// is omitted for single-shell meshes — that is the desired result, not news.
+const formatMeshStats = (
+  model: LoadedModel,
+  translate: (descriptor: MessageDescriptor) => string,
+): string => {
+  const compactTriangles = formatPolygonCountCompact(model.polygonCount);
+  const triangles = translate(msg`${plural(model.polygonCount, {
+    one: `${compactTriangles} triangle`,
+    other: `${compactTriangles} triangles`,
+  })}`);
+
+  const shells = model.geometry.meshDefects?.nativeRepairReport?.post.component_count;
+  if (shells == null || shells <= 1) return triangles;
+
+  return `${triangles} • ${translate(msg`${plural(shells, { one: '# shell', other: '# shells' })}`)}`;
+};
+
 const splitModelNameSuffix = (name: string): { base: string; suffix: string } => {
   const trimmed = name.trim();
   const match = trimmed.match(/^(.*?)(\.[^.\s]+)$/);
@@ -108,6 +132,7 @@ export function ModelManagerPanel({
   dimmed = false,
   bottomClearancePx = 220,
 }: ModelManagerPanelProps) {
+  const { _ } = useLingui();
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<Record<string, boolean>>({});
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
@@ -189,13 +214,13 @@ export function ModelManagerPanel({
       }, outsideModels.length > 0
         ? [{
             id: OUTSIDE_PLATE_GROUP_ID,
-            name: 'Outside Plate',
+            name: _(msg({ message: 'Outside plate', comment: 'Name of the automatic folder collecting models that sit outside the build plate.' })),
             models: [...outsideModels].sort((a, b) => a.name.localeCompare(b.name)),
             isGrouped: true,
             isSystemGroup: true,
           }]
         : []);
-  }, [models, outsidePlateModelIds]);
+  }, [_, models, outsidePlateModelIds]);
 
   const contextModelId = contextMenu?.modelId;
   const contextGroupId = contextMenu?.groupId;
@@ -343,7 +368,7 @@ export function ModelManagerPanel({
           <>
             <IconButton
               onClick={() => setExpanded(!expanded)}
-              title={expanded ? 'Collapse card' : 'Expand card'}
+              title={expanded ? _(msg`Collapse card`) : _(msg`Expand card`)}
               className="!p-0.5"
             >
               <svg
@@ -360,7 +385,9 @@ export function ModelManagerPanel({
                 )}
               </svg>
             </IconButton>
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Models</h3>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              <Trans comment="Title of the panel listing every model loaded into the scene.">Models</Trans>
+            </h3>
           </>
         )}
         right={(
@@ -370,11 +397,11 @@ export function ModelManagerPanel({
               borderColor: 'color-mix(in srgb, var(--accent), transparent 62%)',
               background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
             }}
-            title={`${models.length} model${models.length === 1 ? '' : 's'} loaded`}
+            title={_(msg`${plural(models.length, { one: '# model loaded', other: '# models loaded' })}`)}
           >
             <Box className="h-3 w-3" style={{ color: 'var(--accent)' }} />
             <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Count
+              <Trans comment="Badge label next to the number of loaded models. Rendered uppercase; keep it to one short word.">Count</Trans>
             </span>
             <span className="text-xs font-bold tabular-nums" style={{ color: 'var(--text-strong)' }}>
               {models.length}
@@ -389,7 +416,7 @@ export function ModelManagerPanel({
           <div className="space-y-1 overflow-y-auto custom-scrollbar pr-0.5 flex-1 min-h-0">
             {models.length === 0 ? (
               <div className="text-xs text-center py-2 italic" style={{ color: 'var(--text-muted)' }}>
-                No models loaded
+                <Trans>No models loaded</Trans>
               </div>
             ) : (
               grouped.map((group) => {
@@ -448,7 +475,7 @@ export function ModelManagerPanel({
                             e.stopPropagation();
                             toggleGroupCollapsed(group.id);
                           }}
-                          title={isCollapsed ? 'Expand folder' : 'Collapse folder'}
+                          title={isCollapsed ? _(msg`Expand folder`) : _(msg`Collapse folder`)}
                         >
                           {isCollapsed
                             ? <ChevronRight className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />
@@ -484,7 +511,7 @@ export function ModelManagerPanel({
                               background: 'var(--surface-0)',
                               color: 'var(--text-strong)',
                             }}
-                            aria-label="Rename folder"
+                            aria-label={_(msg`Rename folder`)}
                           />
                         ) : (
                           <span className="text-[10px] font-semibold uppercase tracking-wide truncate" style={{ color: 'var(--text-muted)' }}>
@@ -597,7 +624,7 @@ export function ModelManagerPanel({
                                     background: 'var(--surface-0)',
                                     color: 'var(--text-strong)',
                                   }}
-                                  aria-label="Rename model base name"
+                                  aria-label={_(msg`Rename model base name`)}
                                 />
                                 {renamingModelSuffix && (
                                   <span className="shrink-0 text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
@@ -613,10 +640,7 @@ export function ModelManagerPanel({
                               </Tooltip>
                             )}
                             <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                              {formatMeshStatsForDisplay({
-                                polygonCount: model.polygonCount,
-                                componentCount: model.geometry.meshDefects?.nativeRepairReport?.post.component_count,
-                              })}
+                              {formatMeshStats(model, _)}
                             </div>
                           </div>
 
@@ -628,7 +652,7 @@ export function ModelManagerPanel({
                                   onOpenSupportsInfo(model.id);
                                 }}
                                 className="!p-1.5"
-                                title="Supports for model"
+                                title={_(msg`Supports for model`)}
                               >
                                 <Info className="w-3.5 h-3.5" />
                               </IconButton>
@@ -639,7 +663,7 @@ export function ModelManagerPanel({
                                 onVisibilityChange(model.id, !model.visible);
                               }}
                               className="!p-1.5"
-                              title={model.visible ? 'Hide' : 'Show'}
+                              title={model.visible ? _(msg`Hide`) : _(msg`Show`)}
                             >
                               {model.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
                             </IconButton>
@@ -669,10 +693,10 @@ export function ModelManagerPanel({
           }}
           onPointerDown={(e) => e.stopPropagation()}
           role="menu"
-          aria-label="Models context menu"
+          aria-label={_(msg`Models context menu`)}
         >
           <div className="mb-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-            Models
+            <Trans comment="Section heading of the models context menu. Rendered uppercase.">Models</Trans>
           </div>
 
           <div className="space-y-0.5">
@@ -690,7 +714,7 @@ export function ModelManagerPanel({
                   }}
                 >
                   <FolderPlus className="h-3.5 w-3.5" />
-                  <span>Group Selected</span>
+                  <span><Trans>Group selected</Trans></span>
                 </button>
 
                 <button
@@ -705,7 +729,7 @@ export function ModelManagerPanel({
                   }}
                 >
                   <FolderMinus className="h-3.5 w-3.5" />
-                  <span>Ungroup Selected</span>
+                  <span><Trans>Ungroup selected</Trans></span>
                 </button>
               </>
             )}
@@ -727,7 +751,7 @@ export function ModelManagerPanel({
                   }}
                 >
                   <PanelsTopLeft className="h-3.5 w-3.5" />
-                  <span>Select Folder</span>
+                  <span><Trans>Select folder</Trans></span>
                 </button>
 
                 <button
@@ -741,7 +765,7 @@ export function ModelManagerPanel({
                   }}
                 >
                   <Pencil className="h-3.5 w-3.5" />
-                  <span>Rename Folder</span>
+                  <span><Trans>Rename folder</Trans></span>
                 </button>
 
                 <button
@@ -756,7 +780,7 @@ export function ModelManagerPanel({
                   }}
                 >
                   <FolderMinus className="h-3.5 w-3.5" />
-                  <span>Ungroup Folder</span>
+                  <span><Trans>Ungroup folder</Trans></span>
                 </button>
               </>
             )}
@@ -775,7 +799,7 @@ export function ModelManagerPanel({
                     }}
                   >
                     <Pencil className="h-3.5 w-3.5" />
-                    <span>Rename Model</span>
+                    <span><Trans>Rename model</Trans></span>
                   </button>
                 )}
 
@@ -790,7 +814,7 @@ export function ModelManagerPanel({
                     }}
                   >
                     <Wrench className="h-3.5 w-3.5" />
-                    <span>Repair Mesh…</span>
+                    <span><Trans>Repair mesh…</Trans></span>
                   </button>
                 )}
 
@@ -807,7 +831,7 @@ export function ModelManagerPanel({
                       }}
                     >
                       <Scissors className="h-3.5 w-3.5" />
-                      <span>Split to Bodies</span>
+                      <span><Trans comment="Context menu action: split a multi-body 3MF import into independent models.">Split to bodies</Trans></span>
                     </button>
                   </>
                 )}
@@ -823,7 +847,7 @@ export function ModelManagerPanel({
                     }}
                   >
                     <Box className="h-3.5 w-3.5" />
-                    <span>Model Actions…</span>
+                    <span><Trans>Model actions…</Trans></span>
                   </button>
                 )}
               </>

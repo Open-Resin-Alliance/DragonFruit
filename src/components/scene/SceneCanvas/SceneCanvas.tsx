@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useEffect } from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import { hotkeyStore, useActionActive } from '@/hotkeys/hotkeyStore';
 import dynamic from 'next/dynamic';
 import * as THREE from 'three';
@@ -354,9 +356,7 @@ export function SceneCanvas({
   onTransformStart,
   onGizmoTransformCommit,
   onGizmoTransformGroupCommit,
-  onTransformChangeEnd, // Was onTransformEnd in previous code, checking usage
   onTransformEnd,
-  pxMm,
   showIslandIdLabels,
   mode,
   onSupportClick,
@@ -490,13 +490,11 @@ export function SceneCanvas({
       after: ModelTransform;
     }>;
   }) => void;
-  onTransformChangeEnd?: (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => void;
   onTransformEnd?: (
     operation: 'move' | 'rotate' | 'scale',
     finalTransform?: ModelTransform,
     options?: { skipStoreCommit?: boolean },
   ) => void;
-  pxMm?: number;
   showIslandIdLabels?: boolean;
   mode?: SupportMode;
   onSupportClick?: (hit: THREE.Intersection) => void;
@@ -610,6 +608,7 @@ export function SceneCanvas({
   freezeViewportActive?: boolean;
   onNewDeviceDetected?: (deviceId: string) => void;
 }) {
+  const { _ } = useLingui();
   const DROP_ANIMATION_DURATION_MS = 760;
   const selectedMarker = React.useMemo(() => {
     if (overlaySelectedIslandId == null || !islandMarkers) return null;
@@ -1429,6 +1428,20 @@ export function SceneCanvas({
     text: '#f8fafc',
     accent: '#baf72e',
   });
+  // Orientation labels are resolved out here, in the React tree, and handed to
+  // the 3D helpers as props — those live inside the r3f reconciler, where the
+  // i18n provider is not in scope. "Front" is shared with the build plate's
+  // front-edge marker so both always read the same word.
+  const frontFaceLabel = _(msg({ message: 'Front', comment: 'Orientation label, rendered uppercase on the view cube and on the build plate\'s front edge. Keep it as short as possible — long words are auto-shrunk to fit and become hard to read.' }));
+  // Face order is fixed by the box geometry: +X, -X, +Y, -Y, +Z, -Z.
+  const gizmoFaceLabels = React.useMemo(() => ([
+    frontFaceLabel,
+    _(msg({ message: 'Back', comment: 'View cube face (the side opposite Front), rendered uppercase inside a small 3D cube. Keep it as short as possible.' })),
+    _(msg({ message: 'Right', comment: 'View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.' })),
+    _(msg({ message: 'Left', comment: 'View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.' })),
+    _(msg({ message: 'Top', comment: 'View cube face (seen from above), rendered uppercase inside a small 3D cube. Keep it as short as possible.' })),
+    _(msg({ message: 'Bottom', comment: 'View cube face (seen from below), rendered uppercase inside a small 3D cube. Keep it as short as possible.' })),
+  ]), [_, frontFaceLabel]);
   const hoverTintColor = hoverColor ?? '#ec2a77';
   const selectedTintColor = selectionColor ?? '#ec2a77';
   const likelySupportGeometryTintColor = '#c8752a';
@@ -5361,6 +5374,7 @@ export function SceneCanvas({
           showGrid={(!thumbnailCaptureActive || includeHelpersGridDuringCapture) && !hideGridHelpers}
           showBuildPlate={!thumbnailCaptureActive || includeBuildPlateDuringCapture}
           safetyMarginMm={activeBuildVolumeSettings.safetyMarginMm}
+          frontLabel={frontFaceLabel}
         />
         <EnableLocalClipping enabled={clipLower != null || clipUpper != null || indicatorPlaneZ != null} />
         <CameraProvider cameraRef={cameraRef} />
@@ -5458,6 +5472,13 @@ export function SceneCanvas({
                 if (shouldHideDuplicateSourceModel) return null;
                 if (arrangeArraySourceModelIdSet.has(model.id)) return null;
 
+                // The native repair/classify routines end with a manifold_csg
+                // status check on the model section. When the CSG backend reports
+                // any non-manifold status, overlay a red stripe pattern on
+                // the model to flag it.
+                const modelIsNonManifold =
+                  model.geometry.meshDefects?.nativeRepairReport?.model_is_manifold === false;
+
                 return (
                   <React.Fragment key={model.id}>
                     <StlMesh
@@ -5466,6 +5487,7 @@ export function SceneCanvas({
                       clipLower={clipLower}
                       clipUpper={clipUpper}
                       meshColor={model.color || meshColor} // Use model color
+                      nonManifold={modelIsNonManifold} // Red checkerboard overlay when the model fails the manifold status check
                       meshRef={meshGroupRefCallback}
                       actualMeshRef={actualMeshRefCallback}
                       materialRoughness={materialRoughness}
@@ -5530,6 +5552,7 @@ export function SceneCanvas({
                         && (isGizmoDragging || isPostGizmoInteractionGuardActive)
                       }
                       supportSectionGeometry={model.geometry.meshDefects?.supportSectionGeometry ?? null}
+                      modelSectionGeometry={model.geometry.meshDefects?.modelSectionGeometry ?? null}
                       onHolePunchClick={onHolePunchClick}
                       onHolePunchHover={onHolePunchHover}
                     >
@@ -6676,6 +6699,7 @@ export function SceneCanvas({
           >
             <ZUpGizmoViewcube
               font="600 24px Inter, system-ui, sans-serif"
+              faces={gizmoFaceLabels}
               color={gizmoColors.face}
               textColor={gizmoColors.text}
               strokeColor={gizmoColors.accent}

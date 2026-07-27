@@ -219,10 +219,7 @@ export type MaterialAntiAliasingSettings = {
     zBlurSigma: number;
     zBlendLookBack: number;
     useCustomZBlendLookBack: boolean;
-    zBlendFadePx: number;
-    zBlendFadeMode: 'auto' | 'manual';
     zBlendAutoMode: boolean;
-    useCustomZBlendFadePx: boolean;
     zaaPattern: 'uniform' | 'halton' | 'base2';
     zaaDuplicateZ: boolean;
     blurGraySourceMode: 'minimum' | 'lut';
@@ -251,10 +248,7 @@ export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettin
     zBlurSigma: 0.5,
     zBlendLookBack: 2,
     useCustomZBlendLookBack: false,
-    zBlendFadePx: 20,
-    zBlendFadeMode: 'auto',
     zBlendAutoMode: true,
-    useCustomZBlendFadePx: false,
     zaaPattern: 'halton',
     zaaDuplicateZ: true,
     blurGraySourceMode: 'lut',
@@ -327,7 +321,6 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
         ? source.zaaPattern
         : defaults.zaaPattern;
     const blurGraySourceMode = source.blurGraySourceMode === 'minimum' ? 'minimum' : defaults.blurGraySourceMode;
-    const zBlendFadeMode = source.zBlendFadeMode === 'manual' ? 'manual' : defaults.zBlendFadeMode;
     const zBlendResinType = source.zBlendResinType === 'clear' || source.zBlendResinType === 'custom'
         ? source.zBlendResinType
         : defaults.zBlendResinType;
@@ -357,10 +350,7 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
         zBlurSigma: clampNumber(source.zBlurSigma, defaults.zBlurSigma, 0.05, 16),
         zBlendLookBack: Math.round(clampNumber(source.zBlendLookBack, defaults.zBlendLookBack, 1, 16)),
         useCustomZBlendLookBack: typeof source.useCustomZBlendLookBack === 'boolean' ? source.useCustomZBlendLookBack : defaults.useCustomZBlendLookBack,
-        zBlendFadePx: Math.round(clampNumber(source.zBlendFadePx, defaults.zBlendFadePx, 1, 256)),
-        zBlendFadeMode,
         zBlendAutoMode: typeof source.zBlendAutoMode === 'boolean' ? source.zBlendAutoMode : defaults.zBlendAutoMode,
-        useCustomZBlendFadePx: typeof source.useCustomZBlendFadePx === 'boolean' ? source.useCustomZBlendFadePx : defaults.useCustomZBlendFadePx,
         zaaPattern,
         zaaDuplicateZ: typeof source.zaaDuplicateZ === 'boolean' ? source.zaaDuplicateZ : defaults.zaaDuplicateZ,
         blurGraySourceMode,

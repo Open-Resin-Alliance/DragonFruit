@@ -123,9 +123,7 @@ export type SolidSliceMeshForWasm = {
   widthPx: number;
   heightPx: number;
   xPackingMode: 'none' | 'rgb8_div3' | 'gray3_div2';
-  computeBackend: 'auto' | 'cpu' | 'gpu';
   pngCompressionStrategy: PngCompressionStrategy;
-  bvhAccelerationEnabled: boolean;
   mirrorX: boolean;
   mirrorY: boolean;
   modelTriangleCount: number;
@@ -2472,10 +2470,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     widthPx: settings.widthPx,
     heightPx: settings.heightPx,
     xPackingMode: settings.xPackingMode,
-    // Backend selection is managed internally by the slicing engine.
-    computeBackend: 'auto',
     pngCompressionStrategy: perfSettings.pngCompressionStrategy,
-    bvhAccelerationEnabled: perfSettings.bvhAccelerationEnabled,
     mirrorX: settings.mirrorX,
     mirrorY: settings.mirrorY,
     modelTriangleCount,

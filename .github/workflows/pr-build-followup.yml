@@ -1,0 +1,187 @@
+name: PR macOS build follow-up
+
+on:
+  workflow_run:
+    workflows:
+      - PR macOS build check
+    types:
+      - completed
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  comment-status:
+    name: Comment macOS build status
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.event == 'pull_request'
+    steps:
+      - name: Upsert PR status comment
+        uses: actions/github-script@v9
+        env:
+          BUILD_RESULT: ${{ github.event.workflow_run.conclusion }}
+        with:
+          script: |
+            const marker = "<!-- dragonfruit-macos-build-status -->";
+            const result = process.env.BUILD_RESULT;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const headSha = context.payload.workflow_run.head_sha;
+            const runUrl = context.payload.workflow_run.html_url;
+
+            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner,
+              repo,
+              commit_sha: headSha
+            });
+
+            const pr = prs.find((candidate) => candidate.state === "open") ?? prs[0];
+
+            if (!pr) {
+              core.info(`No pull request found for commit ${headSha}; skipping status comment.`);
+              return;
+            }
+
+            const issue_number = pr.number;
+
+            const emojiMap = {
+              success: "✅",
+              failure: "❌",
+              cancelled: "⚠️",
+              skipped: "⏭️",
+            };
+
+            const statusMap = {
+              success: {
+                icon: emojiMap.success,
+                title: "Compilation succeeded",
+                badge: "Passed",
+                color: "brightgreen",
+                body: "The PR compiled successfully for macOS (Universal)."
+              },
+              failure: {
+                icon: emojiMap.failure,
+                title: "Compilation failed",
+                badge: "Failed",
+                color: "red",
+                body: "The macOS compile check failed. Please inspect the workflow logs for details."
+              },
+              cancelled: {
+                icon: emojiMap.cancelled,
+                title: "Compilation cancelled",
+                badge: "Cancelled",
+                color: "yellow",
+                body: "The macOS compile check did not finish because the workflow was cancelled."
+              }
+            };
+
+            const status = statusMap[result] ?? {
+              icon: emojiMap.skipped,
+              title: `Compilation ended: ${result}`,
+              badge: result,
+              color: "grey",
+              body: "The macOS compile check finished with a non-standard result."
+            };
+
+            const commitSha = headSha.slice(0, 7);
+            const branch = context.payload.workflow_run.head_branch || "unknown";
+
+            const body = [
+              marker,
+              `## ${status.icon} macOS build check — ${status.title}`,
+              "",
+              `| | |`,
+              `|---|---|`,
+              `| **Result** | ${status.badge} |`,
+              `| **Branch** | \`${branch}\` |`,
+              `| **Commit** | \`${commitSha}\` |`,
+              `| **Workflow** | [View run](${runUrl}) |`,
+              "",
+              `${status.body}`,
+              "",
+              "---",
+              "",
+              "> 💡 This check runs automatically on every push to the PR. The macOS DMG is handed off to the nightly workflow when the `nightly-build` label is set."
+            ].join("\n");
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100
+            });
+
+            const existing = comments.find((comment) =>
+              comment.user?.type === "Bot" && comment.body?.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body
+              });
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body
+            });
+
+  dispatch-nightly:
+    name: Dispatch nightly build if labeled
+    runs-on: ubuntu-latest
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Find associated PR
+        id: pr
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const headSha = context.payload.workflow_run.head_sha;
+
+            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: headSha
+            });
+
+            const pr = prs.find((candidate) => candidate.state === "open") ?? prs[0];
+
+            if (!pr) {
+              core.info(`No pull request found for commit ${headSha}; skipping nightly dispatch.`);
+              core.setOutput('should_dispatch', 'false');
+              return;
+            }
+
+            const hasNightlyLabel = pr.labels.some((label) => label.name === 'nightly-build');
+            core.setOutput('should_dispatch', hasNightlyLabel ? 'true' : 'false');
+            core.setOutput('number', String(pr.number));
+            core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('base_ref', pr.base.ref);
+
+      - name: Dispatch build-nightly workflow
+        if: steps.pr.outputs.should_dispatch == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_BRANCH: ${{ steps.pr.outputs.head_ref }}
+          BASE_BRANCH: ${{ steps.pr.outputs.base_ref }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          gh workflow run build-nightly.yml \
+            --repo "${{ github.repository }}" \
+            --ref "$BASE_BRANCH" \
+            -f branch="$HEAD_BRANCH" \
+            -f pr_run_id="$RUN_ID" \
+            -f pr_number="$PR_NUMBER"

@@ -303,6 +303,28 @@ export function SpaceMouseController({
       return;
     }
 
+    // Ignore SpaceMouse input unless our window is the active/focused window.
+    // The Gamepad API keeps reporting axis values for background windows on
+    // Windows, macOS, and Linux, which would otherwise let the SpaceMouse drive
+    // the camera while another app is in front. document.hasFocus() (unlike
+    // document.hidden / visibilitychange) is false whenever the window is not
+    // active, even while it remains visible.
+    if (typeof document !== 'undefined' && typeof document.hasFocus === 'function' && !document.hasFocus()) {
+      if (isNavigatingRef.current) {
+        isNavigatingRef.current = false;
+        onNavigationActiveChange?.(false);
+      }
+      if (weDisabledOrbitRef.current) {
+        const handoffTarget = getHandoffTarget();
+        controls.target.copy(handoffTarget);
+        controls.enabled = true;
+        controls.update();
+        weDisabledOrbitRef.current = false;
+        pendingHorizonResetRef.current = true;
+      }
+      return;
+    }
+
     // Capture once per frame — shared by detection loop and active-pad selection.
     const allCandidates = getCandidateGamepads();
 

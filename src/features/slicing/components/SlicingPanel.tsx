@@ -210,9 +210,6 @@ const SLICING_MIN_AA_ALPHA_STORAGE_KEY = 'dragonfruit.slicing.minimumAaAlphaPerc
 const SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY = 'dragonfruit.slicing.minimumAaAlphaOverrideEnabled';
 const SLICING_3DAA_LOOK_BACK_STORAGE_KEY = 'dragonfruit.slicing.3daaLookBack';
 const SLICING_3DAA_LOOK_BACK_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.3daaLookBackCustomEnabled';
-const SLICING_3DAA_FADE_PX_STORAGE_KEY = 'dragonfruit.slicing.3daaFadePx';
-const SLICING_3DAA_FADE_PX_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.3daaFadePxCustomEnabled';
-const SLICING_3DAA_FADE_MODE_STORAGE_KEY = 'dragonfruit.slicing.3daaFadeMode';
 const SLICING_3DAA_AUTO_MODE_STORAGE_KEY = 'dragonfruit.slicing.3daaAutoMode';
 const SLICING_3DAA_RESIN_TYPE_STORAGE_KEY = 'dragonfruit.slicing.3daaResinType';
 const SLICING_3DAA_SAVED_CURVES_STORAGE_KEY = 'dragonfruit.slicing.3daaSavedCurves';
@@ -247,23 +244,9 @@ const Z_BLUR_RADIUS_MAX_LAYERS = 8; // engine radius cap; 0 = disabled
 const LOOK_BACK_PRESETS = [2, 4, 6, 8] as const;
 const LOOK_BACK_MIN_LAYERS = 1;
 const LOOK_BACK_MAX_LAYERS = 16;
-const FADE_DISTANCE_MIN_PX = 1;
-const FADE_DISTANCE_MAX_PX = 256;
 
 function isPresetValue(presets: readonly number[], value: number): boolean {
   return presets.some((preset) => preset === value);
-}
-
-function deriveFadeDistancePresets(basePx: number): number[] {
-  const base = Math.max(
-    FADE_DISTANCE_MIN_PX,
-    Math.min(FADE_DISTANCE_MAX_PX, Math.round(basePx)),
-  );
-  // Logical scaling: keep fade tied to Blend Window size so users don't have
-  // to mentally retune two disconnected knobs.
-  const candidates = [base, base * 2, base * 3, base * 4]
-    .map((px) => Math.max(FADE_DISTANCE_MIN_PX, Math.min(FADE_DISTANCE_MAX_PX, px)));
-  return Array.from(new Set(candidates));
 }
 
 function materialProfileToDraft(profile: MaterialProfile): MaterialDraft {
@@ -622,23 +605,6 @@ function resolveInitialZBlendLookBack(): number {
   return Math.max(LOOK_BACK_MIN_LAYERS, Math.min(LOOK_BACK_MAX_LAYERS, parsed));
 }
 
-function resolveInitialZBlendFadePx(): number {
-  if (typeof window === 'undefined') return 8;
-  const stored = window.localStorage.getItem(SLICING_3DAA_FADE_PX_STORAGE_KEY)
-    ?? window.sessionStorage.getItem(SLICING_3DAA_FADE_PX_STORAGE_KEY);
-  if (stored == null || stored.trim().length === 0) return 8;
-  const parsed = Math.round(Number(stored));
-  if (!Number.isFinite(parsed)) return 8;
-  return Math.max(FADE_DISTANCE_MIN_PX, Math.min(FADE_DISTANCE_MAX_PX, parsed));
-}
-
-function resolveInitialZBlendFadeMode(): 'auto' | 'manual' {
-  if (typeof window === 'undefined') return 'auto';
-  const stored = window.localStorage.getItem(SLICING_3DAA_FADE_MODE_STORAGE_KEY)
-    ?? window.sessionStorage.getItem(SLICING_3DAA_FADE_MODE_STORAGE_KEY);
-  return stored === 'manual' ? 'manual' : 'auto';
-}
-
 function resolveInitialZBlendAutoMode(): boolean {
   if (typeof window === 'undefined') return true;
   const stored = window.localStorage.getItem(SLICING_3DAA_AUTO_MODE_STORAGE_KEY)
@@ -866,8 +832,6 @@ export function SlicingPanel({
       !isPresetValue(LOOK_BACK_PRESETS, initial),
     );
   });
-  const [zBlendFadePx, setZBlendFadePx] = useState<number>(resolveInitialZBlendFadePx);
-  const [zBlendFadeMode, setZBlendFadeMode] = useState<'auto' | 'manual'>(resolveInitialZBlendFadeMode);
   const [zBlendAutoMode, setZBlendAutoMode] = useState<boolean>(resolveInitialZBlendAutoMode);
   const [zaaPattern, setZaaPattern] = useState<ZaaPattern>(resolveInitialZaaPattern);
   const [zaaDuplicateZ, setZaaDuplicateZ] = useState<boolean>(resolveInitialZaaDuplicateZ);
@@ -891,15 +855,6 @@ export function SlicingPanel({
   const [savedCurves, setSavedCurves] = useState<SavedCurve[]>(() => resolveInitialSavedCurves());
   const [selectedCurveId, setSelectedCurveId] = useState<string>(() => resolveInitialSelectedCurveId(resolveInitialSavedCurves()));
   const [editingTarget, setEditingTarget] = useState<string | null>(null);
-  const [useCustomZBlendFadePx, setUseCustomZBlendFadePx] = useState<boolean>(() => {
-    const initial = resolveInitialZBlendFadePx();
-    const initialLookBack = resolveInitialZBlendLookBack();
-    const initialPresets = deriveFadeDistancePresets(Math.max(2, initialLookBack * 2));
-    return resolveInitialCustomOptionEnabled(
-      SLICING_3DAA_FADE_PX_CUSTOM_ENABLED_STORAGE_KEY,
-      !isPresetValue(initialPresets, initial),
-    );
-  });
   const [minimumAaAlphaPercent, setMinimumAaAlphaPercent] = useState<number>(resolveInitialMinimumAaAlphaPercent);
   const [enableMinimumAaAlphaOverride, setEnableMinimumAaAlphaOverride] = useState<boolean>(resolveInitialMinimumAaAlphaOverrideEnabled);
   const [blurGraySourceMode, setBlurGraySourceMode] = useState<BlurGraySourceMode>(resolveInitialBlurGraySourceMode);
@@ -1392,7 +1347,7 @@ export function SlicingPanel({
     return formatClockFromSeconds(totalSec);
   }, [effectiveMaterialProfile, estimatedLayerCount]);
 
-  // Shared pixel pitch calculation used by both autoZBlendFadePx and autoAaConfig.
+  // Shared pixel pitch calculation used by autoAaConfig.
   // Prefers the explicit pixelSize field (µm, stored directly from the manufacturer
   // spec) when available — avoids floating-point rounding introduced by deriving
   // pitch from buildVolumeMm which is stored at only 3 decimal places.
@@ -1477,38 +1432,6 @@ export function SlicingPanel({
     ? DEFAULT_AUTO_Z_BLEND_LOOK_BACK
     : autoZBlendLookBack;
 
-  const autoLookBackForFade = (aaQualityMode === 'auto' && antiAliasingAvailable)
-    ? effectiveAutoAaConfig.zBlendLookBack
-    : effectiveAutoZBlendLookBack;
-
-  const autoZBlendFadePx = useMemo(() => {
-    const lookBack = Math.max(
-      LOOK_BACK_MIN_LAYERS,
-      Math.min(LOOK_BACK_MAX_LAYERS, Math.round(autoLookBackForFade)),
-    );
-
-    const layerHeightMm = Number(effectiveLayerHeightMm);
-    const safeLayerHeightMm = Number.isFinite(layerHeightMm) && layerHeightMm > 0 ? layerHeightMm : 0.05;
-
-    const pxPerLayer = safeLayerHeightMm / Math.max(pixelPitchMm.x, 1e-6);
-    // Mirror the Rust engine formula (types.rs `effective_z_blend_fade_px`):
-    //   fade_per_layer = ceil(layer_height_px / tan(20°)) = ceil(layer_height_px × 2.747)
-    //   total = fade_per_layer × look_back, clamped to [1, 256]
-    // This ensures the displayed auto value matches what the engine actually uses.
-    const fadePerLayer = Math.ceil(pxPerLayer * 2.747);
-    const base = Math.max(1, fadePerLayer * lookBack);
-    return Math.max(FADE_DISTANCE_MIN_PX, Math.min(FADE_DISTANCE_MAX_PX, base));
-  }, [
-    autoLookBackForFade,
-    effectiveLayerHeightMm,
-    pixelPitchMm,
-  ]);
-
-  const fadeDistancePresets = useMemo(
-    () => deriveFadeDistancePresets(autoZBlendFadePx),
-    [autoZBlendFadePx],
-  );
-
   const materialAaOverrideEnabled = profileAntiAliasingSettings.enableOverride === true;
   useEffect(() => {
     if (!materialAaOverrideEnabled) return;
@@ -1521,12 +1444,6 @@ export function SlicingPanel({
   const profileAaLevel = materialAaOverrideEnabled
     ? formatAaLevel(parseAaLevelSteps(profileAntiAliasingSettings.level) ?? 4)
     : (effectiveAutoAaConfig.aaMode === 'Off' ? 'Off' as const : formatAaLevel(effectiveAutoAaConfig.aaSteps || 4));
-
-  const useAutoFadeDistance = profileAaMode === '3DAA';
-
-  const effectiveZBlendFadePx = useAutoFadeDistance
-    ? autoZBlendFadePx
-    : profileAntiAliasingSettings.zBlendFadePx;
 
   // Resolved AA state: auto mode overrides manual state when AA is available.
   const resolvedAaMode = profileAaMode;
@@ -1547,7 +1464,6 @@ export function SlicingPanel({
     : 'box';
   const resolvedZBlurSigma = clampBlurSigma(profileAntiAliasingSettings.zBlurSigma, 0.5);
   const resolvedZBlendLookBack = profileAaMode === '3DAA' ? effectiveAutoZBlendLookBack : 0;
-  const resolvedZBlendFadeMode = useAutoFadeDistance ? 'auto' as const : 'manual' as const;
 
   const effectiveAntiAliasingLevel =
     !antiAliasingAvailable || resolvedAaMode === 'Off' ? 'Off' as const : resolvedAaLevel;
@@ -1709,33 +1625,12 @@ export function SlicingPanel({
     setZBlendLookBack(Math.max(LOOK_BACK_MIN_LAYERS, Math.min(LOOK_BACK_MAX_LAYERS, Math.round(next))));
   }, []);
 
-  const setClampedZBlendFadePx = useCallback((value: number) => {
-    const next = Number.isFinite(value) ? value : 8;
-    setZBlendFadePx(Math.max(FADE_DISTANCE_MIN_PX, Math.min(FADE_DISTANCE_MAX_PX, Math.round(next))));
-  }, []);
-
   const setAaOnSupportsEnabled = useCallback((enabled: boolean) => {
     saveSlicingPerformanceSettings({
       ...getSavedSlicingPerformanceSettings(),
       aaOnSupportsExperimental: enabled,
     });
   }, []);
-
-  useEffect(() => {
-    if (useAutoFadeDistance) return;
-    if (useCustomZBlendFadePx) return;
-    if (isPresetValue(fadeDistancePresets, zBlendFadePx)) return;
-    // Preserve the user-selected value instead of snapping to a fallback preset.
-    // If current value no longer maps to the dynamic preset set, move to Custom.
-    setUseCustomZBlendFadePx(true);
-  }, [fadeDistancePresets, useAutoFadeDistance, useCustomZBlendFadePx, zBlendFadePx]);
-
-  useEffect(() => {
-    if (aaQualityMode !== 'expert' || aaMode !== '3DAA') return;
-    const targetMode: 'auto' | 'manual' = zBlendAutoMode ? 'auto' : 'manual';
-    if (zBlendFadeMode === targetMode) return;
-    setZBlendFadeMode(targetMode);
-  }, [aaMode, aaQualityMode, zBlendAutoMode, zBlendFadeMode]);
 
   const setClampedRemoteOfflineLayerHeightMm = useCallback((value: number) => {
     setRemoteOfflineLayerHeightMm((previous) => {
@@ -1865,25 +1760,6 @@ export function SlicingPanel({
     window.localStorage.setItem(SLICING_3DAA_LOOK_BACK_CUSTOM_ENABLED_STORAGE_KEY, serialized);
     window.sessionStorage.setItem(SLICING_3DAA_LOOK_BACK_CUSTOM_ENABLED_STORAGE_KEY, serialized);
   }, [useCustomZBlendLookBack]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(SLICING_3DAA_FADE_PX_STORAGE_KEY, String(zBlendFadePx));
-    window.sessionStorage.setItem(SLICING_3DAA_FADE_PX_STORAGE_KEY, String(zBlendFadePx));
-  }, [zBlendFadePx]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const serialized = String(useCustomZBlendFadePx);
-    window.localStorage.setItem(SLICING_3DAA_FADE_PX_CUSTOM_ENABLED_STORAGE_KEY, serialized);
-    window.sessionStorage.setItem(SLICING_3DAA_FADE_PX_CUSTOM_ENABLED_STORAGE_KEY, serialized);
-  }, [useCustomZBlendFadePx]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(SLICING_3DAA_FADE_MODE_STORAGE_KEY, zBlendFadeMode);
-    window.sessionStorage.setItem(SLICING_3DAA_FADE_MODE_STORAGE_KEY, zBlendFadeMode);
-  }, [zBlendFadeMode]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2189,8 +2065,6 @@ export function SlicingPanel({
         zBlurKernel: resolvedZBlurKernel,
         zBlurSigma: resolvedZBlurSigma,
         zBlendLookBack: resolvedAaMode === '3DAA' ? resolvedZBlendLookBack : undefined,
-        zBlendFadePx: resolvedAaMode === '3DAA' ? effectiveZBlendFadePx : undefined,
-        zBlendAutoFade: resolvedAaMode === '3DAA' ? (resolvedZBlendFadeMode === 'auto') : undefined,
         zBlendMinimumAlphaPercent: resolvedAaMode === '3DAA'
           ? profileMinimumAaAlphaPercent
           : undefined,

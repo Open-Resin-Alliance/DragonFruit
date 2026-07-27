@@ -31,28 +31,8 @@ export const SUPPORT_REPLACE_TRUNK = 'support:replace-trunk' as const;
 export const SUPPORT_AUTO_BRACE_REPLACE = 'support:auto-brace-replace' as const;
 export const SUPPORT_EDIT_REPLACE = 'support:edit-replace' as const;
 
-export type SupportHistoryActionType =
-  | typeof SUPPORT_ADD_TRUNK
-  | typeof SUPPORT_REMOVE_TRUNK
-  | typeof SUPPORT_UPDATE_TRUNK
-  | typeof SUPPORT_ADD_LEAF
-  | typeof SUPPORT_REMOVE_LEAF
-  | typeof SUPPORT_ADD_BRANCH
-  | typeof SUPPORT_REMOVE_BRANCH
-  | typeof SUPPORT_UPDATE_BRANCH
-  | typeof SUPPORT_ADD_TWIG
-  | typeof SUPPORT_REMOVE_TWIG
-  | typeof SUPPORT_ADD_STICK
-  | typeof SUPPORT_REMOVE_STICK
-  | typeof SUPPORT_ADD_BRACE
-  | typeof SUPPORT_REMOVE_BRACE
-  | typeof SUPPORT_ADD_ANCHOR
-  | typeof SUPPORT_REMOVE_ANCHOR
-  | typeof SUPPORT_ADD_KICKSTAND
-  | typeof SUPPORT_REMOVE_KICKSTAND
-  | typeof SUPPORT_REPLACE_TRUNK
-  | typeof SUPPORT_EDIT_REPLACE
-  | typeof SUPPORT_AUTO_BRACE_REPLACE;
+/** Every support history action type, derived from the payload map below. */
+export type SupportHistoryActionType = keyof SupportHistoryPayloadMap;
 
 export interface SupportTrunkPayload {
   trunk: Trunk;
@@ -149,3 +129,32 @@ export interface SupportReplaceStatePayload {
   kickstandBefore?: KickstandState;
   kickstandAfter?: KickstandState;
 }
+
+/**
+ * The payload each support history action carries. One source of truth: push
+ * sites and handlers both key off this map, so a type can't be pushed with a
+ * payload its handler won't understand.
+ */
+export type SupportHistoryPayloadMap = {
+  [SUPPORT_ADD_TRUNK]: SupportTrunkPayload;
+  [SUPPORT_REMOVE_TRUNK]: SupportTrunkPayload;
+  [SUPPORT_UPDATE_TRUNK]: SupportTrunkUpdatePayload;
+  [SUPPORT_ADD_LEAF]: SupportLeafPayload;
+  [SUPPORT_REMOVE_LEAF]: SupportLeafPayload;
+  [SUPPORT_ADD_BRANCH]: SupportBranchPayload;
+  [SUPPORT_REMOVE_BRANCH]: SupportBranchRemovePayload;
+  [SUPPORT_UPDATE_BRANCH]: SupportBranchUpdatePayload;
+  [SUPPORT_ADD_TWIG]: SupportTwigPayload;
+  [SUPPORT_REMOVE_TWIG]: SupportTwigRemovePayload;
+  [SUPPORT_ADD_STICK]: SupportStickPayload;
+  [SUPPORT_REMOVE_STICK]: SupportStickPayload;
+  [SUPPORT_ADD_BRACE]: BraceLinkPayload;
+  [SUPPORT_REMOVE_BRACE]: BraceLinkPayload;
+  [SUPPORT_ADD_ANCHOR]: SupportAnchorPayload;
+  [SUPPORT_REMOVE_ANCHOR]: SupportAnchorPayload;
+  [SUPPORT_ADD_KICKSTAND]: SupportKickstandPayload;
+  [SUPPORT_REMOVE_KICKSTAND]: SupportKickstandRemovePayload;
+  [SUPPORT_REPLACE_TRUNK]: SupportReplaceTrunkPayload;
+  [SUPPORT_EDIT_REPLACE]: SupportReplaceStatePayload;
+  [SUPPORT_AUTO_BRACE_REPLACE]: SupportReplaceStatePayload;
+};

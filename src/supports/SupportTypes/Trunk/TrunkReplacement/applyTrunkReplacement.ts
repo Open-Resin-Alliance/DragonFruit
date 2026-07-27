@@ -1,6 +1,6 @@
 import type { Branch, Joint, Knot, Roots, SupportState, Trunk, Vec3 } from '../../../types';
 import { addBranch, addKnot, addLeaf, addRoot, addTrunk, getSnapshot, removeBranch, removeLeaf, removeTrunk, updateBranch, updateKnot, updateTrunk } from '../../../state';
-import { pushHistory } from '@/history/historyStore';
+import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { SUPPORT_REPLACE_TRUNK } from '../../../history/actionTypes';
 import type { SupportReplaceTrunkPayload } from '../../../history/actionTypes';
 import { buildTrunkData } from '../trunkBuilder';
@@ -556,7 +556,7 @@ export function applyTrunkReplacement(plan: TrunkReplacementPlan, historyBefore?
         after,
     };
 
-    pushHistory({ type: SUPPORT_REPLACE_TRUNK, payload });
+    pushSupportHistory({ type: SUPPORT_REPLACE_TRUNK, payload });
 
     return true;
 }
