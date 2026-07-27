@@ -32,6 +32,12 @@ type EditorContextMenuProps = {
   position: EditorContextMenuPosition | null;
   onAction: (action: EditorMenuAction) => void;
   disabledActions?: EditorMenuAction[];
+  /**
+   * Why a disabled action is disabled, shown as a tooltip. Optional per action:
+   * an item whose unavailability is self-evident (nothing selected) needs no
+   * sentence, but one the user has every reason to expect to work does.
+   */
+  disabledReasons?: Partial<Record<EditorMenuAction, string>>;
   title?: string;
   items?: MenuItemDef[];
 };
@@ -57,7 +63,7 @@ const MENU_WIDTH = 176;
 const BASE_MENU_HEIGHT = 44;
 const MENU_ITEM_HEIGHT = 32;
 
-export function EditorContextMenu({ position, onAction, disabledActions = [], title, items = MENU_ITEMS }: EditorContextMenuProps) {
+export function EditorContextMenu({ position, onAction, disabledActions = [], disabledReasons, title, items = MENU_ITEMS }: EditorContextMenuProps) {
   const { _ } = useLingui();
 
   if (!position) return null;
@@ -91,15 +97,20 @@ export function EditorContextMenu({ position, onAction, disabledActions = [], ti
         {items.map((item) => {
           const Icon = item.icon;
           const isDisabled = disabledActions.includes(item.id);
-          return (
+          const disabledReason = isDisabled ? disabledReasons?.[item.id] : undefined;
+          const button = (
             <button
-              key={item.id}
               type="button"
               onClick={() => {
                 if (isDisabled) return;
                 onAction(item.id);
               }}
               disabled={isDisabled}
+              // Inert for the mouse (the element takes no pointer events while
+              // disabled — hence the wrapper below), but it keeps the reason on
+              // the item itself for assistive tech rather than only on a
+              // presentational parent.
+              title={disabledReason}
               className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
               style={{
                 color: isDisabled ? 'var(--text-muted)' : 'var(--text-strong)',
@@ -128,6 +139,18 @@ export function EditorContextMenu({ position, onAction, disabledActions = [], ti
               <span>{_(item.label)}</span>
             </button>
           );
+
+          // A disabled button receives no pointer events, so its own `title`
+          // never surfaces — the tooltip has to live on an enabled wrapper.
+          return disabledReason
+            ? (
+              // `role="none"` keeps the `role="menu"` container owning its
+              // `menuitem`s directly — an unroled wrapper would break that.
+              <span key={item.id} role="none" className="block" title={disabledReason}>
+                {button}
+              </span>
+            )
+            : <React.Fragment key={item.id}>{button}</React.Fragment>;
         })}
       </div>
     </div>

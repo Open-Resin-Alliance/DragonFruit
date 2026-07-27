@@ -4,6 +4,32 @@ import type { LoadedModel } from './useSceneCollectionManager';
 import { accelerateGeometry } from '@/utils/bvh';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 
+/**
+ * Ph3 (scene path) — does the native classification's `model_triangle_count`
+ * index THIS geometry, or the file it came from?
+ *
+ * `model_triangle_count` is measured on the FULL-RESOLUTION source file
+ * (`ImportClassificationJson` / `NativeStlLoadResult` state that contract). A
+ * `nativePreview` geometry is a decimated stand-in for that file, so the count
+ * addresses triangles this buffer does not contain — cutting at
+ * `modelTriangleCount * 9` lands at an arbitrary offset.
+ *
+ * This is the same structural question `resolveOutputSectionPlan` asks on the
+ * output path, and it is asked ONCE, here, because both paths must answer it
+ * identically: the slice-time assertion in `sliceExportOrchestrator` refuses to
+ * slice a model this predicate says is splittable but nobody split.
+ *
+ * Deliberately structural, not arithmetic. The pre-Ph3 output guard compared
+ * the count against the geometry's own triangle count and bailed when the
+ * former was larger; that happened to hold for the usual 11M-file-vs-2M-preview
+ * shape and hid the real defect, so a preview whose model SECTION was smaller
+ * than the preview itself would have been cut with complete confidence
+ * (Ph2 finding F3).
+ */
+export function classificationIndexesGeometry(geometry: Pick<GeometryWithBounds, 'nativePreview'>): boolean {
+  return !geometry.nativePreview;
+}
+
 export type ClassifiedSupportGeometrySplit = {
   modelGeometry: GeometryWithBounds;
   supportGeometry: GeometryWithBounds;
@@ -55,6 +81,12 @@ export function splitClassifiedSupportGeometry(
     source.geometry.meshDefects?.nativeRepairReport?.model_triangle_count ?? 0,
   );
   if (modelTriangleCount <= 0) return null;
+
+  // The count must index the buffer this function is about to slice. It does
+  // not for a decimated preview — see `classificationIndexesGeometry`. Callers
+  // gate on the same predicate (`resolveOutputSectionPlan`) so the affordance
+  // is already off; this is the load-bearing refusal, not the message.
+  if (!classificationIndexesGeometry(source.geometry)) return null;
 
   const geometry = source.geometry.geometry;
   const position = geometry.getAttribute('position') as THREE.BufferAttribute | null;

@@ -354,6 +354,7 @@ import type {
   MeshModifierOpenFace,
 } from '@/features/mesh-modifiers/types';
 import { resolveModelOutputMode } from '@/features/mesh-modifiers/modelOutputPolicy';
+import { resolveOutputSectionPlan } from '@/features/mesh-modifiers/prepareModelGeometry';
 
 interface ShaftHoverDebugDetail {
   segmentId: string | null;
@@ -2118,6 +2119,25 @@ export default function Home() {
 
   const editorContextMenuTitle = scene.mode === 'support' ? _(msg`Supports`) : _(msg`Editor`);
   const editorContextMenuItems = scene.mode === 'support' ? supportContextMenuItems : undefined;
+  /**
+   * The Split-to-Bodies affordance and the cut behind it now answer to ONE
+   * definition. This used to read `model_triangle_count` directly and enable
+   * the item whenever it was non-zero — but that count is measured on the
+   * full-resolution SOURCE FILE, so for a decimated `nativePreview` model it
+   * does not index the scene mesh the split would slice. The item was offered,
+   * the user clicked it, `splitClassifiedSupportGeometry` returned null on its
+   * arithmetic bail, and the progress panel came and went having done nothing.
+   *
+   * `resolveOutputSectionPlan` is the same resolver the slice/export path uses,
+   * so the menu can no longer promise a split that path would refuse.
+   */
+  const editorContextMenuSplitSupportsPlan = React.useMemo(() => {
+    const activeModel = scene.activeModelId
+      ? scene.models.find((m) => m.id === scene.activeModelId)
+      : undefined;
+    return activeModel ? resolveOutputSectionPlan(activeModel) : null;
+  }, [scene.activeModelId, scene.models]);
+
   const editorContextMenuDisabledActions = React.useMemo(() => {
     if (scene.mode === 'support') {
       return [
@@ -2126,17 +2146,39 @@ export default function Home() {
       ];
     }
 
-    const activeModel = scene.activeModelId
-      ? scene.models.find((m) => m.id === scene.activeModelId)
-      : undefined;
-    const canSplitSupports = !!activeModel?.geometry.meshDefects?.nativeRepairReport?.model_triangle_count;
+    const canSplitSupports = editorContextMenuSplitSupportsPlan?.kind === 'scene-split';
 
     return [
       ...(!scene.activeModelId ? (['delete', 'cut', 'copy', 'repair'] as const) : []),
       ...(!scene.canPasteModel ? (['paste'] as const) : []),
       ...(!canSplitSupports ? (['split-supports'] as const) : []),
     ];
-  }, [scene.activeModelId, scene.canPasteModel, scene.mode, scene.models, supportsCanAddJoint, supportsCanToggleCurve]);
+  }, [editorContextMenuSplitSupportsPlan, scene.activeModelId, scene.canPasteModel, scene.mode, supportsCanAddJoint, supportsCanToggleCurve]);
+
+  /**
+   * Why Split-to-Bodies is unavailable, when the reason is not self-evident.
+   * A model with no classification at all gets no sentence — there is nothing
+   * to explain. A model the user can SEE is pre-supported does, because
+   * "disabled and silent" reads as a bug on exactly the imports that carry
+   * supports.
+   */
+  const editorContextMenuDisabledReasons = React.useMemo(() => {
+    if (scene.mode === 'support') return undefined;
+    const plan = editorContextMenuSplitSupportsPlan;
+    if (!plan || plan.kind === 'scene-split') return undefined;
+
+    if (plan.kind === 'spliced-sections' || plan.reason === 'describes-source-file') {
+      return {
+        'split-supports': _(msg`This model is displayed as a reduced preview of a larger file, and its model/support classification describes that original file — so it cannot be split here. Slicing and export still separate the two sections at full resolution.`),
+      };
+    }
+    if (plan.reason === 'count-exceeds-geometry') {
+      return {
+        'split-supports': _(msg`This model's support classification does not match its mesh, so splitting it would cut in the wrong place. Re-import or repair the model to reclassify it.`),
+      };
+    }
+    return undefined;
+  }, [_, editorContextMenuSplitSupportsPlan, scene.mode]);
 
   const clearPrintingLayerPreviewUrls = React.useCallback(() => {
     printingLayerPreviewLoadInFlightRef.current.clear();
@@ -9791,6 +9833,7 @@ export default function Home() {
         title={editorContextMenuTitle}
         items={editorContextMenuItems}
         disabledActions={editorContextMenuDisabledActions}
+        disabledReasons={editorContextMenuDisabledReasons}
       />
 
       <DiagnosticsModals

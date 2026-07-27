@@ -13,7 +13,10 @@ import {
 } from './hollowingGrid';
 import { hollowFromGeometry, type HollowOptions } from '@/utils/meshHollowing';
 import { punchFromGeometry, type PunchOptions } from '@/utils/meshPunching';
-import { splitClassifiedSupportGeometry } from '@/features/scene/splitClassifiedSupports';
+import {
+  classificationIndexesGeometry,
+  splitClassifiedSupportGeometry,
+} from '@/features/scene/splitClassifiedSupports';
 import { prefersDecimatedOutput } from './modelOutputPolicy';
 
 /**
@@ -440,7 +443,13 @@ export function resolveOutputSectionPlan(model: LoadedModel): OutputSectionPlan 
   // THE F3 REPLACEMENT. A native preview's scene geometry is a reduced stand-in
   // for the source file; the classification measured the file. Splitting the
   // preview at a file-derived index cuts it in the wrong place.
-  if (model.geometry.nativePreview) {
+  //
+  // The predicate lives next to the cut it guards
+  // (`splitClassifiedSupports.ts`) rather than here, because the USER-INVOKED
+  // Split-to-Bodies path performs the same cut without going through this
+  // resolver. Two copies of this test is how the scene path kept the defect
+  // after the output path was fixed.
+  if (!classificationIndexesGeometry(model.geometry)) {
     return { kind: 'whole', reason: 'describes-source-file' };
   }
 
