@@ -1009,10 +1009,24 @@ type NativeStlLoadResult = {
   /** The import-time governor triangle budget (0 when unreported). */
   budgetTriangles: number;
   /**
+   * FRAME (A) — the FILE frame.
+   *
    * Ph1 wiring — what the Rust importer measured about the FULL-RESOLUTION
-   * source. For a preview this describes the ORIGINAL file, not the geometry
-   * above, so `model_triangle_count` indexes the returned geometry only when
-   * `isPreview` is false.
+   * source. For a preview this describes the ORIGINAL file, not the `geometry`
+   * above, so `classification.model_triangle_count` indexes the returned
+   * geometry only when `isPreview` is false.
+   *
+   * **This contract is about THIS field only.** It is NOT a statement about
+   * `meshDefects.nativeRepairReport.model_triangle_count` (frame (B)), which is
+   * a different number with a different provenance: when `isPreview` is true,
+   * `processGeometry` deliberately withholds this classification
+   * (`preClassified` stays `null` because `_isNativePreview === true`) and runs a
+   * FRESH `mesh_classify_staged` pass over the decimated triangles, which
+   * reorders the scene buffer model-first and reports a count that indexes it
+   * exactly. Quoting this docblock to justify a `!nativePreview` guard on a (B)
+   * read is the error the 2026-07-27 audit corrected — see
+   * `agents/Claude/STL-import-perf/20260727-Audit-model-triangle-count-frames.md`
+   * and the `MeshHealthReport` docblock in `@/utils/meshRepair`.
    */
   classification: ImportClassificationJson | null;
   /**

@@ -5,28 +5,58 @@ import { accelerateGeometry } from '@/utils/bvh';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 
 /**
- * Ph3 (scene path) — does the native classification's `model_triangle_count`
- * index THIS geometry, or the file it came from?
+ * Is this buffer a VERBATIM full-resolution import, or a decimated stand-in?
  *
- * `model_triangle_count` is measured on the FULL-RESOLUTION source file
- * (`ImportClassificationJson` / `NativeStlLoadResult` state that contract). A
- * `nativePreview` geometry is a decimated stand-in for that file, so the count
- * addresses triangles this buffer does not contain — cutting at
- * `modelTriangleCount * 9` lands at an arbitrary offset.
+ * ## ⚠ Read this before reusing the predicate — it was named for a claim that is FALSE
  *
- * This is the same structural question `resolveOutputSectionPlan` asks on the
- * output path, and it is asked ONCE, here, because both paths must answer it
- * identically: the slice-time assertion in `sliceExportOrchestrator` refuses to
- * slice a model this predicate says is splittable but nobody split.
+ * This function used to be called `classificationIndexesGeometry`, and its
+ * docblock asserted that a `nativePreview` geometry's
+ * `nativeRepairReport.model_triangle_count` addresses triangles the buffer does
+ * not contain. **That is wrong, and the 2026-07-27 audit measured it wrong** —
+ * see `agents/Claude/STL-import-perf/20260727-Audit-model-triangle-count-frames.md`.
  *
- * Deliberately structural, not arithmetic. The pre-Ph3 output guard compared
- * the count against the geometry's own triangle count and bailed when the
- * former was larger; that happened to hold for the usual 11M-file-vs-2M-preview
- * shape and hid the real defect, so a preview whose model SECTION was smaller
- * than the preview itself would have been cut with complete confidence
- * (Ph2 finding F3).
+ * There are two counts. The old docblock quoted the contract of one and applied
+ * it to the other:
+ *
+ * - **(A) file frame** — `ImportClassificationJson.model_triangle_count`, from
+ *   the DFST header, measured by `classify_import` on the full-resolution source
+ *   file. It travels as `geometry.importRunMap` / `nativePreview.runMap` and is
+ *   consumed only by the run-map splice, in source-file indices. It genuinely
+ *   does NOT index a decimated preview — and it never reaches a report.
+ * - **(B) geometry frame** — `MeshHealthReport.model_triangle_count`, i.e.
+ *   `geometry.meshDefects.nativeRepairReport`. A decimated preview runs its OWN
+ *   `mesh_classify_staged` pass over its OWN triangles, is reordered model-first
+ *   by that pass, and gets a count bounded by its own buffer by construction. It
+ *   is a VALID index into the preview. The orange support overlay in `StlMesh`
+ *   is built from exactly that index on exactly those previews, today, and it
+ *   renders correctly — that is the field evidence.
+ *
+ * **Every caller of this predicate reads (B).** None reads (A). So this is not a
+ * frame test and must never be described as one again.
+ *
+ * ## What it IS, and why it is still called
+ *
+ * It answers a narrower, honest question: *is this buffer a verbatim
+ * full-resolution import?* Two Ph3c/Ph3d behaviours are built on that answer and
+ * are deliberately retained (the user chose to fix forward rather than revert):
+ *
+ * - `splitClassifiedSupportGeometry` refuses the in-place scene cut for a
+ *   preview, because Ph3d re-sources both sections from the original file
+ *   instead — a genuinely better answer (full-res halves, per-section budget).
+ * - `resolveOutputSectionPlan` returns `describes-source-file` for a preview,
+ *   which routes Split-to-Bodies to that re-sourcing path.
+ *
+ * Both are over-broad relative to the frame question (audit §5, remediation
+ * steps R4/R5, NOT authorised). Neither is a frame check. **Do not add a fourth
+ * caller on the theory that (B) needs guarding — it does not.** The site that
+ * did add one (`effectiveModelTriangleCount`, Ph3e) disabled support
+ * anti-aliasing outright and was reverted.
+ *
+ * The correct predicate for "was THIS buffer reordered to match THIS report" is
+ * `geometryMatchesReport` in `useStlGeometry.ts`, which answers YES for a
+ * decimated preview.
  */
-export function classificationIndexesGeometry(geometry: Pick<GeometryWithBounds, 'nativePreview'>): boolean {
+export function geometryIsVerbatimImport(geometry: Pick<GeometryWithBounds, 'nativePreview'>): boolean {
   return !geometry.nativePreview;
 }
 
@@ -82,11 +112,19 @@ export function splitClassifiedSupportGeometry(
   );
   if (modelTriangleCount <= 0) return null;
 
-  // The count must index the buffer this function is about to slice. It does
-  // not for a decimated preview — see `classificationIndexesGeometry`. Callers
-  // gate on the same predicate (`resolveOutputSectionPlan`) so the affordance
-  // is already off; this is the load-bearing refusal, not the message.
-  if (!classificationIndexesGeometry(source.geometry)) return null;
+  // Refuse the in-place scene cut for a decimated preview.
+  //
+  // NOT because the count fails to index this buffer — it does index it (see
+  // `geometryIsVerbatimImport`; the count is geometry-framed and this cut would
+  // have been correct). The refusal stands because Ph3d routes previews to
+  // `resource-sections` instead, which re-reads both halves from the original
+  // file at full resolution — a better answer than cutting the stand-in.
+  //
+  // Known cost, accepted 2026-07-27: a preview with a valid count but no
+  // re-readable source (VOXL reload, moved file) reports
+  // `unavailable/source-unavailable` where this cut would have worked. Audit
+  // step R5 would add it back as a fallback; not authorised.
+  if (!geometryIsVerbatimImport(source.geometry)) return null;
 
   const geometry = source.geometry.geometry;
   const position = geometry.getAttribute('position') as THREE.BufferAttribute | null;

@@ -1703,17 +1703,71 @@ function appendModelTrianglesInRange(
   }
 }
 
-/** Returns the number of triangles in a model that belong to the actual
- *  model body (excluding imported support geometry).  When the repair
- *  report has identified a clear model/support split this is the split
- *  point; when the mesh is flagged as entirely support-dominant the count
- *  is zero. */
-function effectiveModelTriangleCount(model: LoadedModel): number {
+/**
+ * The split index this scene hands the slicer: how many of a model's triangles
+ * are model body, the rest being imported support geometry.
+ *
+ * ## Which `model_triangle_count` this reads, and why there is NO preview term
+ *
+ * `meshDefects.nativeRepairReport.model_triangle_count` is the GEOMETRY-frame
+ * count (frame (B)). It is measured on the buffer it is attached to and always
+ * indexes it — including on a decimated preview, which runs its own
+ * `mesh_classify_staged` pass over its own triangles and is reordered
+ * model-first by that pass before the positions are written back. The
+ * FILE-frame count (frame (A)) is `ImportClassificationJson.model_triangle_count`
+ * and it never reaches a report. See `MeshHealthReport` in `@/utils/meshRepair`
+ * and `agents/Claude/STL-import-perf/20260727-Audit-model-triangle-count-frames.md`.
+ *
+ * **Do not add a `nativePreview` guard here.** Ph3e did (2026-07-27) and it was
+ * reverted the same day: returning `totalTriCount` for a preview means
+ * `model_triangle_count === total_triangles`, which trips the
+ * `model_triangle_count >= total_triangles` bail in
+ * `SupportMaskContext::from_job` (`engine.rs`) and **disables support
+ * anti-aliasing for the entire slice**. Imported supports then receive
+ * model-grade AA, softening the tip pixels that do the adhering — on exactly the
+ * large pre-supported plates the collector path exists to serve. The population
+ * such a guard fires on (the Ph2 decimated-output toggle, a missing re-readable
+ * source, unbaked hollowing, a splice degrade) is precisely the population whose
+ * scene buffer IS the thing being sliced, and whose own count indexes it.
+ *
+ * **Proportional scaling must not be built either.** `count / sourceTris *
+ * sceneTris` assumes meshopt preserved model-first ordering AND reduced both
+ * sections proportionally; it is error-driven, so a flat model body collapses
+ * far more than spindly support posts and neither assumption holds. It would be
+ * an arithmetic guess failing as silently as the guard above.
+ *
+ * `Math.min` stays, but only as what it says: a bounds clamp on a buffer index,
+ * belt-and-braces over the `.min(total_triangles)` Rust already applies. What it
+ * no longer does is swallow the contradiction it was clamping — see
+ * `warnedModelIds`.
+ *
+ * @param warnedModelIds Dedupe ledger for the contradiction warning, keyed per
+ *   model and scoped to ONE slice. Deliberately REQUIRED, with no default: this
+ *   function runs four times per model per slice (the split index, the
+ *   `[SupportAA]` diagnostic, PASS ② and PASS ④), so a per-call warning would
+ *   quadruple, and a module-level set would turn a persistent condition into a
+ *   once-per-session whisper. A required parameter is how "who owns the dedupe
+ *   window" gets answered at the type level instead of by convention.
+ */
+function effectiveModelTriangleCount(model: LoadedModel, warnedModelIds: Set<string>): number {
   const totalTriCount = getModelTriangleCount(model);
   const report = model.geometry.meshDefects?.nativeRepairReport;
   const modelTriCount = report?.model_triangle_count;
   if (modelTriCount != null && modelTriCount > 0) {
-    return Math.min(Math.floor(modelTriCount), totalTriCount);
+    const claimed = Math.floor(modelTriCount);
+    if (claimed > totalTriCount && !warnedModelIds.has(model.id)) {
+      // TRIPWIRE. Unreachable in production: frame (B) is bounded by the buffer
+      // it was measured on (audit §6). If it fires, an upstream writer has
+      // attached a report to a mesh it does not describe — which is the finding,
+      // not a shape to clamp quietly and move past.
+      warnedModelIds.add(model.id);
+      console.warn(
+        `[SupportAA] "${model.name}" claims a model section of ${claimed.toLocaleString()} `
+        + `triangles but exceeds its geometry, which holds ${totalTriCount.toLocaleString()}. `
+        + 'Its classification does not describe this mesh — staging it whole as model.',
+      );
+    }
+    return Math.min(claimed, totalTriCount);
   }
   if (report?.likely_support_geometry) return 0;
   return totalTriCount;
@@ -1730,10 +1784,12 @@ function getModelTriangleCount(model: LoadedModel): number {
   return Math.floor(position.count / 3);
 }
 
-function countModelWorldTriangles(models: LoadedModel[]): number {
+/** @param warnedModelIds see `effectiveModelTriangleCount` — required for the
+ *  same reason, and forwarded unchanged. */
+function countModelWorldTriangles(models: LoadedModel[], warnedModelIds: Set<string>): number {
   let count = 0;
   for (const model of models) {
-    count += effectiveModelTriangleCount(model);
+    count += effectiveModelTriangleCount(model, warnedModelIds);
   }
   return count;
 }
@@ -2402,12 +2458,15 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
         0,
       )
     : 0;
-  const collectorModelTriangleCount = countModelWorldTriangles(collectorModels);
+  // One dedupe window per SLICE, not per module: a model still contradicting
+  // itself on the next slice must say so again. See `effectiveModelTriangleCount`.
+  const warnedModelIds = new Set<string>();
+  const collectorModelTriangleCount = countModelWorldTriangles(collectorModels, warnedModelIds);
   const modelTriangleCount = collectorModelTriangleCount + splicedTriangleCount;
   console.warn('[SupportAA] collector input partitions', {
     models: visibleModels.map((model) => {
       const totalTriangles = getModelTriangleCount(model);
-      const effectiveModelTriangles = effectiveModelTriangleCount(model);
+      const effectiveModelTriangles = effectiveModelTriangleCount(model, warnedModelIds);
       const report = model.geometry.meshDefects?.nativeRepairReport;
       return {
         id: model.id,
@@ -2439,7 +2498,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   // skipped: pass ① already staged their model runs ahead of every collector
   // chunk, so the model block stays contiguous at the front of the buffer.
   for (const model of collectorModels) {
-    const modelTriCount = effectiveModelTriangleCount(model);
+    const modelTriCount = effectiveModelTriangleCount(model, warnedModelIds);
     if (modelTriCount > 0) {
       appendModelTrianglesInRange(model, collector, 0, modelTriCount);
     }
@@ -2459,7 +2518,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   // PASS ④ — collector support sections, then generated supports and rafts.
   for (const model of collectorModels) {
     const totalTris = getModelTriangleCount(model);
-    const modelTriCount = effectiveModelTriangleCount(model);
+    const modelTriCount = effectiveModelTriangleCount(model, warnedModelIds);
     if (modelTriCount < totalTris) {
       appendModelTrianglesInRange(model, collector, modelTriCount, totalTris);
     }

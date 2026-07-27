@@ -14,7 +14,7 @@ import {
 import { hollowFromGeometry, type HollowOptions } from '@/utils/meshHollowing';
 import { punchFromGeometry, type PunchOptions } from '@/utils/meshPunching';
 import {
-  classificationIndexesGeometry,
+  geometryIsVerbatimImport,
   splitClassifiedSupportGeometry,
 } from '@/features/scene/splitClassifiedSupports';
 import { prefersDecimatedOutput } from './modelOutputPolicy';
@@ -479,12 +479,27 @@ export function isFullResSpliceEligible(model: LoadedModel): boolean {
  * check; and the moment a preview happened to be larger than a model section it
  * would have sliced supports as model with complete confidence.
  *
- * The replacement asks the structural question instead of the arithmetic one:
- * **does `model_triangle_count` index THIS geometry at all?** It does not when
- * the geometry is a native preview, because the classification describes the
- * SOURCE FILE — that is the contract stated on `ImportClassificationJson` and on
- * `NativeStlLoadResult`, and `nativePreview` is set for exactly the loads where
- * it holds. No arithmetic, no accident, no size dependence.
+ * The replacement asks a structural question instead of the arithmetic one:
+ * **is this geometry a verbatim full-resolution import?** If it is not, the
+ * model is left whole and the splice (or Ph3d's re-sourcing) owns its sections.
+ *
+ * ## ⚠ CORRECTION, 2026-07-27 — why the question below is not the frame question
+ *
+ * This docblock used to justify the guard by saying `model_triangle_count`
+ * describes the SOURCE FILE for a preview and therefore does not index this
+ * geometry. **That reasoning is wrong.** It quotes the contract of
+ * `ImportClassificationJson.model_triangle_count` (frame (A), the DFST header
+ * value) and applies it to `nativeRepairReport.model_triangle_count` (frame (B)),
+ * which is a different number: a decimated preview runs its OWN classify pass
+ * over its OWN triangles and is reordered to match, so (B) is a VALID index into
+ * the preview. See `geometryIsVerbatimImport` and
+ * `agents/Claude/STL-import-perf/20260727-Audit-model-triangle-count-frames.md`.
+ *
+ * **The guard is retained anyway, deliberately** (audit step R4, not
+ * authorised): `describes-source-file` is what routes a preview's Split-to-Bodies
+ * to Ph3d's `resource-sections`, and unwinding that would unwind Ph3d. Its known
+ * cost is recorded at the call site below. What must NOT happen is a fourth site
+ * copying the guard on the belief that a (B) read needs it.
  */
 export type OutputSectionPlan =
   /** The Rust splice stages the model runs and the support complement itself. */
@@ -502,6 +517,15 @@ export type OutputSectionPlan =
        * `count-exceeds-geometry` — a classification that claims more model
        *   triangles than the geometry it indexes actually holds. A genuine
        *   contradiction; warned about, never acted on.
+       *   **UNREACHABLE IN PRODUCTION — a defensive tripwire, not a guard**
+       *   (audit §6 / step R6, 2026-07-27). Frame (B) is produced by a classify
+       *   pass over the buffer it is attached to and is bounded by
+       *   `mesh.triangles.len()` by construction; the only mutator that could
+       *   put a report on a differently-sized buffer (`replaceModelGeometry`)
+       *   drops the whole `meshDefects` block. Kept — not deleted — because the
+       *   reason is surfaced to the user through `SplitUnavailableReason` and
+       *   `page.tsx`, and because a tripwire that fires means an invariant broke
+       *   upstream. If it ever fires, that is the finding.
        */
       reason: 'no-split' | 'describes-source-file' | 'count-exceeds-geometry';
     };
@@ -513,16 +537,20 @@ export function resolveOutputSectionPlan(model: LoadedModel): OutputSectionPlan 
   const modelTriangleCount = Math.floor(report?.model_triangle_count ?? 0);
   if (modelTriangleCount <= 0) return { kind: 'whole', reason: 'no-split' };
 
-  // THE F3 REPLACEMENT. A native preview's scene geometry is a reduced stand-in
-  // for the source file; the classification measured the file. Splitting the
-  // preview at a file-derived index cuts it in the wrong place.
+  // A native preview is left whole here and its sections are produced by
+  // re-sourcing (Ph3d) rather than by cutting the stand-in.
   //
-  // The predicate lives next to the cut it guards
-  // (`splitClassifiedSupports.ts`) rather than here, because the USER-INVOKED
-  // Split-to-Bodies path performs the same cut without going through this
-  // resolver. Two copies of this test is how the scene path kept the defect
-  // after the output path was fixed.
-  if (!classificationIndexesGeometry(model.geometry)) {
+  // NOT because the count fails to index this buffer — it does (see the
+  // correction in this function's docblock and `geometryIsVerbatimImport`).
+  //
+  // KNOWN COST OF KEEPING THIS ARM (audit §5, step R4 — deliberately NOT taken):
+  // it also fires on a preview that is not splice-eligible, e.g. one carrying an
+  // UNBAKED HOLLOWING modifier, where the scene buffer IS the output and its own
+  // count does index it. Such a model is no longer split into two `LoadedModel`s
+  // for output, so `splitClassifiedModelForOutput`'s support half no longer gets
+  // `meshModifiers: undefined` — i.e. unbaked hollowing voxelises the imported
+  // supports too. Pre-Ph3 that model split and the supports were exempt.
+  if (!geometryIsVerbatimImport(model.geometry)) {
     return { kind: 'whole', reason: 'describes-source-file' };
   }
 
@@ -532,9 +560,10 @@ export function resolveOutputSectionPlan(model: LoadedModel): OutputSectionPlan 
   const totalTriangleCount = Math.floor((geometry.getIndex()?.count ?? position.count) / 3);
 
   if (modelTriangleCount >= totalTriangleCount) {
-    // Reached only when the classification is supposed to index this geometry
-    // and does not. Under the old guard this was silent and indistinguishable
-    // from the preview case above; it is neither now.
+    // TRIPWIRE, not a guard. Unreachable in production: frame (B) cannot exceed
+    // its own buffer (audit §6). Retained because if it ever fires, some
+    // upstream writer has attached a report to a mesh it does not describe —
+    // and that is worth hearing about loudly rather than clamping silently.
     console.warn(
       `[resolveOutputSectionPlan] "${model.name}" carries a model-section count of `
       + `${modelTriangleCount.toLocaleString()} for a geometry holding `

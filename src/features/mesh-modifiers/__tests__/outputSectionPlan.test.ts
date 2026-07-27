@@ -27,6 +27,24 @@ import { prepareLoadedModelsForOutput, resolveOutputSectionPlan } from '../prepa
  * The behavioural red is the second test below — under the old guard, a preview
  * SMALLER in triangle count than its own model section was split at the wrong
  * index, which is exactly what "safe by arithmetic accident" means.
+ *
+ * ## ⚠ CORRECTION, 2026-07-27 (F3 frame realignment, steps R2/R6)
+ *
+ * The "structural question" framing above is wrong about WHICH count is being
+ * guarded. `nativeRepairReport.model_triangle_count` (frame (B)) is measured on
+ * the buffer it is attached to — a decimated preview runs its own classify pass
+ * over its own triangles and is reordered to match — so it DOES index the
+ * preview. The contract quoted ("the classification describes the SOURCE FILE")
+ * belongs to `ImportClassificationJson.model_triangle_count` (frame (A)), which
+ * never reaches a report. See
+ * `agents/Claude/STL-import-perf/20260727-Audit-model-triangle-count-frames.md`.
+ *
+ * The `describes-source-file` arm is nevertheless RETAINED (audit step R4, not
+ * authorised): it is what routes a preview's Split-to-Bodies to Ph3d's
+ * re-sourcing. These tests therefore still pin it — but the fixtures that paired
+ * `nativePreview` with a count LARGER than the buffer have been re-tuned to
+ * reachable counts, because frame (B) is bounded by its own buffer by
+ * construction and those shapes cannot occur (audit §6, step R6).
  */
 
 function makeModel(input: {
@@ -85,9 +103,12 @@ function makeModel(input: {
 }
 
 test('a splice-eligible model has its sections expressed by the splice, not by a cut', () => {
+  // R6: the count was 6_000_000 against 10 scene triangles — unreachable, since
+  // a preview's report is bounded by its own buffer. A reachable count changes
+  // nothing here: `spliced-sections` short-circuits before the report is read.
   const model = makeModel({
     sceneTriangles: 10,
-    modelTriangleCount: 6_000_000,
+    modelTriangleCount: 4,
     nativePreview: true,
     sourcePath: 'C:/models/plate.stl',
   });
@@ -116,12 +137,17 @@ test('a preview whose model section OUT-COUNTS it is still never cut', () => {
 
 test('a decimated-output model is left whole for a stated reason, not an accident', () => {
   // Ph2's toggle: the user chose the decimated mesh AS the original. It is not
-  // splice-eligible, it is still a preview, and its classification still
-  // describes the file. Today this is the arm the 11M-vs-2M accident happened
-  // to land on.
+  // splice-eligible, it is still a preview, and the arm that catches it is
+  // structural rather than arithmetic.
+  //
+  // R6: the count was 11_000_000 against a 2 000 000-triangle preview — the
+  // shape the old subtraction bailed on by accident, and unreachable in
+  // production. Re-tuned to 1 500 000, which is REACHABLE (a 7M plate with a
+  // 1.5M model body) and which the old arithmetic guard would have waved
+  // straight through. Same verdict, and now for a reason a fixture can reach.
   const model = makeModel({
     sceneTriangles: 2_000_000,
-    modelTriangleCount: 11_000_000,
+    modelTriangleCount: 1_500_000,
     nativePreview: true,
     sourcePath: 'C:/models/plate.stl',
   });
@@ -147,6 +173,13 @@ test('a classification that cannot index its own geometry is refused, loudly', (
   // Not a preview, so the count is SUPPOSED to index this mesh — and does not.
   // Under the old guard this returned null indistinguishably from the preview
   // case and said nothing.
+  //
+  // R6: this shape is UNREACHABLE in production too (audit §6) — a report cannot
+  // out-count the buffer it was measured on, and the one mutator that could
+  // carry a report across a triangle-count change drops `meshDefects` entirely.
+  // The test is KEPT, not deleted: the arm it covers is retained as a deliberate
+  // tripwire, and an untested tripwire is one that will not fire when the
+  // invariant it watches finally breaks.
   const model = makeModel({ sceneTriangles: 10, modelTriangleCount: 10 });
   const warnings: string[] = [];
   const originalWarn = console.warn;

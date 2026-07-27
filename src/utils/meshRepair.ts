@@ -22,6 +22,15 @@ import {
   type FullResMutatorSource,
 } from '@/utils/fullResMutatorStaging';
 
+/**
+ * Topology stats for ONE mesh, in the frame of the mesh they were measured on.
+ *
+ * `triangle_count` here is the count of the buffer that was analysed — the same
+ * geometry frame as its enclosing `MeshHealthReport` (frame (B); see that
+ * docblock). It is NOT the source file's triangle count when the analysed mesh
+ * is a decimated preview. The file's count is
+ * `ImportClassificationJson.source_triangle_count` (frame (A)).
+ */
 export interface MeshAnalysisJson {
   triangle_count: number;
   vertex_count: number;
@@ -60,6 +69,44 @@ export interface MeshRepairStep {
   changed?: number;
 }
 
+/**
+ * ## FRAME (B) — the GEOMETRY frame. Read this before touching
+ * `model_triangle_count`.
+ *
+ * There are two `model_triangle_count`s in this codebase and they are NOT
+ * interchangeable. This one — the report stored as
+ * `geometry.meshDefects.nativeRepairReport` — is **always measured on the very
+ * buffer it is attached to**, and therefore **always indexes it**:
+ *
+ * - a VERBATIM import reuses the file's own classification, and the file *is*
+ *   the geometry, so (A) ≡ (B);
+ * - a DECIMATED PREVIEW runs its **own** `mesh_classify_staged` pass over its
+ *   **own** decimated triangles, and that pass **reorders the buffer model-first
+ *   in place** before the positions are written back. Rust derives the count
+ *   from that same mesh's connected components, so it is bounded by
+ *   `mesh.triangles.len()` **by construction** and cannot exceed the buffer;
+ * - a VOXL reload, a `repairModelInPlace`, a `cloneGeometryWithBounds` copy —
+ *   all checked, all aligned (report and positions move together, or the report
+ *   is dropped).
+ *
+ * The (A) frame is `ImportClassificationJson.model_triangle_count` — see its own
+ * docblock below. (A) never reaches a report on a preview geometry: the only
+ * bridge, `importClassificationToHealthReport`, has exactly two callers and
+ * neither can do it (see that function's docblock).
+ *
+ * **`geometry.nativePreview` says nothing about this count.** The marker means
+ * "this buffer is a reduced stand-in for a bigger file"; it does not mean "the
+ * attached report describes a different mesh". Guarding a (B) read on
+ * `!nativePreview` throws away a valid, correct split index — that is the
+ * mistake the F3 remediation chain made at three sites and the 2026-07-27 audit
+ * corrected (`agents/Claude/STL-import-perf/20260727-Audit-model-triangle-count-frames.md`).
+ *
+ * The correct predicate for "was THIS buffer reordered to match THIS report" is
+ * `geometryMatchesReport` in `useStlGeometry.ts` — `shouldApplyPositions ||
+ * preClassified != null` — which answers YES for a decimated preview, and whose
+ * output (the orange support overlay) is the field evidence that (B) is
+ * geometry-framed.
+ */
 export interface MeshHealthReport {
   version: number;
   source_path?: string | null;
@@ -67,8 +114,15 @@ export interface MeshHealthReport {
   post: MeshAnalysisJson;
   steps: MeshRepairStep[];
   likely_support_geometry: boolean;
-  /** When present, the first N triangles in the repaired mesh are model body;
-   *  the remainder are support geometry. Used to bake per-triangle vertex colors. */
+  /**
+   * FRAME (B). When present, the first N triangles **in the buffer this report
+   * is attached to** are model body; the remainder are support geometry. Used to
+   * bake per-triangle vertex colors, to build the model/support section
+   * geometries, and as the slicer's support-AA split index.
+   *
+   * `null` means the classifier found NO reliable partition — the absence of a
+   * split, never a split covering everything.
+   */
   model_triangle_count?: number | null;
   /** Result of the final manifold_csg status check on the model section, run at
    *  the end of the native repair and classify routines. `false` means the CSG
@@ -108,6 +162,8 @@ export interface SectionStatsJson {
 }
 
 /**
+ * ## FRAME (A) — the FILE frame.
+ *
  * Ph1 wiring — what `load_stl_file` learned about the FULL-RESOLUTION source,
  * decoded from the DFST response.
  *
@@ -116,10 +172,23 @@ export interface SectionStatsJson {
  * (and the run map) still address the original. `model_triangle_count` is
  * therefore only a valid index into the returned geometry when `isPreview` is
  * false.
+ *
+ * **Do not confuse this with frame (B)** — `MeshHealthReport.model_triangle_count`,
+ * stored as `geometry.meshDefects.nativeRepairReport`. (B) is measured on
+ * whatever buffer it is attached to and always indexes it, previews included.
+ * See the `MeshHealthReport` docblock above and the 2026-07-27 audit
+ * (`agents/Claude/STL-import-perf/20260727-Audit-model-triangle-count-frames.md`).
+ *
+ * Where (A) legitimately travels: `geometry.importRunMap`
+ * (`ImportRunMap.modelTriangleCount`) and `geometry.nativePreview.runMap`
+ * (`ImportRunMapSummary.modelTriangleCount`). Both are consumed only by the
+ * run-map splice, in SOURCE-FILE triangle indices. (A) must never be used to
+ * cut a scene buffer, and it must never be `??`-chained with (B).
  */
 export interface ImportClassificationJson {
-  /** `null` when no reliable model/support partition was found — which is the
-   *  ABSENCE of a split, not a split covering everything. */
+  /** FRAME (A) — a SOURCE-FILE triangle index. `null` when no reliable
+   *  model/support partition was found — which is the ABSENCE of a split, not a
+   *  split covering everything. */
   model_triangle_count: number | null;
   likely_support_geometry: boolean;
   connected_components: number | null;
@@ -403,6 +472,29 @@ export function parseImportClassification(input: unknown): ImportClassificationJ
  * `pre` and `post` are identical because classification does not change the
  * mesh — it only reorders it. Boundary/non-manifold figures come from the MODEL
  * section, matching what the repair path's own manifold check reports on.
+ *
+ * ## THE ONE PLACE FRAME (A) WEARS FRAME (B)'s TYPE — and why it is inert
+ *
+ * This function copies `classification.model_triangle_count` — a SOURCE-FILE
+ * index (frame (A)) — straight into a `MeshHealthReport`, whose
+ * `model_triangle_count` is contractually a GEOMETRY index (frame (B)). That is
+ * the only bridge between the two frames in the tree, so it is the only place a
+ * file-framed count could ever be attached to a geometry it does not index.
+ *
+ * It cannot happen. There are exactly two production callers and neither can
+ * produce an (A)-valued report on a `nativePreview` geometry:
+ *
+ *  1. `processGeometry`'s `preClassified` arm — reachable only when
+ *     `options._isNativePreview !== true`, i.e. a VERBATIM import, where the
+ *     file *is* the geometry and A ≡ B by definition. A decimated preview takes
+ *     the other arm and runs `classifyFromGeometry` over its own triangles.
+ *  2. `loadStlSectionGeometry` (the Split-to-Bodies halves) — passes a
+ *     SYNTHESIZED classification with `model_triangle_count: null`. The half may
+ *     carry `nativePreview`, but it carries no count at all.
+ *
+ * If you add a third caller, it is your job to keep that true: either the
+ * geometry is the file, or the count is `null`. Verified by exhausting the
+ * callers in the 2026-07-27 audit, §2.2.
  *
  * KNOWN GAP, inherited not introduced: `MeshAnalysisJson.self_intersections` is
  * a plain `number`, so the un-measured self-intersection count is reported as

@@ -3,7 +3,7 @@ import test from 'node:test';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import {
-  classificationIndexesGeometry,
+  geometryIsVerbatimImport,
   splitClassifiedSupportGeometry,
 } from '@/features/scene/splitClassifiedSupports';
 import { resolveSplitToBodiesStrategy } from '@/features/scene/splitToBodiesStrategy';
@@ -43,6 +43,23 @@ import { resolveSplitToBodiesStrategy } from '@/features/scene/splitToBodiesStra
  * So this file keeps the fence, and `splitToBodiesStrategy.test.ts` owns the new
  * behaviour. The one test that had to change is the last one, whose premise —
  * "the gate enables exactly what this cut can do" — Ph3d retired.
+ *
+ * ## ⚠ CORRECTION, 2026-07-27 (F3 frame realignment, step R6)
+ *
+ * The premise quoted above is WRONG on one point, and it matters for reading
+ * these tests. `nativeRepairReport.model_triangle_count` is measured on the
+ * buffer it is attached to, previews included — a decimated preview runs its own
+ * classify pass over its own triangles and is reordered to match. So the cuts
+ * refused below would in fact have landed in the RIGHT place; the refusal is
+ * justified by Ph3d's better answer (re-source both halves at full resolution),
+ * not by the index being meaningless. See
+ * `agents/Claude/STL-import-perf/20260727-Audit-model-triangle-count-frames.md`.
+ *
+ * The fixtures are trimmed accordingly: a shape pairing `nativePreview` with a
+ * count LARGER than the buffer (the 11M-against-2 000 "lucky shape") is
+ * **unreachable in production** — frame (B) is bounded by its own buffer by
+ * construction — and has been replaced by a reachable one. The refusals
+ * themselves are unchanged and still asserted.
  */
 
 function makePreviewSplitModel(input: {
@@ -120,27 +137,26 @@ test('a preview whose model section is SMALLER than it is refuses the cut', () =
 });
 
 test('the arithmetic that used to carry this case is no longer what decides it', () => {
-  // Same model as above but scaled to the shape that made the defect invisible:
-  // an 11M model section against a 2M preview. Both must refuse, and for the
-  // same stated reason — if only this one refuses, the guard is a subtraction
-  // again.
-  const luckyShape = makePreviewSplitModel({
-    sceneTriangles: 2_000,
-    modelTriangleCount: 11_000_000,
-    nativePreview: true,
-  });
+  // The scaled-up version of the same shape: a 500-triangle model section inside
+  // a 2 000-triangle preview. The subtraction yields a healthy 1 500 and every
+  // pre-Ph3c bail waves it through, so only the structural refusal stops it.
+  //
+  // R6, 2026-07-27: this test used to pair the above with a "lucky shape" —
+  // 11 000 000 against 2 000 triangles — to show the old subtraction went
+  // negative and bailed by accident. That fixture is DELETED as unreachable: a
+  // `nativePreview` geometry's report comes from a classify pass over that very
+  // buffer and is bounded by it (audit §6), so no production path can attach a
+  // count larger than the mesh to a preview. Only the reachable half survives,
+  // and it is the half that carries the assertion.
   const unluckyShape = makePreviewSplitModel({
     sceneTriangles: 2_000,
     modelTriangleCount: 500,
     nativePreview: true,
   });
   try {
-    assert.equal(splitClassifiedSupportGeometry(luckyShape), null);
     assert.equal(splitClassifiedSupportGeometry(unluckyShape), null);
-    assert.equal(classificationIndexesGeometry(luckyShape.geometry), false);
-    assert.equal(classificationIndexesGeometry(unluckyShape.geometry), false);
+    assert.equal(geometryIsVerbatimImport(unluckyShape.geometry), false);
   } finally {
-    luckyShape.geometry.geometry.dispose();
     unluckyShape.geometry.geometry.dispose();
   }
 });
@@ -157,7 +173,7 @@ test('a non-preview classified model still splits, byte-for-byte as before', () 
     assert.equal(split.modelTriangleCount, 4);
     assert.equal(split.supportTriangleCount, 6);
     assert.equal(split.totalTriangleCount, 10);
-    assert.equal(classificationIndexesGeometry(model.geometry), true);
+    assert.equal(geometryIsVerbatimImport(model.geometry), true);
   } finally {
     split?.modelGeometry.geometry.dispose();
     split?.supportGeometry.geometry.dispose();
@@ -183,7 +199,14 @@ test('the scene-split strategy is chosen exactly when the scene cut works', () =
   const shapes = [
     { sceneTriangles: 10, modelTriangleCount: 4, nativePreview: true },
     { sceneTriangles: 10, modelTriangleCount: 4, nativePreview: false },
-    { sceneTriangles: 2_000, modelTriangleCount: 11_000_000, nativePreview: true },
+    // R6: was `2_000 / 11_000_000 / preview` — unreachable, a preview's report
+    // cannot out-count its own buffer. Replaced by the reachable large-preview
+    // shape, which exercises the same routing arm.
+    { sceneTriangles: 2_000, modelTriangleCount: 500, nativePreview: true },
+    // The `count === total` non-preview shape is ALSO unreachable in production
+    // (audit §6) — it is kept deliberately, because it is the only coverage of
+    // the `count-exceeds-geometry` tripwire's routing, and a tripwire whose
+    // wiring is untested is a tripwire that will not fire.
     { sceneTriangles: 10, modelTriangleCount: 10, nativePreview: false },
     { sceneTriangles: 10, modelTriangleCount: 0, nativePreview: false },
   ];

@@ -38,6 +38,12 @@ export type SplitUnavailableReason =
   /**
    * A classification that claims more model triangles than the geometry it is
    * supposed to index actually holds. A genuine contradiction (Ph3).
+   *
+   * **UNREACHABLE IN PRODUCTION — a defensive tripwire** (audit §6 / step R6,
+   * 2026-07-27). `nativeRepairReport.model_triangle_count` is measured on the
+   * buffer it is attached to and bounded by it. Retained, with the arm in
+   * `resolveOutputSectionPlan` it mirrors, so that a broken upstream writer is
+   * named rather than swallowed.
    */
   | 'count-exceeds-geometry'
   /**
@@ -105,6 +111,17 @@ export function resolveSplitToBodiesStrategy(model: LoadedModel): SplitToBodiesS
     summary: nativePreview?.runMap ?? null,
     persistedRuns: geometry.importRunMap?.runs ?? null,
     storedRecompute: geometry.importRunMapRecompute ?? null,
+    // FRAME NOTE (audit §3.1 site 7, step R7). This is a frame-(B) value —
+    // measured on the scene buffer — standing in for a frame-(A) question:
+    // "does the SOURCE FILE have a model/support split?". Used as a BOOLEAN
+    // only, and only as `planImportSectionSplice`'s last resort, after every
+    // run map and summary has been found missing.
+    //
+    // When they disagree — the file has a split but this preview's own classify
+    // pass fused everything into one component (or vice versa) — the splice is
+    // planned as `whole` when it should have been `sections`, or the reverse.
+    // The consequence is a whole-file splice instead of a sectioned one, which
+    // is the pre-Ph3 behaviour and degrades rather than corrupts.
     reportSplitExists:
       (geometry.meshDefects?.nativeRepairReport?.model_triangle_count ?? 0) > 0,
   });
@@ -128,10 +145,22 @@ export function resolveSplitToBodiesStrategy(model: LoadedModel): SplitToBodiesS
     fingerprint: nativePreview?.sourceFingerprint ?? null,
     runs: splitPlan.runs,
     recomputeReason: splitPlan.recomputeReason,
-    expectedModelTriangleCount:
-      summary?.modelTriangleCount
-      ?? geometry.meshDefects?.nativeRepairReport?.model_triangle_count
-      ?? null,
+    // FRAME NOTE (audit §3.1 site 8, step R7). These are FULL-RESOLUTION
+    // expectations: the caller cross-checks them against what the two Rust
+    // section responses report about the SOURCE FILE. Only frame-(A) values
+    // belong here — `ImportRunMap` / `ImportRunMapSummary.modelTriangleCount`,
+    // both source-file indices.
+    //
+    // This used to `??`-fall back to
+    // `meshDefects.nativeRepairReport.model_triangle_count`, which is frame (B):
+    // measured on the SCENE buffer, so on a decimated preview — the only shape
+    // that reaches this branch — it is a ~2M-scale number being handed to a
+    // check against an 11M-scale file. It was safe only because (A)'s summary is
+    // in fact always attached when the file had a split, i.e. the fallback never
+    // fired. Removed rather than commented: a null expectation means "do not
+    // cross-check", which is honest, where a wrong-frame expectation means "fail
+    // a check that should have passed".
+    expectedModelTriangleCount: summary?.modelTriangleCount ?? null,
     expectedSourceTriangleCount: summary?.sourceTriangleCount ?? null,
   };
 }

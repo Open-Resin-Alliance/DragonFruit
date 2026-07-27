@@ -205,6 +205,10 @@ test('an unclassified model reports no split', () => {
 });
 
 test('a classification that cannot index its own geometry is refused by name', () => {
+  // R6 (2026-07-27): this shape is unreachable in production — a report's
+  // `model_triangle_count` is measured on the buffer it is attached to and
+  // bounded by it (audit §6). The arm is retained as a deliberate tripwire and
+  // this test is retained as its only wiring coverage.
   const model = makeModel({ sceneTriangles: 10, modelTriangleCount: 10 });
   const originalWarn = console.warn;
   console.warn = () => {};

@@ -847,6 +847,14 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                     summary: model.geometry.nativePreview?.runMap ?? null,
                     persistedRuns: model.geometry.importRunMap?.runs ?? null,
                     storedRecompute: model.geometry.importRunMapRecompute ?? null,
+                    // FRAME NOTE (audit §3.1 site 10, step R7). Frame (B) — a
+                    // count measured on the SCENE buffer — standing in for the
+                    // frame-(A) question "does the SOURCE FILE have a split?".
+                    // Boolean use only, and only as `planImportSectionSplice`'s
+                    // last resort, once every run map and summary has been found
+                    // missing. If the two frames disagree the file is spliced
+                    // whole instead of by section (or the reverse), which is a
+                    // degrade to the pre-Ph3 path, not a wrong cut.
                     reportSplitExists:
                         (model.geometry.meshDefects?.nativeRepairReport?.model_triangle_count ?? 0) > 0,
                 })

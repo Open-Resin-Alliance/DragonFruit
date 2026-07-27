@@ -109,6 +109,14 @@ export function planHollowSectionSplice(
     summary: model.geometry.nativePreview?.runMap ?? null,
     persistedRuns: model.geometry.importRunMap?.runs ?? null,
     storedRecompute: model.geometry.importRunMapRecompute ?? null,
+    // FRAME NOTE (audit §3.1 site 9, step R7). A frame-(B) value — measured on
+    // the scene buffer — answering a frame-(A) question ("does the SOURCE FILE
+    // have a split?"). Boolean use only, and only as `planImportSectionSplice`'s
+    // last resort. Narrower here than at the other two proxy sites: this call is
+    // already gated on `spliced-sections`, so a run map or summary was almost
+    // certainly present and the last resort is not reached. If the two frames
+    // ever disagree, the hollow stages the whole file instead of the model
+    // section — the pre-Ph3b behaviour, a degrade rather than a corruption.
     reportSplitExists:
       (model.geometry.meshDefects?.nativeRepairReport?.model_triangle_count ?? 0) > 0,
   });
