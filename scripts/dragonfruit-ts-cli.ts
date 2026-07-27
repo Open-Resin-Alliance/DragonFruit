@@ -47,9 +47,14 @@ import { computePhysicalAaConfig, type AaPreset } from '../src/features/slicing/
 // VOXL File I/O
 // ---------------------------------------------------------------------------
 
+// Pre-decoded embedded mesh bytes (STL) from the most recently loaded VOXL,
+// keyed by model id. Populated by loadVoxl for `embedded-chunk`/`embedded-file`
+// models; the slice path prefers these over hitting the filesystem.
+let LOADED_MESH_BYTES = new Map<string, Uint8Array>();
 function loadVoxl(path: string): VoxlDocumentV1 {
   const raw = readFileSync(path);
   const result = parseVoxlAuto(raw);
+  LOADED_MESH_BYTES = result.meshBytes;
   return result.document;
 }
 
@@ -1186,7 +1191,10 @@ function sceneArrange(args: ReturnType<typeof parseArgs>): void {
  * Same logic as cli.rs load_binary_stl.
  */
 function loadBinaryStl(path: string): Float32Array {
-  const data = readFileSync(path);
+  return parseBinaryStl(readFileSync(path));
+}
+
+function parseBinaryStl(data: Buffer): Float32Array {
   if (data.length < 84) throw new Error(`STL file too small: ${data.length} bytes`);
 
   const numTriangles = data.readUInt32LE(80);
@@ -1536,21 +1544,33 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
   let totalTriangles = 0;
 
   for (const model of visibleModels) {
-    const meshFileName = model.mesh.fileName ?? model.name + '.stl';
-    // Try mesh-dir, then absolute path, then cwd
-    let meshPath: string | null = null;
-    const candidates = [
-      resolve(meshDir, meshFileName),
-      meshFileName,
-      resolve(meshFileName),
-    ];
-    for (const c of candidates) {
-      try { statSync(c); meshPath = c; break; } catch { /* try next */ }
-    }
-    if (!meshPath) throw new Error(`Mesh file not found for model '${model.name}': tried ${candidates.join(', ')}`);
+    let positions: Float32Array;
 
-    console.error(`  loading ${model.name}: ${meshPath}`);
-    const positions = loadBinaryStl(meshPath);
+    const embedded = LOADED_MESH_BYTES.get(model.id);
+    if (embedded) {
+      // `embedded-chunk`/`embedded-file`: the codec already decoded the geometry
+      // to STL bytes — no filesystem lookup needed.
+      positions = parseBinaryStl(Buffer.from(embedded.buffer, embedded.byteOffset, embedded.byteLength));
+      console.error(`  loading ${model.name}: <embedded ${model.mesh.mode}>`);
+    } else if (model.mesh.mode === 'external-file' || model.mesh.fileName) {
+      const meshFileName = model.mesh.fileName ?? model.name + '.stl';
+      // Try mesh-dir, then absolute path, then cwd
+      let meshPath: string | null = null;
+      const candidates = [
+        resolve(meshDir, meshFileName),
+        meshFileName,
+        resolve(meshFileName),
+      ];
+      for (const c of candidates) {
+        try { statSync(c); meshPath = c; break; } catch { /* try next */ }
+      }
+      if (!meshPath) throw new Error(`Mesh file not found for model '${model.name}': tried ${candidates.join(', ')}`);
+
+      console.error(`  loading ${model.name}: ${meshPath}`);
+      positions = loadBinaryStl(meshPath);
+    } else {
+      throw new Error(`Model '${model.name}' has mesh.mode='${model.mesh.mode}' but no embedded bytes and no fileName`);
+    }
 
     // Apply full scene transform (position + rotation + scale)
     applyVoxlTransform(positions, model.transform);
