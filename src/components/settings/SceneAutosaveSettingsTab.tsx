@@ -12,11 +12,18 @@ import {
 type AutosavePaths = {
   voxlPath: string;
   manifestPath: string;
+  origin: string;
+  projectPath: string | null;
+  fallbackReason: string | null;
 };
 
 type AutosaveManifest = {
   savedAt: string;
   clean: boolean;
+  voxlPath?: string | null;
+  origin?: string | null;
+  projectPath?: string | null;
+  fallbackReason?: string | null;
 };
 
 function isDesktopRuntime(): boolean {
@@ -82,9 +89,14 @@ export function SceneAutosaveSettingsTab() {
     setMessage({ kind: 'idle', text: '' });
 
     try {
+      // This is the settings-level explicit discard, so it deletes the payload
+      // as well as clearing the flag — the same rule as the recovery prompt's
+      // Discard. A `_autosave.voxl` the user has just declared stale should not
+      // stay on disk next to their project.
       await invokeDesktop('scene_autosave_write_manifest', {
         savedAt: manifest?.savedAt ?? new Date().toISOString(),
         clean: true,
+        deletePayload: true,
       });
       await loadStatus();
       setMessage({ kind: 'success', text: 'Autosave recovery state marked clean.' });
@@ -95,18 +107,29 @@ export function SceneAutosaveSettingsTab() {
     }
   }, [desktopAvailable, loadStatus, manifest?.savedAt]);
 
+  /**
+   * The manifest wins over the path probe. `scene_autosave_get_paths` is called
+   * here without a project, so it can only ever answer with the generic
+   * fallback — while the last tick may well have written a sidecar beside the
+   * open project. The manifest records the payload that was actually committed,
+   * so it is the honest answer to "where is my autosave".
+   */
+  const resolvedAutosavePath = manifest?.voxlPath ?? paths?.voxlPath ?? null;
+  const resolvedAutosaveOrigin = manifest?.origin ?? paths?.origin ?? null;
+  const resolvedFallbackReason = manifest?.fallbackReason ?? paths?.fallbackReason ?? null;
+
   const handleRevealAutosave = React.useCallback(async () => {
-    if (!desktopAvailable || !paths?.voxlPath) return;
+    if (!desktopAvailable || !resolvedAutosavePath) return;
 
     setBusy('reveal');
     try {
-      await invokeDesktop('reveal_in_file_manager', { path: paths.voxlPath });
+      await invokeDesktop('reveal_in_file_manager', { path: resolvedAutosavePath });
     } catch (error) {
       setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Failed to open autosave location.' });
     } finally {
       setBusy('none');
     }
-  }, [desktopAvailable, paths?.voxlPath]);
+  }, [desktopAvailable, resolvedAutosavePath]);
 
   const debounceSeconds = Math.round(settings.debounceMs / 1000);
   const capMinutes = Math.round(settings.capMs / 60_000);
@@ -307,7 +330,15 @@ export function SceneAutosaveSettingsTab() {
               <div className="rounded-md border px-2.5 py-2 sm:col-span-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Autosave scene file</div>
                 <div className="mt-1 text-xs break-all" style={{ color: 'var(--text-strong)' }}>
-                  {paths?.voxlPath ?? 'Unavailable'}
+                  {resolvedAutosavePath ?? 'Unavailable'}
+                </div>
+                <div className="mt-1.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                  {resolvedAutosaveOrigin === 'sidecar'
+                    ? 'A recovery copy is written beside each saved project, as <name>_autosave.voxl. It uses roughly as much disk as the project itself.'
+                    : 'Recovery copies are written to the app data folder above.'}
+                  {resolvedFallbackReason
+                    ? ` Could not write beside the project (${resolvedFallbackReason}), so the default location is being used.`
+                    : ''}
                 </div>
               </div>
             </div>
@@ -327,7 +358,7 @@ export function SceneAutosaveSettingsTab() {
           <button
             type="button"
             onClick={() => { void handleRevealAutosave(); }}
-            disabled={!desktopAvailable || !paths?.voxlPath || busy !== 'none'}
+            disabled={!desktopAvailable || !resolvedAutosavePath || busy !== 'none'}
             className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
           >
             {busy === 'reveal' ? <Loader2 className="h-4 w-4 animate-spin" /> : <HardDrive className="h-4 w-4" />}

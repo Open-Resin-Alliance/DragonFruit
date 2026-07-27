@@ -5,11 +5,15 @@ import { AlertTriangle, ArchiveRestore, Trash2, X } from 'lucide-react';
 
 type Props = {
   savedAt: string;
+  /** The exact payload recovery resolved; shown so the restore is never a guess. */
+  voxlPath?: string | null;
+  /** `sidecar` (beside the project) or `recovery-dir` (the fallback location). */
+  origin?: string | null;
   onRestore: () => Promise<void> | void;
   onDiscard: () => Promise<void> | void;
 };
 
-export function SceneAutosaveRecoveryModal({ savedAt, onRestore, onDiscard }: Props) {
+export function SceneAutosaveRecoveryModal({ savedAt, voxlPath, origin, onRestore, onDiscard }: Props) {
   const [busy, setBusy] = React.useState<'none' | 'restore' | 'discard'>('none');
 
   const formattedDate = React.useMemo(() => {
@@ -118,6 +122,20 @@ export function SceneAutosaveRecoveryModal({ savedAt, onRestore, onDiscard }: Pr
             <div className="mt-1 text-sm font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
               {formattedDate}
             </div>
+            {voxlPath && (
+              <>
+                <div className="mt-2.5 text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  {origin === 'sidecar' ? 'Saved beside your project' : 'Saved in the recovery folder'}
+                </div>
+                <div
+                  className="mt-1 break-all text-[11px] leading-snug"
+                  style={{ color: 'var(--text-muted)' }}
+                  title={voxlPath}
+                >
+                  {voxlPath}
+                </div>
+              </>
+            )}
           </div>
 
           <div className="flex shrink-0 items-center justify-end gap-2 pt-1">

@@ -17,30 +17,152 @@ const AUTOSAVE_NAVIGATION_SETTLE_MS = 900;
 // Tauri helpers
 // ---------------------------------------------------------------------------
 
-type AutosavePaths = { voxlPath: string; manifestPath: string };
+export type AutosaveOrigin = 'sidecar' | 'recovery-dir';
+
+export type AutosavePaths = {
+  voxlPath: string;
+  manifestPath: string;
+  origin: AutosaveOrigin;
+  projectPath: string | null;
+  /** Set only when the sidecar target was unusable. See `resolve_scene_autosave_target`. */
+  fallbackReason: string | null;
+};
+
+export type AutosaveRecoveryCandidate = {
+  voxlPath: string;
+  origin: AutosaveOrigin;
+  savedAt: string | null;
+  clean: boolean;
+  projectPath: string | null;
+  payloadBytes: number;
+  fallbackReason: string | null;
+};
+
+/** Minimal shape of `@tauri-apps/api/core`'s `invoke`, so tests can inject one. */
+export type AutosaveInvoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+
+async function desktopInvoke(): Promise<AutosaveInvoke> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke as AutosaveInvoke;
+}
 
 let cachedPaths: AutosavePaths | null = null;
 let cachedPreferredSavePath: string | null | undefined;
+let warnedFallbackFor: string | null = null;
 
-async function getAutosavePaths(preferredSavePath?: string | null): Promise<AutosavePaths> {
-  // Invalidate cache if preferredSavePath changes
+/** Drops the resolved-path cache. Used by tests, which would otherwise leak it between cases. */
+export function resetAutosavePathCache(): void {
+  cachedPaths = null;
+  cachedPreferredSavePath = undefined;
+  warnedFallbackFor = null;
+}
+
+/**
+ * Resolves the autosave target at **tick time** (finding N3).
+ *
+ * The cache is keyed on the project path, so a Save As to a new folder moves the
+ * sidecar with it instead of writing next to the old project forever. A resolved
+ * *fallback* is deliberately never cached: falling back means the project folder
+ * was unusable at that moment (read-only, permission-denied, disconnected
+ * share), which is exactly the kind of condition that clears — re-probing costs
+ * one syscall per tick and lets the sidecar come back on its own.
+ */
+export async function resolveAutosavePaths(
+  invoke: AutosaveInvoke,
+  preferredSavePath?: string | null,
+): Promise<AutosavePaths> {
   if (cachedPaths && preferredSavePath !== cachedPreferredSavePath) {
     cachedPaths = null;
   }
   if (cachedPaths) return cachedPaths;
-  const { invoke } = await import('@tauri-apps/api/core');
+
   const result = await invoke<AutosavePaths>(
     'scene_autosave_get_paths',
     preferredSavePath ? { preferredSavePath } : {},
   );
+
+  if (result.fallbackReason) {
+    // Never fail an autosave over a folder-policy question — but never hide it
+    // either. Warned once per distinct project so a 30 s tick cannot spam.
+    const key = `${preferredSavePath ?? ''}:${result.fallbackReason}`;
+    if (warnedFallbackFor !== key) {
+      warnedFallbackFor = key;
+      console.warn(
+        `[SceneAutosave] Cannot write a recovery file beside this project (${result.fallbackReason}); `
+        + `using the default recovery location instead: ${result.voxlPath}`,
+      );
+    }
+    cachedPaths = null;
+    cachedPreferredSavePath = undefined;
+    return result;
+  }
+
+  warnedFallbackFor = null;
   cachedPaths = result;
   cachedPreferredSavePath = preferredSavePath;
-  return cachedPaths;
+  return result;
 }
 
-async function writeManifest(savedAt: string, clean: boolean): Promise<void> {
-  const { invoke } = await import('@tauri-apps/api/core');
-  await invoke('scene_autosave_write_manifest', { savedAt, clean });
+async function getAutosavePaths(preferredSavePath?: string | null): Promise<AutosavePaths> {
+  return resolveAutosavePaths(await desktopInvoke(), preferredSavePath);
+}
+
+export type WriteManifestOptions = {
+  voxlPath?: string | null;
+  origin?: string | null;
+  projectPath?: string | null;
+  payloadBytes?: number | null;
+  fallbackReason?: string | null;
+  /**
+   * Deletes the advertised payload as well as marking the manifest clean.
+   * **Only ever passed when there is no unsaved work to lose** — after a
+   * successful save, a successful restore, or an explicit discard.
+   */
+  deletePayload?: boolean;
+};
+
+async function writeManifest(
+  savedAt: string,
+  clean: boolean,
+  options: WriteManifestOptions = {},
+): Promise<void> {
+  const invoke = await desktopInvoke();
+  await invoke('scene_autosave_write_manifest', {
+    savedAt,
+    clean,
+    voxlPath: options.voxlPath ?? null,
+    origin: options.origin ?? null,
+    projectPath: options.projectPath ?? null,
+    payloadBytes: options.payloadBytes ?? null,
+    fallbackReason: options.fallbackReason ?? null,
+    deletePayload: options.deletePayload ?? false,
+  });
+}
+
+/**
+ * The single entry point for recovery discovery. Resolves, in order: the
+ * manifest's committed `voxlPath` → the sidecar derived from its `projectPath` →
+ * the legacy generic location → none.
+ */
+export async function resolveAutosaveRecovery(): Promise<AutosaveRecoveryCandidate | null> {
+  const invoke = await desktopInvoke();
+  return invoke<AutosaveRecoveryCandidate | null>('scene_autosave_resolve_recovery');
+}
+
+/** Reads a recovery payload. The backend accepts only its own candidates. */
+export async function readAutosaveRecoveryBytes(path: string | null): Promise<ArrayBuffer> {
+  const invoke = await desktopInvoke();
+  return invoke<ArrayBuffer>('scene_autosave_read_voxl_bytes', path ? { path } : {});
+}
+
+/**
+ * Removes the sidecar belonging to `projectPath`. Used on Save As against the
+ * **old** project, so a rename never leaves an orphaned `_autosave.voxl` implying
+ * unsaved work that does not exist.
+ */
+export async function deleteAutosaveSidecarForProject(projectPath: string): Promise<void> {
+  const invoke = await desktopInvoke();
+  await invoke('scene_autosave_delete_sidecar', { projectPath });
 }
 
 function isDesktopRuntime(): boolean {
@@ -159,7 +281,11 @@ export function useSceneAutosave({
       setIsAutosaving(true);
 
       try {
-        const { voxlPath } = await getAutosavePaths(preferredSavePathRef.current);
+        // Resolved per tick, not per render: `preferredSavePathRef` now tracks
+        // `activeSceneFilePath` state, so a Save As moves the sidecar with the
+        // project instead of stranding it beside the old one (finding N3).
+        const paths = await getAutosavePaths(preferredSavePathRef.current);
+        const { voxlPath } = paths;
 
         await ExportManager.exportScene(
           null,
@@ -187,10 +313,16 @@ export function useSceneAutosave({
         // time the manifest is written the file it advertises is guaranteed to
         // be complete. A manifest written first — or written on a failed
         // export — would point recovery at a file that may not exist or may be
-        // half a scene. Sub-phase B extends this manifest with the payload path
-        // and origin; that only stays trustworthy while this order holds.
+        // half a scene. Sub-phase B relies on exactly this: `voxlPath` below is
+        // what makes the manifest authoritative for recovery, and it is only
+        // trustworthy because it is written after the commit.
         const savedAt = new Date().toISOString();
-        await writeManifest(savedAt, false);
+        await writeManifest(savedAt, false, {
+          voxlPath,
+          origin: paths.origin,
+          projectPath: paths.projectPath,
+          fallbackReason: paths.fallbackReason,
+        });
         setLastAutosaveAt(savedAt);
       } catch (err) {
         console.warn('[SceneAutosave] Autosave failed:', err);
@@ -333,10 +465,20 @@ export function useSceneAutosave({
     };
   }, []);
 
+  /**
+   * Marks the autosave clean **and deletes the payload**.
+   *
+   * A `_autosave.voxl` lingering beside a saved project is user-visible clutter
+   * that implies unsaved work which does not exist. Deleting is safe only
+   * because every caller runs after the work is already secured — a successful
+   * explicit save, a successful restore, or an explicit discard. It is
+   * deliberately NOT called on a clean exit that still has unsaved changes; see
+   * `handleRequestProgramClose` in `page.tsx`.
+   */
   const clearAutosave = React.useCallback(async () => {
     if (!isDesktopRuntime()) return;
     try {
-      await writeManifest(new Date().toISOString(), true);
+      await writeManifest(new Date().toISOString(), true, { deletePayload: true });
     } catch (err) {
       console.warn('[SceneAutosave] Failed marking autosave clean:', err);
     }

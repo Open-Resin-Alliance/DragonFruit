@@ -267,9 +267,10 @@ fn commit_scene_file_atomic(
 /// extension (`BUILTIN_PLUGIN_SCENE_EXTENSIONS`). Autosave emits VOXL bytes, so
 /// a plugin-format project must never be handed back as the autosave target —
 /// that would write VOXL into a file whose extension promises a foreign format.
-/// Such projects fall back to the generic recovery location, which is a `.voxl`
-/// by construction. (Sub-phase B replaces the fallback with a proper
-/// `<stem>_autosave.voxl` sidecar; this invariant holds either way.)
+/// Since sub-phase B such a project gets a correctly-named
+/// `<stem>_autosave.voxl` sidecar instead of being handed back verbatim, and
+/// `resolve_scene_autosave_target` uses this predicate to check its own output
+/// before returning it.
 fn is_voxl_autosave_target(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
@@ -2559,21 +2560,440 @@ async fn local_backup_restore_history_item(
 // ---------------------------------------------------------------------------
 
 const SCENE_AUTOSAVE_DIR_NAME: &str = "autosave";
-const SCENE_AUTOSAVE_VOXL_FILE: &str = "scene.voxl";
+/// The generic-recovery payload name. It carries the `_autosave` marker so the
+/// **third** target invariant holds without an exception: every path autosave
+/// writes is self-describing, whether it is a sidecar or the fallback. The
+/// directory is unchanged, so this is still "the existing generic recovery
+/// location"; only the file name gained the marker.
+const SCENE_AUTOSAVE_VOXL_FILE: &str = "scene_autosave.voxl";
+/// The pre-Ph0.1 generic payload name. Never written any more, always searched:
+/// an autosave a user already has on disk must stay recoverable.
+const SCENE_AUTOSAVE_LEGACY_VOXL_FILE: &str = "scene.voxl";
 const SCENE_AUTOSAVE_MANIFEST_FILE: &str = "manifest.json";
 
+/// Every field added after `saved_at` / `clean` is `#[serde(default)]` so a
+/// manifest written by a pre-Ph0.1 build still parses — losing recovery for the
+/// autosave a user already has on disk would be a worse bug than the one this
+/// sub-phase fixes.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct SceneAutosaveManifest {
     saved_at: String,
     clean: bool,
+    /// Absolute path of the payload actually committed. **Authoritative**: the
+    /// manifest is written only after the atomic rename, so this can only ever
+    /// name a fully-committed file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    voxl_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin: Option<String>,
+    /// The project the sidecar belongs to; lets recovery re-derive the sidecar
+    /// when `voxl_path` has gone stale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    project_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    payload_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fallback_reason: Option<String>,
+    /// Reserved for sub-phase D (finding N4). Carried here so the manifest
+    /// schema settles in one change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_error: Option<String>,
 }
+
+// ---------------------------------------------------------------------------
+// Sidecar naming, writability, and payload identity
+// ---------------------------------------------------------------------------
+
+/// The marker that makes a recovery file self-describing in Explorer and gates
+/// every deletion seam below.
+const SCENE_AUTOSAVE_SIDECAR_MARKER: &str = "_autosave";
+
+/// **THE ONE PLACE THE SIDECAR FILE NAME IS BUILT.**
+///
+/// Every target, every discovery candidate, and every deletion guard routes
+/// through this function, so the naming scheme has exactly one definition.
+///
+/// *Open decision, deliberately left as a one-line change:* a per-process name
+/// (`<stem>_<pid>_autosave.voxl`) would make two instances editing the same
+/// project unable to collide. It is **not** the default, because the pid is
+/// gone by the time it matters: after a crash — the one case clean-exit
+/// deletion cannot cover — recovery would face several `MyPrint_1234_autosave`
+/// files with no way to say which is current, and the orphans accumulate
+/// forever. A single well-known name is unambiguous at recovery time, which is
+/// the moment the file exists for. To switch, change only this format string
+/// (and `is_sidecar_autosave_file`'s suffix test to a marker `contains`).
+fn sidecar_autosave_file_name(project_stem: &str) -> String {
+    format!("{project_stem}{SCENE_AUTOSAVE_SIDECAR_MARKER}.voxl")
+}
+
+/// `<dir>/<stem>_autosave.voxl` for a project file. `None` when the path has no
+/// usable stem (the caller falls back to the recovery directory).
+fn sidecar_autosave_path_for_project(project: &std::path::Path) -> Option<std::path::PathBuf> {
+    let stem = project.file_stem().and_then(|s| s.to_str())?.trim();
+    if stem.is_empty() {
+        return None;
+    }
+    let parent = project.parent().unwrap_or_else(|| std::path::Path::new(""));
+    Some(parent.join(sidecar_autosave_file_name(stem)))
+}
+
+/// Windows paths are case-insensitive; a candidate-list check that missed
+/// `C:\Projects\...` vs `c:\projects\...` would reject a legitimate recovery.
+fn autosave_paths_equal(a: &std::path::Path, b: &std::path::Path) -> bool {
+    if a == b {
+        return true;
+    }
+    a.to_string_lossy().to_ascii_lowercase() == b.to_string_lossy().to_ascii_lowercase()
+}
+
+fn is_sidecar_autosave_file(path: &std::path::Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let suffix = format!("{SCENE_AUTOSAVE_SIDECAR_MARKER}.voxl");
+    let lower = name.to_ascii_lowercase();
+    // Strictly longer than the suffix: a file called exactly `_autosave.voxl`
+    // belongs to no project and is not ours to delete.
+    lower.ends_with(&suffix) && lower.len() > suffix.len()
+}
+
+/// The deletion gate. Only a file this policy could itself have produced — a
+/// `<stem>_autosave.voxl` sidecar, or the generic recovery payload — may be
+/// removed through any of the cleanup seams. The user's project never qualifies.
+fn is_deletable_autosave_payload(
+    recovery_dir: &std::path::Path,
+    path: &std::path::Path,
+) -> bool {
+    is_sidecar_autosave_file(path)
+        || autosave_paths_equal(path, &recovery_dir.join(SCENE_AUTOSAVE_LEGACY_VOXL_FILE))
+}
+
+/// Deletes the sidecar belonging to `project`, if there is one.
+///
+/// Used on Save As, where the sidecar beside the **old** project would otherwise
+/// be orphaned — a `_autosave.voxl` next to a file the user no longer edits
+/// implies unsaved work that does not exist.
+fn delete_sidecar_for_project(project: &std::path::Path) -> Result<(), String> {
+    let Some(sidecar) = sidecar_autosave_path_for_project(project) else {
+        return Ok(());
+    };
+    if !is_sidecar_autosave_file(&sidecar) {
+        return Err(format!(
+            "Refusing to delete '{}': not an autosave sidecar",
+            sidecar.display()
+        ));
+    }
+    if !sidecar.exists() {
+        return Ok(());
+    }
+    std::fs::remove_file(&sidecar)
+        .map_err(|err| format!("Failed deleting sidecar '{}': {err}", sidecar.display()))
+}
+
+/// Real-syscall writability probe for a prospective sidecar location.
+///
+/// Deliberately not a metadata/permissions guess: read-only volumes,
+/// permission-denied folders, and unreachable network shares all present
+/// differently in metadata but identically to an actual create. Reuses sub-phase
+/// A's `sibling_commit_temp_path` so the probe exercises the very mechanism the
+/// real commit will use, rather than a lookalike.
+///
+/// Returns `None` when the directory is usable, or the `fallback_reason` to
+/// record in the manifest when it is not.
+fn probe_directory_writable(sidecar: &std::path::Path) -> Option<&'static str> {
+    let parent = sidecar.parent().unwrap_or_else(|| std::path::Path::new("."));
+    if !parent.as_os_str().is_empty() && !parent.is_dir() {
+        return Some("parent-missing");
+    }
+
+    let probe = sibling_commit_temp_path(sidecar).ok()?;
+    let writable = std::fs::write(&probe, b"").is_ok();
+    let _ = std::fs::remove_file(&probe);
+    if writable {
+        None
+    } else {
+        Some("parent-unwritable")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Recovery discovery
+// ---------------------------------------------------------------------------
+
+const VOXL_FILE_MAGIC: &[u8; 4] = b"VOXL";
+
+/// A candidate is only advertised if it exists, is non-empty, and actually
+/// starts with the VOXL magic — a truncated or foreign file must never be
+/// offered as a recoverable scene.
+fn is_readable_voxl_payload(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut magic = [0u8; 4];
+    file.read_exact(&mut magic).is_ok() && &magic == VOXL_FILE_MAGIC
+}
+
+/// The ordered recovery candidate list — and the **only** paths the recovery
+/// reader will ever open.
+///
+/// 1. `manifest.voxlPath` — authoritative: the manifest is written only after
+///    the atomic rename, so it can only name a fully-committed payload.
+/// 2. the sidecar derived from `manifest.projectPath` — covers a project that
+///    moved, and manifests from builds older than this change.
+/// 3. the legacy generic `<app_data>/autosave/scene.voxl` — every autosave
+///    written before sub-phase B; back-compat is free and mandatory.
+fn scene_autosave_recovery_candidates(
+    recovery_dir: &std::path::Path,
+    manifest: Option<&SceneAutosaveManifest>,
+) -> Vec<std::path::PathBuf> {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+
+    if let Some(manifest) = manifest {
+        if let Some(voxl_path) = manifest
+            .voxl_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            candidates.push(std::path::PathBuf::from(voxl_path));
+        }
+        if let Some(project) = manifest
+            .project_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if let Some(sidecar) = sidecar_autosave_path_for_project(std::path::Path::new(project)) {
+                candidates.push(sidecar);
+            }
+        }
+    }
+
+    candidates.push(recovery_dir.join(SCENE_AUTOSAVE_VOXL_FILE));
+    candidates.push(recovery_dir.join(SCENE_AUTOSAVE_LEGACY_VOXL_FILE));
+
+    let mut deduped: Vec<std::path::PathBuf> = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        if !deduped
+            .iter()
+            .any(|existing| autosave_paths_equal(existing, &candidate))
+        {
+            deduped.push(candidate);
+        }
+    }
+    deduped
+}
+
+/// The read gate: `scene_autosave_read_voxl_bytes` accepts a path **only** if
+/// the resolver itself produced it. Same discipline as
+/// `scene_file_discard_atomic_temp` — an arbitrary caller-supplied path can
+/// never be turned into a file read through this seam.
+fn is_allowed_recovery_read(candidates: &[std::path::PathBuf], path: &std::path::Path) -> bool {
+    candidates
+        .iter()
+        .any(|candidate| autosave_paths_equal(candidate, path))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SceneAutosaveRecoveryCandidate {
+    voxl_path: std::path::PathBuf,
+    origin: String,
+    saved_at: Option<String>,
+    clean: bool,
+    project_path: Option<String>,
+    payload_bytes: u64,
+    fallback_reason: Option<String>,
+}
+
+fn resolve_scene_autosave_recovery(
+    recovery_dir: &std::path::Path,
+    manifest: Option<&SceneAutosaveManifest>,
+) -> Option<SceneAutosaveRecoveryCandidate> {
+    let generic = recovery_dir.join(SCENE_AUTOSAVE_VOXL_FILE);
+    let legacy_generic = recovery_dir.join(SCENE_AUTOSAVE_LEGACY_VOXL_FILE);
+
+    for candidate in scene_autosave_recovery_candidates(recovery_dir, manifest) {
+        if !is_readable_voxl_payload(&candidate) {
+            continue;
+        }
+
+        let origin = if autosave_paths_equal(&candidate, &generic)
+            || autosave_paths_equal(&candidate, &legacy_generic)
+        {
+            SCENE_AUTOSAVE_ORIGIN_RECOVERY_DIR.to_string()
+        } else {
+            manifest
+                .and_then(|m| m.origin.clone())
+                .unwrap_or_else(|| SCENE_AUTOSAVE_ORIGIN_SIDECAR.to_string())
+        };
+
+        let payload_bytes = std::fs::metadata(&candidate).map(|m| m.len()).unwrap_or(0);
+
+        return Some(SceneAutosaveRecoveryCandidate {
+            voxl_path: candidate,
+            origin,
+            saved_at: manifest.map(|m| m.saved_at.clone()),
+            clean: manifest.map(|m| m.clean).unwrap_or(false),
+            project_path: manifest.and_then(|m| m.project_path.clone()),
+            payload_bytes,
+            fallback_reason: manifest.and_then(|m| m.fallback_reason.clone()),
+        });
+    }
+
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Stale commit-temp sweep (inherited from sub-phase A)
+// ---------------------------------------------------------------------------
+
+/// The pid segment of a `<target>.tmp-<pid>-<seq>` name.
+fn scene_commit_temp_pid(path: &std::path::Path) -> Option<u32> {
+    let name = path.file_name().and_then(|n| n.to_str())?;
+    let (_, suffix) = name.rsplit_once(SCENE_COMMIT_TEMP_MARKER)?;
+    suffix.split('-').next()?.parse::<u32>().ok()
+}
+
+/// Removes commit temps abandoned by a crashed write.
+///
+/// Conservative by construction, because these live in the user's own project
+/// folder: only names `is_scene_commit_temp_path` recognises (sub-phase A's
+/// exact pattern), only in a directory autosave already writes to, never this
+/// process's own temps (they may be in flight — `scene_file_discard_atomic_temp`
+/// owns those), and only past an age gate so another instance's in-flight write
+/// is never deleted out from under it.
+fn sweep_stale_scene_commit_temps(dir: &std::path::Path, min_age_seconds: u64) -> u32 {
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(min_age_seconds))
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    let current_pid = std::process::id();
+
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+
+    let mut removed = 0u32;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !is_scene_commit_temp_path(&path) {
+            continue;
+        }
+        if scene_commit_temp_pid(&path) == Some(current_pid) {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .map(|modified| modified <= cutoff)
+            .unwrap_or(false);
+        if stale && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// Crash residue can be minutes old for a large scene; anything younger than
+/// this may still be an in-flight write from a second instance.
+const SCENE_COMMIT_TEMP_SWEEP_MIN_AGE_SECONDS: u64 = 30 * 60;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SceneAutosavePaths {
     voxl_path: String,
     manifest_path: String,
+    origin: String,
+    project_path: Option<String>,
+    fallback_reason: Option<String>,
+}
+
+/// Where an autosave tick will land, and why.
+///
+/// Pure and app-handle-free on purpose: the recovery directory is passed in, so
+/// the whole target policy — including the three invariants the user pinned —
+/// is testable without a Tauri runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SceneAutosaveTarget {
+    voxl_path: std::path::PathBuf,
+    origin: &'static str,
+    project_path: Option<String>,
+    fallback_reason: Option<&'static str>,
+}
+
+const SCENE_AUTOSAVE_ORIGIN_SIDECAR: &str = "sidecar";
+const SCENE_AUTOSAVE_ORIGIN_RECOVERY_DIR: &str = "recovery-dir";
+
+/// Resolves where an autosave tick lands.
+///
+/// **User item 5.** A project that has been saved or opened gets its recovery
+/// copy *beside it* as `<stem>_autosave.voxl` — local and obvious, not a hidden
+/// app-data path the user would have to hunt for. Untitled scenes keep the
+/// generic recovery location exactly as before.
+///
+/// **Binding fallback directive.** Any failure of the sidecar target — folder
+/// gone, read-only volume, permission denied, unreachable network share — falls
+/// back to the generic recovery location with a `fallback_reason` recorded in
+/// the manifest. Never fail an autosave over a folder-policy question, and never
+/// lie about where the payload actually went.
+///
+/// Three invariants hold for every input, each with its own test: the result
+/// never equals the project path, always ends in `.voxl`, and always carries the
+/// `_autosave` marker.
+fn resolve_scene_autosave_target(
+    recovery_dir: &std::path::Path,
+    preferred_project_path: Option<&str>,
+) -> SceneAutosaveTarget {
+    let fallback = |project: Option<&str>, reason: &'static str| SceneAutosaveTarget {
+        voxl_path: recovery_dir.join(SCENE_AUTOSAVE_VOXL_FILE),
+        origin: SCENE_AUTOSAVE_ORIGIN_RECOVERY_DIR,
+        project_path: project.map(str::to_string),
+        fallback_reason: Some(reason),
+    };
+
+    let Some(project) = preferred_project_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return fallback(None, "no-project");
+    };
+
+    let path = std::path::Path::new(project);
+    // `is_scene_file_path`, not `is_voxl_autosave_target`: a project saved in a
+    // plugin scene format is still a project and still deserves a sidecar. It
+    // gets a correctly-named `.voxl` one, so VOXL bytes never land in a file
+    // whose extension promises a foreign format (invariant b).
+    if !is_scene_file_path(path) {
+        return fallback(Some(project), "not-a-scene-file");
+    }
+
+    let Some(sidecar) = sidecar_autosave_path_for_project(path) else {
+        return fallback(Some(project), "not-a-scene-file");
+    };
+
+    // Invariants (a) and (b), enforced rather than assumed: the target is never
+    // the file the user saves to, and it always ends in `.voxl`. Both are
+    // unreachable by construction — `sidecar_autosave_file_name` inserts the
+    // marker before a hard-coded `.voxl` — but they are the locks this whole
+    // sub-phase exists for, so the resolver checks its own output instead of
+    // trusting that the naming helper is never changed carelessly.
+    if autosave_paths_equal(&sidecar, path) || !is_voxl_autosave_target(&sidecar) {
+        return fallback(Some(project), "not-a-scene-file");
+    }
+
+    if let Some(reason) = probe_directory_writable(&sidecar) {
+        return fallback(Some(project), reason);
+    }
+
+    SceneAutosaveTarget {
+        voxl_path: sidecar,
+        origin: SCENE_AUTOSAVE_ORIGIN_SIDECAR,
+        project_path: Some(project.to_string()),
+        fallback_reason: None,
+    }
 }
 
 fn scene_autosave_resolve_dir(app: &DragonFruitAppHandle) -> Result<std::path::PathBuf, String> {
@@ -2595,63 +3015,132 @@ async fn scene_autosave_get_paths(
 ) -> Result<SceneAutosavePaths, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = scene_autosave_resolve_dir(&app)?;
+        let target = resolve_scene_autosave_target(&dir, preferred_save_path.as_deref());
 
-        // Determine VOXL autosave path: if user has explicitly saved to a .voxl file,
-        // autosave directly to that file. Otherwise use the generic recovery location.
-        //
-        // The predicate is `is_voxl_autosave_target`, NOT `is_scene_file_path`:
-        // autosave emits VOXL bytes, and `is_scene_file_path` also accepts every
-        // plugin scene extension, so a project saved as e.g. `MyPrint.lys` used
-        // to be returned verbatim and then filled with VOXL. Autosave ALWAYS
-        // writes `.voxl` — see `is_voxl_autosave_target` and its test.
-        let voxl_path = if let Some(preferred) = preferred_save_path {
-            let path = std::path::Path::new(&preferred);
-            if is_voxl_autosave_target(path) && path.exists() {
-                // User has explicitly saved to a VOXL project; autosave to it
-                preferred
-            } else {
-                // Not a VOXL scene file or doesn't exist; fall back to generic recovery
-                dir.join(SCENE_AUTOSAVE_VOXL_FILE)
-                    .to_string_lossy()
-                    .to_string()
-            }
-        } else {
-            // No preferred path; use generic recovery location
-            dir.join(SCENE_AUTOSAVE_VOXL_FILE)
-                .to_string_lossy()
-                .to_string()
-        };
+        // Sweep crash residue from the directory we are about to write to, and
+        // only that one. A `<project>.voxl.tmp-<pid>-<seq>` left by a killed
+        // write is confusing clutter sitting next to the user's project.
+        if let Some(parent) = target.voxl_path.parent() {
+            sweep_stale_scene_commit_temps(parent, SCENE_COMMIT_TEMP_SWEEP_MIN_AGE_SECONDS);
+        }
 
         Ok(SceneAutosavePaths {
-            voxl_path,
+            voxl_path: target.voxl_path.to_string_lossy().to_string(),
             manifest_path: dir
                 .join(SCENE_AUTOSAVE_MANIFEST_FILE)
                 .to_string_lossy()
                 .to_string(),
+            origin: target.origin.to_string(),
+            project_path: target.project_path,
+            fallback_reason: target.fallback_reason.map(str::to_string),
         })
     })
     .await
     .map_err(|err| format!("scene_autosave_get_paths task failed: {err}"))?
 }
 
+/// Writes the recovery manifest — **always after** the payload has been
+/// committed by sub-phase A's atomic rename. That ordering is what makes
+/// `voxl_path` authoritative: the manifest can only ever name a file that is
+/// already complete on disk.
+///
+/// `delete_payload` is the cleanup seam. It removes the payload the *previous*
+/// manifest advertised (plus the legacy generic location), gated on
+/// `is_deletable_autosave_payload` so the user's project can never be reached
+/// through it. Callers use it only after a successful save, restore, or an
+/// explicit discard — never while unsaved work exists.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn scene_autosave_write_manifest(
     app: DragonFruitAppHandle,
     saved_at: String,
     clean: bool,
+    voxl_path: Option<String>,
+    origin: Option<String>,
+    project_path: Option<String>,
+    payload_bytes: Option<u64>,
+    fallback_reason: Option<String>,
+    delete_payload: Option<bool>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = scene_autosave_resolve_dir(&app)?;
-        let manifest = SceneAutosaveManifest { saved_at, clean };
+        let path = dir.join(SCENE_AUTOSAVE_MANIFEST_FILE);
+
+        let previous: Option<SceneAutosaveManifest> = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| serde_json::from_str(&content).ok());
+
+        if delete_payload.unwrap_or(false) {
+            let mut targets: Vec<std::path::PathBuf> =
+                vec![dir.join(SCENE_AUTOSAVE_LEGACY_VOXL_FILE), dir.join(SCENE_AUTOSAVE_VOXL_FILE)];
+            for advertised in [
+                previous.as_ref().and_then(|m| m.voxl_path.clone()),
+                voxl_path.clone(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                targets.push(std::path::PathBuf::from(advertised));
+            }
+            if let Some(project) = previous
+                .as_ref()
+                .and_then(|m| m.project_path.clone())
+                .or_else(|| project_path.clone())
+            {
+                if let Some(sidecar) =
+                    sidecar_autosave_path_for_project(std::path::Path::new(&project))
+                {
+                    targets.push(sidecar);
+                }
+            }
+
+            for target in targets {
+                if !is_deletable_autosave_payload(&dir, &target) {
+                    continue;
+                }
+                if target.exists() {
+                    let _ = std::fs::remove_file(&target);
+                }
+            }
+        }
+
+        let manifest = SceneAutosaveManifest {
+            saved_at,
+            clean,
+            // A cleaned manifest must not keep advertising a payload it just
+            // deleted, or recovery would offer a file that is gone.
+            voxl_path: if delete_payload.unwrap_or(false) { None } else { voxl_path },
+            origin,
+            project_path,
+            payload_bytes,
+            fallback_reason,
+            last_error: None,
+        };
         let json = serde_json::to_string(&manifest)
             .map_err(|err| format!("Failed serializing autosave manifest: {err}"))?;
-        let path = dir.join(SCENE_AUTOSAVE_MANIFEST_FILE);
         std::fs::write(&path, json.as_bytes())
             .map_err(|err| format!("Failed writing autosave manifest: {err}"))?;
         Ok(())
     })
     .await
     .map_err(|err| format!("scene_autosave_write_manifest task failed: {err}"))?
+}
+
+/// Deletes the sidecar belonging to a specific project.
+///
+/// Save As uses this on the **old** project path, so a successful Save As never
+/// orphans a `_autosave.voxl` beside a file the user has stopped editing.
+#[tauri::command]
+async fn scene_autosave_delete_sidecar(project_path: String) -> Result<(), String> {
+    let trimmed = project_path.trim().to_string();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        delete_sidecar_for_project(std::path::Path::new(&trimmed))
+    })
+    .await
+    .map_err(|err| format!("scene_autosave_delete_sidecar task failed: {err}"))?
 }
 
 #[tauri::command]
@@ -2674,15 +3163,67 @@ async fn scene_autosave_read_manifest(
     .map_err(|err| format!("scene_autosave_read_manifest task failed: {err}"))?
 }
 
+fn scene_autosave_read_manifest_from_dir(dir: &std::path::Path) -> Option<SceneAutosaveManifest> {
+    let path = dir.join(SCENE_AUTOSAVE_MANIFEST_FILE);
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+/// **Recovery-discovery parity.** Without this, sidecar path control would be a
+/// regression rather than a fix: the manifest would advertise a payload beside
+/// the project and the reader — hard-wired to the generic location before this
+/// change — could not open it.
 #[tauri::command]
-async fn scene_autosave_read_voxl_bytes(app: DragonFruitAppHandle) -> Result<Response, String> {
+async fn scene_autosave_resolve_recovery(
+    app: DragonFruitAppHandle,
+) -> Result<Option<SceneAutosaveRecoveryCandidate>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = scene_autosave_resolve_dir(&app)?;
+        let manifest = scene_autosave_read_manifest_from_dir(&dir);
+        Ok(resolve_scene_autosave_recovery(&dir, manifest.as_ref()))
+    })
+    .await
+    .map_err(|err| format!("scene_autosave_resolve_recovery task failed: {err}"))?
+}
+
+/// Reads a recovery payload. `path` is accepted **only** when it appears in the
+/// resolver's own candidate list — never an arbitrary caller-supplied path.
+/// Omitting it keeps the pre-Ph0.1 behaviour of reading the generic location.
+#[tauri::command]
+async fn scene_autosave_read_voxl_bytes(
+    app: DragonFruitAppHandle,
+    path: Option<String>,
+) -> Result<Response, String> {
     let bytes = tauri::async_runtime::spawn_blocking(move || {
         let dir = scene_autosave_resolve_dir(&app)?;
-        let path = dir.join(SCENE_AUTOSAVE_VOXL_FILE);
-        if !path.exists() {
+        let manifest = scene_autosave_read_manifest_from_dir(&dir);
+        let candidates = scene_autosave_recovery_candidates(&dir, manifest.as_ref());
+
+        let requested = path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(std::path::PathBuf::from);
+
+        let target = match requested {
+            Some(requested) => {
+                if !is_allowed_recovery_read(&candidates, &requested) {
+                    return Err(format!(
+                        "Refusing to read '{}': not an autosave recovery candidate",
+                        requested.display()
+                    ));
+                }
+                requested
+            }
+            None => resolve_scene_autosave_recovery(&dir, manifest.as_ref())
+                .map(|candidate| candidate.voxl_path)
+                .ok_or_else(|| "No autosaved scene file found".to_string())?,
+        };
+
+        if !target.exists() {
             return Err("No autosaved scene file found".to_string());
         }
-        std::fs::read(&path).map_err(|err| format!("Failed reading autosaved scene: {err}"))
+        std::fs::read(&target).map_err(|err| format!("Failed reading autosaved scene: {err}"))
     })
     .await
     .map_err(|err| format!("scene_autosave_read_voxl_bytes task failed: {err}"))??;
@@ -3644,6 +4185,8 @@ fn main() {
             scene_autosave_write_manifest,
             scene_autosave_read_manifest,
             scene_autosave_read_voxl_bytes,
+            scene_autosave_resolve_recovery,
+            scene_autosave_delete_sidecar,
             reveal_in_file_manager,
             open_external_url,
             launch_external_process,
@@ -4143,5 +4686,468 @@ mod tests {
             }
         }
         assert_eq!(all_paths.len(), THREADS * ALLOCS_PER_THREAD);
+    }
+
+    // -----------------------------------------------------------------------
+    // Ph0.1 sub-phase B — sidecar target policy + recovery-discovery parity
+    // -----------------------------------------------------------------------
+
+    /// Builds a project folder with a real scene file in it, plus a separate
+    /// recovery dir, mirroring the two real locations at runtime.
+    fn autosave_fixture(tag: &str, project_file: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let root = unique_test_dir(tag);
+        let project_dir = root.join("projects");
+        let recovery_dir = root.join("recovery");
+        std::fs::create_dir_all(&project_dir).expect("failed creating project dir");
+        std::fs::create_dir_all(&recovery_dir).expect("failed creating recovery dir");
+        let project = project_dir.join(project_file);
+        std::fs::write(&project, voxl_payload(b"project")).expect("failed seeding project file");
+        (root, recovery_dir, project)
+    }
+
+    /// A minimally-valid VOXL payload: the 4-byte magic plus filler. The
+    /// recovery resolver magic-checks every candidate, so fixtures must carry it.
+    fn voxl_payload(tail: &[u8]) -> Vec<u8> {
+        let mut bytes = b"VOXL".to_vec();
+        bytes.extend_from_slice(tail);
+        bytes
+    }
+
+    /// **User item 5, the lock.** An autosave tick must never target the file the
+    /// user saves to. Before sub-phase B `scene_autosave_get_paths` returned the
+    /// project path verbatim, so every tick overwrote the user's project with a
+    /// scene state they never asked to save.
+    #[test]
+    fn autosave_target_never_equals_the_project_path() {
+        let (root, recovery_dir, project) = autosave_fixture("b-never-project", "MyPrint.voxl");
+        let project_text = project.to_string_lossy().to_string();
+
+        for candidate in [
+            project_text.as_str(),
+            // Already-sidecar-shaped names must not collapse onto themselves.
+            root.join("projects/MyPrint_autosave.voxl")
+                .to_string_lossy()
+                .to_string()
+                .as_str(),
+        ] {
+            let target = super::resolve_scene_autosave_target(&recovery_dir, Some(candidate));
+            assert_ne!(
+                target.voxl_path,
+                std::path::Path::new(candidate),
+                "autosave targeted the user's own project file: {candidate}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **Invariant (b).** Whatever the project's extension, the autosave target
+    /// ends in `.voxl` — autosave emits VOXL bytes and must never put them in a
+    /// file whose extension promises a foreign format.
+    #[test]
+    fn autosave_target_always_ends_in_voxl() {
+        let root = unique_test_dir("b-always-voxl");
+        let project_dir = root.join("projects");
+        std::fs::create_dir_all(&project_dir).expect("failed creating project dir");
+
+        let mut names: Vec<String> = vec!["MyPrint.voxl".to_string(), "MyPrint.VOXL".to_string()];
+        names.extend(
+            super::BUILTIN_PLUGIN_SCENE_EXTENSIONS
+                .iter()
+                .map(|ext| format!("MyPrint.{ext}")),
+        );
+
+        for name in names {
+            let project = project_dir.join(&name);
+            std::fs::write(&project, voxl_payload(b"p")).expect("seed failed");
+            let target = super::resolve_scene_autosave_target(
+                &root.join("recovery"),
+                Some(project.to_string_lossy().as_ref()),
+            );
+            let ext = target
+                .voxl_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            assert_eq!(
+                ext,
+                "voxl",
+                "autosave target for '{name}' does not end in .voxl: {}",
+                target.voxl_path.display()
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **Invariant (c).** The target always carries the `_autosave` marker, so a
+    /// recovery file is self-describing in Explorer and can never be mistaken for
+    /// a project. It is also what gates payload deletion
+    /// (`is_deletable_autosave_payload`).
+    #[test]
+    fn autosave_target_always_contains_the_autosave_marker() {
+        let (root, recovery_dir, project) = autosave_fixture("b-marker", "MyPrint.voxl");
+
+        for preferred in [
+            Some(project.to_string_lossy().to_string()),
+            Some("   ".to_string()),
+            None,
+        ] {
+            let target =
+                super::resolve_scene_autosave_target(&recovery_dir, preferred.as_deref());
+            let name = target
+                .voxl_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string();
+            assert!(
+                name.contains("_autosave"),
+                "autosave target is not self-describing: {name}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **User item 5, the payoff.** A saved/opened project gets its recovery copy
+    /// beside it — local and obvious — not in a hidden app-data path.
+    #[test]
+    fn sidecar_lands_beside_the_project_as_stem_autosave_voxl() {
+        let (root, recovery_dir, project) = autosave_fixture("b-sidecar", "MyPrint.voxl");
+
+        let target = super::resolve_scene_autosave_target(
+            &recovery_dir,
+            Some(project.to_string_lossy().as_ref()),
+        );
+
+        assert_eq!(target.origin, super::SCENE_AUTOSAVE_ORIGIN_SIDECAR);
+        assert_eq!(target.fallback_reason, None);
+        assert_eq!(
+            target.voxl_path,
+            project.parent().unwrap().join("MyPrint_autosave.voxl"),
+            "the sidecar did not land beside the project"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A plugin-format project still gets a correctly-named VOXL sidecar in its
+    /// own folder rather than being exiled to the recovery dir.
+    #[test]
+    fn sidecar_is_derived_for_plugin_scene_extensions_too() {
+        let ext = super::BUILTIN_PLUGIN_SCENE_EXTENSIONS
+            .first()
+            .expect("no plugin scene extensions registered");
+        let (root, recovery_dir, project) =
+            autosave_fixture("b-plugin-ext", &format!("MyPrint.{ext}"));
+
+        let target = super::resolve_scene_autosave_target(
+            &recovery_dir,
+            Some(project.to_string_lossy().as_ref()),
+        );
+
+        assert_eq!(target.origin, super::SCENE_AUTOSAVE_ORIGIN_SIDECAR);
+        assert_eq!(
+            target.voxl_path,
+            project.parent().unwrap().join("MyPrint_autosave.voxl"),
+            "a plugin-format project did not get a .voxl sidecar beside it"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **Binding user directive.** Any failure of the sidecar target falls back
+    /// to the default recovery location and says why — never fail an autosave
+    /// over a folder-permission question, and never lie about where it went.
+    #[test]
+    fn sidecar_falls_back_to_recovery_dir_when_the_project_folder_is_unusable() {
+        let root = unique_test_dir("b-fallback");
+        let recovery_dir = root.join("recovery");
+        std::fs::create_dir_all(&recovery_dir).expect("failed creating recovery dir");
+        let generic = recovery_dir.join(super::SCENE_AUTOSAVE_VOXL_FILE);
+
+        // Parent directory does not exist (deleted folder / unreachable share).
+        let missing = root.join("gone/MyPrint.voxl");
+        let target =
+            super::resolve_scene_autosave_target(&recovery_dir, Some(missing.to_string_lossy().as_ref()));
+        assert_eq!(target.voxl_path, generic);
+        assert_eq!(target.origin, super::SCENE_AUTOSAVE_ORIGIN_RECOVERY_DIR);
+        assert_eq!(target.fallback_reason, Some("parent-missing"));
+
+        // Not a scene file at all.
+        let not_scene = root.join("notes.txt");
+        std::fs::write(&not_scene, b"hi").expect("seed failed");
+        let target = super::resolve_scene_autosave_target(
+            &recovery_dir,
+            Some(not_scene.to_string_lossy().as_ref()),
+        );
+        assert_eq!(target.voxl_path, generic);
+        assert_eq!(target.fallback_reason, Some("not-a-scene-file"));
+
+        // No project at all (untitled scene) keeps today's behaviour exactly.
+        let target = super::resolve_scene_autosave_target(&recovery_dir, None);
+        assert_eq!(target.voxl_path, generic);
+        assert_eq!(target.fallback_reason, Some("no-project"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The writability probe must use a real syscall — a metadata guess passes on
+    /// read-only volumes and on network shares that deny writes.
+    #[test]
+    fn writability_probe_rejects_a_directory_that_cannot_be_written() {
+        let root = unique_test_dir("b-probe");
+        let usable = root.join("usable");
+        std::fs::create_dir_all(&usable).expect("failed creating dir");
+
+        assert!(
+            super::probe_directory_writable(&usable.join("MyPrint_autosave.voxl")).is_none(),
+            "a writable folder was reported unusable"
+        );
+        assert!(
+            !usable.join("MyPrint_autosave.voxl").exists(),
+            "the probe left its scratch file behind"
+        );
+        let residue: Vec<_> = std::fs::read_dir(&usable)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(residue.is_empty(), "the probe left residue: {residue:?}");
+
+        assert_eq!(
+            super::probe_directory_writable(&root.join("absent/MyPrint_autosave.voxl")),
+            Some("parent-missing"),
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **The parity requirement.** Path control without discovery is a
+    /// regression: a manifest would advertise a sidecar the reader could not
+    /// open. Resolution order is manifest → sidecar-from-project → legacy generic.
+    #[test]
+    fn recovery_discovery_prefers_manifest_then_sidecar_then_generic() {
+        let (root, recovery_dir, project) = autosave_fixture("b-discovery", "MyPrint.voxl");
+        let sidecar = project.parent().unwrap().join("MyPrint_autosave.voxl");
+        let generic = recovery_dir.join(super::SCENE_AUTOSAVE_VOXL_FILE);
+        std::fs::write(&sidecar, voxl_payload(b"sidecar")).expect("sidecar seed failed");
+        std::fs::write(&generic, voxl_payload(b"generic")).expect("generic seed failed");
+
+        let manifest = super::SceneAutosaveManifest {
+            saved_at: "2026-07-26T00:00:00.000Z".to_string(),
+            clean: false,
+            voxl_path: Some(sidecar.to_string_lossy().to_string()),
+            origin: Some(super::SCENE_AUTOSAVE_ORIGIN_SIDECAR.to_string()),
+            project_path: Some(project.to_string_lossy().to_string()),
+            payload_bytes: None,
+            fallback_reason: None,
+            last_error: None,
+        };
+
+        // 1. The manifest is authoritative.
+        let found = super::resolve_scene_autosave_recovery(&recovery_dir, Some(&manifest))
+            .expect("no recovery candidate found");
+        assert_eq!(found.voxl_path, sidecar);
+        assert_eq!(found.origin, super::SCENE_AUTOSAVE_ORIGIN_SIDECAR);
+
+        // 2. A manifest whose `voxlPath` no longer resolves falls through to the
+        //    sidecar derived from `projectPath` (project moved, or an older build
+        //    wrote no `voxlPath` at all).
+        let mut stale = manifest.clone();
+        stale.voxl_path = Some(root.join("gone/MyPrint_autosave.voxl").to_string_lossy().to_string());
+        let found = super::resolve_scene_autosave_recovery(&recovery_dir, Some(&stale))
+            .expect("no recovery candidate found via project path");
+        assert_eq!(found.voxl_path, sidecar);
+
+        // 3. With neither, the legacy generic location still recovers.
+        let mut legacy = manifest.clone();
+        legacy.voxl_path = None;
+        legacy.project_path = None;
+        let found = super::resolve_scene_autosave_recovery(&recovery_dir, Some(&legacy))
+            .expect("no recovery candidate found in the legacy location");
+        assert_eq!(found.voxl_path, generic);
+
+        // 4. Nothing on disk ⇒ no prompt.
+        std::fs::remove_file(&generic).expect("generic cleanup failed");
+        assert!(super::resolve_scene_autosave_recovery(&recovery_dir, Some(&legacy)).is_none());
+        assert!(super::resolve_scene_autosave_recovery(&recovery_dir, None).is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Back-compat lock: a manifest written before sub-phase B has none of the
+    /// new fields and must still parse and still recover from the generic path.
+    #[test]
+    fn recovery_discovery_reads_a_legacy_pre_sidecar_manifest() {
+        let root = unique_test_dir("b-legacy-manifest");
+        let recovery_dir = root.join("recovery");
+        std::fs::create_dir_all(&recovery_dir).expect("failed creating recovery dir");
+        // The pre-Ph0.1 payload name, which is never written any more.
+        let legacy = recovery_dir.join(super::SCENE_AUTOSAVE_LEGACY_VOXL_FILE);
+        std::fs::write(&legacy, voxl_payload(b"legacy")).expect("legacy seed failed");
+
+        let legacy_json = r#"{"savedAt":"2026-07-01T12:00:00.000Z","clean":false}"#;
+        let manifest: super::SceneAutosaveManifest =
+            serde_json::from_str(legacy_json).expect("a pre-Ph0.1 manifest no longer parses");
+        assert_eq!(manifest.voxl_path, None);
+
+        let found = super::resolve_scene_autosave_recovery(&recovery_dir, Some(&manifest))
+            .expect("a pre-Ph0.1 autosave became unrecoverable");
+        assert_eq!(found.voxl_path, legacy);
+        assert_eq!(found.origin, super::SCENE_AUTOSAVE_ORIGIN_RECOVERY_DIR);
+        assert_eq!(found.saved_at.as_deref(), Some("2026-07-01T12:00:00.000Z"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A payload that is not VOXL (truncated, foreign, or a leftover of some
+    /// other tool) must not be advertised as recoverable.
+    #[test]
+    fn recovery_discovery_skips_candidates_that_are_not_voxl() {
+        let (root, recovery_dir, project) = autosave_fixture("b-magic", "MyPrint.voxl");
+        let sidecar = project.parent().unwrap().join("MyPrint_autosave.voxl");
+        let generic = recovery_dir.join(super::SCENE_AUTOSAVE_VOXL_FILE);
+        std::fs::write(&sidecar, b"NOPE-not-a-voxl").expect("sidecar seed failed");
+        std::fs::write(&generic, voxl_payload(b"generic")).expect("generic seed failed");
+
+        let manifest = super::SceneAutosaveManifest {
+            saved_at: "2026-07-26T00:00:00.000Z".to_string(),
+            clean: false,
+            voxl_path: Some(sidecar.to_string_lossy().to_string()),
+            origin: Some(super::SCENE_AUTOSAVE_ORIGIN_SIDECAR.to_string()),
+            project_path: Some(project.to_string_lossy().to_string()),
+            payload_bytes: None,
+            fallback_reason: None,
+            last_error: None,
+        };
+
+        let found = super::resolve_scene_autosave_recovery(&recovery_dir, Some(&manifest))
+            .expect("recovery gave up instead of falling through a bad payload");
+        assert_eq!(
+            found.voxl_path, generic,
+            "a non-VOXL payload was advertised as recoverable"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The reader accepts only paths the resolver itself produced — never an
+    /// arbitrary caller-supplied path. Same discipline as
+    /// `scene_file_discard_atomic_temp`'s guard.
+    #[test]
+    fn recovery_read_rejects_paths_outside_the_candidate_list() {
+        let (root, recovery_dir, project) = autosave_fixture("b-candidate-guard", "MyPrint.voxl");
+        let sidecar = project.parent().unwrap().join("MyPrint_autosave.voxl");
+        std::fs::write(&sidecar, voxl_payload(b"sidecar")).expect("sidecar seed failed");
+
+        let manifest = super::SceneAutosaveManifest {
+            saved_at: "2026-07-26T00:00:00.000Z".to_string(),
+            clean: false,
+            voxl_path: Some(sidecar.to_string_lossy().to_string()),
+            origin: Some(super::SCENE_AUTOSAVE_ORIGIN_SIDECAR.to_string()),
+            project_path: Some(project.to_string_lossy().to_string()),
+            payload_bytes: None,
+            fallback_reason: None,
+            last_error: None,
+        };
+
+        let candidates = super::scene_autosave_recovery_candidates(&recovery_dir, Some(&manifest));
+        assert!(super::is_allowed_recovery_read(&candidates, &sidecar));
+        // The user's own project is never a recovery candidate.
+        assert!(!super::is_allowed_recovery_read(&candidates, &project));
+        assert!(!super::is_allowed_recovery_read(
+            &candidates,
+            std::path::Path::new("C:/Windows/System32/config/SAM")
+        ));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Cleanup gate: only a file this policy could have produced may be deleted
+    /// through the payload-deletion seam.
+    #[test]
+    fn only_autosave_payloads_are_deletable() {
+        let recovery_dir = std::path::Path::new("C:/appdata/autosave");
+        assert!(super::is_deletable_autosave_payload(
+            recovery_dir,
+            std::path::Path::new("C:/projects/MyPrint_autosave.voxl")
+        ));
+        assert!(super::is_deletable_autosave_payload(
+            recovery_dir,
+            &recovery_dir.join(super::SCENE_AUTOSAVE_VOXL_FILE)
+        ));
+        // The pre-Ph0.1 payload name has no marker; it is deletable only because
+        // it sits at the one well-known legacy location.
+        assert!(super::is_deletable_autosave_payload(
+            recovery_dir,
+            &recovery_dir.join(super::SCENE_AUTOSAVE_LEGACY_VOXL_FILE)
+        ));
+        assert!(!super::is_deletable_autosave_payload(
+            recovery_dir,
+            std::path::Path::new("C:/projects/scene.voxl")
+        ));
+        // The user's project, and anything else, never.
+        assert!(!super::is_deletable_autosave_payload(
+            recovery_dir,
+            std::path::Path::new("C:/projects/MyPrint.voxl")
+        ));
+        assert!(!super::is_deletable_autosave_payload(
+            recovery_dir,
+            std::path::Path::new("C:/projects/MyPrint_autosave.stl")
+        ));
+    }
+
+    /// **Save-As cleanup (user item 6).** A sidecar left beside the *old* project
+    /// after Save As is an orphan that implies unsaved work which does not exist.
+    #[test]
+    fn sidecar_for_a_project_is_deleted_by_name_and_nothing_else_is() {
+        let (root, _recovery, project) = autosave_fixture("b-saveas-cleanup", "MyPrint.voxl");
+        let sidecar = project.parent().unwrap().join("MyPrint_autosave.voxl");
+        let neighbour = project.parent().unwrap().join("OtherPrint_autosave.voxl");
+        std::fs::write(&sidecar, voxl_payload(b"s")).expect("sidecar seed failed");
+        std::fs::write(&neighbour, voxl_payload(b"n")).expect("neighbour seed failed");
+
+        super::delete_sidecar_for_project(&project).expect("sidecar deletion failed");
+
+        assert!(!sidecar.exists(), "the orphaned sidecar was not deleted");
+        assert!(project.exists(), "deletion touched the user's project");
+        assert!(neighbour.exists(), "deletion touched an unrelated sidecar");
+
+        // Idempotent: a project that never autosaved is not an error.
+        super::delete_sidecar_for_project(&project).expect("second deletion should be a no-op");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **Inherited from sub-phase A.** A crashed write leaves a
+    /// `<target>.tmp-<pid>-<seq>` sibling beside the user's project. Sweep them,
+    /// but only files matching A's exact pattern and only where we already write.
+    #[test]
+    fn stale_commit_temps_are_swept_conservatively() {
+        let root = unique_test_dir("b-temp-sweep");
+        let stale = root.join("MyPrint.voxl.tmp-424242-7");
+        let ours = root.join(format!("MyPrint.voxl.tmp-{}-0", std::process::id()));
+        let innocent = root.join("MyPrint.voxl");
+        let lookalike = root.join("MyPrint.voxl.tmp-notapid-0");
+        for path in [&stale, &ours, &innocent, &lookalike] {
+            std::fs::write(path, b"x").expect("seed failed");
+        }
+
+        // Nothing is old enough yet, so a fresh crash residue is left alone —
+        // an in-flight write from another instance must never be deleted.
+        assert_eq!(super::sweep_stale_scene_commit_temps(&root, 3600), 0);
+        assert!(stale.exists());
+
+        // With the age gate satisfied, only other processes' temps go.
+        assert_eq!(super::sweep_stale_scene_commit_temps(&root, 0), 1);
+        assert!(!stale.exists(), "a stale foreign temp survived the sweep");
+        assert!(ours.exists(), "the sweep deleted this process's own live temp");
+        assert!(innocent.exists(), "the sweep deleted a real scene file");
+        assert!(lookalike.exists(), "the sweep deleted a non-matching file");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

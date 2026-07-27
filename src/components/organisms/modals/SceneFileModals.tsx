@@ -10,7 +10,7 @@ export type SceneFileModalsProps = {
   arrangeOverlayContent: { title: string; detailLines: string[]; };
   arrangeOverlayElapsedLabel: string;
   arrangeOverlayModelCount: number | null;
-  autosaveRecovery: { savedAt: string; } | null;
+  autosaveRecovery: { savedAt: string; voxlPath: string; origin: string } | null;
   closeUnsavedChangesBusy: "none" | "save_and_close" | "discard_and_close";
   handleAutosaveDiscard: () => Promise<void>;
   handleAutosaveRestore: () => Promise<void>;
@@ -176,6 +176,8 @@ export function SceneFileModals({
       {autosaveRecovery && (
         <SceneAutosaveRecoveryModal
           savedAt={autosaveRecovery.savedAt}
+          voxlPath={autosaveRecovery.voxlPath}
+          origin={autosaveRecovery.origin}
           onRestore={handleAutosaveRestore}
           onDiscard={handleAutosaveDiscard}
         />
