@@ -1242,7 +1242,16 @@ fn cmd_slice_run(
         let stop = Arc::clone(&stop);
         let interval = std::time::Duration::from_millis(sample_interval_ms.max(10));
         let start = Instant::now();
+        // Optional sidecar: stream each sample to disk (flushed per line) so the series
+        // survives a kill that prevents the final --json emit — e.g. a cgroup OOM under a
+        // MemoryMax cap. Enabled by the DF_RESOURCE_LOG env var (set by the bench harness).
+        let log_path = std::env::var_os("DF_RESOURCE_LOG").map(PathBuf::from);
         Some(std::thread::spawn(move || {
+            use std::io::Write;
+            let mut log = log_path.and_then(|p| match std::fs::File::create(&p) {
+                Ok(f) => Some(f),
+                Err(e) => { eprintln!("resource-log: cannot create {}: {e}", p.display()); None }
+            });
             let mut last = Instant::now();
             let mut last_cpu = cpu_total_seconds();
             while !stop.load(Ordering::Relaxed) {
@@ -1252,12 +1261,17 @@ fn cmd_slice_run(
                 let dt = now.duration_since(last).as_secs_f64();
                 let cpu_pct = if dt > 0.0 { (cpu - last_cpu) / dt * 100.0 } else { 0.0 };
                 let rss = read_vmrss_bytes().unwrap_or(0);
-                samples.lock().unwrap().push(serde_json::json!({
+                let sample = serde_json::json!({
                     "t_ms": start.elapsed().as_millis() as u64,
                     "rss_bytes": rss,
                     "rss_mb": rss as f64 / 1_048_576.0,
                     "cpu_percent": cpu_pct,
-                }));
+                });
+                if let Some(f) = log.as_mut() {
+                    let _ = writeln!(f, "{}", serde_json::to_string(&sample).unwrap());
+                    let _ = f.flush(); // per-line flush: a mid-run kill keeps everything so far
+                }
+                samples.lock().unwrap().push(sample);
                 last = now;
                 last_cpu = cpu;
             }

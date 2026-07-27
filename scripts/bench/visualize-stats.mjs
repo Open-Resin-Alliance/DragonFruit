@@ -92,6 +92,7 @@ function normalize(row) {
 
   return {
     error: row.error || null,
+    oom: !!row.oom, exit_code: num(row.exit_code),
     voxl: row.voxl ?? '?', printer: row.printer ?? '?', format: row.format || null,
     layer_height: num(row.layer_height), aa_preset: row.aa_preset ?? '?',
     ref: row.ref || null, git_sha: row.git_sha || null,
@@ -319,9 +320,16 @@ function caseTitle(s) {
 
 function card(id, s) {
   if (s.error) {
-    return `<section class="card" id="c${id}"><div class="card-head"><div class="card-title">${esc(caseTitle(s))}</div>
-      <div class="badges">${refBadge(s)}${hwBadge(s)}<span class="badge bad">error</span></div></div>
-      <div class="card-body error-body">${esc(s.error)}</div></section>`;
+    // A failed case — always flagged as such. OOM kills now carry the streamed RSS/CPU
+    // series, so render the run-up-to-death chart when present (it's the whole point of
+    // capturing OOM samples) while keeping the card unmistakably marked failed.
+    const failLabel = s.oom ? 'OOM' : 'error';
+    const detail = s.oom
+      ? `OOM-killed${s.exit_code != null ? ` (exit ${s.exit_code})` : ''}${s.hw_mem ? ` under mem cap ${esc(s.hw_mem)}` : ''} — ${esc(s.error)}`
+      : esc(s.error);
+    return `<section class="card error-card" id="c${id}"><div class="card-head"><div class="card-title">${esc(caseTitle(s))}</div>
+      <div class="badges">${refBadge(s)}${hwBadge(s)}<span class="badge bad">${failLabel}</span></div></div>
+      <div class="card-body"><div class="error-body">${detail}</div>${resourceChart(s)}</div></section>`;
   }
   return `<section class="card" id="c${id}"><div class="card-head">
       <div class="card-title">${esc(caseTitle(s))}</div>
@@ -350,7 +358,7 @@ function overviewTable(list) {
       [fmtPct(s.peak_cpu_percent), s.peak_cpu_percent ?? -1],
       [fmtSec(s.cpu_total_s), s.cpu_total_s ?? -1],
       [fmtBytes(s.file_bytes), s.file_bytes ?? -1],
-      [s.error ? '<span class="pill bad">err</span>' : s.ok == null ? DASH : s.ok ? '<span class="pill ok">ok</span>' : '<span class="pill bad">fail</span>', s.ok ? 1 : 0],
+      [s.oom ? '<span class="pill bad">OOM</span>' : s.error ? '<span class="pill bad">err</span>' : s.ok == null ? DASH : s.ok ? '<span class="pill ok">ok</span>' : '<span class="pill bad">fail</span>', (s.error || s.ok === false) ? 0 : (s.ok ? 1 : 0)],
     ];
     return `<tr>${cells.map((c, ci) => `<td data-sort="${esc(String(c[1]))}"${cols[ci][1] === 'n' ? ' class="numcol"' : ''}>${c[0]}</td>`).join('')}</tr>`;
   }).join('');
@@ -395,6 +403,7 @@ table#ov tbody tr:hover{background:color-mix(in srgb,var(--accent),var(--surface
 /* cards */
 .cards{display:flex;flex-direction:column;gap:16px}
 .card{border:1px solid var(--border-subtle);border-radius:14px;background:var(--surface-0);overflow:hidden;scroll-margin-top:70px}
+.error-card{border-color:color-mix(in srgb,#ef4444,var(--border-subtle) 55%);box-shadow:inset 3px 0 0 #ef4444}
 .card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 16px;
   border-bottom:1px solid var(--border-subtle);background:var(--surface-1)}
 .card-title{font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

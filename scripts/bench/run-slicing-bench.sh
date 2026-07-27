@@ -77,7 +77,7 @@ FIXTURES="scripts/bench/fixtures"
 PRINTERS="scripts/bench/printers"
 MESH_DIR=""
 LAYER_HEIGHTS="0.05"
-AA_PRESETS="sharp,balanced,smooth,raw"
+AA_PRESETS="raw,sharp,balanced,smooth"
 OUT="bench-results.jsonl"
 REPEATS=1
 DO_BUILD=1
@@ -122,6 +122,12 @@ MESH_DIR="${MESH_DIR:-$FIXTURES}"
 # slicing engine's footprint. (The Rust CLI already measures itself via
 # getrusage(RUSAGE_SELF); this keeps the whole process tree honest too.)
 export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--expose-gc"
+
+# Per-case temp artifacts (the sliced .ctb/.goo/… outputs and the JSON capture files) all
+# live under one bench-owned scratch dir, swept on exit — including a hard kill mid-case —
+# so an interrupted run can't strand a multi-hundred-MB output archive in /tmp. Worktrees
+# are cleaned on their own path so --keep-worktrees still works.
+BENCH_SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/df-bench-scratch.XXXXXX")"
 
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 if [[ -n "$VALIDATE_DIR" ]]; then
@@ -405,7 +411,12 @@ cleanup_worktrees() {
   done
   [[ "$CREATED_WT_BASE" == 1 && -n "$WORKTREE_BASE" ]] && rmdir "$WORKTREE_BASE" 2>/dev/null || true
 }
-trap cleanup_worktrees EXIT
+# Wrap worktree cleanup so the scratch sweep runs on the same EXIT path, and route INT/TERM
+# through `exit` so an interrupted run (Ctrl-C / kill / OOM) still fires both cleanups.
+cleanup_all() { cleanup_worktrees; rm -rf "$BENCH_SCRATCH" 2>/dev/null || true; }
+trap cleanup_all EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 build_rust() { # <checkout-dir>
   ( cd "$1/rust/dragonfruit-cli" && cargo build --release >/dev/null )
@@ -513,8 +524,8 @@ run_matrix() { # <label> <sha> <ts-cmd> <rust-binary> <hw-label> <hw-cpus> <hw-m
   # blocking slice, so the cap effectively bounds the slicing engine's footprint.
   local HWPRE; HWPRE="$(hw_prefix_for "$HWC" "$HWM")"
 
-  local voxl printer lh aa vname pname pext repfile ok_repeats r tmp errf res insp fsize row rc
-  local valjson valfile hwcjson hwmjson
+  local voxl printer lh aa vname pname pext repfile ok_repeats r tmp errf resf inspf reslog fsize row rc
+  local valjson valfile hwcjson hwmjson fail_diag oom
   hwcjson="$([[ -n "$HWC" ]] && printf '%s' "$HWC" || printf 'null')"
   hwmjson="$([[ -n "$HWM" ]] && printf '"%s"' "$HWM" || printf 'null')"
   for voxl in "${voxls[@]}"; do
@@ -523,22 +534,29 @@ run_matrix() { # <label> <sha> <ts-cmd> <rust-binary> <hw-label> <hw-cpus> <hw-m
     for lh in "${LHS[@]}"; do
      for aa in "${AAS[@]}"; do
       vname="$(basename "$voxl" .voxl)"; pname="$(basename "$printer" .json)"
-      repfile="$(mktemp)"; ok_repeats=0; valjson=""; valfile=""
+      repfile="$(mktemp -p "$BENCH_SCRATCH")"; ok_repeats=0; valjson=""; valfile=""; fail_diag=""
       for ((r=1; r<=REPEATS; r++)); do
-        tmp="$(mktemp -u --suffix="$pext")"; errf="$(mktemp)"
-        if res="$($HWPRE $TS scene slice "$voxl" --o "$tmp" --mesh-dir "$MESH_DIR" \
+        tmp="$(mktemp -u -p "$BENCH_SCRATCH" --suffix="$pext")"; errf="$(mktemp -p "$BENCH_SCRATCH")"; resf="$(mktemp -p "$BENCH_SCRATCH")"; inspf="$(mktemp -p "$BENCH_SCRATCH")"; reslog="$(mktemp -p "$BENCH_SCRATCH")"
+        # Stream the CLI's JSON to a file, not a shell var: a long slice's `samples`
+        # time-series can exceed the single-argv limit, and `--argjson s "$res"` then
+        # dies with "Argument list too long". jq reads it back via `input` below.
+        # DF_RESOURCE_LOG makes the slicer stream each RSS/CPU sample to $reslog as it goes,
+        # so the series survives an OOM SIGKILL that never reaches the final --json emit; the
+        # failure branch below folds it into the error row for post-mortem debugging.
+        if DF_RESOURCE_LOG="$reslog" $HWPRE $TS scene slice "$voxl" --o "$tmp" --mesh-dir "$MESH_DIR" \
                    --printer "$printer" --layer-height "$lh" --aa-preset "$aa" \
-                   --json 2>"$errf")"; then
+                   --json >"$resf" 2>"$errf"; then
           # print inspect is zip-only; on binary formats (.ctb/.goo/…) it fails and
           # we fall back to a non-empty-file gate. fsize is always available via stat.
-          insp="$($RUST print inspect "$tmp" --json 2>/dev/null || echo '{}')"
+          $RUST print inspect "$tmp" --json >"$inspf" 2>/dev/null || echo '{}' >"$inspf"
           fsize="$(file_size "$tmp")"
-          jq -c -n --argjson s "$res" --argjson i "$insp" \
+          if jq -c -n \
                 --arg voxl "$vname" --arg printer "$pname" --arg fmt "$pext" \
                 --arg lh "$lh" --arg aa "$aa" --argjson r "$r" --argjson fsize "$fsize" \
                 --arg ref "$REF" --arg sha "$SHA" \
                 --arg hw "$HWL" --argjson hwc "$hwcjson" --argjson hwm "$hwmjson" '
-            ($i.numeric_layer_count) as $nlc
+            input as $s | input as $i
+            | ($i.numeric_layer_count) as $nlc
             | {
             ref:$ref, git_sha:$sha,
             hw:$hw, hw_cpus:$hwc, hw_mem:$hwm,
@@ -557,11 +575,18 @@ run_matrix() { # <label> <sha> <ts-cmd> <rust-binary> <hw-label> <hw-cpus> <hw-m
             end_rss_mb:(($s.resources.end_rss_bytes // 0)/1048576),
             samples:[ ($s.resources.samples // [])[] | {run:$r} + . ],
             triangles:($s.scene.total_triangles // null), file_bytes:($i.file_size_bytes // $fsize)
-          }' >> "$repfile"
-          ok_repeats=$((ok_repeats+1))
-          # Validate once per case (slicing is deterministic): keep the first
-          # good archive for the content comparison, delete the rest.
-          if [[ -n "$VALIDATE_DIR" && -z "$valfile" ]]; then valfile="$tmp"; else rm -f "$tmp"; fi
+          }' "$resf" "$inspf" >> "$repfile"; then
+            ok_repeats=$((ok_repeats+1))
+            # Validate once per case (slicing is deterministic): keep the first
+            # good archive for the content comparison, delete the rest.
+            if [[ -n "$VALIDATE_DIR" && -z "$valfile" ]]; then valfile="$tmp"; else rm -f "$tmp"; fi
+          else
+            # jq built no row (e.g. malformed CLI JSON) — count the repeat as failed so the
+            # per-case average isn't taken over a short set and the row reads honestly.
+            fails=$((fails+1))
+            echo "  ${prefix}FAILED: $vname / $pname lh=$lh preset=$aa (run $r/$REPEATS, row-build error)" >&2
+            rm -f "$tmp"
+          fi
         else
           rc=$?
           fails=$((fails+1))
@@ -570,12 +595,22 @@ run_matrix() { # <label> <sha> <ts-cmd> <rust-binary> <hw-label> <hw-cpus> <hw-m
           # with a small code instead. Flag it so the failure reads as "didn't fit this machine's
           # RAM" rather than a generic error.
           local why=""
-          [[ -n "$HWM" && "$rc" -gt 128 ]] && why=" — likely OOM (mem cap=$HWM)"
+          oom=false; [[ -n "$HWM" && "$rc" -gt 128 ]] && { oom=true; why=" — likely OOM (mem cap=$HWM)"; }
+          # The slicer streamed each sample to $reslog as it ran, so even an OOM SIGKILL leaves
+          # the RSS/CPU climb on disk. Fold it (+ derived peaks) into a diagnostic and keep the
+          # richest (last) failure's copy — attached to this case's error row further down.
+          fail_diag="$(jq -c -s --argjson rc "$rc" --argjson oom "$oom" --argjson run "$r" '
+              (map({run:$run} + .)) as $s
+              | { exit_code:$rc, oom:$oom, sample_count:($s|length),
+                  peak_rss_bytes:  ($s|map(.rss_bytes)|max // 0),
+                  peak_rss_mb:     (($s|map(.rss_bytes)|max // 0)/1048576),
+                  peak_sample_cpu_percent: ($s|map(.cpu_percent)|max // 0),
+                  samples:$s }' "$reslog" 2>/dev/null || echo '{}')"
           echo "  ${prefix}FAILED: $vname / $pname lh=$lh preset=$aa (run $r/$REPEATS, exit $rc)$why" >&2
           tail -n 3 "$errf" | sed 's/^/      | /' >&2
           rm -f "$tmp"
         fi
-        rm -f "$errf"
+        rm -f "$errf" "$resf" "$inspf" "$reslog"
       done
 
       if [[ -n "$valfile" ]]; then
@@ -596,11 +631,16 @@ run_matrix() { # <label> <sha> <ts-cmd> <rust-binary> <hw-label> <hw-cpus> <hw-m
         printf '  %s%-14s %-20s lh=%-5s preset=%-9s %s\n' "$prefix" "$vname" "$pname" "$lh" "$aa" \
           "$(echo "$row" | jq -r '"\(.format) \(.layers)L avg \(.total_s*10|round/10)s (\(.repeats)x) \(.layers_per_second|round)lps peakRSS=\(.peak_rss_mb|round)MB peakCPU=\(.peak_sample_cpu_percent|round)% dither=\(.dither.enabled)\(if .validation then " valid=\(.validation.status)" else "" end) ok=\(.ok)"')" >&2
       else
+        # Merge the last failure's resource diagnostic ($fail_diag) so an OOM row carries its
+        # RSS/CPU samples + peaks + exit_code/oom for debugging, not just "all repeats failed".
+        [[ -n "$fail_diag" ]] || fail_diag='{}'
         jq -c -n --arg ref "$REF" --arg sha "$SHA" --arg voxl "$vname" --arg printer "$pname" \
           --arg fmt "$pext" --arg lh "$lh" --arg aa "$aa" \
           --arg hw "$HWL" --argjson hwc "$hwcjson" --argjson hwm "$hwmjson" \
-          '{ref:$ref,git_sha:$sha,hw:$hw,hw_cpus:$hwc,hw_mem:$hwm,voxl:$voxl,printer:$printer,format:$fmt,layer_height:($lh|tonumber),aa_preset:$aa,error:"all repeats failed"}' >> "$OUT"
-        printf '  %s%-14s %-20s lh=%-5s preset=%-9s ERROR (all %s repeats failed)\n' "$prefix" "$vname" "$pname" "$lh" "$aa" "$REPEATS" >&2
+          --argjson diag "$fail_diag" \
+          '{ref:$ref,git_sha:$sha,hw:$hw,hw_cpus:$hwc,hw_mem:$hwm,voxl:$voxl,printer:$printer,format:$fmt,layer_height:($lh|tonumber),aa_preset:$aa,error:"all repeats failed"} + $diag' >> "$OUT"
+        printf '  %s%-14s %-20s lh=%-5s preset=%-9s ERROR (all %s repeats failed%s)\n' "$prefix" "$vname" "$pname" "$lh" "$aa" "$REPEATS" \
+          "$(echo "$fail_diag" | jq -r 'if .oom then ", OOM peakRSS=\(.peak_rss_mb|round)MB \(.sample_count) samples" else "" end' 2>/dev/null)" >&2
       fi
       rm -f "$repfile"
      done
