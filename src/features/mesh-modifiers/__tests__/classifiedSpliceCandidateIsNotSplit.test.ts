@@ -24,6 +24,12 @@ import { prepareLoadedModelsForOutput, resolveOutputGeometrySource } from '../pr
  * pre-supported model. The fence keeps splice-eligible models whole so Ph1 is
  * behaviour-neutral; Ph3's run-map splice is what finally expresses the split
  * on this path.
+ *
+ * Ph3 STATUS: the splice now expresses the split (two passes, model runs then
+ * the support complement), so the ANSWER these tests pin is unchanged while the
+ * reason for it has inverted — from "we cannot express this" to "it is expressed
+ * elsewhere, and cutting here would double-count". The decision itself moved to
+ * `resolveOutputSectionPlan`; see `outputSectionPlan.test.ts`.
  */
 
 function makeClassifiedModel(overrides: {

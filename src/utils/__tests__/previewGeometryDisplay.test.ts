@@ -156,3 +156,35 @@ test('the badge still fires after a preview-derived write-back changes the buffe
     nextBuffer.dispose();
   }
 });
+
+/**
+ * Ph1 wiring — the run-map summary does NOT survive a geometry mutation.
+ *
+ * The rest of the marker (counts, achieved error, budget) describes where this
+ * geometry CAME FROM and stays true across a hollow/punch/repair. The run map
+ * describes its current correspondence to a specific file's triangle order,
+ * which is exactly what a mutation breaks. A stale map is worse than none: a
+ * section-aware splice would stream the wrong records with full confidence.
+ */
+test('carryPreviewMarkerForward strips the run-map summary but keeps provenance', () => {
+  const prior = buildPreviewGeometry();
+  prior.nativePreview = {
+    ...prior.nativePreview!,
+    achievedError: 0.0021,
+    budgetTriangles: 4_000_000,
+    runMap: {
+      entryCount: 2,
+      sourceTriangleCount: 11_228_556,
+      modelTriangleCount: 768,
+      droppedNonFiniteTriangles: 0,
+      totalRunCount: 2,
+    },
+  };
+
+  const carried = carryPreviewMarkerForward(prior);
+  assert.ok(carried);
+  assert.equal(carried.runMap, undefined, 'the run map no longer addresses this geometry');
+  assert.equal(carried.originalTriangleCount, prior.nativePreview.originalTriangleCount);
+  assert.equal(carried.achievedError, 0.0021);
+  assert.equal(carried.budgetTriangles, 4_000_000);
+});

@@ -9126,6 +9126,7 @@ export default function Home() {
       sourceGeometryKey,
       options,
       previewKey,
+      sectionPlan,
     } = buildHollowPreviewRequest(activeModel);
 
     if (hollowPreview && hollowPreview.modelId === activeModel.id && hollowPreview.previewKey === previewKey) {
@@ -9140,6 +9141,7 @@ export default function Home() {
         sourceGeometryKey,
         options,
         previewKey,
+        sectionPlan,
         notifyUnavailable: false,
       });
     }, HOLLOW_PREVIEW_DEBOUNCE_MS);

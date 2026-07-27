@@ -17,8 +17,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use dragonfruit_mesh_repair::{
-    analyze, classify_support_split, hollow_voxel, io, punch_cylinders, repair, HolePunchOptions,
-    HollowOptions, HollowSession, IndexedMesh, RepairOptions, Vec3,
+    analyze, classify_import, classify_support_split, hollow_voxel, io, punch_cylinders, repair,
+    ClassifyImportOptions, HolePunchOptions, HollowOptions, HollowSession, ImportClassification,
+    IndexedMesh, RepairOptions, SectionStats, Vec3,
 };
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -824,11 +825,13 @@ pub async fn mesh_repair_read_positions() -> Result<Response, String> {
     Ok(Response::new(bytes))
 }
 
-/// Parses a binary or ASCII STL file in Rust and returns the vertex positions
-/// and per-vertex normals as a flat byte buffer.
+/// Parses a binary or ASCII STL file in Rust and returns the vertex positions,
+/// per-vertex normals, the import-time classification and its run map as a flat
+/// byte buffer.
 ///
-/// Byte layout: a 16-byte `DFST` header containing flags and the original/output
-/// triangle counts, followed by little-endian f32 positions and normals.
+/// Byte layout: the 32-byte `DFST` header documented at
+/// [`STL_RESPONSE_HEADER_BYTES`], followed by little-endian f32 positions and
+/// normals, the run map, and the classification JSON.
 ///
 /// Processing the file in Rust avoids loading the entire raw STL into the
 /// webview's memory space, which can save ~1 GB for a large binary STL.
@@ -837,9 +840,25 @@ pub async fn load_stl_file(
     file_path: String,
     js_heap_size_limit: Option<f64>,
 ) -> Result<Response, String> {
+    load_stl_file_bytes(&file_path, js_heap_size_limit, None).map(Response::new)
+}
+
+/// The body of [`load_stl_file`], as a plain synchronous function so the tests
+/// can drive the whole import — governor, classify, DFST encode — without a
+/// Tauri runtime.
+///
+/// `budget_override` exists ONLY for tests: the real budget comes from the
+/// machine's RAM, so there is no other way to exercise the over-budget
+/// (decimating) branch against a small deterministic fixture. Production passes
+/// `None` and the governor is untouched.
+fn load_stl_file_bytes(
+    file_path: &str,
+    js_heap_size_limit: Option<f64>,
+    budget_override: Option<u64>,
+) -> Result<Vec<u8>, String> {
     use dragonfruit_mesh_repair::io;
 
-    let path = std::path::Path::new(&file_path);
+    let path = std::path::Path::new(file_path);
 
     log::info!("[load_stl_file] Starting native STL load: {file_path}");
 
@@ -866,6 +885,12 @@ pub async fn load_stl_file(
         .map(|value| value as u64)
         .unwrap_or(0);
     let make_budget = |source_triangles: u64| {
+        if let Some(forced) = budget_override {
+            return crate::stl_budget::TriangleBudget {
+                budget_tris: forced,
+                reason: crate::stl_budget::BudgetReason::Ceiling,
+            };
+        }
         let inputs = crate::stl_budget::BudgetInputs {
             ram_total_bytes: ram_total,
             ram_available_bytes: ram_available,
@@ -904,11 +929,23 @@ pub async fn load_stl_file(
         if expected_binary_size == file_size {
             drop(file);
             let budget = make_budget(triangle_count);
+
+            // Ph1 wiring (a): the FULL-RESOLUTION mesh is welded and classified
+            // FIRST, for both branches. The decimating branch used to go
+            // straight from the streamed soup into meshopt, which meant the only
+            // mesh that ever existed at full resolution was consumed before
+            // anything could ask what its triangles WERE. Classification is
+            // structural; it has to happen here or not at all.
+            let soup = load_binary_stl_soup(path, triangle_count as u32)?;
+            let (mut mesh, _stats, dropped_file_indices) =
+                IndexedMesh::from_triangle_soup_tracked(&soup, io::DEFAULT_MERGE_EPSILON);
+            drop(soup);
+            let classification =
+                classify_import_at_full_res(&mut mesh, triangle_count as usize, dropped_file_indices);
+
             if triangle_count <= budget.budget_tris {
                 // At/under budget → keep verbatim (NO decimation). The former
                 // hard 6M gate is gone; the budget scales with the machine.
-                let mesh = io::stl::load(path)
-                    .map_err(|e| format!("Failed to load STL '{}': {e}", file_path))?;
                 log::info!(
                     "[load_stl_file] Native load kept verbatim: {} triangles (≤ budget {})",
                     mesh.triangles.len(),
@@ -920,15 +957,12 @@ pub async fn load_stl_file(
                     false,
                     0.0,
                     budget.budget_tris as u32,
-                )
-                .map(Response::new);
+                    Some(&classification),
+                );
             }
             // Over budget → query-first decimation TO budget.
-            let outcome = decimate_binary_stl_to_budget(
-                path,
-                triangle_count as u32,
-                budget.budget_tris as usize,
-            )?;
+            let outcome =
+                decimate_indexed_to_budget(mesh, budget.budget_tris as usize, DECIMATION_OPTIONS);
             log::info!(
                 "[load_stl_file] Query-first decimation: {} -> {} triangles (budget {}, achieved_error {:.6})",
                 triangle_count,
@@ -942,8 +976,8 @@ pub async fn load_stl_file(
                 true,
                 outcome.achieved_error,
                 budget.budget_tris as u32,
-            )
-            .map(Response::new);
+                Some(&classification),
+            );
         }
     }
     if file_size > MAX_NATIVE_ASCII_STL_BYTES && header.starts_with(b"solid") {
@@ -957,13 +991,26 @@ pub async fn load_stl_file(
 
     // ASCII (or non-standard binary): parse fully, then apply the SAME
     // governor policy to the loaded mesh.
-    let mesh =
-        io::stl::load(path).map_err(|e| format!("Failed to load STL '{}': {e}", file_path))?;
+    //
+    // `file_triangle_count` is the count as PARSED (the run map's index space);
+    // `source_tris` stays the WELDED count, because that is what this branch has
+    // always reported as the original count and fed to the governor. The two
+    // differ only when the file carried non-finite triangles.
+    let (mut mesh, _stats, dropped_file_indices, file_triangle_count) = io::stl::load_tracked(path)
+        .map_err(|e| format!("Failed to load STL '{}': {e}", file_path))?;
     let source_tris = mesh.triangles.len() as u64;
     let budget = make_budget(source_tris);
+    let classification =
+        classify_import_at_full_res(&mut mesh, file_triangle_count, dropped_file_indices);
     if source_tris <= budget.budget_tris {
-        return encode_stl_response(&mesh, source_tris as u32, false, 0.0, budget.budget_tris as u32)
-            .map(Response::new);
+        return encode_stl_response(
+            &mesh,
+            source_tris as u32,
+            false,
+            0.0,
+            budget.budget_tris as u32,
+            Some(&classification),
+        );
     }
     let outcome = decimate_indexed_to_budget(mesh, budget.budget_tris as usize, DECIMATION_OPTIONS);
     log::info!(
@@ -979,19 +1026,148 @@ pub async fn load_stl_file(
         true,
         outcome.achieved_error,
         budget.budget_tris as u32,
+        Some(&classification),
     )
-    .map(Response::new)
+}
+
+/// Ph1 wiring (a) — run the import-time classification over the FULL-RESOLUTION
+/// welded mesh and log its cost in the governor's idiom.
+///
+/// Reorders `mesh` model-section-first as a side effect (that is
+/// `classify_import`'s contract), so the encoded response is already in section
+/// order and the frontend does not have to stage the whole mesh back to Rust to
+/// learn what its triangles are.
+///
+/// NOT size-gated, deliberately and permanently: the P6 `>= 3M` skip this phase
+/// removes is exactly the defect of treating a structural question as an
+/// optional nicety. The one thing that IS size-gated lives inside
+/// `classify_import` — the manifold validity check — and reports `None` rather
+/// than a verdict when it declines.
+fn classify_import_at_full_res(
+    mesh: &mut IndexedMesh,
+    source_triangle_count: usize,
+    dropped_file_indices: Vec<u32>,
+) -> ImportClassification {
+    let dropped = dropped_file_indices.len();
+    let classification = classify_import(
+        mesh,
+        &ClassifyImportOptions {
+            source_triangle_count,
+            dropped_file_indices,
+            compute_section_stats: true,
+        },
+    );
+    log::info!(
+        "[STL classify] {} source tris ({} dropped non-finite) -> model={:?}, components={:?}, runs={}, manifold={:?}{}, classify {:.0} ms + stats {:.0} ms",
+        source_triangle_count,
+        dropped,
+        classification.model_triangle_count,
+        classification.connected_components,
+        classification.model_runs.len(),
+        classification.model_is_manifold,
+        if classification.manifold_check_size_guarded {
+            " (size-guarded)"
+        } else {
+            ""
+        },
+        classification.classify_ms,
+        classification.section_stats_ms,
+    );
+    classification
 }
 
 const STL_RESPONSE_MAGIC: &[u8; 4] = b"DFST";
-// 24-byte header: magic(4) + flags(4) + original_count(4) + output_count(4)
-// + achieved_error f32(4) + budget_tris u32(4). The two trailing fields were
-// added for Phase 2a (query-first decimation) so the frontend/badge can show
-// the ACTUAL decimation error + governor budget; they are 0 for verbatim
-// loads. Additive: the decoder in useStlGeometry.ts reads them at offsets
-// 16/20 and the payload now starts at offset 24.
-const STL_RESPONSE_HEADER_BYTES: usize = 24;
+/// The `DFST` response header — **32 bytes** since the Ph1 wiring.
+///
+/// ```text
+///   off  size  field
+///     0     4  magic "DFST"
+///     4     4  flags u32          bit0 = this payload is a reduced preview
+///     8     4  originalTriangleCount u32
+///    12     4  outputTriangleCount   u32   (triangles actually in the payload)
+///    16     4  achievedError f32          (0 for a verbatim load)
+///    20     4  budgetTriangles u32        (governor budget; 0 when unreported)
+///    24     4  runMapEntryCount u32       (Ph1 — entries PRESENT below)
+///    28     4  classificationJsonBytes u32 (Ph1 — 0 when absent)
+/// ```
+///
+/// Payload, tightly packed after the header:
+/// `positions (n·36 B) | normals (n·36 B) | run map (entries·8 B) | classification JSON`.
+///
+/// The run map precedes the JSON so it stays 4-byte aligned — the frontend
+/// builds a `Uint32Array` view directly over the IPC buffer, and a
+/// variable-length JSON block in front of it would break that alignment for no
+/// benefit. The two counts at 24/28 make the total length exactly derivable,
+/// which is what `useStlGeometry.ts`'s equality check asserts.
+///
+/// **Offsets 0..23 are unchanged from the 24-byte Phase-2a header.** The
+/// extension is purely additive, but the frontend's exact-length assertion is
+/// NOT tolerant of a length it cannot derive, so `NATIVE_STL_HEADER_BYTES` and
+/// that assertion must move in the same commit as this constant. A mismatched
+/// pair does not degrade — imports break outright.
+const STL_RESPONSE_HEADER_BYTES: usize = 32;
 const STL_RESPONSE_FLAG_PREVIEW: u32 = 1;
+
+/// Ph1 wiring (c) — hard cap on the run map carried in one response.
+///
+/// 64 KiB = 8 192 `(start, len)` pairs. The same number caps the VOXL `RUNM`
+/// chunk (`voxlRunMap.ts`, `IMPORT_RUN_MAP_MAX_ENTRIES`), deliberately: a map
+/// that cannot be persisted is a map the splice would have to recompute on the
+/// next load anyway, so transporting it now would buy one session of speed at
+/// the cost of two behaviours to reason about.
+///
+/// A map this large means thousands of interleaved model/support components.
+/// The classification itself is unaffected — only the map is dropped, and the
+/// classification JSON still reports `run_count`, so a reader can tell "no
+/// split" (`run_count == 0`) from "too fragmented to carry"
+/// (`run_count > runMapEntryCount`) and fall back to recomputing.
+const STL_RESPONSE_RUN_MAP_MAX_BYTES: usize = 64 * 1024;
+const STL_RESPONSE_RUN_MAP_MAX_ENTRIES: usize = STL_RESPONSE_RUN_MAP_MAX_BYTES / 8;
+
+/// The classification as it crosses the IPC boundary.
+///
+/// Borrowed, and WITHOUT `model_runs` — the run map travels as a binary block
+/// instead. Serializing it as JSON would cost a full `serde_json::Value`
+/// materialization of a vector that can hold millions of entries on a
+/// fragmented mesh, to produce a text encoding ~5× the size of the binary one.
+#[derive(serde::Serialize)]
+struct ImportClassificationWire<'a> {
+    model_triangle_count: Option<usize>,
+    likely_support_geometry: bool,
+    connected_components: Option<usize>,
+    model_section: Option<&'a SectionStats>,
+    support_section: Option<&'a SectionStats>,
+    source_triangle_count: usize,
+    dropped_nonfinite_triangles: usize,
+    model_is_manifold: Option<bool>,
+    model_manifold_status: Option<&'a str>,
+    manifold_check_size_guarded: bool,
+    classify_ms: f64,
+    section_stats_ms: f64,
+    /// Runs the classifier PRODUCED. Compare against the header's
+    /// `runMapEntryCount` to detect a map dropped for exceeding the cap.
+    run_count: usize,
+}
+
+impl<'a> From<&'a ImportClassification> for ImportClassificationWire<'a> {
+    fn from(c: &'a ImportClassification) -> Self {
+        Self {
+            model_triangle_count: c.model_triangle_count,
+            likely_support_geometry: c.likely_support_geometry,
+            connected_components: c.connected_components,
+            model_section: c.model_section.as_ref(),
+            support_section: c.support_section.as_ref(),
+            source_triangle_count: c.source_triangle_count,
+            dropped_nonfinite_triangles: c.dropped_nonfinite_triangles,
+            model_is_manifold: c.model_is_manifold,
+            model_manifold_status: c.model_manifold_status.as_deref(),
+            manifold_check_size_guarded: c.manifold_check_size_guarded,
+            classify_ms: c.classify_ms,
+            section_stats_ms: c.section_stats_ms,
+            run_count: c.model_runs.len(),
+        }
+    }
+}
 
 fn encode_stl_response(
     mesh: &IndexedMesh,
@@ -999,13 +1175,36 @@ fn encode_stl_response(
     is_preview: bool,
     achieved_error: f32,
     budget_triangles: u32,
+    classification: Option<&ImportClassification>,
 ) -> Result<Vec<u8>, String> {
     let tri_count = mesh.triangles.len();
     let positions_len = tri_count * 9 * std::mem::size_of::<f32>();
     let normals_len = tri_count * 9 * std::mem::size_of::<f32>();
+
+    let classification_json = classification
+        .map(|c| serde_json::to_vec(&ImportClassificationWire::from(c)))
+        .transpose()
+        .map_err(|e| format!("serialize import classification: {e}"))?
+        .unwrap_or_default();
+    let run_entries: &[dragonfruit_mesh_repair::TriangleRun] = match classification {
+        Some(c) if c.model_runs.len() <= STL_RESPONSE_RUN_MAP_MAX_ENTRIES => &c.model_runs,
+        Some(c) => {
+            log::warn!(
+                "[STL classify] run map dropped: {} runs exceed the {}-entry transport cap; the splice will recompute it",
+                c.model_runs.len(),
+                STL_RESPONSE_RUN_MAP_MAX_ENTRIES,
+            );
+            &[]
+        }
+        None => &[],
+    };
+    let run_map_len = run_entries.len() * 8;
+
     let response_len = STL_RESPONSE_HEADER_BYTES
         .checked_add(positions_len)
         .and_then(|size| size.checked_add(normals_len))
+        .and_then(|size| size.checked_add(run_map_len))
+        .and_then(|size| size.checked_add(classification_json.len()))
         .ok_or_else(|| "STL response size overflow".to_string())?;
     let mut result = Vec::new();
     result.try_reserve_exact(response_len).map_err(|_| {
@@ -1027,7 +1226,9 @@ fn encode_stl_response(
     result.extend_from_slice(&(tri_count as u32).to_le_bytes());
     result.extend_from_slice(&achieved_error.to_le_bytes());
     result.extend_from_slice(&budget_triangles.to_le_bytes());
-    result.resize(response_len, 0);
+    result.extend_from_slice(&(run_entries.len() as u32).to_le_bytes());
+    result.extend_from_slice(&(classification_json.len() as u32).to_le_bytes());
+    result.resize(STL_RESPONSE_HEADER_BYTES + positions_len + normals_len, 0);
     let (position_output, normal_output) =
         result[STL_RESPONSE_HEADER_BYTES..].split_at_mut(positions_len);
     position_output
@@ -1066,11 +1267,20 @@ fn encode_stl_response(
             }
         });
 
+    for run in run_entries {
+        result.extend_from_slice(&run.start.to_le_bytes());
+        result.extend_from_slice(&run.len.to_le_bytes());
+    }
+    result.extend_from_slice(&classification_json);
+    debug_assert_eq!(result.len(), response_len);
+
     log::info!(
-        "[load_stl_file] {} triangles, {} MB positions + {} MB normals",
+        "[load_stl_file] {} triangles, {} MB positions + {} MB normals, {} run entries, {} B classification",
         tri_count,
         positions_len / (1024 * 1024),
         normals_len / (1024 * 1024),
+        run_entries.len(),
+        classification_json.len(),
     );
 
     Ok(result)
@@ -1498,6 +1708,14 @@ fn decimate_indexed_to_budget(
 }
 
 /// Streams a binary STL and decimates it to `budget_tris` (query-first).
+///
+/// The Ph1 wiring took this off the production path: `load_stl_file` now has to
+/// hold the full-resolution welded mesh long enough to CLASSIFY it, so it
+/// performs the weld itself and calls `decimate_indexed_to_budget` directly.
+/// The three steps are otherwise identical, so the P2a decimation-policy
+/// characterizations keep measuring exactly what they always did through this
+/// test-only wrapper rather than being rewritten around the change.
+#[cfg(test)]
 fn decimate_binary_stl_to_budget(
     path: &std::path::Path,
     triangle_count: u32,
@@ -1659,6 +1877,179 @@ const FULLRES_SPLICE_CHUNK_TRIANGLES: usize = 65_536;
 /// warning path. Never silently fall back Rust-side.
 pub(crate) const FULLRES_SOURCE_MISSING_PREFIX: &str = "FULLRES_SOURCE_MISSING";
 pub(crate) const FULLRES_SOURCE_STALE_PREFIX: &str = "FULLRES_SOURCE_STALE";
+/// Ph3 — a run map that does not describe the file it is paired with. Refused,
+/// never "best-effort" applied: a mis-ordered or out-of-range map does not
+/// produce a slightly-wrong partition, it produces a confidently wrong one.
+pub(crate) const FULLRES_RUN_MAP_INVALID_PREFIX: &str = "FULLRES_RUN_MAP_INVALID";
+
+/// Ph3 — which half of a classified import a single splice pass stages.
+///
+/// The slicing engine takes ONE split index, so the staged buffer has to be
+/// `[all model triangles | all support triangles]` across every model in the
+/// scene. A spliced model therefore contributes to the staged buffer TWICE —
+/// once in the model pass, once in the support pass — with the WebView
+/// collector's own model triangles in between. See the four-pass interleave in
+/// `sliceExportOrchestrator.ts`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SpliceSection {
+    /// Every triangle in file order. Byte-identical to the pre-Ph3 splice, and
+    /// the only section a source with no model/support split can produce.
+    All,
+    /// Only triangles named by the model run map.
+    Model,
+    /// Only triangles the model run map does NOT name.
+    Support,
+}
+
+impl SpliceSection {
+    fn parse(raw: Option<&str>) -> Result<Self, String> {
+        match raw.unwrap_or("all") {
+            "all" => Ok(Self::All),
+            "model" => Ok(Self::Model),
+            "support" => Ok(Self::Support),
+            other => Err(format!(
+                "unknown splice section '{other}' (expected 'all', 'model' or 'support')"
+            )),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Model => "model",
+            Self::Support => "support",
+        }
+    }
+}
+
+/// Where the model run map used by a splice pass came from. Reported back so a
+/// slow job is explainable rather than mysterious, and so a test can assert
+/// that a recompute happened rather than inferring it from a triangle count.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RunMapSource {
+    /// `SpliceSection::All` — no map is consulted at all.
+    NotRequired,
+    /// The caller supplied the map (in-session, or rehydrated from `RUNM`).
+    Provided,
+    /// The map was re-derived from the source file by re-running
+    /// `classify_import`, because the caller had none it could trust.
+    Recomputed,
+    /// A recompute found no model/support split: the whole file is model.
+    NoSplit,
+}
+
+impl RunMapSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::NotRequired => "not-required",
+            Self::Provided => "provided",
+            Self::Recomputed => "recomputed",
+            Self::NoSplit => "no-split",
+        }
+    }
+}
+
+/// Decodes the flat `[start0, len0, start1, len1, …]` run array the frontend
+/// transports (the same encoding as the DFST response and the `RUNM` chunk)
+/// into pairs. An odd length is a damaged map, not a short one.
+fn decode_flat_run_map(flat: &[u32]) -> Result<Vec<(u32, u32)>, String> {
+    if flat.len() % 2 != 0 {
+        return Err(format!(
+            "{FULLRES_RUN_MAP_INVALID_PREFIX}: run map has {} values, which is not a whole \
+             number of (start, len) pairs",
+            flat.len(),
+        ));
+    }
+    Ok(flat.chunks_exact(2).map(|pair| (pair[0], pair[1])).collect())
+}
+
+/// Turns the model run map into the ascending, disjoint SOURCE-FILE segments a
+/// given section must stage.
+///
+/// `model_runs` is `None` when the source has no model/support split at all.
+/// That absence is NOT "a run covering everything" in the classification — the
+/// classifier is deliberate about the difference — but it is exactly that for
+/// the splice, because a file with no support section is wholly model. This
+/// function is the single place the two meanings are translated, so no consumer
+/// has to hold both in its head.
+fn section_emit_segments(
+    section: SpliceSection,
+    model_runs: Option<&[(u32, u32)]>,
+    triangle_count: u64,
+) -> Result<Vec<(u64, u64)>, String> {
+    if triangle_count == 0 {
+        return Ok(Vec::new());
+    }
+    if section == SpliceSection::All {
+        return Ok(vec![(0, triangle_count)]);
+    }
+
+    let Some(model_runs) = model_runs else {
+        return Ok(match section {
+            SpliceSection::Model => vec![(0, triangle_count)],
+            SpliceSection::Support => Vec::new(),
+            SpliceSection::All => unreachable!(),
+        });
+    };
+
+    // Validate as we normalize. Ascending + disjoint + in-range is the whole
+    // contract; violating any of it means the map describes some other file.
+    let mut model: Vec<(u64, u64)> = Vec::with_capacity(model_runs.len());
+    let mut cursor: u64 = 0;
+    for &(start, len) in model_runs {
+        if len == 0 {
+            continue;
+        }
+        let start = u64::from(start);
+        let len = u64::from(len);
+        let end = start + len;
+        if start < cursor {
+            return Err(format!(
+                "{FULLRES_RUN_MAP_INVALID_PREFIX}: run starting at {start} overlaps or precedes \
+                 the previous run (which ended at {cursor}) — the map must be ascending and \
+                 disjoint",
+            ));
+        }
+        if end > triangle_count {
+            return Err(format!(
+                "{FULLRES_RUN_MAP_INVALID_PREFIX}: run {start}..{end} runs past the {triangle_count} \
+                 triangles in this file — the map describes a different file",
+            ));
+        }
+        model.push((start, len));
+        cursor = end;
+    }
+
+    if model.is_empty() {
+        // An explicitly-supplied EMPTY map paired with a section request is a
+        // contradiction: the caller asked to split by a map that names nothing.
+        // "No split" arrives as `None`, never as an empty vector.
+        return Err(format!(
+            "{FULLRES_RUN_MAP_INVALID_PREFIX}: section '{}' was requested with an empty run map; \
+             a source with no model/support split must be spliced whole",
+            section.as_str(),
+        ));
+    }
+
+    Ok(match section {
+        SpliceSection::Model => model,
+        SpliceSection::Support => {
+            let mut out: Vec<(u64, u64)> = Vec::with_capacity(model.len() + 1);
+            let mut at: u64 = 0;
+            for (start, len) in model {
+                if start > at {
+                    out.push((at, start - at));
+                }
+                at = start + len;
+            }
+            if at < triangle_count {
+                out.push((at, triangle_count - at));
+            }
+            out
+        }
+        SpliceSection::All => unreachable!(),
+    })
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1681,7 +2072,22 @@ pub struct SourceFileStat {
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FullResSpliceSummary {
+    /// Triangles this pass actually appended.
     pub staged_triangle_count: u64,
+    /// Triangles in the source file, as its own header numbers them — the index
+    /// space the run map addresses. `staged + skipped == source` is the
+    /// arithmetic that makes a partition checkable instead of trusted.
+    pub source_triangle_count: u64,
+    /// Triangles the section filter excluded from this pass.
+    pub skipped_triangle_count: u64,
+    /// Which section was staged: `all` | `model` | `support`.
+    pub section: String,
+    /// Where the run map came from: `not-required` | `provided` | `recomputed`
+    /// | `no-split`.
+    pub run_map_source: String,
+    /// World bounds of the STAGED triangles only. `[0,0,0]`/`[0,0,0]` when the
+    /// pass staged nothing (an empty support section) — callers must gate any
+    /// bounds merge on `stagedTriangleCount > 0` rather than trusting these.
     pub world_min: [f32; 3],
     pub world_max: [f32; 3],
     pub splice_ms: f64,
@@ -1757,10 +2163,21 @@ pub(crate) struct FullResSpliceParams<'a> {
     /// transforms (rasterLayerZipExport.ts appendModelTrianglesInRange, #334).
     /// Slicing passes true; mesh export (which never flips) passes false.
     pub flip_winding_on_negative_determinant: bool,
+    /// Ph3 — which half of the classified import this pass stages.
+    pub section: SpliceSection,
+    /// Ph3 — model-section runs in SOURCE-FILE triangle indices, ascending and
+    /// disjoint. `None` means the source has NO model/support split, which the
+    /// splice reads as "wholly model" (see `section_emit_segments`). Ignored
+    /// entirely for [`SpliceSection::All`].
+    pub model_runs: Option<Vec<(u32, u32)>>,
 }
 
+#[derive(Debug)]
 struct FullResSpliceStats {
-    triangle_count: u64,
+    /// Triangles handed to the sink.
+    staged_triangle_count: u64,
+    /// Triangles the source file declares in its header.
+    source_triangle_count: u64,
     world_min: [f32; 3],
     world_max: [f32; 3],
 }
@@ -1770,6 +2187,12 @@ struct FullResSpliceStats {
 /// (9 floats per triangle) to `sink`. O(chunk) memory; the full soup is never
 /// materialised. `sample` receives (triangle_index, world_triangle) for any
 /// index listed in `sample_indices` (R2 verification seam).
+///
+/// Ph3: `params.section` selects which triangles are emitted. Triangles outside
+/// the requested section are SEEKED PAST rather than read and discarded, so a
+/// model pass plus a support pass together read the file's records exactly once
+/// between them (plus two header reads and a handful of seeks). Bounds and the
+/// staged count describe the emitted triangles only.
 fn splice_fullres_stl_stream(
     params: &FullResSpliceParams<'_>,
     sample_indices: &[u64],
@@ -1826,68 +2249,259 @@ fn splice_fullres_stl_stream(
         ]
     };
 
+    let segments = section_emit_segments(
+        params.section,
+        params.model_runs.as_deref(),
+        triangle_count,
+    )?;
+
     let mut world_min = [f32::INFINITY; 3];
     let mut world_max = [f32::NEG_INFINITY; 3];
     let mut chunk: Vec<f32> = Vec::with_capacity(FULLRES_SPLICE_CHUNK_TRIANGLES * 9);
     let mut record = [0u8; STL_RECORD_BYTES];
     let mut sample_cursor = 0usize;
+    let mut staged_triangle_count = 0u64;
+    // Next file-triangle index the reader is positioned at.
+    let mut reader_at = 0u64;
 
-    for triangle_index in 0..triangle_count {
-        reader.read_exact(&mut record).map_err(|e| {
-            format!(
-                "Truncated binary STL '{}' at triangle {triangle_index}: {e}",
-                path.display()
-            )
-        })?;
-        let raw = [
-            read_binary_stl_vertex(&record, 12),
-            read_binary_stl_vertex(&record, 24),
-            read_binary_stl_vertex(&record, 36),
-        ];
-        let world = [
-            transform([raw[0].x, raw[0].y, raw[0].z]),
-            transform([raw[1].x, raw[1].y, raw[1].z]),
-            transform([raw[2].x, raw[2].y, raw[2].z]),
-        ];
-        for vertex in &world {
-            for axis in 0..3 {
-                if vertex[axis] < world_min[axis] {
-                    world_min[axis] = vertex[axis];
-                }
-                if vertex[axis] > world_max[axis] {
-                    world_max[axis] = vertex[axis];
+    for (segment_start, segment_len) in segments {
+        if segment_start > reader_at {
+            let skip_bytes = (segment_start - reader_at) * STL_RECORD_BYTES as u64;
+            let skip_bytes = i64::try_from(skip_bytes).map_err(|_| {
+                format!(
+                    "Binary STL '{}' is too large to seek within ({skip_bytes} bytes)",
+                    path.display()
+                )
+            })?;
+            reader.seek_relative(skip_bytes).map_err(|e| {
+                format!(
+                    "Failed seeking to triangle {segment_start} of '{}': {e}",
+                    path.display()
+                )
+            })?;
+            reader_at = segment_start;
+        }
+
+        for offset in 0..segment_len {
+            let triangle_index = segment_start + offset;
+            reader.read_exact(&mut record).map_err(|e| {
+                format!(
+                    "Truncated binary STL '{}' at triangle {triangle_index}: {e}",
+                    path.display()
+                )
+            })?;
+            reader_at = triangle_index + 1;
+            let raw = [
+                read_binary_stl_vertex(&record, 12),
+                read_binary_stl_vertex(&record, 24),
+                read_binary_stl_vertex(&record, 36),
+            ];
+            let world = [
+                transform([raw[0].x, raw[0].y, raw[0].z]),
+                transform([raw[1].x, raw[1].y, raw[1].z]),
+                transform([raw[2].x, raw[2].y, raw[2].z]),
+            ];
+            for vertex in &world {
+                for axis in 0..3 {
+                    if vertex[axis] < world_min[axis] {
+                        world_min[axis] = vertex[axis];
+                    }
+                    if vertex[axis] > world_max[axis] {
+                        world_max[axis] = vertex[axis];
+                    }
                 }
             }
-        }
 
-        if sample_cursor < sample_indices.len() && sample_indices[sample_cursor] == triangle_index
-        {
-            sample(triangle_index, world);
-            sample_cursor += 1;
-        }
+            // Sampled indices are ascending, but a filtered pass skips over
+            // some of them — advance past anything this section did not stage
+            // rather than stalling the cursor on it.
+            while sample_cursor < sample_indices.len()
+                && sample_indices[sample_cursor] < triangle_index
+            {
+                sample_cursor += 1;
+            }
+            if sample_cursor < sample_indices.len()
+                && sample_indices[sample_cursor] == triangle_index
+            {
+                sample(triangle_index, world);
+                sample_cursor += 1;
+            }
 
-        let ordered: [[f32; 3]; 3] = if flip_winding {
-            [world[0], world[2], world[1]]
-        } else {
-            world
-        };
-        for vertex in &ordered {
-            chunk.extend_from_slice(vertex);
-        }
-        if chunk.len() >= FULLRES_SPLICE_CHUNK_TRIANGLES * 9 {
-            sink(&chunk)?;
-            chunk.clear();
+            let ordered: [[f32; 3]; 3] = if flip_winding {
+                [world[0], world[2], world[1]]
+            } else {
+                world
+            };
+            for vertex in &ordered {
+                chunk.extend_from_slice(vertex);
+            }
+            staged_triangle_count += 1;
+            if chunk.len() >= FULLRES_SPLICE_CHUNK_TRIANGLES * 9 {
+                sink(&chunk)?;
+                chunk.clear();
+            }
         }
     }
     if !chunk.is_empty() {
         sink(&chunk)?;
     }
 
+    if staged_triangle_count == 0 {
+        // An empty section is legitimate (a plate whose model runs cover every
+        // triangle has no support section). Report neutral bounds rather than
+        // infinities, which serialize to JSON `null` and would arrive at the
+        // frontend as a hole in a `[number, number, number]`.
+        world_min = [0.0; 3];
+        world_max = [0.0; 3];
+    }
+
     Ok(FullResSpliceStats {
-        triangle_count,
+        staged_triangle_count,
+        source_triangle_count: triangle_count,
         world_min,
         world_max,
     })
+}
+
+// --- Ph3: the run-map recompute ---------------------------------------------
+//
+// `resolveImportRunMap` (importRunMap.ts) is the frontend's single sanctioned
+// reader of a model's run map, and it returns one of four `recompute` reasons:
+// `over-cap` (the classifier produced more runs than the 8 192-entry transport
+// and persistence cap carries), `not-persisted` (the model's split is known but
+// no map was ever written — a pre-Ph1 VOXL), `chunk-missing` (a summary expects
+// a `RUNM` chunk an older writer dropped) and `chunk-damaged` (the chunk's
+// length contradicts its summary).
+//
+// All four have the SAME remedy and it lives here: re-derive the map from the
+// source file the splice is about to read anyway. They differ in diagnosis, not
+// in cure, so the reason is carried through purely so a slow job is explainable.
+//
+// The recomputed map deliberately never crosses back into the WebView. The
+// 64 KiB cap exists precisely because a pathological map is unbounded; handing
+// the frontend the thing the cap refused would defeat it. It is memoised
+// Rust-side instead, so the model pass and the support pass of one job share a
+// single classify rather than paying for two.
+
+/// Identity of a memoised recompute. Fingerprint-keyed, so a source file edited
+/// between two slices re-classifies instead of serving a map for the old bytes.
+#[derive(Clone, PartialEq, Eq)]
+struct RecomputedRunMapKey {
+    path: String,
+    size_bytes: u64,
+    mtime_ms_bits: u64,
+}
+
+/// `None` in the payload = the recompute found NO model/support split.
+type RecomputedRunMap = Option<Arc<Vec<(u32, u32)>>>;
+
+static RECOMPUTED_RUN_MAP: OnceLock<Mutex<Option<(RecomputedRunMapKey, RecomputedRunMap)>>> =
+    OnceLock::new();
+
+fn recomputed_run_map_cache(
+) -> &'static Mutex<Option<(RecomputedRunMapKey, RecomputedRunMap)>> {
+    RECOMPUTED_RUN_MAP.get_or_init(|| Mutex::new(None))
+}
+
+/// Re-derives a source file's model run map by re-running the import
+/// classification over it. Returns `None` when the file has no model/support
+/// split at all.
+///
+/// Cost is the classify itself — measured at 3 774 ms for 11.2M triangles on
+/// the adversarial lattice (`classify_import`'s own doc table). That is the
+/// honest price of a map that was never carried; the single-entry memo below is
+/// what keeps a job from paying it twice for the same model.
+fn recompute_import_model_runs(
+    path: &std::path::Path,
+    stat: &SourceFileStat,
+    reason: Option<&str>,
+) -> Result<RecomputedRunMap, String> {
+    let key = RecomputedRunMapKey {
+        path: path.to_string_lossy().into_owned(),
+        size_bytes: stat.size_bytes,
+        mtime_ms_bits: stat.mtime_ms.to_bits(),
+    };
+
+    if let Ok(cache) = recomputed_run_map_cache().lock() {
+        if let Some((cached_key, cached)) = cache.as_ref() {
+            if *cached_key == key {
+                return Ok(cached.clone());
+            }
+        }
+    }
+
+    let started = std::time::Instant::now();
+    let (mut mesh, _stats, dropped_file_indices, file_triangle_count) = io::stl::load_tracked(path)
+        .map_err(|e| {
+            format!(
+                "{FULLRES_SOURCE_MISSING_PREFIX}: cannot re-read '{}' to recompute its import \
+                 run map: {e}",
+                path.display()
+            )
+        })?;
+    let classification = classify_import(
+        &mut mesh,
+        &ClassifyImportOptions {
+            source_triangle_count: file_triangle_count,
+            dropped_file_indices,
+            // Section topology stats are for the UI; the splice needs the map
+            // and nothing else, and this pass is already the expensive one.
+            compute_section_stats: false,
+        },
+    );
+
+    let recomputed: RecomputedRunMap = match classification.model_triangle_count {
+        Some(_) => Some(Arc::new(
+            classification
+                .model_runs
+                .iter()
+                .map(|run| (run.start, run.len))
+                .collect(),
+        )),
+        // Absence of a split, recorded as absence. The splice translates it to
+        // "wholly model" at `section_emit_segments`, in one place.
+        None => None,
+    };
+
+    log::info!(
+        "[fullres splice] recomputed the import run map for '{}' in {:.0} ms \
+         ({} source triangles, model={:?}, runs={}) — reason: {}",
+        path.display(),
+        started.elapsed().as_secs_f64() * 1000.0,
+        file_triangle_count,
+        classification.model_triangle_count,
+        recomputed.as_ref().map_or(0, |runs| runs.len()),
+        reason.unwrap_or("unspecified"),
+    );
+
+    if let Ok(mut cache) = recomputed_run_map_cache().lock() {
+        *cache = Some((key, recomputed.clone()));
+    }
+    Ok(recomputed)
+}
+
+/// Resolves the model runs a section-aware splice pass will use: nothing for a
+/// whole-file pass, the caller's map when it had one, else a recompute.
+fn resolve_splice_model_runs(
+    path: &std::path::Path,
+    stat: &SourceFileStat,
+    section: SpliceSection,
+    provided: Option<Vec<u32>>,
+    reason: Option<&str>,
+) -> Result<(Option<Vec<(u32, u32)>>, RunMapSource), String> {
+    if section == SpliceSection::All {
+        return Ok((None, RunMapSource::NotRequired));
+    }
+    if let Some(flat) = provided {
+        return Ok((Some(decode_flat_run_map(&flat)?), RunMapSource::Provided));
+    }
+    match recompute_import_model_runs(path, stat, reason)? {
+        Some(runs) => Ok((
+            Some(runs.as_ref().clone()),
+            RunMapSource::Recomputed,
+        )),
+        None => Ok((None, RunMapSource::NoSplit)),
+    }
 }
 
 fn parse_matrix16(matrix16: &[f64]) -> Result<[f64; 16], String> {
@@ -1931,10 +2545,24 @@ fn quantize_world_floats_to_u16_bytes(
 /// Slicing splice: streams the original STL from `source_path`, reprojects to
 /// world space, quantizes with the job's transport bounds, and APPENDS directly
 /// into the in-memory staged mesh (`STAGED_MESH`). The orchestrator must have
-/// called `stage_mesh_binary_start` first and must splice BEFORE streaming the
-/// remaining models' chunks so model triangles stay contiguous at the front of
-/// the staged buffer (model_triangle_count contract). Atomic per model: on any
-/// failure the staged buffer is truncated back to its pre-splice length.
+/// called `stage_mesh_binary_start` first. Atomic per pass: on any failure the
+/// staged buffer is truncated back to its pre-splice length.
+///
+/// **Ph3 — `section` is what makes the engine's single split index able to
+/// describe a spliced scene.** The slicer takes one boundary, so the staged
+/// buffer must be `[every model triangle | every support triangle]`. The
+/// orchestrator therefore drives four passes: this command with
+/// `section: 'model'` for each spliced model, then the WebView collector's
+/// model triangles, then this command with `section: 'support'`, then the
+/// collector's support triangles and the generated supports/rafts. Omitting
+/// `section` (or passing `'all'`) reproduces the pre-Ph3 whole-file pass
+/// byte-for-byte, which is what a source with no model/support split gets.
+///
+/// `model_runs` is the flat `[start0, len0, …]` map in SOURCE-FILE indices.
+/// Omit it on a sectioned pass to have the map recomputed from the file — see
+/// `resolve_splice_model_runs`. `run_map_recompute_reason` only labels the log
+/// line; the remedy is identical for all four of `resolveImportRunMap`'s
+/// reasons.
 #[tauri::command]
 pub async fn stage_fullres_mesh_from_source(
     source_path: String,
@@ -1943,15 +2571,34 @@ pub async fn stage_fullres_mesh_from_source(
     expected_size_bytes: Option<u64>,
     expected_mtime_ms: Option<f64>,
     quantization: FullResQuantizationBounds,
+    section: Option<String>,
+    model_runs: Option<Vec<u32>>,
+    run_map_recompute_reason: Option<String>,
 ) -> Result<FullResSpliceSummary, String> {
     let started = std::time::Instant::now();
+    let path = std::path::PathBuf::from(&source_path);
+    let expected_fingerprint =
+        expected_size_bytes.and_then(|size| expected_mtime_ms.map(|mtime| (size, mtime)));
+    let section = SpliceSection::parse(section.as_deref())?;
+    // Verify BEFORE any recompute: re-classifying a file that turns out to be
+    // stale would spend seconds to produce a map for bytes we then refuse.
+    let stat = verify_source_fingerprint(&path, expected_fingerprint)?;
+    let (resolved_runs, run_map_source) = resolve_splice_model_runs(
+        &path,
+        &stat,
+        section,
+        model_runs,
+        run_map_recompute_reason.as_deref(),
+    )?;
+
     let params = FullResSpliceParams {
-        source_path: std::path::Path::new(&source_path),
+        source_path: &path,
         matrix16_col_major: parse_matrix16(&matrix16)?,
         c_pre: parse_vec3_f64(&c_pre, "cPre")?,
-        expected_fingerprint: expected_size_bytes
-            .and_then(|size| expected_mtime_ms.map(|mtime| (size, mtime))),
+        expected_fingerprint,
         flip_winding_on_negative_determinant: true,
+        section,
+        model_runs: resolved_runs,
     };
 
     let baseline_len = {
@@ -1987,15 +2634,25 @@ pub async fn stage_fullres_mesh_from_source(
         Ok(stats) => {
             let splice_ms = started.elapsed().as_secs_f64() * 1_000.0;
             log::info!(
-                "[stage_fullres_mesh_from_source] spliced {} full-res triangles from '{}' in {:.1} ms (world z {:.3}..{:.3})",
-                stats.triangle_count,
+                "[stage_fullres_mesh_from_source] spliced {} of {} full-res triangles from '{}' \
+                 (section {}, run map {}) in {:.1} ms (world z {:.3}..{:.3})",
+                stats.staged_triangle_count,
+                stats.source_triangle_count,
                 source_path,
+                section.as_str(),
+                run_map_source.as_str(),
                 splice_ms,
                 stats.world_min[2],
                 stats.world_max[2],
             );
             Ok(FullResSpliceSummary {
-                staged_triangle_count: stats.triangle_count,
+                staged_triangle_count: stats.staged_triangle_count,
+                source_triangle_count: stats.source_triangle_count,
+                skipped_triangle_count: stats
+                    .source_triangle_count
+                    .saturating_sub(stats.staged_triangle_count),
+                section: section.as_str().to_string(),
+                run_map_source: run_map_source.as_str().to_string(),
                 world_min: stats.world_min,
                 world_max: stats.world_max,
                 splice_ms,
@@ -2038,6 +2695,13 @@ pub async fn splice_fullres_mesh_into_stage_file(
         // The JS export bake applies matrixWorld verbatim without a winding
         // flip — mirror that exactly.
         flip_winding_on_negative_determinant: false,
+        // Ph3: mesh export is deliberately WHOLE-file. Its output is one STL /
+        // 3MF of everything the user has on the plate, triangle order is
+        // irrelevant to both serializers, and there is no split index for a
+        // section boundary to mean anything to. Sectioning here would buy
+        // nothing and cost a second read of the file.
+        section: SpliceSection::All,
+        model_runs: None,
     };
 
     // Release any WebView chunk appender still holding this staging file so
@@ -2096,13 +2760,17 @@ pub async fn splice_fullres_mesh_into_stage_file(
             let splice_ms = started.elapsed().as_secs_f64() * 1_000.0;
             log::info!(
                 "[splice_fullres_mesh_into_stage_file] spliced {} full-res triangles from '{}' into '{}' in {:.1} ms",
-                stats.triangle_count,
+                stats.staged_triangle_count,
                 source_path,
                 stage_file_path,
                 splice_ms,
             );
             Ok(FullResSpliceSummary {
-                staged_triangle_count: stats.triangle_count,
+                staged_triangle_count: stats.staged_triangle_count,
+                source_triangle_count: stats.source_triangle_count,
+                skipped_triangle_count: 0,
+                section: SpliceSection::All.as_str().to_string(),
+                run_map_source: RunMapSource::NotRequired.as_str().to_string(),
                 world_min: stats.world_min,
                 world_max: stats.world_max,
                 splice_ms,
@@ -2151,36 +2819,61 @@ const IDENTITY_MATRIX16: [f64; 16] = [
     0.0, 0.0, 0.0, 1.0, //
 ];
 
-/// Mutator splice: streams the original binary STL, reprojects to the local
-/// centered frame (`v_local = v_raw − C_pre`), and REPLACES the in-memory
-/// staged mesh (`STAGED_MESH`) with raw f32 LE triangle soup that the
-/// `*_staged` mutator commands read. Atomic: on any failure the previously
-/// staged buffer is left untouched (the frontend degrades to re-staging the
-/// preview geometry).
-#[tauri::command]
-pub async fn stage_fullres_mesh_into_staged(
-    source_path: String,
-    c_pre: Vec<f64>,
-    expected_size_bytes: Option<u64>,
-    expected_mtime_ms: Option<f64>,
-) -> Result<FullResSpliceSummary, String> {
-    let started = std::time::Instant::now();
+// --- Ph3b: hollow section-awareness ------------------------------------------
+//
+// Ph3 gave the SLICING splice a section, because the slicer's single split index
+// needed one. The permanent mutators kept splicing the whole file, so hollowing
+// a pre-supported import voxelised the supports along with the model body — an
+// honest suboptimality Ph3 recorded rather than half-wired.
+//
+// Ph3b closes it with the plan's design: stage the MODEL section, hollow it,
+// re-append the untouched SUPPORT section. Both halves come off the same
+// `splice_fullres_stl_stream` walk in the same LOCAL frame, so "untouched" is
+// literal — the support bytes the frontend re-appends are the source file's own
+// records, reprojected by `v_local = v_raw − T_center` and nothing else.
+//
+// The two passes are checkable rather than trusted: the model pass reports
+// `skipped_triangle_count`, the support pass reports `staged_triangle_count`,
+// and the frontend refuses to re-append unless they are equal.
+
+/// One LOCAL-frame mutator splice pass. Shared by the staging command (which
+/// publishes the soup as `STAGED_MESH`) and the section read-back (which hands
+/// it to the frontend for re-append), so the two cannot drift in frame,
+/// winding or section semantics.
+pub(crate) struct MutatorSpliceRequest<'a> {
+    pub path: &'a std::path::Path,
+    /// The vector subtracted from each raw vertex. For the mutators this is
+    /// `T_center = C_pre − geometry.center`, NOT `C_pre` — see
+    /// `fullResMutatorStaging.ts`. Getting it wrong fails as a whole-model shift
+    /// in Y by half the model height.
+    pub c_pre: [f64; 3],
+    pub expected_fingerprint: Option<(u64, f64)>,
+    pub section: SpliceSection,
+    pub model_runs: Option<Vec<(u32, u32)>>,
+    /// Carried into the log line only; the summary reports it back so a test can
+    /// assert a recompute happened rather than infer it from a triangle count.
+    pub run_map_source: RunMapSource,
+}
+
+/// Streams one section of the source file into a raw f32 LE triangle soup in the
+/// local mutator frame. Identity matrix, no winding flip — the encoding
+/// `io::staged::load_positions_le` reads and the encoding the mutators' own
+/// output uses, so a re-appended support block is byte-compatible with a
+/// hollowed model block.
+fn mutator_splice_soup(
+    request: &MutatorSpliceRequest<'_>,
+) -> Result<(FullResSpliceStats, Vec<u8>), String> {
     let params = FullResSpliceParams {
-        source_path: std::path::Path::new(&source_path),
+        source_path: request.path,
         matrix16_col_major: IDENTITY_MATRIX16,
-        c_pre: parse_vec3_f64(&c_pre, "cPre")?,
-        expected_fingerprint: expected_size_bytes
-            .and_then(|size| expected_mtime_ms.map(|mtime| (size, mtime))),
+        c_pre: request.c_pre,
+        expected_fingerprint: request.expected_fingerprint,
         // Identity transform → positive determinant → no winding flip; the
         // mutator soup preserves the source triangle winding exactly.
         flip_winding_on_negative_determinant: false,
+        section: request.section,
+        model_runs: request.model_runs.clone(),
     };
-
-    // Accumulate the full raw-f32 soup in Rust memory, then publish it as the
-    // staged mesh only on success (`?` below aborts before the publish block, so
-    // a missing/stale source leaves the prior staged buffer intact). The soup is
-    // the same materialization the mutator performs anyway when it loads the
-    // staged positions — no extra WebView residency (plan §C.2).
     let mut soup_bytes: Vec<u8> = Vec::new();
     let stats = splice_fullres_stl_stream(
         &params,
@@ -2191,6 +2884,110 @@ pub async fn stage_fullres_mesh_into_staged(
             Ok(())
         },
     )?;
+    Ok((stats, soup_bytes))
+}
+
+/// Turns the command-level arguments shared by both mutator commands into a
+/// request, resolving the run map exactly as the slicing splice does
+/// (`resolve_splice_model_runs`: nothing for a whole-file pass, the caller's map
+/// when it had one, else a fingerprint-memoised recompute).
+fn build_mutator_splice_request<'a>(
+    path: &'a std::path::Path,
+    c_pre: &[f64],
+    expected_size_bytes: Option<u64>,
+    expected_mtime_ms: Option<f64>,
+    section: Option<String>,
+    model_runs: Option<Vec<u32>>,
+    run_map_recompute_reason: Option<&str>,
+) -> Result<MutatorSpliceRequest<'a>, String> {
+    let expected_fingerprint =
+        expected_size_bytes.and_then(|size| expected_mtime_ms.map(|mtime| (size, mtime)));
+    let section = SpliceSection::parse(section.as_deref())?;
+    // Verify BEFORE any recompute: re-classifying a file that turns out to be
+    // stale would spend seconds to produce a map for bytes we then refuse.
+    let stat = verify_source_fingerprint(path, expected_fingerprint)?;
+    let (resolved_runs, run_map_source) = resolve_splice_model_runs(
+        path,
+        &stat,
+        section,
+        model_runs,
+        run_map_recompute_reason,
+    )?;
+    Ok(MutatorSpliceRequest {
+        path,
+        c_pre: parse_vec3_f64(c_pre, "cPre")?,
+        expected_fingerprint,
+        section,
+        model_runs: resolved_runs,
+        run_map_source,
+    })
+}
+
+fn mutator_splice_summary(
+    request: &MutatorSpliceRequest<'_>,
+    stats: &FullResSpliceStats,
+    splice_ms: f64,
+) -> FullResSpliceSummary {
+    FullResSpliceSummary {
+        staged_triangle_count: stats.staged_triangle_count,
+        source_triangle_count: stats.source_triangle_count,
+        skipped_triangle_count: stats
+            .source_triangle_count
+            .saturating_sub(stats.staged_triangle_count),
+        section: request.section.as_str().to_string(),
+        run_map_source: request.run_map_source.as_str().to_string(),
+        world_min: stats.world_min,
+        world_max: stats.world_max,
+        splice_ms,
+    }
+}
+
+/// Mutator splice: streams the original binary STL, reprojects to the local
+/// centered frame (`v_local = v_raw − C_pre`), and REPLACES the in-memory
+/// staged mesh (`STAGED_MESH`) with raw f32 LE triangle soup that the
+/// `*_staged` mutator commands read. Atomic: on any failure the previously
+/// staged buffer is left untouched (the frontend degrades to re-staging the
+/// preview geometry).
+///
+/// **Ph3b — `section` is what keeps hollowing off the supports.** Passing
+/// `'model'` stages only the triangles the run map names, so the voxel grid, the
+/// cavity and the shell all describe the model body alone. The complement is
+/// read back separately by [`read_fullres_mesh_section_positions`] and
+/// re-appended to the mutation output by the caller. Omitting `section` (or
+/// passing `'all'`) reproduces the pre-Ph3b whole-file pass byte-for-byte, which
+/// is what a source with no model/support split gets and what every non-hollow
+/// mutator still asks for.
+///
+/// `model_runs` is the flat `[start0, len0, …]` map in SOURCE-FILE indices; omit
+/// it on a sectioned pass to have the map recomputed from the file.
+#[tauri::command]
+pub async fn stage_fullres_mesh_into_staged(
+    source_path: String,
+    c_pre: Vec<f64>,
+    expected_size_bytes: Option<u64>,
+    expected_mtime_ms: Option<f64>,
+    section: Option<String>,
+    model_runs: Option<Vec<u32>>,
+    run_map_recompute_reason: Option<String>,
+) -> Result<FullResSpliceSummary, String> {
+    let started = std::time::Instant::now();
+    let path = std::path::PathBuf::from(&source_path);
+    let request = build_mutator_splice_request(
+        &path,
+        &c_pre,
+        expected_size_bytes,
+        expected_mtime_ms,
+        section,
+        model_runs,
+        run_map_recompute_reason.as_deref(),
+    )?;
+
+    // Accumulate the soup in Rust memory, then publish it as the staged mesh
+    // only on success (`?` below aborts before the publish block, so a
+    // missing/stale source leaves the prior staged buffer intact). The soup is
+    // the same materialization the mutator performs anyway when it loads the
+    // staged positions — no extra WebView residency (plan §C.2).
+    let (stats, soup_bytes) = mutator_splice_soup(&request)?;
 
     // Publish (replace) the staged mesh; clear any file-backed staging so the
     // mutator reads this in-memory buffer via `read_staging_bytes`.
@@ -2212,19 +3009,70 @@ pub async fn stage_fullres_mesh_into_staged(
 
     let splice_ms = started.elapsed().as_secs_f64() * 1_000.0;
     log::info!(
-        "[stage_fullres_mesh_into_staged] spliced {} full-res triangles from '{}' into the staged mesh in {:.1} ms (local z {:.3}..{:.3})",
-        stats.triangle_count,
+        "[stage_fullres_mesh_into_staged] spliced {} of {} full-res triangles from '{}' into the \
+         staged mesh (section {}, run map {}) in {:.1} ms (local z {:.3}..{:.3})",
+        stats.staged_triangle_count,
+        stats.source_triangle_count,
         source_path,
+        request.section.as_str(),
+        request.run_map_source.as_str(),
         splice_ms,
         stats.world_min[2],
         stats.world_max[2],
     );
-    Ok(FullResSpliceSummary {
-        staged_triangle_count: stats.triangle_count,
-        world_min: stats.world_min,
-        world_max: stats.world_max,
-        splice_ms,
-    })
+    Ok(mutator_splice_summary(&request, &stats, splice_ms))
+}
+
+/// Ph3b — the SUPPORT read-back. Streams one section of the original STL in the
+/// LOCAL mutator frame and returns it as raw f32 LE triangle soup (9 floats per
+/// triangle), the same encoding `mesh_repair_read_positions` returns and the
+/// same frame the mutation output comes back in — so the caller can concatenate
+/// the two and get one coherent mesh.
+///
+/// This is the only place in the arc where full-resolution source bytes cross
+/// into the WebView, and it is unavoidable rather than an oversight: the point
+/// of Ph3b is that the support section survives the mutation *verbatim*, and the
+/// mutation's output IS the model's new scene geometry. The bytes were always
+/// going to land there — before Ph3b they arrived voxelised.
+///
+/// Returns the section's triangles only. The caller must have staged the
+/// complementary section with the SAME `model_runs`, and must verify that this
+/// pass's triangle count equals that pass's `skippedTriangleCount` before
+/// re-appending; the two counts disagreeing means the map does not describe the
+/// file, which is a wrong mesh rather than a slow one.
+#[tauri::command]
+pub async fn read_fullres_mesh_section_positions(
+    source_path: String,
+    c_pre: Vec<f64>,
+    expected_size_bytes: Option<u64>,
+    expected_mtime_ms: Option<f64>,
+    section: Option<String>,
+    model_runs: Option<Vec<u32>>,
+    run_map_recompute_reason: Option<String>,
+) -> Result<Response, String> {
+    let started = std::time::Instant::now();
+    let path = std::path::PathBuf::from(&source_path);
+    let request = build_mutator_splice_request(
+        &path,
+        &c_pre,
+        expected_size_bytes,
+        expected_mtime_ms,
+        section,
+        model_runs,
+        run_map_recompute_reason.as_deref(),
+    )?;
+    let (stats, soup_bytes) = mutator_splice_soup(&request)?;
+    log::info!(
+        "[read_fullres_mesh_section_positions] read {} of {} full-res triangles from '{}' \
+         (section {}, run map {}) in {:.1} ms",
+        stats.staged_triangle_count,
+        stats.source_triangle_count,
+        source_path,
+        request.section.as_str(),
+        request.run_map_source.as_str(),
+        started.elapsed().as_secs_f64() * 1_000.0,
+    );
+    Ok(Response::new(soup_bytes))
 }
 
 #[cfg(test)]
@@ -2651,6 +3499,8 @@ mod p0_fullres_red_harness {
                 c_pre: request.c_pre,
                 expected_fingerprint: None,
                 flip_winding_on_negative_determinant: true,
+                section: SpliceSection::All,
+                model_runs: None,
             };
             // Build-volume-style transport bounds generously covering the
             // transformed lattice (bounds correctness itself is exercised by
@@ -2680,7 +3530,7 @@ mod p0_fullres_red_harness {
             assert_eq!(staged_bytes % 18, 0, "staged bytes must be whole u16 triangles");
             let staged_triangle_count = staged_bytes / 18;
             assert_eq!(
-                staged_triangle_count, stats.triangle_count,
+                staged_triangle_count, stats.staged_triangle_count,
                 "sink-measured staged count must match the stream's triangle count",
             );
             Ok(FullResSpliceOutcome {
@@ -2935,10 +3785,12 @@ mod p0_fullres_red_harness {
             c_pre,
             expected_fingerprint: None,
             flip_winding_on_negative_determinant: true,
+            section: SpliceSection::All,
+            model_runs: None,
         };
         let stats = splice_fullres_stl_stream(&params, &[], |_, _| {}, |_| Ok(()))
             .expect("full-res splice stream");
-        assert_eq!(stats.triangle_count, total);
+        assert_eq!(stats.staged_triangle_count, total);
 
         // Containment invariant (subset-of-vertices ⇒ subset-of-bounds).
         const EPS: f32 = 1e-3;
@@ -3021,6 +3873,8 @@ mod p0_fullres_red_harness {
             c_pre,
             expected_fingerprint: None,
             flip_winding_on_negative_determinant: true,
+            section: SpliceSection::All,
+            model_runs: None,
         };
         let mut staged_bytes = 0u64;
         let mut scratch: Vec<u8> = Vec::new();
@@ -3038,7 +3892,7 @@ mod p0_fullres_red_harness {
         )
         .expect("12M splice");
         let elapsed = started.elapsed();
-        assert_eq!(stats.triangle_count, total);
+        assert_eq!(stats.staged_triangle_count, total);
         eprintln!(
             "[p1][splice-wall-time] {} triangles ({:.1} MB staged) in {:.3}s",
             total,
@@ -3082,6 +3936,8 @@ mod p0_fullres_red_harness {
             c_pre,
             expected_fingerprint: None,
             flip_winding_on_negative_determinant: true,
+            section: SpliceSection::All,
+            model_runs: None,
         };
         let mut staged: Vec<u8> = Vec::with_capacity((total as usize) * 18);
         let mut scratch: Vec<u8> = Vec::new();
@@ -3097,7 +3953,7 @@ mod p0_fullres_red_harness {
             },
         )
         .expect("full-res splice stream");
-        assert_eq!(stats.triangle_count, total);
+        assert_eq!(stats.staged_triangle_count, total);
         assert_eq!(staged.len() as u64, total * 18);
 
         // Decode the staged u16 stream the way the engine transport does.
@@ -3235,6 +4091,8 @@ mod p0_fullres_red_harness {
             c_pre,
             expected_fingerprint: None,
             flip_winding_on_negative_determinant: false,
+            section: SpliceSection::All,
+            model_runs: None,
         };
 
         let samples = [0u64, total / 2, total - 1];
@@ -3260,7 +4118,7 @@ mod p0_fullres_red_harness {
             "the mutator staged input must carry the ORIGINAL triangle count ({total}), \
              not the {preview_tris}-triangle preview"
         );
-        assert_eq!(stats.triangle_count, total);
+        assert_eq!(stats.staged_triangle_count, total);
 
         // Local-frame reprojection: identity means v_local = v_raw − C_pre.
         for (sample_index, &tri_index) in samples.iter().enumerate() {
@@ -3304,6 +4162,8 @@ mod p0_fullres_red_harness {
             c_pre,
             expected_fingerprint: None,
             flip_winding_on_negative_determinant: false,
+            section: SpliceSection::All,
+            model_runs: None,
         };
         let mut soup: Vec<f32> = Vec::with_capacity((total as usize) * 9);
         splice_fullres_stl_stream(&params, &[], |_, _| {}, |floats| {
@@ -3545,5 +4405,915 @@ mod p0_fullres_red_harness {
             (elapsed - after_weld).as_secs_f64(),
         );
         assert!(!outcome.mesh.triangles.is_empty());
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ph1 WIRING — `load_stl_file` → classify → DFST transport
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod ph1_import_wiring_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    /// A deterministic model+support plate, small enough to run in a unit test
+    /// and shaped to satisfy every guard in `classify_and_reorder_detailed`:
+    /// ONE high-poly model shell well above the raft cut, plus 200 low-poly
+    /// support posts that touch the base.
+    ///
+    /// The file order is deliberately INTERLEAVED — model half, all supports,
+    /// model half — so a run map that merely recorded "the first N triangles"
+    /// would be visibly wrong.
+    const SUPPORT_POSTS: usize = 200;
+    /// Sized so the model shell clears the classifier's `model_min_tris` floor
+    /// and out-densities the posts by far more than 4x per component, while the
+    /// support section still out-TOTALS it — which is what
+    /// `compute_likely_support_geometry` actually asks for, and what a real
+    /// pre-supported plate looks like.
+    const MODEL_GRID: usize = 8;
+    /// 6 faces x MODEL_GRID^2 quads x 2 triangles.
+    pub(super) const MODEL_TRIS: usize = 6 * MODEL_GRID * MODEL_GRID * 2;
+    pub(super) const SUPPORT_TRIS: usize = SUPPORT_POSTS * 12;
+    const _: () = assert!(SUPPORT_TRIS > MODEL_TRIS);
+
+    fn axis_box_triangles(min: [f32; 3], max: [f32; 3]) -> Vec<[[f32; 3]; 3]> {
+        let [x0, y0, z0] = min;
+        let [x1, y1, z1] = max;
+        vec![
+            [[x0, y0, z0], [x1, y1, z0], [x1, y0, z0]],
+            [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0]],
+            [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1]],
+            [[x0, y0, z1], [x1, y1, z1], [x0, y1, z1]],
+            [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1]],
+            [[x0, y0, z0], [x1, y0, z1], [x0, y0, z1]],
+            [[x0, y1, z0], [x1, y1, z1], [x1, y1, z0]],
+            [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1]],
+            [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1]],
+            [[x0, y0, z0], [x0, y1, z1], [x0, y1, z0]],
+            [[x1, y0, z0], [x1, y1, z1], [x1, y0, z1]],
+            [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1]],
+        ]
+    }
+
+    /// A box whose six faces are each subdivided into `n x n` quads, so it is
+    /// ONE connected component with enough triangles to clear the classifier's
+    /// `model_min_tris` floor. Seam vertices are computed by the same lerp on
+    /// both adjoining faces, so they weld exactly.
+    fn subdivided_box_triangles(min: [f32; 3], max: [f32; 3], n: usize) -> Vec<[[f32; 3]; 3]> {
+        let lerp = |a: f32, b: f32, i: usize| a + (b - a) * (i as f32 / n as f32);
+        let mut out = Vec::with_capacity(6 * n * n * 2);
+        // (axis held constant, its value, then the two varying axes)
+        let faces: [(usize, f32, usize, usize); 6] = [
+            (2, min[2], 0, 1),
+            (2, max[2], 0, 1),
+            (1, min[1], 0, 2),
+            (1, max[1], 0, 2),
+            (0, min[0], 1, 2),
+            (0, max[0], 1, 2),
+        ];
+        for (fixed_axis, fixed_value, au, av) in faces {
+            for i in 0..n {
+                for j in 0..n {
+                    let corner = |iu: usize, iv: usize| -> [f32; 3] {
+                        let mut p = [0.0f32; 3];
+                        p[fixed_axis] = fixed_value;
+                        p[au] = lerp(min[au], max[au], iu);
+                        p[av] = lerp(min[av], max[av], iv);
+                        p
+                    };
+                    let a = corner(i, j);
+                    let b = corner(i + 1, j);
+                    let c = corner(i + 1, j + 1);
+                    let d = corner(i, j + 1);
+                    out.push([a, b, c]);
+                    out.push([a, c, d]);
+                }
+            }
+        }
+        out
+    }
+
+    /// Writes the fixture as a binary STL. When `nan_at_file_index` is set, the
+    /// triangle at that FILE index gets a NaN coordinate — the intake drops it,
+    /// which shifts every later welded index by one relative to the file and is
+    /// exactly the shift the run map has to compensate for.
+    pub(super) fn write_support_plate_stl(path: &Path, nan_at_file_index: Option<usize>) -> usize {
+        let model = subdivided_box_triangles([40.0, 25.0, 2.0], [140.0, 125.0, 12.0], MODEL_GRID);
+        assert_eq!(model.len(), MODEL_TRIS);
+        let mut supports = Vec::with_capacity(SUPPORT_TRIS);
+        for k in 0..SUPPORT_POSTS {
+            let ix = (k % 20) as f32;
+            let iy = (k / 20) as f32;
+            let x = 41.0 + ix * 4.0;
+            let y = 26.0 + iy * 4.0;
+            supports.extend(axis_box_triangles([x, y, 0.0], [x + 0.4, y + 0.4, 1.0]));
+        }
+        assert_eq!(supports.len(), SUPPORT_TRIS);
+
+        let half = MODEL_TRIS / 2;
+        let mut triangles: Vec<[[f32; 3]; 3]> = Vec::with_capacity(MODEL_TRIS + SUPPORT_TRIS);
+        triangles.extend_from_slice(&model[..half]);
+        triangles.extend_from_slice(&supports);
+        triangles.extend_from_slice(&model[half..]);
+
+        if let Some(index) = nan_at_file_index {
+            triangles[index][0][0] = f32::NAN;
+        }
+
+        let file = std::fs::File::create(path).expect("create fixture STL");
+        let mut out = BufWriter::with_capacity(1 << 20, file);
+        out.write_all(&[0u8; 80]).unwrap();
+        out.write_all(&(triangles.len() as u32).to_le_bytes()).unwrap();
+        let mut record = [0u8; 50];
+        for tri in &triangles {
+            let mut at = 12;
+            for vertex in tri {
+                for component in vertex {
+                    record[at..at + 4].copy_from_slice(&component.to_le_bytes());
+                    at += 4;
+                }
+            }
+            out.write_all(&record).unwrap();
+        }
+        out.flush().unwrap();
+        triangles.len()
+    }
+
+
+    /// Writes the same fixture as an ASCII STL, which takes the OTHER branch of
+    /// `load_stl_file` — the one that goes through `io::stl::load_tracked`.
+    fn write_support_plate_ascii_stl(path: &Path) -> usize {
+        let model = subdivided_box_triangles([40.0, 25.0, 2.0], [140.0, 125.0, 12.0], MODEL_GRID);
+        let mut supports = Vec::with_capacity(SUPPORT_TRIS);
+        for k in 0..SUPPORT_POSTS {
+            let ix = (k % 20) as f32;
+            let iy = (k / 20) as f32;
+            let x = 41.0 + ix * 4.0;
+            let y = 26.0 + iy * 4.0;
+            supports.extend(axis_box_triangles([x, y, 0.0], [x + 0.4, y + 0.4, 1.0]));
+        }
+        let half = MODEL_TRIS / 2;
+        let mut triangles: Vec<[[f32; 3]; 3]> = Vec::with_capacity(MODEL_TRIS + SUPPORT_TRIS);
+        triangles.extend_from_slice(&model[..half]);
+        triangles.extend_from_slice(&supports);
+        triangles.extend_from_slice(&model[half..]);
+
+        let file = std::fs::File::create(path).expect("create ASCII fixture");
+        let mut out = BufWriter::with_capacity(1 << 20, file);
+        writeln!(out, "solid plate").unwrap();
+        for tri in &triangles {
+            writeln!(out, "facet normal 0 0 0").unwrap();
+            writeln!(out, "outer loop").unwrap();
+            for v in tri {
+                writeln!(out, "vertex {} {} {}", v[0], v[1], v[2]).unwrap();
+            }
+            writeln!(out, "endloop").unwrap();
+            writeln!(out, "endfacet").unwrap();
+        }
+        writeln!(out, "endsolid plate").unwrap();
+        out.flush().unwrap();
+        triangles.len()
+    }
+
+    /// Ph1 wiring (a) — the ASCII / non-standard-binary branch classifies too.
+    /// It reaches `classify_import` through `io::stl::load_tracked` rather than
+    /// the streamed soup, so it is a genuinely separate path and not covered by
+    /// the binary tests above.
+    #[test]
+    fn ascii_import_classifies_and_transports_the_result() {
+        let fixture = fixture_path("ascii");
+        let total = write_support_plate_ascii_stl(&fixture.0);
+
+        let bytes = load_stl_file_bytes(fixture.0.to_str().unwrap(), None, None)
+            .expect("ASCII import must succeed");
+        let decoded = decode_stl_response(&bytes);
+
+        assert!(!decoded.is_preview);
+        let c = &decoded.classification;
+        assert_eq!(c["source_triangle_count"].as_u64().unwrap() as usize, total);
+        assert_eq!(
+            c["model_triangle_count"].as_u64().unwrap() as usize,
+            MODEL_TRIS,
+        );
+        assert!(c["likely_support_geometry"].as_bool().unwrap());
+        assert!(!decoded.run_map.is_empty(), "the ASCII branch emits a run map too");
+        let mapped: usize = decoded.run_map.iter().map(|&(_, len)| len as usize).sum();
+        assert_eq!(mapped, MODEL_TRIS);
+    }
+
+    pub(super) struct FixtureFile(pub(super) PathBuf);
+
+    impl Drop for FixtureFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    /// pid + monotonic sequence, per the established temp-naming discipline —
+    /// coarse Windows clock granularity makes a nanos-only name collide between
+    /// concurrently-scheduled tests.
+    pub(super) fn fixture_path(label: &str) -> FixtureFile {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        FixtureFile(std::env::temp_dir().join(format!(
+            "dragonfruit-ph1-wiring-{label}-{}-{seq}.stl",
+            std::process::id()
+        )))
+    }
+
+    /// The frontend's view of a DFST response, decoded by the same rules
+    /// `useStlGeometry.ts` uses. A Rust-side decoder means the wire format has
+    /// an executable spec on both ends of the IPC rather than one end and a
+    /// comment.
+    struct DecodedResponse {
+        is_preview: bool,
+        original_triangle_count: u32,
+        output_triangle_count: u32,
+        run_map: Vec<(u32, u32)>,
+        classification: serde_json::Value,
+    }
+
+    fn decode_stl_response(bytes: &[u8]) -> DecodedResponse {
+        assert!(bytes.len() >= STL_RESPONSE_HEADER_BYTES, "response too short");
+        assert_eq!(&bytes[0..4], STL_RESPONSE_MAGIC, "bad magic");
+        let u32_at = |off: usize| u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap());
+        let flags = u32_at(4);
+        let original_triangle_count = u32_at(8);
+        let output_triangle_count = u32_at(12);
+        let run_map_entries = u32_at(24) as usize;
+        let classification_bytes = u32_at(28) as usize;
+
+        let geometry_len = output_triangle_count as usize * 18 * 4;
+        let expected =
+            STL_RESPONSE_HEADER_BYTES + geometry_len + run_map_entries * 8 + classification_bytes;
+        assert_eq!(
+            bytes.len(),
+            expected,
+            "response length must be exactly derivable from the header",
+        );
+
+        let run_base = STL_RESPONSE_HEADER_BYTES + geometry_len;
+        let run_map = (0..run_map_entries)
+            .map(|i| {
+                let at = run_base + i * 8;
+                (
+                    u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()),
+                    u32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap()),
+                )
+            })
+            .collect();
+        let json_base = run_base + run_map_entries * 8;
+        let classification = if classification_bytes == 0 {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes[json_base..json_base + classification_bytes])
+                .expect("classification JSON must parse")
+        };
+
+        DecodedResponse {
+            is_preview: (flags & STL_RESPONSE_FLAG_PREVIEW) != 0,
+            original_triangle_count,
+            output_triangle_count,
+            run_map,
+            classification,
+        }
+    }
+
+    /// Ph1 wiring (a) + (d) — the classification exists on the VERBATIM branch
+    /// and reaches the frontend. Before the wiring, `classify_import` had no
+    /// call site outside the mesh-repair crate's own tests, so an import
+    /// returned geometry and nothing else.
+    #[test]
+    fn verbatim_import_classifies_and_transports_the_result() {
+        let fixture = fixture_path("verbatim");
+        let total = write_support_plate_stl(&fixture.0, None);
+
+        let bytes = load_stl_file_bytes(fixture.0.to_str().unwrap(), None, None)
+            .expect("import must succeed");
+        let decoded = decode_stl_response(&bytes);
+
+        assert!(!decoded.is_preview, "at-budget import must stay verbatim");
+        assert_eq!(decoded.original_triangle_count as usize, total);
+        assert_eq!(decoded.output_triangle_count as usize, total);
+
+        let c = &decoded.classification;
+        assert!(c.is_object(), "classification block must be present");
+        assert_eq!(c["source_triangle_count"].as_u64().unwrap() as usize, total);
+        assert_eq!(
+            c["model_triangle_count"].as_u64().unwrap() as usize,
+            MODEL_TRIS,
+            "the model section is the subdivided shell, not the whole file",
+        );
+        assert!(
+            c["likely_support_geometry"].as_bool().unwrap(),
+            "200 low-poly base-touching posts is a pre-supported plate",
+        );
+        assert_eq!(
+            c["connected_components"].as_u64().unwrap() as usize,
+            SUPPORT_POSTS + 1,
+        );
+        assert_eq!(c["dropped_nonfinite_triangles"].as_u64().unwrap(), 0);
+    }
+
+    /// The honesty contract, end to end: a field the cheap tier does not
+    /// compute crosses the wire as `null`, never as a measured-looking `0`.
+    #[test]
+    fn transported_section_stats_keep_unmeasured_fields_null() {
+        let fixture = fixture_path("unmeasured");
+        write_support_plate_stl(&fixture.0, None);
+
+        let bytes = load_stl_file_bytes(fixture.0.to_str().unwrap(), None, None).unwrap();
+        let c = decode_stl_response(&bytes).classification;
+
+        for section in ["model_section", "support_section"] {
+            let s = &c[section];
+            assert!(s.is_object(), "{section} must be present");
+            assert!(
+                s["self_intersection_triangles"].is_null(),
+                "{section}: the BVH sweep never runs at this tier — it must be null, not 0",
+            );
+            assert!(
+                s["boundary_edges"].is_u64(),
+                "{section}: the topology tier DID run, so its fields are measured",
+            );
+            assert!(s["is_watertight"].is_boolean(), "{section}: measured verdict");
+        }
+    }
+
+    /// Ph1 wiring (a) on the DECIMATING branch — the branch that previously
+    /// destroyed the full-resolution mesh before anything could classify it.
+    /// The classification describes the SOURCE; the geometry is the preview.
+    #[test]
+    fn over_budget_import_classifies_the_full_res_source_not_the_preview() {
+        let fixture = fixture_path("decimated");
+        let total = write_support_plate_stl(&fixture.0, None);
+        let budget = 1_000u64;
+
+        let bytes = load_stl_file_bytes(fixture.0.to_str().unwrap(), None, Some(budget)).unwrap();
+        let decoded = decode_stl_response(&bytes);
+
+        assert!(decoded.is_preview, "over-budget import must be a preview");
+        assert!(
+            (decoded.output_triangle_count as usize) < total,
+            "preview must actually be smaller than the source",
+        );
+        let c = &decoded.classification;
+        assert_eq!(
+            c["source_triangle_count"].as_u64().unwrap() as usize,
+            total,
+            "the classification is of the FULL-RES source",
+        );
+        assert_eq!(
+            c["model_triangle_count"].as_u64().unwrap() as usize,
+            MODEL_TRIS,
+        );
+        assert!(c["likely_support_geometry"].as_bool().unwrap());
+    }
+
+    /// Ph1 wiring (c) — the transported run map addresses triangles as the
+    /// SOURCE FILE numbers them. A triangle dropped at intake for a non-finite
+    /// coordinate shifts every later welded index by one; only compensating for
+    /// the drop POSITION (a count cannot) keeps the map addressing the right
+    /// records when the splice re-reads the file.
+    #[test]
+    fn transported_run_map_addresses_source_file_triangles() {
+        let dropped_at = 100usize; // inside the leading model block
+        let fixture = fixture_path("runmap");
+        let total = write_support_plate_stl(&fixture.0, Some(dropped_at));
+
+        let bytes = load_stl_file_bytes(fixture.0.to_str().unwrap(), None, None).unwrap();
+        let decoded = decode_stl_response(&bytes);
+        let c = &decoded.classification;
+
+        assert_eq!(c["dropped_nonfinite_triangles"].as_u64().unwrap(), 1);
+        assert_eq!(c["source_triangle_count"].as_u64().unwrap() as usize, total);
+        assert_eq!(
+            c["run_count"].as_u64().unwrap() as usize,
+            decoded.run_map.len(),
+            "no cap was hit, so every run the classifier produced is present",
+        );
+        assert!(!decoded.run_map.is_empty(), "a split must emit a run map");
+
+        // Ascending, disjoint, inside the FILE's index space.
+        let mut previous_end = 0u32;
+        for &(start, len) in &decoded.run_map {
+            assert!(len > 0, "empty run");
+            assert!(start >= previous_end, "runs must be ascending and disjoint");
+            previous_end = start + len;
+            assert!(
+                previous_end as usize <= total,
+                "run [{start}, {previous_end}) escapes the file's {total} triangles",
+            );
+        }
+
+        let mapped: usize = decoded.run_map.iter().map(|&(_, len)| len as usize).sum();
+        assert_eq!(
+            mapped,
+            c["model_triangle_count"].as_u64().unwrap() as usize,
+            "the runs must cover exactly the model section",
+        );
+
+        // THE point of the compensation: the dropped file triangle is not a
+        // model triangle any more, so no run may claim it — and the runs on
+        // either side of it must still address the file, not the welded mesh.
+        let covers_dropped = decoded
+            .run_map
+            .iter()
+            .any(|&(start, len)| (dropped_at as u32) >= start && (dropped_at as u32) < start + len);
+        assert!(
+            !covers_dropped,
+            "the run map claims file triangle {dropped_at}, which the intake dropped",
+        );
+        assert!(
+            decoded.run_map.len() >= 3,
+            "the interleaved fixture plus the drop must split into >=3 runs, got {:?}",
+            decoded.run_map,
+        );
+    }
+
+    /// The cap is a transport property, not a classification one: a map too
+    /// large to carry is dropped, but `run_count` still reports what the
+    /// classifier found so the reader knows to recompute rather than assuming
+    /// "no split".
+    #[test]
+    fn run_map_over_the_cap_is_dropped_but_reported() {
+        let mut classification = ImportClassification {
+            model_triangle_count: Some(4),
+            source_triangle_count: 8,
+            ..Default::default()
+        };
+        classification.model_runs = (0..(STL_RESPONSE_RUN_MAP_MAX_ENTRIES + 1) as u32)
+            .map(|i| dragonfruit_mesh_repair::TriangleRun {
+                start: i * 2,
+                len: 1,
+            })
+            .collect();
+
+        let mesh = IndexedMesh::from_triangle_soup(
+            &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            io::DEFAULT_MERGE_EPSILON,
+        );
+        let bytes = encode_stl_response(&mesh, 1, false, 0.0, 0, Some(&classification)).unwrap();
+        let decoded = decode_stl_response(&bytes);
+
+        assert!(decoded.run_map.is_empty(), "over-cap map must not be carried");
+        assert_eq!(
+            decoded.classification["run_count"].as_u64().unwrap() as usize,
+            STL_RESPONSE_RUN_MAP_MAX_ENTRIES + 1,
+            "the count must survive so the reader can tell 'too big' from 'no split'",
+        );
+    }
+}
+
+/// Ph3 — the run-map splice. These exercise `splice_fullres_stl_stream`'s
+/// section filter and `resolve_splice_model_runs`'s recompute against the SAME
+/// deliberately-interleaved model/support plate the Ph1 wiring tests use, so
+/// "the first N triangles" cannot pass by accident.
+#[cfg(test)]
+mod ph3_run_map_splice_tests {
+    use super::ph1_import_wiring_tests::{
+        fixture_path, write_support_plate_stl, MODEL_TRIS, SUPPORT_TRIS,
+    };
+    use super::*;
+
+    /// Whole-file params for the plate, in the identity frame (the section
+    /// filter is what is under test, not the reprojection — that is R2's job).
+    fn plate_params<'a>(
+        path: &'a std::path::Path,
+        section: SpliceSection,
+        model_runs: Option<Vec<(u32, u32)>>,
+    ) -> FullResSpliceParams<'a> {
+        FullResSpliceParams {
+            source_path: path,
+            matrix16_col_major: IDENTITY_MATRIX16,
+            c_pre: [0.0, 0.0, 0.0],
+            expected_fingerprint: None,
+            flip_winding_on_negative_determinant: false,
+            section,
+            model_runs,
+        }
+    }
+
+    fn stream_section(
+        path: &std::path::Path,
+        section: SpliceSection,
+        model_runs: Option<Vec<(u32, u32)>>,
+    ) -> Result<(FullResSpliceStats, Vec<f32>), String> {
+        let params = plate_params(path, section, model_runs);
+        let mut soup: Vec<f32> = Vec::new();
+        let stats = splice_fullres_stl_stream(&params, &[], |_, _| {}, |floats| {
+            soup.extend_from_slice(floats);
+            Ok(())
+        })?;
+        Ok((stats, soup))
+    }
+
+    /// The map the classifier produces for the plate fixture, obtained the same
+    /// way production does — by classifying the file.
+    pub(super) fn plate_model_runs(path: &std::path::Path) -> Vec<(u32, u32)> {
+        let stat = stat_file_fingerprint(path).expect("stat fixture");
+        // Clear the memo so this helper measures the file rather than whatever
+        // a previous test left behind.
+        if let Ok(mut cache) = recomputed_run_map_cache().lock() {
+            *cache = None;
+        }
+        recompute_import_model_runs(path, &stat, Some("test"))
+            .expect("recompute")
+            .expect("the plate fixture has a model/support split")
+            .as_ref()
+            .clone()
+    }
+
+    /// PH3 RED #1. The model pass must stage the model RUNS, not a prefix.
+    ///
+    /// The fixture writes `model[..half] | supports | model[half..]`, so a
+    /// splice that ignored the run map would stage all
+    /// `MODEL_TRIS + SUPPORT_TRIS` triangles — which is exactly what the
+    /// pre-Ph3 stream did, and what this asserts against.
+    #[test]
+    fn splice_streams_model_runs_only() {
+        let fixture = fixture_path("ph3-model-section");
+        let total = write_support_plate_stl(&fixture.0, None);
+        assert_eq!(total, MODEL_TRIS + SUPPORT_TRIS);
+
+        let runs = plate_model_runs(&fixture.0);
+        assert!(
+            runs.len() >= 2,
+            "the fixture is interleaved, so the model section must need more than one run \
+             (got {runs:?})",
+        );
+
+        let (stats, soup) = stream_section(&fixture.0, SpliceSection::Model, Some(runs.clone()))
+            .expect("model pass");
+        assert_eq!(stats.source_triangle_count, total as u64);
+        assert_eq!(
+            stats.staged_triangle_count, MODEL_TRIS as u64,
+            "the model pass must stage exactly the run-map sum, not the whole file",
+        );
+        assert_eq!(soup.len(), MODEL_TRIS * 9);
+
+        // The model shell sits at z >= 2.0; every support post spans z 0..1.
+        // A prefix-splice would drag posts into the model block, which shows up
+        // here and nowhere in a triangle count.
+        let min_z = soup
+            .chunks_exact(3)
+            .map(|v| v[2])
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            min_z >= 2.0 - 1e-5,
+            "the model section must not contain support geometry (min z {min_z})",
+        );
+    }
+
+    /// PH3 RED #2. Model + support must reconstruct the file exactly: every
+    /// triangle staged once, none staged twice. This is the regression gate the
+    /// plan names — "total staged triangle count identical to Ph1's".
+    #[test]
+    fn splice_sections_partition_the_source_exactly() {
+        let fixture = fixture_path("ph3-partition");
+        let total = write_support_plate_stl(&fixture.0, None) as u64;
+        let runs = plate_model_runs(&fixture.0);
+
+        let (model, model_soup) =
+            stream_section(&fixture.0, SpliceSection::Model, Some(runs.clone())).expect("model");
+        let (support, support_soup) =
+            stream_section(&fixture.0, SpliceSection::Support, Some(runs)).expect("support");
+        let (whole, whole_soup) = stream_section(&fixture.0, SpliceSection::All, None).expect("whole");
+
+        assert_eq!(whole.staged_triangle_count, total);
+        assert_eq!(
+            model.staged_triangle_count + support.staged_triangle_count,
+            total,
+            "the two sections must partition the file — nothing dropped, nothing duplicated",
+        );
+        // `skipped` is what the command reports; here it is `source - staged`,
+        // and each pass must have skipped exactly the other pass's block.
+        assert_eq!(
+            model.source_triangle_count - model.staged_triangle_count,
+            support.staged_triangle_count,
+        );
+        assert_eq!(
+            support.source_triangle_count - support.staged_triangle_count,
+            model.staged_triangle_count,
+        );
+        assert_eq!(support.staged_triangle_count, SUPPORT_TRIS as u64);
+
+        // Same triangles, reordered — the concatenation is a permutation of the
+        // whole-file soup, so the section split cannot have altered geometry.
+        let mut rejoined: Vec<f32> = model_soup;
+        rejoined.extend_from_slice(&support_soup);
+        assert_eq!(rejoined.len(), whole_soup.len());
+        let sum_of = |v: &[f32]| v.iter().map(|f| *f as f64).sum::<f64>();
+        assert!((sum_of(&rejoined) - sum_of(&whole_soup)).abs() < 1e-3);
+    }
+
+    /// PH3 RED #3. `resolveImportRunMap` returns `recompute` for four distinct
+    /// reasons; all four land here, and the remedy is one code path. With no
+    /// map supplied, a sectioned pass must re-derive it from the file rather
+    /// than degrade to "everything is model".
+    #[test]
+    fn splice_recomputes_map_when_absent() {
+        let fixture = fixture_path("ph3-recompute");
+        let total = write_support_plate_stl(&fixture.0, None) as u64;
+        let stat = stat_file_fingerprint(&fixture.0).expect("stat");
+
+        for reason in ["over-cap", "not-persisted", "chunk-missing", "chunk-damaged"] {
+            if let Ok(mut cache) = recomputed_run_map_cache().lock() {
+                *cache = None;
+            }
+            let (runs, source) =
+                resolve_splice_model_runs(&fixture.0, &stat, SpliceSection::Model, None, Some(reason))
+                    .expect("recompute resolves");
+            assert_eq!(
+                source,
+                RunMapSource::Recomputed,
+                "reason '{reason}' must produce a recomputed map, not a silent whole-file pass",
+            );
+            let runs = runs.expect("the plate has a split");
+            let mapped: u64 = runs.iter().map(|(_, len)| u64::from(*len)).sum();
+            assert_eq!(mapped, MODEL_TRIS as u64);
+
+            let (stats, _) = stream_section(&fixture.0, SpliceSection::Model, Some(runs))
+                .expect("model pass on the recomputed map");
+            assert_eq!(stats.staged_triangle_count, MODEL_TRIS as u64);
+            assert_eq!(stats.source_triangle_count, total);
+        }
+    }
+
+    /// The memo is what keeps one job's model pass and support pass from paying
+    /// for two classifies, and it is fingerprint-keyed so an edited file is
+    /// never served the old map.
+    #[test]
+    fn recomputed_run_map_is_memoised_per_fingerprint() {
+        let fixture = fixture_path("ph3-memo");
+        write_support_plate_stl(&fixture.0, None);
+        let stat = stat_file_fingerprint(&fixture.0).expect("stat");
+        if let Ok(mut cache) = recomputed_run_map_cache().lock() {
+            *cache = None;
+        }
+
+        let first =
+            recompute_import_model_runs(&fixture.0, &stat, Some("over-cap")).expect("first recompute");
+        {
+            let cache = recomputed_run_map_cache().lock().expect("memo");
+            let (key, _) = cache.as_ref().expect("memo populated");
+            assert_eq!(key.size_bytes, stat.size_bytes);
+            assert_eq!(key.mtime_ms_bits, stat.mtime_ms.to_bits());
+        }
+        let second =
+            recompute_import_model_runs(&fixture.0, &stat, Some("over-cap")).expect("memo hit");
+        assert_eq!(first.as_deref(), second.as_deref());
+
+        // A different fingerprint for the same path must miss.
+        let stale = SourceFileStat {
+            size_bytes: stat.size_bytes + 1,
+            mtime_ms: stat.mtime_ms,
+        };
+        let refreshed = recompute_import_model_runs(&fixture.0, &stale, Some("over-cap"))
+            .expect("re-derive under a new fingerprint");
+        assert_eq!(first.as_deref(), refreshed.as_deref());
+        let cache = recomputed_run_map_cache().lock().expect("memo");
+        assert_eq!(
+            cache.as_ref().expect("memo populated").0.size_bytes,
+            stale.size_bytes,
+            "the memo must now hold the newer key",
+        );
+    }
+
+    /// A map that does not describe the file it is paired with is REFUSED. It
+    /// would not produce a slightly-wrong partition — it would produce a
+    /// confidently wrong one, which is the failure class this arc exists to
+    /// remove.
+    #[test]
+    fn splice_refuses_a_run_map_that_cannot_describe_the_file() {
+        let fixture = fixture_path("ph3-invalid-map");
+        let total = write_support_plate_stl(&fixture.0, None) as u32;
+
+        let out_of_range =
+            stream_section(&fixture.0, SpliceSection::Model, Some(vec![(total - 1, 5)]))
+                .expect_err("a run past the end of the file must be refused");
+        assert!(
+            out_of_range.starts_with(FULLRES_RUN_MAP_INVALID_PREFIX),
+            "{out_of_range}",
+        );
+
+        let overlapping =
+            stream_section(&fixture.0, SpliceSection::Model, Some(vec![(10, 20), (15, 5)]))
+                .expect_err("overlapping runs must be refused");
+        assert!(
+            overlapping.starts_with(FULLRES_RUN_MAP_INVALID_PREFIX),
+            "{overlapping}",
+        );
+
+        let empty = stream_section(&fixture.0, SpliceSection::Model, Some(Vec::new()))
+            .expect_err("an empty map paired with a section request is a contradiction");
+        assert!(empty.starts_with(FULLRES_RUN_MAP_INVALID_PREFIX), "{empty}");
+
+        assert!(
+            decode_flat_run_map(&[1, 2, 3]).is_err(),
+            "an odd-length flat map is damaged, not short",
+        );
+    }
+
+    /// The absence of a split is not a split covering everything — but for the
+    /// SPLICE it is, and `section_emit_segments` is the one place that
+    /// translation happens.
+    #[test]
+    fn a_source_with_no_split_stages_wholly_as_model() {
+        let model = section_emit_segments(SpliceSection::Model, None, 100).expect("model");
+        assert_eq!(model, vec![(0, 100)]);
+        let support = section_emit_segments(SpliceSection::Support, None, 100).expect("support");
+        assert!(support.is_empty());
+
+        // Complement arithmetic, including both edges.
+        let leading = section_emit_segments(SpliceSection::Support, Some(&[(0, 10)]), 100).unwrap();
+        assert_eq!(leading, vec![(10, 90)]);
+        let trailing = section_emit_segments(SpliceSection::Support, Some(&[(90, 10)]), 100).unwrap();
+        assert_eq!(trailing, vec![(0, 90)]);
+        let interleaved =
+            section_emit_segments(SpliceSection::Support, Some(&[(10, 10), (40, 10)]), 100).unwrap();
+        assert_eq!(interleaved, vec![(0, 10), (20, 20), (50, 50)]);
+        let exact = section_emit_segments(SpliceSection::Support, Some(&[(0, 100)]), 100).unwrap();
+        assert!(
+            exact.is_empty(),
+            "a model section covering the file leaves no support section",
+        );
+    }
+}
+
+/// Ph3b — hollow section-awareness, Rust half.
+///
+/// Ph3 gave the SLICING splice a section parameter. The permanent mutators kept
+/// splicing the whole file, so hollowing a pre-supported import voxelised the
+/// supports along with the model body. These exercise the two commands that fix
+/// it, against the same interleaved plate fixture Ph1/Ph3 use — so "the first N
+/// triangles" cannot pass by accident.
+#[cfg(test)]
+mod ph3b_hollow_section_tests {
+    use super::ph1_import_wiring_tests::{
+        fixture_path, write_support_plate_stl, MODEL_TRIS, SUPPORT_TRIS,
+    };
+    use super::ph3_run_map_splice_tests::plate_model_runs;
+    use super::*;
+
+    /// PH3b RED #1. The mutator splice must stage the MODEL section only when
+    /// asked, in the local mutator frame (identity matrix, no winding flip).
+    /// Before Ph3b `mutator_splice_soup` did not exist and
+    /// `stage_fullres_mesh_into_staged` hard-coded `SpliceSection::All`.
+    #[test]
+    fn mutator_splice_stages_the_model_section_only() {
+        let fixture = fixture_path("ph3b-model-section");
+        let total = write_support_plate_stl(&fixture.0, None);
+        assert_eq!(total, MODEL_TRIS + SUPPORT_TRIS);
+        let runs = plate_model_runs(&fixture.0);
+
+        let (stats, soup) = mutator_splice_soup(&MutatorSpliceRequest {
+            path: &fixture.0,
+            c_pre: [0.0, 0.0, 0.0],
+            expected_fingerprint: None,
+            section: SpliceSection::Model,
+            model_runs: Some(runs),
+            run_map_source: RunMapSource::Provided,
+        })
+        .expect("model pass");
+
+        assert_eq!(stats.source_triangle_count, total as u64);
+        assert_eq!(
+            stats.staged_triangle_count, MODEL_TRIS as u64,
+            "hollowing must see the model runs, not the whole plate",
+        );
+        assert_eq!(soup.len(), MODEL_TRIS * 9 * 4, "raw f32 LE, 9 floats/triangle");
+
+        // The model shell sits at z >= 2.0; every support post spans z 0..1. A
+        // prefix splice would drag posts into the block that gets voxelised,
+        // which shows up here and in no triangle count.
+        let floats: &[f32] = bytemuck::cast_slice(&soup);
+        let min_z = floats.chunks_exact(3).map(|v| v[2]).fold(f32::INFINITY, f32::min);
+        assert!(
+            min_z >= 2.0 - 1e-5,
+            "the hollowed section must contain no support geometry (min z {min_z})",
+        );
+    }
+
+    /// PH3b RED #2. The support read-back must be EXACTLY the complement of what
+    /// the model pass skipped, and the two together must reconstruct the file.
+    /// This is the arithmetic the frontend asserts on before it re-appends —
+    /// without it, "supports are preserved" would be a claim rather than a check.
+    #[test]
+    fn mutator_sections_partition_the_source_for_re_append() {
+        let fixture = fixture_path("ph3b-partition");
+        let total = write_support_plate_stl(&fixture.0, None) as u64;
+        let runs = plate_model_runs(&fixture.0);
+
+        let request = |section: SpliceSection| MutatorSpliceRequest {
+            path: &fixture.0,
+            c_pre: [0.0, 0.0, 0.0],
+            expected_fingerprint: None,
+            section,
+            model_runs: Some(runs.clone()),
+            run_map_source: RunMapSource::Provided,
+        };
+
+        let (model, model_soup) =
+            mutator_splice_soup(&request(SpliceSection::Model)).expect("model");
+        let (support, support_soup) =
+            mutator_splice_soup(&request(SpliceSection::Support)).expect("support");
+        let (whole, whole_soup) = mutator_splice_soup(&MutatorSpliceRequest {
+            path: &fixture.0,
+            c_pre: [0.0, 0.0, 0.0],
+            expected_fingerprint: None,
+            section: SpliceSection::All,
+            model_runs: None,
+            run_map_source: RunMapSource::NotRequired,
+        })
+        .expect("whole");
+
+        assert_eq!(whole.staged_triangle_count, total);
+        assert_eq!(support.staged_triangle_count, SUPPORT_TRIS as u64);
+        assert_eq!(
+            model.source_triangle_count - model.staged_triangle_count,
+            support.staged_triangle_count,
+            "the support read-back must be exactly what the model pass skipped — this is the \
+             equality the re-append is gated on",
+        );
+
+        // Concatenating in re-append order reproduces the file's bytes as a
+        // permutation: the split cannot have altered geometry.
+        let mut rejoined = model_soup;
+        rejoined.extend_from_slice(&support_soup);
+        assert_eq!(rejoined.len(), whole_soup.len());
+        let sum_of = |bytes: &[u8]| {
+            bytemuck::cast_slice::<u8, f32>(bytes)
+                .iter()
+                .map(|f| *f as f64)
+                .sum::<f64>()
+        };
+        assert!((sum_of(&rejoined) - sum_of(&whole_soup)).abs() < 1e-3);
+    }
+
+    /// The mutator's LOCAL frame is `v_local = v_raw − T_center` with an identity
+    /// matrix and NO winding flip — the same contract Phase 4 established for the
+    /// whole-file mutator splice. Sectioning must not quietly change it, because
+    /// a frame error here fails as a whole-model shift that looks like a
+    /// placement bug.
+    #[test]
+    fn mutator_section_keeps_the_local_frame_and_winding() {
+        let fixture = fixture_path("ph3b-frame");
+        write_support_plate_stl(&fixture.0, None);
+        let runs = plate_model_runs(&fixture.0);
+        let c_pre = [1.5, -2.25, 0.75];
+
+        let (_, centered) = mutator_splice_soup(&MutatorSpliceRequest {
+            path: &fixture.0,
+            c_pre,
+            expected_fingerprint: None,
+            section: SpliceSection::Model,
+            model_runs: Some(runs.clone()),
+            run_map_source: RunMapSource::Provided,
+        })
+        .expect("centered model pass");
+        let (_, raw) = mutator_splice_soup(&MutatorSpliceRequest {
+            path: &fixture.0,
+            c_pre: [0.0, 0.0, 0.0],
+            expected_fingerprint: None,
+            section: SpliceSection::Model,
+            model_runs: Some(runs),
+            run_map_source: RunMapSource::Provided,
+        })
+        .expect("raw model pass");
+
+        let centered: &[f32] = bytemuck::cast_slice(&centered);
+        let raw: &[f32] = bytemuck::cast_slice(&raw);
+        assert_eq!(centered.len(), raw.len());
+        for (index, (c, r)) in centered.iter().zip(raw.iter()).enumerate() {
+            let axis = index % 3;
+            assert!(
+                (*c as f64 - (*r as f64 - c_pre[axis])).abs() < 1e-3,
+                "vertex float {index} (axis {axis}) is not v_raw − c_pre",
+            );
+        }
+    }
+
+    /// Absence of a section request must reproduce the pre-Ph3b whole-file
+    /// mutator splice byte for byte. A model with no support section is the
+    /// common case, and it must not start paying for a section walk.
+    #[test]
+    fn a_mutator_splice_without_a_section_is_the_whole_file() {
+        let fixture = fixture_path("ph3b-whole");
+        let total = write_support_plate_stl(&fixture.0, None) as u64;
+
+        let (stats, soup) = mutator_splice_soup(&MutatorSpliceRequest {
+            path: &fixture.0,
+            c_pre: [0.0, 0.0, 0.0],
+            expected_fingerprint: None,
+            section: SpliceSection::All,
+            model_runs: None,
+            run_map_source: RunMapSource::NotRequired,
+        })
+        .expect("whole pass");
+        assert_eq!(stats.staged_triangle_count, total);
+        assert_eq!(soup.len() as u64, total * 9 * 4);
+        assert_eq!(SpliceSection::parse(None).expect("default"), SpliceSection::All);
     }
 }

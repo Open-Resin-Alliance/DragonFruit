@@ -19,12 +19,20 @@ import {
   hollowApplyFromCapturedSource,
   hollowFromGeometry,
   hollowPreviewFromCapturedSource,
+  readHollowSupportSection,
   selectRemovedVoxelsInPolygon,
   stageHollowPreviewSource,
   type HollowOptions,
   type HollowReport,
 } from '@/utils/meshHollowing';
 import { planMutatorFullResStaging } from '@/utils/fullResMutatorStaging';
+import {
+  checkSupportSectionPartition,
+  concatHollowOutputWithSupportSection,
+  hollowSectionStagingKeySuffix,
+  planHollowSectionSplice,
+  type HollowSectionSplicePlan,
+} from '@/features/hollowing/hollowSectionAwareness';
 import { centerCavityPositions } from '@/features/hollowing/cavityCentering';
 import { getRotationQuatTuple, resolveBlockedVoxelValidity } from '@/features/mesh-modifiers/hollowingGrid';
 import { toPersistedHolePunchPlacements } from '@/features/hole-punching/holePunchPersistence';
@@ -66,6 +74,17 @@ function isKeyboardTargetEditable(target: EventTarget | null): boolean {
   if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
   if (target.isContentEditable) return true;
   return Boolean(target.closest('[contenteditable="true"]'));
+}
+
+/**
+ * Ph3b adapter: a `sections` plan always stages the MODEL half — the support
+ * half is read back separately and re-appended, never staged into the mutator's
+ * input. `null` for a whole-file plan reproduces the pre-Ph3b call exactly.
+ */
+function toMutatorSectionRequest(plan: HollowSectionSplicePlan) {
+  return plan.kind === 'sections'
+    ? { section: 'model' as const, runs: plan.runs, recomputeReason: plan.recomputeReason }
+    : null;
 }
 
 function quantizePreviewShellThicknessMm(valueMm: number): number {
@@ -229,10 +248,57 @@ export function useHollowingManager({
         // permanently replaces the geometry, so consuming the ~2M preview would
         // bake decimation forever — the permanence-urgent case.
         const fullResPlan = planMutatorFullResStaging(activeModel);
+
+        // ════ Ph3b — HOLLOW SECTION-AWARENESS ═══════════════════════════════
+        //
+        // A pre-supported import used to be voxelised whole, so its supports
+        // came back as a shelled, smoothed approximation of themselves. Now the
+        // MODEL section is staged and hollowed, and the SUPPORT section is read
+        // back verbatim and re-appended below.
+        //
+        // ORDER IS THE FAILURE POSTURE. The support read happens FIRST, before
+        // anything is staged or mutated, so every way it can fail (missing
+        // source, stale source, a run map that cannot describe the file) is a
+        // DEGRADE to the pre-Ph3b whole-file hollow with a warning — not an
+        // abort after the model has already been rebuilt without its supports.
+        let sectionPlan = planHollowSectionSplice(activeModel, fullResPlan);
+        let supportSection: Float32Array | null = null;
+        if (sectionPlan.kind === 'sections' && fullResPlan) {
+          if (sectionPlan.recomputeReason) {
+            console.warn(
+              `[HollowFullRes] "${activeModel.name}": recomputing the import run map from the `
+              + 'source file to separate its support section. This re-runs the import '
+              + 'classification and costs seconds on a large model.',
+            );
+          }
+          try {
+            supportSection = await readHollowSupportSection(
+              fullResPlan,
+              sectionPlan.runs,
+              sectionPlan.recomputeReason,
+            );
+          } catch (sectionError) {
+            const raw = sectionError instanceof Error ? sectionError.message : String(sectionError);
+            console.warn(
+              `[HollowFullRes] could not read the support section for "${activeModel.name}" — `
+              + `hollowing the whole model instead: ${raw}`,
+            );
+            deps.current.showOperationError(
+              'Hollowing could not separate this model\'s supports, so they were hollowed with it.',
+            );
+            supportSection = null;
+            sectionPlan = { kind: 'whole', reason: 'support-read-failed' };
+          }
+        }
+
+        // The section is folded into the staging cache key by
+        // `stageHollowPreviewSource` itself, so the key passed here stays the
+        // pre-Ph3b one.
         const stageResult = await stageHollowPreviewSource(
           sourceGeometry,
           `${activeModel.id}::${sourceGeometryKey}`,
           fullResPlan,
+          toMutatorSectionRequest(sectionPlan),
         );
         if (fullResPlan && stageResult.degraded) {
           deps.current.showOperationError(
@@ -240,6 +306,48 @@ export function useHollowingManager({
           );
         }
         const usedFullRes = stageResult.usedFullRes;
+
+        // WHAT WAS STAGED decides whether the re-append happens — not what was
+        // read, and not what was planned. Staging can degrade to the preview
+        // geometry between the plan and here (missing/stale source), and it can
+        // be served from a cache entry captured by an earlier preview. The
+        // summary describes the pass whose output the hollow is about to
+        // consume, so it is the only honest authority.
+        const modelSectionSummary = stageResult.spliceSummary?.section === 'model'
+          ? stageResult.spliceSummary
+          : null;
+        if (!modelSectionSummary) {
+          // A whole-file (or preview-geometry) input already contains its
+          // supports; re-appending would put every support triangle in twice.
+          supportSection = null;
+        } else if (!supportSection) {
+          // The staged input EXCLUDES the supports, so the re-append is no
+          // longer optional — going ahead would silently delete them. Nothing
+          // has been mutated yet, so this costs the user a retry, not a part.
+          deps.current.showOperationError(
+            `Hollowing staged only the model section of "${activeModel.name}" but has no support `
+            + 'section to restore, so it was stopped rather than dropping the supports.',
+          );
+          return;
+        } else {
+          // ABORT, not degrade. Two independent reads of one file through one
+          // map must account for every triangle exactly once. They cannot
+          // disagree because of user input or a changed file (both passes verify
+          // the import fingerprint), so a mismatch means the map does not
+          // describe the file — and a plausible-looking mesh with supports
+          // dropped or duplicated is discovered on the plate, not on screen.
+          const partition = checkSupportSectionPartition({
+            modelName: activeModel.name,
+            stagedTriangleCount: modelSectionSummary.stagedTriangleCount,
+            skippedTriangleCount: modelSectionSummary.skippedTriangleCount,
+            sourceTriangleCount: modelSectionSummary.sourceTriangleCount,
+            supportPositionFloatCount: supportSection.length,
+          });
+          if (!partition.ok) {
+            deps.current.showOperationError(partition.message);
+            return;
+          }
+        }
 
         const result = stageResult.staged
           ? await hollowApplyFromCapturedSource(options)
@@ -265,8 +373,26 @@ export function useHollowingManager({
         deps.current.beginFinalizing('hollowing');
         await deps.current.nextPaint();
 
+        // Ph3b — the re-append. `result.positions` is the hollowed MODEL section
+        // when a section plan survived to here; the support section is the
+        // source file's own records in the same local frame, untouched. Model
+        // first, so the layout matches the classifier's own convention.
+        const outputPositions = supportSection
+          ? concatHollowOutputWithSupportSection(result.positions, supportSection)
+          : result.positions;
+        const outputTriangleCount = supportSection
+          ? outputPositions.length / 9
+          : result.report.outputTriangleCount;
+        if (supportSection) {
+          console.warn(
+            `[HollowFullRes] "${activeModel.name}": hollowed `
+            + `${result.report.outputTriangleCount.toLocaleString()} model triangles and re-appended `
+            + `${(supportSection.length / 9).toLocaleString()} support triangles untouched.`,
+          );
+        }
+
         const nextGeometry = new THREE.BufferGeometry();
-        nextGeometry.setAttribute('position', new THREE.BufferAttribute(result.positions, 3));
+        nextGeometry.setAttribute('position', new THREE.BufferAttribute(outputPositions, 3));
         nextGeometry.computeVertexNormals();
         nextGeometry.computeBoundingBox();
         nextGeometry.computeBoundingSphere();
@@ -299,7 +425,7 @@ export function useHollowingManager({
         const replaced = scene.replaceModelGeometry(
           activeModel.id,
           nextGeometry,
-          `${modeLabel} (${result.report.outputTriangleCount.toLocaleString()} tris)`,
+          `${modeLabel} (${outputTriangleCount.toLocaleString()} tris)`,
           // Full-res hollow output is no longer decimation-derived — clear the
           // native-preview marker so the preview badge stops firing (Phase 4).
           { clearNativePreview: usedFullRes },
@@ -978,13 +1104,23 @@ export function useHollowingManager({
       rotationQuat: [previewQuat.x, previewQuat.y, previewQuat.z, previewQuat.w],
     };
     const optionsKey = JSON.stringify(options);
-    const previewKey = `${activeModel.id}::${sourceGeometryKey}::${optionsKey}`;
+    // Ph3b — the preview must resolve the SAME section Apply will, or the user
+    // accepts a cavity computed against a different mesh. The section is folded
+    // into the cache key for the same reason the options are: a whole-file
+    // preview served for a sectioned model is a stale answer, not a fast one.
+    const sectionPlan = planHollowSectionSplice(
+      activeModel,
+      planMutatorFullResStaging(activeModel),
+    );
+    const previewKey =
+      `${activeModel.id}::${sourceGeometryKey}${hollowSectionStagingKeySuffix(sectionPlan)}::${optionsKey}`;
 
     return {
       sourceGeometry,
       sourceGeometryKey,
       options,
       previewKey,
+      sectionPlan,
     };
   }, [
     buildHollowingOptions,
@@ -1067,7 +1203,7 @@ export function useHollowingManager({
     activeModel: (typeof scene.models)[number],
     overrideState?: HollowingPanelState,
   ) => {
-    const { sourceGeometry, sourceGeometryKey, options, previewKey } = buildHollowPreviewRequest(activeModel, overrideState);
+    const { sourceGeometry, sourceGeometryKey, options, previewKey, sectionPlan } = buildHollowPreviewRequest(activeModel, overrideState);
 
     if (hollowPreviewResultCacheRef.current.has(previewKey) || hollowPreviewWarmupKeyRef.current === previewKey) {
       return;
@@ -1077,11 +1213,16 @@ export function useHollowingManager({
     try {
       // Phase 4: preview against the SAME source Apply will use — full-res for
       // a native preview — so the cavity the user accepts matches the output.
+      // Ph3b: and the same SECTION, so the cavity describes the model body
+      // alone exactly as the applied output will. The preview needs no support
+      // read-back — it is an overlay over the model, which still renders with
+      // its supports.
       const warmupFullResPlan = planMutatorFullResStaging(activeModel);
       const stageResult = await stageHollowPreviewSource(
         sourceGeometry,
         `${activeModel.id}::${sourceGeometryKey}`,
         warmupFullResPlan,
+        toMutatorSectionRequest(sectionPlan),
       );
       // Ph2 degrade audit: this is a speculative BACKGROUND warm-up, so it does
       // not toast (nothing the user did caused it). It must still say so —
@@ -1142,6 +1283,7 @@ export function useHollowingManager({
     sourceGeometryKey,
     options,
     previewKey,
+    sectionPlan,
     notifyUnavailable,
   }: {
     activeModel: (typeof scene.models)[number];
@@ -1149,6 +1291,11 @@ export function useHollowingManager({
     sourceGeometryKey: string;
     options: HollowOptions;
     previewKey: string;
+    /** Ph3b — from `buildHollowPreviewRequest`, so the preview hollows the same
+     *  section Apply will. Optional so a caller that has not been threaded
+     *  through falls back to the pre-Ph3b whole-file preview rather than
+     *  silently mis-keying the cache. */
+    sectionPlan?: HollowSectionSplicePlan;
     notifyUnavailable: boolean;
   }) => {
     const requestSeq = ++hollowPreviewRequestSeqRef.current;
@@ -1192,10 +1339,16 @@ export function useHollowingManager({
       }
 
       const previewFullResPlan = planMutatorFullResStaging(activeModel);
+      // Ph3b: hollow the same SECTION Apply will, so the cavity the user accepts
+      // describes the model body alone. The preview is an overlay over a model
+      // that still renders with its supports, so it needs no support read-back.
+      const previewSectionPlan: HollowSectionSplicePlan =
+        sectionPlan ?? { kind: 'whole', reason: 'not-full-res' };
       const stageResult = await stageHollowPreviewSource(
         sourceGeometry,
         `${activeModel.id}::${sourceGeometryKey}`,
         previewFullResPlan,
+        toMutatorSectionRequest(previewSectionPlan),
       );
       // Ph2 degrade audit. Census row 7: the preview MUST resolve the same
       // source Apply will, or the user accepts a cavity that is not what gets

@@ -373,43 +373,105 @@ function createGeometryFromPositions(positions: Float32Array): THREE.BufferGeome
 }
 
 /**
- * THE Ph1 D1 FENCE — load-bearing, do not relax without Ph3.
- *
  * True when this model's outputs come from the ORIGINAL file via the Rust-side
- * splice rather than from its scene geometry. Splitting such a model is
- * destructive: both halves are rebuilt from a bare `Float32Array`
- * (`buildGeometryWithBounds`) and therefore carry no `nativePreview`, so
- * `resolveFullResSourceForModel` returns `null` afterwards and the splice loop
- * drops the model — the >budget pre-supported STL then slices at PREVIEW
- * fidelity with no signal to the user (defect D1).
+ * splice rather than from its scene geometry.
  *
- * Until Ph3's run-map splice can express `[model runs | support runs]` inside
- * the spliced stream, splice-eligible models stay whole and keep today's exact
- * output bytes. This is what makes Ph1's full-res classification behaviour-
- * neutral instead of a silent fidelity regression on exactly the class of
- * import this whole effort exists to fix.
+ * Ph1 used this as a FENCE ("do not split, we cannot express the split in the
+ * spliced stream"). Ph3 keeps the same answer for the opposite reason: the
+ * run-map splice now EXPRESSES the split itself, in source-file indices, by
+ * staging the model runs and the support complement as two passes. Splitting
+ * the scene geometry as well would double-count — and would still be
+ * destructive, because both halves are rebuilt from a bare `Float32Array`
+ * (`buildGeometryWithBounds`), carry no `nativePreview`, and would therefore
+ * drop straight off the full-res path.
  */
 export function isFullResSpliceEligible(model: LoadedModel): boolean {
   return resolveOutputGeometrySource(model).kind === 'fullres-source-file';
+}
+
+/**
+ * Ph3 — HOW this model's model/support sections reach the output, decided once.
+ *
+ * ## What this replaces, and why
+ *
+ * Ph2 finding F3: the old guard compared `nativeRepairReport.model_triangle_count`
+ * against the SCENE geometry's triangle count and bailed when the former was
+ * larger. Once Ph1's wiring made that count full-resolution, an 11M count
+ * against a 2M preview happened to trip the guard — so the code did the right
+ * thing for a reason nobody had written down and nothing enforced. It read as a
+ * "degenerate classification" check; it was working as a resolution-mismatch
+ * check; and the moment a preview happened to be larger than a model section it
+ * would have sliced supports as model with complete confidence.
+ *
+ * The replacement asks the structural question instead of the arithmetic one:
+ * **does `model_triangle_count` index THIS geometry at all?** It does not when
+ * the geometry is a native preview, because the classification describes the
+ * SOURCE FILE — that is the contract stated on `ImportClassificationJson` and on
+ * `NativeStlLoadResult`, and `nativePreview` is set for exactly the loads where
+ * it holds. No arithmetic, no accident, no size dependence.
+ */
+export type OutputSectionPlan =
+  /** The Rust splice stages the model runs and the support complement itself. */
+  | { kind: 'spliced-sections' }
+  /** Split the scene geometry: the classification indexes it, and it has both. */
+  | { kind: 'scene-split'; modelTriangleCount: number; totalTriangleCount: number }
+  | {
+      kind: 'whole';
+      /**
+       * `no-split` — no classification, or one that found a single section.
+       * `describes-source-file` — the count is full-resolution and the geometry
+       *   is a reduced preview, so the count does not index it. Not a degrade:
+       *   this is the ordinary shape of a decimated-output model (Ph2's toggle)
+       *   and of a preview whose splice is unavailable.
+       * `count-exceeds-geometry` — a classification that claims more model
+       *   triangles than the geometry it indexes actually holds. A genuine
+       *   contradiction; warned about, never acted on.
+       */
+      reason: 'no-split' | 'describes-source-file' | 'count-exceeds-geometry';
+    };
+
+export function resolveOutputSectionPlan(model: LoadedModel): OutputSectionPlan {
+  if (isFullResSpliceEligible(model)) return { kind: 'spliced-sections' };
+
+  const report = model.geometry.meshDefects?.nativeRepairReport;
+  const modelTriangleCount = Math.floor(report?.model_triangle_count ?? 0);
+  if (modelTriangleCount <= 0) return { kind: 'whole', reason: 'no-split' };
+
+  // THE F3 REPLACEMENT. A native preview's scene geometry is a reduced stand-in
+  // for the source file; the classification measured the file. Splitting the
+  // preview at a file-derived index cuts it in the wrong place.
+  if (model.geometry.nativePreview) {
+    return { kind: 'whole', reason: 'describes-source-file' };
+  }
+
+  const geometry = model.geometry.geometry;
+  const position = geometry.getAttribute('position');
+  if (!position) return { kind: 'whole', reason: 'no-split' };
+  const totalTriangleCount = Math.floor((geometry.getIndex()?.count ?? position.count) / 3);
+
+  if (modelTriangleCount >= totalTriangleCount) {
+    // Reached only when the classification is supposed to index this geometry
+    // and does not. Under the old guard this was silent and indistinguishable
+    // from the preview case above; it is neither now.
+    console.warn(
+      `[resolveOutputSectionPlan] "${model.name}" carries a model-section count of `
+      + `${modelTriangleCount.toLocaleString()} for a geometry holding `
+      + `${totalTriangleCount.toLocaleString()} triangles. The classification does not `
+      + 'describe this mesh — slicing it whole rather than cutting it at a meaningless index.',
+    );
+    return { kind: 'whole', reason: 'count-exceeds-geometry' };
+  }
+
+  return { kind: 'scene-split', modelTriangleCount, totalTriangleCount };
 }
 
 function splitClassifiedModelForOutput(model: LoadedModel): {
   models: LoadedModel[];
   geometries: THREE.BufferGeometry[];
 } | null {
-  // D1 fence — see `isFullResSpliceEligible`. Ph3 removes this and replaces it
-  // with a section-aware splice.
-  if (isFullResSpliceEligible(model)) return null;
+  if (resolveOutputSectionPlan(model).kind !== 'scene-split') return null;
 
   const report = model.geometry.meshDefects?.nativeRepairReport;
-  const modelTriangleCount = Math.floor(report?.model_triangle_count ?? 0);
-
-  const geometry = model.geometry.geometry;
-  const position = geometry.getAttribute('position');
-  if (!position) return null;
-  const totalTriangleCount = Math.floor((geometry.getIndex()?.count ?? position.count) / 3);
-  if (modelTriangleCount <= 0 || modelTriangleCount >= totalTriangleCount) return null;
-
   const split = splitClassifiedSupportGeometry(model);
   if (!split) return null;
 

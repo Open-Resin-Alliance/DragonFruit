@@ -48,6 +48,12 @@ import {
 } from './types';
 import type { DragonfruitImportFormat } from '@/supports/types';
 import { normalizeOutputPolicyForPersistence } from '@/features/mesh-modifiers/modelOutputPolicy';
+import {
+  decodeImportRunMapChunk,
+  encodeImportRunMapChunk,
+  summarizeImportRunMap,
+  IMPORT_RUN_MAP_MAX_BYTES,
+} from '@/utils/importRunMap';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -78,6 +84,24 @@ const CHUNK_MODL = 'MODL';
 const CHUNK_MESH = 'MESH';
 const CHUNK_SUPP = 'SUPP';
 const CHUNK_EXTD = 'EXTD';
+/**
+ * Ph1 — one per model that carries an import run map: `(start, len)` u32 pairs
+ * in SOURCE-FILE triangle indices, indexed by model ordinal, capped at
+ * {@link IMPORT_RUN_MAP_MAX_BYTES} (64 KiB) per model.
+ *
+ * **No version bump.** The reader resolves chunks by lookup, never by
+ * iteration (`readJsonChunk` / the MESH resolution below both `find` by type +
+ * index), and the directory is fixed-width and self-describing — so an unknown
+ * chunk type is structurally skipped and never looked up. The convention this
+ * file already states is that bumps are reserved for changes that would make an
+ * old reader WRONG, as the dedup chunk-sharing does. An old reader that ignores
+ * `RUNM` lands on "no persisted map", which is a recompute, not a wrong answer.
+ *
+ * The honest consequence, same as for every additive chunk: an OLD WRITER
+ * re-saving such a file silently drops the chunk. That degrades to a recompute
+ * too, because the `MODL` summary that survives says a map was expected.
+ */
+const CHUNK_RUNM = 'RUNM';
 
 // ─── Internal Types ───────────────────────────────────────────────────────────
 
@@ -339,6 +363,27 @@ async function prepareVoxlDocumentV2(
   }
   const dedupRemovedChunks = chunkCandidateCount > dedupedChunkIndices.length;
 
+  // ── Import run maps (Ph1) ─────────────────────────────────────────────
+  // Encoded up front so the MODL summary and the RUNM chunks are derived from
+  // ONE decision about each model's map — a summary that claimed a chunk the
+  // writer then skipped (or vice versa) is exactly the desync the resolver
+  // would have to guess its way out of.
+  const runMapChunks = new Map<number, Uint8Array>();
+  for (let i = 0; i < input.models.length; i += 1) {
+    const map = input.models[i].importRunMap;
+    if (!map) continue;
+    const encoded = encodeImportRunMapChunk(map);
+    if (encoded) {
+      runMapChunks.set(i, encoded);
+    } else if (map.totalRunCount > 0) {
+      console.warn(
+        `[VOXL] "${input.models[i].name}" has ${map.totalRunCount.toLocaleString()} import run-map entries, `
+        + `over the ${(IMPORT_RUN_MAP_MAX_BYTES / 1024).toFixed(0)} KB per-model cap — the map is not persisted `
+        + 'and section-aware output will recompute it from the source file.',
+      );
+    }
+  }
+
   const models: VoxlModelEntry[] = input.models.map((m, i) => {
     const hasChunk = hasChunkFor(i);
     const ownerIndex = chunkOwnerByModelIndex.get(i);
@@ -375,7 +420,26 @@ async function prepareVoxlDocumentV2(
       ...(typeof m.sourcePath === 'string' && m.sourcePath.trim().length > 0
         ? { sourcePath: m.sourcePath }
         : {}),
-      ...(m.nativePreview ? { nativePreview: m.nativePreview } : {}),
+      // Ph1: the run-map SUMMARY is folded into `nativePreview` here rather
+      // than at the call site, so every writer path persists it — the runtime
+      // map lives on `importRunMap` (binary; it must not reach JSON) and this
+      // is its only textual form.
+      //
+      // Derived from `m.importRunMap` and NOTHING ELSE, including deleting a
+      // summary that arrived on the marker without a live map. The summary and
+      // the RUNM chunk have to describe one decision: a summary claiming runs
+      // the writer never wrote would send every reader down the recompute path
+      // for a model that genuinely has no map to recompute.
+      ...(m.nativePreview
+        ? {
+            nativePreview: (() => {
+              const marker = { ...m.nativePreview };
+              delete marker.runMap;
+              if (m.importRunMap) marker.runMap = summarizeImportRunMap(m.importRunMap);
+              return marker;
+            })(),
+          }
+        : {}),
       // Ph2 Original/Decimated toggle. Same additive discipline: written only
       // when non-default, so absence keeps the safe full-resolution reading.
       ...(normalizeOutputPolicyForPersistence(m.outputPolicy)
@@ -418,6 +482,16 @@ async function prepareVoxlDocumentV2(
     } else {
       pending.push({ type: CHUNK_MESH, index: modelIndex, raw: meshBytes.get(modelIndex)!, compress: true });
     }
+  }
+
+  // One RUNM chunk per model that has a persistable map, in model order.
+  for (const modelIndex of [...runMapChunks.keys()].sort((a, b) => a - b)) {
+    pending.push({
+      type: CHUNK_RUNM,
+      index: modelIndex,
+      raw: runMapChunks.get(modelIndex)!,
+      compress: true,
+    });
   }
 
   pending.push({ type: CHUNK_SUPP, index: 0, raw: textEncoder.encode(JSON.stringify(input.supports)), compress: true });
@@ -726,6 +800,25 @@ export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
     }
   }
 
+  // ── Resolve RUNM chunks (Ph1) ─────────────────────────────────────────
+  //
+  // Keyed by MODEL index, never shared: two models with byte-identical
+  // geometry can still come from different source files, so run maps are
+  // deliberately outside the MESH dedup. A damaged or absent chunk is simply
+  // left out of the map — `resolveImportRunMap` reads the MODL summary and
+  // returns an explicit recompute verdict rather than "no split".
+  const runMapsByModelId = new Map<string, Uint32Array>();
+  for (let i = 0; i < models.length; i += 1) {
+    const entry = entries.find((e) => e.type === CHUNK_RUNM && e.index === i);
+    if (!entry) continue;
+    try {
+      const runs = decodeImportRunMapChunk(readChunk(entry));
+      if (runs) runMapsByModelId.set(models[i].id, runs);
+    } catch (error) {
+      console.warn(`[VOXL] Could not read the import run map for "${models[i].name}"; it will be recomputed.`, error);
+    }
+  }
+
   return {
     document: {
       magic: VOXL_MAGIC,
@@ -737,6 +830,7 @@ export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
       extensions,
     },
     meshBytes: meshBytesMap,
+    runMaps: runMapsByModelId,
     sourceVersion: VOXL_V2_SEMANTIC_REVISION,
   };
 }

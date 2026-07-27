@@ -57,13 +57,23 @@ export function resolveDisplayPolygonCount(geometry: GeometryWithBounds): number
  *
  * Returns a fresh copy (never the prior object) so the two geometries never
  * alias one marker.
+ *
+ * Ph1: the run-map SUMMARY is stripped on the way through, for the same reason
+ * `replaceModelGeometry` drops `cPre` and `importRunMap` — the runs address the
+ * ORIGINAL FILE's triangles and this geometry is no longer that file. The
+ * decimation-honesty fields (counts, achieved error, budget) describe the
+ * mesh's PROVENANCE and stay true across a mutation; the run map describes its
+ * current correspondence to a file, and that is exactly what a mutation breaks.
  */
 export function carryPreviewMarkerForward(
   prior: GeometryWithBounds,
   options?: { clearNativePreview?: boolean },
 ): GeometryWithBounds['nativePreview'] | undefined {
   if (options?.clearNativePreview) return undefined;
-  return prior.nativePreview ? { ...prior.nativePreview } : undefined;
+  if (!prior.nativePreview) return undefined;
+  const carried = { ...prior.nativePreview };
+  delete carried.runMap;
+  return carried;
 }
 
 export interface PreviewBadgeInfo {

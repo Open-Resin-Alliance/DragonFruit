@@ -16,6 +16,7 @@ import {
   type PrecompressedChunk,
 } from '@/features/scene/voxl';
 import { meshChunkStore, type BakedChunk } from '@/features/scene/voxl/meshChunkStore';
+import type { ImportRunMap } from '@/utils/importRunMap';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
 import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, spliceFullResMeshIntoStageFile, writeChunkedToNativePath, writeFileAtomicStreamedToNativePath, writeFileAtomicToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { resolveOutputGeometrySource } from '@/features/mesh-modifiers/prepareModelGeometry';
@@ -1382,6 +1383,8 @@ export class ExportManager {
               cPre?: [number, number, number];
               sourceFingerprint?: { sizeBytes: number; mtimeMs: number };
             };
+            /** Ph1 — source of this model's RUNM chunk + its MODL summary. */
+            importRunMap?: ImportRunMap;
             outputPolicy?: ModelOutputPolicy;
             geometryStale?: boolean;
             transform: {
@@ -1430,6 +1433,13 @@ export class ExportManager {
                 : {}),
               ...(model.geometry.nativePreview
                 ? { nativePreview: { ...model.geometry.nativePreview } }
+                : {}),
+              // Ph1: the run map travels as its own binary chunk. Handing the
+              // codec the runtime object (not a JSON field) is what keeps a
+              // Uint32Array out of the MODL text; the codec derives both the
+              // chunk and the `nativePreview.runMap` summary from it.
+              ...(model.geometry.importRunMap
+                ? { importRunMap: model.geometry.importRunMap }
                 : {}),
               // Ph2 Original/Decimated toggle — additive, written only when
               // the user chose `decimated`. A file that never met the toggle

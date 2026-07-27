@@ -4298,6 +4298,7 @@ fn main() {
             mesh_repair::stage_fullres_mesh_from_source,
             mesh_repair::splice_fullres_mesh_into_stage_file,
             mesh_repair::stage_fullres_mesh_into_staged,
+            mesh_repair::read_fullres_mesh_section_positions,
             sdf::compute_sdf_from_staged,
             sdf::compute_heightmap_from_staged,
             sdf::invalidate_sdf_cache,

@@ -2,7 +2,8 @@ import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profil
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSolidSliceMeshForWasm, composeModelMatrix, type FullResSplicedModel } from './rasterLayerZipExport';
 import { clampSliceJobNumber } from './sliceJobLimits';
-import { isFullResSpliceEligible, prepareLoadedModelsForOutput, resolveOutputGeometrySource } from '@/features/mesh-modifiers/prepareModelGeometry';
+import { prepareLoadedModelsForOutput, resolveOutputGeometrySource, resolveOutputSectionPlan } from '@/features/mesh-modifiers/prepareModelGeometry';
+import { describeImportRunMapRecompute, planImportSectionSplice, type ImportSectionSplicePlan } from '@/utils/importRunMap';
 import { resolveOutputFileExtension, resolveOutputFormatVersion, resolveOutputSettingsMode, resolveSlicingFormatDefinition } from './formats/registry';
 import { getSavedSlicingPerformanceSettings, type PngCompressionStrategy } from '@/components/settings/performancePreferences';
 import {
@@ -75,7 +76,16 @@ type StageMeshChunkAck = {
 
 /** Response of the Rust `stage_fullres_mesh_from_source` command. */
 type FullResSpliceSummary = {
+    /** Triangles this pass appended. */
     stagedTriangleCount: number;
+    /** Triangles in the source file — `staged + skipped` must equal it (Ph3). */
+    sourceTriangleCount: number;
+    skippedTriangleCount: number;
+    /** `all` | `model` | `support`. */
+    section: string;
+    /** `not-required` | `provided` | `recomputed` | `no-split`. */
+    runMapSource: string;
+    /** Bounds of the STAGED triangles; `[0,0,0]` twice when nothing was staged. */
     worldMin: [number, number, number];
     worldMax: [number, number, number];
     spliceMs: number;
@@ -699,23 +709,14 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     const preparedModelsForOutput = await prepareLoadedModelsForOutput(visibleModels);
     const modifierBakeMs = performance.now() - modifierBakeStartMs;
 
-    const survivingCombinedModels = preparedModelsForOutput.models.filter((model) => {
-        // D1 FENCE (Ph1). A splice-eligible model is deliberately left whole:
-        // splitting it would rebuild both halves without `nativePreview` and
-        // silently demote it to preview-fidelity slicing. Its support section
-        // therefore rides along inside the full-res splice exactly as it does
-        // today; Ph3's run-map splice is what finally separates the sections on
-        // this path. Without this exemption the fence would trip the assertion
-        // below and break slicing outright for every ≥budget pre-supported model.
-        if (isFullResSpliceEligible(model)) return false;
-        const modelTriangleCount = model.geometry.meshDefects?.nativeRepairReport?.model_triangle_count;
-        if (!modelTriangleCount || modelTriangleCount <= 0) return false;
-        const position = model.geometry.geometry.getAttribute('position');
-        const totalTriangleCount = Math.floor(
-            (model.geometry.geometry.getIndex()?.count ?? position?.count ?? 0) / 3,
-        );
-        return modelTriangleCount < totalTriangleCount;
-    });
+    // Ph3: ONE definition of "these sections still need separating", shared with
+    // `prepareLoadedModelsForOutput`, which is what splits them. This used to
+    // re-implement the same arithmetic beside it — including Ph2 finding F3's
+    // accidental resolution guard — so the two could drift and the assertion
+    // could fire (or fail to) for reasons neither site stated.
+    const survivingCombinedModels = preparedModelsForOutput.models.filter(
+        (model) => resolveOutputSectionPlan(model).kind === 'scene-split',
+    );
     if (survivingCombinedModels.length > 0) {
         preparedModelsForOutput.dispose();
         throw new Error(
@@ -732,12 +733,59 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         modifierBakeMs,
     });
 
-    // Phase-1 full-res splice: stage each candidate's ORIGINAL file
-    // Rust-side BEFORE the collector streams any chunk, so the full-res
-    // triangles sit contiguously at the front of the staged buffer (the
-    // model_triangle_count contract). Failure is never silent: the model
-    // degrades to the existing preview path with a user-visible warning.
+    // ════ Ph3 — THE FOUR-PASS STAGING INTERLEAVE ════════════════════════════
+    //
+    // The slicing engine takes ONE split index, so the staged buffer must be
+    // `[every model triangle | every support triangle]` across the whole scene.
+    // A spliced model therefore contributes to it TWICE:
+    //
+    //   ① this loop            — splice each candidate's MODEL runs
+    //   ② collector            — every collector model's model triangles
+    //   ③ spliceSupportSections — splice each candidate's SUPPORT complement
+    //   ④ collector            — support sections, then generated supports/rafts
+    //
+    // Passes ②–④ happen inside `buildSolidSliceMeshForWasm`, which calls ③ back
+    // through `onModelSectionStaged` after flushing ②. Doing ① and ③ together
+    // here instead would produce `[model | support | model | support]`, which no
+    // single split index can describe — and reading that layout with one index
+    // slices supports as model, silently, at full confidence.
+    //
+    // A model whose partition is unknown (`plan.kind === 'whole'`) is spliced
+    // exactly as it was before Ph3: one whole-file pass in ①, nothing in ③.
+    // Failure is never silent: the model degrades to the preview path with a
+    // user-visible warning.
     const fullResSplices = new Map<string, FullResSplicedModel>();
+    /** Candidates whose support complement pass ③ must still stage. */
+    const supportSectionPasses: Array<{
+        model: LoadedModel;
+        source: Extract<ReturnType<typeof resolveOutputGeometrySource>, { kind: 'fullres-source-file' }>;
+        plan: Extract<ImportSectionSplicePlan, { kind: 'sections' }>;
+    }> = [];
+
+    const stageFullResSection = async (
+        model: LoadedModel,
+        source: Extract<ReturnType<typeof resolveOutputGeometrySource>, { kind: 'fullres-source-file' }>,
+        section: 'all' | 'model' | 'support',
+        plan: ImportSectionSplicePlan,
+    ) => {
+        const matrix = composeModelMatrix(model.transform);
+        return invoke<FullResSpliceSummary>('stage_fullres_mesh_from_source', {
+            sourcePath: source.sourcePath,
+            matrix16: Array.from(matrix.elements),
+            cPre: source.cPre,
+            expectedSizeBytes: source.fingerprint?.sizeBytes ?? null,
+            expectedMtimeMs: source.fingerprint?.mtimeMs ?? null,
+            quantization: meshTransportQuantization,
+            section,
+            // A sectioned pass with no runs tells Rust to re-derive the map from
+            // the source file. The recomputed map deliberately never comes back
+            // here: the 64 KiB cap exists because such a map can be unbounded,
+            // and handing the WebView the thing the cap refused would defeat it.
+            modelRuns: plan.kind === 'sections' && plan.runs ? Array.from(plan.runs) : null,
+            runMapRecomputeReason: plan.kind === 'sections' ? plan.recomputeReason : null,
+        });
+    };
+
     if (fullResCandidateIds.size > 0) {
         for (const model of preparedModelsForOutput.models) {
             if (!fullResCandidateIds.has(model.id)) continue;
@@ -774,29 +822,47 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
 
             throwIfAborted(options.abortSignal);
             options.onProgress?.(0, 1, 'Staging Full-Resolution Mesh');
+            const plan = planImportSectionSplice({
+                runtime: model.geometry.importRunMap ?? null,
+                summary: model.geometry.nativePreview?.runMap ?? null,
+                persistedRuns: model.geometry.importRunMap?.runs ?? null,
+                storedRecompute: model.geometry.importRunMapRecompute ?? null,
+                reportSplitExists:
+                    (model.geometry.meshDefects?.nativeRepairReport?.model_triangle_count ?? 0) > 0,
+            });
+            if (plan.kind === 'sections' && plan.recomputeReason) {
+                console.warn(
+                    `[SlicingFullRes] "${model.name}": recomputing the import run map from the `
+                    + `source file because ${describeImportRunMapRecompute(plan.recomputeReason)}. `
+                    + 'This re-runs the import classification and costs seconds on a large model.',
+                );
+            }
             const spliceInvokeStart = performance.now();
             try {
-                const matrix = composeModelMatrix(model.transform);
-                const summary = await invoke<FullResSpliceSummary>('stage_fullres_mesh_from_source', {
-                    sourcePath: source.sourcePath,
-                    matrix16: Array.from(matrix.elements),
-                    cPre: source.cPre,
-                    expectedSizeBytes: source.fingerprint?.sizeBytes ?? null,
-                    expectedMtimeMs: source.fingerprint?.mtimeMs ?? null,
-                    quantization: meshTransportQuantization,
-                });
+                const summary = await stageFullResSection(
+                    model,
+                    source,
+                    plan.kind === 'sections' ? 'model' : 'all',
+                    plan,
+                );
                 stageMeshIpcMs += performance.now() - spliceInvokeStart;
                 fullResSplices.set(model.id, {
-                    triangleCount: summary.stagedTriangleCount,
+                    modelTriangleCount: summary.stagedTriangleCount,
+                    supportTriangleCount: 0,
                     worldMin: summary.worldMin,
                     worldMax: summary.worldMax,
                 });
+                if (plan.kind === 'sections') {
+                    supportSectionPasses.push({ model, source, plan });
+                }
                 cumulativeBytesStage += summary.stagedTriangleCount * QUANTIZED_U16_BYTES_PER_TRIANGLE;
                 console.warn(
-                    `[SlicingFullRes] staged full-res source for "${model.name}": `
-                    + `${summary.stagedTriangleCount.toLocaleString()} triangles from `
+                    `[SlicingFullRes] staged the full-res ${summary.section} section for `
+                    + `"${model.name}": ${summary.stagedTriangleCount.toLocaleString()} of `
+                    + `${summary.sourceTriangleCount.toLocaleString()} source triangles from `
                     + `${source.sourcePath} in ${summary.spliceMs.toFixed(1)} ms `
-                    + `(scene preview holds ${model.geometry.nativePreview?.previewTriangleCount?.toLocaleString() ?? '?'} triangles).`,
+                    + `(run map: ${summary.runMapSource}; scene preview holds `
+                    + `${model.geometry.nativePreview?.previewTriangleCount?.toLocaleString() ?? '?'} triangles).`,
                 );
             } catch (spliceError) {
                 stageMeshIpcMs += performance.now() - spliceInvokeStart;
@@ -813,6 +879,63 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         }
     }
 
+    // PASS ③ — fired by the collector once every model triangle is staged and
+    // flushed, and before the first support triangle. Each spliced model's
+    // support complement lands here, on the far side of the split index.
+    //
+    // A failure here CANNOT degrade to the preview the way pass ① can: the
+    // model section is already in the buffer, so the model's support triangles
+    // would simply be missing from the print. It aborts the job instead — a
+    // failed slice the user can retry beats a silently unsupported one.
+    const spliceSupportSections = async () => {
+        for (const { model, source, plan } of supportSectionPasses) {
+            throwIfAborted(options.abortSignal);
+            options.onProgress?.(0, 1, 'Staging Full-Resolution Supports');
+            const spliceInvokeStart = performance.now();
+            let summary: FullResSpliceSummary;
+            try {
+                summary = await stageFullResSection(model, source, 'support', plan);
+            } catch (spliceError) {
+                stageMeshIpcMs += performance.now() - spliceInvokeStart;
+                const rawMessage = spliceError instanceof Error ? spliceError.message : String(spliceError);
+                throw new Error(
+                    `Full-resolution support section could not be staged for "${model.name}" after `
+                    + `its model section was: ${describeFullResSpliceError(rawMessage)}. `
+                    + 'The slice was stopped rather than printed without those supports.',
+                );
+            }
+            stageMeshIpcMs += performance.now() - spliceInvokeStart;
+
+            const entry = fullResSplices.get(model.id);
+            if (!entry) continue;
+            entry.supportTriangleCount = summary.stagedTriangleCount;
+            if (summary.stagedTriangleCount > 0) {
+                for (let axis = 0; axis < 3; axis += 1) {
+                    entry.worldMin[axis] = Math.min(entry.worldMin[axis], summary.worldMin[axis]);
+                    entry.worldMax[axis] = Math.max(entry.worldMax[axis], summary.worldMax[axis]);
+                }
+            }
+            cumulativeBytesStage += summary.stagedTriangleCount * QUANTIZED_U16_BYTES_PER_TRIANGLE;
+
+            // The partition check, stated as arithmetic rather than trusted:
+            // the two passes must between them account for every triangle in
+            // the file, exactly once.
+            const accounted = entry.modelTriangleCount + entry.supportTriangleCount;
+            if (accounted !== summary.sourceTriangleCount) {
+                throw new Error(
+                    `Full-resolution section splice for "${model.name}" staged ${accounted} of `
+                    + `${summary.sourceTriangleCount} source triangles — the model and support `
+                    + 'sections do not partition the file, so the slice was stopped.',
+                );
+            }
+            console.warn(
+                `[SlicingFullRes] staged the full-res support section for "${model.name}": `
+                + `${summary.stagedTriangleCount.toLocaleString()} triangles in `
+                + `${summary.spliceMs.toFixed(1)} ms (run map: ${summary.runMapSource}).`,
+            );
+        }
+    };
+
     const meshPrepStartMs = performance.now();
     let solidMesh: Awaited<ReturnType<typeof buildSolidSliceMeshForWasm>>;
     try {
@@ -828,6 +951,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                     : undefined,
             meshChunkTargetBytes,
             ...(fullResSplices.size > 0 ? { fullResSplices } : {}),
+            ...(supportSectionPasses.length > 0 ? { onModelSectionStaged: spliceSupportSections } : {}),
         });
     } finally {
         preparedModelsForOutput.dispose();

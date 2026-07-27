@@ -1,6 +1,7 @@
 import type { DragonfruitImportFormat } from '@/supports/types';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import type { ModelOutputPolicy } from '@/features/mesh-modifiers/modelOutputPolicy';
+import type { ImportRunMap, ImportRunMapSummary } from '@/utils/importRunMap';
 
 export const VOXL_MAGIC = 'VOXL' as const;
 export const VOXL_VERSION = 1 as const;
@@ -60,6 +61,17 @@ export type VoxlNativePreviewRef = {
     sizeBytes: number;
     mtimeMs: number;
   };
+  /**
+   * Ph1 — SUMMARY of the import run map. The run array itself lives in this
+   * model's `RUNM` chunk; the summary is small enough to be unconditional, so
+   * a reader can always tell what the file meant to carry.
+   *
+   * `totalRunCount === 0` means there is genuinely no model/support split.
+   * `totalRunCount > 0` with `entryCount === 0` means the map exceeded the
+   * 64 KiB cap and was deliberately not written — recompute, do not read it as
+   * "no supports". `resolveImportRunMap` is the only sanctioned reader.
+   */
+  runMap?: ImportRunMapSummary;
 };
 
 export type VoxlModelEntry = {
@@ -143,6 +155,14 @@ export type VoxlModelRuntimeLike = {
   fileSizeBytes?: number;
   sourcePath?: string;
   nativePreview?: VoxlNativePreviewRef;
+  /**
+   * Ph1 — the in-memory run map, the source of this model's `RUNM` chunk. Kept
+   * OFF `nativePreview` at runtime on purpose: `nativePreview` is serialized
+   * wholesale into `MODL` JSON, and a `Uint32Array` there would stringify to
+   * `{"0":…,"1":…}`. The writer takes the binary array from here and the JSON
+   * summary from `nativePreview.runMap`.
+   */
+  importRunMap?: ImportRunMap;
   /** See `VoxlModelEntry.outputPolicy` (Ph2). */
   outputPolicy?: ModelOutputPolicy;
   /** See `VoxlModelEntry.geometryStale` (Ph0.1 sub-phase D2). */
@@ -176,6 +196,14 @@ export type ParsedVoxlResult = {
   document: VoxlDocumentV1;
   /** Pre-decoded mesh bytes keyed by model ID (populated for V2 files). */
   meshBytes: Map<string, Uint8Array>;
+  /**
+   * Ph1 — decoded import run maps keyed by model ID, for files that carried a
+   * `RUNM` chunk. Empty for V1 files, for files written before the chunk
+   * existed, and for models whose map exceeded the cap; `resolveImportRunMap`
+   * turns each of those into an explicit recompute verdict rather than a
+   * silent "no split".
+   */
+  runMaps: Map<string, Uint32Array>;
   /** The VOXL format version that was read (e.g. 1, 2.1). */
   sourceVersion: number;
 };

@@ -31,14 +31,36 @@ const MIN_MESH_CHUNK_TARGET_BYTES = 16 * 1024 * 1024;
 const MAX_MESH_CHUNK_TARGET_BYTES = 256 * 1024 * 1024;
 
 /**
- * A model whose full-resolution geometry was already staged Rust-side by the
- * Phase-1 splice (`stage_fullres_mesh_from_source`) BEFORE the collector
- * streams. The collector must skip the model's (preview) geometry while the
- * model stays part of the job for supports/rafts, the manifest, and the
- * layer-count derivation (via the splice's world bounds).
+ * A model whose full-resolution geometry is staged Rust-side by the splice
+ * (`stage_fullres_mesh_from_source`) rather than by the collector. The
+ * collector must skip the model's (preview) geometry while the model stays part
+ * of the job for supports/rafts, the manifest, and the layer-count derivation
+ * (via the splice's world bounds).
+ *
+ * Ph3 — the counts are PER SECTION, because the staged buffer is built in four
+ * passes and this model contributes to two of them:
+ *
+ * ```text
+ *   ① splice model runs (every spliced model)      ← modelTriangleCount
+ *   ② collector streams model triangles
+ *   ③ splice support complement (every spliced model) ← supportTriangleCount
+ *   ④ collector streams support triangles, then generated supports + rafts
+ * ```
+ *
+ * That order is what lets ONE split index describe the whole staged buffer:
+ * everything before the ①+② boundary is model, everything after is support. A
+ * naive per-model section splice would produce
+ * `[model | support | model | support]`, which no single index can describe —
+ * which is why the support pass is a callback fired between ② and ④ rather
+ * than another loop beside ①.
+ *
+ * `supportTriangleCount` is 0 until pass ③ has run (and stays 0 for a model
+ * spliced whole, which contributes only to the model block exactly as before
+ * Ph3). `worldMin`/`worldMax` are the union over the passes that actually ran.
  */
 export type FullResSplicedModel = {
-  triangleCount: number;
+  modelTriangleCount: number;
+  supportTriangleCount: number;
   worldMin: [number, number, number];
   worldMax: [number, number, number];
 };
@@ -55,6 +77,17 @@ export type RasterLayerZipExportOptions = {
   meshChunkTargetBytes?: number;
   /** Keyed by model id; absent/empty means the legacy (byte-identical) path. */
   fullResSplices?: Map<string, FullResSplicedModel>;
+  /**
+   * Ph3 pass ③ — invoked once, after the collector has emitted every model
+   * triangle and flushed them, and before it emits a single support triangle.
+   * The orchestrator uses it to splice each spliced model's SUPPORT section
+   * into the staged buffer at exactly the right offset. It must mutate the
+   * `fullResSplices` entries in place (adding `supportTriangleCount` and
+   * widening the bounds); this function reads them again afterwards.
+   *
+   * Absent ⇒ no support pass, i.e. today's whole-file splice behaviour.
+   */
+  onModelSectionStaged?: () => Promise<void>;
 };
 
 function normalizeMeshChunkTargetBytes(value: number | null | undefined): number {
@@ -493,6 +526,29 @@ class TriangleFloatCollector {
         tri.cz,
       );
     }
+  }
+
+  /**
+   * Ph3 — flush everything collected so far and wait for it to land, WITHOUT
+   * finalizing. This is the seam that makes the four-pass staging interleave
+   * possible: the support splice appends straight into the staged buffer
+   * Rust-side, so any model floats still sitting in this buffer would be
+   * appended AFTER it and land on the wrong side of the split index.
+   *
+   * No-op outside streaming mode (nothing has been sent, so nothing can be out
+   * of order — the whole array is handed over at `finalize`).
+   */
+  async flushPending(): Promise<void> {
+    if (!this.flushCallback) return;
+    if (this.cursor > 0) {
+      const pending = new Uint8Array(this.data.buffer, this.data.byteOffset, this.cursor * 4);
+      this.flushChain = this.flushChain.then(() => this.flushCallback!(pending));
+      // A fresh buffer, not a rewind: the chunk above aliases `this.data` and
+      // is consumed asynchronously, so reusing it would race the flush.
+      this.data = new Float32Array(this.data.length);
+      this.cursor = 0;
+    }
+    await this.flushChain;
   }
 
   async finalize(): Promise<Float32Array> {
@@ -2337,9 +2393,12 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   const collectorModels = fullResSplices
     ? visibleModels.filter((model) => !fullResSplices.has(model.id))
     : visibleModels;
+  // Pass ① has already run: this is the spliced MODEL block only. The spliced
+  // support block is staged by pass ③ below and is deliberately not counted
+  // here — it belongs on the far side of the split index.
   const splicedTriangleCount = fullResSplices
     ? visibleModels.reduce(
-        (sum, model) => sum + (fullResSplices.get(model.id)?.triangleCount ?? 0),
+        (sum, model) => sum + (fullResSplices.get(model.id)?.modelTriangleCount ?? 0),
         0,
       )
     : 0;
@@ -2363,7 +2422,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
         rotation: model.transform.rotation.toArray().slice(0, 3),
         scale: model.transform.scale.toArray(),
         ...(fullResSplices?.has(model.id)
-          ? { fullResSplicedTriangles: fullResSplices.get(model.id)!.triangleCount }
+          ? { fullResSplicedModelTriangles: fullResSplices.get(model.id)!.modelTriangleCount }
           : {}),
       };
     }),
@@ -2376,16 +2435,28 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     options.meshChunkTargetBytes,
   );
 
-  // Push model-only triangles first (across all models), then support-only.
-  // This produces the same collector layout as manually splitting before slicing.
-  // Spliced models are skipped: their full-res triangles are already staged
-  // ahead of every collector chunk, keeping the model block contiguous.
+  // PASS ② — every collector model's model-only triangles. Spliced models are
+  // skipped: pass ① already staged their model runs ahead of every collector
+  // chunk, so the model block stays contiguous at the front of the buffer.
   for (const model of collectorModels) {
     const modelTriCount = effectiveModelTriangleCount(model);
     if (modelTriCount > 0) {
       appendModelTrianglesInRange(model, collector, 0, modelTriCount);
     }
   }
+
+  // PASS ③ — the model block is complete. Flush it so it is physically ahead of
+  // anything the support splice appends, THEN let the orchestrator splice each
+  // spliced model's support complement. Order here is the entire contract: a
+  // buffered model chunk flushed after the support splice would land past the
+  // split index and be sliced as support.
+  const collectorModelTriangleCountStaged = collector.triangleCount;
+  if (options.onModelSectionStaged) {
+    await collector.flushPending();
+    await options.onModelSectionStaged();
+  }
+
+  // PASS ④ — collector support sections, then generated supports and rafts.
   for (const model of collectorModels) {
     const totalTris = getModelTriangleCount(model);
     const modelTriCount = effectiveModelTriangleCount(model);
@@ -2393,9 +2464,16 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
       appendModelTrianglesInRange(model, collector, modelTriCount, totalTris);
     }
   }
+  const splicedSupportTriangleCount = fullResSplices
+    ? visibleModels.reduce(
+        (sum, model) => sum + (fullResSplices.get(model.id)?.supportTriangleCount ?? 0),
+        0,
+      )
+    : 0;
   emitMeshPrepDiagnostic('Mesh prep: models', 1, 4, {
     modelTriangleEstimate: modelTriangleCount,
-    triangleCountAfterModels: collector.triangleCount,
+    triangleCountAfterModels: collectorModelTriangleCountStaged,
+    splicedSupportTriangleCount,
   });
 
   const visibleModelIds = new Set(visibleModels.map((model) => model.id));
@@ -2404,7 +2482,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     triangleCountAfterSupports: collector.triangleCount,
   });
 
-  if (collector.triangleCount === 0 && splicedTriangleCount === 0) {
+  if (collector.triangleCount === 0 && splicedTriangleCount === 0 && splicedSupportTriangleCount === 0) {
     throw new Error('Unable to prepare world-space triangles from visible models.');
   }
 
@@ -2414,6 +2492,10 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   let splicedMaxZ = -Infinity;
   if (fullResSplices) {
     for (const spliced of fullResSplices.values()) {
+      // A pass that staged nothing reports neutral [0,0,0] bounds (Rust cannot
+      // send infinities through JSON), so an empty support section must not
+      // drag the z-range down to zero.
+      if (spliced.modelTriangleCount + spliced.supportTriangleCount === 0) continue;
       if (spliced.worldMax[2] > splicedMaxZ) {
         splicedMaxZ = spliced.worldMax[2];
       }
@@ -2431,8 +2513,15 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   console.warn('[SupportAA] collector finalized', {
     modelTriangleCount,
     splicedTriangleCount,
-    totalTriangleCount: collector.triangleCount + splicedTriangleCount,
-    supportTriangleCount: Math.max(0, collector.triangleCount - collectorModelTriangleCount),
+    splicedSupportTriangleCount,
+    totalTriangleCount: collector.triangleCount + splicedTriangleCount + splicedSupportTriangleCount,
+    // Ph3: this is what the plan's acceptance criterion reads. It was
+    // STRUCTURALLY zero for a spliced model before — the whole model, supports
+    // included, sat in the model block — so `aa_on_supports=false` had nothing
+    // to exclude. It is now the collector's support block plus the spliced
+    // support sections.
+    supportTriangleCount: Math.max(0, collector.triangleCount - collectorModelTriangleCount)
+      + splicedSupportTriangleCount,
     triangleFloatCount: trianglesXYZ.length,
     streamed: options.flushBinaryMeshChunk != null,
     modelFloatFingerprint: fingerprintTriangleFloats(
@@ -2540,6 +2629,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
       if (!fullResSplices) return collector.meshBounds;
       const merged = { ...collector.meshBounds };
       for (const spliced of fullResSplices.values()) {
+        if (spliced.modelTriangleCount + spliced.supportTriangleCount === 0) continue;
         merged.minX = Math.min(merged.minX, spliced.worldMin[0]);
         merged.minY = Math.min(merged.minY, spliced.worldMin[1]);
         merged.minZ = Math.min(merged.minZ, spliced.worldMin[2]);

@@ -416,6 +416,10 @@ export function parseVoxlAuto(data: Uint8Array | ArrayBuffer): ParsedVoxlResult 
   return {
     document,
     meshBytes: new Map(),
+    // V1 predates the RUNM chunk entirely; a V1 model with a persisted
+    // `nativePreview.runMap` summary cannot exist, so the resolver reports
+    // "not persisted" and the map is recomputed if anything ever needs it.
+    runMaps: new Map(),
     sourceVersion: 1,
   };
 }

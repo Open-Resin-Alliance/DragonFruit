@@ -83,6 +83,64 @@ export interface MeshHealthReport {
   total_ms: number;
 }
 
+/**
+ * Ph1 wiring — cheap per-section topology stats measured at import.
+ *
+ * The honesty contract is the whole point of the shape: EVERY field the tier
+ * may or may not compute is `number | null`. `null` means UNKNOWN and renders
+ * as an em dash; it must never be collapsed to `0`. `self_intersection_triangles`
+ * is `null` by construction — the sweep that would fill it is a BVH query per
+ * triangle and has no place in an import path.
+ */
+export interface SectionStatsJson {
+  triangle_count: number;
+  vertex_count: number;
+  connected_components: number | null;
+  boundary_edges: number | null;
+  boundary_loops: number | null;
+  largest_boundary_loop: number | null;
+  non_manifold_edges: number | null;
+  non_manifold_vertices: number | null;
+  inconsistent_winding_edges: number | null;
+  is_watertight: boolean | null;
+  self_intersection_triangles: number | null;
+  elapsed_ms: number;
+}
+
+/**
+ * Ph1 wiring — what `load_stl_file` learned about the FULL-RESOLUTION source,
+ * decoded from the DFST response.
+ *
+ * This describes the SOURCE FILE, not the geometry in the viewport: for an
+ * over-budget import the payload is a decimated preview while these numbers
+ * (and the run map) still address the original. `model_triangle_count` is
+ * therefore only a valid index into the returned geometry when `isPreview` is
+ * false.
+ */
+export interface ImportClassificationJson {
+  /** `null` when no reliable model/support partition was found — which is the
+   *  ABSENCE of a split, not a split covering everything. */
+  model_triangle_count: number | null;
+  likely_support_geometry: boolean;
+  connected_components: number | null;
+  model_section: SectionStatsJson | null;
+  support_section: SectionStatsJson | null;
+  source_triangle_count: number;
+  dropped_nonfinite_triangles: number;
+  /** `null` = the manifold check was DELIBERATELY NOT RUN. Never `false` for a
+   *  mesh nobody looked at. */
+  model_is_manifold: boolean | null;
+  model_manifold_status: string | null;
+  /** True when the check was skipped by the size guard specifically, as opposed
+   *  to the backend being unavailable. */
+  manifold_check_size_guarded: boolean;
+  classify_ms: number;
+  section_stats_ms: number;
+  /** Runs the classifier PRODUCED. Greater than the decoded run map's length
+   *  means the map exceeded the transport cap and must be recomputed. */
+  run_count: number;
+}
+
 export interface MeshRepairOptions {
   weldEpsilon?: number;
   fillHolesMaxEdges?: number;
@@ -276,6 +334,139 @@ function normalizeMeshHealthReport(input: unknown): MeshHealthReport {
   };
 }
 
+function asOptionalNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function normalizeSectionStats(input: unknown): SectionStatsJson | null {
+  if (input == null || typeof input !== 'object') return null;
+  const raw = asRecord(input);
+  return {
+    triangle_count: asNumber(raw.triangle_count),
+    vertex_count: asNumber(raw.vertex_count),
+    connected_components: asOptionalNumber(raw.connected_components),
+    boundary_edges: asOptionalNumber(raw.boundary_edges),
+    boundary_loops: asOptionalNumber(raw.boundary_loops),
+    largest_boundary_loop: asOptionalNumber(raw.largest_boundary_loop),
+    non_manifold_edges: asOptionalNumber(raw.non_manifold_edges),
+    non_manifold_vertices: asOptionalNumber(raw.non_manifold_vertices),
+    inconsistent_winding_edges: asOptionalNumber(raw.inconsistent_winding_edges),
+    is_watertight: typeof raw.is_watertight === 'boolean' ? raw.is_watertight : null,
+    // Never defaulted to 0 — see `SectionStatsJson`.
+    self_intersection_triangles: asOptionalNumber(raw.self_intersection_triangles),
+    elapsed_ms: asNumber(raw.elapsed_ms),
+  };
+}
+
+/**
+ * Decodes the classification block carried by the DFST import response.
+ *
+ * Tolerant of a missing block (returns `null`) because a response produced by
+ * an older binary carries none — but NOT tolerant about UNKNOWN: an absent
+ * numeric field becomes `null`, never `0`.
+ */
+export function parseImportClassification(input: unknown): ImportClassificationJson | null {
+  if (input == null || typeof input !== 'object') return null;
+  const raw = asRecord(input);
+  const modelTriangleCount = asOptionalNumber(raw.model_triangle_count);
+  return {
+    model_triangle_count:
+      modelTriangleCount != null && modelTriangleCount > 0 ? modelTriangleCount : null,
+    likely_support_geometry: asBoolean(raw.likely_support_geometry),
+    connected_components: asOptionalNumber(raw.connected_components),
+    model_section: normalizeSectionStats(raw.model_section),
+    support_section: normalizeSectionStats(raw.support_section),
+    source_triangle_count: asNumber(raw.source_triangle_count),
+    dropped_nonfinite_triangles: asNumber(raw.dropped_nonfinite_triangles),
+    model_is_manifold: typeof raw.model_is_manifold === 'boolean' ? raw.model_is_manifold : null,
+    model_manifold_status:
+      typeof raw.model_manifold_status === 'string' ? raw.model_manifold_status : null,
+    manifold_check_size_guarded: asBoolean(raw.manifold_check_size_guarded),
+    classify_ms: asNumber(raw.classify_ms),
+    section_stats_ms: asNumber(raw.section_stats_ms),
+    run_count: asNumber(raw.run_count),
+  };
+}
+
+/**
+ * Projects an import classification onto the `MeshHealthReport` shape the rest
+ * of the app already consumes (shell count, support verdict, section split,
+ * manifold flag).
+ *
+ * Why a projection rather than a second report type: every consumer of these
+ * signals — `ModelManagerPanel`'s shell count, `SceneCanvas`'s orange tint,
+ * `page.tsx`'s Split-to-Bodies gate, the defect chip — reads
+ * `meshDefects.nativeRepairReport`. Giving the import path its own parallel
+ * shape would mean touching all of them; projecting means the import simply
+ * becomes another producer of the report they already read.
+ *
+ * `pre` and `post` are identical because classification does not change the
+ * mesh — it only reorders it. Boundary/non-manifold figures come from the MODEL
+ * section, matching what the repair path's own manifold check reports on.
+ *
+ * KNOWN GAP, inherited not introduced: `MeshAnalysisJson.self_intersections` is
+ * a plain `number`, so the un-measured self-intersection count is reported as
+ * `0` here exactly as the incumbent classify-only tier (`minimal_analysis`)
+ * already does. Widening that field to `number | null` ripples into the repair
+ * report modal and the repair quality gate, and belongs with those.
+ */
+export function importClassificationToHealthReport(
+  classification: ImportClassificationJson,
+  geometry: { triangleCount: number; vertexCount: number },
+): MeshHealthReport {
+  const model = classification.model_section;
+  const analysis: MeshAnalysisJson = {
+    triangle_count: geometry.triangleCount,
+    vertex_count: geometry.vertexCount,
+    non_manifold_edges: model?.non_manifold_edges ?? 0,
+    non_manifold_vertices: model?.non_manifold_vertices ?? 0,
+    boundary_edges: model?.boundary_edges ?? 0,
+    boundary_loops: model?.boundary_loops ?? 0,
+    inconsistent_edges: model?.inconsistent_winding_edges ?? 0,
+    degenerate_triangles: 0,
+    duplicate_triangles: 0,
+    component_count: classification.connected_components ?? 0,
+    self_intersections: 0,
+    signed_volume: 0,
+    // UNKNOWN stays UNKNOWN: absent stats mean the tier did not run, which is
+    // an em dash, not "this mesh has holes".
+    is_watertight: model ? model.is_watertight : null,
+    timings_ms: {
+      topology_ms: model?.elapsed_ms ?? 0,
+      self_intersections_ms: 0,
+      components_ms: 0,
+      total_ms: classification.classify_ms + classification.section_stats_ms,
+    },
+  };
+
+  return {
+    version: 1,
+    source_path: null,
+    pre: analysis,
+    post: analysis,
+    steps: [
+      {
+        name: 'classify_import',
+        duration_ms: classification.classify_ms,
+        details: `import classification of ${classification.source_triangle_count.toLocaleString()} source triangles`,
+        changed: 0,
+      },
+    ],
+    likely_support_geometry: classification.likely_support_geometry,
+    model_triangle_count: classification.model_triangle_count,
+    model_is_manifold: classification.model_is_manifold,
+    model_manifold_status: classification.model_manifold_status,
+    residual_issues: [],
+    // `true` matches what the incumbent classify-only pass reports
+    // (`classify_support_split` sets it unconditionally). A classify pass has
+    // nothing to repair, so it has no residual issues — and reporting `false`
+    // would make `repairReportNeedsAttention` treat every import as a failed
+    // repair and raise the report modal.
+    fully_repaired: true,
+    total_ms: classification.classify_ms + classification.section_stats_ms,
+  };
+}
+
 export function isTauriRuntime(): boolean {
   if (typeof window === 'undefined') return false;
   return '__TAURI_INTERNALS__' in window;
@@ -317,6 +508,13 @@ async function readStagedPositions(invoke: TauriInvoke): Promise<Float32Array> {
 /**
  * Runs the native mesh-repair engine on a file the Rust side can read
  * directly (STL/OBJ/3MF). Returns null if the current runtime isn't Tauri.
+ *
+ * DORMANT (audited STL-import Ph2, 2026-07-26): this function has NO production
+ * caller — live repair goes through the geometry-passing path instead.
+ * Deliberately KEPT, not deleted. Note that it reads the ORIGINAL file from
+ * disk, so it inherently bypasses the Original/Decimated chokepoint in
+ * `prepareModelGeometry.ts`; any future caller must confirm full-resolution
+ * input is what that call site actually wants.
  */
 export async function repairFromPath(
   filePath: string,

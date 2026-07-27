@@ -12,12 +12,22 @@ import {
   analyzeFromGeometry,
   applyRepairedPositions,
   classifyFromGeometry,
+  importClassificationToHealthReport,
   isHeavyRepair,
   isTauriRuntime,
+  parseImportClassification,
   repairFromGeometry,
+  type ImportClassificationJson,
   type MeshAnalysisJson,
   type MeshHealthReport,
 } from '@/utils/meshRepair';
+import {
+  importRunMapFromResponse,
+  summarizeImportRunMap,
+  IMPORT_RUN_MAP_BYTES_PER_ENTRY,
+  type ImportRunMap,
+  type ImportRunMapRecomputeReason,
+} from '@/utils/importRunMap';
 import type { FullResMutatorSource } from '@/utils/fullResMutatorStaging';
 
 export type MeshDefects = {
@@ -83,7 +93,38 @@ export type GeometryWithBounds = {
     achievedError?: number;
     /** The import-time governor triangle budget this preview was reduced to. */
     budgetTriangles?: number;
+    /**
+     * Ph1 wiring — the persisted SUMMARY of this model's import run map. The
+     * run array itself lives in its own VOXL chunk; this stays here so a
+     * reader can always tell what the file meant to carry (and whether the
+     * array was dropped for exceeding the cap) even when the chunk is absent.
+     */
+    runMap?: import('@/utils/importRunMap').ImportRunMapSummary;
   };
+  /**
+   * Ph1 wiring — model-section triangle runs in SOURCE-FILE indices, as
+   * measured by the Rust importer over the FULL-RESOLUTION mesh.
+   *
+   * Present only for a native file-backed import that found a model/support
+   * split. NEVER read it directly: an over-cap map and an absent map both look
+   * like an empty array, and only `resolveImportRunMap` distinguishes them.
+   */
+  importRunMap?: ImportRunMap;
+  /**
+   * Ph3 — the recompute verdict a PREVIOUS `resolveImportRunMap` call reached
+   * for this geometry, when it could not produce a usable map.
+   *
+   * It exists because the reload path decides the verdict while the `RUNM`
+   * chunk is still in hand and the splice needs it much later, by which time
+   * `chunk-damaged` and `chunk-missing` are indistinguishable — a dropped
+   * damaged chunk and an absent one look the same. Preserving the verdict keeps
+   * all four of the resolver's reasons reportable at the point they matter.
+   *
+   * Invalidated exactly like `importRunMap` and `cPre`: `replaceModelGeometry`
+   * builds its successor geometry by explicit construction, so a mutation drops
+   * it. Carried by `cloneGeometryWithBounds`, which shares the source file.
+   */
+  importRunMapRecompute?: ImportRunMapRecomputeReason;
   /**
    * C_pre — the pre-centering 3-D bbox center this geometry was built around,
    * expressed in its SOURCE FILE's coordinate frame (P0 memo §2.2). Any
@@ -161,17 +202,20 @@ function sanitizePositionAttribute(geometry: THREE.BufferGeometry): MeshDefects 
 export interface ProcessGeometryOptions {
   center?: boolean;
   /**
-   * Controls native Tauri mesh processing behavior. Every mode EXCEPT `repair`
-   * is additionally size-gated: native processing is skipped above
-   * `AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD` (≥ 3M triangles), matching the
-   * existing auto-repair skip convention.
-   * - `auto` (default): standard flow; may run the repair path (size-gated).
-   * - `classify-only`: lightweight shell-split classification, no heavy repair
-   *   (size-gated).
-   * - `none`: skip heavy repair, but — below the size gate — STILL run the
-   *   classify-only shell-split pass for support-geometry detection. It does
-   *   NOT skip native processing entirely.
-   * - `repair`: force the full repair/classification path (never size-gated).
+   * Controls native Tauri mesh processing behavior.
+   *
+   * Ph1 wiring (d): CLASSIFICATION IS NO LONGER SIZE-GATED IN ANY MODE. Only
+   * auto-mode's heavy REPAIR retains a size opt-out
+   * (`AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD`, ≥ 3M triangles). Repair is
+   * optional work; classification decides what a triangle IS, and gating it
+   * silently stripped the shell count, the support verdict and the defect chip
+   * from exactly the large pre-supported imports that need them. Do not
+   * reintroduce a size gate on the classify path.
+   * - `auto` (default): standard flow; classifies always, repairs below 3M.
+   * - `classify-only`: lightweight shell-split classification, no heavy repair.
+   * - `none`: skip heavy repair, but STILL run the classify-only shell-split
+   *   pass for support-geometry detection. It does NOT skip native processing.
+   * - `repair`: force the full repair/classification path.
    */
     nativeProcessingMode?: 'auto' | 'classify-only' | 'none' | 'repair';
   /**
@@ -218,6 +262,21 @@ export interface ProcessGeometryOptions {
    * consulted on the repair path — a classify-only pass measures afresh.
    */
   assumeSupportGeometry?: boolean;
+  /**
+   * Ph1 wiring — the classification the Rust importer already performed over
+   * the FULL-RESOLUTION mesh, handed straight to this pass.
+   *
+   * Consulted only when this pass would otherwise have run a classify-only
+   * round trip AND the geometry is the very mesh the classification describes
+   * (i.e. not a decimated preview, whose triangle order is a different mesh
+   * entirely). In that case the round trip is pure duplicated work — the same
+   * classifier, over the same triangles, plus two whole-mesh IPC transfers —
+   * so it is skipped and this result used instead. The geometry arrives
+   * already reordered model-section-first, which is `classify_import`'s
+   * contract.
+   * @internal
+   */
+  _importClassification?: ImportClassificationJson | null;
 }
 
 // Cloning extremely large position buffers can require hundreds of MB and can
@@ -371,33 +430,57 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   let repairUsedFullRes = false;
   if (isTauriRuntime()) {
     const nativeMode = options.nativeProcessingMode ?? 'auto';
-    // STL-import P6 hygiene (audit §2c): native processing — the auto-repair
-    // path AND the classify-only shell-split pass — stages the whole mesh to
-    // Rust and back. On very large meshes that round-trip is expensive wasted
-    // work, so skip it above the same ≥3M threshold auto-repair already used,
-    // for every mode EXCEPT the explicit manual `repair` force path (user
-    // opt-in, never size-gated). Previously only `auto` was gated, so a default
-    // import (mode=`none`, autoRepair off) still classified at any size. Small
-    // meshes (< threshold) keep classifying, so support-geometry detection is
-    // unaffected for the common case.
-    const skipNativeProcessingForSize = nativeMode !== 'repair'
+    // Ph1 wiring (d): the P6 `>= 3M` size gate that used to sit here is GONE.
+    //
+    // It skipped native processing — the auto-REPAIR path and the classify-only
+    // shell-split pass alike — for any mesh at or above
+    // AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD. Repair is genuinely optional
+    // work and opting big meshes out of it is defensible. Classification is
+    // not: it decides what a triangle IS, and skipping it silently removed
+    // `component_count` (the shell count), `likely_support_geometry` (the
+    // orange support tint and the Split-to-Bodies gate), the model/support
+    // section split and the defect chip — for exactly the large pre-supported
+    // imports that need them most. The pass was cheap relative to what it
+    // bought, and the user saw a model that had simply forgotten it had
+    // supports.
+    //
+    // Auto-repair keeps its own size opt-out below; the classify path has none,
+    // by design, and must never grow one again.
+    const skipAutoRepairForSize = nativeMode === 'auto'
       && sourceTriangleEstimate >= AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD;
 
-    if (skipNativeProcessingForSize) {
-      console.warn(
-        `[processGeometry] Skipping native repair/classification for large mesh (` +
-        `${sourceTriangleEstimate.toLocaleString()} triangles ≥ ${AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD.toLocaleString()} threshold). Use manual Repair to force.`
-      );
-    } else try {
+    try {
       if (nativeMode === 'none') {
         console.log('[processGeometry] Native repair skipped (mode=none) — running classification for support geometry detection');
       }
       let classifyOnly = nativeMode === 'classify-only' || nativeMode === 'none';
       const forceRepair = nativeMode === 'repair';
+      if (skipAutoRepairForSize) {
+        console.warn(
+          `[processGeometry] Skipping auto-repair for large mesh (`
+          + `${sourceTriangleEstimate.toLocaleString()} triangles ≥ `
+          + `${AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD.toLocaleString()} threshold). `
+          + 'Classifying only — use manual Repair to force a repair.',
+        );
+        classifyOnly = true;
+      }
       // P5-2 / D5: convex-hull rescue is opt-in. Only ever true when the user
       // explicitly consents in the multi-component confirm dialog below; single-
       // component / watertight meshes never prompt, so this stays false.
       let allowHullRescue = false;
+
+      // Ph1 wiring (d): the native importer already classified this exact mesh
+      // at full resolution and shipped the result in the DFST response. Running
+      // `classifyFromGeometry` now would re-run the same classifier over the
+      // same triangles and pay two whole-mesh IPC transfers for an answer we
+      // are holding. Only valid when the geometry IS the classified mesh —
+      // a decimated preview is a different triangle set, so its own classify
+      // pass still runs.
+      const preClassified = classifyOnly
+        && options._isNativePreview !== true
+        && options._importClassification != null
+        ? options._importClassification
+        : null;
 
       // If a confirmation callback is wired up, run a quick pre-repair analysis
       // so we can ask the user before committing to a heavy solidification pass.
@@ -429,9 +512,25 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
       }
 
       options.onNativeProcessingStage?.(classifyOnly ? 'classifying' : 'repairing');
-      console.log(`[${new Date().toISOString()}] [processGeometry] Running native ${classifyOnly ? 'classification' : 'repair/classification'}`);
+      const positionCount = (geometry.getAttribute('position') as THREE.BufferAttribute | null)?.count ?? 0;
+      console.log(
+        `[${new Date().toISOString()}] [processGeometry] `
+        + (preClassified
+          ? 'Using the import-time classification (no round trip)'
+          : `Running native ${classifyOnly ? 'classification' : 'repair/classification'}`),
+      );
       const nativeStart = performance.now();
-      const result = classifyOnly
+      const result = preClassified
+        ? {
+            report: importClassificationToHealthReport(preClassified, {
+              triangleCount: Math.floor(positionCount / 3),
+              vertexCount: positionCount,
+            }),
+            // The importer already applied this ordering before encoding the
+            // response — there are no positions to write back.
+            positions: new Float32Array(0),
+          }
+        : classifyOnly
         ? await classifyFromGeometry(geometry)
         : await repairFromGeometry(
             geometry,
@@ -448,7 +547,10 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
         }
         let effectiveResult = result;
         let usedFallbackClassification = false;
-        let shouldApplyPositions = true;
+        // The pre-classified path has nothing to write back: the importer
+        // reordered the mesh before it encoded the response, so the geometry
+        // already matches the report.
+        let shouldApplyPositions = preClassified == null;
 
         if (!classifyOnly) {
           const qualityGate = evaluateNativeRepairQualityGate(result.report);
@@ -513,11 +615,17 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
           nativeRepairReport: report,
         };
 
-        // If the repaired mesh has a model/support split, extract the support
-        // section as a separate geometry for orange overlay rendering.
-        const positionsWereApplied = shouldApplyPositions;
+        // If the mesh has a model/support split, extract the support section as
+        // a separate geometry for orange overlay rendering.
+        //
+        // The precondition is that the buffer is IN THE REPORT'S ORDER, which
+        // is true either because this pass wrote the reordered positions back,
+        // or because the importer had already reordered them before encoding.
+        // (It is NOT true when the repair output was rejected and the original
+        // geometry kept — hence the flag rather than an unconditional slice.)
+        const geometryMatchesReport = shouldApplyPositions || preClassified != null;
 
-        if (positionsWereApplied && report.model_triangle_count != null && report.model_triangle_count > 0) {
+        if (geometryMatchesReport && report.model_triangle_count != null && report.model_triangle_count > 0) {
           const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
           const allPos = posAttr.array as Float32Array;
           const modelFloatEnd = report.model_triangle_count * 9; // 3 vertices × 3 floats per tri
@@ -872,6 +980,20 @@ type NativeStlLoadResult = {
   achievedError: number;
   /** The import-time governor triangle budget (0 when unreported). */
   budgetTriangles: number;
+  /**
+   * Ph1 wiring — what the Rust importer measured about the FULL-RESOLUTION
+   * source. For a preview this describes the ORIGINAL file, not the geometry
+   * above, so `model_triangle_count` indexes the returned geometry only when
+   * `isPreview` is false.
+   */
+  classification: ImportClassificationJson | null;
+  /**
+   * Flat `[start0, len0, start1, len1, …]` model runs in SOURCE-FILE triangle
+   * indices. `null` when there is no split, or when the map exceeded the
+   * transport cap (`classification.run_count > runMap.length / 2` distinguishes
+   * the two) and must be recomputed from the source file.
+   */
+  runMap: Uint32Array | null;
 };
 
 /**
@@ -888,18 +1010,47 @@ function readJsHeapSizeLimit(): number | undefined {
   return undefined;
 }
 
-// DFST header is 24 bytes: magic(4) flags(4) originalCount(4) outputCount(4)
-// achievedError:f32(4) budgetTriangles:u32(4). The last two were added for the
-// Phase-2a query-first decimation (see mesh_repair::encode_stl_response).
-const NATIVE_STL_HEADER_BYTES = 24;
+/**
+ * DFST header — **32 bytes** since the Ph1 wiring.
+ *
+ * ```text
+ *   off  size  field
+ *     0     4  magic "DFST"
+ *     4     4  flags u32               bit0 = payload is a reduced preview
+ *     8     4  originalTriangleCount u32
+ *    12     4  outputTriangleCount   u32
+ *    16     4  achievedError f32       (0 for a verbatim load)      — Phase 2a
+ *    20     4  budgetTriangles u32     (0 when unreported)          — Phase 2a
+ *    24     4  runMapEntryCount u32    (entries present below)      — Ph1
+ *    28     4  classificationJsonBytes u32 (0 when absent)          — Ph1
+ * ```
+ *
+ * Payload: `positions (n·36 B) | normals (n·36 B) | run map (entries·8 B) |
+ * classification JSON`. The run map sits before the JSON so it stays 4-byte
+ * aligned for a direct `Uint32Array` view over the IPC buffer.
+ *
+ * This constant, the two Ph1 field reads, and the exact-length assertion below
+ * are ONE unit with `STL_RESPONSE_HEADER_BYTES` in `mesh_repair.rs`. The length
+ * check is an equality, so a writer and reader that disagree do not degrade
+ * gracefully — every native import fails outright.
+ */
+const NATIVE_STL_HEADER_BYTES = 32;
 
-async function loadStlViaTauri(filePath: string): Promise<NativeStlLoadResult | null> {
-  try {
-    const { invoke } = await import('@tauri-apps/api/core');
-    const bytes = await invoke<ArrayBuffer>('load_stl_file', {
-      filePath,
-      jsHeapSizeLimit: readJsHeapSizeLimit(),
-    });
+/**
+ * Decodes a DFST response into geometry + import classification + run map.
+ *
+ * Pure and exported so the wire format has a test that does not need a Tauri
+ * runtime: the header and the Rust writer are one unit, and the exact-length
+ * assertion below is the only thing standing between a version skew and a
+ * silently misread buffer.
+ *
+ * Returns `null` for an empty or sub-header response (nothing to decode);
+ * THROWS for a response that has a header but does not match it, because a
+ * length that disagrees with its own header is a corrupt transfer, not a small
+ * one.
+ */
+export function decodeNativeStlResponse(bytes: ArrayBuffer): NativeStlLoadResult | null {
+  {
     if (!bytes || bytes.byteLength === 0) return null;
 
     if (bytes.byteLength < NATIVE_STL_HEADER_BYTES) return null;
@@ -915,8 +1066,14 @@ async function loadStlViaTauri(filePath: string): Promise<NativeStlLoadResult | 
     const previewTriangleCount = header.getUint32(12, true);
     const achievedError = header.getFloat32(16, true);
     const budgetTriangles = header.getUint32(20, true);
+    const runMapEntryCount = header.getUint32(24, true);
+    const classificationJsonBytes = header.getUint32(28, true);
+    const geometryBytes = previewTriangleCount * 18 * Float32Array.BYTES_PER_ELEMENT;
     const expectedBytes =
-      NATIVE_STL_HEADER_BYTES + previewTriangleCount * 18 * Float32Array.BYTES_PER_ELEMENT;
+      NATIVE_STL_HEADER_BYTES
+      + geometryBytes
+      + runMapEntryCount * IMPORT_RUN_MAP_BYTES_PER_ENTRY
+      + classificationJsonBytes;
     if (previewTriangleCount === 0 || bytes.byteLength !== expectedBytes) {
       throw new Error('Native STL loader returned a truncated response.');
     }
@@ -927,6 +1084,24 @@ async function loadStlViaTauri(filePath: string): Promise<NativeStlLoadResult | 
       NATIVE_STL_HEADER_BYTES + previewTriangleCount * 9 * Float32Array.BYTES_PER_ELEMENT,
       previewTriangleCount * 9,
     );
+
+    // The run map is `[start, len]` pairs in SOURCE-FILE triangle indices —
+    // never welded or preview indices. Copied out of the IPC buffer (unlike the
+    // geometry, which deliberately keeps its view) because it is kilobytes at
+    // most and outlives the geometry on `GeometryWithBounds`.
+    const runMapBase = NATIVE_STL_HEADER_BYTES + geometryBytes;
+    const runMap = runMapEntryCount > 0
+      ? new Uint32Array(new Uint32Array(bytes, runMapBase, runMapEntryCount * 2))
+      : null;
+    const classification = classificationJsonBytes > 0
+      ? parseImportClassification(
+          JSON.parse(
+            new TextDecoder().decode(
+              new Uint8Array(bytes, runMapBase + runMapEntryCount * IMPORT_RUN_MAP_BYTES_PER_ENTRY, classificationJsonBytes),
+            ),
+          ),
+        )
+      : null;
 
     const geometry = new THREE.BufferGeometry();
     // Both attributes retain the IPC ArrayBuffer. Avoiding slice() here removes
@@ -944,6 +1119,21 @@ async function loadStlViaTauri(filePath: string): Promise<NativeStlLoadResult | 
         `${originalTriangleCount.toLocaleString()} -> ${previewTriangleCount.toLocaleString()} triangles.`,
       );
     }
+    if (classification) {
+      console.log(
+        `[loadStlGeometry] Import classification: model=${classification.model_triangle_count ?? '—'}`
+        + `/${classification.source_triangle_count} tris, shells=${classification.connected_components ?? '—'}`
+        + `, support=${classification.likely_support_geometry}`
+        + `, runs=${runMapEntryCount}/${classification.run_count}`
+        + ` (${(classification.classify_ms + classification.section_stats_ms).toFixed(0)} ms).`,
+      );
+      if (classification.run_count > runMapEntryCount) {
+        console.warn(
+          `[loadStlGeometry] Run map not transported: ${classification.run_count.toLocaleString()} runs `
+          + 'exceed the transport cap. Section-aware output will recompute it from the source file.',
+        );
+      }
+    }
     return {
       geometry,
       originalTriangleCount,
@@ -951,7 +1141,20 @@ async function loadStlViaTauri(filePath: string): Promise<NativeStlLoadResult | 
       isPreview: (flags & 1) !== 0,
       achievedError,
       budgetTriangles,
+      classification,
+      runMap,
     };
+  }
+}
+
+async function loadStlViaTauri(filePath: string): Promise<NativeStlLoadResult | null> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const bytes = await invoke<ArrayBuffer>('load_stl_file', {
+      filePath,
+      jsHeapSizeLimit: readJsHeapSizeLimit(),
+    });
+    return decodeNativeStlResponse(bytes);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error('[loadStlGeometry] Tauri Rust parser failed.', error);
@@ -996,8 +1199,25 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
         ...options,
         _skipComputeNormals: true,
         _isNativePreview: nativeResult.isPreview,
+        _importClassification: nativeResult.classification,
         ...(nativeResult.isPreview ? { nativeProcessingMode: 'none' as const } : {}),
       });
+
+      // Ph1 wiring — the run map, in SOURCE-FILE indices, describing the
+      // ORIGINAL file whether or not the payload above was decimated. Attached
+      // for every native import that found a split; Ph3's splice is its
+      // consumer, and `resolveImportRunMap` is how it must be read.
+      const importRunMap = nativeResult.classification
+        ? importRunMapFromResponse({
+            runs: nativeResult.runMap,
+            modelTriangleCount: nativeResult.classification.model_triangle_count,
+            sourceTriangleCount: nativeResult.classification.source_triangle_count,
+            droppedNonFiniteTriangles: nativeResult.classification.dropped_nonfinite_triangles,
+            totalRunCount: nativeResult.classification.run_count,
+          })
+        : null;
+      if (importRunMap) processed.importRunMap = importRunMap;
+
       if (nativeResult.isPreview) {
         // C_pre captured at the centering site inside processGeometry.
         // Stripped by finalizeImportFrameDatum on the way out.
@@ -1035,6 +1255,13 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
           ...(nativeResult.budgetTriangles > 0
             ? { budgetTriangles: nativeResult.budgetTriangles }
             : {}),
+          // Ph1 wiring — the run-map SUMMARY rides with the rest of the
+          // full-res linkage, because the splice that consumes the map is
+          // gated on exactly this marker plus a re-readable `sourcePath`.
+          // Written even when the array itself was dropped for exceeding the
+          // cap: `totalRunCount` is what lets a reload tell "no split" from
+          // "too fragmented to carry, recompute it".
+          ...(importRunMap ? { runMap: summarizeImportRunMap(importRunMap) } : {}),
         };
       }
       return finalizeImportFrameDatum(processed, options.filePath);

@@ -1694,6 +1694,13 @@ export function clearAllSDFCaches(): void {
  *
  * Safe to call when running in the browser (non-Tauri) — it returns silently.
  *
+ * DORMANT (audited STL-import Ph2, 2026-07-26): this function has NO production
+ * caller — the SDF precompute path is reachable only from tests. Deliberately
+ * KEPT, not deleted. Before wiring it up, stage geometry through
+ * `stageModelForRustAnalysis` (`src/utils/rustAnalysisStaging.ts`) so the
+ * per-model Original/Decimated toggle is honoured; `compute_sdf_from_staged`
+ * analyses the process-global staged buffer and cannot resolve a source itself.
+ *
  * @returns The number of pre-computed cells, or 0 if unavailable.
  */
 export async function tryLoadPrecomputedSDFForMesh(

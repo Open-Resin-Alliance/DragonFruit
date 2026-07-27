@@ -1,8 +1,11 @@
 import * as THREE from 'three';
 import {
   describeFullResMutatorSpliceError,
+  readFullResMutatorSection,
   stageFullResMutatorSource,
+  type FullResMutatorSectionRequest,
   type FullResMutatorSource,
+  type FullResSpliceSummary,
 } from '@/utils/fullResMutatorStaging';
 
 type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown> | ArrayBuffer | ArrayBufferView, opts?: { headers?: Record<string, string> }) => Promise<T>;
@@ -13,6 +16,14 @@ interface TauriCoreModule {
 
 let tauriCorePromise: Promise<TauriCoreModule | null> | null = null;
 let stagedHollowPreviewSourceKey: string | null = null;
+/**
+ * Ph3b — the splice summary for the CURRENTLY captured full-res source, kept
+ * beside the key it belongs to. The Apply path needs the model pass's
+ * `skippedTriangleCount` to verify the support read-back partitions the file,
+ * and a cache hit returns without re-invoking, so the summary has to outlive
+ * the call that produced it. Cleared with the key, never independently.
+ */
+let stagedHollowPreviewSourceSummary: FullResSpliceSummary | null = null;
 
 export type HollowMode = 'cavity' | 'infill' | 'shell_open_face';
 export type InfillMode = 'lattice' | 'pillar';
@@ -245,6 +256,14 @@ export interface HollowSourceStageResult {
   /** Present when full-res was requested but the source was missing/stale and
    *  staging fell back to the preview geometry (the user should be warned). */
   degraded?: { reason: string };
+  /**
+   * Ph3b — the Rust splice summary for the captured full-res source, present
+   * whenever `usedFullRes` is true (including on a cache hit). The Apply path
+   * gates its support re-append on `section === 'model'` and on
+   * `skippedTriangleCount`; reading either from anywhere else would be reading
+   * a different pass.
+   */
+  spliceSummary?: FullResSpliceSummary;
 }
 
 /**
@@ -255,28 +274,43 @@ export interface HollowSourceStageResult {
  * WebView (plan §C.2). A missing/stale source degrades to the preview geometry
  * with a reason (never silent). Cached by an effective source key so repeated
  * previews of the same model re-use the one splice.
+ *
+ * Ph3b: `section` stages the MODEL section alone, so the voxel grid, cavity and
+ * shell describe the model body and the supports are left for the caller to
+ * re-append verbatim. It is folded into the cache key — a whole-file capture
+ * answering a sectioned request would hollow the supports while the caller
+ * re-appends them, putting every support triangle in the output twice.
  */
 export async function stageHollowPreviewSource(
   geometry: THREE.BufferGeometry,
   sourceKey: string,
   fullResSource?: FullResMutatorSource | null,
+  section?: FullResMutatorSectionRequest | null,
 ): Promise<HollowSourceStageResult> {
   const core = await loadTauriCore();
   if (!core) return { staged: false, usedFullRes: false };
 
+  const sectionSuffix = section && section.section !== 'all' ? `::${section.section}` : '';
   const effectiveKey = fullResSource
-    ? `fullres::${fullResSource.sourcePath}::${fullResSource.originalTriangleCount}::${sourceKey}`
+    ? `fullres::${fullResSource.sourcePath}::${fullResSource.originalTriangleCount}${sectionSuffix}::${sourceKey}`
     : sourceKey;
   if (stagedHollowPreviewSourceKey === effectiveKey) {
-    return { staged: true, usedFullRes: Boolean(fullResSource) };
+    return {
+      staged: true,
+      usedFullRes: Boolean(fullResSource),
+      ...(fullResSource && stagedHollowPreviewSourceSummary
+        ? { spliceSummary: stagedHollowPreviewSourceSummary }
+        : {}),
+    };
   }
 
   if (fullResSource) {
     try {
-      await stageFullResMutatorSource(core.invoke, fullResSource);
+      const summary = await stageFullResMutatorSource(core.invoke, fullResSource, section);
       await core.invoke('mesh_hollow_preview_capture_staged_source');
       stagedHollowPreviewSourceKey = effectiveKey;
-      return { staged: true, usedFullRes: true };
+      stagedHollowPreviewSourceSummary = summary;
+      return { staged: true, usedFullRes: true, spliceSummary: summary };
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
       const reason = describeFullResMutatorSpliceError(raw);
@@ -288,6 +322,7 @@ export async function stageHollowPreviewSource(
       await stageGeometryToStagedMesh(core.invoke, geometry);
       await core.invoke('mesh_hollow_preview_capture_staged_source');
       stagedHollowPreviewSourceKey = sourceKey;
+      stagedHollowPreviewSourceSummary = null;
       return { staged: true, usedFullRes: false, degraded: { reason } };
     }
   }
@@ -295,7 +330,35 @@ export async function stageHollowPreviewSource(
   await stageGeometryToStagedMesh(core.invoke, geometry);
   await core.invoke('mesh_hollow_preview_capture_staged_source');
   stagedHollowPreviewSourceKey = sourceKey;
+  stagedHollowPreviewSourceSummary = null;
   return { staged: true, usedFullRes: false };
+}
+
+/**
+ * Ph3b — reads the SUPPORT section of a model's original file back in the local
+ * mutator frame, so the caller can re-append it to the hollow output untouched.
+ *
+ * Deliberately called BEFORE anything is staged or mutated. Every failure mode
+ * here (missing source, stale source, a run map that cannot describe the file)
+ * is then a DEGRADE — hollow the whole file, as before Ph3b, with a warning —
+ * rather than an abort after the model section has already been rebuilt. The one
+ * failure that must still abort is a partition mismatch, which is checked
+ * separately once both counts are in hand.
+ *
+ * `null` outside the Tauri runtime, where there is no file to read.
+ */
+export async function readHollowSupportSection(
+  fullResSource: FullResMutatorSource,
+  runs: Uint32Array | null,
+  recomputeReason: string | null,
+): Promise<Float32Array | null> {
+  const core = await loadTauriCore();
+  if (!core) return null;
+  return readFullResMutatorSection(core.invoke, fullResSource, {
+    section: 'support',
+    runs,
+    recomputeReason,
+  });
 }
 
 export async function hollowPreviewFromCapturedSource(

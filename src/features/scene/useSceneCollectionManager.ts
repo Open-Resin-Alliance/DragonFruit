@@ -20,6 +20,7 @@ import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
 import { generateUuid } from '@/utils/uuid';
 import { resolveDisplayPolygonCount, carryPreviewMarkerForward } from '@/utils/previewGeometryDisplay';
+import { resolveImportRunMap } from '@/utils/importRunMap';
 import { planMutatorFullResStaging } from '@/utils/fullResMutatorStaging';
 import type { ModelOutputPolicy } from '@/features/mesh-modifiers/modelOutputPolicy';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
@@ -1872,7 +1873,13 @@ export function useSceneCollectionManager() {
         meshDefects: source.meshDefects,
         // A clone shares the source file, geometry and centering, so the
         // import frame datum stays valid (duplicates keep `sourcePath` too).
+        // The Ph1 run map is valid for the same reason — same file, same
+        // triangle numbering.
         ...(source.cPre ? { cPre: source.cPre } : {}),
+        ...(source.importRunMap ? { importRunMap: source.importRunMap } : {}),
+        ...(source.importRunMapRecompute
+          ? { importRunMapRecompute: source.importRunMapRecompute }
+          : {}),
       };
     }
 
@@ -1905,8 +1912,13 @@ export function useSceneCollectionManager() {
       })),
       meshDefects: source.meshDefects,
       // A clone shares the source file, geometry and centering, so the import
-      // frame datum stays valid (duplicates keep `sourcePath` too).
+      // frame datum stays valid (duplicates keep `sourcePath` too). The Ph1 run
+      // map is valid for the same reason — same file, same triangle numbering.
       ...(source.cPre ? { cPre: source.cPre } : {}),
+      ...(source.importRunMap ? { importRunMap: source.importRunMap } : {}),
+      ...(source.importRunMapRecompute
+        ? { importRunMapRecompute: source.importRunMapRecompute }
+        : {}),
     };
   }, []);
 
@@ -2709,8 +2721,14 @@ export function useSceneCollectionManager() {
     // re-reads the source must be gated on `cPre`, not on the path. Dropping it
     // here is what makes that gate correct.
     //
+    // The Ph1 `importRunMap` is dropped here for exactly the same reason and by
+    // exactly the same mechanism: its runs address the ORIGINAL FILE's triangle
+    // indices, and this geometry is no longer that file. A stale run map is
+    // worse than none — it would let a section-aware splice stream the wrong
+    // records with full confidence.
+    //
     // Do NOT "simplify" this into a `...target.geometry` spread — that would
-    // silently reintroduce a stale frame datum.
+    // silently reintroduce a stale frame datum AND a stale run map.
     const nextGeometry: GeometryWithBounds = {
       geometry: nextBufferGeometry,
       bbox,
@@ -4271,14 +4289,19 @@ export function useSceneCollectionManager() {
 
       let document: VoxlDocumentV1;
       let resolvedMeshBytes: Map<string, Uint8Array>;
+      // Ph1: decoded RUNM chunks, keyed by the model id AS WRITTEN (ids are
+      // remapped below on collision, so this is read before the remap).
+      let resolvedRunMaps: Map<string, Uint32Array>;
 
       if (isV2) {
         const r = parseVoxlBinaryV2(new Uint8Array(await file.arrayBuffer()));
         document = r.document;
         resolvedMeshBytes = r.meshBytes;
+        resolvedRunMaps = r.runMaps;
       } else {
         document = parseVoxlDocument(await file.text());
         resolvedMeshBytes = new Map();
+        resolvedRunMaps = new Map();
       }
 
       const existingIds = new Set(modelsRef.current.map((model) => model.id));
@@ -4447,6 +4470,31 @@ export function useSceneCollectionManager() {
             // embedded-frame and is correctly NOT promoted (no filePath).
             if (persistedPreview.cPre && persistedSourcePath) {
               geometry.cPre = [...persistedPreview.cPre] as [number, number, number];
+            }
+
+            // Ph1: rehydrate the import run map from the MODL summary + this
+            // model's RUNM chunk. `resolveImportRunMap` is what decides
+            // whether the pair is usable — an over-cap or dropped chunk comes
+            // back as an explicit recompute verdict, never as "no split",
+            // which would silently slice supports as model.
+            const resolution = resolveImportRunMap({
+              summary: persistedPreview.runMap ?? null,
+              persistedRuns: resolvedRunMaps.get(model.id) ?? null,
+            });
+            if (resolution.kind === 'available') {
+              geometry.importRunMap = resolution.map;
+            } else if (resolution.kind === 'recompute') {
+              // Ph3: PRESERVE the verdict, do not just log it. This is the only
+              // moment the `RUNM` chunk is in hand, so it is the only moment
+              // `chunk-damaged` can be told from `chunk-missing`; the splice
+              // that acts on it runs much later, with the chunk long gone.
+              geometry.importRunMapRecompute = resolution.reason;
+              if (persistedPreview.runMap) {
+                console.warn(
+                  `[VOXL] "${model.name}": import run map unavailable (${resolution.reason}); `
+                  + 'section-aware output will recompute it from the source file.',
+                );
+              }
             }
           }
 
