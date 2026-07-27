@@ -18,6 +18,7 @@ import {
   splitClassifiedSupportGeometry,
 } from '@/features/scene/splitClassifiedSupports';
 import { prefersDecimatedOutput } from './modelOutputPolicy';
+import { resolveImportRunMap } from '@/utils/importRunMap';
 
 /**
  * ═══ THE RUST-BOUND GEOMETRY CHOKEPOINT (Ph2) ═══════════════════════════════
@@ -87,6 +88,21 @@ export type PreparedModelGeometry = {
  * `scene-geometry`: stage the scene BufferGeometry exactly as before
  * (byte-identical path for every non-preview model).
  */
+/**
+ * Ph3d — which part of its source file a full-res-backed model occupies.
+ *
+ * `whole` is every ordinary import. The sectioned arms exist only for
+ * Split-to-Bodies halves, and carry the parent's model-run map because that map
+ * is what DEFINES both sections; `runs: null` tells Rust to re-derive it.
+ */
+export type FullResSourceSection =
+  | { kind: 'whole' }
+  | {
+      kind: 'model' | 'support';
+      runs: Uint32Array | null;
+      recomputeReason: string | null;
+    };
+
 export type OutputGeometrySource =
   | {
       kind: 'fullres-source-file';
@@ -101,6 +117,22 @@ export type OutputGeometrySource =
       /** Import-time staleness fingerprint; `null` skips the stat compare. */
       fingerprint: { sizeBytes: number; mtimeMs: number } | null;
       originalTriangleCount: number;
+      /**
+       * Ph3d — WHICH PART of `sourcePath` this model is.
+       *
+       * `whole` for every ordinary import: the model is the file. A
+       * Split-to-Bodies half is `model` or `support`, and re-reading the file
+       * for it means re-reading THAT SECTION — all three Rust splice commands
+       * already take `section` + `model_runs`, so a consumer forwards this and
+       * is correct by construction.
+       *
+       * IGNORING THIS FIELD IS THE ONE SILENT FAILURE OF Ph3d: a consumer that
+       * asks only for `sourcePath` re-reads the WHOLE file for a half, quietly
+       * putting the supports back into a hollow, an export or a slice. That is
+       * why it lives on the resolved source that every Rust-bound consumer
+       * already asks for, rather than on the model where it could be missed.
+       */
+      section: FullResSourceSection;
     }
   | {
       kind: 'scene-geometry';
@@ -214,12 +246,53 @@ export function resolveFullResSourceForModel(model: LoadedModel): FullResSourceF
     ? model.sourcePath
     : null;
   if (!nativePreview || !sourcePath) return null;
+  // Ph3d: a Split-to-Bodies half IS a section of this file. Resolved here, once,
+  // so every consumer receives it without having to know Ph3d happened.
+  const sourceSection = nativePreview.sourceSection;
   return {
     kind: 'fullres-source-file',
     sourcePath,
     cPre: nativePreview.cPre ?? null,
     fingerprint: nativePreview.sourceFingerprint ?? null,
     originalTriangleCount: nativePreview.originalTriangleCount,
+    section: sourceSection
+      ? resolveSectionRuns(model, sourceSection.section, sourceSection.recomputeReason ?? null)
+      : { kind: 'whole' },
+  };
+}
+
+/**
+ * Ph3d — a half's section plus the runs that define it.
+ *
+ * The runs live on `importRunMap` (one array, one place — a half carries its
+ * parent's map verbatim), but they are NOT read raw. `importRunMap.runs` is an
+ * EMPTY array when the classifier's map exceeded the transport cap, which is
+ * "too fragmented to carry, recompute it" and not "there are no runs". Handing
+ * that empty array to the splice would ask for a model section containing
+ * nothing — a half that slices to an empty plate.
+ *
+ * `resolveImportRunMap` is the only thing that tells those two apart, so it is
+ * what answers here, exactly as it does for a whole-file splice.
+ */
+function resolveSectionRuns(
+  model: LoadedModel,
+  section: 'model' | 'support',
+  storedRecompute: string | null,
+): FullResSourceSection {
+  const resolved = resolveImportRunMap({
+    runtime: model.geometry.importRunMap ?? null,
+    summary: model.geometry.nativePreview?.runMap ?? null,
+    persistedRuns: model.geometry.importRunMap?.runs ?? null,
+  });
+  if (resolved.kind === 'available') {
+    return { kind: section, runs: resolved.map.runs, recomputeReason: null };
+  }
+  // `none` and `recompute` both mean "Rust must re-derive the map from the
+  // file". They differ only in what the log line says.
+  return {
+    kind: section,
+    runs: null,
+    recomputeReason: resolved.kind === 'recompute' ? resolved.reason : storedRecompute,
   };
 }
 

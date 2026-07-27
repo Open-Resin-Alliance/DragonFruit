@@ -1,7 +1,7 @@
 import type { DragonfruitImportFormat } from '@/supports/types';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import type { ModelOutputPolicy } from '@/features/mesh-modifiers/modelOutputPolicy';
-import type { ImportRunMap, ImportRunMapSummary } from '@/utils/importRunMap';
+import type { ImportRunMap, ImportRunMapRecomputeReason, ImportRunMapSummary } from '@/utils/importRunMap';
 
 export const VOXL_MAGIC = 'VOXL' as const;
 export const VOXL_VERSION = 1 as const;
@@ -72,6 +72,24 @@ export type VoxlNativePreviewRef = {
    * "no supports". `resolveImportRunMap` is the only sanctioned reader.
    */
   runMap?: ImportRunMapSummary;
+  /**
+   * Ph3d — this model is ONE SECTION of `sourcePath`, not the whole file.
+   *
+   * Written only for a Split-to-Bodies half. Its absence means "the whole file",
+   * which is every other model, so an older reader that ignores this field lands
+   * on the pre-Ph3d reading — and that is exactly why it must NOT be absent for
+   * a half: a reader that misses it re-reads the entire plate for a model that
+   * is half of it.
+   *
+   * JSON-safe by construction: the runs are NOT here. They live in this model's
+   * `RUNM` chunk via `importRunMap` (a `Uint32Array` in this object would
+   * stringify to `{"0":…}`, the hazard this type's sibling comment names), and
+   * `resolveFullResSourceForModel` rejoins the two on load.
+   */
+  sourceSection?: {
+    section: 'model' | 'support';
+    recomputeReason?: ImportRunMapRecomputeReason | null;
+  };
 };
 
 export type VoxlModelEntry = {

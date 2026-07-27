@@ -2677,6 +2677,7 @@ pub async fn stage_fullres_mesh_from_source(
 /// the non-preview geometry (triangle order in the staging file is
 /// irrelevant to STL/3MF serialization).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn splice_fullres_mesh_into_stage_file(
     source_path: String,
     stage_file_path: String,
@@ -2684,24 +2685,44 @@ pub async fn splice_fullres_mesh_into_stage_file(
     c_pre: Vec<f64>,
     expected_size_bytes: Option<u64>,
     expected_mtime_ms: Option<f64>,
+    section: Option<String>,
+    model_runs: Option<Vec<u32>>,
+    run_map_recompute_reason: Option<String>,
 ) -> Result<FullResSpliceSummary, String> {
     let started = std::time::Instant::now();
+    let path = std::path::PathBuf::from(&source_path);
+    let expected_fingerprint =
+        expected_size_bytes.and_then(|size| expected_mtime_ms.map(|mtime| (size, mtime)));
+
+    // Ph3 left mesh export deliberately WHOLE-file: its output is one STL/3MF of
+    // everything on the plate, triangle order is irrelevant to both serializers,
+    // and there is no split index for a section boundary to mean anything to.
+    //
+    // Ph3d is the case that changes it, and only that case. A Split-to-Bodies
+    // HALF is one section of its file, so a whole-file pass would export the
+    // ENTIRE plate — exporting the model half would silently ship the supports
+    // with it. Omitting `section` still reproduces the pre-Ph3d whole-file pass
+    // byte for byte, which is what every ordinary model still asks for.
+    let section = SpliceSection::parse(section.as_deref())?;
+    let stat = verify_source_fingerprint(&path, expected_fingerprint)?;
+    let (resolved_runs, run_map_source) = resolve_splice_model_runs(
+        &path,
+        &stat,
+        section,
+        model_runs,
+        run_map_recompute_reason.as_deref(),
+    )?;
+
     let params = FullResSpliceParams {
-        source_path: std::path::Path::new(&source_path),
+        source_path: &path,
         matrix16_col_major: parse_matrix16(&matrix16)?,
         c_pre: parse_vec3_f64(&c_pre, "cPre")?,
-        expected_fingerprint: expected_size_bytes
-            .and_then(|size| expected_mtime_ms.map(|mtime| (size, mtime))),
+        expected_fingerprint,
         // The JS export bake applies matrixWorld verbatim without a winding
         // flip — mirror that exactly.
         flip_winding_on_negative_determinant: false,
-        // Ph3: mesh export is deliberately WHOLE-file. Its output is one STL /
-        // 3MF of everything the user has on the plate, triangle order is
-        // irrelevant to both serializers, and there is no split index for a
-        // section boundary to mean anything to. Sectioning here would buy
-        // nothing and cost a second read of the file.
-        section: SpliceSection::All,
-        model_runs: None,
+        section,
+        model_runs: resolved_runs,
     };
 
     // Release any WebView chunk appender still holding this staging file so
@@ -2759,18 +2780,24 @@ pub async fn splice_fullres_mesh_into_stage_file(
         Ok(stats) => {
             let splice_ms = started.elapsed().as_secs_f64() * 1_000.0;
             log::info!(
-                "[splice_fullres_mesh_into_stage_file] spliced {} full-res triangles from '{}' into '{}' in {:.1} ms",
+                "[splice_fullres_mesh_into_stage_file] spliced {} of {} full-res triangles from '{}' \
+                 into '{}' (section {}, run map {}) in {:.1} ms",
                 stats.staged_triangle_count,
+                stats.source_triangle_count,
                 source_path,
                 stage_file_path,
+                section.as_str(),
+                run_map_source.as_str(),
                 splice_ms,
             );
             Ok(FullResSpliceSummary {
                 staged_triangle_count: stats.staged_triangle_count,
                 source_triangle_count: stats.source_triangle_count,
-                skipped_triangle_count: 0,
-                section: SpliceSection::All.as_str().to_string(),
-                run_map_source: RunMapSource::NotRequired.as_str().to_string(),
+                skipped_triangle_count: stats
+                    .source_triangle_count
+                    .saturating_sub(stats.staged_triangle_count),
+                section: section.as_str().to_string(),
+                run_map_source: run_map_source.as_str().to_string(),
                 world_min: stats.world_min,
                 world_max: stats.world_max,
                 splice_ms,
@@ -3073,6 +3100,204 @@ pub async fn read_fullres_mesh_section_positions(
         started.elapsed().as_secs_f64() * 1_000.0,
     );
     Ok(Response::new(soup_bytes))
+}
+
+// --- Ph3d: Split-to-Bodies for decimated previews ----------------------------
+//
+// Split-to-Bodies cannot CUT a decimated preview. `model_triangle_count` indexes
+// the SOURCE FILE and the scene mesh is a reduced stand-in for it, so slicing
+// the scene buffer at that index lands at an arbitrary offset (Ph2 finding F3 on
+// the output path; Ph3c on this one). The split therefore RE-SOURCES: this
+// command returns ONE section of the original file as its own decimated preview.
+//
+// It emits the SAME DFST payload `load_stl_file` returns, deliberately — the
+// frontend decodes it with the importer's own decoder and builds the half
+// through `processGeometry`, so a half is constructed by the import pipeline
+// rather than by a parallel one that could drift from it.
+
+/// Ph3d — one section of a classified source file, as its own decimated preview.
+///
+/// FRAME: `c_pre = [0,0,0]` with an identity matrix, so the emitted soup is in
+/// RAW FILE coordinates — deliberately NOT the mutators' local frame. The
+/// frontend then centers it exactly as it centers a fresh import, which is what
+/// makes the half's `cPre` and `geometry.center` two readings of ONE measurement
+/// of ONE mesh. Every downstream re-read depends on the identity
+/// `geometry.center = cPre − T_center`; handing back a pre-centered soup would
+/// break it silently, as a whole-half shift in Y.
+///
+/// BUDGET: the governor runs per SECTION with `concurrent_model_count = 2`, so
+/// the two halves together stay inside the memory one whole-file preview was
+/// allowed. Worth stating because it is a fidelity WIN, not just a cost: a 1.5M
+/// model body no longer competes with 5.5M support triangles for one budget, so
+/// the model half comes back sharper than the combined preview it replaces.
+///
+/// [`SpliceSection::All`] is REFUSED. A whole-file preview is `load_stl_file`'s
+/// job; accepting it here would hand back a payload the caller then labels with
+/// a section it does not have.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn load_fullres_section_preview(
+    source_path: String,
+    expected_size_bytes: Option<u64>,
+    expected_mtime_ms: Option<f64>,
+    section: Option<String>,
+    model_runs: Option<Vec<u32>>,
+    run_map_recompute_reason: Option<String>,
+    js_heap_size_limit: Option<f64>,
+    concurrent_model_count: Option<u32>,
+) -> Result<Response, String> {
+    load_fullres_section_preview_bytes(
+        &source_path,
+        expected_size_bytes,
+        expected_mtime_ms,
+        section.as_deref(),
+        model_runs,
+        run_map_recompute_reason.as_deref(),
+        js_heap_size_limit,
+        concurrent_model_count,
+        None,
+    )
+    .map(Response::new)
+}
+
+/// The body of [`load_fullres_section_preview`], as a plain synchronous function
+/// so the tests can drive the whole path — section walk, weld, governor,
+/// decimate, DFST encode — without a Tauri runtime.
+///
+/// `budget_override` exists ONLY for tests, exactly as it does for
+/// `load_stl_file_bytes`: the real budget comes from the machine's RAM, so there
+/// is no other way to exercise the decimating branch against a small
+/// deterministic fixture. Production passes `None`.
+#[allow(clippy::too_many_arguments)]
+fn load_fullres_section_preview_bytes(
+    source_path: &str,
+    expected_size_bytes: Option<u64>,
+    expected_mtime_ms: Option<f64>,
+    section: Option<&str>,
+    model_runs: Option<Vec<u32>>,
+    run_map_recompute_reason: Option<&str>,
+    js_heap_size_limit: Option<f64>,
+    concurrent_model_count: Option<u32>,
+    budget_override: Option<u64>,
+) -> Result<Vec<u8>, String> {
+    use dragonfruit_mesh_repair::io;
+
+    let started = std::time::Instant::now();
+    let path = std::path::PathBuf::from(source_path);
+    let section = SpliceSection::parse(section)?;
+    if section == SpliceSection::All {
+        return Err(
+            "load_fullres_section_preview requires section 'model' or 'support' — a whole-file \
+             preview is load_stl_file's job."
+                .to_string(),
+        );
+    }
+
+    let expected_fingerprint =
+        expected_size_bytes.and_then(|size| expected_mtime_ms.map(|mtime| (size, mtime)));
+    // Verify BEFORE any recompute: re-classifying a file that turns out to be
+    // stale would spend seconds to produce a map for bytes we then refuse.
+    let stat = verify_source_fingerprint(&path, expected_fingerprint)?;
+    let (resolved_runs, run_map_source) =
+        resolve_splice_model_runs(&path, &stat, section, model_runs, run_map_recompute_reason)?;
+
+    let params = FullResSpliceParams {
+        source_path: &path,
+        matrix16_col_major: IDENTITY_MATRIX16,
+        // RAW file coordinates — see the frame note on the command above.
+        c_pre: [0.0, 0.0, 0.0],
+        expected_fingerprint,
+        // Identity transform ⇒ positive determinant ⇒ no flip either way. Stated
+        // explicitly so this reads as a decision rather than an inherited default.
+        flip_winding_on_negative_determinant: false,
+        section,
+        model_runs: resolved_runs,
+    };
+
+    let mut soup: Vec<f32> = Vec::new();
+    let stats = splice_fullres_stl_stream(&params, &[], |_, _| {}, |floats| {
+        soup.extend_from_slice(floats);
+        Ok(())
+    })?;
+
+    let section_triangle_count = stats.staged_triangle_count;
+    if section_triangle_count == 0 {
+        return Err(format!(
+            "The {} section of '{}' is empty — there is nothing to split out.",
+            section.as_str(),
+            path.display(),
+        ));
+    }
+
+    let mesh = IndexedMesh::from_triangle_soup(&soup, io::DEFAULT_MERGE_EPSILON);
+    drop(soup);
+
+    let budget = if let Some(forced) = budget_override {
+        crate::stl_budget::TriangleBudget {
+            budget_tris: forced,
+            reason: crate::stl_budget::BudgetReason::Ceiling,
+        }
+    } else {
+        let (ram_total, ram_available) = crate::stl_budget::query_system_memory();
+        crate::stl_budget::compute_triangle_budget(&crate::stl_budget::BudgetInputs {
+            ram_total_bytes: ram_total,
+            ram_available_bytes: ram_available,
+            heap_limit_bytes: js_heap_size_limit
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map(|value| value as u64)
+                .unwrap_or(0),
+            source_triangles: section_triangle_count,
+            // Ph3d: a split leaves TWO halves resident from one file, so the
+            // governor is TOLD that rather than handing each half a whole-model
+            // budget and quietly doubling the plate's resident triangles.
+            concurrent_model_count: concurrent_model_count.unwrap_or(2).max(1),
+            retained_geometry_copies: 1,
+        })
+    };
+
+    let welded_triangle_count = mesh.triangles.len();
+    let (mesh, is_preview, achieved_error) = if welded_triangle_count as u64 <= budget.budget_tris {
+        (mesh, false, 0.0f32)
+    } else {
+        let outcome =
+            decimate_indexed_to_budget(mesh, budget.budget_tris as usize, DECIMATION_OPTIONS);
+        (outcome.mesh, true, outcome.achieved_error)
+    };
+
+    log::info!(
+        "[load_fullres_section_preview] {} section of '{}': {} full-res triangles (welded {}) \
+         -> {} preview triangles (budget {}, reason {}, run map {}, achieved_error {:.6}) \
+         in {:.1} ms",
+        section.as_str(),
+        source_path,
+        section_triangle_count,
+        welded_triangle_count,
+        mesh.triangles.len(),
+        budget.budget_tris,
+        budget.reason.as_str(),
+        run_map_source.as_str(),
+        achieved_error,
+        started.elapsed().as_secs_f64() * 1_000.0,
+    );
+
+    // `original_triangle_count` is THIS SECTION's full-resolution count, not the
+    // file's. It becomes the half's `nativePreview.originalTriangleCount` and its
+    // displayed polygon count, and the frontend cross-checks it against the
+    // parent's run map — model + support must sum to the source triangle count.
+    //
+    // No classification is embedded: a half has no model/support split of its
+    // own, and the frontend synthesizes the report each half carries (the model
+    // half plain, the support half flagged `likely_support_geometry` for its
+    // tint). Re-classifying a section here would cost a second full pass to
+    // answer a question whose answer is already known.
+    encode_stl_response(
+        &mesh,
+        section_triangle_count as u32,
+        is_preview,
+        achieved_error,
+        budget.budget_tris as u32,
+        None,
+    )
 }
 
 #[cfg(test)]
@@ -4626,15 +4851,20 @@ mod ph1_import_wiring_tests {
     /// `useStlGeometry.ts` uses. A Rust-side decoder means the wire format has
     /// an executable spec on both ends of the IPC rather than one end and a
     /// comment.
-    struct DecodedResponse {
-        is_preview: bool,
-        original_triangle_count: u32,
-        output_triangle_count: u32,
-        run_map: Vec<(u32, u32)>,
-        classification: serde_json::Value,
+    pub(super) struct DecodedResponse {
+        pub(super) is_preview: bool,
+        pub(super) original_triangle_count: u32,
+        pub(super) output_triangle_count: u32,
+        pub(super) run_map: Vec<(u32, u32)>,
+        pub(super) classification: serde_json::Value,
+        /// Interleaved xyz, 9 per triangle. Ph3d reads these to assert the
+        /// SECTION PREVIEW comes back in RAW file coordinates — a centered soup
+        /// would break the `geometry.center = cPre − T_center` identity every
+        /// downstream re-read depends on, and would do it silently.
+        pub(super) positions: Vec<f32>,
     }
 
-    fn decode_stl_response(bytes: &[u8]) -> DecodedResponse {
+    pub(super) fn decode_stl_response(bytes: &[u8]) -> DecodedResponse {
         assert!(bytes.len() >= STL_RESPONSE_HEADER_BYTES, "response too short");
         assert_eq!(&bytes[0..4], STL_RESPONSE_MAGIC, "bad magic");
         let u32_at = |off: usize| u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap());
@@ -4671,12 +4901,21 @@ mod ph1_import_wiring_tests {
                 .expect("classification JSON must parse")
         };
 
+        let position_floats = output_triangle_count as usize * 9;
+        let positions = (0..position_floats)
+            .map(|i| {
+                let at = STL_RESPONSE_HEADER_BYTES + i * 4;
+                f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+            })
+            .collect();
+
         DecodedResponse {
             is_preview: (flags & STL_RESPONSE_FLAG_PREVIEW) != 0,
             original_triangle_count,
             output_triangle_count,
             run_map,
             classification,
+            positions,
         }
     }
 
@@ -5315,5 +5554,190 @@ mod ph3b_hollow_section_tests {
         assert_eq!(stats.staged_triangle_count, total);
         assert_eq!(soup.len() as u64, total * 9 * 4);
         assert_eq!(SpliceSection::parse(None).expect("default"), SpliceSection::All);
+    }
+}
+
+/// Ph3d — SECTION PREVIEW LOAD, the Rust half of Split-to-Bodies on a decimated
+/// preview.
+///
+/// RED HONESTY: these are **compile-only** reds. `load_fullres_section_preview`
+/// did not exist, so there was no wrong behaviour to measure here — the
+/// behavioural red for this phase is on the TypeScript side, where the gate
+/// previously refused the split outright. What these pin instead is the set of
+/// invariants a section preview has to satisfy for the frontend's frame and
+/// bookkeeping to be correct, each of which fails silently rather than loudly if
+/// it regresses:
+///
+///   - `original_triangle_count` is the SECTION's full-res count, not the file's
+///     and not the decimated count (it becomes the half's polygon count and the
+///     value the frontend cross-checks against the parent's run map);
+///   - the two sections partition the file exactly;
+///   - the payload is in RAW file coordinates, so `processGeometry` can center it
+///     and produce a `cPre` that matches its own `geometry.center`;
+///   - the model section contains no support geometry.
+#[cfg(test)]
+mod ph3d_section_preview_tests {
+    use super::ph1_import_wiring_tests::{
+        decode_stl_response, fixture_path, write_support_plate_stl, MODEL_TRIS, SUPPORT_TRIS,
+    };
+    use super::ph3_run_map_splice_tests::plate_model_runs;
+    use super::*;
+
+    /// Flattens the classifier's own map into the flat `[start, len, …]` wire
+    /// shape the command takes, so the tests feed it exactly what the frontend
+    /// feeds it.
+    fn flat_runs(path: &std::path::Path) -> Vec<u32> {
+        plate_model_runs(path)
+            .into_iter()
+            .flat_map(|(start, len)| [start, len])
+            .collect()
+    }
+
+    fn section_preview(
+        path: &std::path::Path,
+        section: &str,
+        budget_override: Option<u64>,
+    ) -> Result<Vec<u8>, String> {
+        load_fullres_section_preview_bytes(
+            path.to_str().expect("fixture path is utf-8"),
+            None,
+            None,
+            Some(section),
+            Some(flat_runs(path)),
+            None,
+            None,
+            Some(2),
+            budget_override,
+        )
+    }
+
+    /// The headline invariant. A half's reported ORIGINAL count is its own
+    /// section's full-resolution triangle count — not the file's (which would
+    /// over-report both halves) and not the decimated count (which would make
+    /// the honest polygon-count UI lie and break the frontend's partition
+    /// cross-check).
+    #[test]
+    fn a_section_preview_reports_its_own_full_res_count() {
+        let fixture = fixture_path("ph3d-counts");
+        let total = write_support_plate_stl(&fixture.0, None);
+        assert_eq!(total, MODEL_TRIS + SUPPORT_TRIS);
+
+        let model = decode_stl_response(
+            &section_preview(&fixture.0, "model", None).expect("model section preview"),
+        );
+        let support = decode_stl_response(
+            &section_preview(&fixture.0, "support", None).expect("support section preview"),
+        );
+
+        assert_eq!(
+            model.original_triangle_count as usize, MODEL_TRIS,
+            "the model half must report the MODEL section's full-res count",
+        );
+        assert_eq!(
+            support.original_triangle_count as usize, SUPPORT_TRIS,
+            "the support half must report the SUPPORT section's full-res count",
+        );
+        assert_eq!(
+            (model.original_triangle_count + support.original_triangle_count) as usize,
+            total,
+            "the two halves must partition the file exactly",
+        );
+
+        // No classification is embedded: a half has no split of its own, and the
+        // frontend synthesizes the report it carries.
+        assert!(model.classification.is_null());
+        assert!(support.classification.is_null());
+        assert!(model.run_map.is_empty());
+    }
+
+    /// THE FRAME TEST. The payload must be in RAW file coordinates. The frontend
+    /// centers it with `processGeometry`, which is what makes the half's `cPre`
+    /// and its `geometry.center` two readings of one measurement; a pre-centered
+    /// payload would break that identity and fail as a whole-half shift in Y —
+    /// the exact failure the islands sideload bug was.
+    ///
+    /// Also proves section purity: the fixture's model shell spans z 2..12 and
+    /// every support post spans z 0..1, so a model preview that dragged posts in
+    /// shows up here and in no triangle count.
+    #[test]
+    fn a_section_preview_is_raw_framed_and_section_pure() {
+        let fixture = fixture_path("ph3d-frame");
+        write_support_plate_stl(&fixture.0, None);
+
+        let model = decode_stl_response(
+            &section_preview(&fixture.0, "model", None).expect("model section preview"),
+        );
+        assert!(!model.is_preview, "768 triangles is under any real budget");
+
+        let min_z = model
+            .positions
+            .chunks_exact(3)
+            .map(|v| v[2])
+            .fold(f32::INFINITY, f32::min);
+        let min_x = model
+            .positions
+            .chunks_exact(3)
+            .map(|v| v[0])
+            .fold(f32::INFINITY, f32::min);
+
+        // Raw frame: the model box was written at x 40..140, z 2..12. Centered
+        // output would put min x near −50 and min z near 0.
+        assert!(
+            (min_x - 40.0).abs() < 1e-3,
+            "expected RAW file coordinates (min x 40), got {min_x} — a centered payload \
+             breaks the cPre / geometry.center identity",
+        );
+        assert!(
+            min_z >= 2.0 - 1e-5,
+            "the model section must contain no support geometry (min z {min_z})",
+        );
+
+        let support = decode_stl_response(
+            &section_preview(&fixture.0, "support", None).expect("support section preview"),
+        );
+        let support_max_z = support
+            .positions
+            .chunks_exact(3)
+            .map(|v| v[2])
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            support_max_z <= 1.0 + 1e-5,
+            "the support section must contain no model geometry (max z {support_max_z})",
+        );
+    }
+
+    /// Over budget, a section decimates and SAYS SO — while still reporting the
+    /// section's full-resolution count. The preview flag is what makes the half
+    /// splice-eligible downstream; losing it would silently strand the half on
+    /// its decimated geometry forever.
+    #[test]
+    fn an_over_budget_section_decimates_and_keeps_its_original_count() {
+        let fixture = fixture_path("ph3d-decimate");
+        write_support_plate_stl(&fixture.0, None);
+
+        let decoded = decode_stl_response(
+            &section_preview(&fixture.0, "model", Some(400)).expect("decimated model section"),
+        );
+        assert!(decoded.is_preview, "an over-budget section is a preview");
+        assert_eq!(
+            decoded.original_triangle_count as usize, MODEL_TRIS,
+            "decimation must not overwrite the section's full-res count",
+        );
+        assert!(
+            (decoded.output_triangle_count as usize) < MODEL_TRIS,
+            "the payload must actually be reduced (got {})",
+            decoded.output_triangle_count,
+        );
+    }
+
+    /// `all` is refused. A whole-file preview is `load_stl_file`'s job; accepting
+    /// it here would hand back a payload the caller then labels with a section it
+    /// does not have.
+    #[test]
+    fn a_whole_file_section_request_is_refused() {
+        let fixture = fixture_path("ph3d-all");
+        write_support_plate_stl(&fixture.0, None);
+        let error = section_preview(&fixture.0, "all", None).expect_err("'all' must be refused");
+        assert!(error.contains("load_stl_file"), "unexpected error: {error}");
     }
 }

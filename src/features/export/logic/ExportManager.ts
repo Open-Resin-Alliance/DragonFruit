@@ -463,12 +463,19 @@ export class ExportManager {
     sourcePath: string;
     cPre: [number, number, number];
     fingerprint: { sizeBytes: number; mtimeMs: number } | null;
+    /** Ph3d — `all` for a whole-file model; a Split-to-Bodies half names its own. */
+    section: 'all' | 'model' | 'support';
+    modelRuns: Uint32Array | null;
+    runMapRecomputeReason: string | null;
   }> {
     const targets: Array<{
       model: LoadedModel;
       sourcePath: string;
       cPre: [number, number, number];
       fingerprint: { sizeBytes: number; mtimeMs: number } | null;
+      section: 'all' | 'model' | 'support';
+      modelRuns: Uint32Array | null;
+      runMapRecomputeReason: string | null;
     }> = [];
     for (const model of models) {
       const source = resolveOutputGeometrySource(model);
@@ -486,6 +493,13 @@ export class ExportManager {
         sourcePath: source.sourcePath,
         cPre: source.cPre,
         fingerprint: source.fingerprint,
+        // Ph3d: a Split-to-Bodies half is ONE section of its file. Exporting it
+        // whole-file would write the entire plate — the model half would ship
+        // with the supports it was split away from.
+        section: source.section.kind === 'whole' ? 'all' : source.section.kind,
+        modelRuns: source.section.kind === 'whole' ? null : source.section.runs,
+        runMapRecomputeReason:
+          source.section.kind === 'whole' ? null : source.section.recomputeReason,
       });
     }
     return targets;
@@ -1259,11 +1273,14 @@ export class ExportManager {
                 cPre: target.cPre,
                 expectedSizeBytes: target.fingerprint?.sizeBytes ?? null,
                 expectedMtimeMs: target.fingerprint?.mtimeMs ?? null,
+                section: target.section,
+                modelRuns: target.modelRuns,
+                runMapRecomputeReason: target.runMapRecomputeReason,
               });
               console.warn(
-                `[ExportFullRes] staged full-res source for "${target.model.name}": `
-                + `${summary.stagedTriangleCount.toLocaleString()} triangles from `
-                + `${target.sourcePath} in ${summary.spliceMs.toFixed(1)} ms.`,
+                `[ExportFullRes] staged the full-res ${target.section} section for `
+                + `"${target.model.name}": ${summary.stagedTriangleCount.toLocaleString()} triangles `
+                + `from ${target.sourcePath} in ${summary.spliceMs.toFixed(1)} ms.`,
               );
             } catch (spliceError) {
               const raw = this.getErrorMessage(spliceError);

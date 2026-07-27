@@ -70,6 +70,20 @@ export function resolveIslandScanFrame(model: IslandScanFrameInput): IslandScanF
   // construction) is the right path.
   if (model.outputMode === 'decimated') return null;
 
+  // Ph3d — a Split-to-Bodies HALF is one section of its source file, and
+  // `scan_islands_from_path` has no section filter: it would re-read and scan
+  // the WHOLE plate, reporting the supports' islands on the model half and the
+  // model's on the support half. Both halves would look wrong in a way that
+  // reads as an islands bug rather than a sourcing one.
+  //
+  // So the sideload declines, which is exactly what this module's never-guess
+  // contract is for: the caller scans the half's own scene geometry client-side,
+  // frame-correct by construction and bounded by the preview budget. The cost is
+  // preview-fidelity islands on a split half — an honest degrade, and strictly
+  // better than a confident scan of the wrong triangles. Teaching the islands
+  // command to take a run map is the follow-up, not a rider on this change.
+  if (model.geometry?.nativePreview?.sourceSection) return null;
+
   const filePath = typeof model.sourcePath === 'string' && model.sourcePath.trim().length > 0
     ? model.sourcePath
     : null;

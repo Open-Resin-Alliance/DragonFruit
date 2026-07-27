@@ -354,7 +354,7 @@ import type {
   MeshModifierOpenFace,
 } from '@/features/mesh-modifiers/types';
 import { resolveModelOutputMode } from '@/features/mesh-modifiers/modelOutputPolicy';
-import { resolveOutputSectionPlan } from '@/features/mesh-modifiers/prepareModelGeometry';
+import { resolveSplitToBodiesStrategy } from '@/features/scene/splitToBodiesStrategy';
 
 interface ShaftHoverDebugDetail {
   segmentId: string | null;
@@ -955,6 +955,18 @@ export default function Home() {
     };
     window.addEventListener('dragonfruit:fullres-degraded', onFullResDegraded);
     return () => window.removeEventListener('dragonfruit:fullres-degraded', onFullResDegraded);
+  }, [showOperationError]);
+
+  // Ph3d — a scene operation that REFUSED to run (today: Split to Bodies failing
+  // to re-source its sections). Distinct from the degrade event above: that one
+  // means the output quietly got worse, this one means nothing happened at all.
+  React.useEffect(() => {
+    const onSceneOperationError = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: string }>).detail;
+      showOperationError(detail?.message ?? 'The operation could not be completed.');
+    };
+    window.addEventListener('dragonfruit:scene-operation-error', onSceneOperationError);
+    return () => window.removeEventListener('dragonfruit:scene-operation-error', onSceneOperationError);
   }, [showOperationError]);
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
@@ -2120,22 +2132,23 @@ export default function Home() {
   const editorContextMenuTitle = scene.mode === 'support' ? _(msg`Supports`) : _(msg`Editor`);
   const editorContextMenuItems = scene.mode === 'support' ? supportContextMenuItems : undefined;
   /**
-   * The Split-to-Bodies affordance and the cut behind it now answer to ONE
-   * definition. This used to read `model_triangle_count` directly and enable
-   * the item whenever it was non-zero — but that count is measured on the
-   * full-resolution SOURCE FILE, so for a decimated `nativePreview` model it
-   * does not index the scene mesh the split would slice. The item was offered,
-   * the user clicked it, `splitClassifiedSupportGeometry` returned null on its
-   * arithmetic bail, and the progress panel came and went having done nothing.
+   * The Split-to-Bodies affordance and the action behind it answer to ONE
+   * definition. This used to read `model_triangle_count` directly and enable the
+   * item whenever it was non-zero — but that count is measured on the
+   * full-resolution SOURCE FILE, so for a decimated `nativePreview` model it does
+   * not index the scene mesh. The item was offered, the user clicked it, the cut
+   * bailed, and the progress panel came and went having done nothing.
    *
-   * `resolveOutputSectionPlan` is the same resolver the slice/export path uses,
-   * so the menu can no longer promise a split that path would refuse.
+   * `resolveSplitToBodiesStrategy` is what `scene.splitSupports` itself branches
+   * on, so the menu cannot promise a split the action would refuse — and since
+   * Ph3d it also cannot refuse one the action can now perform by re-sourcing the
+   * sections from the original file.
    */
-  const editorContextMenuSplitSupportsPlan = React.useMemo(() => {
+  const editorContextMenuSplitStrategy = React.useMemo(() => {
     const activeModel = scene.activeModelId
       ? scene.models.find((m) => m.id === scene.activeModelId)
       : undefined;
-    return activeModel ? resolveOutputSectionPlan(activeModel) : null;
+    return activeModel ? resolveSplitToBodiesStrategy(activeModel) : null;
   }, [scene.activeModelId, scene.models]);
 
   const editorContextMenuDisabledActions = React.useMemo(() => {
@@ -2146,39 +2159,48 @@ export default function Home() {
       ];
     }
 
-    const canSplitSupports = editorContextMenuSplitSupportsPlan?.kind === 'scene-split';
+    const canSplitSupports = editorContextMenuSplitStrategy != null
+      && editorContextMenuSplitStrategy.kind !== 'unavailable';
 
     return [
       ...(!scene.activeModelId ? (['delete', 'cut', 'copy', 'repair'] as const) : []),
       ...(!scene.canPasteModel ? (['paste'] as const) : []),
       ...(!canSplitSupports ? (['split-supports'] as const) : []),
     ];
-  }, [editorContextMenuSplitSupportsPlan, scene.activeModelId, scene.canPasteModel, scene.mode, supportsCanAddJoint, supportsCanToggleCurve]);
+  }, [editorContextMenuSplitStrategy, scene.activeModelId, scene.canPasteModel, scene.mode, supportsCanAddJoint, supportsCanToggleCurve]);
 
   /**
    * Why Split-to-Bodies is unavailable, when the reason is not self-evident.
-   * A model with no classification at all gets no sentence — there is nothing
-   * to explain. A model the user can SEE is pre-supported does, because
-   * "disabled and silent" reads as a bug on exactly the imports that carry
-   * supports.
+   *
+   * Ph3d removed the common case from this list: a decimated preview is now
+   * SPLITTABLE, by re-sourcing each section from the original file. What is left
+   * is the genuinely impossible — a model that was never classified, one whose
+   * classification contradicts its mesh, one that is already a half, and one
+   * whose original file can no longer be reached. Only the last two need a
+   * sentence; "no classification" has nothing to explain.
    */
   const editorContextMenuDisabledReasons = React.useMemo(() => {
     if (scene.mode === 'support') return undefined;
-    const plan = editorContextMenuSplitSupportsPlan;
-    if (!plan || plan.kind === 'scene-split') return undefined;
+    const strategy = editorContextMenuSplitStrategy;
+    if (!strategy || strategy.kind !== 'unavailable') return undefined;
 
-    if (plan.kind === 'spliced-sections' || plan.reason === 'describes-source-file') {
+    if (strategy.reason === 'source-unavailable') {
       return {
-        'split-supports': _(msg`This model is displayed as a reduced preview of a larger file, and its model/support classification describes that original file — so it cannot be split here. Slicing and export still separate the two sections at full resolution.`),
+        'split-supports': _(msg`This model is shown as a reduced preview, and its supports can only be separated by re-reading the original file — which is no longer available. Slicing and export still separate the two sections at full resolution.`),
       };
     }
-    if (plan.reason === 'count-exceeds-geometry') {
+    if (strategy.reason === 'already-a-section') {
+      return {
+        'split-supports': _(msg`This model is already one half of a split — it has no supports of its own to separate.`),
+      };
+    }
+    if (strategy.reason === 'count-exceeds-geometry') {
       return {
         'split-supports': _(msg`This model's support classification does not match its mesh, so splitting it would cut in the wrong place. Re-import or repair the model to reclassify it.`),
       };
     }
     return undefined;
-  }, [_, editorContextMenuSplitSupportsPlan, scene.mode]);
+  }, [_, editorContextMenuSplitStrategy, scene.mode]);
 
   const clearPrintingLayerPreviewUrls = React.useCallback(() => {
     printingLayerPreviewLoadInFlightRef.current.clear();

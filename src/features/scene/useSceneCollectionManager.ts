@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { loadMeshGeometry, load3mfGeometryMergedWithSplitData, processGeometry, type GeometryWithBounds, type ProcessGeometryOptions } from '@/hooks/useStlGeometry';
+import { loadMeshGeometry, load3mfGeometryMergedWithSplitData, loadStlSectionGeometry, processGeometry, type GeometryWithBounds, type ProcessGeometryOptions, type StlSectionGeometry } from '@/hooks/useStlGeometry';
 import type { MeshHealthReport, MeshAnalysisJson } from '@/utils/meshRepair';
 import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { isVoxlBinaryV2, parseVoxlBinaryV2, parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
@@ -47,6 +47,27 @@ import {
   storeModelMeshModifiers,
 } from '@/features/mesh-modifiers/meshModifierStore';
 import { splitClassifiedSupportGeometry } from '@/features/scene/splitClassifiedSupports';
+import {
+  resolveSplitToBodiesStrategy,
+  type SplitToBodiesStrategy,
+} from '@/features/scene/splitToBodiesStrategy';
+
+/**
+ * Routes a failed scene operation to the editor shell's operation-error toast
+ * (listener in `page.tsx`).
+ *
+ * Deliberately its OWN channel rather than reusing `dragonfruit:fullres-degraded`:
+ * that event means "the output quietly got worse and you should know", and its
+ * fallback copy says so. A split that refused to run is the opposite — nothing
+ * changed, and the user needs to know the action did not happen. One channel for
+ * two meanings would make the fallback text wrong for whichever came second.
+ */
+function emitSceneOperationError(message: string): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent('dragonfruit:scene-operation-error', {
+    detail: { message },
+  }));
+}
 
 type PersistedMeshAppearance = {
   v: 1;
@@ -1851,6 +1872,28 @@ export function useSceneCollectionManager() {
   // Helper to generate IDs
   const generateId = () => generateUuid();
 
+  /**
+   * Ph3d — a clone of a Split-to-Bodies HALF must not inherit the frame datum.
+   *
+   * `cloneGeometryWithBounds` carries `cPre` and `importRunMap` (same file, same
+   * centering, same triangle numbering) but deliberately does NOT carry
+   * `nativePreview` — so the section identity does not survive a clone. For a
+   * whole-file preview that is merely a fidelity loss: `sourcePath` + `cPre`
+   * still authorize a re-read, and the whole file IS that model.
+   *
+   * For a HALF it would be a correctness bug. The duplicate would carry a path
+   * and a centering datum that authorize re-reading the WHOLE plate for a model
+   * that is half of it — the islands sideload takes exactly that pair, and would
+   * scan the supports as part of the model.
+   *
+   * So the datum is dropped, which routes every raw-file consumer to its
+   * existing degrade (scan/slice this geometry) through the never-guess contract
+   * they already implement. A duplicated half then behaves exactly like a
+   * duplicated whole preview does today — consistent, and safe.
+   */
+  const cloneRetainsImportFrameDatum = (source: GeometryWithBounds): boolean =>
+    !source.nativePreview?.sourceSection;
+
   const cloneGeometryWithBounds = useCallback((source: GeometryWithBounds, options?: { accelerate?: boolean; shared?: boolean }): GeometryWithBounds => {
     if (options?.shared) {
       const sharedSourceKey = String(source.geometry.userData?.resinVolumeSourceKey ?? source.geometry.uuid);
@@ -1875,7 +1918,7 @@ export function useSceneCollectionManager() {
         // import frame datum stays valid (duplicates keep `sourcePath` too).
         // The Ph1 run map is valid for the same reason — same file, same
         // triangle numbering.
-        ...(source.cPre ? { cPre: source.cPre } : {}),
+        ...(source.cPre && cloneRetainsImportFrameDatum(source) ? { cPre: source.cPre } : {}),
         ...(source.importRunMap ? { importRunMap: source.importRunMap } : {}),
         ...(source.importRunMapRecompute
           ? { importRunMapRecompute: source.importRunMapRecompute }
@@ -1914,7 +1957,7 @@ export function useSceneCollectionManager() {
       // A clone shares the source file, geometry and centering, so the import
       // frame datum stays valid (duplicates keep `sourcePath` too). The Ph1 run
       // map is valid for the same reason — same file, same triangle numbering.
-      ...(source.cPre ? { cPre: source.cPre } : {}),
+      ...(source.cPre && cloneRetainsImportFrameDatum(source) ? { cPre: source.cPre } : {}),
       ...(source.importRunMap ? { importRunMap: source.importRunMap } : {}),
       ...(source.importRunMapRecompute
         ? { importRunMapRecompute: source.importRunMapRecompute }
@@ -2972,11 +3015,202 @@ export function useSceneCollectionManager() {
     setSelectedModelIds(newIds);
   }, []);
 
+  /**
+   * Ph3d — Split-to-Bodies for a DECIMATED PREVIEW, by re-sourcing each section
+   * from the original file. See {@link emitSceneOperationError} for the failure
+   * channel.
+   *
+   * The scene mesh cannot be cut here: `model_triangle_count` indexes the source
+   * file and this geometry is a reduced stand-in for it, so the index does not
+   * address it. Instead each section is re-read and decimated on its own
+   * (`load_fullres_section_preview`), and each half keeps a `sourceSection`
+   * linkage so slicing and export still splice ITS half of the file at full
+   * resolution.
+   *
+   * The two halves are fully independent models from this point on — their own
+   * Models-panel rows, transforms, visibility and modifier state. Nothing links
+   * them but the file they both came out of.
+   */
+  const splitByResourcingSections = useCallback(async (
+    modelId: string,
+    strategy: Extract<SplitToBodiesStrategy, { kind: 'resource-sections' }>,
+  ) => {
+    const source = modelsRef.current.find((m) => m.id === modelId);
+    if (!source) return;
+
+    const sectionArgs = {
+      sourcePath: strategy.sourcePath,
+      // The RESOLVED runs go to Rust (an over-cap map resolves to `null`, which
+      // means recompute — not "no runs")…
+      runs: strategy.runs,
+      // …while the parent's map rides along onto both halves verbatim: same
+      // file, same triangle numbering. It is what persists the runs through VOXL.
+      parentRunMap: source.geometry.importRunMap ?? null,
+      recomputeReason: strategy.recomputeReason,
+      fingerprint: strategy.fingerprint,
+      concurrentModelCount: 2,
+    };
+
+    setImportProgress((p) => ({ ...p, detail: 'Reading the model section from the original file…' }));
+    const modelSection = await loadStlSectionGeometry({ ...sectionArgs, section: 'model' });
+    setImportProgress((p) => ({ ...p, detail: 'Reading the support section from the original file…' }));
+    const supportSection = await loadStlSectionGeometry({ ...sectionArgs, section: 'support' });
+
+    // The partition, checked rather than trusted — the same discipline Ph3
+    // applies to the splice. A run map that does not describe this file yields
+    // two halves that look plausible and are not, so it must fail loudly here
+    // rather than reach the plate.
+    const sectionTotal = modelSection.sectionTriangleCount + supportSection.sectionTriangleCount;
+    if (strategy.expectedSourceTriangleCount != null
+      && sectionTotal !== strategy.expectedSourceTriangleCount) {
+      throw new Error(
+        `Splitting "${source.name}" read ${sectionTotal.toLocaleString()} triangles across the two `
+        + `sections but the file holds ${strategy.expectedSourceTriangleCount.toLocaleString()} — `
+        + 'the run map does not describe this file, so the split was stopped.',
+      );
+    }
+    if (strategy.expectedModelTriangleCount != null
+      && modelSection.sectionTriangleCount !== strategy.expectedModelTriangleCount) {
+      throw new Error(
+        `Splitting "${source.name}" read ${modelSection.sectionTriangleCount.toLocaleString()} model `
+        + `triangles where the classification recorded `
+        + `${strategy.expectedModelTriangleCount.toLocaleString()} — the split was stopped.`,
+      );
+    }
+
+    setImportProgress((p) => ({ ...p, detail: 'Finalizing…' }));
+    await waitForUiYield();
+
+    // PLACEMENT. Each half was centered by its OWN `processGeometry` call, so it
+    // has its own local origin — the pre-Ph3d shortcut (`partCenter −
+    // originalCenter`) only worked because both halves shared the parent's
+    // frame. Keeping a half where the user saw it means offsetting its position
+    // by `T_half − T_parent` in the parent's local space, where
+    // `T = cPre − geometry.center` (the identity documented in
+    // `fullResMutatorStaging.ts`). Getting this wrong does not look like an
+    // error; it looks like the supports jumped.
+    const rotation = new THREE.Quaternion().setFromEuler(source.transform.rotation);
+    const parentT = new THREE.Vector3(
+      strategy.cPre[0] - source.geometry.center.x,
+      strategy.cPre[1] - source.geometry.center.y,
+      strategy.cPre[2] - source.geometry.center.z,
+    );
+    const placeHalf = (half: StlSectionGeometry) => {
+      if (!half.importCPre) return source.transform.position.clone();
+      const offset = new THREE.Vector3(
+        half.importCPre[0] - half.geometry.center.x,
+        half.importCPre[1] - half.geometry.center.y,
+        half.importCPre[2] - half.geometry.center.z,
+      ).sub(parentT);
+      offset.multiply(source.transform.scale).applyQuaternion(rotation);
+      return source.transform.position.clone().add(offset);
+    };
+
+    const baseName = source.name.replace(/\.(stl|obj|3mf)$/i, '');
+    const buildHalf = (
+      half: StlSectionGeometry,
+      label: string,
+      shareOfFile: number,
+    ): LoadedModel => ({
+      id: generateId(),
+      name: `${baseName} (${label})`,
+      fileUrl: source.fileUrl,
+      fileSizeBytes: source.fileSizeBytes
+        ? Math.round(source.fileSizeBytes * shareOfFile)
+        : undefined,
+      // Ph3d REVERSES the D7 `sourcePath: null` rule for THIS path, and only
+      // here. That rule exists because split geometry no longer corresponds to
+      // anything on disk — true of a scene cut, false of a re-sourced section:
+      // this half IS a part of that file, and `sourceSection` says which part.
+      // A verbatim (undecimated) section carries no linkage and no path, because
+      // its scene geometry already IS the full-resolution section.
+      sourcePath: half.isPreview ? strategy.sourcePath : null,
+      geometry: half.geometry,
+      transform: {
+        position: placeHalf(half),
+        rotation: source.transform.rotation.clone(),
+        scale: source.transform.scale.clone(),
+      },
+      visible: source.visible,
+      color: source.color,
+      // P2b: the DISPLAYED count is what the WebView actually holds. The
+      // section's full-resolution count lives on `nativePreview`.
+      polygonCount: resolveDisplayPolygonCount(half.geometry),
+      ignoreAutoLift: source.ignoreAutoLift,
+      manualZMoveOverride: source.manualZMoveOverride,
+      // Ruling #12 travels with the halves: if the user declared the decimated
+      // mesh to BE the model, both halves inherit that and keep slicing from
+      // their own geometry.
+      ...(source.outputPolicy ? { outputPolicy: { ...source.outputPolicy } } : {}),
+    });
+
+    const modelModel = buildHalf(
+      modelSection,
+      'Model',
+      sectionTotal > 0 ? modelSection.sectionTriangleCount / sectionTotal : 0.5,
+    );
+    const supportModel = buildHalf(
+      supportSection,
+      'Supports',
+      sectionTotal > 0 ? supportSection.sectionTriangleCount / sectionTotal : 0.5,
+    );
+
+    // Snapshot only now: everything above can throw, and a scene the user can
+    // undo to must be one that actually changed.
+    const before = captureSceneSnapshot(
+      modelsRef.current,
+      activeModelIdRef.current,
+      selectedModelIdsRef.current,
+      { includeSupportState: true },
+    );
+    const nextModels = [
+      ...modelsRef.current.filter((m) => m.id !== modelId),
+      modelModel,
+      supportModel,
+    ];
+    setModels(nextModels);
+    setActiveModelId(modelModel.id);
+    setSelectedModelIds([modelModel.id, supportModel.id]);
+
+    const after = captureSceneSnapshot(
+      nextModels,
+      modelModel.id,
+      [modelModel.id, supportModel.id],
+      { includeSupportState: true },
+    );
+    pushSceneSnapshotHistory(before, after, `Split Supports from ${source.name}`);
+
+    console.warn(
+      `[splitSupports] re-sourced "${source.name}" from ${strategy.sourcePath}: model section `
+      + `${modelSection.sectionTriangleCount.toLocaleString()} tris `
+      + `(${modelModel.polygonCount.toLocaleString()} in the scene`
+      + `${modelSection.isPreview ? ', decimated' : ', verbatim'}), support section `
+      + `${supportSection.sectionTriangleCount.toLocaleString()} tris `
+      + `(${supportModel.polygonCount.toLocaleString()} in the scene`
+      + `${supportSection.isPreview ? ', decimated' : ', verbatim'}).`,
+    );
+  }, [pushSceneSnapshotHistory, setImportProgress, waitForUiYield]);
+
   /** Splits a model that has a classified model/support triangle split
    *  (from the native repair engine) into two independent models:
    *  one for the model body and one for the support geometry.
-   *  Requires `model_triangle_count` in the native repair report. */
+   *
+   *  Ph3d: the cut below applies only when the classification indexes the SCENE
+   *  geometry. A decimated preview routes to `splitByResourcingSections`, which
+   *  re-reads each section from the original file — the gate in `page.tsx` asks
+   *  the SAME resolver, so the affordance and this can never disagree. */
   const splitSupports = useCallback(async (modelId: string) => {
+    const initialSource = modelsRef.current.find((m) => m.id === modelId);
+    if (!initialSource) return;
+
+    const strategy = resolveSplitToBodiesStrategy(initialSource);
+    if (strategy.kind === 'unavailable') {
+      console.warn(
+        `[splitSupports] "${initialSource.name}" cannot be split into bodies (${strategy.reason}).`,
+      );
+      return;
+    }
+
     setImportProgress({
       active: true,
       type: 'mesh',
@@ -2987,6 +3221,28 @@ export function useSceneCollectionManager() {
     await waitForUiYield();
 
     try {
+    if (strategy.kind === 'resource-sections') {
+      try {
+        await splitByResourcingSections(modelId, strategy);
+      } catch (error) {
+        // Every failure path above happens BEFORE the scene is touched — the
+        // reads, the partition check and the placement all complete before
+        // `setModels`. So the scene is untouched here by construction, and the
+        // honest report is "this did not happen", not a half-applied split.
+        const raw = error instanceof Error ? error.message : String(error);
+        const reason = raw.includes('FULLRES_SOURCE_MISSING')
+          ? 'the original file is missing or unreadable'
+          : raw.includes('FULLRES_SOURCE_STALE')
+            ? 'the original file changed since it was imported'
+            : raw;
+        console.error(`[splitSupports] re-sourced split failed for "${initialSource.name}".`, error);
+        emitSceneOperationError(
+          `"${initialSource.name}" could not be split into bodies: ${reason} — the scene is unchanged.`,
+        );
+      }
+      return;
+    }
+
     const source = modelsRef.current.find((m) => m.id === modelId);
     if (!source) return;
 
@@ -3131,7 +3387,7 @@ export function useSceneCollectionManager() {
     } finally {
       setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
     }
-  }, [pushSceneSnapshotHistory, setImportProgress, waitForUiYield]);
+  }, [pushSceneSnapshotHistory, setImportProgress, splitByResourcingSections, waitForUiYield]);
 
   const renameGroup = useCallback((groupId: string, nextName: string) => {
     const trimmed = nextName.trim();

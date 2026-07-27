@@ -3,7 +3,7 @@ import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSolidSliceMeshForWasm, composeModelMatrix, type FullResSplicedModel } from './rasterLayerZipExport';
 import { clampSliceJobNumber } from './sliceJobLimits';
 import { prepareLoadedModelsForOutput, resolveOutputGeometrySource, resolveOutputSectionPlan } from '@/features/mesh-modifiers/prepareModelGeometry';
-import { describeImportRunMapRecompute, planImportSectionSplice, type ImportSectionSplicePlan } from '@/utils/importRunMap';
+import { describeImportRunMapRecompute, planImportSectionSplice, type ImportRunMapRecomputeReason, type ImportSectionSplicePlan } from '@/utils/importRunMap';
 import { resolveOutputFileExtension, resolveOutputFormatVersion, resolveOutputSettingsMode, resolveSlicingFormatDefinition } from './formats/registry';
 import { getSavedSlicingPerformanceSettings, type PngCompressionStrategy } from '@/components/settings/performancePreferences';
 import {
@@ -755,6 +755,12 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     // Failure is never silent: the model degrades to the preview path with a
     // user-visible warning.
     const fullResSplices = new Map<string, FullResSplicedModel>();
+    /**
+     * Ph3d — model-half passes whose partition must be verified once staging
+     * has committed them. Deferred out of the pass-① try so a failure aborts
+     * instead of degrading into a double-stage; see the push site.
+     */
+    const modelSectionPartitionChecks: Array<{ name: string; summary: FullResSpliceSummary }> = [];
     /** Candidates whose support complement pass ③ must still stage. */
     const supportSectionPasses: Array<{
         model: LoadedModel;
@@ -822,14 +828,33 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
 
             throwIfAborted(options.abortSignal);
             options.onProgress?.(0, 1, 'Staging Full-Resolution Mesh');
-            const plan = planImportSectionSplice({
-                runtime: model.geometry.importRunMap ?? null,
-                summary: model.geometry.nativePreview?.runMap ?? null,
-                persistedRuns: model.geometry.importRunMap?.runs ?? null,
-                storedRecompute: model.geometry.importRunMapRecompute ?? null,
-                reportSplitExists:
-                    (model.geometry.meshDefects?.nativeRepairReport?.model_triangle_count ?? 0) > 0,
-            });
+
+            // ══ Ph3d — WHICH PASSES DOES THIS MODEL JOIN? ══════════════════
+            //
+            // Ph3 assumed one shape: a whole file that may need splitting into
+            // two passes. Ph3d adds a second: a model that IS one section of a
+            // file (a Split-to-Bodies half), which joins exactly ONE pass.
+            //
+            // The half's own classification cannot answer this — it reports no
+            // split, which `planImportSectionSplice` would read as "splice the
+            // whole file" and stage the OTHER half along with it. The answer
+            // comes from the chokepoint's `section`, which carries the parent's
+            // run map precisely because that map is what defines both sections.
+            const sourceSection = source.section;
+            const plan: ImportSectionSplicePlan = sourceSection.kind === 'whole'
+                ? planImportSectionSplice({
+                    runtime: model.geometry.importRunMap ?? null,
+                    summary: model.geometry.nativePreview?.runMap ?? null,
+                    persistedRuns: model.geometry.importRunMap?.runs ?? null,
+                    storedRecompute: model.geometry.importRunMapRecompute ?? null,
+                    reportSplitExists:
+                        (model.geometry.meshDefects?.nativeRepairReport?.model_triangle_count ?? 0) > 0,
+                })
+                : {
+                    kind: 'sections' as const,
+                    runs: sourceSection.runs,
+                    recomputeReason: sourceSection.recomputeReason as ImportRunMapRecomputeReason | null,
+                };
             if (plan.kind === 'sections' && plan.recomputeReason) {
                 console.warn(
                     `[SlicingFullRes] "${model.name}": recomputing the import run map from the `
@@ -837,6 +862,35 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                     + 'This re-runs the import classification and costs seconds on a large model.',
                 );
             }
+
+            // A SUPPORT half contributes nothing to pass ① — every one of its
+            // triangles belongs on the far side of the split index. It is still
+            // registered now, with a zero model count, because the collector
+            // decides what to stream from this map BEFORE pass ③ runs and must
+            // skip this model's preview geometry. The sentinel bounds are
+            // unioned in by pass ③; the bounds merge already skips an entry that
+            // staged nothing at all.
+            if (sourceSection.kind === 'support') {
+                if (plan.kind !== 'sections') {
+                    // Unreachable: a sectioned source takes the `sections` arm
+                    // above unconditionally. Stated as a check rather than a
+                    // cast, because the alternative to a loud failure here is
+                    // splicing a support half as a whole file.
+                    throw new Error(
+                        `"${model.name}" is a support section but resolved to a whole-file splice `
+                        + 'plan — the slice was stopped rather than staging the entire source.',
+                    );
+                }
+                fullResSplices.set(model.id, {
+                    modelTriangleCount: 0,
+                    supportTriangleCount: 0,
+                    worldMin: [Infinity, Infinity, Infinity],
+                    worldMax: [-Infinity, -Infinity, -Infinity],
+                });
+                supportSectionPasses.push({ model, source, plan });
+                continue;
+            }
+
             const spliceInvokeStart = performance.now();
             try {
                 const summary = await stageFullResSection(
@@ -852,8 +906,18 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                     worldMin: summary.worldMin,
                     worldMax: summary.worldMax,
                 });
-                if (plan.kind === 'sections') {
+                if (sourceSection.kind === 'whole' && plan.kind === 'sections') {
                     supportSectionPasses.push({ model, source, plan });
+                }
+                // Ph3d — a MODEL half's partition check is DEFERRED to just
+                // after this loop. It cannot live in this try: by now the half's
+                // triangles are in the staged buffer, so failing into the
+                // degrade-to-preview catch below would stage them a SECOND time
+                // from the collector. Same asymmetry Ph3 documented for pass ③ —
+                // before anything is staged a failure may degrade; after it, it
+                // must abort.
+                if (sourceSection.kind === 'model') {
+                    modelSectionPartitionChecks.push({ name: model.name, summary });
                 }
                 cumulativeBytesStage += summary.stagedTriangleCount * QUANTIZED_U16_BYTES_PER_TRIANGLE;
                 console.warn(
@@ -875,6 +939,21 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                 // Not registered in fullResSplices ⇒ the collector stages the
                 // preview geometry exactly as before (Rust truncated any
                 // partial append).
+            }
+        }
+
+        // Ph3d — the MODEL-half partition check, run now that pass ① has
+        // committed. A model half has no pass ③, so the check Ph3 put there
+        // cannot cover it; the same arithmetic holds on its single summary,
+        // because a sectioned pass reports what it skipped.
+        for (const { name, summary } of modelSectionPartitionChecks) {
+            const accounted = summary.stagedTriangleCount + summary.skippedTriangleCount;
+            if (accounted !== summary.sourceTriangleCount) {
+                throw new Error(
+                    `Full-resolution model section for "${name}" accounted for ${accounted} of `
+                    + `${summary.sourceTriangleCount} source triangles — the run map does not `
+                    + 'describe this file, so the slice was stopped.',
+                );
             }
         }
     }
@@ -918,9 +997,19 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
             cumulativeBytesStage += summary.stagedTriangleCount * QUANTIZED_U16_BYTES_PER_TRIANGLE;
 
             // The partition check, stated as arithmetic rather than trusted:
-            // the two passes must between them account for every triangle in
-            // the file, exactly once.
-            const accounted = entry.modelTriangleCount + entry.supportTriangleCount;
+            // every triangle in the file is accounted for exactly once.
+            //
+            // Ph3d — WHICH two numbers those are depends on who owns the other
+            // section. For a WHOLE-file model both passes are its own, so the
+            // entry's two counts are the partition. For a SUPPORT HALF the model
+            // section belongs to a DIFFERENT model (its sibling half), so the
+            // entry's model count is 0 by construction and summing it would fail
+            // a correct split. The pass's own report is the right pair there:
+            // what it staged plus what it skipped is the file.
+            const isSectionHalf = source.section.kind !== 'whole';
+            const accounted = isSectionHalf
+                ? summary.stagedTriangleCount + summary.skippedTriangleCount
+                : entry.modelTriangleCount + entry.supportTriangleCount;
             if (accounted !== summary.sourceTriangleCount) {
                 throw new Error(
                     `Full-resolution section splice for "${model.name}" staged ${accounted} of `

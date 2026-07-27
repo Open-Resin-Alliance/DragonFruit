@@ -6,7 +6,7 @@ import {
   classificationIndexesGeometry,
   splitClassifiedSupportGeometry,
 } from '@/features/scene/splitClassifiedSupports';
-import { resolveOutputSectionPlan } from '../prepareModelGeometry';
+import { resolveSplitToBodiesStrategy } from '@/features/scene/splitToBodiesStrategy';
 
 /**
  * Ph3 (scene path) — THE F3 DEFECT CLASS ON THE USER-INVOKED SPLIT.
@@ -32,6 +32,17 @@ import { resolveOutputSectionPlan } from '../prepareModelGeometry';
  * Two bodies come back, both geometrically meaningless, both presented to the
  * user as a successful split. Before the fix this test failed by receiving a
  * split object; after it, the refusal is structural and size-independent.
+ *
+ * ## Ph3d update
+ *
+ * The refusals below are UNCHANGED and still load-bearing: the naive cut must
+ * never run on a preview. What changed is what happens INSTEAD of it. Ph3c
+ * disabled the affordance; Ph3d makes the split WORK by re-sourcing each section
+ * from the original file (`resolveSplitToBodiesStrategy` → `resource-sections`).
+ *
+ * So this file keeps the fence, and `splitToBodiesStrategy.test.ts` owns the new
+ * behaviour. The one test that had to change is the last one, whose premise —
+ * "the gate enables exactly what this cut can do" — Ph3d retired.
  */
 
 function makePreviewSplitModel(input: {
@@ -155,14 +166,20 @@ test('a non-preview classified model still splits, byte-for-byte as before', () 
 });
 
 /**
- * The gate and the cut must not be able to disagree. `page.tsx` enables
- * Split-to-Bodies on `resolveOutputSectionPlan(model).kind === 'scene-split'`;
- * `splitClassifiedSupportGeometry` is what runs when the user clicks it. If the
- * resolver ever says `scene-split` where the cut returns null, the menu offers
- * an action that silently does nothing behind a progress panel — which is
- * exactly the state this change removes.
+ * THE STRATEGY AND THE SCENE CUT MUST AGREE.
+ *
+ * Ph3c's version of this test asserted that the menu gate enabled exactly what
+ * the naive cut could do. **Ph3d retired that premise**: a decimated preview is
+ * now splittable, by re-sourcing each section from the original file, so the
+ * gate deliberately enables cases the cut refuses.
+ *
+ * What survives is the narrower and still load-bearing claim: `scene-split` is
+ * chosen IF AND ONLY IF the scene cut actually succeeds. That is the invariant
+ * whose violation produced the original defect — an affordance that opened a
+ * progress panel and did nothing. A `resource-sections` verdict is deliberately
+ * not compared against the cut, because it never calls it.
  */
-test('the menu gate and the cut agree on every shape', () => {
+test('the scene-split strategy is chosen exactly when the scene cut works', () => {
   const shapes = [
     { sceneTriangles: 10, modelTriangleCount: 4, nativePreview: true },
     { sceneTriangles: 10, modelTriangleCount: 4, nativePreview: false },
@@ -176,12 +193,12 @@ test('the menu gate and the cut agree on every shape', () => {
   try {
     for (const shape of shapes) {
       const model = makePreviewSplitModel(shape);
-      const gateSaysSplittable = resolveOutputSectionPlan(model).kind === 'scene-split';
+      const strategy = resolveSplitToBodiesStrategy(model);
       const split = splitClassifiedSupportGeometry(model);
       assert.equal(
-        gateSaysSplittable,
+        strategy.kind === 'scene-split',
         split !== null,
-        `gate and cut disagree for ${JSON.stringify(shape)}`,
+        `strategy and cut disagree for ${JSON.stringify(shape)}`,
       );
       split?.modelGeometry.geometry.dispose();
       split?.supportGeometry.geometry.dispose();

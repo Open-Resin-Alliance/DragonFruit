@@ -100,6 +100,34 @@ export type GeometryWithBounds = {
      * array was dropped for exceeding the cap) even when the chunk is absent.
      */
     runMap?: import('@/utils/importRunMap').ImportRunMapSummary;
+    /**
+     * Ph3d — this model is ONE SECTION of its source file, not the whole file.
+     *
+     * Set only by Split-to-Bodies on a decimated preview, which re-sources each
+     * half through `load_fullres_section_preview` rather than cutting the scene
+     * geometry (which a file-derived index cannot address — Ph2 finding F3).
+     * Absent ⇒ this model is the whole file, which is every other import.
+     *
+     * WHY IT IS READ THROUGH THE CHOKEPOINT AND NOT FROM HERE. Every Rust-bound
+     * consumer resolves its source with `resolveFullResSourceForModel`, which
+     * folds this into the `section` it returns. A consumer that reached past it
+     * and asked only "is there a sourcePath?" would re-read the WHOLE file for a
+     * half — staging the supports back into a hollow, an export or a slice. That
+     * is the one way this feature fails silently, so the section travels with
+     * the source rather than beside it.
+     *
+     * The RUNS THEMSELVES ARE NOT HERE. They live on `importRunMap`, which a
+     * half carries verbatim from its parent — same file, same triangle
+     * numbering. Two reasons that matters: the runs are a `Uint32Array` and this
+     * marker is persisted as JSON (a duplicate copy here would silently
+     * round-trip into an object), and one array in one place cannot disagree
+     * with itself. `resolveFullResSourceForModel` joins the two.
+     */
+    sourceSection?: {
+      section: 'model' | 'support';
+      /** Optional: a persisted marker may omit it entirely. Read as `?? null`. */
+      recomputeReason?: import('@/utils/importRunMap').ImportRunMapRecomputeReason | null;
+    };
   };
   /**
    * Ph1 wiring — model-section triangle runs in SOURCE-FILE indices, as
@@ -1295,6 +1323,185 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
       }
     );
   });
+}
+
+/** Ph3d — one half produced by {@link loadStlSectionGeometry}. */
+export type StlSectionGeometry = {
+  geometry: GeometryWithBounds;
+  /** The section's FULL-RESOLUTION triangle count, as Rust read it from the file. */
+  sectionTriangleCount: number;
+  /** True when the section exceeded its budget and came back decimated. */
+  isPreview: boolean;
+  /**
+   * The pre-centering bbox center `processGeometry` subtracted, in RAW FILE
+   * coordinates — returned unconditionally, even for a verbatim section whose
+   * public `cPre` is deliberately not promoted.
+   *
+   * Two different questions share one datum, and conflating them is a bug:
+   * "may a consumer re-read the source file with this?" (promotion, gated on
+   * keeping a re-readable path) and "where does this half sit relative to the
+   * plate it came out of?" (placement, always needed). The caller computes
+   * `T = cPre − geometry.center` from this to keep the half where the user saw it.
+   */
+  importCPre?: [number, number, number];
+};
+
+/**
+ * Ph3d — loads ONE SECTION of a classified source file as its own model geometry.
+ *
+ * Split-to-Bodies cannot cut a decimated preview: `model_triangle_count` indexes
+ * the SOURCE FILE and the scene mesh is a reduced stand-in for it, so the index
+ * does not address it (Ph2 finding F3; Ph3c on this path). The split therefore
+ * re-sources, and this is how each half arrives.
+ *
+ * ## It reuses the import pipeline rather than paralleling it
+ *
+ * Rust returns the section in the SAME DFST payload `load_stl_file` returns and
+ * in RAW FILE COORDINATES, so this runs the very same `decodeNativeStlResponse`
+ * and `processGeometry` an import runs. That is what makes the frame correct
+ * without new arithmetic: `processGeometry` captures `_importCPre` at the
+ * centering site it performs, so the half's `cPre` and its `geometry.center` are
+ * two readings of ONE measurement of ONE mesh, and the identity
+ * `geometry.center = cPre − T_center` that every raw-file re-read depends on
+ * holds for a half exactly as it holds for an import.
+ *
+ * ## The classification is SYNTHESIZED, never re-derived
+ *
+ * `_isNativePreview` is deliberately NOT set: it exists to force a fresh
+ * classify pass for a decimated mesh, and re-classifying a section is both
+ * wasteful and WRONG — the classifier could find a spurious model/support split
+ * *within* a half and make it look splittable again. Instead the half is handed
+ * the classification it is known to have: no internal split, and
+ * `likely_support_geometry` set on the support half alone, which is what drives
+ * its orange tint through the existing mechanism.
+ *
+ * ## Two shapes out, on purpose
+ *
+ * - **Decimated** (`isPreview`) — keeps `sourcePath` and gets
+ *   `nativePreview.sourceSection`, so every Rust-bound consumer re-reads THIS
+ *   SECTION of the original at full resolution.
+ * - **Verbatim** — the geometry already IS the full-resolution section, so there
+ *   is nothing to re-source. The caller clears `sourcePath` (matching the
+ *   pre-Ph3d split), and no `nativePreview` marker is written: claiming a
+ *   reduction that did not happen would light the preview-honesty badge on a
+ *   full-resolution mesh.
+ */
+export async function loadStlSectionGeometry(input: {
+  sourcePath: string;
+  section: 'model' | 'support';
+  /**
+   * The RESOLVED runs to send to Rust — `planImportSectionSplice`'s answer, not
+   * a raw `importRunMap.runs`. The distinction is load-bearing: the raw array is
+   * EMPTY when the classifier's map exceeded the transport cap, which means
+   * "recompute it", and sending it would ask for a section containing nothing.
+   * `null` ⇒ Rust re-derives the map from the file.
+   */
+  runs: Uint32Array | null;
+  /**
+   * The PARENT's run map, attached to the returned geometry as `importRunMap` so
+   * the runs persist (VOXL `RUNM`) and `resolveFullResSourceForModel` can read
+   * them back. Carried verbatim — same file, same triangle numbering.
+   */
+  parentRunMap: ImportRunMap | null;
+  recomputeReason: ImportRunMapRecomputeReason | null;
+  fingerprint: { sizeBytes: number; mtimeMs: number } | null;
+  /** How many halves stay resident together; the governor divides by this. */
+  concurrentModelCount?: number;
+  processOptions?: ProcessGeometryOptions;
+}): Promise<StlSectionGeometry> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  const bytes = await invoke<ArrayBuffer>('load_fullres_section_preview', {
+    sourcePath: input.sourcePath,
+    expectedSizeBytes: input.fingerprint?.sizeBytes ?? null,
+    expectedMtimeMs: input.fingerprint?.mtimeMs ?? null,
+    section: input.section,
+    modelRuns: input.runs ? Array.from(input.runs) : null,
+    runMapRecomputeReason: input.recomputeReason ?? null,
+    jsHeapSizeLimit: readJsHeapSizeLimit(),
+    concurrentModelCount: input.concurrentModelCount ?? 2,
+  });
+
+  const decoded = decodeNativeStlResponse(bytes);
+  if (!decoded) {
+    throw new Error(`The ${input.section} section of the source file returned no geometry.`);
+  }
+
+  // `originalTriangleCount` is THIS SECTION's full-res count (the Rust command
+  // sets it so) — not the file's, and not the decimated count.
+  const sectionTriangleCount = decoded.originalTriangleCount;
+
+  const sectionClassification: ImportClassificationJson = {
+    // A half has no internal split. This is the field that gates the
+    // Split-to-Bodies affordance, so `null` is also what stops a half being
+    // offered for splitting again.
+    model_triangle_count: null,
+    likely_support_geometry: input.section === 'support',
+    // UNKNOWN stays UNKNOWN. Nothing measured this section's topology, and an
+    // invented 0 would read as "no shells" / "has holes" rather than "not
+    // looked at" (the Ph1 CP3 ruling, applied to the synthesized report).
+    connected_components: null,
+    model_section: null,
+    support_section: null,
+    source_triangle_count: sectionTriangleCount,
+    dropped_nonfinite_triangles: 0,
+    model_is_manifold: null,
+    model_manifold_status: null,
+    manifold_check_size_guarded: false,
+    classify_ms: 0,
+    section_stats_ms: 0,
+    run_count: 0,
+  };
+
+  const processed = await processGeometry(decoded.geometry, {
+    center: true,
+    ...input.processOptions,
+    _skipComputeNormals: true,
+    // NOT `_isNativePreview` — see the docblock. Setting it would force a fresh
+    // classify pass over the section, which can invent a split inside a half.
+    _importClassification: sectionClassification,
+    nativeProcessingMode: 'classify-only',
+  });
+
+  if (decoded.isPreview) {
+    // The parent's run map, carried verbatim — same file, same triangle
+    // numbering. This is where the half's runs LIVE (see `sourceSection`), so it
+    // is also what persists them through VOXL's `RUNM` chunk.
+    if (input.parentRunMap) processed.importRunMap = input.parentRunMap;
+
+    const cPre = processed._importCPre;
+    processed.nativePreview = {
+      originalTriangleCount: sectionTriangleCount,
+      previewTriangleCount: decoded.previewTriangleCount,
+      ...(cPre ? { cPre } : {}),
+      ...(input.fingerprint ? { sourceFingerprint: input.fingerprint } : {}),
+      ...(Number.isFinite(decoded.achievedError) ? { achievedError: decoded.achievedError } : {}),
+      ...(decoded.budgetTriangles > 0 ? { budgetTriangles: decoded.budgetTriangles } : {}),
+      // THE Ph3d LINKAGE. Carries the parent's runs because they define both
+      // sections; the chokepoint folds this into the `section` every Rust-bound
+      // consumer receives, so none of them can re-read the whole file for a half.
+      sourceSection: {
+        section: input.section,
+        recomputeReason: input.recomputeReason,
+      },
+      // The run-map SUMMARY, same as an ordinary preview import carries. It is
+      // what lets a reload tell "no map persisted" from "no split at all".
+      ...(input.parentRunMap ? { runMap: summarizeImportRunMap(input.parentRunMap) } : {}),
+    };
+  }
+
+  // Captured BEFORE `finalizeImportFrameDatum` strips it: placement needs the
+  // datum whether or not the public `cPre` is promoted.
+  const importCPre = processed._importCPre;
+
+  // A verbatim section has no full-res linkage to keep, so it must not carry a
+  // public `cPre` either — `finalizeImportFrameDatum` promotes it only for a
+  // path the caller will keep re-readable.
+  return {
+    geometry: finalizeImportFrameDatum(processed, decoded.isPreview ? input.sourcePath : undefined),
+    sectionTriangleCount,
+    isPreview: decoded.isPreview,
+    ...(importCPre ? { importCPre } : {}),
+  };
 }
 
 function collectMergedGeometryFromObject3d(root: THREE.Object3D, sourceLabel: '3MF' | 'OBJ'): THREE.BufferGeometry {

@@ -884,6 +884,15 @@ export async function spliceFullResMeshIntoStageFile(args: {
   cPre: [number, number, number];
   expectedSizeBytes?: number | null;
   expectedMtimeMs?: number | null;
+  /**
+   * Ph3d — which section of `sourcePath` this model IS. Omit (or `'all'`) for an
+   * ordinary whole-file model, which reproduces the pre-Ph3d pass byte for byte.
+   * A Split-to-Bodies half MUST pass its own section, or exporting one half
+   * silently writes the entire plate.
+   */
+  section?: 'all' | 'model' | 'support' | null;
+  modelRuns?: Uint32Array | null;
+  runMapRecomputeReason?: string | null;
 }): Promise<{
   stagedTriangleCount: number;
   worldMin: [number, number, number];
@@ -901,6 +910,9 @@ export async function spliceFullResMeshIntoStageFile(args: {
     cPre: args.cPre,
     expectedSizeBytes: args.expectedSizeBytes ?? null,
     expectedMtimeMs: args.expectedMtimeMs ?? null,
+    section: args.section ?? null,
+    modelRuns: args.modelRuns ? Array.from(args.modelRuns) : null,
+    runMapRecomputeReason: args.runMapRecomputeReason ?? null,
   });
 }
 

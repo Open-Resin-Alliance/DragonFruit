@@ -40,6 +40,10 @@ const FULL_RES_SOURCE: FullResMutatorSource = {
   localCenteringVector: [1, 2, 3],
   fingerprint: { sizeBytes: 562_000_000, mtimeMs: 1_700_000_000_000 },
   originalTriangleCount: 11_240_000,
+  // Ph3d: this fixture is a WHOLE-file import — the case Ph3b's sectioning was
+  // built for. A Split-to-Bodies half would carry `{ kind: 'model' | 'support' }`
+  // here and get that section by default, without an explicit request.
+  section: { kind: 'whole' },
 };
 
 function makeModel(input: {

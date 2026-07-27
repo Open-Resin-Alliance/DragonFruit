@@ -23,7 +23,10 @@
  * returns as the new scene geometry.
  */
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import { resolveFullResSourceForModel } from '@/features/mesh-modifiers/prepareModelGeometry';
+import {
+  resolveFullResSourceForModel,
+  type FullResSourceSection,
+} from '@/features/mesh-modifiers/prepareModelGeometry';
 
 type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown> | ArrayBuffer | ArrayBufferView, opts?: { headers?: Record<string, string> }) => Promise<T>;
 
@@ -51,6 +54,17 @@ export interface FullResMutatorSource {
   /** Import-time staleness fingerprint; `null` skips the stat compare. */
   fingerprint: { sizeBytes: number; mtimeMs: number } | null;
   originalTriangleCount: number;
+  /**
+   * Ph3d — WHICH PART of `sourcePath` this model is, carried through from the
+   * chokepoint. `whole` for every ordinary import; `model`/`support` for a
+   * Split-to-Bodies half.
+   *
+   * Every mutator gets this for free: {@link sectionArgs} falls back to it, so a
+   * call site that passes no explicit section still stages the RIGHT SECTION for
+   * a half instead of the whole file. That defaulting is the point — requiring
+   * five mutators to remember Ph3d exists is how the supports quietly come back.
+   */
+  section: FullResSourceSection;
 }
 
 /**
@@ -76,6 +90,7 @@ export function planMutatorFullResStaging(model: LoadedModel): FullResMutatorSou
     localCenteringVector,
     fingerprint: source.fingerprint,
     originalTriangleCount: source.originalTriangleCount,
+    section: source.section,
   };
 }
 
@@ -111,12 +126,41 @@ export interface FullResMutatorSectionRequest {
   recomputeReason: string | null;
 }
 
-function sectionArgs(request?: FullResMutatorSectionRequest | null) {
-  return {
-    section: request?.section ?? null,
-    modelRuns: request?.runs ? Array.from(request.runs) : null,
-    runMapRecomputeReason: request?.recomputeReason ?? null,
-  };
+/**
+ * The section a command actually asks Rust for.
+ *
+ * Precedence, and the reason for it:
+ *
+ * 1. **An explicit request wins.** Ph3b's hollow asks for `'model'` on a
+ *    WHOLE-file classified import so the voxel grid skips the supports. That is
+ *    a statement about this operation, and it must not be overridden.
+ * 2. **Otherwise the SOURCE's own section.** Ph3d: a Split-to-Bodies half IS one
+ *    section of its file, so re-reading "all" of that file would hand the mutator
+ *    the other half as well — putting the supports back into a hollow, a repair
+ *    or a punch. Defaulting here means a call site that has never heard of Ph3d
+ *    is still correct; the alternative is five call sites that each have to
+ *    remember, which is the failure mode this arc keeps finding.
+ * 3. **Otherwise whole-file**, byte-identical to the pre-Ph3b pass.
+ */
+function sectionArgs(
+  source: FullResMutatorSource,
+  request?: FullResMutatorSectionRequest | null,
+) {
+  if (request) {
+    return {
+      section: request.section,
+      modelRuns: request.runs ? Array.from(request.runs) : null,
+      runMapRecomputeReason: request.recomputeReason ?? null,
+    };
+  }
+  if (source.section.kind !== 'whole') {
+    return {
+      section: source.section.kind,
+      modelRuns: source.section.runs ? Array.from(source.section.runs) : null,
+      runMapRecomputeReason: source.section.recomputeReason ?? null,
+    };
+  }
+  return { section: null, modelRuns: null, runMapRecomputeReason: null };
 }
 
 /**
@@ -142,7 +186,7 @@ export async function stageFullResMutatorSource(
     cPre: source.localCenteringVector,
     expectedSizeBytes: source.fingerprint?.sizeBytes ?? null,
     expectedMtimeMs: source.fingerprint?.mtimeMs ?? null,
-    ...sectionArgs(section),
+    ...sectionArgs(source, section),
   });
 }
 
@@ -169,7 +213,7 @@ export async function readFullResMutatorSection(
       cPre: source.localCenteringVector,
       expectedSizeBytes: source.fingerprint?.sizeBytes ?? null,
       expectedMtimeMs: source.fingerprint?.mtimeMs ?? null,
-      ...sectionArgs(section),
+      ...sectionArgs(source, section),
     },
   );
 
