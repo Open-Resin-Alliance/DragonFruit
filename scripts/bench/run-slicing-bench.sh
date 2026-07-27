@@ -251,10 +251,11 @@ hw_prefix_for() { # <cpus-or-empty> <mem-or-empty> -> prints prefix tokens
 # TS CLI does (outputFormatToExt): ctb/nanodlp are named; anything else passes through.
 printer_ext() { # <printer.json>
   local fmt
-  fmt="$(jq -r '((.display.outputFormat // .outputFormat // "") | tostring | ascii_downcase)' "$1" 2>/dev/null || echo "")"
+  fmt="$(jq -r '((.printer.display.outputFormat // .display.outputFormat // .outputFormat // "") | tostring | ascii_downcase)' "$1" 2>/dev/null || echo "")"
   case "$fmt" in
     *ctb*)          echo ".ctb";;
-    ""|*nanodlp*)   echo ".nanodlp";;
+    *nanodlp*)      echo ".nanodlp";;
+    "")             echo "printer_ext: no outputFormat in $1 (bundle not unwrapped?)" >&2; return 1;;
     .*)             echo "$fmt";;
     *)              echo ".$fmt";;
   esac

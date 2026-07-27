@@ -1334,7 +1334,10 @@ interface PrinterSliceParams {
 }
 
 function resolvePrinterProfile(raw: unknown, wantId?: string): any {
-  const list = Array.isArray(raw) ? raw : [raw];
+  // App-exported bundles wrap the profile as { version, printer, materials, … };
+  // unwrap so downstream reads (.display, .buildVolumeMm, .name, …) hit the real object.
+  const unwrap = (p: any) => (p && p.printer && p.display == null ? p.printer : p);
+  const list = (Array.isArray(raw) ? raw : [raw]).map(unwrap);
   if (wantId) {
     const hit = list.find(
       (p) => p?.id === wantId || p?.name === wantId || p?.officialPresetId === wantId,
