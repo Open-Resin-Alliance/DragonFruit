@@ -3,6 +3,10 @@ import { STLExporter } from 'three-stdlib';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import { resolveModelMeshModifiers } from '@/features/mesh-modifiers/meshModifierStore';
+import {
+  normalizeOutputPolicyForPersistence,
+  type ModelOutputPolicy,
+} from '@/features/mesh-modifiers/modelOutputPolicy';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
 import {
   buildSupportExportFromStores,
@@ -1283,6 +1287,20 @@ export class ExportManager {
         return prePickedNativePath;
       } catch (err) {
         console.warn('[ExportManager] Rust export failed, falling back to JS serializer.', err);
+        // Ph2 degrade audit — sibling of the D1 silent `continue`. The JS
+        // serializers below traverse the SCENE meshes, so for any model that
+        // had resolved to its full-resolution source this fallback quietly
+        // exports the reduced preview instead. It was console-only: the user
+        // got a decimated STL with no signal at all. Warn per affected model,
+        // through the same degrade channel the splice failures use.
+        if (options.includeModel) {
+          for (const target of this.collectFullResExportTargets(sceneContext?.models ?? [])) {
+            this.emitFullResExportDegradeWarning(
+              target.model.name,
+              'the native export path failed and the fallback serializer can only read the scene geometry',
+            );
+          }
+        }
         // Fall through to JS-based export below
       }
     }
@@ -1364,6 +1382,7 @@ export class ExportManager {
               cPre?: [number, number, number];
               sourceFingerprint?: { sizeBytes: number; mtimeMs: number };
             };
+            outputPolicy?: ModelOutputPolicy;
             geometryStale?: boolean;
             transform: {
               position: { x: number; y: number; z: number };
@@ -1411,6 +1430,14 @@ export class ExportManager {
                 : {}),
               ...(model.geometry.nativePreview
                 ? { nativePreview: { ...model.geometry.nativePreview } }
+                : {}),
+              // Ph2 Original/Decimated toggle — additive, written only when
+              // the user chose `decimated`. A file that never met the toggle
+              // is byte-identical to a pre-Ph2 save, and an old reader that
+              // drops the field lands on full-resolution output, never on a
+              // silent decimation.
+              ...(normalizeOutputPolicyForPersistence(model.outputPolicy)
+                ? { outputPolicy: { mode: 'decimated' as const } }
                 : {}),
               // Honesty flag (Ph0.1 D2): this model's embedded mesh is the last
               // committed bake, not the geometry currently on screen, because a

@@ -53,6 +53,19 @@ fn sdf_pool() -> &'static ThreadPool {
 
 /// Compute a signed distance field from the current staged mesh.
 ///
+/// FRONTEND CONTRACT (STL-import support-aware import, Ph2). This command takes
+/// no geometry: it analyses whatever is in the process-global `staged_mesh()`
+/// and caches on that buffer's stats. There is therefore NO call site here at
+/// which a source resolver could be applied, and no signal when the thing last
+/// staged happens to be a decimated import preview.
+///
+/// Callers must stage through `stageModelForRustAnalysis(model)`
+/// (`src/utils/rustAnalysisStaging.ts`), which resolves the source at the one
+/// frontend chokepoint (`resolveOutputGeometrySource` in
+/// `prepareModelGeometry.ts`) and so honours the user's per-model
+/// Original/Decimated toggle. Staging a `BufferGeometry` directly before
+/// calling this is the documented way to get it wrong.
+///
 /// The result is a raw binary blob in the `SparseSdfGrid` wire format.
 /// The frontend is responsible for deserialising it into the `SDFCache`.
 ///

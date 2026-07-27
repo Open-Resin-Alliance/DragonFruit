@@ -5,6 +5,7 @@ import { runIslandScanNative } from './nativeIslandScan';
 import { computeIslandMarkers, type IslandMarker } from './islandOverlayLogic';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { resolvePreviewGeometryForRustConsumer } from '@/features/mesh-modifiers/prepareModelGeometry';
 
 interface TransformState {
   position: THREE.Vector3;
@@ -63,7 +64,15 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
   const prepareTransformedGeom = useCallback(() => {
     if (!geom) return null;
 
-    const transformedGeom = geom.geometry.clone();
+    // EXPLICIT PREVIEW OPT-OUT (Ph2). This Analysis-tab scanner is Rust-bound
+    // (`runIslandScanNative` → `stage_mesh_binary_set`) but deliberately stays
+    // preview-sourced: it is superseded by the Support-tab scanner, which owns
+    // the full-resolution sideload (census row 13). Named rather than omitted so
+    // the choice is visible when someone next audits what reaches Rust.
+    const transformedGeom = resolvePreviewGeometryForRustConsumer(
+      { geometry: geom },
+      'legacy-island-scan',
+    ).clone();
 
     // Center offset (negate to move geometry)
     // Note: geom.bbox is world-aligned but geom.geometry might need centering if it wasn't baked

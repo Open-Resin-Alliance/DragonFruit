@@ -17,6 +17,8 @@ import {
   emitIslandScanDegradeWarning,
   resolveIslandScanFrame,
 } from './islandScanSource';
+import { resolvePreviewGeometryForRustConsumer } from '@/features/mesh-modifiers/prepareModelGeometry';
+import type { ModelOutputMode } from '@/features/mesh-modifiers/modelOutputPolicy';
 import { type DetectedIsland, type TipInfo, SUPPORTED_RADIUS_MM } from './types';
 import { classifyIntersection } from './intersection';
 import { getSnapshot } from '@/supports/state';
@@ -50,9 +52,10 @@ function buildScanCacheKey(
   sourcePath: string | null | undefined,
   geom: GeometryWithBounds | null,
   transform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
+  outputMode: ModelOutputMode | null | undefined,
 ): string | null {
   if (!sourcePath) return null;
-  const frame = resolveIslandScanFrame({ sourcePath, geometry: geom });
+  const frame = resolveIslandScanFrame({ sourcePath, geometry: geom, outputMode });
   const frameTag = frame ? frame.cPre.join(',') : 'scene';
   const t = transform;
   return [
@@ -74,13 +77,20 @@ export interface UseIslandsInput {
   plateZ?: number;
   /** File path of the loaded model. */
   sourcePath?: string | null;
+  /**
+   * The model's Original/Decimated output policy (Ph2). `'decimated'` switches
+   * the sideload off — the scene mesh IS the original for this model, so the
+   * scan must come from it rather than from a re-read of the source file.
+   * Absent ⇒ `'original'`.
+   */
+  outputMode?: ModelOutputMode | null;
   /** Active mode / tab. */
   activeTab?: string;
 }
 
 export type UseIslandsReturn = ReturnType<typeof useIslands>;
 
-export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ = 0, sourcePath, activeTab }: UseIslandsInput) {
+export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ = 0, sourcePath, outputMode, activeTab }: UseIslandsInput) {
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number } | null>(null);
   const [voxelIslands, setVoxelIslands] = useState<DetectedIsland[]>([]);
@@ -163,7 +173,12 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
    */
   const prepareWorldGeom = useCallback((): { positions: Float32Array; bbox: THREE.Box3 } | null => {
     if (!geom) return null;
-    const g = geom.geometry.clone();
+    // EXPLICIT PREVIEW OPT-OUT (Ph2). This is the path the full-resolution
+    // sideload DEGRADES to, and the path ruling #11 keeps for mesh minima — it
+    // is preview-sourced on purpose, not by omission. Named here so a future
+    // "route everything through the chokepoint" sweep has to read the reason
+    // before changing it.
+    const g = resolvePreviewGeometryForRustConsumer({ geometry: geom }, 'islands-client-scan').clone();
     try {
       const bb = g.boundingBox ?? new THREE.Box3().setFromBufferAttribute(g.getAttribute('position') as THREE.BufferAttribute);
       const center = bb.getCenter(new THREE.Vector3());
@@ -211,7 +226,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     // `M_linear · T_center` for off-origin source files. No datum (pre-fix
     // import, VOXL reload without one, geometry mutated since import) ⇒
     // resolver returns null ⇒ frame-correct client-side path below.
-    const sideloadFrame = resolveIslandScanFrame({ sourcePath, geometry: geom });
+    const sideloadFrame = resolveIslandScanFrame({ sourcePath, geometry: geom, outputMode });
 
     if (sideloadFrame && geom) {
       try {
@@ -273,7 +288,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         setMinimaIslands(minimaMapped);
 
         // Cache the scan results for this model
-        const cacheKey = buildScanCacheKey(sourcePath, geom, transform);
+        const cacheKey = buildScanCacheKey(sourcePath, geom, transform, outputMode);
         if (cacheKey) {
           scanCacheRef.current.set(cacheKey, { voxel: voxelMapped, minima: minimaMapped });
         }
@@ -289,7 +304,12 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
           describeIslandScanSourceError(err instanceof Error ? err.message : String(err)),
         );
       }
-    } else if (sourcePath && geom?.nativePreview) {
+    } else if (sourcePath && geom?.nativePreview && outputMode !== 'decimated') {
+      // Ph2: `decimated` is a CHOICE, not a degrade — the user asked for the
+      // scene mesh to be treated as the original, so scanning it is the correct
+      // outcome and warning about it would be crying wolf. Only an UNCHOSEN
+      // fallback is a degrade.
+      //
       // A decimated preview with no trustworthy frame datum: the client-side
       // fallback below scans the ~preview-quality scene geometry. That IS a
       // quality degrade for this model class — surface it (an ordinary model's
@@ -326,14 +346,14 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
           const minima = await scanMeshMinima(world.positions, minimaK);
           setMinimaIslands(minima);
           // Cache the scan results for this model
-          const cacheKey = buildScanCacheKey(sourcePath, geom, transform);
+          const cacheKey = buildScanCacheKey(sourcePath, geom, transform, outputMode);
           if (cacheKey) {
             scanCacheRef.current.set(cacheKey, { voxel, minima });
           }
         } catch (err) {
           console.error('[Islands] mesh-minima scan failed', err);
           setMinimaIslands([]);
-          const cacheKey = buildScanCacheKey(sourcePath, geom, transform);
+          const cacheKey = buildScanCacheKey(sourcePath, geom, transform, outputMode);
           if (cacheKey) {
             scanCacheRef.current.set(cacheKey, { voxel, minima: [] });
           }
@@ -344,7 +364,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     } else {
       setScanning(false);
     }
-  }, [geom, transform, sourcePath, prepareWorldGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minAreaMm2, minimaK]);
+  }, [geom, transform, sourcePath, outputMode, prepareWorldGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minAreaMm2, minimaK]);
 
   // Pass 1: Proposed consolidation & classification
   const proposedConsolidated = useMemo(() => {
@@ -643,7 +663,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     prevSourcePathRef.current = sourcePath;
     if (!sourcePath || prev === sourcePath) return;
 
-    const cacheKey = buildScanCacheKey(sourcePath, geom, transform);
+    const cacheKey = buildScanCacheKey(sourcePath, geom, transform, outputMode);
     const cached = cacheKey ? scanCacheRef.current.get(cacheKey) : undefined;
     if (cached) {
       setVoxelIslands(cached.voxel);
@@ -655,7 +675,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     // No cache entry — clear for new model
     clear();
     // prev-tracking above makes extra geom/transform firings no-ops.
-  }, [sourcePath, geom, transform, clear]);
+  }, [sourcePath, geom, transform, outputMode, clear]);
 
   // On transform/geom change: always clear (scan is invalidated)
   useEffect(() => {

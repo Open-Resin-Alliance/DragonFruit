@@ -21,6 +21,7 @@ import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotatio
 import { generateUuid } from '@/utils/uuid';
 import { resolveDisplayPolygonCount, carryPreviewMarkerForward } from '@/utils/previewGeometryDisplay';
 import { planMutatorFullResStaging } from '@/utils/fullResMutatorStaging';
+import type { ModelOutputPolicy } from '@/features/mesh-modifiers/modelOutputPolicy';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
 import { getKickstandSnapshot, setKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import type { KickstandState } from '@/supports/SupportTypes/Kickstand/types';
@@ -889,6 +890,13 @@ export interface LoadedModel {
    *  models for each entry — instant, no reprocessing needed. */
   splitBodies?: GeometryWithBounds[];
   meshModifiers?: ModelMeshModifiers;
+  /**
+   * Per-model Original/Decimated output policy (Ph2). Absent ⇒ `'original'`.
+   * Read it through `resolveModelOutputMode` / the resolver in
+   * `prepareModelGeometry.ts`, never by hand — the whole point of the field is
+   * that exactly one place decides what this model sends to Rust.
+   */
+  outputPolicy?: ModelOutputPolicy | null;
   ignoreAutoLift?: boolean;
   manualZMoveOverride?: boolean;
 }
@@ -4465,6 +4473,12 @@ export function useSceneCollectionManager() {
             color,
             polygonCount,
             meshModifiers: undefined,
+            // Ph2: restore the per-model Original/Decimated choice. Absent (the
+            // only case for every file written before Ph2) ⇒ `original`, so a
+            // reload can never silently inherit decimated output.
+            ...(model.outputPolicy?.mode === 'decimated'
+              ? { outputPolicy: { mode: 'decimated' as const } }
+              : {}),
             ignoreAutoLift: true,
             manualZMoveOverride: true,
           });

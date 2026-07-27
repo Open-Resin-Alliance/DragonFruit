@@ -353,6 +353,7 @@ import type {
   ModelHollowingModifier,
   MeshModifierOpenFace,
 } from '@/features/mesh-modifiers/types';
+import { resolveModelOutputMode } from '@/features/mesh-modifiers/modelOutputPolicy';
 
 interface ShaftHoverDebugDetail {
   segmentId: string | null;
@@ -6854,6 +6855,8 @@ export default function Home() {
     supportTips,
     plateZ: 0,
     sourcePath: scene.activeModel?.sourcePath,
+    // Ph2: the Original/Decimated toggle reaches the islands sideload here.
+    outputMode: resolveModelOutputMode(scene.activeModel),
     activeTab: scene.mode,
   });
 

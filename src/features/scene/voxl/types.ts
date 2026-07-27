@@ -1,5 +1,6 @@
 import type { DragonfruitImportFormat } from '@/supports/types';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
+import type { ModelOutputPolicy } from '@/features/mesh-modifiers/modelOutputPolicy';
 
 export const VOXL_MAGIC = 'VOXL' as const;
 export const VOXL_VERSION = 1 as const;
@@ -72,6 +73,14 @@ export type VoxlModelEntry = {
   sourcePath?: string;
   nativePreview?: VoxlNativePreviewRef;
   /**
+   * Per-model Original/Decimated output policy (Ph2). Additive and written
+   * ONLY when the user chose `'decimated'` — absence means `'original'`, so a
+   * scene that never touched the toggle serialises to exactly the bytes it did
+   * before the field existed, and an older reader that ignores it lands on the
+   * safe (full-resolution) default rather than a silently degraded one.
+   */
+  outputPolicy?: ModelOutputPolicy;
+  /**
    * Set when the writer had to fall back to this model's last committed mesh
    * chunk because a geometry bake was still in flight when the tick's bounded
    * wait expired (Ph0.1 sub-phase D2). The bytes are one operation behind, and
@@ -134,6 +143,8 @@ export type VoxlModelRuntimeLike = {
   fileSizeBytes?: number;
   sourcePath?: string;
   nativePreview?: VoxlNativePreviewRef;
+  /** See `VoxlModelEntry.outputPolicy` (Ph2). */
+  outputPolicy?: ModelOutputPolicy;
   /** See `VoxlModelEntry.geometryStale` (Ph0.1 sub-phase D2). */
   geometryStale?: boolean;
   transform: {

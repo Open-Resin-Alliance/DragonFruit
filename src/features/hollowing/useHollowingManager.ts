@@ -1077,11 +1077,24 @@ export function useHollowingManager({
     try {
       // Phase 4: preview against the SAME source Apply will use — full-res for
       // a native preview — so the cavity the user accepts matches the output.
+      const warmupFullResPlan = planMutatorFullResStaging(activeModel);
       const stageResult = await stageHollowPreviewSource(
         sourceGeometry,
         `${activeModel.id}::${sourceGeometryKey}`,
-        planMutatorFullResStaging(activeModel),
+        warmupFullResPlan,
       );
+      // Ph2 degrade audit: this is a speculative BACKGROUND warm-up, so it does
+      // not toast (nothing the user did caused it). It must still say so —
+      // dropping `stageResult.degraded` here is the same silent-fallback class
+      // as the bare `continue` Ph1 removed from the splice loop. The
+      // user-facing warning fires on the interactive preview and on Apply,
+      // which resolve the same source.
+      if (warmupFullResPlan && stageResult.degraded) {
+        console.warn(
+          `[HollowFullRes] preview warm-up for "${activeModel.name}" fell back to the reduced `
+          + `preview: ${stageResult.degraded.reason}.`,
+        );
+      }
       if (!stageResult.staged) {
         return;
       }
@@ -1178,11 +1191,22 @@ export function useHollowingManager({
         return;
       }
 
+      const previewFullResPlan = planMutatorFullResStaging(activeModel);
       const stageResult = await stageHollowPreviewSource(
         sourceGeometry,
         `${activeModel.id}::${sourceGeometryKey}`,
-        planMutatorFullResStaging(activeModel),
+        previewFullResPlan,
       );
+      // Ph2 degrade audit. Census row 7: the preview MUST resolve the same
+      // source Apply will, or the user accepts a cavity that is not what gets
+      // built. Apply already warned on this; the preview swallowed it, so a
+      // degrade was visible only after the irreversible step. Same wording as
+      // Apply so the two read as one event.
+      if (previewFullResPlan && stageResult.degraded) {
+        deps.current.showOperationError(
+          `Hollowing preview used the reduced preview because ${stageResult.degraded.reason}.`,
+        );
+      }
       if (!stageResult.staged) {
         if (notifyUnavailable) {
           deps.current.showOperationError('Hollowing preview is available in DragonFruit Desktop only.');

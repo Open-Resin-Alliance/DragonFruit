@@ -1,4 +1,5 @@
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
+import type { ModelOutputMode } from '@/features/mesh-modifiers/modelOutputPolicy';
 
 /**
  * Frame resolution for the islands sideload (CP2 of the islands sideload
@@ -31,6 +32,13 @@ export interface IslandScanFrameInput {
   sourcePath?: string | null;
   /** The model's scene geometry wrapper. */
   geometry: GeometryWithBounds | null | undefined;
+  /**
+   * The model's effective output mode (Ph2). `'decimated'` means the user chose
+   * to treat the scene mesh AS the original for every Rust round-trip, so the
+   * sideload — which re-reads the ORIGINAL file from disk — must not fire.
+   * Absent means `'original'`, the default.
+   */
+  outputMode?: ModelOutputMode | null;
 }
 
 /** A resolved sideload source: file + the frame datum to reproject it with. */
@@ -53,6 +61,15 @@ export interface IslandScanFrame {
  * (`__tests__/islandScanFrame.test.ts` is its regression lock).
  */
 export function resolveIslandScanFrame(model: IslandScanFrameInput): IslandScanFrame | null {
+  // Ph2 — the Original/Decimated toggle. This resolver is a legitimately
+  // separate one (it returns a FRAME, not geometry), so it cannot inherit the
+  // decision from `resolveFullResSourceForModel`; it takes the same input and
+  // gives the same answer. `decimated` means the scene mesh IS the original for
+  // this model (ruling #12), and the sideload re-reads the file from disk — so
+  // it must not fire, and the caller's client-side scan (frame-correct by
+  // construction) is the right path.
+  if (model.outputMode === 'decimated') return null;
+
   const filePath = typeof model.sourcePath === 'string' && model.sourcePath.trim().length > 0
     ? model.sourcePath
     : null;

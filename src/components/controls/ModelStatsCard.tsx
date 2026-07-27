@@ -8,6 +8,7 @@ import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { useIsLinux } from '@/hooks/usePlatform';
 import { formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
 import { getPreviewBadgeInfo } from '@/utils/previewGeometryDisplay';
+import { resolveModelOutputMode } from '@/features/mesh-modifiers/modelOutputPolicy';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 import {
   getActiveMaterialProfile,
@@ -65,6 +66,43 @@ function formatReducedPreviewDetail(
   return translate(msg({
     message: `Interactive preview: ${previewCount} of ${fullCount} triangles · achieved decimation error ${errorPct} of model extent. Slicing and export use the full-resolution source.`,
     comment: 'Tooltip for the reduced-preview badge on the model details card. {previewCount}/{fullCount} are triangle counts; {errorPct} is the achieved decimation error.',
+  }));
+}
+
+/**
+ * Ph2 honesty text. When the user has switched this model to Decimated, the
+ * old copy ("Slicing and export use the full-resolution source") is a LIE — the
+ * decimated mesh IS what everything consumes now (ruling #12). Two separate
+ * module-scope formatters rather than one with a branch inside, because
+ * interpolating `msg` must stay at module scope (AGENTS.md) and a conditional
+ * message id is exactly what breaks the compiled catalog.
+ */
+function formatDecimatedOutputSummary(
+  translate: (descriptor: MessageDescriptor) => string,
+  errorPct: string | null,
+): string {
+  if (errorPct === null) return translate(msg`Decimated`);
+  return translate(msg({
+    message: `Decimated — ${errorPct} error`,
+    comment: 'Badge on the model details card when the user chose Decimated output for this model. {errorPct} is the achieved decimation error as a percentage of the model extent.',
+  }));
+}
+
+function formatDecimatedOutputDetail(
+  translate: (descriptor: MessageDescriptor) => string,
+  previewCount: string,
+  fullCount: string,
+  errorPct: string | null,
+): string {
+  if (errorPct === null) {
+    return translate(msg({
+      message: `Decimated to ${previewCount} of ${fullCount} triangles. Slicing, export and mesh operations use this reduced mesh — you chose Decimated for this model.`,
+      comment: 'Tooltip for the Decimated badge on the model details card. {previewCount}/{fullCount} are triangle counts.',
+    }));
+  }
+  return translate(msg({
+    message: `Decimated to ${previewCount} of ${fullCount} triangles · achieved decimation error ${errorPct} of model extent. Slicing, export and mesh operations use this reduced mesh — you chose Decimated for this model.`,
+    comment: 'Tooltip for the Decimated badge on the model details card. {previewCount}/{fullCount} are triangle counts; {errorPct} is the achieved decimation error.',
   }));
 }
 
@@ -697,24 +735,29 @@ export function ModelStatsCard({
               const errorPct = typeof previewInfo.achievedError === 'number'
                 ? `${(previewInfo.achievedError * 100).toFixed(2)}%`
                 : null;
-              const summary = formatReducedPreviewSummary(_, errorPct);
-              const detail = formatReducedPreviewDetail(
-                _,
-                formatPolygonCountCompact(previewInfo.previewTriangleCount),
-                formatPolygonCountCompact(previewInfo.originalTriangleCount),
-                errorPct,
-              );
+              // Ph2: the badge and its tooltip must describe what this model
+              // actually sends to Rust, which is now the user's choice.
+              const decimatedOutput = resolveModelOutputMode(model) === 'decimated';
+              const previewCount = formatPolygonCountCompact(previewInfo.previewTriangleCount);
+              const fullCount = formatPolygonCountCompact(previewInfo.originalTriangleCount);
+              const summary = decimatedOutput
+                ? formatDecimatedOutputSummary(_, errorPct)
+                : formatReducedPreviewSummary(_, errorPct);
+              const detail = decimatedOutput
+                ? formatDecimatedOutputDetail(_, previewCount, fullCount, errorPct)
+                : formatReducedPreviewDetail(_, previewCount, fullCount, errorPct);
+              const accent = decimatedOutput ? '#f59e0b' : '#6366f1';
               return (
                 <div
                   className="flex items-start gap-1.5 rounded px-2 py-1 text-[10px]"
                   title={detail}
                   style={{
-                    background: 'color-mix(in srgb, #6366f1, var(--surface-1) 84%)',
-                    color: 'color-mix(in srgb, #6366f1, var(--text-strong) 20%)',
-                    border: '1px solid color-mix(in srgb, #6366f1, transparent 55%)',
+                    background: `color-mix(in srgb, ${accent}, var(--surface-1) 84%)`,
+                    color: `color-mix(in srgb, ${accent}, var(--text-strong) 20%)`,
+                    border: `1px solid color-mix(in srgb, ${accent}, transparent 55%)`,
                   }}
                 >
-                  <span>◔</span>
+                  <span>{decimatedOutput ? '◑' : '◔'}</span>
                   <span className="min-w-0">{summary}</span>
                 </div>
               );

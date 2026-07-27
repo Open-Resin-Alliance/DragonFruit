@@ -412,8 +412,15 @@ export async function repairFromGeometry(
   return { report, positions, usedFullRes };
 }
 
-/** Stages a geometry's triangle soup into the shared staged mesh (raw f32). */
-async function stageGeometrySoupToStagedMesh(
+/**
+ * Stages a geometry's triangle soup into the shared staged mesh (raw f32).
+ *
+ * Exported for `rustAnalysisStaging.ts` (Ph2), which needs the same encoding
+ * for the preview arm of the analysis chokepoint. Callers that mean "stage THIS
+ * MODEL for Rust" should use `stageModelForRustAnalysis` rather than this —
+ * handing it a `BufferGeometry` directly bypasses the output-policy resolver.
+ */
+export async function stageGeometrySoupToStagedMesh(
   invoke: TauriInvoke,
   geometry: THREE.BufferGeometry,
 ): Promise<void> {

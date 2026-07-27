@@ -47,6 +47,7 @@ import {
   type VoxlSceneState,
 } from './types';
 import type { DragonfruitImportFormat } from '@/supports/types';
+import { normalizeOutputPolicyForPersistence } from '@/features/mesh-modifiers/modelOutputPolicy';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -375,6 +376,11 @@ async function prepareVoxlDocumentV2(
         ? { sourcePath: m.sourcePath }
         : {}),
       ...(m.nativePreview ? { nativePreview: m.nativePreview } : {}),
+      // Ph2 Original/Decimated toggle. Same additive discipline: written only
+      // when non-default, so absence keeps the safe full-resolution reading.
+      ...(normalizeOutputPolicyForPersistence(m.outputPolicy)
+        ? { outputPolicy: { mode: 'decimated' as const } }
+        : {}),
       // Written only when true (Ph0.1 D2): a scene with nothing stale must
       // serialize to exactly the bytes it did before the flag existed.
       ...(m.geometryStale === true ? { geometryStale: true } : {}),

@@ -14,6 +14,57 @@ import {
 import { hollowFromGeometry, type HollowOptions } from '@/utils/meshHollowing';
 import { punchFromGeometry, type PunchOptions } from '@/utils/meshPunching';
 import { splitClassifiedSupportGeometry } from '@/features/scene/splitClassifiedSupports';
+import { prefersDecimatedOutput } from './modelOutputPolicy';
+
+/**
+ * ═══ THE RUST-BOUND GEOMETRY CHOKEPOINT (Ph2) ═══════════════════════════════
+ *
+ * ONE question, answered in ONE place: **what geometry does this model send to
+ * Rust?** `resolveFullResSourceForModel` is that place;
+ * `resolveOutputGeometrySource` is its public face, and the staging planners
+ * (`planMutatorFullResStaging`, `planModelRustAnalysisStaging`,
+ * `resolveIslandScanFrame`) are built on it.
+ *
+ * WHY IT IS A CHOKEPOINT AND NOT A CONVENTION. The defect this arc exists to
+ * fix is not that some consumer chose preview geometry — it is that consumers
+ * got preview geometry by SAYING NOTHING. `model.geometry.geometry` is right
+ * there on every model, it always works, and nothing about reaching for it
+ * looks wrong at review time. So the census below is not documentation of a
+ * past audit; it is the enforced partition:
+ *
+ *   ROUTED (must ask this module)      — slicing staging, mesh export, VOXL
+ *                                        embed, hollow apply + preview, hole
+ *                                        punch apply, repair-in-place, islands
+ *                                        sideload, Rust analysis staging (SDF).
+ *   EXPLICIT OPT-OUT (must name it)    — mesh minima (#11), islands client
+ *                                        scan, legacy island scan. See
+ *                                        `PREVIEW_GEOMETRY_OPT_OUT_REASONS`.
+ *   OUTSIDE THE BOUNDARY (no contract) — viewport render, raycast picking,
+ *                                        overlays, thumbnails, arrange hulls,
+ *                                        resin estimates, cache keys. These
+ *                                        never cross into Rust, so they cannot
+ *                                        produce or mutate output.
+ *   DEFERRED TO OTHER DEVS             — the in-progress model cutting tool
+ *                                        (#12). It is not chased here; the
+ *                                        contract it must call is
+ *                                        `resolveOutputGeometrySource(model)`,
+ *                                        returning either
+ *                                        `{kind:'fullres-source-file', sourcePath, cPre, fingerprint}`
+ *                                        or `{kind:'scene-geometry', geometry}`.
+ *                                        Note the FRAME: the slicing transport
+ *                                        reprojects `w = M · (v_raw − cPre)`,
+ *                                        while the permanent mutators stage the
+ *                                        LOCAL centered soup and must use
+ *                                        `T_center = cPre − geometry.center`
+ *                                        (see `fullResMutatorStaging.ts`) —
+ *                                        that confusion is the single most
+ *                                        common way to get this wrong, and it
+ *                                        fails as a whole-model Y shift.
+ *
+ * Full census with anchors and rationale:
+ * `agents/Claude/STL-import-perf/20260718-P0-Consumer-census.md`.
+ * ════════════════════════════════════════════════════════════════════════════
+ */
 
 export type PreparedModelGeometry = {
   model: LoadedModel;
@@ -57,6 +108,69 @@ export type OutputGeometrySource =
 export type FullResSourceFile = Extract<OutputGeometrySource, { kind: 'fullres-source-file' }>;
 
 /**
+ * THE SANCTIONED PREVIEW OPT-OUTS (Ph2).
+ *
+ * A Rust-bound consumer gets its geometry from the chokepoint
+ * ({@link resolveOutputGeometrySource} / {@link resolveFullResSourceForModel},
+ * or the staging planners built on them) — OR it calls
+ * {@link resolvePreviewGeometryForRustConsumer} with one of these reasons.
+ * There is no third way, and SILENCE IS NOT ONE: reaching into
+ * `model.geometry.geometry` directly on a path that ends at a Tauri command is
+ * how a consumer silently acquires preview geometry, which is the defect class
+ * this whole arc exists to eliminate.
+ *
+ * The union is closed on purpose. Adding a preview-consuming Rust caller is
+ * then a reviewed diff in THIS file, next to the census, rather than an
+ * omission at a call site nobody looks at.
+ *
+ * - `mesh-minima-full-model` — user ruling #11: mesh-minima behaviour is
+ *   UNCHANGED and consumes the full model on that path. Preview-fidelity by
+ *   construction; markers still land with correct spatial suppression and
+ *   classification. Locked by a test, not just this comment.
+ * - `islands-client-scan` — the client-side islands fallback. Frame-correct by
+ *   construction (it transforms the scene geometry it was handed); it is the
+ *   path the sideload DEGRADES to, so it must stay preview-sourced.
+ * - `legacy-island-scan` — the Analysis-tab scanner, superseded by the Support
+ *   tab. Preview-sourced, accepted (census row 13).
+ *
+ * NOT in this union, and deliberately outside this contract: viewport render,
+ * raycast picking, overlays, thumbnails, arrange hulls, cache keys. Those never
+ * cross the Rust boundary, so they cannot produce or mutate output; the census
+ * block above classifies them PREVIEW-OK and they consume the scene geometry
+ * directly, as they should.
+ */
+export const PREVIEW_GEOMETRY_OPT_OUT_REASONS = [
+  'mesh-minima-full-model',
+  'islands-client-scan',
+  'legacy-island-scan',
+] as const;
+
+export type PreviewGeometryOptOutReason = typeof PREVIEW_GEOMETRY_OPT_OUT_REASONS[number];
+
+/**
+ * Explicit, named opt-out: hand a Rust-bound consumer the SCENE (possibly
+ * decimated) geometry on purpose. The `reason` is mandatory and enumerated —
+ * that is the whole point of the function; it exists so that "this consumer
+ * uses the preview" is a statement in the code rather than the absence of one.
+ */
+export function resolvePreviewGeometryForRustConsumer(
+  model: PreviewGeometryHolder,
+  reason: PreviewGeometryOptOutReason,
+): THREE.BufferGeometry {
+  void reason;
+  return model.geometry.geometry;
+}
+
+/**
+ * Structural minimum for {@link resolvePreviewGeometryForRustConsumer} — a
+ * `LoadedModel` satisfies it, and so does a bare `{ geometry: GeometryWithBounds }`
+ * (the islands hook holds the wrapper, not the model).
+ */
+export interface PreviewGeometryHolder {
+  geometry: { geometry: THREE.BufferGeometry };
+}
+
+/**
  * Core native-preview → full-resolution-source resolution, WITHOUT the
  * slice-time unbaked-hollowing carve-out below. Returns the full-res file
  * descriptor for a native-preview model that still retains its original
@@ -75,6 +189,23 @@ export type FullResSourceFile = Extract<OutputGeometrySource, { kind: 'fullres-s
  * original; documented Phase-4 limitation.)
  */
 export function resolveFullResSourceForModel(model: LoadedModel): FullResSourceFile | null {
+  // Ph2 — THE TOGGLE, decided HERE and nowhere else.
+  //
+  // User ruling #12: "treat decimated as the original mesh when the user
+  // chooses that toggle." So `decimated` is not a quality setting layered on
+  // top of full-res sourcing — it REPLACES the notion of the original for this
+  // model, for every Rust round-trip, with no per-consumer override.
+  //
+  // It is enforced by returning `null` at this one function rather than by
+  // teaching five call sites about the flag, because every full-res consumer
+  // already has a correct, tested `null` fallback to the scene geometry — that
+  // is the whole reason this resolver exists. A consumer added tomorrow
+  // inherits the behaviour by asking the question at all; one that reaches past
+  // this function for `model.geometry.geometry` is the failure mode the census
+  // block above and `resolvePreviewGeometryForRustConsumer` exist to make
+  // visible.
+  if (prefersDecimatedOutput(model)) return null;
+
   const nativePreview = model.geometry.nativePreview;
   const sourcePath = typeof model.sourcePath === 'string' && model.sourcePath.trim().length > 0
     ? model.sourcePath
