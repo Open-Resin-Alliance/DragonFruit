@@ -181,6 +181,14 @@ export function useSceneAutosave({
           { nativePath: voxlPath },
         );
 
+        // Ordering is load-bearing and must stay this way: payload first, then
+        // manifest. `exportScene` above commits the VOXL through the atomic
+        // writer (temp → fsync → rename, ExportManager.downloadFile), so by the
+        // time the manifest is written the file it advertises is guaranteed to
+        // be complete. A manifest written first — or written on a failed
+        // export — would point recovery at a file that may not exist or may be
+        // half a scene. Sub-phase B extends this manifest with the payload path
+        // and origin; that only stays trustworthy while this order holds.
         const savedAt = new Date().toISOString();
         await writeManifest(savedAt, false);
         setLastAutosaveAt(savedAt);

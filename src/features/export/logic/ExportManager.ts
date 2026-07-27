@@ -6,7 +6,7 @@ import { resolveModelMeshModifiers } from '@/features/mesh-modifiers/meshModifie
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
 import { buildSupportExportFromStores, serializeVoxlDocumentV2 } from '@/features/scene/voxl';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
-import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, spliceFullResMeshIntoStageFile, writeChunkedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
+import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, spliceFullResMeshIntoStageFile, writeChunkedToNativePath, writeFileAtomicToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { resolveOutputGeometrySource } from '@/features/mesh-modifiers/prepareModelGeometry';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getSnapshot } from '@/supports/state';
@@ -1404,6 +1404,19 @@ export class ExportManager {
     );
   }
 
+  /**
+   * Which exported formats must be committed atomically rather than written in
+   * place. A scene file IS the user's document — losing it to an interrupted
+   * overwrite is unrecoverable data loss — whereas a mesh export is a
+   * regenerable artifact.
+   *
+   * Exported for the shared-seam test: this predicate, not the caller, decides
+   * whether a given save is crash-safe.
+   */
+  static requiresAtomicCommit(extension: string): boolean {
+    return extension.trim().toLowerCase() === 'voxl';
+  }
+
   private static async downloadFile(
     data: DataView | Uint8Array | string,
     filename: string,
@@ -1423,12 +1436,31 @@ export class ExportManager {
         ? data
         : new TextEncoder().encode(data);
 
+    // The shared write seam (Ph0.1 sub-phase A, finding N1).
+    //
+    // Scene files go through the atomic writer: temp → fsync → rename. The
+    // truncate-first chunked writer destroyed the destination before the first
+    // byte of the new payload landed, so a crash mid-write left a truncated file
+    // with no fallback.
+    //
+    // Autosave and explicit save BOTH arrive here — autosave via
+    // `useSceneAutosave.performAutosave` → `exportScene({nativePath})`, Ctrl+S
+    // via the same `exportScene` with a picked path — so this one branch is what
+    // makes both crash-safe. Do not fork them into separate writers.
+    //
+    // STL/3MF keep the raw chunked writer: they are new-file exports rather than
+    // overwrites of the working document, and 3MF's native path additionally
+    // depends on the existing truncate-on-fresh-appender semantics.
+    const writeNative = this.requiresAtomicCommit(extension)
+      ? writeFileAtomicToNativePath
+      : writeChunkedToNativePath;
+
     // If a native path was already picked before heavy work started, write directly.
     let nativeDestinationPath = prePickedNativePath;
 
     if (nativeDestinationPath && useNativeWrite) {
       try {
-        await writeChunkedToNativePath(nativeDestinationPath, bytes);
+        await writeNative(nativeDestinationPath, bytes);
         return nativeDestinationPath;
       } catch (error) {
         console.warn('[ExportManager] Chunked write failed, retrying with a fresh save destination.', error);
@@ -1440,7 +1472,7 @@ export class ExportManager {
       // Fallback: try native dialog + write (e.g. VOXL path that doesn't pre-pick)
       try {
         const destinationPath = await pickSavePathWithNativeDialog(resolvedFilename);
-        await writeChunkedToNativePath(destinationPath, bytes);
+        await writeNative(destinationPath, bytes);
         return destinationPath;
       } catch (error) {
         const message = this.getErrorMessage(error);

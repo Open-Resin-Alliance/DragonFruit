@@ -108,6 +108,237 @@ fn temp_artifact_path(extension: &str) -> std::path::PathBuf {
     path
 }
 
+/// Marker that identifies a scene-file commit temp. Must stay byte-identical:
+/// `is_scene_commit_temp_path` gates the discard command on it, so an arbitrary
+/// caller-supplied path can never be deleted through that seam.
+const SCENE_COMMIT_TEMP_MARKER: &str = ".tmp-";
+
+/// Allocates the staging file for an atomic scene-file commit, as a **sibling**
+/// of the target: `<target>.tmp-<pid>-<seq>`.
+///
+/// Sibling by construction is what makes the commit atomic — `fs::rename` is
+/// only guaranteed atomic within a volume, and a temp-dir staging file can
+/// easily be on a different one (a project on D:, `%TEMP%` on C:).
+///
+/// pid + a process-wide counter, the same idiom as
+/// `allocate_mesh_stage_file_path` / `temp_artifact_path` above: nanos alone are
+/// NOT unique because Windows `SystemTime` granularity lets two concurrent
+/// allocations land in the same tick, and the consumer opens with
+/// `truncate(true)` — two in-flight saves sharing a name would let one overwrite
+/// the other's staging bytes and then rename the wrong content over the user's
+/// project. Unlike those two helpers the nanos stamp is deliberately **omitted**
+/// here: these temps live next to the user's project rather than in `%TEMP%`,
+/// and a bounded per-process name space means a hard crash leaves at most one
+/// residue file per concurrent write (reused and truncated by a later run)
+/// instead of an unbounded pile of dead files in the user's folder.
+fn sibling_commit_temp_path(target: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    static COMMIT_TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    let file_name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            format!(
+                "Cannot stage an atomic commit for '{}': no UTF-8 file name",
+                target.display()
+            )
+        })?;
+
+    let parent = target.parent().unwrap_or_else(|| std::path::Path::new("."));
+    if !parent.as_os_str().is_empty() {
+        std::fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "Failed creating destination directory '{}': {err}",
+                parent.display()
+            )
+        })?;
+    }
+
+    Ok(parent.join(format!(
+        "{file_name}{SCENE_COMMIT_TEMP_MARKER}{}-{}",
+        std::process::id(),
+        COMMIT_TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    )))
+}
+
+fn is_scene_commit_temp_path(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| {
+            let Some((_, suffix)) = name.rsplit_once(SCENE_COMMIT_TEMP_MARKER) else {
+                return false;
+            };
+            let mut parts = suffix.split('-');
+            let pid_ok = parts
+                .next()
+                .map(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+                .unwrap_or(false);
+            let seq_ok = parts
+                .next()
+                .map(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+                .unwrap_or(false);
+            pid_ok && seq_ok && parts.next().is_none()
+        })
+        .unwrap_or(false)
+}
+
+const SCENE_COMMIT_RENAME_BACKOFF_MS: [u64; 3] = [50, 150, 300];
+
+/// Commits a fully-written staging file over `target` atomically: fsync the
+/// temp, then rename it into place. Either the reader sees the previous good
+/// file or it sees the new one — never a truncated prefix of either.
+///
+/// The bounded retry is a Windows concession: a rename can transiently fail with
+/// `ERROR_ACCESS_DENIED` / `ERROR_SHARING_VIOLATION` while an antivirus scanner
+/// or an Explorer thumbnailer holds the destination open.
+///
+/// On terminal failure the temp is removed and the **previous good target is
+/// left untouched** — strictly better than the pre-Ph0.1 writer, which had
+/// already destroyed it by the time anything could fail.
+fn commit_scene_file_atomic(
+    temp: &std::path::Path,
+    target: &std::path::Path,
+) -> Result<(), String> {
+    if !temp.exists() {
+        return Err(format!(
+            "Atomic commit staging file is missing: {}",
+            temp.display()
+        ));
+    }
+
+    // fsync the payload BEFORE the rename, or a power loss can leave the
+    // rename durable while the bytes it points at are not.
+    //
+    // Opened for write rather than read-only (the obvious choice on unix):
+    // Windows `FlushFileBuffers` requires write access to the handle, so a
+    // read-only handle would fail with ERROR_ACCESS_DENIED on the platform this
+    // ships to first.
+    let sync_result = std::fs::OpenOptions::new()
+        .write(true)
+        .open(temp)
+        .and_then(|file| file.sync_all());
+    if let Err(err) = sync_result {
+        let _ = std::fs::remove_file(temp);
+        return Err(format!(
+            "Failed flushing '{}' to disk before commit: {err}",
+            temp.display()
+        ));
+    }
+
+    let mut last_error: Option<String> = None;
+    for (attempt, backoff_ms) in SCENE_COMMIT_RENAME_BACKOFF_MS.iter().enumerate() {
+        match std::fs::rename(temp, target) {
+            Ok(()) => {
+                // Best-effort directory fsync so the rename itself is durable.
+                // No portable Windows equivalent (a directory cannot be opened
+                // as a file), where NTFS metadata journalling covers it.
+                #[cfg(unix)]
+                {
+                    if let Some(parent) = target.parent() {
+                        if let Ok(dir) = std::fs::File::open(parent) {
+                            let _ = dir.sync_all();
+                        }
+                    }
+                }
+                return Ok(());
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+                if attempt + 1 < SCENE_COMMIT_RENAME_BACKOFF_MS.len() {
+                    std::thread::sleep(std::time::Duration::from_millis(*backoff_ms));
+                }
+            }
+        }
+    }
+
+    let _ = std::fs::remove_file(temp);
+    Err(format!(
+        "Failed committing '{}' over '{}' after {} attempts: {}",
+        temp.display(),
+        target.display(),
+        SCENE_COMMIT_RENAME_BACKOFF_MS.len(),
+        last_error.unwrap_or_else(|| "unknown error".to_string()),
+    ))
+}
+
+/// **User invariant: autosave ALWAYS writes `.voxl`.**
+///
+/// Deliberately NOT `is_scene_file_path`, which also accepts every plugin scene
+/// extension (`BUILTIN_PLUGIN_SCENE_EXTENSIONS`). Autosave emits VOXL bytes, so
+/// a plugin-format project must never be handed back as the autosave target —
+/// that would write VOXL into a file whose extension promises a foreign format.
+/// Such projects fall back to the generic recovery location, which is a `.voxl`
+/// by construction. (Sub-phase B replaces the fallback with a proper
+/// `<stem>_autosave.voxl` sidecar; this invariant holds either way.)
+fn is_voxl_autosave_target(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.trim().trim_start_matches('.').eq_ignore_ascii_case("voxl"))
+        .unwrap_or(false)
+}
+
+/// Allocates the sibling staging path for an atomic scene-file write.
+#[tauri::command]
+async fn scene_file_begin_atomic_write(target_path: String) -> Result<String, String> {
+    let trimmed = target_path.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("scene_file_begin_atomic_write requires a non-empty target path".into());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let temp = sibling_commit_temp_path(std::path::Path::new(&trimmed))?;
+        Ok(temp.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|err| format!("scene_file_begin_atomic_write task failed: {err}"))?
+}
+
+/// fsync + atomic rename of a staged scene file over its destination.
+#[tauri::command]
+async fn scene_file_commit_atomic(temp_path: String, target_path: String) -> Result<(), String> {
+    let temp = temp_path.trim().to_string();
+    let target = target_path.trim().to_string();
+    if temp.is_empty() || target.is_empty() {
+        return Err("scene_file_commit_atomic requires non-empty temp and target paths".into());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        commit_scene_file_atomic(std::path::Path::new(&temp), std::path::Path::new(&target))
+    })
+    .await
+    .map_err(|err| format!("scene_file_commit_atomic task failed: {err}"))?
+}
+
+/// Removes an abandoned commit staging file (the write failed before commit),
+/// so a failed save does not litter the user's project folder.
+///
+/// Gated on `is_scene_commit_temp_path`: this command can only ever delete a
+/// path this process's own allocator could have produced, never an arbitrary
+/// caller-supplied file.
+#[tauri::command]
+async fn scene_file_discard_atomic_temp(temp_path: String) -> Result<(), String> {
+    let temp = temp_path.trim().to_string();
+    if temp.is_empty() {
+        return Err("scene_file_discard_atomic_temp requires a non-empty path".into());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = std::path::Path::new(&temp);
+        if !is_scene_commit_temp_path(path) {
+            return Err(format!(
+                "Refusing to discard '{temp}': not a scene-file commit temp"
+            ));
+        }
+        if path.exists() {
+            std::fs::remove_file(path)
+                .map_err(|err| format!("Failed discarding commit temp '{temp}': {err}"))?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|err| format!("scene_file_discard_atomic_temp task failed: {err}"))?
+}
+
 fn is_dragonfruit_temp_artifact(path: &std::path::Path) -> bool {
     let file_name_ok = path
         .file_name()
@@ -1027,12 +1258,6 @@ async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64
         return Err("append_mesh_stage_chunk received empty x-mesh-stage-path header".into());
     }
 
-    let path = std::path::PathBuf::from(path_text);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|err| format!("Failed creating mesh stage directory: {err}"))?;
-    }
-
     let offset_header = request.headers().get("x-mesh-stage-offset");
     let is_first_chunk = match offset_header {
         Some(value) => {
@@ -1051,9 +1276,53 @@ async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64
         None => false,
     };
 
+    stage_append_chunk(path_text, bytes, is_first_chunk)
+}
+
+/// Body of `append_mesh_stage_chunk`, extracted from the `#[tauri::command]`
+/// wrapper so the writer's crash-safety and contention contracts can be driven
+/// directly from unit tests (a `tauri::ipc::Request` cannot be constructed in
+/// one). Behaviour is byte-for-byte the pre-extraction behaviour apart from the
+/// explicitly-documented contention backstop below.
+pub(crate) fn stage_append_chunk(
+    path_text: &str,
+    bytes: &[u8],
+    is_first_chunk: bool,
+) -> Result<u64, String> {
+    let path = std::path::PathBuf::from(path_text);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("Failed creating mesh stage directory: {err}"))?;
+    }
+
     let mut appender_lock = staged_mesh_file_appender()
         .lock()
         .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
+
+    // Contention backstop (Ph0.1 A / finding N2). There is exactly ONE
+    // process-global appender. A mid-sequence chunk (offset != 0) that arrives
+    // while a *different* path owns the appender means two chunked writes are
+    // interleaving: the previous code silently evicted the other writer and
+    // re-opened with truncate(true), so this chunk landed at offset 0 and the
+    // other writer's bytes were destroyed — both files corrupt, no error.
+    // The frontend single-flight queue (`runExclusiveNativeWrite` in
+    // nativeSlicerBridge.ts) makes this unreachable for callers that go through
+    // it; this backstop covers the one caller that streams chunks directly
+    // (`sliceExportOrchestrator.handleMeshFileChunk`). A loud error beats two
+    // silently corrupt files.
+    //
+    // Deliberately NOT extended to the `None` case: `handleMeshFileChunk` sends
+    // no `x-mesh-stage-offset` header at all, so *every* chunk of a slice stage
+    // is `is_first_chunk == false` and relies on the `None` branch to open its
+    // file. Erroring there would break slicing outright.
+    if let Some(existing) = appender_lock.as_ref() {
+        if !is_first_chunk && existing.path != path_text {
+            return Err(format!(
+                "concurrent mesh-stage write detected: '{}' is mid-write while a chunk arrived for '{}'",
+                existing.path, path_text
+            ));
+        }
+    }
 
     let needs_new_appender = match appender_lock.as_ref() {
         Some(existing) => is_first_chunk || existing.path != path_text,
@@ -1100,6 +1369,12 @@ async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64
 
 #[tauri::command]
 async fn finish_mesh_stage_write(path: String) -> Result<u64, String> {
+    finish_stage_write(&path)
+}
+
+/// Body of `finish_mesh_stage_write`, extracted for the same reason as
+/// `stage_append_chunk`.
+pub(crate) fn finish_stage_write(path: &str) -> Result<u64, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return Err("finish_mesh_stage_write requires a non-empty path".into());
@@ -2323,13 +2598,19 @@ async fn scene_autosave_get_paths(
 
         // Determine VOXL autosave path: if user has explicitly saved to a .voxl file,
         // autosave directly to that file. Otherwise use the generic recovery location.
+        //
+        // The predicate is `is_voxl_autosave_target`, NOT `is_scene_file_path`:
+        // autosave emits VOXL bytes, and `is_scene_file_path` also accepts every
+        // plugin scene extension, so a project saved as e.g. `MyPrint.lys` used
+        // to be returned verbatim and then filled with VOXL. Autosave ALWAYS
+        // writes `.voxl` — see `is_voxl_autosave_target` and its test.
         let voxl_path = if let Some(preferred) = preferred_save_path {
             let path = std::path::Path::new(&preferred);
-            if is_scene_file_path(path) && path.exists() {
-                // User has explicitly saved; autosave directly to that file
+            if is_voxl_autosave_target(path) && path.exists() {
+                // User has explicitly saved to a VOXL project; autosave to it
                 preferred
             } else {
-                // Not a valid scene file or doesn't exist; fall back to generic recovery
+                // Not a VOXL scene file or doesn't exist; fall back to generic recovery
                 dir.join(SCENE_AUTOSAVE_VOXL_FILE)
                     .to_string_lossy()
                     .to_string()
@@ -3320,6 +3601,9 @@ fn main() {
             allocate_mesh_stage_path,
             append_mesh_stage_chunk,
             finish_mesh_stage_write,
+            scene_file_begin_atomic_write,
+            scene_file_commit_atomic,
+            scene_file_discard_atomic_temp,
             stage_mesh_file_path,
             stage_mesh_binary_set,
             stage_mesh_binary_chunk,
@@ -3423,6 +3707,355 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    // -----------------------------------------------------------------------
+    // Shared writer-test scaffolding (Ph0.1 sub-phase A)
+    // -----------------------------------------------------------------------
+
+    /// `append_mesh_stage_chunk` owns ONE process-global appender, so every test
+    /// that drives the writer must run alone. `cargo test` runs tests on
+    /// parallel threads by default; without this they would evict each other's
+    /// appenders and go flaky for the very reason sub-phase A exists.
+    static WRITER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_writer_tests() -> std::sync::MutexGuard<'static, ()> {
+        let guard = WRITER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // A test that simulated a crash leaves the appender open; start clean.
+        *super::staged_mesh_file_appender()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        guard
+    }
+
+    /// pid + process-wide sequence, same rationale as
+    /// `allocate_mesh_stage_file_path`: nanos alone collide on Windows.
+    fn unique_test_dir(tag: &str) -> std::path::PathBuf {
+        static TEST_DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "dragonfruit-test-{tag}-{}-{}",
+            std::process::id(),
+            TEST_DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("failed creating test dir");
+        dir
+    }
+
+    /// Mirrors the frontend's native VOXL write seam
+    /// (`ExportManager.downloadFile` → `writeFileAtomicToNativePath`, which both
+    /// autosave and explicit save funnel through) so the crash-safety invariant
+    /// is asserted against the real writer rather than a paraphrase of it.
+    /// `interrupt_after_bytes` models the process dying mid-write: chunks stop
+    /// and nothing commits, exactly as a kill would leave things.
+    fn voxl_write_seam(
+        target: &std::path::Path,
+        bytes: &[u8],
+        interrupt_after_bytes: Option<usize>,
+    ) -> Result<(), String> {
+        let temp = super::sibling_commit_temp_path(target)?;
+        let temp_text = temp.to_string_lossy().to_string();
+        let cut = interrupt_after_bytes.unwrap_or(bytes.len()).min(bytes.len());
+
+        super::stage_append_chunk(&temp_text, &bytes[..cut], true)?;
+        if interrupt_after_bytes.is_some() {
+            // Process dies here: no further chunks, no finish, no commit.
+            return Ok(());
+        }
+        super::stage_append_chunk(&temp_text, &bytes[cut..], false)?;
+        super::finish_stage_write(&temp_text)?;
+        super::commit_scene_file_atomic(&temp, target)
+    }
+
+    /// **The data-loss regression.** Before sub-phase A the seam wrote straight
+    /// to the destination with `truncate(true)` on chunk 0
+    /// (`append_mesh_stage_chunk`), so a crash between truncate and the last
+    /// chunk left a truncated scene file and no fallback — the user's project
+    /// destroyed by an autosave tick or a Ctrl+S that never finished.
+    #[test]
+    fn interrupted_voxl_write_preserves_previous_good_file() {
+        let _guard = lock_writer_tests();
+        let dir = unique_test_dir("atomic-commit");
+        let target = dir.join("MyPrint.voxl");
+
+        let good: Vec<u8> = (0..64u32).flat_map(|i| i.to_le_bytes()).collect();
+        voxl_write_seam(&target, &good, None).expect("initial good write failed");
+        assert_eq!(
+            std::fs::read(&target).expect("good file unreadable"),
+            good,
+            "the baseline write did not produce the expected file"
+        );
+
+        let replacement = vec![0xABu8; 4096];
+        let _ = voxl_write_seam(&target, &replacement, Some(1024));
+
+        assert_eq!(
+            std::fs::read(&target).expect("previous good file no longer exists"),
+            good,
+            "an interrupted write destroyed the previous good scene file"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The happy path of the commit: the target becomes the temp's bytes and no
+    /// `.tmp-` residue is left beside the user's project.
+    #[test]
+    fn commit_atomic_replaces_target_and_removes_temp() {
+        let _guard = lock_writer_tests();
+        let dir = unique_test_dir("atomic-replace");
+        let target = dir.join("MyPrint.voxl");
+        std::fs::write(&target, b"old contents").expect("seed write failed");
+
+        let temp = super::sibling_commit_temp_path(&target).expect("temp alloc failed");
+        std::fs::write(&temp, b"new contents").expect("temp write failed");
+        super::commit_scene_file_atomic(&temp, &target).expect("commit failed");
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"new contents");
+        assert!(!temp.exists(), "commit left a temp file beside the project");
+        let residue: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains(".tmp-"))
+            .collect();
+        assert!(residue.is_empty(), "temp residue left behind: {residue:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Terminal failure must be strictly better than the old behaviour: the
+    /// previous good target survives, the temp is cleaned up, and the caller
+    /// gets an `Err` instead of a silently destroyed file.
+    #[test]
+    fn commit_atomic_leaves_target_intact_when_rename_fails() {
+        let _guard = lock_writer_tests();
+        let dir = unique_test_dir("atomic-fail");
+        // A directory can never be replaced by a file rename on any platform.
+        let target = dir.join("MyPrint.voxl");
+        std::fs::create_dir_all(&target).expect("failed creating blocking directory");
+        std::fs::write(target.join("sentinel.txt"), b"still here").expect("sentinel write failed");
+
+        let temp = super::sibling_commit_temp_path(&target).expect("temp alloc failed");
+        std::fs::write(&temp, b"new contents").expect("temp write failed");
+
+        let result = super::commit_scene_file_atomic(&temp, &target);
+        assert!(result.is_err(), "commit onto a directory should fail");
+        assert_eq!(
+            std::fs::read(target.join("sentinel.txt")).unwrap(),
+            b"still here",
+            "a failed commit damaged the previous target"
+        );
+        assert!(!temp.exists(), "a failed commit left its temp behind");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Same collision geometry as the two allocator races already pinned below:
+    /// the commit temp is created with truncate, so two same-tick allocations
+    /// sharing a name would let one in-flight save overwrite another's staging
+    /// file and then rename the wrong bytes over the user's project.
+    #[test]
+    fn sibling_commit_temp_paths_are_unique_under_concurrent_allocation() {
+        const THREADS: usize = 8;
+        const ALLOCS_PER_THREAD: usize = 64;
+
+        let dir = unique_test_dir("temp-uniqueness");
+        let target = std::sync::Arc::new(dir.join("MyPrint.voxl"));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let barrier = std::sync::Arc::clone(&barrier);
+                let target = std::sync::Arc::clone(&target);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    (0..ALLOCS_PER_THREAD)
+                        .map(|_| {
+                            super::sibling_commit_temp_path(&target)
+                                .expect("commit temp allocation failed")
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        let mut all_paths = std::collections::HashSet::new();
+        for handle in handles {
+            for path in handle.join().expect("allocator thread panicked") {
+                assert_eq!(
+                    path.parent(),
+                    target.parent(),
+                    "commit temp must be a sibling of the target, or the rename is not atomic"
+                );
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .expect("commit temp path has a UTF-8 file name")
+                    .to_string();
+                assert!(
+                    name.starts_with("MyPrint.voxl.tmp-"),
+                    "commit temp name lost its contract: {name}"
+                );
+                assert!(
+                    super::is_scene_commit_temp_path(&path),
+                    "discard guard no longer recognizes its own temp: {name}"
+                );
+                assert!(all_paths.insert(path), "duplicate commit temp allocated");
+            }
+        }
+        assert_eq!(all_paths.len(), THREADS * ALLOCS_PER_THREAD);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Finding N2.** Two chunked writes to different paths used to evict each
+    /// other from the single process-global appender and re-truncate on every
+    /// switch-back — writer A's committed chunks destroyed, its next chunk
+    /// landing at offset 0, both files corrupt, and no error anywhere.
+    #[test]
+    fn concurrent_stage_writes_error_instead_of_truncating() {
+        let _guard = lock_writer_tests();
+        let dir = unique_test_dir("stage-contention");
+        let path_a = dir.join("a.bin").to_string_lossy().to_string();
+        let path_b = dir.join("b.bin").to_string_lossy().to_string();
+
+        // Writer A opens and writes its first chunk.
+        super::stage_append_chunk(&path_a, &[0xAA; 512], true).expect("writer A chunk 0 failed");
+        // Writer B interleaves with its own first chunk (evicts A's appender).
+        super::stage_append_chunk(&path_b, &[0xBB; 512], true).expect("writer B chunk 0 failed");
+        // A resumes mid-sequence. This is the corruption point.
+        let resumed = super::stage_append_chunk(&path_a, &[0xAA; 512], false);
+
+        assert!(
+            resumed.is_err(),
+            "an interleaved mid-sequence chunk was accepted — it silently re-truncated '{path_a}'"
+        );
+        let message = resumed.unwrap_err();
+        assert!(
+            message.contains("concurrent mesh-stage write detected"),
+            "contention error lost its identity: {message}"
+        );
+
+        *super::staged_mesh_file_appender()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Guard on the contention backstop itself: it must not fire on the ordinary
+    /// sequence of a *second* stage write.
+    ///
+    /// `stage_mesh_file_path` flushes the appender but deliberately does not
+    /// close it, and an aborted slice never reaches that call at all — so the
+    /// previous stage file's appender is routinely still open when the next
+    /// slice's first chunk arrives. That chunk must truncate its own new file,
+    /// not be rejected as an interleave, or the second slice of every session
+    /// (and every slice after an abort) would fail.
+    ///
+    /// This is what `sliceExportOrchestrator.handleMeshFileChunk`'s
+    /// `x-mesh-stage-offset` header buys: chunk 0 is identifiable.
+    #[test]
+    fn sequential_stage_writes_after_an_abandoned_one_still_succeed() {
+        let _guard = lock_writer_tests();
+        let dir = unique_test_dir("stage-sequential");
+        let first = dir.join("stage-1.bin").to_string_lossy().to_string();
+        let second = dir.join("stage-2.bin").to_string_lossy().to_string();
+
+        // Slice 1 streams and is abandoned (aborted) — appender left open.
+        super::stage_append_chunk(&first, &[0x11; 256], true).expect("stage 1 chunk 0 failed");
+        super::stage_append_chunk(&first, &[0x11; 256], false).expect("stage 1 chunk 1 failed");
+
+        // Slice 2 starts a brand-new stage file while that appender is open.
+        super::stage_append_chunk(&second, &[0x22; 256], true).expect(
+            "a new stage write was rejected as an interleave — the backstop is too aggressive",
+        );
+        super::stage_append_chunk(&second, &[0x22; 256], false).expect("stage 2 chunk 1 failed");
+        super::finish_stage_write(&second).expect("stage 2 finish failed");
+
+        assert_eq!(
+            std::fs::read(&second).unwrap().len(),
+            512,
+            "chunk 0 of a new stage file must truncate, not append to stale bytes"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **User invariant: autosave ALWAYS writes `.voxl`.** `is_scene_file_path`
+    /// also accepts the plugin scene extensions, so a project saved in a plugin
+    /// format used to be handed back verbatim as the autosave target — VOXL
+    /// bytes written into a file whose extension promises a foreign format.
+    #[test]
+    fn autosave_target_is_always_voxl_for_plugin_scene_extensions() {
+        for ext in super::BUILTIN_PLUGIN_SCENE_EXTENSIONS {
+            let candidate = std::path::PathBuf::from(format!("C:/projects/MyPrint.{ext}"));
+            assert!(
+                super::is_scene_file_path(&candidate),
+                "test fixture is not a recognised scene file: {}",
+                candidate.display()
+            );
+            assert!(
+                !super::is_voxl_autosave_target(&candidate),
+                "autosave would have written VOXL bytes into a .{ext} file"
+            );
+        }
+
+        assert!(super::is_voxl_autosave_target(std::path::Path::new(
+            "C:/projects/MyPrint.voxl"
+        )));
+        assert!(super::is_voxl_autosave_target(std::path::Path::new(
+            "C:/projects/MyPrint.VOXL"
+        )));
+        assert!(!super::is_voxl_autosave_target(std::path::Path::new(
+            "C:/projects/MyPrint.stl"
+        )));
+        assert!(!super::is_voxl_autosave_target(std::path::Path::new(
+            "C:/projects/MyPrint"
+        )));
+    }
+
+    /// **RED — NOT OWNED BY Ph0.1. DO NOT "FIX" BY LOOSENING TRUNCATE.**
+    ///
+    /// Corollary of finding N2. `writeChunkedToNativePath`'s `finally` always
+    /// calls `finish_mesh_stage_write` (nativeSlicerBridge.ts:597-607), which
+    /// drops the appender, and every call restarts at offset 0 — so *every*
+    /// call re-opens with `truncate(true)`. `streamZipToNativePath`
+    /// (ExportManager.ts:655-706) makes three sequential calls to the same path
+    /// and its docstring (:642-654) asserts append-on-subsequent. That
+    /// assertion is false: native 3MF export emits only its postamble.
+    ///
+    /// This test reproduces that call shape exactly and asserts the docstring's
+    /// contract, so it fails. It is `#[ignore]`d rather than deleted so the
+    /// suite stays green while the defect stays on the record.
+    ///
+    /// Owner: the 3MF export team — fix in `streamZipToNativePath` (e.g. a
+    /// single write sequence, or an explicit append mode), NOT by weakening
+    /// `append_mesh_stage_chunk`'s truncate-on-fresh-appender semantics, which
+    /// mesh staging and Ph0.1's atomic commit both depend on.
+    #[test]
+    #[ignore = "RED: pins the known native-3MF truncation defect (N2 corollary); owned by the 3MF export team, not Ph0.1"]
+    fn native_3mf_sequential_writes_append_instead_of_truncating() {
+        let _guard = lock_writer_tests();
+        let dir = unique_test_dir("3mf-corollary");
+        let path = dir.join("model.3mf").to_string_lossy().to_string();
+
+        // Exactly what streamZipToNativePath does: three separate
+        // writeChunkedToNativePath calls to one path, each starting at offset 0
+        // and each closing the appender in its `finally`.
+        for payload in [b"PREAMBLE".as_slice(), b"XMLXMLXML", b"POSTAMBLE"] {
+            super::stage_append_chunk(&path, payload, true).expect("3mf chunk write failed");
+            super::finish_stage_write(&path).expect("3mf finish failed");
+        }
+
+        let written = std::fs::read(&path).expect("3mf output unreadable");
+        assert_eq!(
+            written, b"PREAMBLEXMLXMLXMLPOSTAMBLE",
+            "native 3MF export is emitting only its last write — the ZIP has no local headers and no model data"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Two same-tick allocations used to return the SAME stage path (nanos-only
     /// name), and the append-mode consumer would interleave both writers into
     /// one file with no error. The barrier maximizes same-tick pressure; the

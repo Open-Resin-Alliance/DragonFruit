@@ -583,6 +583,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                 ? 'single-shot'
                 : 'streamed';
     let meshStageFilePath: string | null = null;
+    /** Byte offset of the next chunk in the file-backed stage sequence. */
+    let meshStageFileOffset = 0;
 
     if (fullResCandidateIds.size > 0) {
         logDebug('Full-res splice candidates force streamed staging', {
@@ -668,10 +670,21 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         maybeEmitStageProgress();
 
         const appendStart = performance.now();
+        // The offset header is what makes this a well-formed chunk sequence:
+        // chunk 0 truncates, later chunks append, and Rust's contention backstop
+        // (`stage_append_chunk`) can tell "starting a new stage file" from
+        // "resuming mid-sequence after another writer stole the appender".
+        // Without it every chunk looked mid-sequence and the first one relied on
+        // the appender happening to be closed — which it is not after an aborted
+        // stage write, and which would append to stale bytes rather than
+        // truncating.
+        const chunkOffset = meshStageFileOffset;
+        meshStageFileOffset += transportChunk.byteLength;
         const appendedLen = await invoke<number>('append_mesh_stage_chunk', transportChunk, {
             headers: {
                 'Content-Type': 'application/octet-stream',
                 'x-mesh-stage-path': meshStageFilePath,
+                'x-mesh-stage-offset': String(chunkOffset),
             },
         });
         stageMeshIpcMs += performance.now() - appendStart;
