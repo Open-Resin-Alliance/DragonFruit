@@ -1207,13 +1207,7 @@ fn cmd_slice_run(
         model_triangle_count: (flat.len() / 9) as u32,
         mirror_x,
         mirror_y,
-<<<<<<< HEAD
         z_blend_look_back,
-        z_blend_fade_px: 20,
-        z_blend_auto_fade: true,
-=======
-        z_blend_look_back: 2,
->>>>>>> dev
         z_blend_minimum_alpha_percent: 0.0,
         z_blend_max_alpha_percent: 90.0,
         z_blend_custom_lut: None,
