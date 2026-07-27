@@ -94,21 +94,198 @@ interface ChunkDirEntry {
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
+// ─── Size limits (Ph0.1 sub-phase D1) ─────────────────────────────────────────
+
+/**
+ * The container addresses chunk offsets, `compSize` and `rawSize` with `u32`
+ * (`:290-292`). Past this, offsets wrap and the writer emits a file that parses
+ * and is silently wrong. There was no writer guard at all.
+ */
+export const VOXL_SIZE_LIMIT_BYTES = 0xFFFF_FFFF;
+
+/**
+ * Explicit saves warn here rather than failing. The ceiling is approached fast
+ * once Ph5 embeds originals — one 4M preview plus one 11.24M original is
+ * ~654 MiB, so six such models reach it.
+ */
+export const VOXL_SIZE_SOFT_WARN_BYTES = Math.floor(3.5 * 1024 * 1024 * 1024);
+
+export interface VoxlChunkSizeInfo {
+  type: string;
+  index: number;
+  compressedSize: number;
+  uncompressedSize: number;
+}
+
+export interface VoxlSizeBreakdownRow {
+  index: number;
+  name: string;
+  compressedBytes: number;
+  uncompressedBytes: number;
+}
+
+const formatGb = (bytes: number): string => `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+
+/** Latch so the soft warning fires once per approach, not once per 30 s tick. */
+let softLimitWarned = false;
+
+/**
+ * Thrown **before** any allocation. Carries the measured total and the per-model
+ * breakdown so the caller can tell the user which model to remove rather than
+ * reporting a bare failure.
+ */
+export class VoxlSizeLimitError extends Error {
+  readonly totalBytes: number;
+
+  readonly limitBytes: number;
+
+  readonly oversizeChunks: VoxlChunkSizeInfo[];
+
+  readonly perModelBreakdown: VoxlSizeBreakdownRow[];
+
+  /** The sentence a modal / toast shows verbatim. */
+  readonly userMessage: string;
+
+  constructor(args: {
+    totalBytes: number;
+    oversizeChunks: VoxlChunkSizeInfo[];
+    perModelBreakdown: VoxlSizeBreakdownRow[];
+    userMessage: string;
+  }) {
+    super(args.userMessage);
+    this.name = 'VoxlSizeLimitError';
+    this.totalBytes = args.totalBytes;
+    this.limitBytes = VOXL_SIZE_LIMIT_BYTES;
+    this.oversizeChunks = args.oversizeChunks;
+    this.perModelBreakdown = args.perModelBreakdown;
+    this.userMessage = args.userMessage;
+  }
+}
+
+/**
+ * Pre-flight size check. Wired to the computed directory rather than to the
+ * assembly step: every chunk's length is known once the layout is calculated
+ * (`:246-266`), which is *before* `new ArrayBuffer` — so the failure is a clean
+ * typed error, never a silent wrap and never a failed 4 GiB allocation.
+ */
+export function assertVoxlSizeLimits(
+  entries: VoxlChunkSizeInfo[],
+  totalSize: number,
+  options?: { modelNames?: string[] },
+): void {
+  const oversizeChunks = entries.filter(
+    (e) => e.compressedSize > VOXL_SIZE_LIMIT_BYTES || e.uncompressedSize > VOXL_SIZE_LIMIT_BYTES,
+  );
+  const totalOver = totalSize > VOXL_SIZE_LIMIT_BYTES;
+
+  if (!totalOver && oversizeChunks.length === 0) {
+    // Soft warning. The headroom below the ceiling disappears fast once Ph5
+    // embeds originals — one 4M preview plus one 11.24M original is ~654 MiB, so
+    // six such models reach it. Latched so a 30 s autosave tick cannot spam, and
+    // reset when the scene drops back under, so it fires again next time.
+    if (totalSize >= VOXL_SIZE_SOFT_WARN_BYTES) {
+      if (!softLimitWarned) {
+        softLimitWarned = true;
+        console.warn(
+          `[VOXL] This scene is ${formatGb(totalSize)} — approaching the 4 GB format limit. `
+          + 'Saves will fail past it; remove a model or reduce embedded originals.',
+        );
+      }
+    } else {
+      softLimitWarned = false;
+    }
+    return;
+  }
+
+  const names = options?.modelNames ?? [];
+  const perModelBreakdown: VoxlSizeBreakdownRow[] = entries
+    .filter((e) => e.type === CHUNK_MESH)
+    .map((e) => ({
+      index: e.index,
+      name: names[e.index] ?? `Model ${e.index + 1}`,
+      compressedBytes: e.compressedSize,
+      uncompressedBytes: e.uncompressedSize,
+    }))
+    .sort((a, b) => b.compressedBytes - a.compressedBytes);
+
+  const remedy = 'Remove a model, or turn off “Save original model along with decimated”.';
+  const userMessage = totalOver
+    ? `This scene is ${formatGb(totalSize)} compressed and exceeds the VOXL 4 GB limit. ${remedy}`
+    : `“${names[oversizeChunks[0].index] ?? `Model ${oversizeChunks[0].index + 1}`}” is `
+      + `${formatGb(Math.max(oversizeChunks[0].compressedSize, oversizeChunks[0].uncompressedSize))} on its own, `
+      + `which exceeds the VOXL 4 GB limit for a single mesh. ${remedy}`;
+
+  throw new VoxlSizeLimitError({ totalBytes: totalSize, oversizeChunks, perModelBreakdown, userMessage });
+}
+
+// ─── Codec instrumentation ────────────────────────────────────────────────────
+
+/**
+ * Counters the perf and honesty tests assert against. `meshChunkCompressions`
+ * is the one that mattered: it was N-per-tick, and post-store it must be zero
+ * for an unchanged scene. `largestContiguousAllocation` pins sub-phase E's
+ * claim that the streaming writer never allocates the whole document.
+ */
+export const voxlCodecStats = {
+  meshChunkCompressions: 0,
+  jsonChunkCompressions: 0,
+  largestContiguousAllocation: 0,
+};
+
+export function resetVoxlCodecStats(): void {
+  voxlCodecStats.meshChunkCompressions = 0;
+  voxlCodecStats.jsonChunkCompressions = 0;
+  voxlCodecStats.largestContiguousAllocation = 0;
+}
+
 // ─── V2 Binary Writer ─────────────────────────────────────────────────────────
 
 /**
- * Serialize a VOXL scene to the V2 binary container format.
- *
- * @param input       - Scene data (models, supports, extensions, etc.)
- * @param meshBytes   - Map of model index → raw mesh binary (e.g. STL bytes)
- * @param sha256Map   - Optional map of model index → hex SHA-256 digest
- * @returns           - Complete VOXL V2 binary as Uint8Array
+ * A chunk payload the caller already encoded, hashed and compressed — supplied
+ * by the COW chunk store (Ph0.1 sub-phase C). `compression` uses the container's
+ * own tags (0 = none, 1 = zlib), and the store applies the identical
+ * `>64 bytes and only if it shrinks` policy the writer used to apply inline, so
+ * the emitted bytes are unchanged.
  */
-export async function serializeVoxlDocumentV2(
+export interface PrecompressedChunk {
+  data: Uint8Array;
+  compression: number;
+  uncompressedSize: number;
+}
+
+export interface VoxlSerializeOptions {
+  /** Model index → already-compressed MESH payload. */
+  precompressed?: Map<number, PrecompressedChunk>;
+}
+
+interface ResolvedChunk {
+  type: string;
+  index: number;
+  compression: number;
+  data: Uint8Array;
+  uncompressedSize: number;
+}
+
+interface PreparedDocument {
+  resolved: ResolvedChunk[];
+  directory: ChunkDirEntry[];
+  totalSize: number;
+  version: number;
+}
+
+/**
+ * Everything up to (but not including) assembly: chunk construction, dedup,
+ * compression, layout, and the pre-flight size guard. Shared by the buffered and
+ * streaming writers so they cannot drift — the byte-identity gate between them
+ * is the whole point of sub-phase E.
+ */
+async function prepareVoxlDocumentV2(
   input: BuildVoxlDocumentInput,
   meshBytes: Map<number, Uint8Array>,
   sha256Map?: Map<number, string>,
-): Promise<Uint8Array> {
+  options?: VoxlSerializeOptions,
+): Promise<PreparedDocument> {
+  const precompressed = options?.precompressed;
   const nowIso = new Date().toISOString();
 
   // ── Build chunk payloads ──────────────────────────────────────────────
@@ -133,11 +310,22 @@ export async function serializeVoxlDocumentV2(
   // chunks are written, so a Fill-Plate bed of N copies stores 1 mesh, not N.
   // Falls back to 1:1 when a SHA is missing (dedup is best-effort, never
   // wrong: without a hash we cannot prove two meshes are identical).
+  //
+  // A model's payload may arrive raw (`meshBytes`) or already baked
+  // (`precompressed`, from the chunk store). Both are legitimate sources of "this
+  // model has a chunk"; everything downstream goes through these two accessors
+  // so the dedup, the directory, and the MODL entries cannot disagree about it.
+  const hasChunkFor = (i: number): boolean => meshBytes.has(i) || (precompressed?.has(i) ?? false);
+  const rawSizeFor = (i: number): number =>
+    meshBytes.get(i)?.length ?? precompressed?.get(i)?.uncompressedSize ?? 0;
+
   const chunkOwnerByModelIndex = new Map<number, number>(); // model i → owning chunk index
   const ownerBySha = new Map<string, number>();
-  const dedupedMeshBytes = new Map<number, Uint8Array>();
+  const dedupedChunkIndices: number[] = [];
+  let chunkCandidateCount = 0;
   for (let i = 0; i < input.models.length; i += 1) {
-    if (!meshBytes.has(i)) continue;
+    if (!hasChunkFor(i)) continue;
+    chunkCandidateCount += 1;
     const sha = sha256Map?.get(i);
     const existingOwner = sha !== undefined ? ownerBySha.get(sha) : undefined;
     if (existingOwner !== undefined) {
@@ -145,20 +333,20 @@ export async function serializeVoxlDocumentV2(
     } else {
       chunkOwnerByModelIndex.set(i, i); // owner → keeps its own chunk
       if (sha !== undefined) ownerBySha.set(sha, i);
-      dedupedMeshBytes.set(i, meshBytes.get(i)!);
+      dedupedChunkIndices.push(i);
     }
   }
-  const dedupRemovedChunks = meshBytes.size > dedupedMeshBytes.size;
+  const dedupRemovedChunks = chunkCandidateCount > dedupedChunkIndices.length;
 
   const models: VoxlModelEntry[] = input.models.map((m, i) => {
-    const hasChunk = meshBytes.has(i);
+    const hasChunk = hasChunkFor(i);
     const ownerIndex = chunkOwnerByModelIndex.get(i);
     const meshRef: VoxlMeshRef = hasChunk
       ? {
           mode: 'embedded-chunk',
           fileName: m.mesh?.fileName ?? m.name,
           mimeType: m.mesh?.mimeType ?? 'model/stl',
-          uncompressedSizeBytes: meshBytes.get(i)!.length,
+          uncompressedSizeBytes: rawSizeFor(i),
           sha256: sha256Map?.get(i),
           // Only duplicates carry an explicit pointer; owners default to `i`,
           // keeping V2 files byte-identical to before when no dedup occurs.
@@ -187,6 +375,9 @@ export async function serializeVoxlDocumentV2(
         ? { sourcePath: m.sourcePath }
         : {}),
       ...(m.nativePreview ? { nativePreview: m.nativePreview } : {}),
+      // Written only when true (Ph0.1 D2): a scene with nothing stale must
+      // serialize to exactly the bytes it did before the flag existed.
+      ...(m.geometryStale === true ? { geometryStale: true } : {}),
       transform: {
         position: { x: m.transform.position.x, y: m.transform.position.y, z: m.transform.position.z },
         rotation: { x: m.transform.rotation.x, y: m.transform.rotation.y, z: m.transform.rotation.z },
@@ -199,7 +390,13 @@ export async function serializeVoxlDocumentV2(
 
   // ── Collect pending chunks ────────────────────────────────────────────
 
-  type PendingChunk = { type: string; index: number; raw: Uint8Array; compress: boolean };
+  type PendingChunk = {
+    type: string;
+    index: number;
+    raw?: Uint8Array;
+    pre?: PrecompressedChunk;
+    compress: boolean;
+  };
   const pending: PendingChunk[] = [];
 
   pending.push({ type: CHUNK_META, index: 0, raw: textEncoder.encode(JSON.stringify(meta)), compress: false });
@@ -208,9 +405,13 @@ export async function serializeVoxlDocumentV2(
 
   // One MESH chunk per UNIQUE mesh (owner index), sorted by index. Duplicates
   // reference an owner via meshRef.chunkIndex and get no chunk of their own.
-  const sortedMeshEntries = [...dedupedMeshBytes.entries()].sort((a, b) => a[0] - b[0]);
-  for (const [modelIndex, bytes] of sortedMeshEntries) {
-    pending.push({ type: CHUNK_MESH, index: modelIndex, raw: bytes, compress: true });
+  for (const modelIndex of [...dedupedChunkIndices].sort((a, b) => a - b)) {
+    const pre = precompressed?.get(modelIndex);
+    if (pre) {
+      pending.push({ type: CHUNK_MESH, index: modelIndex, pre, compress: true });
+    } else {
+      pending.push({ type: CHUNK_MESH, index: modelIndex, raw: meshBytes.get(modelIndex)!, compress: true });
+    }
   }
 
   pending.push({ type: CHUNK_SUPP, index: 0, raw: textEncoder.encode(JSON.stringify(input.supports)), compress: true });
@@ -220,17 +421,35 @@ export async function serializeVoxlDocumentV2(
   }
 
   // ── Compress (async – does not block the main thread) ─────────────────
+  //
+  // A chunk that arrives pre-compressed skips this entirely. That is the whole
+  // sub-phase-C win: for an unchanged scene, every MESH chunk takes this branch
+  // and the per-tick zlib cost collapses to the KB-scale JSON chunks.
 
-  const resolved = await Promise.all(pending.map(async (chunk) => {
-    if (chunk.compress && chunk.raw.length > 64) {
-      const compressed = await compressAsync(chunk.raw, 6);
-      if (compressed.length < chunk.raw.length) {
+  const resolved: ResolvedChunk[] = await Promise.all(pending.map(async (chunk): Promise<ResolvedChunk> => {
+    if (chunk.pre) {
+      return {
+        type: chunk.type,
+        index: chunk.index,
+        compression: chunk.pre.compression,
+        data: chunk.pre.data,
+        uncompressedSize: chunk.pre.uncompressedSize,
+      };
+    }
+
+    const raw = chunk.raw!;
+    if (chunk.compress && raw.length > 64) {
+      if (chunk.type === CHUNK_MESH) voxlCodecStats.meshChunkCompressions += 1;
+      else voxlCodecStats.jsonChunkCompressions += 1;
+
+      const compressed = await compressAsync(raw, 6);
+      if (compressed.length < raw.length) {
         return {
           type: chunk.type,
           index: chunk.index,
           compression: COMPRESSION_ZLIB,
           data: compressed,
-          uncompressedSize: chunk.raw.length,
+          uncompressedSize: raw.length,
         };
       }
     }
@@ -238,8 +457,8 @@ export async function serializeVoxlDocumentV2(
       type: chunk.type,
       index: chunk.index,
       compression: COMPRESSION_NONE,
-      data: chunk.raw,
-      uncompressedSize: chunk.raw.length,
+      data: raw,
+      uncompressedSize: raw.length,
     };
   }));
 
@@ -265,26 +484,39 @@ export async function serializeVoxlDocumentV2(
 
   const totalSize = cursor;
 
-  // ── Assemble binary ───────────────────────────────────────────────────
+  // Pre-flight, before any assembly buffer exists (Ph0.1 D1). Every offset and
+  // length is already known here, so a scene past the u32 ceiling fails with a
+  // typed, user-readable error instead of wrapping its offsets silently.
+  assertVoxlSizeLimits(directory, totalSize, { modelNames: input.models.map((m) => m.name) });
 
-  const buffer = new ArrayBuffer(totalSize);
-  const view = new DataView(buffer);
-  const out = new Uint8Array(buffer);
+  return {
+    resolved,
+    directory,
+    totalSize,
+    // Version bumps to 3 only when dedup removed chunks, so old readers reject
+    // deduped files cleanly rather than losing the shared-chunk models;
+    // non-deduped scenes stay V2 and remain readable by older builds.
+    version: dedupRemovedChunks ? VOXL_V3 : VOXL_V2,
+  };
+}
 
-  // Header. Version bumps to 3 only when dedup removed chunks, so old readers
-  // reject deduped files cleanly rather than losing the shared-chunk models;
-  // non-deduped scenes stay V2 and remain readable by older builds.
-  out.set(MAGIC_BYTES, 0);
-  view.setUint16(4, dedupRemovedChunks ? VOXL_V3 : VOXL_V2, true);
+/** Header + directory. Identical in both writers; ~16 + 20N bytes, never scene-sized. */
+function buildVoxlPreamble(prepared: PreparedDocument): Uint8Array {
+  const { directory, version } = prepared;
+  const chunkCount = directory.length;
+  const preamble = new Uint8Array(HEADER_SIZE + chunkCount * DIR_ENTRY_SIZE);
+  const view = new DataView(preamble.buffer);
+
+  preamble.set(MAGIC_BYTES, 0);
+  view.setUint16(4, version, true);
   view.setUint16(6, 0, true);
   view.setUint32(8, chunkCount, true);
   view.setUint32(12, 0, true);
 
-  // Directory
   for (let i = 0; i < chunkCount; i += 1) {
     const entry = directory[i];
     const base = HEADER_SIZE + i * DIR_ENTRY_SIZE;
-    out.set(textEncoder.encode(entry.type), base);
+    preamble.set(textEncoder.encode(entry.type), base);
     view.setUint16(base + 4, entry.index, true);
     view.setUint16(base + 6, entry.compression, true);
     view.setUint32(base + 8, entry.offset, true);
@@ -292,12 +524,79 @@ export async function serializeVoxlDocumentV2(
     view.setUint32(base + 16, entry.uncompressedSize, true);
   }
 
-  // Chunk data
-  for (let i = 0; i < resolved.length; i += 1) {
-    out.set(resolved[i].data, directory[i].offset);
+  return preamble;
+}
+
+/**
+ * Serialize a VOXL scene to the V2 binary container format.
+ *
+ * Buffered form: allocates the whole document contiguously. Kept for the browser
+ * `<a download>` fallback, which genuinely needs a Blob, and for every existing
+ * caller. Native writes should prefer `serializeVoxlDocumentV2Streaming` — see
+ * its docstring for why the contiguous buffer is worth avoiding.
+ *
+ * @param input       - Scene data (models, supports, extensions, etc.)
+ * @param meshBytes   - Map of model index → raw mesh binary (e.g. STL bytes)
+ * @param sha256Map   - Optional map of model index → hex SHA-256 digest
+ * @param options     - Optional pre-compressed payloads from the chunk store
+ * @returns           - Complete VOXL V2 binary as Uint8Array
+ */
+export async function serializeVoxlDocumentV2(
+  input: BuildVoxlDocumentInput,
+  meshBytes: Map<number, Uint8Array>,
+  sha256Map?: Map<number, string>,
+  options?: VoxlSerializeOptions,
+): Promise<Uint8Array> {
+  const prepared = await prepareVoxlDocumentV2(input, meshBytes, sha256Map, options);
+
+  const out = new Uint8Array(prepared.totalSize);
+  voxlCodecStats.largestContiguousAllocation = Math.max(
+    voxlCodecStats.largestContiguousAllocation,
+    prepared.totalSize,
+  );
+
+  out.set(buildVoxlPreamble(prepared), 0);
+  for (let i = 0; i < prepared.resolved.length; i += 1) {
+    out.set(prepared.resolved[i].data, prepared.directory[i].offset);
   }
 
   return out;
+}
+
+/**
+ * Streaming form (Ph0.1 sub-phase E).
+ *
+ * The buffered writer allocated ONE contiguous `ArrayBuffer` the size of the
+ * whole document and memcpy'd every chunk into it on the MAIN thread —
+ * 172 MiB for a single 4M-tri model, 515 MiB for a 3-model plate — on the one
+ * code path that runs unattended every 30 seconds. It is both a jank source and
+ * an OOM candidate, and Ph5's original-mesh embed roughly triples it.
+ *
+ * Removing it is cheap because the directory is computed **before** assembly:
+ * every chunk's offset is known when the first byte is emitted, so the writer
+ * emits the preamble and then each chunk's payload in directory order, with no
+ * second pass and no copy. Peak residency per tick drops from
+ * `raw + compressed + contiguous` to `compressed` (the store's own retention)
+ * plus one sink chunk.
+ *
+ * The sink is awaited per emission, so a write failure aborts immediately rather
+ * than after the whole document has been produced.
+ */
+export async function serializeVoxlDocumentV2Streaming(
+  input: BuildVoxlDocumentInput,
+  meshBytes: Map<number, Uint8Array>,
+  sha256Map: Map<number, string> | undefined,
+  sink: (bytes: Uint8Array) => void | Promise<void>,
+  options?: VoxlSerializeOptions,
+): Promise<{ totalSize: number; version: number }> {
+  const prepared = await prepareVoxlDocumentV2(input, meshBytes, sha256Map, options);
+
+  await sink(buildVoxlPreamble(prepared));
+  for (const chunk of prepared.resolved) {
+    await sink(chunk.data);
+  }
+
+  return { totalSize: prepared.totalSize, version: prepared.version };
 }
 
 // ─── V2 Binary Reader ─────────────────────────────────────────────────────────

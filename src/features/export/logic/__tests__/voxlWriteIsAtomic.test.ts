@@ -2,7 +2,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { ExportManager } from '../ExportManager';
-import { writeFileAtomicUnlocked, type NativeWriteInvoke } from '@/features/slicing/tauri/nativeSlicerBridge';
+import {
+  writeFileAtomicUnlocked,
+  writeFileAtomicStreamedUnlocked,
+  type NativeWriteInvoke,
+} from '@/features/slicing/tauri/nativeSlicerBridge';
 
 /**
  * Crash-safe scene-file commit (Ph0.1 sub-phase A, findings N1 + user item 2).
@@ -102,6 +106,96 @@ describe('VOXL writes are committed atomically', () => {
       calls.some((call) => call.cmd === 'scene_file_discard_atomic_temp' && call.path === TEMP_PATH),
       true,
       'a failed write left its staging file beside the user project',
+    );
+  });
+});
+
+/**
+ * The streaming writer (Ph0.1 sub-phase E) is now the primary autosave path, so
+ * it inherits sub-phase A's contract rather than replacing it: the destination is
+ * still untouched until a complete payload is on disk. These pin that, because a
+ * streaming writer that opened the destination early would silently undo A.
+ */
+describe('the streaming scene writer keeps the atomic contract', () => {
+  it('stages, appends every emission in order, then commits', async () => {
+    const { invoke, calls } = createRecordingInvoke();
+
+    const written = await writeFileAtomicStreamedUnlocked(
+      invoke,
+      TARGET_PATH,
+      async (emit) => {
+        await emit(new Uint8Array(4));
+        await emit(new Uint8Array(6));
+      },
+      4,
+    );
+
+    assert.equal(written, 10, 'the writer must report exactly what it emitted');
+    assert.ok(
+      calls
+        .filter((call) => call.cmd === 'append_mesh_stage_chunk')
+        .every((call) => call.path === TEMP_PATH),
+      'streamed scene bytes were written straight to the destination',
+    );
+    assert.deepEqual(
+      calls.map((call) => call.cmd),
+      [
+        'scene_file_begin_atomic_write',
+        'append_mesh_stage_chunk', // 4 B emission
+        'append_mesh_stage_chunk', // 6 B emission, re-chunked at 4 B…
+        'append_mesh_stage_chunk', // …into 4 + 2
+        'finish_mesh_stage_write',
+        'scene_file_commit_atomic',
+      ],
+      'the appender must be closed before the rename, and the rename must be last',
+    );
+  });
+
+  it('only the FIRST emission carries offset 0, so later ones append', async () => {
+    const offsets: string[] = [];
+    const invoke = (async (
+      cmd: string,
+      _args?: unknown,
+      opts?: { headers: HeadersInit },
+    ) => {
+      if (cmd === 'scene_file_begin_atomic_write') return TEMP_PATH as never;
+      if (cmd === 'append_mesh_stage_chunk') {
+        offsets.push((opts?.headers as Record<string, string>)['x-mesh-stage-offset']);
+      }
+      return undefined as never;
+    }) as NativeWriteInvoke;
+
+    await writeFileAtomicStreamedUnlocked(invoke, TARGET_PATH, async (emit) => {
+      await emit(new Uint8Array(4));
+      await emit(new Uint8Array(4));
+      await emit(new Uint8Array(4));
+    }, 4);
+
+    // Rust reads offset 0 as "open fresh, truncate"; anything else appends. A
+    // second zero mid-stream would restart the file and lose everything before it.
+    assert.deepEqual(offsets, ['0', '4', '8']);
+  });
+
+  it('discards the staging file and never commits when production fails midway', async () => {
+    const { invoke, calls } = createRecordingInvoke();
+
+    await assert.rejects(
+      writeFileAtomicStreamedUnlocked(invoke, TARGET_PATH, async (emit) => {
+        await emit(new Uint8Array(4));
+        throw new Error('serializer exploded');
+      }, 4),
+      /serializer exploded/,
+    );
+
+    assert.equal(
+      calls.some((call) => call.cmd === 'scene_file_commit_atomic'),
+      false,
+      'a half-produced document reached the destination',
+    );
+    assert.equal(
+      calls.some((call) => call.cmd === 'scene_file_discard_atomic_temp'),
+      true,
+      'a failed streamed write left its staging file behind',
     );
   });
 });

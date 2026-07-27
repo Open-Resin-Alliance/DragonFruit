@@ -717,6 +717,93 @@ export async function writeFileAtomicUnlocked(
 }
 
 /**
+ * Streaming counterpart of {@link writeFileAtomicUnlocked} (Ph0.1 sub-phase E),
+ * **without** the single-flight lock. Exported for the write-seam tests.
+ *
+ * `produce` is handed an `emit` function and calls it as many times as it likes;
+ * emissions are re-chunked at `chunkSize` and appended in order against a single
+ * open appender, so the caller never has to materialise the whole payload. Only
+ * the first IPC call carries offset 0, which is what tells Rust to open fresh —
+ * every later emission appends.
+ *
+ * The atomic contract is unchanged: temp → fsync → rename, destination untouched
+ * until the payload is complete.
+ */
+export async function writeFileAtomicStreamedUnlocked(
+  invoke: NativeWriteInvoke,
+  destinationPath: string,
+  produce: (emit: (bytes: Uint8Array) => Promise<void>) => Promise<void>,
+  chunkSize = 4 * 1024 * 1024,
+): Promise<number> {
+  const tempPath = await invoke<string>('scene_file_begin_atomic_write', {
+    targetPath: destinationPath,
+  });
+
+  let written = 0;
+  try {
+    try {
+      await produce(async (bytes: Uint8Array) => {
+        let local = 0;
+        while (local < bytes.length) {
+          const chunk = bytes.subarray(local, Math.min(local + chunkSize, bytes.length));
+          await invoke<number>('append_mesh_stage_chunk', chunk, {
+            headers: {
+              'Content-Type': 'application/octet-stream',
+              'x-mesh-stage-path': tempPath,
+              'x-mesh-stage-offset': String(written),
+            },
+          });
+          local += chunk.length;
+          written += chunk.length;
+        }
+      });
+    } finally {
+      // Always close the backend writer for this path, exactly as the buffered
+      // form does — the handle must be released before the commit renames it.
+      try {
+        await invoke<number>('finish_mesh_stage_write', { path: tempPath });
+      } catch (error) {
+        console.warn('[nativeSlicerBridge] Failed finishing streamed write appender.', error);
+      }
+    }
+  } catch (error) {
+    try {
+      await invoke<void>('scene_file_discard_atomic_temp', { tempPath });
+    } catch (discardError) {
+      console.warn('[nativeSlicerBridge] Failed discarding atomic-write staging file.', discardError);
+    }
+    throw error;
+  }
+
+  await invoke<void>('scene_file_commit_atomic', {
+    tempPath,
+    targetPath: destinationPath,
+  });
+
+  return written;
+}
+
+/**
+ * Crash-safe streaming write. Same seam and same guarantees as
+ * {@link writeFileAtomicToNativePath}; use it when the payload can be produced
+ * incrementally, so no contiguous copy of the document ever exists.
+ */
+export async function writeFileAtomicStreamedToNativePath(
+  destinationPath: string,
+  produce: (emit: (bytes: Uint8Array) => Promise<void>) => Promise<void>,
+  chunkSize = 4 * 1024 * 1024,
+): Promise<number> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Atomic file writing is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  return runExclusiveNativeWrite(() =>
+    writeFileAtomicStreamedUnlocked(core.invoke, destinationPath, produce, chunkSize),
+  );
+}
+
+/**
  * Crash-safe replacement for `writeChunkedToNativePath` on files the user would
  * miss if they were destroyed (scene files).
  *

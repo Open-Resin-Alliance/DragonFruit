@@ -41,6 +41,7 @@
     "test": "node --import tsx --test \"src/**/*.test.{ts,tsx}\"",
     "test:watch": "node --import tsx --test --watch \"src/**/*.test.{ts,tsx}\"",
     "bench:support-drag": "node --import tsx scripts/support-drag-perf.ts",
+    "bench:voxl-tick": "node --max-old-space-size=8192 --import tsx scripts/bench-voxl-tick.ts",
     "i18n:extract": "lingui extract --clean",
     "i18n:compile": "lingui compile",
     "i18n:update": "lingui extract --clean && lingui compile"

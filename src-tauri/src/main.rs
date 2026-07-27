@@ -2601,6 +2601,76 @@ struct SceneAutosaveManifest {
     last_error: Option<String>,
 }
 
+/// One manifest write's inputs, grouped so the pure builder below has a
+/// signature a human can read.
+pub(crate) struct SceneAutosaveManifestWrite {
+    pub saved_at: String,
+    pub clean: bool,
+    pub voxl_path: Option<String>,
+    pub origin: Option<String>,
+    pub project_path: Option<String>,
+    pub payload_bytes: Option<u64>,
+    pub fallback_reason: Option<String>,
+    pub last_error: Option<String>,
+    pub delete_payload: bool,
+}
+
+/// Builds the manifest to persist, given whatever was there before.
+///
+/// Extracted from the `#[tauri::command]` wrapper so the honesty contract below
+/// can be driven from unit tests (a `DragonFruitAppHandle` cannot be constructed
+/// in one).
+///
+/// **Failure honesty (Ph0.1 sub-phase D3, finding N4).** A failing tick calls in
+/// with only `last_error` set. It must not be allowed to overwrite the pointer
+/// to the last payload that actually committed — otherwise the first failure
+/// after a good autosave would erase the very file recovery needs, converting a
+/// *reported* problem into a real one. So on a failure write every
+/// payload-describing field, `saved_at` included, falls back to the previous
+/// manifest's value. Conversely a successful write clears `last_error`: the
+/// condition is over, and a stale error in the settings tab is its own small
+/// dishonesty.
+pub(crate) fn build_scene_autosave_manifest(
+    previous: Option<&SceneAutosaveManifest>,
+    write: SceneAutosaveManifestWrite,
+) -> SceneAutosaveManifest {
+    if write.last_error.is_some() {
+        return SceneAutosaveManifest {
+            saved_at: previous
+                .map(|m| m.saved_at.clone())
+                .unwrap_or(write.saved_at),
+            clean: write.clean,
+            voxl_path: write
+                .voxl_path
+                .or_else(|| previous.and_then(|m| m.voxl_path.clone())),
+            origin: write.origin.or_else(|| previous.and_then(|m| m.origin.clone())),
+            project_path: write
+                .project_path
+                .or_else(|| previous.and_then(|m| m.project_path.clone())),
+            payload_bytes: write
+                .payload_bytes
+                .or_else(|| previous.and_then(|m| m.payload_bytes)),
+            fallback_reason: write
+                .fallback_reason
+                .or_else(|| previous.and_then(|m| m.fallback_reason.clone())),
+            last_error: write.last_error,
+        };
+    }
+
+    SceneAutosaveManifest {
+        saved_at: write.saved_at,
+        clean: write.clean,
+        // A cleaned manifest must not keep advertising a payload it just
+        // deleted, or recovery would offer a file that is gone.
+        voxl_path: if write.delete_payload { None } else { write.voxl_path },
+        origin: write.origin,
+        project_path: write.project_path,
+        payload_bytes: write.payload_bytes,
+        fallback_reason: write.fallback_reason,
+        last_error: None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Sidecar naming, writability, and payload identity
 // ---------------------------------------------------------------------------
@@ -3060,6 +3130,7 @@ async fn scene_autosave_write_manifest(
     project_path: Option<String>,
     payload_bytes: Option<u64>,
     fallback_reason: Option<String>,
+    last_error: Option<String>,
     delete_payload: Option<bool>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -3104,18 +3175,20 @@ async fn scene_autosave_write_manifest(
             }
         }
 
-        let manifest = SceneAutosaveManifest {
-            saved_at,
-            clean,
-            // A cleaned manifest must not keep advertising a payload it just
-            // deleted, or recovery would offer a file that is gone.
-            voxl_path: if delete_payload.unwrap_or(false) { None } else { voxl_path },
-            origin,
-            project_path,
-            payload_bytes,
-            fallback_reason,
-            last_error: None,
-        };
+        let manifest = build_scene_autosave_manifest(
+            previous.as_ref(),
+            SceneAutosaveManifestWrite {
+                saved_at,
+                clean,
+                voxl_path,
+                origin,
+                project_path,
+                payload_bytes,
+                fallback_reason,
+                last_error,
+                delete_payload: delete_payload.unwrap_or(false),
+            },
+        );
         let json = serde_json::to_string(&manifest)
             .map_err(|err| format!("Failed serializing autosave manifest: {err}"))?;
         std::fs::write(&path, json.as_bytes())
@@ -5149,5 +5222,121 @@ mod tests {
         assert!(lookalike.exists(), "the sweep deleted a non-matching file");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // -----------------------------------------------------------------------
+    // Manifest failure honesty (Ph0.1 sub-phase D3, finding N4)
+    // -----------------------------------------------------------------------
+
+    fn committed_manifest() -> super::SceneAutosaveManifest {
+        super::SceneAutosaveManifest {
+            saved_at: "2026-07-26T10:00:00.000Z".to_string(),
+            clean: false,
+            voxl_path: Some("C:/projects/MyPrint_autosave.voxl".to_string()),
+            origin: Some("sidecar".to_string()),
+            project_path: Some("C:/projects/MyPrint.voxl".to_string()),
+            payload_bytes: Some(12_345),
+            fallback_reason: None,
+            last_error: None,
+        }
+    }
+
+    fn failure_write(message: &str) -> super::SceneAutosaveManifestWrite {
+        super::SceneAutosaveManifestWrite {
+            saved_at: "2026-07-26T11:00:00.000Z".to_string(),
+            clean: false,
+            voxl_path: None,
+            origin: None,
+            project_path: None,
+            payload_bytes: None,
+            fallback_reason: None,
+            last_error: Some(message.to_string()),
+            delete_payload: false,
+        }
+    }
+
+    /// The defect: failures were swallowed with a  and the
+    /// manifest was written only on success, so an autosave that had been
+    /// failing for an hour presented as a stale "unsaved changes" prompt with
+    /// no signal. Recording the failure must not cost the pointer to the last
+    /// payload that actually committed.
+    #[test]
+    fn autosave_failure_is_recorded_without_disturbing_the_last_good_payload() {
+        let previous = committed_manifest();
+        let next = super::build_scene_autosave_manifest(
+            Some(&previous),
+            failure_write("This scene is 4.3 GB compressed and exceeds the VOXL 4 GB limit."),
+        );
+
+        assert_eq!(
+            next.last_error.as_deref(),
+            Some("This scene is 4.3 GB compressed and exceeds the VOXL 4 GB limit.")
+        );
+        assert_eq!(
+            next.saved_at, previous.saved_at,
+            "a failed tick advanced the timestamp the recovery prompt shows"
+        );
+        assert_eq!(
+            next.voxl_path, previous.voxl_path,
+            "a failed tick erased the pointer to the last committed payload"
+        );
+        assert_eq!(next.origin, previous.origin);
+        assert_eq!(next.project_path, previous.project_path);
+        assert_eq!(next.payload_bytes, previous.payload_bytes);
+    }
+
+    #[test]
+    fn a_first_ever_failure_still_produces_a_readable_manifest() {
+        let next = super::build_scene_autosave_manifest(None, failure_write("disk full"));
+        assert_eq!(next.last_error.as_deref(), Some("disk full"));
+        assert_eq!(next.saved_at, "2026-07-26T11:00:00.000Z");
+        assert_eq!(next.voxl_path, None);
+    }
+
+    #[test]
+    fn a_successful_write_clears_a_recorded_failure() {
+        let mut previous = committed_manifest();
+        previous.last_error = Some("disk full".to_string());
+
+        let next = super::build_scene_autosave_manifest(
+            Some(&previous),
+            super::SceneAutosaveManifestWrite {
+                saved_at: "2026-07-26T12:00:00.000Z".to_string(),
+                clean: false,
+                voxl_path: Some("C:/projects/MyPrint_autosave.voxl".to_string()),
+                origin: Some("sidecar".to_string()),
+                project_path: Some("C:/projects/MyPrint.voxl".to_string()),
+                payload_bytes: Some(999),
+                fallback_reason: None,
+                last_error: None,
+                delete_payload: false,
+            },
+        );
+
+        assert_eq!(next.last_error, None, "a healthy autosave kept reporting a stale error");
+        assert_eq!(next.saved_at, "2026-07-26T12:00:00.000Z");
+        assert_eq!(next.payload_bytes, Some(999));
+    }
+
+    #[test]
+    fn clearing_the_manifest_drops_the_payload_pointer_it_just_deleted() {
+        let previous = committed_manifest();
+        let next = super::build_scene_autosave_manifest(
+            Some(&previous),
+            super::SceneAutosaveManifestWrite {
+                saved_at: "2026-07-26T12:00:00.000Z".to_string(),
+                clean: true,
+                voxl_path: previous.voxl_path.clone(),
+                origin: previous.origin.clone(),
+                project_path: previous.project_path.clone(),
+                payload_bytes: None,
+                fallback_reason: None,
+                last_error: None,
+                delete_payload: true,
+            },
+        );
+
+        assert!(next.clean);
+        assert_eq!(next.voxl_path, None, "a cleaned manifest advertised a file it had deleted");
     }
 }

@@ -71,6 +71,14 @@ export type VoxlModelEntry = {
   /** Absolute on-disk path of the original import (native-preview models). */
   sourcePath?: string;
   nativePreview?: VoxlNativePreviewRef;
+  /**
+   * Set when the writer had to fall back to this model's last committed mesh
+   * chunk because a geometry bake was still in flight when the tick's bounded
+   * wait expired (Ph0.1 sub-phase D2). The bytes are one operation behind, and
+   * recovery says so instead of presenting them as current. Omitted — never
+   * written as `false` — so an ordinary scene's bytes are unchanged.
+   */
+  geometryStale?: boolean;
   transform: VoxlModelTransform;
   mesh: VoxlMeshRef;
   meshModifiers?: ModelMeshModifiers;
@@ -126,6 +134,8 @@ export type VoxlModelRuntimeLike = {
   fileSizeBytes?: number;
   sourcePath?: string;
   nativePreview?: VoxlNativePreviewRef;
+  /** See `VoxlModelEntry.geometryStale` (Ph0.1 sub-phase D2). */
+  geometryStale?: boolean;
   transform: {
     position: { x: number; y: number; z: number };
     rotation: { x: number; y: number; z: number };

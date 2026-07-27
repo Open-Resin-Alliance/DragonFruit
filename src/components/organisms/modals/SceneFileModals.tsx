@@ -11,6 +11,9 @@ export type SceneFileModalsProps = {
   arrangeOverlayElapsedLabel: string;
   arrangeOverlayModelCount: number | null;
   autosaveRecovery: { savedAt: string; voxlPath: string; origin: string } | null;
+  /** Ph0.1 sub-phase D: the 4 GiB guard and a persistently failing autosave. */
+  sceneSaveError: { title: string; message: string; detail?: string | null } | null;
+  dismissSceneSaveError: () => void;
   closeUnsavedChangesBusy: "none" | "save_and_close" | "discard_and_close";
   handleAutosaveDiscard: () => Promise<void>;
   handleAutosaveRestore: () => Promise<void>;
@@ -43,6 +46,8 @@ export function SceneFileModals({
   arrangeOverlayElapsedLabel,
   arrangeOverlayModelCount,
   autosaveRecovery,
+  sceneSaveError,
+  dismissSceneSaveError,
   closeUnsavedChangesBusy,
   handleAutosaveDiscard,
   handleAutosaveRestore,
@@ -166,6 +171,74 @@ export function SceneFileModals({
                   onClick={() => scene.resolveSceneImportPlacementPrompt('auto_arrange')}
                 >
                   Auto-Arrange
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {sceneSaveError && (
+        <div
+          className="fixed inset-0 z-[240] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) dismissSceneSaveError();
+          }}
+        >
+          <div
+            className="w-full max-w-md overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="alertdialog"
+            aria-modal="true"
+            aria-label={sceneSaveError.title}
+          >
+            <div className="flex items-start gap-3 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+              <span
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                style={{
+                  borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 50%)',
+                  background: 'color-mix(in srgb, #ef4444, var(--surface-1) 85%)',
+                }}
+              >
+                <AlertTriangle className="h-4 w-4" style={{ color: '#ef4444' }} />
+              </span>
+              <h2 className="text-base font-semibold leading-tight pt-1" style={{ color: 'var(--text-strong)' }}>
+                {sceneSaveError.title}
+              </h2>
+            </div>
+
+            <div className="space-y-3 p-5">
+              <p className="text-sm leading-relaxed" style={{ color: 'var(--text-strong)' }}>
+                {sceneSaveError.message}
+              </p>
+              {sceneSaveError.detail ? (
+                <pre
+                  className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md border px-3 py-2 text-[11px] leading-relaxed"
+                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+                >
+                  {sceneSaveError.detail}
+                </pre>
+              ) : null}
+              {/*
+                Stated explicitly because it is the reassuring half and it is
+                true: the atomic writer (sub-phase A) never touches the
+                destination until the payload is complete, so a rejected save
+                cannot have damaged the previous file.
+              */}
+              <p className="text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                Your previously saved file was not modified.
+              </p>
+              <div className="flex justify-end pt-1">
+                <button
+                  type="button"
+                  className="ui-button ui-button-accent !h-9 px-4 text-xs"
+                  onClick={dismissSceneSaveError}
+                >
+                  Close
                 </button>
               </div>
             </div>

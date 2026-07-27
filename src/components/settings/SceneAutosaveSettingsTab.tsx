@@ -24,6 +24,8 @@ type AutosaveManifest = {
   origin?: string | null;
   projectPath?: string | null;
   fallbackReason?: string | null;
+  /** Why the most recent tick failed, if it did (Ph0.1 D3 / finding N4). */
+  lastError?: string | null;
 };
 
 function isDesktopRuntime(): boolean {
@@ -341,6 +343,35 @@ export function SceneAutosaveSettingsTab() {
                     : ''}
                 </div>
               </div>
+
+              {/*
+                Failure honesty (Ph0.1 D3, finding N4). Autosave failures used to
+                be swallowed with a console warning, so a autosave that had been
+                failing for an hour looked exactly like one that had nothing to
+                do. The timestamp above deliberately still shows the last
+                SUCCESSFUL write — this row is what tells the user it is not the
+                current one.
+              */}
+              {manifest?.lastError ? (
+                <div
+                  className="rounded-md border px-2.5 py-2 sm:col-span-2"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
+                    background: 'color-mix(in srgb, #ef4444, var(--surface-1) 88%)',
+                  }}
+                >
+                  <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: '#fca5a5' }}>
+                    Autosave is failing
+                  </div>
+                  <div className="mt-1 text-xs break-words" style={{ color: 'var(--text-strong)' }}>
+                    {manifest.lastError}
+                  </div>
+                  <div className="mt-1.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                    The timestamp above is the last autosave that actually reached disk. Save your
+                    project manually until this clears.
+                  </div>
+                </div>
+              ) : null}
             </div>
           )}
         </div>
