@@ -113,7 +113,7 @@ export function CameraProjectionController({ mode }: { mode: CameraProjectionMod
       return;
     }
 
-    const next = new THREE.PerspectiveCamera(15, aspect, PERSPECTIVE_NEAR, PERSPECTIVE_FAR);
+    const next = new THREE.PerspectiveCamera(10, aspect, PERSPECTIVE_NEAR, PERSPECTIVE_FAR);
     next.up.copy(camera.up);
 
     if (camera instanceof THREE.OrthographicCamera) {
