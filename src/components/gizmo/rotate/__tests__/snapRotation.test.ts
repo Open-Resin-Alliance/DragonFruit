@@ -12,6 +12,11 @@ import {
   objectAngleForRingAngle,
   parseSnapTickConfig,
   DEFAULT_SNAP_TICK_CONFIG,
+  getRingTicks,
+  getSpokeAngles,
+  classifySnapZone,
+  parseSnapDialConfig,
+  DEFAULT_SNAP_DIAL_CONFIG,
   type SnapTickConfig,
 } from "../snapRotation";
 
@@ -388,6 +393,142 @@ describe("parseSnapTickConfig", () => {
   it("always returns a config getSnapTicks can consume", () => {
     for (const raw of [null, "{}", "garbage", JSON.stringify({ minorDeg: 7 })]) {
       assert.doesNotThrow(() => getSnapTicks(parseSnapTickConfig(raw)));
+    }
+  });
+});
+
+// ─── Faithful dial model (dragonfruit-103-2) ────────────────────────────────
+
+describe("getRingTicks", () => {
+  it("produces one tick per short increment for the reference anatomy", () => {
+    assert.equal(getRingTicks(DEFAULT_SNAP_DIAL_CONFIG).length, 72, "360 / 5");
+  });
+
+  it("classifies long ticks every 10 degrees and short elsewhere", () => {
+    const ticks = getRingTicks(DEFAULT_SNAP_DIAL_CONFIG);
+    assert.equal(ticks.filter((t) => t.tier === "long").length, 36, "360/10");
+    assert.equal(ticks.filter((t) => t.tier === "short").length, 36);
+    const byDeg = new Map(ticks.map((t) => [t.deg, t.tier]));
+    assert.equal(byDeg.get(0), "long");
+    assert.equal(byDeg.get(10), "long");
+    assert.equal(byDeg.get(45), "short", "45 is NOT a ring tier in the faithful anatomy");
+    assert.equal(byDeg.get(5), "short");
+  });
+
+  it("orders ascending from 0, stays below 360, keeps rad consistent", () => {
+    const ticks = getRingTicks(DEFAULT_SNAP_DIAL_CONFIG);
+    const degs = ticks.map((t) => t.deg);
+    assert.deepEqual(degs, [...degs].sort((a, b) => a - b));
+    assert.equal(degs[0], 0);
+    assert.ok(degs[degs.length - 1] < 360);
+    for (const t of ticks) {
+      assert.ok(Math.abs(t.rad - (t.deg * Math.PI) / 180) < 1e-12);
+    }
+  });
+
+  it("treats a zero long interval as that tier disabled", () => {
+    const ticks = getRingTicks({ ringShortDeg: 5, ringLongDeg: 0, spokeDeg: 45 });
+    assert.equal(ticks.length, 72);
+    assert.equal(ticks.filter((t) => t.tier === "long").length, 0);
+  });
+
+  it("rejects a short increment that is non-positive or does not divide 360", () => {
+    assert.throws(() => getRingTicks({ ringShortDeg: 0, ringLongDeg: 10, spokeDeg: 45 }));
+    assert.throws(() => getRingTicks({ ringShortDeg: 7, ringLongDeg: 10, spokeDeg: 45 }));
+  });
+});
+
+describe("getSpokeAngles", () => {
+  it("produces 8 spokes at 45 degrees, ascending from 0", () => {
+    const spokes = getSpokeAngles(DEFAULT_SNAP_DIAL_CONFIG);
+    assert.equal(spokes.length, 8);
+    spokes.forEach((rad, i) => {
+      assert.ok(closeTo(rad, (i * 45 * Math.PI) / 180), `spoke ${i}`);
+    });
+  });
+
+  it("is symmetric under negation, so the spoke set is flip-invariant", () => {
+    const spokes = getSpokeAngles(DEFAULT_SNAP_DIAL_CONFIG);
+    const norm = (r: number) => (((r % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI));
+    const set = spokes.map((r) => Math.round((norm(r) * 180) / Math.PI));
+    for (const r of spokes) {
+      const neg = Math.round((norm(-r) * 180) / Math.PI) % 360;
+      assert.ok(set.includes(neg), `negated spoke ${neg} not in set`);
+    }
+  });
+
+  it("treats zero spacing as disabled", () => {
+    assert.deepEqual(getSpokeAngles({ ringShortDeg: 5, ringLongDeg: 10, spokeDeg: 0 }), []);
+  });
+});
+
+describe("classifySnapZone", () => {
+  // Bands derive from GIZMO_SIZES: dialRadius 3.9, dialTickLength 0.55.
+  const R = 3.9;
+  const fine = (5 * Math.PI) / 180;
+  const coarse = (45 * Math.PI) / 180;
+
+  it("maps the inner spoke band to the coarse step", () => {
+    assert.ok(closeTo(classifySnapZone(R / 3, DEFAULT_SNAP_DIAL_CONFIG)!, coarse));
+    assert.ok(closeTo(classifySnapZone(R / 2, DEFAULT_SNAP_DIAL_CONFIG)!, coarse));
+    assert.ok(closeTo(classifySnapZone((2 * R) / 3, DEFAULT_SNAP_DIAL_CONFIG)!, coarse));
+  });
+
+  it("maps the tick ring band to the fine step", () => {
+    assert.ok(closeTo(classifySnapZone(R, DEFAULT_SNAP_DIAL_CONFIG)!, fine));
+    assert.ok(closeTo(classifySnapZone(R + 0.5, DEFAULT_SNAP_DIAL_CONFIG)!, fine));
+  });
+
+  it("pins band edges: inclusive at both ends of both bands", () => {
+    // Spoke band [R/3, 2R/3]; ring band [R, R + dialTickLength * 1.6].
+    const ringOuter = R + 0.55 * 1.6;
+    assert.ok(closeTo(classifySnapZone(R / 3, DEFAULT_SNAP_DIAL_CONFIG)!, coarse), "spoke lower edge");
+    assert.ok(closeTo(classifySnapZone((2 * R) / 3, DEFAULT_SNAP_DIAL_CONFIG)!, coarse), "spoke upper edge");
+    assert.ok(closeTo(classifySnapZone(R, DEFAULT_SNAP_DIAL_CONFIG)!, fine), "ring lower edge");
+    assert.ok(closeTo(classifySnapZone(ringOuter, DEFAULT_SNAP_DIAL_CONFIG)!, fine), "ring upper edge");
+    assert.equal(classifySnapZone((2 * R) / 3 + 1e-6, DEFAULT_SNAP_DIAL_CONFIG), null, "just past spoke band");
+    assert.equal(classifySnapZone(ringOuter + 1e-6, DEFAULT_SNAP_DIAL_CONFIG), null, "just past ring band");
+  });
+
+  it("is free everywhere else — centre, the gap between bands, and outside", () => {
+    assert.equal(classifySnapZone(0.2, DEFAULT_SNAP_DIAL_CONFIG), null);
+    assert.equal(classifySnapZone(R * 0.85, DEFAULT_SNAP_DIAL_CONFIG), null, "gap between bands");
+    assert.equal(classifySnapZone(R * 2, DEFAULT_SNAP_DIAL_CONFIG), null);
+  });
+
+  it("returns null in the spoke band when spokes are disabled", () => {
+    assert.equal(classifySnapZone(R / 2, { ringShortDeg: 5, ringLongDeg: 10, spokeDeg: 0 }), null);
+  });
+});
+
+describe("parseSnapDialConfig", () => {
+  it("falls back to the default on empty, garbage, or malformed input", () => {
+    assert.deepEqual(parseSnapDialConfig(null), DEFAULT_SNAP_DIAL_CONFIG);
+    assert.deepEqual(parseSnapDialConfig("{not json"), DEFAULT_SNAP_DIAL_CONFIG);
+    assert.deepEqual(parseSnapDialConfig("[]"), DEFAULT_SNAP_DIAL_CONFIG);
+  });
+
+  it("rejects the LEGACY persisted shape so stale configs reset cleanly", () => {
+    assert.deepEqual(
+      parseSnapDialConfig(JSON.stringify({ majorDeg: 45, mediumDeg: 15, minorDeg: 5 })),
+      DEFAULT_SNAP_DIAL_CONFIG,
+    );
+  });
+
+  it("accepts a well-formed config and rejects a non-divisor short step", () => {
+    assert.deepEqual(
+      parseSnapDialConfig(JSON.stringify({ ringShortDeg: 10, ringLongDeg: 30, spokeDeg: 90 })),
+      { ringShortDeg: 10, ringLongDeg: 30, spokeDeg: 90 },
+    );
+    assert.deepEqual(
+      parseSnapDialConfig(JSON.stringify({ ringShortDeg: 7, ringLongDeg: 10, spokeDeg: 45 })),
+      DEFAULT_SNAP_DIAL_CONFIG,
+    );
+  });
+
+  it("always returns a config getRingTicks can consume", () => {
+    for (const raw of [null, "{}", "garbage", JSON.stringify({ ringShortDeg: 7 })]) {
+      assert.doesNotThrow(() => getRingTicks(parseSnapDialConfig(raw)));
     }
   });
 });

@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+import { GIZMO_SIZES } from '../constants';
 import type { GizmoAxis } from '../types';
 
 /** Snap angle to nearest increment using Math.round quantization. */
@@ -235,4 +237,177 @@ export function parseSnapTickConfig(raw: string | null): SnapTickConfig {
   } catch {
     return DEFAULT_SNAP_TICK_CONFIG;
   }
+}
+
+// ─── Faithful dial model (dragonfruit-103-2) ────────────────────────────────
+// Ring ticks at short/long tiers plus a coarse spoke band; snapping is chosen
+// by WHERE the cursor sits in the ring's local plane during a drag, not by
+// modifier keys or a toggle. The legacy SnapTickConfig API above remains until
+// each consumer migrates, then is deleted with its last consumer.
+
+/** Tier intervals for the faithful dial, whole degrees. */
+export interface SnapDialConfig {
+  /** Short-tick spacing on the ring; also the fine snap step. Must divide 360. */
+  ringShortDeg: number;
+  /** Long-tick spacing on the ring. 0 disables the long tier. */
+  ringLongDeg: number;
+  /** Spoke spacing in the inner band; also the coarse snap step. 0 disables. */
+  spokeDeg: number;
+}
+
+/** The reference anatomy: short 5, long 10, spokes 45. */
+export const DEFAULT_SNAP_DIAL_CONFIG: SnapDialConfig = {
+  ringShortDeg: 5,
+  ringLongDeg: 10,
+  spokeDeg: 45,
+};
+
+export type RingTickTier = 'long' | 'short';
+
+export interface RingTick {
+  deg: number;
+  rad: number;
+  tier: RingTickTier;
+}
+
+function assertShortDeg(shortDeg: number): void {
+  if (!Number.isInteger(shortDeg) || shortDeg <= 0 || 360 % shortDeg !== 0) {
+    throw new Error(
+      `ring short step must be a positive whole divisor of 360, got ${shortDeg}`,
+    );
+  }
+}
+
+/**
+ * Ring tick set for one revolution: one tick per short increment, classified
+ * long where the long interval divides the degree. Whole-degree arithmetic,
+ * for the same float-comparison reason as the legacy tier builder above.
+ */
+export function getRingTicks(
+  config: SnapDialConfig = DEFAULT_SNAP_DIAL_CONFIG,
+): RingTick[] {
+  const { ringShortDeg, ringLongDeg } = config;
+  assertShortDeg(ringShortDeg);
+
+  const ticks: RingTick[] = [];
+  for (let deg = 0; deg < 360; deg += ringShortDeg) {
+    const tier: RingTickTier =
+      ringLongDeg > 0 && deg % ringLongDeg === 0 ? 'long' : 'short';
+    ticks.push({ deg, rad: (deg * Math.PI) / 180, tier });
+  }
+  return ticks;
+}
+
+/** Spoke angles for the inner coarse band. Zero spacing disables the band. */
+export function getSpokeAngles(
+  config: SnapDialConfig = DEFAULT_SNAP_DIAL_CONFIG,
+): number[] {
+  const { spokeDeg } = config;
+  if (spokeDeg === 0) return [];
+  if (!Number.isInteger(spokeDeg) || spokeDeg < 0 || 360 % spokeDeg !== 0) {
+    throw new Error(`spoke step must be 0 or a positive whole divisor of 360, got ${spokeDeg}`);
+  }
+  const spokes: number[] = [];
+  for (let deg = 0; deg < 360; deg += spokeDeg) {
+    spokes.push((deg * Math.PI) / 180);
+  }
+  return spokes;
+}
+
+/** True when a config can be rendered and snapped against without throwing. */
+function isUsableDialConfig(value: unknown): value is SnapDialConfig {
+  if (typeof value !== 'object' || value === null) return false;
+  const { ringShortDeg, ringLongDeg, spokeDeg } = value as Record<string, unknown>;
+  if (
+    typeof ringShortDeg !== 'number' ||
+    typeof ringLongDeg !== 'number' ||
+    typeof spokeDeg !== 'number'
+  ) {
+    return false;
+  }
+  const divides = (d: number) => Number.isInteger(d) && d > 0 && 360 % d === 0;
+  return (
+    divides(ringShortDeg) &&
+    (ringLongDeg === 0 || divides(ringLongDeg)) &&
+    (spokeDeg === 0 || divides(spokeDeg))
+  );
+}
+
+/**
+ * Read a persisted dial config, falling back to the default on anything
+ * unusable — including the LEGACY {majorDeg, mediumDeg, minorDeg} shape, which
+ * must reset cleanly rather than half-apply.
+ */
+export function parseSnapDialConfig(raw: string | null): SnapDialConfig {
+  if (!raw) return DEFAULT_SNAP_DIAL_CONFIG;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isUsableDialConfig(parsed)
+      ? {
+          ringShortDeg: parsed.ringShortDeg,
+          ringLongDeg: parsed.ringLongDeg,
+          spokeDeg: parsed.spokeDeg,
+        }
+      : DEFAULT_SNAP_DIAL_CONFIG;
+  } catch {
+    return DEFAULT_SNAP_DIAL_CONFIG;
+  }
+}
+
+/**
+ * Snap increment for a cursor position during a drag, from its radial distance
+ * in the ring's local plane. This is the whole faithful mechanic: the dial
+ * geometry IS the mode switch.
+ *
+ * Bands derive from GIZMO_SIZES so behaviour tracks the visuals by
+ * construction: spoke band [dialRadius/3, 2*dialRadius/3] -> coarse step;
+ * tick band [dialRadius, dialRadius + dialTickLength*1.6] -> fine step
+ * (matching the dial pick band the predecessor used); anywhere else -> null,
+ * meaning free rotation. Both bands are inclusive at both edges.
+ */
+export function classifySnapZone(
+  lenLocal: number,
+  config: SnapDialConfig = DEFAULT_SNAP_DIAL_CONFIG,
+): number | null {
+  const r = GIZMO_SIZES.dialRadius;
+  const spokeInner = r / 3;
+  const spokeOuter = (2 * r) / 3;
+  const ringInner = r;
+  const ringOuter = r + GIZMO_SIZES.dialTickLength * 1.6;
+
+  if (config.spokeDeg > 0 && lenLocal >= spokeInner && lenLocal <= spokeOuter) {
+    return (config.spokeDeg * Math.PI) / 180;
+  }
+  if (lenLocal >= ringInner && lenLocal <= ringOuter) {
+    return (config.ringShortDeg * Math.PI) / 180;
+  }
+  return null;
+}
+
+/**
+ * Intersect a pointer ray with a ring's plane and return ring-local polar
+ * coordinates, or null when the ray is (near-)parallel to the plane or the
+ * intersection lies behind the origin. Callers treat null as "hold the
+ * previous zone" during a drag, so a grazing pose degrades gracefully instead
+ * of flickering to free.
+ */
+export function rayToRingLocal(
+  rayOrigin: THREE.Vector3,
+  rayDir: THREE.Vector3,
+  ringQuat: THREE.Quaternion,
+  ringCenter: THREE.Vector3,
+): { len: number; angleRad: number } | null {
+  const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(ringQuat);
+  const denom = rayDir.dot(normal);
+  if (Math.abs(denom) < 1e-6) return null;
+
+  const t = ringCenter.clone().sub(rayOrigin).dot(normal) / denom;
+  if (t <= 0) return null;
+
+  const local = rayOrigin
+    .clone()
+    .addScaledVector(rayDir, t)
+    .sub(ringCenter)
+    .applyQuaternion(ringQuat.clone().invert());
+  return { len: Math.hypot(local.x, local.y), angleRad: Math.atan2(local.y, local.x) };
 }

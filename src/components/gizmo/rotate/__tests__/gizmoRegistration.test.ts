@@ -6,6 +6,7 @@ import {
   spokeRingAngle,
   objectAngleForRingAngle,
   nearestTickRad,
+  rayToRingLocal,
   polarToLocal,
   ringGroupEuler,
   DEFAULT_SNAP_TICK_CONFIG,
@@ -347,5 +348,74 @@ describe("click resolution reaches the tick under the cursor", () => {
     const landed = spokeRingAngle(objectAngle, 1);
     const landedDeg = Math.round((landed * 180) / Math.PI);
     assert.equal(landedDeg, 45);
+  });
+});
+
+describe("rayToRingLocal resolves cursor rays into the ring plane", () => {
+  /**
+   * Zone selection during a drag depends on this: a ray from the camera
+   * through a point known to sit on the dial must come back with that point's
+   * ring-local polar coordinates at every camera pose, or the snap zones
+   * detach from the visible dial exactly the way the original registration
+   * bug detached the ticks from the handle.
+   */
+  function ringQuatFor(axis: GizmoAxis): THREE.Quaternion {
+    return new THREE.Quaternion().setFromEuler(new THREE.Euler(...ringGroupEuler(axis)));
+  }
+
+  it("recovers len and angle for dial points across axes and camera poses", () => {
+    let checks = 0;
+    for (const axis of AXES) {
+      const quat = ringQuatFor(axis);
+      for (const azimuth of AZIMUTHS_DEG) {
+        for (const elevation of ELEVATIONS_DEG) {
+          const camera = makeCamera(azimuth, elevation);
+          for (const degree of [0, 45, 130, 355]) {
+            const rad = (degree * Math.PI) / 180;
+            const world = new THREE.Vector3(
+              ...polarToLocal(rad, GIZMO_SIZES.dialRadius),
+            ).applyQuaternion(quat);
+            const dir = world.clone().sub(camera.position).normalize();
+
+            const hit = rayToRingLocal(
+              camera.position,
+              dir,
+              quat,
+              new THREE.Vector3(0, 0, 0),
+            );
+            // Grazing poses legitimately return null; everything else must
+            // resolve to the constructed point.
+            const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(quat);
+            if (Math.abs(dir.dot(normal)) < 1e-3) continue;
+
+            assert.ok(hit, `axis ${axis}, az ${azimuth}, el ${elevation}: null off-grazing`);
+            assert.ok(
+              Math.abs(hit.len - GIZMO_SIZES.dialRadius) < 1e-6,
+              `len ${hit.len} != dialRadius`,
+            );
+            const gap = Math.abs(
+              Math.atan2(Math.sin(hit.angleRad - rad), Math.cos(hit.angleRad - rad)),
+            );
+            assert.ok(gap < 1e-6, `axis ${axis}: angle off by ${gap}`);
+            checks += 1;
+          }
+        }
+      }
+    }
+    assert.ok(checks > 300, `expected a real sweep, ran ${checks}`);
+  });
+
+  it("returns null for a ray parallel to the ring plane", () => {
+    const quat = ringQuatFor("z");
+    const origin = new THREE.Vector3(10, 0, 5);
+    const dir = new THREE.Vector3(-1, 0, 0); // in-plane direction, z ring plane is XY
+    assert.equal(rayToRingLocal(origin, dir, quat, new THREE.Vector3(0, 0, 0)), null);
+  });
+
+  it("returns null when the plane is behind the ray origin", () => {
+    const quat = ringQuatFor("z");
+    const origin = new THREE.Vector3(0, 0, 10);
+    const dir = new THREE.Vector3(0, 0, 1); // pointing away from the plane
+    assert.equal(rayToRingLocal(origin, dir, quat, new THREE.Vector3(0, 0, 0)), null);
   });
 });
