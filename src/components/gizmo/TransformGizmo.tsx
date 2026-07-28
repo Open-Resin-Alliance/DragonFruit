@@ -151,6 +151,7 @@ function getOperationFromPart(part: string): GizmoOperation | null {
 export function TransformGizmo({
   position,
   rotation = [0, 0, 0],
+  indicatedRotation,
   visible = true,
   enableMove = DEFAULT_GIZMO_CONFIG.enableMove,
   enableRotate = DEFAULT_GIZMO_CONFIG.enableRotate,
@@ -202,6 +203,12 @@ export function TransformGizmo({
   const rotationX = Array.isArray(rotation) ? rotation[0] : rotation.x;
   const rotationY = Array.isArray(rotation) ? rotation[1] : rotation.y;
   const rotationZ = Array.isArray(rotation) ? rotation[2] : rotation.z;
+  // What the dial indicates — falls back to the gizmo orientation, which is
+  // the right default for local-space gizmos whose frame turns with the object.
+  const indicated = indicatedRotation ?? rotation;
+  const indicatedX = Array.isArray(indicated) ? indicated[0] : indicated.x;
+  const indicatedY = Array.isArray(indicated) ? indicated[1] : indicated.y;
+  const indicatedZ = Array.isArray(indicated) ? indicated[2] : indicated.z;
 
   const posArray: [number, number, number] = React.useMemo(
     () => [positionX, positionY, positionZ],
@@ -605,7 +612,7 @@ export function TransformGizmo({
               axis="x"
               worldAxisDir={worldAxisDirs.x}
               axisVisualFlip={axisVisualFlip?.x ?? 1}
-              currentAngleRad={rotationX}
+              currentAngleRad={indicatedX}
               isHovered={!suppressHover && hoveredPart === 'ring-x'}
               isActive={activePart === 'ring-x'}
               isDimmed={isDimmed('ring-x')}
@@ -629,7 +636,7 @@ export function TransformGizmo({
               axis="y"
               worldAxisDir={worldAxisDirs.y}
               axisVisualFlip={axisVisualFlip?.y ?? 1}
-              currentAngleRad={rotationY}
+              currentAngleRad={indicatedY}
               isHovered={!suppressHover && hoveredPart === 'ring-y'}
               isActive={activePart === 'ring-y'}
               isDimmed={isDimmed('ring-y')}
@@ -653,7 +660,7 @@ export function TransformGizmo({
               axis="z"
               worldAxisDir={worldAxisDirs.z}
               axisVisualFlip={axisVisualFlip?.z ?? 1}
-              currentAngleRad={rotationZ}
+              currentAngleRad={indicatedZ}
               isHovered={!suppressHover && hoveredPart === 'ring-z'}
               isActive={activePart === 'ring-z'}
               isDimmed={isDimmed('ring-z')}

@@ -6064,6 +6064,11 @@ export function SceneCanvas({
                     (isMultiGizmoSelection ? (multiGizmoCenter?.z ?? activeModelTransform?.position.z) : activeModelTransform?.position.z) ?? 0,
                   ]}
                   rotation={[0, 0, 0]}
+                  indicatedRotation={[
+                    activeModelTransform?.rotation.x ?? 0,
+                    activeModelTransform?.rotation.y ?? 0,
+                    activeModelTransform?.rotation.z ?? 0,
+                  ]}
                   enableMove
                   enableRotate={!isMultiGizmoSelection}
                   enableScale

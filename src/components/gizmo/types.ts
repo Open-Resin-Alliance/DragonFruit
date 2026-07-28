@@ -131,6 +131,14 @@ export interface GizmoConfig {
 export interface TransformGizmoProps extends GizmoConfig {
   position: [number, number, number] | THREE.Vector3;
   rotation?: [number, number, number] | THREE.Euler;
+  /**
+   * Rotation the dial INDICATES (spoke, parked grabber, tick selection),
+   * when it differs from the gizmo's own orientation. A world-aligned editor
+   * gizmo keeps rotation=[0,0,0] but indicates the model's rotation here.
+   * Defaults to `rotation`, which is correct for local-space gizmos where
+   * the frame turns with the object.
+   */
+  indicatedRotation?: [number, number, number] | THREE.Euler;
   visible?: boolean;
   suppressAxisAnimations?: boolean;
   rootRef?: React.RefObject<THREE.Group | null>;
