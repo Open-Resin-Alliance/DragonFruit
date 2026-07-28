@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "exportedAt": "2026-07-27T19:05:54.210Z",
+  "printer": {
+    "id": "printer-mrbmn4ce-y0878ox",
+    "name": "Saturn 2",
+    "manufacturer": "ELEGOO",
+    "imageDataUrl": "/api/profile-assets/plugins/elegoo/printers/assets/saturn/saturn-2.png",
+    "antiAliasing": true,
+    "hasCamera": false,
+    "networkFilter": "Saturn 2",
+    "pixelSize": {
+      "x": 28.5,
+      "y": 28.5
+    },
+    "buildDimensionMode": "auto",
+    "officialPresetId": "elegoo-saturn-2-ctb",
+    "officialPresetVersion": 1,
+    "isOfficial": true,
+    "isCustom": false,
+    "buildVolumeMm": {
+      "width": 218.88,
+      "depth": 123.12,
+      "height": 250
+    },
+    "display": {
+      "resolutionX": 7680,
+      "resolutionY": 4320,
+      "outputFormat": ".ctb",
+      "formatVersion": "v5enc",
+      "settingsMode": "twostage",
+      "webcamRotationDeg": 0,
+      "mirrorX": true,
+      "mirrorY": false
+    },
+    "network": {
+      "discoveryEnabled": true,
+      "ipAddress": ""
+    }
+  },
+  "materials": [
+    {
+      "id": "material-mrbmn4ce-h2s02ov",
+      "printerProfileId": "printer-mrbmn4ce-y0878ox",
+      "officialTemplateVersion": 1,
+      "name": "Standard 405nm",
+      "brand": "Default",
+      "currencyCode": "USD",
+      "bottlePrice": 24.99,
+      "bottleCapacityMl": 1000,
+      "resinFamily": "standard",
+      "scaleCompensationPct": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "layerHeightMm": 0.03,
+      "normalExposureSec": 2,
+      "bottomExposureSec": 25,
+      "bottomLayerCount": 5,
+      "liftDistanceMm": 1,
+      "liftSpeedMmMin": 60,
+      "retractSpeedMmMin": 240,
+      "minimumAaAlphaPercent": 35,
+      "antiAliasingSettings": {
+        "enableCustomSettings": false,
+        "enableOverride": false,
+        "mode": "Blur",
+        "level": "4x",
+        "useCustomLevel": false,
+        "blurBrushRadiusPx": 1,
+        "useCustomBlurBrushRadius": false,
+        "blurBrushKernel": "gaussian",
+        "blurBrushSigmaX": 0.5,
+        "blurBrushSigmaY": 0.5,
+        "zBlurRadiusLayers": 0,
+        "useCustomZBlurRadius": false,
+        "zBlurKernel": "box",
+        "zBlurSigma": 0.5,
+        "zBlendLookBack": 2,
+        "useCustomZBlendLookBack": false,
+        "zBlendFadePx": 20,
+        "zBlendFadeMode": "auto",
+        "zBlendAutoMode": true,
+        "useCustomZBlendFadePx": false,
+        "zaaPattern": "halton",
+        "zaaDuplicateZ": true,
+        "blurGraySourceMode": "lut",
+        "zBlendResinType": "opaque",
+        "selectedLutCurveId": "default",
+        "aaOnSupports": false,
+        "ditherEnabled": false,
+        "ditherBitDepth": 3,
+        "ditherDeviceGamma": 3
+      },
+      "localSettingsByOutput": {
+        ".ctb": {
+          "layerHeightMm": 0.03,
+          "bottomLayerCount": 5,
+          "transitionLayerCount": 0,
+          "bottomExposureSec": 25,
+          "bottomLiftDistanceMm": 3,
+          "bottomLiftSpeedMmMin": 60,
+          "bottomRetractSpeedMmMin": 180,
+          "normalExposureSec": 2,
+          "liftDistanceMm": 1,
+          "liftSpeedMmMin": 60,
+          "retractSpeedMmMin": 240,
+          "waitTimeBeforeCureSec": 0,
+          "waitTimeAfterCureSec": 0,
+          "waitTimeAfterLiftSec": 0,
+          "projectorPwmPercent": 100,
+          "bottomProjectorPwmPercent": 100,
+          "bottomLiftDistance2Mm": 4,
+          "bottomLiftSpeed2MmMin": 180,
+          "bottomRetractSpeed2MmMin": 60,
+          "liftDistance2Mm": 4,
+          "liftSpeed2MmMin": 240,
+          "retractSpeed2MmMin": 60
+        }
+      }
+    }
+  ]
+}
