@@ -9,6 +9,8 @@ import {
   objectAngleForRingAngle,
   getRingTicks,
   getSpokeAngles,
+  nearestRingTickRad,
+  shortestAngleDelta,
   classifySnapZone,
   parseSnapDialConfig,
   DEFAULT_SNAP_DIAL_CONFIG,
@@ -306,6 +308,43 @@ describe("parseSnapDialConfig", () => {
   it("always returns a config getRingTicks can consume", () => {
     for (const raw of [null, "{}", "garbage", JSON.stringify({ ringShortDeg: 7 })]) {
       assert.doesNotThrow(() => getRingTicks(parseSnapDialConfig(raw)));
+    }
+  });
+});
+
+describe("nearestRingTickRad", () => {
+  it("returns the tick itself when already on one and snaps to the nearer neighbour", () => {
+    assert.ok(closeTo(nearestRingTickRad(deg(45)), deg(45)));
+    assert.ok(closeTo(nearestRingTickRad(deg(2)), deg(0)));
+    assert.ok(closeTo(nearestRingTickRad(deg(3)), deg(5)));
+  });
+
+  it("wraps forward past the last tick and normalises negatives", () => {
+    assert.ok(closeTo(nearestRingTickRad(deg(358)), deg(0)));
+    assert.ok(closeTo(nearestRingTickRad(deg(-3)), deg(355)));
+  });
+
+  it("always lands on a member of the ring tick set", () => {
+    const tickDegs = new Set(getRingTicks(DEFAULT_SNAP_DIAL_CONFIG).map((t) => t.deg));
+    for (let d = -720; d <= 720; d += 7) {
+      const landedDeg = Math.round((nearestRingTickRad(deg(d)) * 180) / Math.PI) % 360;
+      assert.ok(tickDegs.has(landedDeg), `${d}deg landed off-set at ${landedDeg}`);
+    }
+  });
+});
+
+describe("shortestAngleDelta", () => {
+  it("takes the short way across the wrap boundary, signed by direction", () => {
+    assert.ok(closeTo(shortestAngleDelta(deg(350), deg(10)), deg(20)));
+    assert.ok(closeTo(shortestAngleDelta(deg(10), deg(350)), deg(-20)));
+    assert.equal(shortestAngleDelta(deg(30), deg(30)), 0);
+  });
+
+  it("never exceeds half a revolution", () => {
+    for (let a = -360; a <= 360; a += 13) {
+      for (let b = -360; b <= 360; b += 29) {
+        assert.ok(Math.abs(shortestAngleDelta(deg(a), deg(b))) <= Math.PI + 1e-9);
+      }
     }
   });
 });

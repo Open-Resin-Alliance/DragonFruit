@@ -23,6 +23,8 @@ interface SnapTickDialProps {
   opacityScale?: number;
   /** Tier intervals. Defaults to the reference 5/10/45 anatomy. */
   config?: SnapDialConfig;
+  /** Ring-local angle of the tick under the cursor, drawn emphasised. */
+  highlightRad?: number | null;
 }
 
 /** Ring tick length as a fraction of dialTickLength. */
@@ -68,6 +70,7 @@ export function SnapTickDial({
   active,
   opacityScale = 1,
   config = DEFAULT_SNAP_DIAL_CONFIG,
+  highlightRad = null,
 }: SnapTickDialProps) {
   const ringSegmentsByTier = useMemo(() => {
     const ticks = getRingTicks(config);
@@ -95,6 +98,13 @@ export function SnapTickDial({
     }
     return points;
   }, [config]);
+
+  const highlightPoints = useMemo(() => {
+    if (highlightRad === null) return null;
+    const inner = GIZMO_SIZES.dialRadius;
+    const outer = inner + GIZMO_SIZES.dialTickLength * 1.25;
+    return [polarToLocal(highlightRad, inner), polarToLocal(highlightRad, outer)];
+  }, [highlightRad]);
 
   const referencePoints = useMemo(
     () => [
@@ -132,6 +142,18 @@ export function SnapTickDial({
           lineWidth={1.4}
           transparent
           opacity={opacity * 0.8}
+          depthTest={false}
+          toneMapped={false}
+        />
+      )}
+      {highlightPoints && (
+        // The tick the cursor would rotate to — selection needs aim feedback.
+        <Line
+          points={highlightPoints}
+          color="#ffffff"
+          lineWidth={2.4}
+          transparent
+          opacity={Math.min(1, opacity + 0.35)}
           depthTest={false}
           toneMapped={false}
         />

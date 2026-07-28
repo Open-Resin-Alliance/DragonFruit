@@ -273,3 +273,35 @@ export function rayToRingLocal(
     .applyQuaternion(ringQuat.clone().invert());
   return { len: Math.hypot(local.x, local.y), angleRad: Math.atan2(local.y, local.x) };
 }
+
+/**
+ * Ring-local angle of the ring tick nearest a given angle, normalised into
+ * [0, 2*PI). Quantisation is by the short step in whole degrees, matching
+ * getRingTicks, so the result is exactly a member of that tick set.
+ */
+export function nearestRingTickRad(
+  angleRad: number,
+  config: SnapDialConfig = DEFAULT_SNAP_DIAL_CONFIG,
+): number {
+  const { ringShortDeg } = config;
+  if (!Number.isInteger(ringShortDeg) || ringShortDeg <= 0 || 360 % ringShortDeg !== 0) {
+    throw new Error(`nearestRingTickRad: short step must divide 360, got ${ringShortDeg}`);
+  }
+  const degrees = (angleRad * 180) / Math.PI;
+  const normalised = ((degrees % 360) + 360) % 360;
+  const snapped = (Math.round(normalised / ringShortDeg) * ringShortDeg) % 360;
+  return (snapped * Math.PI) / 180;
+}
+
+/**
+ * Signed delta from one angle to another, taking the short way round.
+ * A tick selection applies as a delta through the drag callbacks, so choosing
+ * 350 degrees while sitting at 10 must rotate -20, not +340.
+ */
+export function shortestAngleDelta(fromRad: number, toRad: number): number {
+  const TWO_PI = Math.PI * 2;
+  let delta = (toRad - fromRad) % TWO_PI;
+  if (delta > Math.PI) delta -= TWO_PI;
+  if (delta < -Math.PI) delta += TWO_PI;
+  return Object.is(delta, -0) ? 0 : delta;
+}

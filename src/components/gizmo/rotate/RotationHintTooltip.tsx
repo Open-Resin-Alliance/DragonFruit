@@ -34,6 +34,9 @@ export function RotationHintTooltip() {
         <div className="mt-0.5 opacity-70">
           over ticks: 5° snap &nbsp;|&nbsp; over spokes: 45°
         </div>
+        <div className="mt-0.5 opacity-70">
+          click a tick to rotate to it
+        </div>
       </div>
     </MouseTooltip>
   );
