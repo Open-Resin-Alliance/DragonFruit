@@ -3,11 +3,10 @@ import * as THREE from 'three';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Card, CardHeader, IconButton } from '@/components/atoms';
 import {
-  SNAP_STORAGE_KEY,
-  SNAP_TICK_CONFIG_STORAGE_KEY,
-  DEFAULT_SNAP_TICK_CONFIG,
-  parseSnapTickConfig,
-  type SnapTickConfig,
+  SNAP_DIAL_CONFIG_STORAGE_KEY,
+  DEFAULT_SNAP_DIAL_CONFIG,
+  parseSnapDialConfig,
+  type SnapDialConfig,
 } from '@/components/gizmo/rotate/snapRotation';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
@@ -81,15 +80,11 @@ export function TransformControls({
   onTransformCommit,
 }: TransformControlsProps) {
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
-  const [snapEnabled, setSnapEnabled] = useState(() => {
-    try { return localStorage.getItem(SNAP_STORAGE_KEY) === 'true'; } catch { return false; }
-  });
-
-  const [tickConfig, setTickConfig] = useState<SnapTickConfig>(() => {
+  const [tickConfig, setTickConfig] = useState<SnapDialConfig>(() => {
     try {
-      return parseSnapTickConfig(localStorage.getItem(SNAP_TICK_CONFIG_STORAGE_KEY));
+      return parseSnapDialConfig(localStorage.getItem(SNAP_DIAL_CONFIG_STORAGE_KEY));
     } catch {
-      return DEFAULT_SNAP_TICK_CONFIG;
+      return DEFAULT_SNAP_DIAL_CONFIG;
     }
   });
   // Bumped on every commit to re-seed the uncontrolled interval inputs, so a
@@ -101,26 +96,24 @@ export function TransformControls({
   // transiently built 360 ticks at minorDeg=1) and made multi-digit non-divisors
   // like 17 untypeable, since each rejected keystroke reverted the controlled
   // input. A key on tickConfig re-seeds the uncontrolled inputs after a commit.
-  const handleTickIntervalCommit = (tier: keyof SnapTickConfig, raw: string) => {
+  const handleTickIntervalCommit = (tier: keyof SnapDialConfig, raw: string) => {
     const parsed = Number(raw);
     if (!Number.isFinite(parsed)) { setTickConfigEpoch((n) => n + 1); return; }
     const next = { ...tickConfig, [tier]: parsed };
-    // Reject anything the dial could not render rather than persisting it and
-    // letting every ring throw. parseSnapTickConfig is the same gate the gizmo
-    // reads through, so a value that survives here is safe there.
-    const usable = parseSnapTickConfig(JSON.stringify(next));
-    if (usable.minorDeg !== next.minorDeg) { setTickConfigEpoch((n) => n + 1); return; }
+    // Reject anything the dial could not render or snap against rather than
+    // persisting it and letting every ring throw. parseSnapDialConfig is the
+    // same gate the gizmo reads through, so a value that survives here is
+    // safe there.
+    const usable = parseSnapDialConfig(JSON.stringify(next));
+    if (
+      usable.ringShortDeg !== next.ringShortDeg ||
+      usable.ringLongDeg !== next.ringLongDeg ||
+      usable.spokeDeg !== next.spokeDeg
+    ) { setTickConfigEpoch((n) => n + 1); return; }
     setTickConfig(next);
     setTickConfigEpoch((n) => n + 1);
-    try { localStorage.setItem(SNAP_TICK_CONFIG_STORAGE_KEY, JSON.stringify(next)); } catch {}
+    try { localStorage.setItem(SNAP_DIAL_CONFIG_STORAGE_KEY, JSON.stringify(next)); } catch {}
     window.dispatchEvent(new CustomEvent('dragonfruit:tick-config-change'));
-  };
-
-  const handleSnapToggle = () => {
-    const next = !snapEnabled;
-    setSnapEnabled(next);
-    try { localStorage.setItem(SNAP_STORAGE_KEY, String(next)); } catch {}
-    window.dispatchEvent(new CustomEvent('dragonfruit:snap-toggle', { detail: { enabled: next } }));
   };
 
   const compactButtonClass = 'ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]';
@@ -354,36 +347,18 @@ export function TransformControls({
             <div className="flex items-center">
               <div className="flex-1" />
               <SectionHeader title="Rotate" />
-              <div className="flex-1 flex justify-end">
-                <button
-                  type="button"
-                  onClick={handleSnapToggle}
-                  className="h-7 min-w-[64px] rounded-md border px-2 text-[10px] font-semibold uppercase tracking-wide transition-colors"
-                  style={snapEnabled
-                    ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'var(--accent-contrast)',
-                      }
-                    : {
-                        borderColor: 'var(--border-subtle)',
-                        background: 'var(--surface-1)',
-                        color: 'var(--text-muted)',
-                      }}
-                >
-                  Snap drag
-                </button>
-              </div>
+              <div className="flex-1" />
             </div>
             <div className="pt-1.5 space-y-2">
-              {/* Tick intervals (#104). Labelled "drag" above on purpose: the
-                  toggle governs dragging only, and clicking a dial tick always
-                  rotates to that angle whether it is on or off. */}
+              {/* Dial intervals (#104). There is no snap toggle any more:
+                  snapping is chosen by where the cursor sits during a drag —
+                  over the tick ring it snaps by Short, over the inner spokes
+                  by Spoke, elsewhere rotation is free. */}
               <div className="grid grid-cols-3 gap-1 min-w-0">
                 {([
-                  ['majorDeg', 'Major'],
-                  ['mediumDeg', 'Med'],
-                  ['minorDeg', 'Minor'],
+                  ['ringShortDeg', 'Short'],
+                  ['ringLongDeg', 'Long'],
+                  ['spokeDeg', 'Spoke'],
                 ] as const).map(([key, label]) => (
                   <label key={key} className="min-w-0 flex flex-col gap-0.5">
                     <span className="text-[9px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
@@ -400,9 +375,11 @@ export function TransformControls({
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
                       }}
-                      title={key === 'minorDeg'
-                        ? 'Smallest tick spacing, in degrees. Must divide 360.'
-                        : `${label} tick spacing, in degrees. 0 hides this tier.`}
+                      title={key === 'ringShortDeg'
+                        ? 'Short tick spacing and the fine snap step, in degrees. Must divide 360.'
+                        : key === 'spokeDeg'
+                          ? 'Inner spoke spacing and the coarse snap step, in degrees. 0 disables the band.'
+                          : 'Long tick spacing, in degrees. 0 hides the long tier.'}
                       className={valueInputClass}
                     />
                   </label>

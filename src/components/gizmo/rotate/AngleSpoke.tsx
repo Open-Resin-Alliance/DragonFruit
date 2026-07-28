@@ -5,6 +5,9 @@ import { Line } from '@react-three/drei';
 import { GIZMO_SIZES } from '../constants';
 import { polarToLocal, spokeRingAngle } from './snapRotation';
 
+/** Angular resolution of the drag arc. */
+const ARC_STEP_RAD = Math.PI / 64;
+
 interface AngleSpokeProps {
   /** Axis ring colour. */
   color: string;
@@ -42,28 +45,54 @@ export function AngleSpoke({
   active,
   opacityScale = 1,
 }: AngleSpokeProps) {
-  const points = useMemo(() => {
-    // spokeRingAngle carries the drag path's sign convention, so the spoke
-    // travels the same way the handle does rather than mirroring it.
-    const angle = spokeRingAngle(currentAngleRad, axisVisualFlip);
-    return [
+  const angle = spokeRingAngle(currentAngleRad, axisVisualFlip);
+
+  const points = useMemo(
+    () => [
       polarToLocal(angle, GIZMO_SIZES.spokeInnerRadius),
       polarToLocal(angle, GIZMO_SIZES.dialRadius),
-    ];
-  }, [currentAngleRad, axisVisualFlip]);
+    ],
+    [angle],
+  );
+
+  // Arc from the 0-degree reference to the current angle, hugging the tick
+  // circle — rendered only during a drag, when continuous invalidation is
+  // already active, so it adds no idle-loop pressure.
+  const arcPoints = useMemo(() => {
+    if (!active || Math.abs(angle) < 1e-6) return null;
+    const steps = Math.max(2, Math.ceil(Math.abs(angle) / ARC_STEP_RAD));
+    const pts: [number, number, number][] = [];
+    for (let i = 0; i <= steps; i += 1) {
+      pts.push(polarToLocal((angle * i) / steps, GIZMO_SIZES.dialRadius));
+    }
+    return pts;
+  }, [active, angle]);
 
   const opacity = (active ? 0.9 : hovered ? 0.5 : 0) * opacityScale;
   if (opacity <= 0) return null;
 
   return (
-    <Line
-      points={points}
-      color={color}
-      lineWidth={active ? 1.6 : 1.2}
-      transparent
-      opacity={opacity}
-      depthTest={false}
-      toneMapped={false}
-    />
+    <group>
+      <Line
+        points={points}
+        color={color}
+        lineWidth={active ? 1.6 : 1.2}
+        transparent
+        opacity={opacity}
+        depthTest={false}
+        toneMapped={false}
+      />
+      {arcPoints && (
+        <Line
+          points={arcPoints}
+          color={color}
+          lineWidth={2.2}
+          transparent
+          opacity={Math.min(1, opacity * 1.1)}
+          depthTest={false}
+          toneMapped={false}
+        />
+      )}
+    </group>
   );
 }

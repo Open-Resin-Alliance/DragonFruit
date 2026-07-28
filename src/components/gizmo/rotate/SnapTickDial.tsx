@@ -4,11 +4,12 @@ import React, { useMemo } from 'react';
 import { Line } from '@react-three/drei';
 import { GIZMO_SIZES } from '../constants';
 import {
-  getSnapTicks,
+  getRingTicks,
+  getSpokeAngles,
   polarToLocal,
-  DEFAULT_SNAP_TICK_CONFIG,
-  type SnapTickConfig,
-  type TickTier,
+  DEFAULT_SNAP_DIAL_CONFIG,
+  type SnapDialConfig,
+  type RingTickTier,
 } from './snapRotation';
 
 interface SnapTickDialProps {
@@ -20,58 +21,59 @@ interface SnapTickDialProps {
   active: boolean;
   /** Multiplies the computed opacity, mirroring the ring's opacityScale. */
   opacityScale?: number;
-  /** Tier intervals. Defaults to 45/15/5; the settings surface supplies #104's config. */
-  config?: SnapTickConfig;
-  /** Ring-local angle of the tick under the cursor, drawn emphasised. */
-  highlightRad?: number | null;
+  /** Tier intervals. Defaults to the reference 5/10/45 anatomy. */
+  config?: SnapDialConfig;
 }
 
-/** Tick length as a fraction of dialTickLength, longest tier first. */
-const TIER_LENGTH_SCALE: Record<TickTier, number> = {
-  major: 1.0,
-  medium: 0.62,
-  minor: 0.34,
+/** Ring tick length as a fraction of dialTickLength. */
+const TIER_LENGTH_SCALE: Record<RingTickTier, number> = {
+  long: 1.0,
+  short: 0.5,
 };
 
-/** Stroke width per tier. */
-const TIER_LINE_WIDTH: Record<TickTier, number> = {
-  major: 2.0,
-  medium: 1.3,
-  minor: 0.7,
+/** Stroke width per ring tier. */
+const TIER_LINE_WIDTH: Record<RingTickTier, number> = {
+  long: 1.8,
+  short: 0.9,
 };
 
-const TIERS: TickTier[] = ['major', 'medium', 'minor'];
+const RING_TIERS: RingTickTier[] = ['long', 'short'];
 
 /**
- * SnapTickDial — the protractor dial.
+ * SnapTickDial — the faithful protractor anatomy, and a picture of the snap
+ * zones themselves.
  *
- * Ticks sit on a circle at `dialRadius`, inside the coloured drag ring, and
- * radiate OUTWARD toward it. Keeping the tick band off the ring geometry is the
- * point: overlapping the ring is what made the previous attempt hard to read.
+ * Three elements, all in the ring-local frame:
+ * - Ring ticks on the circle at dialRadius, radiating outward: short every 5
+ *   degrees, long every 10. Dragging with the cursor over this band snaps to
+ *   the short step.
+ * - Eight spokes in the inner band from dialRadius/3 to 2*dialRadius/3.
+ *   Dragging with the cursor over this band snaps to the spoke step (45).
+ * - A reference radius at 0 degrees, so the angle arc and readout have a
+ *   visible origin.
  *
- * Rendered in the ring's local frame, deliberately NOT inside the
- * camera-following arc group. Pairing fixed angular positions with a
- * camera-following frame is what made ticks and indicator drift apart off-axis.
+ * The zone maths in classifySnapZone derives its bands from the same
+ * GIZMO_SIZES values used here, so what the user sees IS where snapping
+ * happens — they cannot drift apart.
  *
- * No axisVisualFlip prop, and that is not an oversight: the tick set is one full
- * revolution at a fixed increment, so negating every angle maps the set onto
- * itself, and tier classification is preserved because each interval divides
- * 360. The dial is flip-invariant. The spoke and click resolution are not —
- * they carry a single angle, and both take the flip.
+ * Deliberately NOT inside the camera-following arc group (the original
+ * off-axis drift defect), and deliberately flip-agnostic: both the tick set
+ * and the spoke set are full symmetric revolutions, so negating every angle
+ * maps each set onto itself. The AngleSpoke, which carries a single angle, is
+ * the one that takes axisVisualFlip.
  */
 export function SnapTickDial({
   color,
   hovered,
   active,
   opacityScale = 1,
-  config = DEFAULT_SNAP_TICK_CONFIG,
-  highlightRad = null,
+  config = DEFAULT_SNAP_DIAL_CONFIG,
 }: SnapTickDialProps) {
-  const segmentsByTier = useMemo(() => {
-    const ticks = getSnapTicks(config);
+  const ringSegmentsByTier = useMemo(() => {
+    const ticks = getRingTicks(config);
     const inner = GIZMO_SIZES.dialRadius;
 
-    return TIERS.map((tier) => {
+    return RING_TIERS.map((tier) => {
       const outer = inner + GIZMO_SIZES.dialTickLength * TIER_LENGTH_SCALE[tier];
       const points: [number, number, number][] = [];
       for (const tick of ticks) {
@@ -83,19 +85,31 @@ export function SnapTickDial({
     });
   }, [config]);
 
-  const highlightPoints = useMemo(() => {
-    if (highlightRad === null) return null;
-    const inner = GIZMO_SIZES.dialRadius;
-    const outer = inner + GIZMO_SIZES.dialTickLength * 1.25;
-    return [polarToLocal(highlightRad, inner), polarToLocal(highlightRad, outer)];
-  }, [highlightRad]);
+  const spokePoints = useMemo(() => {
+    const inner = GIZMO_SIZES.dialRadius / 3;
+    const outer = (2 * GIZMO_SIZES.dialRadius) / 3;
+    const points: [number, number, number][] = [];
+    for (const rad of getSpokeAngles(config)) {
+      points.push(polarToLocal(rad, inner));
+      points.push(polarToLocal(rad, outer));
+    }
+    return points;
+  }, [config]);
+
+  const referencePoints = useMemo(
+    () => [
+      polarToLocal(0, GIZMO_SIZES.spokeInnerRadius),
+      polarToLocal(0, GIZMO_SIZES.dialRadius + GIZMO_SIZES.dialTickLength),
+    ],
+    [],
+  );
 
   const opacity = (active ? 0.85 : hovered ? 0.45 : 0) * opacityScale;
   if (opacity <= 0) return null;
 
   return (
     <group>
-      {segmentsByTier.map(({ tier, points }) =>
+      {ringSegmentsByTier.map(({ tier, points }) =>
         points.length > 0 ? (
           <Line
             key={tier}
@@ -110,19 +124,28 @@ export function SnapTickDial({
           />
         ) : null,
       )}
-      {highlightPoints && (
-        // The tick the cursor would land on. With 72 targets on a dial that is
-        // small at default zoom, a click with no aim feedback is a coin toss.
+      {spokePoints.length > 0 && (
         <Line
-          points={highlightPoints}
-          color="#ffffff"
-          lineWidth={2.4}
+          points={spokePoints}
+          segments
+          color={color}
+          lineWidth={1.4}
           transparent
-          opacity={Math.min(1, opacity + 0.35)}
+          opacity={opacity * 0.8}
           depthTest={false}
           toneMapped={false}
         />
       )}
+      {/* 0-degree reference radius — the origin the angle arc grows from. */}
+      <Line
+        points={referencePoints}
+        color={color}
+        lineWidth={2.0}
+        transparent
+        opacity={Math.min(1, opacity * 1.15)}
+        depthTest={false}
+        toneMapped={false}
+      />
     </group>
   );
 }

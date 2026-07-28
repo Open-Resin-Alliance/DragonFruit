@@ -7,16 +7,12 @@ import { Line } from '@react-three/drei';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
 import {
   snapAngle,
-  SNAP_COARSE,
-  SNAP_FINE,
-  SNAP_STORAGE_KEY,
-  nearestTickRad,
-  shortestAngleDelta,
-  objectAngleForRingAngle,
-  parseSnapTickConfig,
-  SNAP_TICK_CONFIG_STORAGE_KEY,
-  DEFAULT_SNAP_TICK_CONFIG,
-  type SnapTickConfig,
+  classifySnapZone,
+  rayToRingLocal,
+  parseSnapDialConfig,
+  SNAP_DIAL_CONFIG_STORAGE_KEY,
+  DEFAULT_SNAP_DIAL_CONFIG,
+  type SnapDialConfig,
 } from './snapRotation';
 import { SnapTickDial } from './SnapTickDial';
 import { AngleSpoke } from './AngleSpoke';
@@ -25,13 +21,17 @@ import {
   getCachedConeGeometry,
   getCachedRotationArcGeometry,
   getCachedRotationArcPoints,
-  getCachedRingGeometry,
   getCachedSphereGeometry,
 } from '../gizmoGeometryCache';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
 
 const ROTATION_CENTER_DEADZONE_PX = 24;
+
+// Scratch objects for per-move zone classification; reused, never retained.
+const zoneRaycaster = new THREE.Raycaster();
+const zoneQuat = new THREE.Quaternion();
+const zoneCenter = new THREE.Vector3();
 const ROTATION_NEAR_CENTER_JUMP_GUARD_PX = 56;
 const ROTATION_NEAR_CENTER_MAX_DELTA = Math.PI / 2;
 
@@ -121,18 +121,22 @@ export function GizmoRotation({
   onPointerLeave,
 }: GizmoRotationProps) {
   const [isDragging, setIsDragging] = useState(false);
-  /** Pointer-down screen position on the dial, used to tell a click from a drag. */
-  const dialPointerDownRef = useRef<{ x: number; y: number } | null>(null);
-  /** Ring-local angle of the tick under the cursor, for hover highlighting. */
-  const [hoveredTickRad, setHoveredTickRad] = useState<number | null>(null);
-  /** Persisted tier intervals (#104). Parsed defensively — see parseSnapTickConfig. */
-  const [tickConfig, setTickConfig] = useState<SnapTickConfig>(() => {
+  /** Persisted dial intervals (#104). Parsed defensively — see parseSnapDialConfig. */
+  const [dialConfig, setDialConfig] = useState<SnapDialConfig>(() => {
     try {
-      return parseSnapTickConfig(localStorage.getItem(SNAP_TICK_CONFIG_STORAGE_KEY));
+      return parseSnapDialConfig(localStorage.getItem(SNAP_DIAL_CONFIG_STORAGE_KEY));
     } catch {
-      return DEFAULT_SNAP_TICK_CONFIG;
+      return DEFAULT_SNAP_DIAL_CONFIG;
     }
   });
+  /** Mirror of dialConfig for the window-level drag listener, so config edits
+   *  do not force the drag effect to resubscribe mid-gesture. */
+  const dialConfigRef = useRef(dialConfig);
+  /** Root of the ring-local frame — zone classification reads its world pose. */
+  const ringGroupRef = useRef<THREE.Group>(null);
+  /** Snap increment from the last classifiable cursor position. Held across
+   *  grazing poses so a near-edge-on drag does not flicker snap<->free. */
+  const lastZoneIncrementRef = useRef<number | null>(null);
   const positiveAxisMidpointAngle = getPositiveAxisMidpointAngle(axis);
   const handleAngleRef = useRef<number>(positiveAxisMidpointAngle);
   const targetHandleAngleRef = useRef<number>(positiveAxisMidpointAngle);
@@ -161,11 +165,12 @@ export function GizmoRotation({
   // broadcasts. invalidate() because under demand mode nothing else would draw.
   useEffect(() => {
     const reload = () => {
+      let next = DEFAULT_SNAP_DIAL_CONFIG;
       try {
-        setTickConfig(parseSnapTickConfig(localStorage.getItem(SNAP_TICK_CONFIG_STORAGE_KEY)));
-      } catch {
-        setTickConfig(DEFAULT_SNAP_TICK_CONFIG);
-      }
+        next = parseSnapDialConfig(localStorage.getItem(SNAP_DIAL_CONFIG_STORAGE_KEY));
+      } catch {}
+      setDialConfig(next);
+      dialConfigRef.current = next;
       invalidate();
     };
     window.addEventListener('dragonfruit:tick-config-change', reload);
@@ -353,78 +358,9 @@ export function GizmoRotation({
     rawAccumulatedAngleRef.current = 0;
     lastSnappedAngleRef.current = 0;
     prevSnapIncrementRef.current = null;
+    lastZoneIncrementRef.current = null;
     window.dispatchEvent(new CustomEvent('dragonfruit:rotation-hint', { detail: { visible: false } }));
     setIsDragging(true);
-  };
-
-  // --- Dial click-to-rotate -------------------------------------------------
-  // A click on a tick rotates to that absolute angle. This is ALWAYS available
-  // and deliberately does not consult SNAP_STORAGE_KEY: that toggle governs
-  // drag snapping only. Ticks being inert unless a mode was first enabled is
-  // what made them read as decoration.
-
-  /** Pointer travel below this is a click; above it the gesture belongs to the camera. */
-  const DIAL_CLICK_SLOP_PX = 4;
-
-  /** Ring-local angle of a pointer hit on the dial band, or null at the centre. */
-  const dialHitAngle = useCallback((e: ThreeEvent<PointerEvent>): number | null => {
-    const local = e.object.worldToLocal(e.point.clone());
-    if (local.x === 0 && local.y === 0) return null;
-    return Math.atan2(local.y, local.x);
-  }, []);
-
-  const handleDialPointerDown = (e: ThreeEvent<PointerEvent>) => {
-    if (!interactionsEnabled || isHidden) return;
-    // Deliberately NOT stopPropagation. A drag that begins on the dial still
-    // belongs to the camera — only a click rotates. Swallowing the gesture here
-    // would make the dial a second, undocumented drag surface.
-    dialPointerDownRef.current = { x: e.clientX, y: e.clientY };
-  };
-
-  const handleDialPointerUp = (e: ThreeEvent<PointerEvent>) => {
-    const start = dialPointerDownRef.current;
-    dialPointerDownRef.current = null;
-    if (!start || !interactionsEnabled || isHidden) return;
-    // If the handle claimed this gesture as a drag, do not also fire a click.
-    // The dial does not stopPropagation on pointerdown (so a camera drag started
-    // on it is preserved), which means a ray through both the dial band and the
-    // handle sphere can arm both. isDragging tells us the handle won.
-    if (isDragging) return;
-    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > DIAL_CLICK_SLOP_PX) return;
-
-    const hit = dialHitAngle(e);
-    if (hit === null) return;
-
-    const targetObjectAngle = objectAngleForRingAngle(
-      nearestTickRad(hit, tickConfig),
-      axisVisualFlip,
-    );
-    const delta = shortestAngleDelta(currentAngleRad, targetObjectAngle);
-    if (delta === 0) return;
-
-    // Emit the full gesture triad through the existing drag callbacks so a click
-    // produces exactly one undo entry, shaped identically to a drag.
-    if (onDragStart() === false) return;
-    onDrag(delta);
-    onDragEnd();
-  };
-
-  const handleDialPointerMove = (e: ThreeEvent<PointerEvent>) => {
-    if (!interactionsEnabled || isHidden) return;
-    const hit = dialHitAngle(e);
-    const next = hit === null ? null : nearestTickRad(hit, tickConfig);
-    if (next !== hoveredTickRad) {
-      setHoveredTickRad(next);
-      invalidate();
-    }
-  };
-
-  const handleDialPointerLeave = () => {
-    dialPointerDownRef.current = null;
-    if (hoveredTickRad !== null) {
-      setHoveredTickRad(null);
-      invalidate();
-    }
   };
 
   const handlePointerEnterLocal = (e: ThreeEvent<PointerEvent>) => {
@@ -464,6 +400,35 @@ export function GizmoRotation({
       if (deltaAngle > Math.PI) deltaAngle -= 2 * Math.PI;
       if (deltaAngle < -Math.PI) deltaAngle += 2 * Math.PI;
 
+      // Faithful zonal snapping: the increment comes from WHERE the cursor
+      // sits in the ring's local plane — over the spoke band it is coarse,
+      // over the tick band fine, elsewhere free. Classification runs BEFORE
+      // the screen deadzone gate below on purpose: the deadzone only
+      // suppresses delta emission, so the zone is already current the moment
+      // emission resumes.
+      const rect = gl.domElement.getBoundingClientRect();
+      zoneRaycaster.setFromCamera(
+        new THREE.Vector2(
+          ((e.clientX - rect.left) / rect.width) * 2 - 1,
+          -(((e.clientY - rect.top) / rect.height) * 2 - 1),
+        ),
+        camera,
+      );
+      if (ringGroupRef.current) {
+        ringGroupRef.current.getWorldQuaternion(zoneQuat);
+        ringGroupRef.current.getWorldPosition(zoneCenter);
+        const planeHit = rayToRingLocal(
+          zoneRaycaster.ray.origin,
+          zoneRaycaster.ray.direction,
+          zoneQuat,
+          zoneCenter,
+        );
+        if (planeHit) {
+          lastZoneIncrementRef.current = classifySnapZone(planeHit.len, dialConfigRef.current);
+        }
+        // null = grazing ray: hold the previous zone rather than flickering.
+      }
+
       if (
         mousePolar.distance < ROTATION_CENTER_DEADZONE_PX
         || (
@@ -483,13 +448,7 @@ export function GizmoRotation({
       const rawObjectDelta = deltaAngle * objectSignFactor;
       rawAccumulatedAngleRef.current += rawObjectDelta;
 
-      // Determine snap state from modifier keys or persistent toggle
-      let snapToggled = false;
-      try { snapToggled = localStorage.getItem(SNAP_STORAGE_KEY) === 'true'; } catch {}
-      const isSnapActive = e.metaKey || e.ctrlKey || snapToggled;
-      const currentIncrement = isSnapActive
-        ? (e.shiftKey ? SNAP_FINE : SNAP_COARSE)
-        : null;
+      const currentIncrement = lastZoneIncrementRef.current;
 
       // Reset accumulated on any transition (free↔snap, coarse↔fine)
       // to prevent grid-misalignment jumps
@@ -550,7 +509,7 @@ export function GizmoRotation({
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
     };
-  }, [isDragging, getMousePolar, axis, axisVisualFlip]);
+  }, [isDragging, getMousePolar, axis, axisVisualFlip, camera, gl.domElement]);
 
   // Use GPU picking hover state OR prop-based hover (fallback)
   const effectiveHovered = !suppressHover && (isPickingHovered || isHovered);
@@ -600,19 +559,6 @@ export function GizmoRotation({
   // (The handleAngle already calculated above is what we need)
 
   const arcGeometry = useMemo(() => getCachedRotationArcGeometry(axis), [axis]);
-  /** One merged pick surface for the whole dial band. 72 separate tick meshes
-   *  would multiply the pick surface count per ring and undo ADR-0002's
-   *  off-loop picking cache; the angle is resolved from the hit point instead. */
-  const dialPickGeometry = useMemo(
-    () =>
-      getCachedRingGeometry(
-        GIZMO_SIZES.dialRadius - GIZMO_SIZES.dialTickLength * 0.6,
-        GIZMO_SIZES.dialRadius + GIZMO_SIZES.dialTickLength * 1.6,
-        72,
-      ),
-    [],
-  );
-
   const pickGeometry = useMemo(
     () => getCachedSphereGeometry(Math.max(0.18, GIZMO_SIZES.ringDiamondRadius * 0.9 * handleScale), 16, 16),
     [handleScale],
@@ -624,6 +570,7 @@ export function GizmoRotation({
 
   return (
     <group
+      ref={ringGroupRef}
       rotation={rotation}
     >
       {/* Pickable mesh for GPU picking - invisible but rendered in pick pass.
@@ -656,25 +603,12 @@ export function GizmoRotation({
           indicator drift apart off-axis. */}
       {!isHidden && !isDimmed && (
         <>
-          {interactionsEnabled && (
-            <mesh
-              geometry={dialPickGeometry}
-              onPointerDown={handleDialPointerDown}
-              onPointerUp={handleDialPointerUp}
-              onPointerMove={handleDialPointerMove}
-              onPointerLeave={handleDialPointerLeave}
-              onPointerCancel={handleDialPointerLeave}
-            >
-              <meshBasicMaterial visible={false} side={THREE.DoubleSide} />
-            </mesh>
-          )}
           <SnapTickDial
             color={ringColors.ring}
             hovered={!!effectiveHovered}
             active={ringIsActive}
             opacityScale={opacityScale}
-            config={tickConfig}
-            highlightRad={hoveredTickRad}
+            config={dialConfig}
           />
           <AngleSpoke
             color={ringColors.ring}

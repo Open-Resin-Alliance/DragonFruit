@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
-import { usePlatformModifier } from '@/hooks/usePlatformModifier';
 
-/** Cursor-following tooltip shown on rotation ring hover with snap shortcut hints. */
+/**
+ * Cursor-following tooltip shown on rotation ring hover.
+ *
+ * Snapping is zonal: it is chosen by where the cursor sits during the drag,
+ * not by modifier keys — this hint is the one piece of chrome that makes that
+ * discoverable, so its copy must match the zones in SnapTickDial.
+ */
 export function RotationHintTooltip() {
   const [visible, setVisible] = useState(false);
-  const modKey = usePlatformModifier();
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -28,7 +32,7 @@ export function RotationHintTooltip() {
       >
         <div>Drag to rotate</div>
         <div className="mt-0.5 opacity-70">
-          {modKey}+Drag: 45° &nbsp;|&nbsp; +Shift: 15°
+          over ticks: 5° snap &nbsp;|&nbsp; over spokes: 45°
         </div>
       </div>
     </MouseTooltip>

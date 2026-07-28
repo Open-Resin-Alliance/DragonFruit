@@ -13,69 +13,6 @@ export const SNAP_COARSE = Math.PI / 4;
 /** Fine snap increment: 15 degrees */
 export const SNAP_FINE = Math.PI / 12;
 
-/** localStorage key for persistent snap toggle. Governs DRAG snapping only —
- *  tick click-to-rotate is always available regardless of this setting. */
-export const SNAP_STORAGE_KEY = 'dragonfruit:rotation-snap-enabled';
-
-/** Tick length tier. `major` is longest, `minor` shortest. */
-export type TickTier = 'major' | 'medium' | 'minor';
-
-/** Tier intervals in whole degrees. Runtime-tunable via the settings panel (#104). */
-export interface SnapTickConfig {
-  majorDeg: number;
-  mediumDeg: number;
-  minorDeg: number;
-}
-
-/** 45/15/5 — 45 divides evenly by 15, so majors and mediums stay in phase. */
-export const DEFAULT_SNAP_TICK_CONFIG: SnapTickConfig = {
-  majorDeg: 45,
-  mediumDeg: 15,
-  minorDeg: 5,
-};
-
-/** One dial tick at a fixed angular position in the ring-local frame. */
-export interface SnapTick {
-  deg: number;
-  rad: number;
-  tier: TickTier;
-}
-
-/**
- * Build the de-duplicated tick set for one full revolution.
- *
- * Every position is emitted exactly once and classified by its LARGEST
- * matching tier, so a degree that is a multiple of all three (0, 45, 90...)
- * yields a single major tick rather than three overlapping ones. Classification
- * is done in whole degrees because the float radians for 45 and 15 multiples do
- * not compare exactly.
- */
-export function getSnapTicks(
-  config: SnapTickConfig = DEFAULT_SNAP_TICK_CONFIG,
-): SnapTick[] {
-  const { majorDeg, mediumDeg, minorDeg } = config;
-
-  if (!Number.isInteger(minorDeg) || minorDeg <= 0) {
-    throw new Error(
-      `getSnapTicks: minorDeg must be a positive whole number of degrees, got ${minorDeg}`,
-    );
-  }
-  if (360 % minorDeg !== 0) {
-    throw new Error(
-      `getSnapTicks: minorDeg must divide 360 evenly or the last gap is uneven, got ${minorDeg}`,
-    );
-  }
-
-  const ticks: SnapTick[] = [];
-  for (let deg = 0; deg < 360; deg += minorDeg) {
-    const isMajor = majorDeg > 0 && deg % majorDeg === 0;
-    const isMedium = mediumDeg > 0 && deg % mediumDeg === 0;
-    const tier: TickTier = isMajor ? 'major' : isMedium ? 'medium' : 'minor';
-    ticks.push({ deg, rad: (deg * Math.PI) / 180, tier });
-  }
-  return ticks;
-}
-
 /**
  * Map an object rotation angle about a ring's axis into that ring's local frame.
  *
@@ -123,47 +60,6 @@ export function ringGroupEuler(axis: GizmoAxis): [number, number, number] {
   return [0, 0, 0];
 }
 
-const TWO_PI = Math.PI * 2;
-
-/**
- * Ring-local angle of the tick nearest a given angle.
- *
- * Resolves a pointer hit on the dial to the tick it landed on. Quantisation is
- * done in whole degrees, matching getSnapTicks, so the result is exactly a
- * member of that tick set rather than a float that merely rounds to one.
- * Normalised into one revolution, so 358 degrees resolves forward to 0 rather
- * than backwards to 355.
- */
-export function nearestTickRad(
-  angleRad: number,
-  config: SnapTickConfig = DEFAULT_SNAP_TICK_CONFIG,
-): number {
-  const { minorDeg } = config;
-  if (!Number.isInteger(minorDeg) || minorDeg <= 0 || 360 % minorDeg !== 0) {
-    throw new Error(
-      `nearestTickRad: minorDeg must be a positive whole divisor of 360, got ${minorDeg}`,
-    );
-  }
-
-  const degrees = (angleRad * 180) / Math.PI;
-  const normalised = ((degrees % 360) + 360) % 360;
-  const snapped = (Math.round(normalised / minorDeg) * minorDeg) % 360;
-  return (snapped * Math.PI) / 180;
-}
-
-/**
- * Signed delta from one angle to another, taking the short way round.
- *
- * A tick click is applied as a delta through the existing drag callbacks, so
- * clicking 350 degrees while sitting at 10 must rotate -20, not +340.
- */
-export function shortestAngleDelta(fromRad: number, toRad: number): number {
-  let delta = (toRad - fromRad) % TWO_PI;
-  if (delta > Math.PI) delta -= TWO_PI;
-  if (delta < -Math.PI) delta += TWO_PI;
-  return Object.is(delta, -0) ? 0 : delta;
-}
-
 /**
  * Sign relating an object-space rotation to its ring-local visual angle.
  *
@@ -202,48 +98,10 @@ export function objectAngleForRingAngle(
   return RING_VISUAL_AXIS_SIGN * ringLocalAngle(ringAngleRad, axisVisualFlip);
 }
 
-/** localStorage key for the persisted tick tier config (#104). */
-export const SNAP_TICK_CONFIG_STORAGE_KEY = 'dragonfruit:rotation-tick-config';
-
-/** True when a config can be rendered without getSnapTicks throwing. */
-function isUsableTickConfig(value: unknown): value is SnapTickConfig {
-  if (typeof value !== 'object' || value === null) return false;
-  const { majorDeg, mediumDeg, minorDeg } = value as Record<string, unknown>;
-  if (
-    typeof majorDeg !== 'number' ||
-    typeof mediumDeg !== 'number' ||
-    typeof minorDeg !== 'number'
-  ) {
-    return false;
-  }
-  return Number.isInteger(minorDeg) && minorDeg > 0 && 360 % minorDeg === 0;
-}
-
-/**
- * Read a persisted tick config, falling back to the default on anything
- * unusable.
- *
- * Deliberately total: a corrupt or hand-edited localStorage value must not make
- * every rotation ring throw on render. Validation mirrors getSnapTicks' own
- * precondition so a parsed config is always safe to pass straight to it.
- */
-export function parseSnapTickConfig(raw: string | null): SnapTickConfig {
-  if (!raw) return DEFAULT_SNAP_TICK_CONFIG;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return isUsableTickConfig(parsed)
-      ? { majorDeg: parsed.majorDeg, mediumDeg: parsed.mediumDeg, minorDeg: parsed.minorDeg }
-      : DEFAULT_SNAP_TICK_CONFIG;
-  } catch {
-    return DEFAULT_SNAP_TICK_CONFIG;
-  }
-}
-
 // ─── Faithful dial model (dragonfruit-103-2) ────────────────────────────────
 // Ring ticks at short/long tiers plus a coarse spoke band; snapping is chosen
 // by WHERE the cursor sits in the ring's local plane during a drag, not by
-// modifier keys or a toggle. The legacy SnapTickConfig API above remains until
-// each consumer migrates, then is deleted with its last consumer.
+// modifier keys or a toggle.
 
 /** Tier intervals for the faithful dial, whole degrees. */
 export interface SnapDialConfig {
@@ -256,6 +114,10 @@ export interface SnapDialConfig {
 }
 
 /** The reference anatomy: short 5, long 10, spokes 45. */
+/** localStorage key for the persisted dial config (#104). Same key the legacy
+ *  shape used — parseSnapDialConfig rejects old values so they reset cleanly. */
+export const SNAP_DIAL_CONFIG_STORAGE_KEY = 'dragonfruit:rotation-tick-config';
+
 export const DEFAULT_SNAP_DIAL_CONFIG: SnapDialConfig = {
   ringShortDeg: 5,
   ringLongDeg: 10,

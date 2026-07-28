@@ -2,14 +2,13 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import * as THREE from "three";
 import {
-  getSnapTicks,
+  getRingTicks,
   spokeRingAngle,
   objectAngleForRingAngle,
-  nearestTickRad,
   rayToRingLocal,
   polarToLocal,
   ringGroupEuler,
-  DEFAULT_SNAP_TICK_CONFIG,
+  DEFAULT_SNAP_DIAL_CONFIG,
 } from "../snapRotation";
 import { GIZMO_SIZES } from "../../constants";
 import type { GizmoAxis } from "../../types";
@@ -37,7 +36,7 @@ const AXES: GizmoAxis[] = ["x", "y", "z"];
 const AZIMUTHS_DEG = [0, 45, 90, 135, 180, 225, 270, 315];
 const ELEVATIONS_DEG = [-60, -30, 0, 30, 60];
 
-/** Tick positions sampled for registration. Mix of major, medium and minor. */
+/** Tick positions sampled for registration. Mix of long and short ring ticks. */
 const SAMPLE_DEGREES = [0, 45, 90, 135, 180, 270, 315, 15, 30, 5];
 
 function makeCamera(azimuthDeg: number, elevationDeg: number): THREE.PerspectiveCamera {
@@ -86,7 +85,7 @@ function buildRing(axis: GizmoAxis, objectAngleRad: number, axisVisualFlip: numb
   const radius = GIZMO_SIZES.dialRadius;
   const tickByDegree = new Map<number, THREE.Object3D>();
 
-  for (const tick of getSnapTicks(DEFAULT_SNAP_TICK_CONFIG)) {
+  for (const tick of getRingTicks(DEFAULT_SNAP_DIAL_CONFIG)) {
     const marker = new THREE.Object3D();
     const [x, y, z] = polarToLocal(tick.rad, radius);
     marker.position.set(x, y, z);
@@ -288,66 +287,6 @@ describe("the spoke tracks the object's real rotation", () => {
         );
       }
     }
-  });
-});
-
-describe("click resolution reaches the tick under the cursor", () => {
-  /**
-   * Exercises the exact composition handleDialPointerUp runs, from a pick point
-   * to an object angle, across camera poses and both flip directions. The
-   * component reads e.point (a world hit) through e.object.worldToLocal; here we
-   * build a real world hit on the dial band, invert it into the ring-local frame
-   * the same way, and assert the resolved object angle lands the spoke back on
-   * the tick the cursor was over. Unit tests cover the pieces; this covers the
-   * wiring, which is where a sign or frame slip would hide.
-   */
-  function ringQuat(axis: GizmoAxis): THREE.Quaternion {
-    return new THREE.Quaternion().setFromEuler(new THREE.Euler(...ringGroupEuler(axis)));
-  }
-
-  /** World-space point sitting on the dial band at a given ring-local angle. */
-  function dialWorldPoint(axis: GizmoAxis, ringAngleRad: number): THREE.Vector3 {
-    const local = new THREE.Vector3(...polarToLocal(ringAngleRad, GIZMO_SIZES.dialRadius));
-    return local.applyQuaternion(ringQuat(axis));
-  }
-
-  /** The resolution handleDialPointerUp performs: world hit -> object angle. */
-  function resolveClick(axis: GizmoAxis, worldHit: THREE.Vector3, flip: number): number {
-    // e.object.worldToLocal — the dial mesh's frame is the ring group's frame.
-    const local = worldHit.clone().applyQuaternion(ringQuat(axis).clone().invert());
-    const hitAngle = Math.atan2(local.y, local.x);
-    return objectAngleForRingAngle(nearestTickRad(hitAngle), flip);
-  }
-
-  it("resolves a hit on each sampled tick to that tick, across axes and flips", () => {
-    for (const axis of AXES) {
-      for (const flip of [1, -1]) {
-        for (const degree of SAMPLE_DEGREES) {
-          const ringAngle = (degree * Math.PI) / 180;
-          const worldHit = dialWorldPoint(axis, ringAngle);
-          const objectAngle = resolveClick(axis, worldHit, flip);
-
-          // The spoke drawn for that object angle must land back on the tick.
-          const landedRingAngle = spokeRingAngle(objectAngle, flip);
-          const landedDeg = ((Math.round((landedRingAngle * 180) / Math.PI) % 360) + 360) % 360;
-          assert.equal(
-            landedDeg,
-            degree,
-            `axis ${axis}, flip ${flip}: clicking tick ${degree}deg resolved to a ` +
-              `rotation that lands the spoke at ${landedDeg}deg`,
-          );
-        }
-      }
-    }
-  });
-
-  it("snaps an off-tick hit to the nearest tick, not the raw cursor angle", () => {
-    // A hit at 43deg on the dial must rotate to the 45 tick, not to 43.
-    const worldHit = dialWorldPoint("z", (43 * Math.PI) / 180);
-    const objectAngle = resolveClick("z", worldHit, 1);
-    const landed = spokeRingAngle(objectAngle, 1);
-    const landedDeg = Math.round((landed * 180) / Math.PI);
-    assert.equal(landedDeg, 45);
   });
 });
 
