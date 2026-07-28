@@ -20,16 +20,27 @@ import {
   IMPORT_RUN_MAP_MAX_ENTRIES,
   type ImportRunMap,
 } from '../importRunMap';
+import { asFileFrameCount } from '../triangleCountFrames';
+import {
+  makeFileFrameRunMap,
+  type FileFrameRunMapFixture,
+} from './triangleCountFrameFixtures';
 
-function mapWith(runs: number[], overrides: Partial<ImportRunMap> = {}): ImportRunMap {
-  return {
+// The defaults stay HERE, unchanged — `makeFileFrameRunMap` supplies none of
+// its own (see that module's design rule). All it adds is the statement that
+// `modelTriangleCount` is a FRAME (A) source-file count.
+function mapWith(
+  runs: number[],
+  overrides: Partial<FileFrameRunMapFixture> = {},
+): ImportRunMap {
+  return makeFileFrameRunMap({
     runs: new Uint32Array(runs),
     sourceTriangleCount: 3168,
     modelTriangleCount: 768,
     droppedNonFiniteTriangles: 0,
     totalRunCount: runs.length / 2,
     ...overrides,
-  };
+  });
 }
 
 test('the chunk encoding round-trips exactly', () => {
@@ -136,7 +147,9 @@ test('an import with no model/support split records no run map at all', () => {
 test('an import whose map exceeded the transport cap still records the count', () => {
   const map = importRunMapFromResponse({
     runs: null,
-    modelTriangleCount: 768,
+    // What boundary 1 (`parseImportClassification`) hands this function: a
+    // FRAME (A) count read off the DFST header, describing the source file.
+    modelTriangleCount: asFileFrameCount(768),
     sourceTriangleCount: 3168,
     droppedNonFiniteTriangles: 2,
     totalRunCount: 99_999,

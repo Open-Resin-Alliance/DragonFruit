@@ -21,6 +21,12 @@ import {
   stageFullResMutatorSource,
   type FullResMutatorSource,
 } from '@/utils/fullResMutatorStaging';
+import {
+  asFileFrameCount,
+  asGeometryFrameCount,
+  type FileFrameCount,
+  type GeometryFrameCount,
+} from '@/utils/triangleCountFrames';
 
 /**
  * Topology stats for ONE mesh, in the frame of the mesh they were measured on.
@@ -122,8 +128,12 @@ export interface MeshHealthReport {
    *
    * `null` means the classifier found NO reliable partition — the absence of a
    * split, never a split covering everything.
+   *
+   * R8-lite (2026-07-27): typed {@link GeometryFrameCount} so the distinction
+   * above is enforced by `tsc` rather than by this paragraph. A plain `number`
+   * no longer fits here, and an {@link FileFrameCount} never fits.
    */
-  model_triangle_count?: number | null;
+  model_triangle_count?: GeometryFrameCount | null;
   /** Result of the final manifold_csg status check on the model section, run at
    *  the end of the native repair and classify routines. `false` means the CSG
    *  backend reported some non-manifold status (open mesh, non-finite vertices,
@@ -188,8 +198,12 @@ export interface SectionStatsJson {
 export interface ImportClassificationJson {
   /** FRAME (A) — a SOURCE-FILE triangle index. `null` when no reliable
    *  model/support partition was found — which is the ABSENCE of a split, not a
-   *  split covering everything. */
-  model_triangle_count: number | null;
+   *  split covering everything.
+   *
+   *  R8-lite (2026-07-27): typed {@link FileFrameCount}. It is mutually
+   *  incompatible with {@link GeometryFrameCount}, so the `??`-chain R7 removed
+   *  from `splitToBodiesStrategy.ts` can no longer be written at all. */
+  model_triangle_count: FileFrameCount | null;
   likely_support_geometry: boolean;
   connected_components: number | null;
   model_section: SectionStatsJson | null;
@@ -392,8 +406,15 @@ function normalizeMeshHealthReport(input: unknown): MeshHealthReport {
     post,
     steps: Array.isArray(raw.steps) ? raw.steps.map(normalizeMeshRepairStep) : [],
     likely_support_geometry: asBoolean(raw.likely_support_geometry ?? raw.likelySupportGeometry),
+    // ── FRAME BOUNDARY (B) ────────────────────────────────────────────────
+    // R8-lite boundary 2 of 4. This is the ONE decode for every report the Rust
+    // engine produces — `mesh_classify_staged`, `mesh_repair_staged` and
+    // `mesh_repair_from_path` all land here — and every one of them measured
+    // the count on the mesh currently in the staging buffer, which is the mesh
+    // the caller is about to read the positions of. So the geometry frame is a
+    // fact about this decode, not an assumption about its callers.
     model_triangle_count: typeof raw.model_triangle_count === 'number' && raw.model_triangle_count > 0
-      ? raw.model_triangle_count
+      ? asGeometryFrameCount(raw.model_triangle_count)
       : null,
     model_is_manifold: typeof raw.model_is_manifold === 'boolean' ? raw.model_is_manifold : null,
     model_manifold_status: typeof raw.model_manifold_status === 'string' ? raw.model_manifold_status : null,
@@ -439,8 +460,15 @@ export function parseImportClassification(input: unknown): ImportClassificationJ
   const raw = asRecord(input);
   const modelTriangleCount = asOptionalNumber(raw.model_triangle_count);
   return {
+    // ── FRAME BOUNDARY (A) ──────────────────────────────────────────────
+    // R8-lite boundary 1 of 4 — the DFST classification decode. The sole
+    // production caller is `decodeNativeStlResponse` in `useStlGeometry.ts`,
+    // reading the block Rust's `classify_import` wrote about the
+    // FULL-RESOLUTION source file, before any decimation.
     model_triangle_count:
-      modelTriangleCount != null && modelTriangleCount > 0 ? modelTriangleCount : null,
+      modelTriangleCount != null && modelTriangleCount > 0
+        ? asFileFrameCount(modelTriangleCount)
+        : null,
     likely_support_geometry: asBoolean(raw.likely_support_geometry),
     connected_components: asOptionalNumber(raw.connected_components),
     model_section: normalizeSectionStats(raw.model_section),
@@ -496,6 +524,16 @@ export function parseImportClassification(input: unknown): ImportClassificationJ
  * geometry is the file, or the count is `null`. Verified by exhausting the
  * callers in the 2026-07-27 audit, §2.2.
  *
+ * **R8-lite (2026-07-27) makes that obligation visible.** With the two counts
+ * branded, the copy below no longer type-checks on its own: it is now an
+ * explicit `asGeometryFrameCount(...)` on an (A) value — **the only A→B
+ * conversion in the tree**, and the only place either brand is converted to the
+ * other. It is a re-brand and not a decode, so it asserts something about the
+ * CALLERS rather than about the data; the two preconditions above are what make
+ * the assertion true. A third caller that cannot satisfy them must pass
+ * `model_triangle_count: null` (as `loadStlSectionGeometry` does) rather than
+ * widen this cast.
+ *
  * KNOWN GAP, inherited not introduced: `MeshAnalysisJson.self_intersections` is
  * a plain `number`, so the un-measured self-intersection count is reported as
  * `0` here exactly as the incumbent classify-only tier (`minimal_analysis`)
@@ -545,7 +583,14 @@ export function importClassificationToHealthReport(
       },
     ],
     likely_support_geometry: classification.likely_support_geometry,
-    model_triangle_count: classification.model_triangle_count,
+    // ── FRAME BOUNDARY (A → B) ──────────────────────────────────────────
+    // R8-lite boundary 4 of 4. Legal ONLY because both callers guarantee
+    // A ≡ B — see the "THE ONE PLACE FRAME (A) WEARS FRAME (B)'s TYPE"
+    // section above. Value-identical to the plain copy it replaces: `null`
+    // stays `null`, a number stays the same number.
+    model_triangle_count: classification.model_triangle_count == null
+      ? null
+      : asGeometryFrameCount(classification.model_triangle_count),
     model_is_manifold: classification.model_is_manifold,
     model_manifold_status: classification.model_manifold_status,
     residual_issues: [],

@@ -29,6 +29,7 @@ import {
   planImportSectionSplice,
   type ImportRunMapRecomputeReason,
 } from '@/utils/importRunMap';
+import type { FileFrameCount } from '@/utils/triangleCountFrames';
 
 export type SplitUnavailableReason =
   /** No classification, or one that found a single section. Nothing to split. */
@@ -77,8 +78,14 @@ export type SplitToBodiesStrategy =
      * Full-resolution counts the two Rust responses must reproduce, when they
      * are known. The caller cross-checks rather than trusting: model + support
      * must equal the source, or the map does not describe the file.
+     *
+     * FRAME (A), and now branded so (audit §3.1 site 8, step R7). R7 removed a
+     * `?? nativeRepairReport?.model_triangle_count` fallback here because that
+     * is a (B) value — a ~2M scene number offered to a check against an 11M
+     * file. R8-lite makes re-adding it a compile error rather than a review
+     * catch.
      */
-    expectedModelTriangleCount: number | null;
+    expectedModelTriangleCount: FileFrameCount | null;
     expectedSourceTriangleCount: number | null;
   }
   | { kind: 'unavailable'; reason: SplitUnavailableReason };

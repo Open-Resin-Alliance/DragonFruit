@@ -3,6 +3,7 @@ import test from 'node:test';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { prepareLoadedModelsForOutput, resolveOutputSectionPlan } from '../prepareModelGeometry';
+import { makeGeometryFrameReport } from '@/utils/__tests__/triangleCountFrameFixtures';
 
 /**
  * Ph3 — THE F3 REPLACEMENT.
@@ -88,10 +89,10 @@ function makeModel(input: {
         hasDefects: false,
         repairedFloats: 0,
         totalVertices: input.sceneTriangles * 3,
-        nativeRepairReport: {
-          model_triangle_count: input.modelTriangleCount,
-          likely_support_geometry: true,
-        },
+        nativeRepairReport: makeGeometryFrameReport({
+          modelTriangleCount: input.modelTriangleCount,
+          likelySupportGeometry: true,
+        }),
       },
     },
     transform: {

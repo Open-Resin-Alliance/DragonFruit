@@ -30,7 +30,20 @@
  * consumer re-derives the map from the source file. Ph1 establishes the map, the
  * persistence and this resolver; the recompute itself is Ph3's, because the
  * splice is its only consumer.
+ *
+ * ## Which frame everything here is in
+ *
+ * **FRAME (A), throughout.** Every count in this module — {@link ImportRunMap},
+ * {@link ImportRunMapSummary}, and the input to {@link importRunMapFromResponse}
+ * — is a SOURCE-FILE number, and R8-lite (2026-07-27) brands them
+ * {@link FileFrameCount} so that stays true by compilation rather than by
+ * comment. The one thing in here that is NOT (A) is
+ * {@link planImportSectionSplice}'s `reportSplitExists`, which is a boolean
+ * distilled from a frame-(B) report — deliberately, as the last resort, and
+ * documented at each of its three call sites.
  */
+
+import type { FileFrameCount } from '@/utils/triangleCountFrames';
 
 /** `(start: u32, len: u32)`. */
 export const IMPORT_RUN_MAP_BYTES_PER_ENTRY = 8;
@@ -53,8 +66,15 @@ export type ImportRunMap = {
   runs: Uint32Array;
   /** Triangle count as the SOURCE FILE numbers them — the space `runs` addresses. */
   sourceTriangleCount: number;
-  /** Model-section triangle count. Equals the sum of the run lengths. */
-  modelTriangleCount: number;
+  /**
+   * FRAME (A). Model-section triangle count, in SOURCE-FILE indices. Equals the
+   * sum of the run lengths.
+   *
+   * R8-lite (2026-07-27): branded {@link FileFrameCount}, so it can never be
+   * assigned to — or `??`-chained with — a `MeshHealthReport`'s geometry-frame
+   * count. See `@/utils/triangleCountFrames`.
+   */
+  modelTriangleCount: FileFrameCount;
   /** Triangles the intake dropped for a non-finite coordinate; already compensated for. */
   droppedNonFiniteTriangles: number;
   /**
@@ -73,7 +93,26 @@ export type ImportRunMap = {
 export type ImportRunMapSummary = {
   entryCount: number;
   sourceTriangleCount: number;
-  modelTriangleCount: number;
+  /**
+   * FRAME (A), same as {@link ImportRunMap.modelTriangleCount} — this is its
+   * textual, persisted form.
+   *
+   * ## R8-lite boundary 3 of 4 — the VOXL restore
+   *
+   * On the way OUT the brand comes from the live map (`summarizeImportRunMap`).
+   * On the way BACK IN it is asserted by the existing structural cast in
+   * `voxl/codec-v2.ts` — `readJsonChunk<VoxlModelEntry[]>(CHUNK_MODL)` — which
+   * is the single point where the persisted `MODL` JSON re-enters the type
+   * system. No second cast was added: the assertion already existed and this is
+   * the field it now carries a frame for.
+   *
+   * **VOXL persists (A), and only (A).** A reload's `MeshHealthReport` is NOT
+   * read from the file — `loadMeshGeometry` runs a fresh classify pass over the
+   * embedded (possibly preview) mesh and writes the positions back, so that
+   * count is branded (B) at `normalizeMeshHealthReport` like any other report.
+   * Audit §4, "Other producers of (B), all checked".
+   */
+  modelTriangleCount: FileFrameCount;
   droppedNonFiniteTriangles: number;
   totalRunCount: number;
 };
@@ -299,7 +338,8 @@ export function planImportSectionSplice(input: {
  */
 export function importRunMapFromResponse(input: {
   runs: Uint32Array | null;
-  modelTriangleCount: number | null;
+  /** FRAME (A) — the DFST classification's own count, straight from boundary 1. */
+  modelTriangleCount: FileFrameCount | null;
   sourceTriangleCount: number;
   droppedNonFiniteTriangles: number;
   totalRunCount: number;

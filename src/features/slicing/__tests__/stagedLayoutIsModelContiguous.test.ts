@@ -3,6 +3,7 @@ import test from 'node:test';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSolidSliceMeshForWasm, type FullResSplicedModel } from '../rasterLayerZipExport';
+import { makeGeometryFrameReport } from '@/utils/__tests__/triangleCountFrameFixtures';
 
 /**
  * Ph3 — THE STAGING-ORDER CONTRACT.
@@ -87,12 +88,12 @@ function makeCollectorModel(
         hasDefects: false,
         repairedFloats: 0,
         totalVertices: total * 3,
-        nativeRepairReport: {
-          model_triangle_count: options.reportModelTriangleCount === undefined
+        nativeRepairReport: makeGeometryFrameReport({
+          modelTriangleCount: options.reportModelTriangleCount === undefined
             ? modelTris
             : options.reportModelTriangleCount,
-          likely_support_geometry: options.likelySupportGeometry ?? true,
-        },
+          likelySupportGeometry: options.likelySupportGeometry ?? true,
+        }),
       },
     },
     transform: {

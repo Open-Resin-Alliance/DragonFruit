@@ -7,6 +7,7 @@ import {
   splitClassifiedSupportGeometry,
 } from '@/features/scene/splitClassifiedSupports';
 import { resolveSplitToBodiesStrategy } from '@/features/scene/splitToBodiesStrategy';
+import { makeGeometryFrameReport } from '@/utils/__tests__/triangleCountFrameFixtures';
 
 /**
  * Ph3 (scene path) — THE F3 DEFECT CLASS ON THE USER-INVOKED SPLIT.
@@ -102,10 +103,10 @@ function makePreviewSplitModel(input: {
         hasDefects: false,
         repairedFloats: 0,
         totalVertices: input.sceneTriangles * 3,
-        nativeRepairReport: {
-          model_triangle_count: input.modelTriangleCount,
-          likely_support_geometry: true,
-        },
+        nativeRepairReport: makeGeometryFrameReport({
+          modelTriangleCount: input.modelTriangleCount,
+          likelySupportGeometry: true,
+        }),
       },
     },
     transform: {

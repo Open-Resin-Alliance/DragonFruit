@@ -3,6 +3,7 @@ import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import type { LoadedModel } from './useSceneCollectionManager';
 import { accelerateGeometry } from '@/utils/bvh';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
+import { asGeometryFrameCount, type GeometryFrameCount } from '@/utils/triangleCountFrames';
 
 /**
  * Is this buffer a VERBATIM full-resolution import, or a decimated stand-in?
@@ -65,7 +66,13 @@ export type ClassifiedSupportGeometrySplit = {
   supportGeometry: GeometryWithBounds;
   modelPosition: THREE.Vector3;
   supportPosition: THREE.Vector3;
-  modelTriangleCount: number;
+  /**
+   * FRAME (B) — THE CUT INDEX. Where `positions` was sliced, in the source
+   * model's own buffer indices. R8-lite brands it so it cannot be confused with
+   * the file-frame count that Ph3c's docblock wrongly claimed was being read
+   * here.
+   */
+  modelTriangleCount: GeometryFrameCount;
   supportTriangleCount: number;
   totalTriangleCount: number;
 };
@@ -107,9 +114,12 @@ export function splitClassifiedSupportGeometry(
   source: LoadedModel,
   options: { interactive?: boolean } = {},
 ): ClassifiedSupportGeometrySplit | null {
-  const modelTriangleCount = Math.floor(
+  // DERIVED (B): `Math.floor` launders the brand off a value that was already
+  // (B), and `?? 0` substitutes a start-of-buffer index that is valid in any
+  // frame. Both leave the geometry frame intact, so re-asserting it is honest.
+  const modelTriangleCount = asGeometryFrameCount(Math.floor(
     source.geometry.meshDefects?.nativeRepairReport?.model_triangle_count ?? 0,
-  );
+  ));
   if (modelTriangleCount <= 0) return null;
 
   // Refuse the in-place scene cut for a decimated preview.

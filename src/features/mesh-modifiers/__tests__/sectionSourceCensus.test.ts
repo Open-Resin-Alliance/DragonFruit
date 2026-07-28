@@ -6,6 +6,10 @@ import { resolveFullResSourceForModel, resolveOutputGeometrySource } from '../pr
 import { planMutatorFullResStaging } from '@/utils/fullResMutatorStaging';
 import { planModelRustAnalysisStaging } from '@/utils/rustAnalysisStaging';
 import { resolveIslandScanFrame } from '@/volumeAnalysis/Islands/islandScanSource';
+import {
+  makeFileFrameRunMap,
+  makeGeometryFrameReport,
+} from '@/utils/__tests__/triangleCountFrameFixtures';
 
 /**
  * Ph3d — THE CENSUS. Every Rust-bound consumer must learn that a model is only
@@ -55,13 +59,13 @@ function makeModel(input: {
       cPre: [1, 2, 3] as [number, number, number],
       ...(runs
         ? {
-          importRunMap: {
+          importRunMap: makeFileFrameRunMap({
             runs,
             sourceTriangleCount: 40,
             modelTriangleCount: 12,
             droppedNonFiniteTriangles: 0,
             totalRunCount: input.overCapRunMap ? 9_000 : runs.length / 2,
-          },
+          }),
         }
         : {}),
       nativePreview: {
@@ -77,7 +81,10 @@ function makeModel(input: {
         hasDefects: false,
         repairedFloats: 0,
         totalVertices: 90,
-        nativeRepairReport: { model_triangle_count: null, likely_support_geometry: false },
+        nativeRepairReport: makeGeometryFrameReport({
+          modelTriangleCount: null,
+          likelySupportGeometry: false,
+        }),
       },
     },
     transform: {

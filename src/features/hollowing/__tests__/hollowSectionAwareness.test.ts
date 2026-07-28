@@ -9,6 +9,10 @@ import {
   hollowSectionStagingKeySuffix,
   planHollowSectionSplice,
 } from '../hollowSectionAwareness';
+import {
+  makeFileFrameRunMap,
+  makeGeometryFrameReport,
+} from '@/utils/__tests__/triangleCountFrameFixtures';
 
 /**
  * Ph3b — HOLLOW SECTION-AWARENESS.
@@ -85,23 +89,23 @@ function makeModel(input: {
         : {}),
       ...(runtimeRuns !== undefined && runtimeRuns !== null
         ? {
-            importRunMap: {
+            importRunMap: makeFileFrameRunMap({
               runs: runtimeRuns,
               sourceTriangleCount: 11_240_000,
               modelTriangleCount: 9_000_000,
               droppedNonFiniteTriangles: 0,
               totalRunCount: input.runtimeTotalRunCount ?? runtimeRuns.length / 2,
-            },
+            }),
           }
         : {}),
       meshDefects: {
         hasDefects: false,
         repairedFloats: 0,
         totalVertices: input.sceneTriangles * 3,
-        nativeRepairReport: {
-          model_triangle_count: input.modelTriangleCount,
-          likely_support_geometry: true,
-        },
+        nativeRepairReport: makeGeometryFrameReport({
+          modelTriangleCount: input.modelTriangleCount,
+          likelySupportGeometry: true,
+        }),
       },
     },
     transform: {

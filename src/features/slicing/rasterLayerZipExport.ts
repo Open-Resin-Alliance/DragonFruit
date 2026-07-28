@@ -23,6 +23,7 @@ import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
 import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints } from '@/supports/SupportPrimitives/Knot/knotUtils';
 import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { asGeometryFrameCount, type GeometryFrameCount } from '@/utils/triangleCountFrames';
 import { JOINT_DIAMETER_OFFSET_MM } from '@/supports/constants';
 
 const MAX_CANVAS_PIXELS = 24_000_000;
@@ -1641,11 +1642,28 @@ function buildWorldTriangles(models: LoadedModel[]): WorldTriangle[] {
   return triangles;
 }
 
+/**
+ * Triangle 0 — the start of any buffer, and therefore in every frame at once.
+ * Named rather than re-branded inline at each call site, so that the two
+ * `asGeometryFrameCount` calls in this file are both real assertions.
+ */
+const GEOMETRY_FRAME_START = asGeometryFrameCount(0);
+
+/**
+ * Appends `[startTri, endTri)` of ONE model's triangles, world-transformed.
+ *
+ * `startTri`/`endTri` are {@link GeometryFrameCount} — indices into
+ * **this model's own buffer**, which is the only index space the loop below
+ * addresses (`position.getX(i)` / `index.array[i]`). A file-frame count (A) or
+ * the staged-buffer split index would both be nonsense here, and the brand is
+ * what says so; before R8-lite the parameters were plain `number` and every
+ * count in the tree fit them.
+ */
 function appendModelTrianglesInRange(
   model: LoadedModel,
   collector: TriangleFloatCollector,
-  startTri: number,
-  endTri: number,
+  startTri: GeometryFrameCount,
+  endTri: GeometryFrameCount,
 ): void {
   const matrix = composeModelMatrix(model.transform);
   // A negative-determinant model transform (a mirror / negative scale, e.g.
@@ -1749,7 +1767,10 @@ function appendModelTrianglesInRange(
  *   once-per-session whisper. A required parameter is how "who owns the dedupe
  *   window" gets answered at the type level instead of by convention.
  */
-function effectiveModelTriangleCount(model: LoadedModel, warnedModelIds: Set<string>): number {
+function effectiveModelTriangleCount(
+  model: LoadedModel,
+  warnedModelIds: Set<string>,
+): GeometryFrameCount {
   const totalTriCount = getModelTriangleCount(model);
   const report = model.geometry.meshDefects?.nativeRepairReport;
   const modelTriCount = report?.model_triangle_count;
@@ -1767,21 +1788,29 @@ function effectiveModelTriangleCount(model: LoadedModel, warnedModelIds: Set<str
         + 'Its classification does not describe this mesh — staging it whole as model.',
       );
     }
-    return Math.min(claimed, totalTriCount);
+    // DERIVED (B), not decoded: `Math.floor`/`Math.min` launder the brand, so
+    // the frame has to be re-asserted. It is trivially true here — both operands
+    // are counts of THIS model's own buffer, and the result is the smaller of
+    // them, so it cannot leave the buffer.
+    return asGeometryFrameCount(Math.min(claimed, totalTriCount));
   }
-  if (report?.likely_support_geometry) return 0;
+  if (report?.likely_support_geometry) return asGeometryFrameCount(0);
   return totalTriCount;
 }
 
 /** Returns the total triangle count for a model's geometry
- *  (used for both counting and iteration bounds). */
-function getModelTriangleCount(model: LoadedModel): number {
+ *  (used for both counting and iteration bounds).
+ *
+ *  FRAME (B) by measurement: it is read straight off the buffer's own index /
+ *  position attribute, so it indexes that buffer by construction — which is why
+ *  it is a legitimate `endTri` for {@link appendModelTrianglesInRange}. */
+function getModelTriangleCount(model: LoadedModel): GeometryFrameCount {
   const geometry = model.geometry.geometry;
   const position = geometry.getAttribute('position');
-  if (!position) return 0;
+  if (!position) return asGeometryFrameCount(0);
   const index = geometry.getIndex();
-  if (index) return Math.floor(index.count / 3);
-  return Math.floor(position.count / 3);
+  if (index) return asGeometryFrameCount(Math.floor(index.count / 3));
+  return asGeometryFrameCount(Math.floor(position.count / 3));
 }
 
 /** @param warnedModelIds see `effectiveModelTriangleCount` — required for the
@@ -2462,6 +2491,12 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   // itself on the next slice must say so again. See `effectiveModelTriangleCount`.
   const warnedModelIds = new Set<string>();
   const collectorModelTriangleCount = countModelWorldTriangles(collectorModels, warnedModelIds);
+  // NOT frame (B), deliberately left a plain `number`: this is the STAGED-buffer
+  // split index. It sums per-model (B) counts across every collector model and
+  // adds the full-resolution splice counts, so it indexes the CONCATENATED
+  // staged buffer and nothing else. Branding it (B) would make it
+  // interchangeable with a single model's index, which it is not. Audit §3.1
+  // site 18.
   const modelTriangleCount = collectorModelTriangleCount + splicedTriangleCount;
   console.warn('[SupportAA] collector input partitions', {
     models: visibleModels.map((model) => {
@@ -2500,7 +2535,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   for (const model of collectorModels) {
     const modelTriCount = effectiveModelTriangleCount(model, warnedModelIds);
     if (modelTriCount > 0) {
-      appendModelTrianglesInRange(model, collector, 0, modelTriCount);
+      appendModelTrianglesInRange(model, collector, GEOMETRY_FRAME_START, modelTriCount);
     }
   }
 

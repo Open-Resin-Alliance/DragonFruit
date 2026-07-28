@@ -8,6 +8,11 @@ import {
   IMPORT_RUN_MAP_MAX_ENTRIES,
   type ImportRunMap,
 } from '@/utils/importRunMap';
+import {
+  makeFileFrameRunMap,
+  makeFileFrameRunMapSummary,
+  type FileFrameRunMapFixture,
+} from '@/utils/__tests__/triangleCountFrameFixtures';
 
 /**
  * Ph1 wiring (c) — run-map persistence in the container.
@@ -29,15 +34,18 @@ const NATIVE_PREVIEW = {
   cPre: [40, 25, 0] as [number, number, number],
 };
 
-function runMap(runs: number[], overrides: Partial<ImportRunMap> = {}): ImportRunMap {
-  return {
+// Defaults unchanged (including the count derived from the run lengths); the
+// factory adds only the FRAME (A) statement — these are SOURCE-FILE indices,
+// which is the whole reason the map is persisted separately from the mesh.
+function runMap(runs: number[], overrides: Partial<FileFrameRunMapFixture> = {}): ImportRunMap {
+  return makeFileFrameRunMap({
     runs: new Uint32Array(runs),
     sourceTriangleCount: 11_228_556,
     modelTriangleCount: runs.filter((_, i) => i % 2 === 1).reduce((a, b) => a + b, 0),
     droppedNonFiniteTriangles: 3,
     totalRunCount: runs.length / 2,
     ...overrides,
-  };
+  });
 }
 
 describe('import run map round trip', () => {
@@ -126,13 +134,13 @@ describe('import run map round trip', () => {
     // recompute path for a model that has nothing to recompute.
     const staleMarker = {
       ...NATIVE_PREVIEW,
-      runMap: {
+      runMap: makeFileFrameRunMapSummary({
         entryCount: 2,
         sourceTriangleCount: 11_228_556,
         modelTriangleCount: 768,
         droppedNonFiniteTriangles: 0,
         totalRunCount: 2,
-      },
+      }),
     };
     const input = testInput([testModel('mutated', { nativePreview: staleMarker })]);
     const bin = await serializeVoxlDocumentV2(input, new Map([[0, MESH]]), new Map([[0, 'sha-a']]));

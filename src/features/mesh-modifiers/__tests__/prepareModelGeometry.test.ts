@@ -3,6 +3,7 @@ import test from 'node:test';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { prepareLoadedModelsForOutput } from '../prepareModelGeometry';
+import { makeGeometryFrameReport } from '@/utils/__tests__/triangleCountFrameFixtures';
 
 test('classified support shells are materialized as a support-only slice model', async () => {
   const geometry = new THREE.BufferGeometry();
@@ -32,10 +33,10 @@ test('classified support shells are materialized as a support-only slice model',
         hasDefects: false,
         repairedFloats: 0,
         totalVertices: 6,
-        nativeRepairReport: {
-          model_triangle_count: 1,
-          likely_support_geometry: false,
-        },
+        nativeRepairReport: makeGeometryFrameReport({
+          modelTriangleCount: 1,
+          likelySupportGeometry: false,
+        }),
       },
     },
     transform: {

@@ -28,6 +28,7 @@ import {
   type ImportRunMap,
   type ImportRunMapRecomputeReason,
 } from '@/utils/importRunMap';
+import type { GeometryFrameCount } from '@/utils/triangleCountFrames';
 import type { FullResMutatorSource } from '@/utils/fullResMutatorStaging';
 
 export type MeshDefects = {
@@ -656,7 +657,15 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
         if (geometryMatchesReport && report.model_triangle_count != null && report.model_triangle_count > 0) {
           const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
           const allPos = posAttr.array as Float32Array;
-          const modelFloatEnd = report.model_triangle_count * 9; // 3 vertices × 3 floats per tri
+          // FRAME (B), and the field evidence for it: this cut is what produces
+          // the orange support overlay, it runs on decimated previews today, and
+          // it renders correctly. `GeometryFrameCount` is an annotation only —
+          // `report.model_triangle_count` already carries the brand from
+          // boundary 2 — so it costs nothing and states which frame is being
+          // multiplied by 9 below. (The product is a FLOAT offset, and the
+          // multiplication launders the brand, as it should.)
+          const modelSectionCut: GeometryFrameCount = report.model_triangle_count;
+          const modelFloatEnd = modelSectionCut * 9; // 3 vertices × 3 floats per tri
           if (modelFloatEnd < allPos.length) {
             const supportPositions = allPos.slice(modelFloatEnd);
             const supportGeo = new THREE.BufferGeometry();

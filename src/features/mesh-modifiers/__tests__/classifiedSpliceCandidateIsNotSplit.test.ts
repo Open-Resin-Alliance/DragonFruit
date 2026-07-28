@@ -5,6 +5,7 @@ import test from 'node:test';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { prepareLoadedModelsForOutput, resolveOutputGeometrySource } from '../prepareModelGeometry';
+import { makeGeometryFrameReport } from '@/utils/__tests__/triangleCountFrameFixtures';
 
 /**
  * THE Ph1 D1 FENCE — regression lock.
@@ -64,10 +65,10 @@ function makeClassifiedModel(overrides: {
         hasDefects: false,
         repairedFloats: 0,
         totalVertices: 6,
-        nativeRepairReport: {
-          model_triangle_count: 1,
-          likely_support_geometry: true,
-        },
+        nativeRepairReport: makeGeometryFrameReport({
+          modelTriangleCount: 1,
+          likelySupportGeometry: true,
+        }),
       },
     },
     transform: {

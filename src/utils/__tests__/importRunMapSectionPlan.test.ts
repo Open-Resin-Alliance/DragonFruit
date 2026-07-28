@@ -8,6 +8,12 @@ import {
   type ImportRunMapRecomputeReason,
   type ImportRunMapSummary,
 } from '../importRunMap';
+import {
+  makeFileFrameRunMap,
+  makeFileFrameRunMapSummary,
+  type FileFrameRunMapFixture,
+  type FileFrameRunMapSummaryFixture,
+} from './triangleCountFrameFixtures';
 
 /**
  * Ph3 — the splice's decision layer.
@@ -33,26 +39,27 @@ import {
  * red, stated as such rather than dressed up.
  */
 
-function runtimeMap(overrides?: Partial<ImportRunMap>): ImportRunMap {
-  return {
+// Defaults unchanged; the factories add only the FRAME (A) statement.
+function runtimeMap(overrides?: Partial<FileFrameRunMapFixture>): ImportRunMap {
+  return makeFileFrameRunMap({
     runs: new Uint32Array([0, 384, 2784, 384]),
     sourceTriangleCount: 3168,
     modelTriangleCount: 768,
     droppedNonFiniteTriangles: 0,
     totalRunCount: 2,
     ...overrides,
-  };
+  });
 }
 
-function summary(overrides?: Partial<ImportRunMapSummary>): ImportRunMapSummary {
-  return {
+function summary(overrides?: Partial<FileFrameRunMapSummaryFixture>): ImportRunMapSummary {
+  return makeFileFrameRunMapSummary({
     entryCount: 2,
     sourceTriangleCount: 3168,
     modelTriangleCount: 768,
     droppedNonFiniteTriangles: 0,
     totalRunCount: 2,
     ...overrides,
-  };
+  });
 }
 
 test('a live in-session map splices in sections, with the runs', () => {

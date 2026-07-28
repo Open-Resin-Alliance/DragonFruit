@@ -70,6 +70,19 @@ export type VoxlNativePreviewRef = {
    * `totalRunCount > 0` with `entryCount === 0` means the map exceeded the
    * 64 KiB cap and was deliberately not written — recompute, do not read it as
    * "no supports". `resolveImportRunMap` is the only sanctioned reader.
+   *
+   * ## FRAME (A) — and this field is R8-lite boundary 3 of 4
+   *
+   * `modelTriangleCount` here is a SOURCE-FILE index (`FileFrameCount`); VOXL
+   * persists frame (A) and only frame (A). On reload the brand is asserted by
+   * the structural cast that already existed — `readJsonChunk<VoxlModelEntry[]>`
+   * in `codec-v2.ts` — which is the single point where the `MODL` JSON re-enters
+   * the type system, so no new cast was added for it.
+   *
+   * A reloaded model's `MeshHealthReport` is NOT read from the file: the reload
+   * runs a fresh classify pass over the embedded mesh and writes the positions
+   * back, so that count is frame (B), branded at `normalizeMeshHealthReport`.
+   * See `@/utils/triangleCountFrames`.
    */
   runMap?: ImportRunMapSummary;
   /**

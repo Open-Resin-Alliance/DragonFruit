@@ -41,6 +41,22 @@ export type NativeSolidSliceJobEnvelope = {
   zaaKernel?: 'perturb';
   zaaPattern?: 'uniform' | 'halton' | 'base2';
   zaaDuplicateZ?: boolean;
+  /**
+   * The slicer's support-AA split index: `trianglesXYZ[0 .. n)` is model body,
+   * the remainder is support. Consumed by `SupportMaskContext::from_job` in
+   * `rust/dragonfruit-slicing-engine/src/engine.rs`.
+   *
+   * ## FRAME NOTE — this is neither (A) nor (B), and is deliberately unbranded
+   *
+   * R8-lite (2026-07-27) brands the two `model_triangle_count` frames
+   * (`@/utils/triangleCountFrames`). This field is a THIRD frame: it indexes the
+   * CONCATENATED STAGED buffer, and `buildSolidSliceMeshForWasm` builds it as a
+   * sum — every collector model's own frame-(B) count, plus every spliced
+   * model's full-resolution model-run count. Neither brand describes it, and
+   * branding it (B) would make it interchangeable with a single model's index,
+   * which is exactly the class of confusion R8-lite exists to stop. Audit §3.1
+   * site 18 classifies this row as "staged-buffer frame".
+   */
   modelTriangleCount: number;
   containerCompressionLevel?: number;
   buildWidthMm: number;

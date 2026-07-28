@@ -8,6 +8,7 @@ import {
   getPreviewBadgeInfo,
   resolveDisplayPolygonCount,
 } from '../previewGeometryDisplay';
+import { makeFileFrameRunMapSummary } from './triangleCountFrameFixtures';
 
 /**
  * Phase 2b — CP1 preview-honesty contract (STL-import decimation remediation;
@@ -172,13 +173,13 @@ test('carryPreviewMarkerForward strips the run-map summary but keeps provenance'
     ...prior.nativePreview!,
     achievedError: 0.0021,
     budgetTriangles: 4_000_000,
-    runMap: {
+    runMap: makeFileFrameRunMapSummary({
       entryCount: 2,
       sourceTriangleCount: 11_228_556,
       modelTriangleCount: 768,
       droppedNonFiniteTriangles: 0,
       totalRunCount: 2,
-    },
+    }),
   };
 
   const carried = carryPreviewMarkerForward(prior);

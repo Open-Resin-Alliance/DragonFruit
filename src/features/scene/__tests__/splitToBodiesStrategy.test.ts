@@ -3,6 +3,10 @@ import test from 'node:test';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { resolveSplitToBodiesStrategy, canSplitToBodies } from '../splitToBodiesStrategy';
+import {
+  makeFileFrameRunMap,
+  makeGeometryFrameReport,
+} from '@/utils/__tests__/triangleCountFrameFixtures';
 
 /**
  * Ph3d — ONE ANSWER for "how does this model split", shared by the menu gate and
@@ -58,13 +62,15 @@ function makeModel(input: {
       flatteningPlanes: [],
       ...(runs
         ? {
-          importRunMap: {
+          // FRAME (A). NOTE this fixture drives BOTH frames from one input —
+          // see the report below. Values unchanged by the factory migration.
+          importRunMap: makeFileFrameRunMap({
             runs,
             sourceTriangleCount,
             modelTriangleCount: input.modelTriangleCount ?? 0,
             droppedNonFiniteTriangles: 0,
             totalRunCount: runs.length / 2,
-          },
+          }),
         }
         : {}),
       ...(input.nativePreview
@@ -84,10 +90,15 @@ function makeModel(input: {
         hasDefects: false,
         repairedFloats: 0,
         totalVertices: input.sceneTriangles * 3,
-        nativeRepairReport: {
-          model_triangle_count: input.modelTriangleCount,
-          likely_support_geometry: true,
-        },
+        // FRAME (B), from the SAME `input.modelTriangleCount` as the (A) run
+        // map above. That coincidence is real for a verbatim import (A ≡ B) and
+        // synthetic for the `nativePreview: true` cases here — which is fine,
+        // because these tests assert ROUTING, not arithmetic. Named rather than
+        // changed: changing it would change what the suite pins.
+        nativeRepairReport: makeGeometryFrameReport({
+          modelTriangleCount: input.modelTriangleCount,
+          likelySupportGeometry: true,
+        }),
       },
     },
     transform: {
