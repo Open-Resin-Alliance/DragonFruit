@@ -9,6 +9,7 @@ import {
   snapAngle,
   classifySnapZone,
   rayToRingLocal,
+  spokeRingAngle,
   parseSnapDialConfig,
   SNAP_DIAL_CONFIG_STORAGE_KEY,
   DEFAULT_SNAP_DIAL_CONFIG,
@@ -79,21 +80,6 @@ interface GizmoRotationProps {
   onPointerLeave: () => void;
 }
 
-function getPositiveAxisMidpointAngle(axis: GizmoAxis): number {
-  if (axis === 'x') {
-    // X rotation lives in the Y/Z plane. In X-ring local space,
-    // +Y is local +Y and +Z is local -X.
-    return (3 * Math.PI) / 4;
-  }
-  if (axis === 'y') {
-    // Y rotation lives in the X/Z plane. With the +Y ring orientation,
-    // +X is local +X and +Z is local -Y.
-    return -Math.PI / 4;
-  }
-  // Z rotation lives in the X/Y plane, directly between local +X and +Y.
-  return Math.PI / 4;
-}
-
 /**
  * GizmoRotation - Ring with diamond handle for rotation
  */
@@ -137,9 +123,13 @@ export function GizmoRotation({
   /** Snap increment from the last classifiable cursor position. Held across
    *  grazing poses so a near-edge-on drag does not flicker snap<->free. */
   const lastZoneIncrementRef = useRef<number | null>(null);
-  const positiveAxisMidpointAngle = getPositiveAxisMidpointAngle(axis);
-  const handleAngleRef = useRef<number>(positiveAxisMidpointAngle);
-  const targetHandleAngleRef = useRef<number>(positiveAxisMidpointAngle);
+  // The grabber parks at the object's true angle in the ring frame — the
+  // faithful behaviour — rather than facing the camera or sitting between the
+  // positive axes. Same angle source as the spoke, so grabber and indicator
+  // cannot disagree.
+  const parkedAngle = spokeRingAngle(currentAngleRad, axisVisualFlip);
+  const handleAngleRef = useRef<number>(parkedAngle);
+  const targetHandleAngleRef = useRef<number>(parkedAngle);
   const billboardRotationRef = useRef<number>(0);
   const lastMouseAngle = useRef<number>(0);
   const shouldFlipRef = useRef(false);
@@ -240,44 +230,35 @@ export function GizmoRotation({
   const ringColors = axis === 'x' ? GIZMO_COLORS.xRing : axis === 'y' ? GIZMO_COLORS.yRing : GIZMO_COLORS.zRing;
   const axisColors = axis === 'x' ? GIZMO_COLORS.xAxis : axis === 'y' ? GIZMO_COLORS.yAxis : GIZMO_COLORS.zAxis;
 
-  const getCameraAlignedAngle = useCallback(() => {
-    const cameraDir = new THREE.Vector3().subVectors(camera.position, gizmoPosition).normalize();
-
-    if (axis === 'x') {
-      return Math.atan2(cameraDir.z, cameraDir.y) + Math.PI / 2;
-    }
-    if (axis === 'y') {
-      // The Y ring is rotated into the X/Z plane with local +Y mapped to
-      // world -Z, so project camera Z with the matching sign.
-      return Math.atan2(-cameraDir.z, cameraDir.x);
-    }
-    return Math.atan2(cameraDir.y, cameraDir.x);
-  }, [axis, camera.position, gizmoPosition]);
-
+  // Snap the grabber straight to its parked angle when animations are
+  // suppressed (instant-placement contexts). The smoothed path below handles
+  // the normal case.
+  //
+  // shouldFlip audit (dragonfruit-103-2 plan MEDIUM): the flip logic is
+  // POSITION-INDEPENDENT — it signs drag deltas by which side of the ring
+  // plane the camera is on (cameraOffset dot worldAxisDir), and the grabber's
+  // parked position never enters that computation. Grabbing a far-side parked
+  // handle therefore cannot invert the drag: the camera side, and only the
+  // camera side, decides the sign, exactly as it did when the handle was
+  // camera-parked.
   React.useEffect(() => {
-    if (disableRingBillboard) {
-      if (isDragging) return;
-      // Center the active arc between the two positive arrow axes after
-      // the drag completes so the handle stays aligned with the new frame.
-      handleAngleRef.current = positiveAxisMidpointAngle;
-      targetHandleAngleRef.current = positiveAxisMidpointAngle;
-      return;
-    }
-    if (!suppressAxisAnimations || isDragging) return;
+    if (isDragging) return;
+    if (!disableRingBillboard && !suppressAxisAnimations) return;
     shouldFlipRef.current = computeShouldFlip();
-    const aligned = getCameraAlignedAngle();
-    handleAngleRef.current = aligned;
-    targetHandleAngleRef.current = aligned;
+    handleAngleRef.current = parkedAngle;
+    targetHandleAngleRef.current = parkedAngle;
 
-    const cameraDir = new THREE.Vector3().subVectors(camera.position, gizmoPosition).normalize();
-    billboardRotationRef.current = Math.atan2(cameraDir.y, cameraDir.x);
-  }, [camera.position, computeShouldFlip, getCameraAlignedAngle, gizmoPosition, isDragging, positiveAxisMidpointAngle, suppressAxisAnimations, disableRingBillboard]);
+    if (!disableRingBillboard) {
+      const cameraDir = new THREE.Vector3().subVectors(camera.position, gizmoPosition).normalize();
+      billboardRotationRef.current = Math.atan2(cameraDir.y, cameraDir.x);
+    }
+  }, [camera.position, computeShouldFlip, gizmoPosition, isDragging, parkedAngle, suppressAxisAnimations, disableRingBillboard]);
 
   // Ref-based temporal smoothing to avoid micro-shimmer from per-frame React state updates.
   useFrame(() => {
-    if (!isDragging && !disableRingBillboard) {
+    if (!isDragging) {
       shouldFlipRef.current = computeShouldFlip();
-      targetHandleAngleRef.current = getCameraAlignedAngle();
+      targetHandleAngleRef.current = parkedAngle;
     }
 
     let delta = targetHandleAngleRef.current - handleAngleRef.current;
@@ -328,8 +309,8 @@ export function GizmoRotation({
     axis === 'x' ? [0, Math.PI / 2, 0] : axis === 'y' ? [-Math.PI / 2, 0, 0] : [0, 0, 0];
 
   const initialHandlePos: [number, number, number] = [
-    Math.cos(positiveAxisMidpointAngle) * GIZMO_SIZES.ringMajorRadius,
-    Math.sin(positiveAxisMidpointAngle) * GIZMO_SIZES.ringMajorRadius,
+    Math.cos(parkedAngle) * GIZMO_SIZES.ringMajorRadius,
+    Math.sin(parkedAngle) * GIZMO_SIZES.ringMajorRadius,
     0,
   ];
   
