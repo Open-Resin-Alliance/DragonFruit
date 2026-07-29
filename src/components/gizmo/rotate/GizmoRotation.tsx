@@ -6,8 +6,6 @@ import { ThreeEvent, useThree, useFrame } from '@react-three/fiber';
 import { Line } from '@react-three/drei';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
 import {
-  snapAngle,
-  classifySnapZone,
   rayToRingLocal,
   spokeRingAngle,
   objectAngleForRingAngle,
@@ -26,20 +24,18 @@ import {
   getCachedConeGeometry,
   getCachedRotationArcGeometry,
   getCachedRotationArcPoints,
-  getCachedRingGeometry,
   getCachedSphereGeometry,
 } from '../gizmoGeometryCache';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
 
-const ROTATION_CENTER_DEADZONE_PX = 24;
 
 // Scratch objects for per-move zone classification; reused, never retained.
 const zoneRaycaster = new THREE.Raycaster();
 const zoneQuat = new THREE.Quaternion();
 const zoneCenter = new THREE.Vector3();
-const ROTATION_NEAR_CENTER_JUMP_GUARD_PX = 56;
-const ROTATION_NEAR_CENTER_MAX_DELTA = Math.PI / 2;
+/** Pointer travel below this is a click; above it the gesture is the camera's. */
+const DIAL_CLICK_SLOP_PX = 4;
 
 interface GizmoRotationProps {
   axis: GizmoAxis;
@@ -78,6 +74,10 @@ interface GizmoRotationProps {
    * on a real tick and so reads as correct rather than missing.
    */
   currentAngleRad: number;
+  /** True when this ring's dial is armed for tick selection. */
+  armed: boolean;
+  /** Arm/disarm this ring's dial (arming one ring disarms the others). */
+  onArmedChange: (armed: boolean) => void;
   onDragStart: () => boolean | void;
   onDrag: (angle: number) => void;
   onDragEnd: () => void;
@@ -102,16 +102,17 @@ export function GizmoRotation({
   gizmoPosition,
   disableRingBillboard = false,
   handleScale = 1.0,
-  worldAxisDir,
   axisVisualFlip = 1,
   currentAngleRad,
+  armed,
+  onArmedChange,
   onDragStart,
   onDrag,
   onDragEnd,
   onPointerEnter,
   onPointerLeave,
 }: GizmoRotationProps) {
-  const [isDragging, setIsDragging] = useState(false);
+
   /** Persisted dial intervals (#104). Parsed defensively — see parseSnapDialConfig. */
   const [dialConfig, setDialConfig] = useState<SnapDialConfig>(() => {
     try {
@@ -125,13 +126,12 @@ export function GizmoRotation({
   const dialConfigRef = useRef(dialConfig);
   /** Root of the ring-local frame — zone classification reads its world pose. */
   const ringGroupRef = useRef<THREE.Group>(null);
-  /** Snap increment from the last classifiable cursor position. Held across
-   *  grazing poses so a near-edge-on drag does not flicker snap<->free. */
-  const lastZoneIncrementRef = useRef<number | null>(null);
-  /** Tick armed by hovering the dial — previews the rotation before commit. */
-  const [previewTickRad, setPreviewTickRad] = useState<number | null>(null);
-  /** Pointer-down screen position on the dial, telling a click from a drag. */
-  const dialPointerDownRef = useRef<{ x: number; y: number } | null>(null);
+  /** Tick the selection spoke is on while armed. */
+  const [selectedTickRad, setSelectedTickRad] = useState<number | null>(null);
+  /** Pointer-down screen position while armed — a click commits, a drag orbits. */
+  const armedPointerDownRef = useRef<{ x: number; y: number } | null>(null);
+  /** Set when the grabber consumes a gesture, so the armed commit skips it. */
+  const suppressCommitRef = useRef(false);
   // The grabber parks at the object's true angle in the ring frame — the
   // faithful behaviour — rather than facing the camera or sitting between the
   // positive axes. Same angle source as the spoke, so grabber and indicator
@@ -140,12 +140,6 @@ export function GizmoRotation({
   const handleAngleRef = useRef<number>(parkedAngle);
   const targetHandleAngleRef = useRef<number>(parkedAngle);
   const billboardRotationRef = useRef<number>(0);
-  const lastMouseAngle = useRef<number>(0);
-  const shouldFlipRef = useRef(false);
-  // Snap rotation refs (object-space)
-  const rawAccumulatedAngleRef = useRef<number>(0);
-  const lastSnappedAngleRef = useRef<number>(0);
-  const prevSnapIncrementRef = useRef<number | null>(null);
   // Callback refs to stabilize useEffect deps (prevents effect churn during drag)
   const onDragRef = useRef(onDrag);
   const onDragEndRef = useRef(onDragEnd);
@@ -176,33 +170,6 @@ export function GizmoRotation({
     return () => window.removeEventListener('dragonfruit:tick-config-change', reload);
   }, [invalidate]);
 
-  const computeShouldFlip = useCallback(() => {
-    if (worldAxisDir) {
-      // Use the gizmo's actual local axis direction for flip detection.
-      // This ensures correct sign regardless of gizmo rotation.
-      const cameraOffset = new THREE.Vector3().subVectors(camera.position, gizmoPosition);
-      return cameraOffset.dot(worldAxisDir) > 0;
-    }
-    // Fall back to world-axis comparison when no worldAxisDir is given
-    // (existing behavior for non-rotated gizmos).
-    if (axis === 'x') {
-      return camera.position.x - gizmoPosition.x > 0;
-    }
-    if (axis === 'y') {
-      return camera.position.y - gizmoPosition.y > 0;
-    }
-    return camera.position.z - gizmoPosition.z > 0;
-  }, [axis, camera.position, gizmoPosition, worldAxisDir]);
-
-  const getGizmoScreenCenter = useCallback(() => {
-    const rect = gl.domElement.getBoundingClientRect();
-    const projected = gizmoPosition.clone().project(camera);
-    return {
-      x: rect.left + ((projected.x + 1) * 0.5) * rect.width,
-      y: rect.top + ((1 - projected.y) * 0.5) * rect.height,
-    };
-  }, [camera, gl, gizmoPosition]);
-  
   // GPU Picking registration
   const pickMeshRef = useRef<THREE.Mesh>(null);
   const pickIdRef = useRef<number | null>(null);
@@ -251,9 +218,7 @@ export function GizmoRotation({
   // camera side, decides the sign, exactly as it did when the handle was
   // camera-parked.
   React.useEffect(() => {
-    if (isDragging) return;
     if (!disableRingBillboard && !suppressAxisAnimations) return;
-    shouldFlipRef.current = computeShouldFlip();
     handleAngleRef.current = parkedAngle;
     targetHandleAngleRef.current = parkedAngle;
 
@@ -261,20 +226,17 @@ export function GizmoRotation({
       const cameraDir = new THREE.Vector3().subVectors(camera.position, gizmoPosition).normalize();
       billboardRotationRef.current = Math.atan2(cameraDir.y, cameraDir.x);
     }
-  }, [camera.position, computeShouldFlip, gizmoPosition, isDragging, parkedAngle, suppressAxisAnimations, disableRingBillboard]);
+  }, [camera.position, gizmoPosition, parkedAngle, suppressAxisAnimations, disableRingBillboard]);
 
   // Ref-based temporal smoothing to avoid micro-shimmer from per-frame React state updates.
   useFrame(() => {
-    if (!isDragging) {
-      shouldFlipRef.current = computeShouldFlip();
-      targetHandleAngleRef.current = parkedAngle;
-    }
+    targetHandleAngleRef.current = parkedAngle;
 
     let delta = targetHandleAngleRef.current - handleAngleRef.current;
     if (delta > Math.PI) delta -= 2 * Math.PI;
     if (delta < -Math.PI) delta += 2 * Math.PI;
 
-    const smoothing = isDragging || suppressAxisAnimations ? 1 : 0.2;
+    const smoothing = suppressAxisAnimations ? 1 : 0.2;
     handleAngleRef.current += delta * smoothing;
 
     const handleAngle = handleAngleRef.current;
@@ -325,50 +287,25 @@ export function GizmoRotation({
   
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
     // Ignore right-click to allow camera orbit controls
-    if (e.button === 2) {
-      return;
-    }
-    if (!interactionsEnabled) {
-      return;
-    }
-    
+    if (e.button === 2) return;
+    if (!interactionsEnabled) return;
+
     e.stopPropagation();
     e.stopped = true; // Mark event as handled for OrbitControls
-
-    shouldFlipRef.current = computeShouldFlip();
-    
-    // Calculate initial mouse angle
-    lastMouseAngle.current = getMousePolar(e.clientX, e.clientY).angle;
-    
-    const allowed = onDragStart();
-    if (allowed === false) {
-      return;
-    }
-    // Initialize snap refs at drag start to avoid spurious first-frame transition
-    rawAccumulatedAngleRef.current = 0;
-    lastSnappedAngleRef.current = 0;
-    prevSnapIncrementRef.current = null;
-    lastZoneIncrementRef.current = null;
-    clearDialPreview();
+    // stopPropagation does not reach the armed window listeners — flag the
+    // gesture so toggling the diamond never doubles as a commit click.
+    suppressCommitRef.current = true;
+    onArmedChange(!armed);
     window.dispatchEvent(new CustomEvent('dragonfruit:rotation-hint', { detail: { visible: false } }));
-    setIsDragging(true);
   };
 
-  // --- Tick selection with preview ------------------------------------------
-  // Pointing at a tick arms a preview: the tick highlights, a ghost spoke
-  // shows the target, and the readout shows the SIGNED rotation that would be
-  // applied. Clicking commits it through the same drag callbacks as a gesture,
-  // so it produces one undo entry shaped identically to a drag.
-
-  /** Pointer travel below this is a click; above it the gesture is the camera's. */
-  const DIAL_CLICK_SLOP_PX = 4;
-
-  /** Ring-local angle of a pointer hit on the dial band, or null at the centre. */
-  const dialHitAngle = useCallback((e: ThreeEvent<PointerEvent>): number | null => {
-    const local = e.object.worldToLocal(e.point.clone());
-    if (local.x === 0 && local.y === 0) return null;
-    return Math.atan2(local.y, local.x);
-  }, []);
+  // --- Armed tick selection ------------------------------------------------
+  // Clicking the diamond arms this ring's dial. While armed, the selection
+  // spoke follows the cursor in the ring's plane, sticking to ticks; the
+  // selected tick is highlighted and the readout shows the SIGNED rotation a
+  // click would apply. A click commits it through the rotate callbacks (one
+  // undo entry); a drag still belongs to the camera; Esc or the diamond again
+  // cancels.
 
   /** Signed object-space delta that selecting a ring angle would apply. */
   const previewDelta = useCallback(
@@ -377,56 +314,90 @@ export function GizmoRotation({
     [currentAngleRad, axisVisualFlip],
   );
 
-  const clearDialPreview = useCallback(() => {
-    dialPointerDownRef.current = null;
-    setPreviewTickRad((prev) => {
-      if (prev !== null) {
-        window.dispatchEvent(new CustomEvent('dragonfruit:snap-angle', { detail: { active: false } }));
-        invalidate();
+  useEffect(() => {
+    if (!armed) return;
+
+    const readout = (detail: object) =>
+      window.dispatchEvent(new CustomEvent('dragonfruit:snap-angle', { detail }));
+
+    const trackPointer = (e: PointerEvent) => {
+      const rect = gl.domElement.getBoundingClientRect();
+      zoneRaycaster.setFromCamera(
+        new THREE.Vector2(
+          ((e.clientX - rect.left) / rect.width) * 2 - 1,
+          -(((e.clientY - rect.top) / rect.height) * 2 - 1),
+        ),
+        camera,
+      );
+      if (!ringGroupRef.current) return;
+      ringGroupRef.current.getWorldQuaternion(zoneQuat);
+      ringGroupRef.current.getWorldPosition(zoneCenter);
+      const hit = rayToRingLocal(
+        zoneRaycaster.ray.origin,
+        zoneRaycaster.ray.direction,
+        zoneQuat,
+        zoneCenter,
+      );
+      // Grazing poses keep the previous selection rather than flickering.
+      if (!hit) return;
+      const next = nearestRingTickRad(hit.angleRad, dialConfigRef.current);
+      setSelectedTickRad((prev) => {
+        if (prev !== next) {
+          readout({ active: true, angle: previewDelta(next), axis });
+          invalidate();
+        }
+        return next;
+      });
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      armedPointerDownRef.current = { x: e.clientX, y: e.clientY };
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      const start = armedPointerDownRef.current;
+      armedPointerDownRef.current = null;
+      if (suppressCommitRef.current) {
+        // The grabber consumed this gesture (arm/disarm toggle).
+        suppressCommitRef.current = false;
+        return;
       }
-      return null;
-    });
-  }, [invalidate]);
+      if (!start) return;
+      if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > DIAL_CLICK_SLOP_PX) return;
 
-  const handleDialPointerMove = (e: ThreeEvent<PointerEvent>) => {
-    if (!interactionsEnabled || isHidden || isDragging) return;
-    const hit = dialHitAngle(e);
-    const next = hit === null ? null : nearestRingTickRad(hit, dialConfigRef.current);
-    if (next === previewTickRad) return;
-    setPreviewTickRad(next);
-    window.dispatchEvent(new CustomEvent('dragonfruit:snap-angle', {
-      detail: next === null
-        ? { active: false }
-        : { active: true, angle: previewDelta(next), axis },
-    }));
-    invalidate();
-  };
+      setSelectedTickRad((tick) => {
+        if (tick === null) return tick;
+        const delta = previewDelta(tick);
+        if (delta !== 0 && onDragStart() !== false) {
+          onDragRef.current(delta);
+          onDragEndRef.current();
+        }
+        onArmedChange(false);
+        return tick;
+      });
+    };
 
-  const handleDialPointerDown = (e: ThreeEvent<PointerEvent>) => {
-    if (!interactionsEnabled || isHidden) return;
-    // Deliberately NOT stopPropagation: a drag that begins on the dial still
-    // belongs to the camera — only a click commits a rotation.
-    dialPointerDownRef.current = { x: e.clientX, y: e.clientY };
-  };
+    // Raw keydown listeners are forbidden here (hotkey-restriction rule);
+    // the hotkey system re-broadcasts keys on this app event instead.
+    const onAppHotkey = (e: Event) => {
+      if ((e as CustomEvent).detail?.key === 'Escape') onArmedChange(false);
+    };
 
-  const handleDialPointerUp = (e: ThreeEvent<PointerEvent>) => {
-    const start = dialPointerDownRef.current;
-    dialPointerDownRef.current = null;
-    if (!start || !interactionsEnabled || isHidden) return;
-    // If the grabber claimed this gesture as a drag, the dial stays out of it.
-    if (isDragging) return;
-    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > DIAL_CLICK_SLOP_PX) return;
-
-    const hit = dialHitAngle(e);
-    if (hit === null) return;
-    const delta = previewDelta(nearestRingTickRad(hit, dialConfigRef.current));
-    if (delta === 0) return;
-
-    if (onDragStart() === false) return;
-    onDrag(delta);
-    onDragEnd();
-    clearDialPreview();
-  };
+    window.addEventListener('pointermove', trackPointer);
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('app-hotkey-keydown', onAppHotkey);
+    return () => {
+      window.removeEventListener('pointermove', trackPointer);
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('app-hotkey-keydown', onAppHotkey);
+      armedPointerDownRef.current = null;
+      setSelectedTickRad(null);
+      readout({ active: false });
+      invalidate();
+    };
+  }, [armed, axis, camera, gl.domElement, invalidate, onArmedChange, onDragStart, previewDelta]);
 
   const handlePointerEnterLocal = (e: ThreeEvent<PointerEvent>) => {
     if (!interactionsEnabled) return;
@@ -441,140 +412,6 @@ export function GizmoRotation({
     onPointerLeave();
     window.dispatchEvent(new CustomEvent('dragonfruit:rotation-hint', { detail: { visible: false } }));
   };
-
-  const getMousePolar = useCallback((clientX: number, clientY: number): { angle: number; distance: number } => {
-    const center = getGizmoScreenCenter();
-    const dx = clientX - center.x;
-    const dy = clientY - center.y;
-    return {
-      angle: Math.atan2(dy, dx),
-      distance: Math.hypot(dx, dy),
-    };
-  }, [getGizmoScreenCenter]);
-
-  // Global pointer move and up listeners during drag
-  useEffect(() => {
-    if (!isDragging) return;
-
-    const handleGlobalPointerMove = (e: PointerEvent) => {
-      const mousePolar = getMousePolar(e.clientX, e.clientY);
-      const currentMouseAngle = mousePolar.angle;
-      let deltaAngle = currentMouseAngle - lastMouseAngle.current;
-
-      // Handle angle wrapping (crossing -π/π boundary)
-      if (deltaAngle > Math.PI) deltaAngle -= 2 * Math.PI;
-      if (deltaAngle < -Math.PI) deltaAngle += 2 * Math.PI;
-
-      // Faithful zonal snapping: the increment comes from WHERE the cursor
-      // sits in the ring's local plane — over the spoke band it is coarse,
-      // over the tick band fine, elsewhere free. Classification runs BEFORE
-      // the screen deadzone gate below on purpose: the deadzone only
-      // suppresses delta emission, so the zone is already current the moment
-      // emission resumes.
-      const rect = gl.domElement.getBoundingClientRect();
-      zoneRaycaster.setFromCamera(
-        new THREE.Vector2(
-          ((e.clientX - rect.left) / rect.width) * 2 - 1,
-          -(((e.clientY - rect.top) / rect.height) * 2 - 1),
-        ),
-        camera,
-      );
-      if (ringGroupRef.current) {
-        ringGroupRef.current.getWorldQuaternion(zoneQuat);
-        ringGroupRef.current.getWorldPosition(zoneCenter);
-        const planeHit = rayToRingLocal(
-          zoneRaycaster.ray.origin,
-          zoneRaycaster.ray.direction,
-          zoneQuat,
-          zoneCenter,
-        );
-        if (planeHit) {
-          lastZoneIncrementRef.current = classifySnapZone(planeHit.len, dialConfigRef.current);
-        }
-        // null = grazing ray: hold the previous zone rather than flickering.
-      }
-
-      if (
-        mousePolar.distance < ROTATION_CENTER_DEADZONE_PX
-        || (
-          mousePolar.distance < ROTATION_NEAR_CENTER_JUMP_GUARD_PX
-          && Math.abs(deltaAngle) > ROTATION_NEAR_CENTER_MAX_DELTA
-        )
-      ) {
-        lastMouseAngle.current = currentMouseAngle;
-        return;
-      }
-
-      // Compute sign factors for axis inversion and camera flip
-      const flipMult = shouldFlipRef.current ? -1 : 1;
-      const objectSignFactor = -flipMult;
-      const axisSign = -1;
-
-      const rawObjectDelta = deltaAngle * objectSignFactor;
-      rawAccumulatedAngleRef.current += rawObjectDelta;
-
-      const currentIncrement = lastZoneIncrementRef.current;
-
-      // Reset accumulated on any transition (free↔snap, coarse↔fine)
-      // to prevent grid-misalignment jumps
-      if (currentIncrement !== prevSnapIncrementRef.current) {
-        rawAccumulatedAngleRef.current = lastSnappedAngleRef.current;
-      }
-      prevSnapIncrementRef.current = currentIncrement;
-
-      let emittedObjectDelta: number;
-      if (currentIncrement !== null) {
-        // Snap mode: quantize accumulated angle, emit difference
-        const snappedAngle = snapAngle(rawAccumulatedAngleRef.current, currentIncrement);
-        emittedObjectDelta = snappedAngle - lastSnappedAngleRef.current;
-        lastSnappedAngleRef.current = snappedAngle;
-      } else {
-        // Free rotation: emit raw delta
-        emittedObjectDelta = rawObjectDelta;
-        lastSnappedAngleRef.current += rawObjectDelta;
-      }
-
-      // Visual delta = objectDelta * axisSign. The model applies emitted
-      // object deltas with the opposite sign, so the handle arc mirrors that
-      // application step to move with the visible rotation.
-      // axisVisualFlip allows the parent to invert the visual animation direction
-      // (e.g. when the gizmo's local frame has an inverted axis convention such
-      // as displayY = -cutterY in HolePunchGizmo).
-      const visualDelta = emittedObjectDelta * axisSign * axisVisualFlip;
-
-      // Update handle angle for visual feedback (ref-based)
-      handleAngleRef.current += visualDelta;
-      targetHandleAngleRef.current = handleAngleRef.current;
-
-      // Send rotation delta to parent (object rotation)
-      onDragRef.current(emittedObjectDelta);
-
-      // Dispatch snap readout event for DOM overlay (always active while dragging)
-      // Parent applies object rotation with -angle, so mirror that sign here so
-      // the readout matches Transform panel values and perceived rotation direction.
-      window.dispatchEvent(new CustomEvent('dragonfruit:snap-angle', {
-        detail: { active: true, angle: -lastSnappedAngleRef.current, axis },
-      }));
-
-      lastMouseAngle.current = currentMouseAngle;
-    };
-
-    const handleGlobalPointerUp = () => {
-      // Remove pointermove synchronously so it can't re-fire active:true before React re-renders
-      window.removeEventListener('pointermove', handleGlobalPointerMove);
-      setIsDragging(false);
-      onDragEndRef.current();
-      window.dispatchEvent(new CustomEvent('dragonfruit:snap-angle', { detail: { active: false } }));
-    };
-
-    window.addEventListener('pointermove', handleGlobalPointerMove);
-    window.addEventListener('pointerup', handleGlobalPointerUp);
-
-    return () => {
-      window.removeEventListener('pointermove', handleGlobalPointerMove);
-      window.removeEventListener('pointerup', handleGlobalPointerUp);
-    };
-  }, [isDragging, getMousePolar, axis, axisVisualFlip, camera, gl.domElement]);
 
   // Use GPU picking hover state OR prop-based hover (fallback)
   const effectiveHovered = !suppressHover && (isPickingHovered || isHovered);
@@ -624,17 +461,6 @@ export function GizmoRotation({
   // (The handleAngle already calculated above is what we need)
 
   const arcGeometry = useMemo(() => getCachedRotationArcGeometry(axis), [axis]);
-  /** One merged pick surface for the dial band; angle resolved from the hit. */
-  const dialPickGeometry = useMemo(
-    () =>
-      getCachedRingGeometry(
-        GIZMO_SIZES.dialRadius - GIZMO_SIZES.dialTickLength * 0.6,
-        GIZMO_SIZES.dialRadius + GIZMO_SIZES.dialTickLength * 1.6,
-        72,
-      ),
-    [],
-  );
-
   const pickGeometry = useMemo(
     () => getCachedSphereGeometry(Math.max(0.18, GIZMO_SIZES.ringDiamondRadius * 0.9 * handleScale), 16, 16),
     [handleScale],
@@ -679,32 +505,20 @@ export function GizmoRotation({
           indicator drift apart off-axis. */}
       {!isHidden && !isDimmed && (
         <>
-          {interactionsEnabled && (
-            <mesh
-              geometry={dialPickGeometry}
-              onPointerDown={handleDialPointerDown}
-              onPointerUp={handleDialPointerUp}
-              onPointerMove={handleDialPointerMove}
-              onPointerLeave={clearDialPreview}
-              onPointerCancel={clearDialPreview}
-            >
-              <meshBasicMaterial visible={false} side={THREE.DoubleSide} />
-            </mesh>
-          )}
           <SnapTickDial
             color={ringColors.ring}
             hovered={!!effectiveHovered}
-            active={ringIsActive}
+            active={armed || ringIsActive}
             opacityScale={opacityScale}
             config={dialConfig}
-            highlightRad={previewTickRad}
+            highlightRad={armed ? selectedTickRad : null}
           />
-          {previewTickRad !== null && !isDragging && (
-            // Ghost spoke at the armed tick — where the model WOULD point.
+          {armed && selectedTickRad !== null && (
+            // Selection spoke — where the model WILL point if clicked.
             <Line
               points={[
-                polarToLocal(previewTickRad, GIZMO_SIZES.spokeInnerRadius),
-                polarToLocal(previewTickRad, GIZMO_SIZES.dialRadius),
+                polarToLocal(selectedTickRad, GIZMO_SIZES.spokeInnerRadius),
+                polarToLocal(selectedTickRad, GIZMO_SIZES.dialRadius),
               ]}
               color="#ffffff"
               lineWidth={1.4}

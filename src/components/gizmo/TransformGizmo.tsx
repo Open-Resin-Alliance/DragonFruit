@@ -191,6 +191,8 @@ export function TransformGizmo({
   const gizmoRootRef = React.useRef<THREE.Group | null>(null);
   const [hoveredPart, setHoveredPart] = useState<string | null>(null);
   const [activePart, setActivePart] = useState<string | null>(null);
+  // Which ring's dial is armed for tick selection. Arming one disarms the rest.
+  const [armedAxis, setArmedAxis] = useState<GizmoAxis | null>(null);
   const [isUniformScale, setIsUniformScale] = useState(false);
   const [viewCullState, setViewCullState] = useState<ViewCullState>(() => createDefaultViewCullState());
   const activePartRef = React.useRef<string | null>(null);
@@ -423,7 +425,8 @@ export function TransformGizmo({
   };
 
   const isDimmed = (part: string) => {
-    const focusedPart = activePart;
+    // An armed dial focuses its ring exactly like an active drag would.
+    const focusedPart = activePart ?? (armedAxis !== null ? `ring-${armedAxis}` : null);
     return focusedPart !== null && focusedPart !== part;
   };
 
@@ -613,6 +616,8 @@ export function TransformGizmo({
               worldAxisDir={worldAxisDirs.x}
               axisVisualFlip={axisVisualFlip?.x ?? 1}
               currentAngleRad={indicatedX}
+              armed={armedAxis === 'x'}
+              onArmedChange={(next: boolean) => setArmedAxis(next ? 'x' : null)}
               isHovered={!suppressHover && hoveredPart === 'ring-x'}
               isActive={activePart === 'ring-x'}
               isDimmed={isDimmed('ring-x')}
@@ -637,6 +642,8 @@ export function TransformGizmo({
               worldAxisDir={worldAxisDirs.y}
               axisVisualFlip={axisVisualFlip?.y ?? 1}
               currentAngleRad={indicatedY}
+              armed={armedAxis === 'y'}
+              onArmedChange={(next: boolean) => setArmedAxis(next ? 'y' : null)}
               isHovered={!suppressHover && hoveredPart === 'ring-y'}
               isActive={activePart === 'ring-y'}
               isDimmed={isDimmed('ring-y')}
@@ -661,6 +668,8 @@ export function TransformGizmo({
               worldAxisDir={worldAxisDirs.z}
               axisVisualFlip={axisVisualFlip?.z ?? 1}
               currentAngleRad={indicatedZ}
+              armed={armedAxis === 'z'}
+              onArmedChange={(next: boolean) => setArmedAxis(next ? 'z' : null)}
               isHovered={!suppressHover && hoveredPart === 'ring-z'}
               isActive={activePart === 'ring-z'}
               isDimmed={isDimmed('ring-z')}

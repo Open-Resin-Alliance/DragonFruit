@@ -11,7 +11,6 @@ import {
   getSpokeAngles,
   nearestRingTickRad,
   shortestAngleDelta,
-  classifySnapZone,
   parseSnapDialConfig,
   DEFAULT_SNAP_DIAL_CONFIG,
 } from "../snapRotation";
@@ -238,45 +237,6 @@ describe("getSpokeAngles", () => {
 
   it("treats zero spacing as disabled", () => {
     assert.deepEqual(getSpokeAngles({ ringShortDeg: 5, ringLongDeg: 10, spokeDeg: 0 }), []);
-  });
-});
-
-describe("classifySnapZone", () => {
-  // Bands derive from GIZMO_SIZES: dialRadius 3.9, dialTickLength 0.55.
-  const R = 3.9;
-  const fine = (5 * Math.PI) / 180;
-  const coarse = (45 * Math.PI) / 180;
-
-  it("maps the inner spoke band to the coarse step", () => {
-    assert.ok(closeTo(classifySnapZone(R / 3, DEFAULT_SNAP_DIAL_CONFIG)!, coarse));
-    assert.ok(closeTo(classifySnapZone(R / 2, DEFAULT_SNAP_DIAL_CONFIG)!, coarse));
-    assert.ok(closeTo(classifySnapZone((2 * R) / 3, DEFAULT_SNAP_DIAL_CONFIG)!, coarse));
-  });
-
-  it("maps the tick ring band to the fine step", () => {
-    assert.ok(closeTo(classifySnapZone(R, DEFAULT_SNAP_DIAL_CONFIG)!, fine));
-    assert.ok(closeTo(classifySnapZone(R + 0.5, DEFAULT_SNAP_DIAL_CONFIG)!, fine));
-  });
-
-  it("pins band edges: inclusive at both ends of both bands", () => {
-    // Spoke band [R/3, 2R/3]; ring band [R, R + dialTickLength * 1.6].
-    const ringOuter = R + 0.55 * 1.6;
-    assert.ok(closeTo(classifySnapZone(R / 3, DEFAULT_SNAP_DIAL_CONFIG)!, coarse), "spoke lower edge");
-    assert.ok(closeTo(classifySnapZone((2 * R) / 3, DEFAULT_SNAP_DIAL_CONFIG)!, coarse), "spoke upper edge");
-    assert.ok(closeTo(classifySnapZone(R, DEFAULT_SNAP_DIAL_CONFIG)!, fine), "ring lower edge");
-    assert.ok(closeTo(classifySnapZone(ringOuter, DEFAULT_SNAP_DIAL_CONFIG)!, fine), "ring upper edge");
-    assert.equal(classifySnapZone((2 * R) / 3 + 1e-6, DEFAULT_SNAP_DIAL_CONFIG), null, "just past spoke band");
-    assert.equal(classifySnapZone(ringOuter + 1e-6, DEFAULT_SNAP_DIAL_CONFIG), null, "just past ring band");
-  });
-
-  it("is free everywhere else — centre, the gap between bands, and outside", () => {
-    assert.equal(classifySnapZone(0.2, DEFAULT_SNAP_DIAL_CONFIG), null);
-    assert.equal(classifySnapZone(R * 0.85, DEFAULT_SNAP_DIAL_CONFIG), null, "gap between bands");
-    assert.equal(classifySnapZone(R * 2, DEFAULT_SNAP_DIAL_CONFIG), null);
-  });
-
-  it("returns null in the spoke band when spokes are disabled", () => {
-    assert.equal(classifySnapZone(R / 2, { ringShortDeg: 5, ringLongDeg: 10, spokeDeg: 0 }), null);
   });
 });
 

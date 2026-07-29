@@ -99,9 +99,9 @@ export function objectAngleForRingAngle(
 }
 
 // ─── Faithful dial model (dragonfruit-103-2) ────────────────────────────────
-// Ring ticks at short/long tiers plus a coarse spoke band; snapping is chosen
-// by WHERE the cursor sits in the ring's local plane during a drag, not by
-// modifier keys or a toggle.
+// Ring ticks at short/long tiers plus a coarse spoke band. Rotation is a
+// two-step pick: arm the dial from the grabber, aim at a tick (the selection
+// spoke sticks to ticks), click to commit. There is no drag-to-rotate.
 
 /** Tier intervals for the faithful dial, whole degrees. */
 export interface SnapDialConfig {
@@ -214,36 +214,6 @@ export function parseSnapDialConfig(raw: string | null): SnapDialConfig {
   } catch {
     return DEFAULT_SNAP_DIAL_CONFIG;
   }
-}
-
-/**
- * Snap increment for a cursor position during a drag, from its radial distance
- * in the ring's local plane. This is the whole faithful mechanic: the dial
- * geometry IS the mode switch.
- *
- * Bands derive from GIZMO_SIZES so behaviour tracks the visuals by
- * construction: spoke band [dialRadius/3, 2*dialRadius/3] -> coarse step;
- * tick band [dialRadius, dialRadius + dialTickLength*1.6] -> fine step
- * (matching the dial pick band the predecessor used); anywhere else -> null,
- * meaning free rotation. Both bands are inclusive at both edges.
- */
-export function classifySnapZone(
-  lenLocal: number,
-  config: SnapDialConfig = DEFAULT_SNAP_DIAL_CONFIG,
-): number | null {
-  const r = GIZMO_SIZES.dialRadius;
-  const spokeInner = r / 3;
-  const spokeOuter = (2 * r) / 3;
-  const ringInner = r;
-  const ringOuter = r + GIZMO_SIZES.dialTickLength * 1.6;
-
-  if (config.spokeDeg > 0 && lenLocal >= spokeInner && lenLocal <= spokeOuter) {
-    return (config.spokeDeg * Math.PI) / 180;
-  }
-  if (lenLocal >= ringInner && lenLocal <= ringOuter) {
-    return (config.ringShortDeg * Math.PI) / 180;
-  }
-  return null;
 }
 
 /**
