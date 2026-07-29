@@ -4071,6 +4071,11 @@ export function SceneCanvas({
       return;
     }
 
+    // While a rotation dial is armed, canvas clicks belong to the tick picker
+    // (its listeners are window-level, so every pick "misses" the scene) —
+    // deselecting here would unmount the gizmo mid-aim.
+    if ((window as any).__gizmoDialArmed) return;
+
     if (mode === 'prepare') {
       if (onActiveModelChange) {
         onActiveModelChange(null);

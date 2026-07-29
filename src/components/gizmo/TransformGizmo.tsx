@@ -193,6 +193,16 @@ export function TransformGizmo({
   const [activePart, setActivePart] = useState<string | null>(null);
   // Which ring's dial is armed for tick selection. Arming one disarms the rest.
   const [armedAxis, setArmedAxis] = useState<GizmoAxis | null>(null);
+
+  // Aiming clicks are window-level and also reach the scene's own click
+  // handling — without this flag, a commit click that hits no mesh fires
+  // onPointerMissed and deselects the model, unmounting the gizmo mid-aim.
+  React.useEffect(() => {
+    (window as unknown as Record<string, unknown>).__gizmoDialArmed = armedAxis !== null;
+    return () => {
+      (window as unknown as Record<string, unknown>).__gizmoDialArmed = false;
+    };
+  }, [armedAxis]);
   const [isUniformScale, setIsUniformScale] = useState(false);
   const [viewCullState, setViewCullState] = useState<ViewCullState>(() => createDefaultViewCullState());
   const activePartRef = React.useRef<string | null>(null);
