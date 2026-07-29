@@ -505,8 +505,13 @@ export function GizmoRotation({
         invalidate();
         return;
       }
-      // Second click: rotate by the sweep from start to here.
-      const delta = sweepObjectDelta(from, tick);
+      // Second click: rotate by the sweep from start to here. The consumer
+      // applies emitted rotate deltas NEGATED (SceneCanvas: setFromAxisAngle
+      // (axis, -angle)) — the drag path is built around that inversion — so
+      // the emission must negate the on-dial sweep or the model turns against
+      // the arc. The readout keeps the un-negated sweep: it describes the
+      // dial, not the wire format.
+      const delta = -sweepObjectDelta(from, tick);
       if (delta !== 0 && onDragStartRef.current() !== false) {
         onDragRef.current(delta);
         onDragEndRef.current();
