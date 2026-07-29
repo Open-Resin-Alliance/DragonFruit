@@ -42,21 +42,16 @@ const TIER_LINE_WIDTH: Record<RingTickTier, number> = {
 const RING_TIERS: RingTickTier[] = ['long', 'short'];
 
 /**
- * SnapTickDial — the faithful protractor anatomy, and a picture of the snap
- * zones themselves.
+ * SnapTickDial — the protractor anatomy the armed picker aims at.
  *
  * Three elements, all in the ring-local frame:
  * - Ring ticks on the circle at dialRadius, radiating outward: short every 5
- *   degrees, long every 10. Dragging with the cursor over this band snaps to
- *   the short step.
- * - Eight spokes in the inner band from dialRadius/3 to 2*dialRadius/3.
- *   Dragging with the cursor over this band snaps to the spoke step (45).
- * - A reference radius at 0 degrees, so the angle arc and readout have a
- *   visible origin.
- *
- * The zone maths in classifySnapZone derives its bands from the same
- * GIZMO_SIZES values used here, so what the user sees IS where snapping
- * happens — they cannot drift apart.
+ *   degrees, long every 10. While the dial is armed these are the pick
+ *   targets the selection spoke sticks to.
+ * - Eight spokes in the inner band from dialRadius/3 to 2*dialRadius/3 —
+ *   visual anatomy marking the 45-degree positions.
+ * - A reference radius at 0 degrees — the origin the sweep arc and the
+ *   committed rotation are measured from.
  *
  * Deliberately NOT inside the camera-following arc group (the original
  * off-axis drift defect), and deliberately flip-agnostic: both the tick set

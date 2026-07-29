@@ -7,6 +7,7 @@ import { Line } from '@react-three/drei';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
 import {
   rayToRingLocal,
+  ringGroupEuler,
   spokeRingAngle,
   objectAngleForRingAngle,
   nearestRingTickRad,
@@ -30,7 +31,7 @@ import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
 
 
-// Scratch objects for per-move zone classification; reused, never retained.
+// Scratch objects for aim-ray resolution while armed; reused, never retained.
 const zoneRaycaster = new THREE.Raycaster();
 const zoneQuat = new THREE.Quaternion();
 const zoneCenter = new THREE.Vector3();
@@ -293,9 +294,9 @@ export function GizmoRotation({
     }
   }, -1);
 
-  // Rotation for each axis
-  const rotation: [number, number, number] =
-    axis === 'x' ? [0, Math.PI / 2, 0] : axis === 'y' ? [-Math.PI / 2, 0, 0] : [0, 0, 0];
+  // Ring-local frame orientation — the SAME source the registration guard
+  // validates through, so guard and app can never orient rings differently.
+  const rotation = ringGroupEuler(axis);
 
   const initialHandlePos: [number, number, number] = [
     Math.cos(parkedAngle) * GIZMO_SIZES.ringMajorRadius,

@@ -1,11 +1,6 @@
 import * as THREE from 'three';
 import type { GizmoAxis } from '../types';
 
-/** Snap angle to nearest increment using Math.round quantization. */
-export function snapAngle(angle: number, increment: number): number {
-  return Math.round(angle / increment) * increment;
-}
-
 /** Coarse snap increment: 45 degrees */
 export const SNAP_COARSE = Math.PI / 4;
 
@@ -218,9 +213,9 @@ export function parseSnapDialConfig(raw: string | null): SnapDialConfig {
 /**
  * Intersect a pointer ray with a ring's plane and return ring-local polar
  * coordinates, or null when the ray is (near-)parallel to the plane or the
- * intersection lies behind the origin. Callers treat null as "hold the
- * previous zone" during a drag, so a grazing pose degrades gracefully instead
- * of flickering to free.
+ * intersection lies behind the origin. The armed picker treats null as "keep
+ * the last selection", so a grazing pose degrades gracefully instead of
+ * flickering the aim.
  */
 export function rayToRingLocal(
   rayOrigin: THREE.Vector3,

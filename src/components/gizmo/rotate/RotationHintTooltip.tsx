@@ -4,9 +4,10 @@ import { MouseTooltip } from '@/components/ui/MouseTooltip';
 /**
  * Cursor-following tooltip shown on rotation ring hover.
  *
- * Snapping is zonal: it is chosen by where the cursor sits during the drag,
- * not by modifier keys — this hint is the one piece of chrome that makes that
- * discoverable, so its copy must match the zones in SnapTickDial.
+ * Rotation is picked from the dial: click the handle to arm, click a tick to
+ * rotate by that angle from the 0-degree reference; dragging the handle
+ * rotates freely. This hint is the one piece of chrome that teaches that, so
+ * its copy must match the interaction in GizmoRotation.
  */
 export function RotationHintTooltip() {
   const [visible, setVisible] = useState(false);

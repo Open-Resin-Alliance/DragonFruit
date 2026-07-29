@@ -350,10 +350,10 @@ export function TransformControls({
               <div className="flex-1" />
             </div>
             <div className="pt-1.5 space-y-2">
-              {/* Dial intervals (#104). There is no snap toggle any more:
-                  snapping is chosen by where the cursor sits during a drag —
-                  over the tick ring it snaps by Short, over the inner spokes
-                  by Spoke, elsewhere rotation is free. */}
+              {/* Dial intervals (#104). Click a ring's diamond to arm its
+                  dial, then click a tick to rotate by that angle; Short sets
+                  the tick spacing the picker resolves to. Long and Spoke are
+                  the longer visual marks. */}
               <div className="grid grid-cols-3 gap-1 min-w-0">
                 {([
                   ['ringShortDeg', 'Short'],
@@ -376,9 +376,9 @@ export function TransformControls({
                         if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
                       }}
                       title={key === 'ringShortDeg'
-                        ? 'Short tick spacing and the fine snap step, in degrees. Must divide 360.'
+                        ? 'Tick spacing and pick resolution, in degrees. Must divide 360.'
                         : key === 'spokeDeg'
-                          ? 'Inner spoke spacing and the coarse snap step, in degrees. 0 disables the band.'
+                          ? 'Inner spoke-mark spacing, in degrees. 0 hides the spokes.'
                           : 'Long tick spacing, in degrees. 0 hides the long tier.'}
                       className={valueInputClass}
                     />
