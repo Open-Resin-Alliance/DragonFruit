@@ -132,6 +132,7 @@ export function GizmoRotation({
   const ringGroupRef = useRef<THREE.Group>(null);
   /** Tick the selection spoke is on while armed. */
   const [selectedTickRad, setSelectedTickRad] = useState<number | null>(null);
+  const selectedTickRadRef = useRef<number | null>(null);
   /** Start tick of the sweep — the first click while armed picks it. */
   const [referenceTickRad, setReferenceTickRad] = useState<number | null>(null);
   const referenceTickRadRef = useRef<number | null>(null);
@@ -436,6 +437,9 @@ export function GizmoRotation({
 
   useEffect(() => {
     if (!armed) return;
+    // The arming click's pointerup fired before this effect subscribed, so its
+    // suppress flag was never consumed — clear it or it eats the first pick.
+    suppressCommitRef.current = false;
 
     const readout = (detail: object) =>
       window.dispatchEvent(new CustomEvent('dragonfruit:snap-angle', { detail }));
@@ -461,16 +465,14 @@ export function GizmoRotation({
       // Grazing poses keep the previous selection rather than flickering.
       if (!hit) return;
       const next = nearestRingTickRad(hit.angleRad, dialConfigRef.current);
-      setSelectedTickRad((prev) => {
-        if (prev !== next) {
-          const from = referenceTickRadRef.current;
-          if (from !== null) {
-            readout({ active: true, angle: sweepObjectDelta(from, next), axis });
-          }
-          invalidate();
-        }
-        return next;
-      });
+      if (selectedTickRadRef.current === next) return;
+      selectedTickRadRef.current = next;
+      setSelectedTickRad(next);
+      const from = referenceTickRadRef.current;
+      if (from !== null) {
+        readout({ active: true, angle: sweepObjectDelta(from, next), axis });
+      }
+      invalidate();
     };
 
     const onPointerDown = (e: PointerEvent) => {
@@ -488,26 +490,28 @@ export function GizmoRotation({
       if (!start) return;
       if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > DIAL_CLICK_SLOP_PX) return;
 
-      setSelectedTickRad((tick) => {
-        if (tick === null) return tick;
-        const from = referenceTickRadRef.current;
-        if (from === null) {
-          // First click: pick the sweep's start.
-          referenceTickRadRef.current = tick;
-          setReferenceTickRad(tick);
-          readout({ active: true, angle: 0, axis });
-          invalidate();
-          return tick;
-        }
-        // Second click: rotate by the sweep from start to here.
-        const delta = sweepObjectDelta(from, tick);
-        if (delta !== 0 && onDragStartRef.current() !== false) {
-          onDragRef.current(delta);
-          onDragEndRef.current();
-        }
-        onArmedChangeRef.current(false);
-        return tick;
-      });
+      // No setState updaters here: React double-invokes updaters in dev
+      // (StrictMode), and commit logic inside one ran twice — the first pass
+      // picked the start, the second saw it picked, swept 0 and disarmed.
+      // Refs are the source of truth; setters only receive plain values.
+      const tick = selectedTickRadRef.current;
+      if (tick === null) return;
+      const from = referenceTickRadRef.current;
+      if (from === null) {
+        // First click: pick the sweep's start.
+        referenceTickRadRef.current = tick;
+        setReferenceTickRad(tick);
+        readout({ active: true, angle: 0, axis });
+        invalidate();
+        return;
+      }
+      // Second click: rotate by the sweep from start to here.
+      const delta = sweepObjectDelta(from, tick);
+      if (delta !== 0 && onDragStartRef.current() !== false) {
+        onDragRef.current(delta);
+        onDragEndRef.current();
+      }
+      onArmedChangeRef.current(false);
     };
 
     // Raw keydown listeners are forbidden here (hotkey-restriction rule);
@@ -526,6 +530,7 @@ export function GizmoRotation({
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('app-hotkey-keydown', onAppHotkey);
       armedPointerDownRef.current = null;
+      selectedTickRadRef.current = null;
       setSelectedTickRad(null);
       referenceTickRadRef.current = null;
       setReferenceTickRad(null);
