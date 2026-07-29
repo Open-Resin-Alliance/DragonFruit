@@ -21,6 +21,8 @@ interface AngleSpokeProps {
   active: boolean;
   /** Multiplies the computed opacity, mirroring the ring's opacityScale. */
   opacityScale?: number;
+  /** Draw the 0-to-current arc. The armed picker replaces it with a sweep arc. */
+  showArc?: boolean;
 }
 
 /**
@@ -44,6 +46,7 @@ export function AngleSpoke({
   hovered,
   active,
   opacityScale = 1,
+  showArc = true,
 }: AngleSpokeProps) {
   const angle = spokeRingAngle(currentAngleRad, axisVisualFlip);
 
@@ -59,14 +62,14 @@ export function AngleSpoke({
   // circle — rendered only during a drag, when continuous invalidation is
   // already active, so it adds no idle-loop pressure.
   const arcPoints = useMemo(() => {
-    if (!active || Math.abs(angle) < 1e-6) return null;
+    if (!showArc || !active || Math.abs(angle) < 1e-6) return null;
     const steps = Math.max(2, Math.ceil(Math.abs(angle) / ARC_STEP_RAD));
     const pts: [number, number, number][] = [];
     for (let i = 0; i <= steps; i += 1) {
       pts.push(polarToLocal((angle * i) / steps, GIZMO_SIZES.dialRadius));
     }
     return pts;
-  }, [active, angle]);
+  }, [showArc, active, angle]);
 
   const opacity = (active ? 0.9 : hovered ? 0.5 : 0) * opacityScale;
   if (opacity <= 0) return null;

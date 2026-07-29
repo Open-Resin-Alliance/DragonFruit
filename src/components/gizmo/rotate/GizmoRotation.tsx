@@ -128,6 +128,9 @@ export function GizmoRotation({
   const ringGroupRef = useRef<THREE.Group>(null);
   /** Tick the selection spoke is on while armed. */
   const [selectedTickRad, setSelectedTickRad] = useState<number | null>(null);
+  /** Start tick of the sweep — the first click while armed picks it. */
+  const [referenceTickRad, setReferenceTickRad] = useState<number | null>(null);
+  const referenceTickRadRef = useRef<number | null>(null);
   /** Pointer-down screen position while armed — a click commits, a drag orbits. */
   const armedPointerDownRef = useRef<{ x: number; y: number } | null>(null);
   /** Set when the grabber consumes a gesture, so the armed commit skips it. */
@@ -299,19 +302,21 @@ export function GizmoRotation({
     window.dispatchEvent(new CustomEvent('dragonfruit:rotation-hint', { detail: { visible: false } }));
   };
 
-  // --- Armed tick selection ------------------------------------------------
+  // --- Armed tick sweep ----------------------------------------------------
   // Clicking the diamond arms this ring's dial. While armed, the selection
-  // spoke follows the cursor in the ring's plane, sticking to ticks; the
-  // selected tick is highlighted and the readout shows the SIGNED rotation a
-  // click would apply. A click commits it through the rotate callbacks (one
-  // undo entry); a drag still belongs to the camera; Esc or the diamond again
-  // cancels.
+  // spoke follows the cursor in the ring's plane, sticking to ticks. The
+  // FIRST click picks the start tick; from then on the readout and the sweep
+  // arc show the SIGNED angle from that start to the current tick, and the
+  // SECOND click rotates the model by exactly that sweep — rotation is
+  // relative to the picked start, not to where the model happens to point.
+  // A drag still belongs to the camera; Esc or the diamond again cancels.
 
-  /** Signed object-space delta that selecting a ring angle would apply. */
-  const previewDelta = useCallback(
-    (tickRad: number) =>
-      shortestAngleDelta(currentAngleRad, objectAngleForRingAngle(tickRad, axisVisualFlip)),
-    [currentAngleRad, axisVisualFlip],
+  /** Object-space rotation for a ring-space sweep. The ring->object map is
+   *  linear through zero, so it applies to deltas as well as absolutes. */
+  const sweepObjectDelta = useCallback(
+    (fromTickRad: number, toTickRad: number) =>
+      objectAngleForRingAngle(shortestAngleDelta(fromTickRad, toTickRad), axisVisualFlip),
+    [axisVisualFlip],
   );
 
   useEffect(() => {
@@ -343,7 +348,10 @@ export function GizmoRotation({
       const next = nearestRingTickRad(hit.angleRad, dialConfigRef.current);
       setSelectedTickRad((prev) => {
         if (prev !== next) {
-          readout({ active: true, angle: previewDelta(next), axis });
+          const from = referenceTickRadRef.current;
+          if (from !== null) {
+            readout({ active: true, angle: sweepObjectDelta(from, next), axis });
+          }
           invalidate();
         }
         return next;
@@ -367,7 +375,17 @@ export function GizmoRotation({
 
       setSelectedTickRad((tick) => {
         if (tick === null) return tick;
-        const delta = previewDelta(tick);
+        const from = referenceTickRadRef.current;
+        if (from === null) {
+          // First click: pick the sweep's start.
+          referenceTickRadRef.current = tick;
+          setReferenceTickRad(tick);
+          readout({ active: true, angle: 0, axis });
+          invalidate();
+          return tick;
+        }
+        // Second click: rotate by the sweep from start to here.
+        const delta = sweepObjectDelta(from, tick);
         if (delta !== 0 && onDragStart() !== false) {
           onDragRef.current(delta);
           onDragEndRef.current();
@@ -394,10 +412,12 @@ export function GizmoRotation({
       window.removeEventListener('app-hotkey-keydown', onAppHotkey);
       armedPointerDownRef.current = null;
       setSelectedTickRad(null);
+      referenceTickRadRef.current = null;
+      setReferenceTickRad(null);
       readout({ active: false });
       invalidate();
     };
-  }, [armed, axis, camera, gl.domElement, invalidate, onArmedChange, onDragStart, previewDelta]);
+  }, [armed, axis, camera, gl.domElement, invalidate, onArmedChange, onDragStart, sweepObjectDelta]);
 
   const handlePointerEnterLocal = (e: ThreeEvent<PointerEvent>) => {
     if (!interactionsEnabled) return;
@@ -513,8 +533,23 @@ export function GizmoRotation({
             config={dialConfig}
             highlightRad={armed ? selectedTickRad : null}
           />
+          {armed && referenceTickRad !== null && (
+            // Sweep start — the first-clicked tick the rotation measures from.
+            <Line
+              points={[
+                polarToLocal(referenceTickRad, GIZMO_SIZES.spokeInnerRadius),
+                polarToLocal(referenceTickRad, GIZMO_SIZES.dialRadius),
+              ]}
+              color="#ffffff"
+              lineWidth={2.0}
+              transparent
+              opacity={0.95 * opacityScale}
+              depthTest={false}
+              toneMapped={false}
+            />
+          )}
           {armed && selectedTickRad !== null && (
-            // Selection spoke — where the model WILL point if clicked.
+            // Selection spoke — the sweep's end under the cursor.
             <Line
               points={[
                 polarToLocal(selectedTickRad, GIZMO_SIZES.spokeInnerRadius),
@@ -531,10 +566,36 @@ export function GizmoRotation({
               toneMapped={false}
             />
           )}
+          {armed &&
+            referenceTickRad !== null &&
+            selectedTickRad !== null &&
+            referenceTickRad !== selectedTickRad && (
+              // Sweep arc — the rotation a click will apply, drawn tick to tick.
+              <Line
+                points={(() => {
+                  const sweep = shortestAngleDelta(referenceTickRad, selectedTickRad);
+                  const steps = Math.max(2, Math.ceil(Math.abs(sweep) / (Math.PI / 64)));
+                  const pts: [number, number, number][] = [];
+                  for (let i = 0; i <= steps; i += 1) {
+                    pts.push(
+                      polarToLocal(referenceTickRad + (sweep * i) / steps, GIZMO_SIZES.dialRadius),
+                    );
+                  }
+                  return pts;
+                })()}
+                color="#ffffff"
+                lineWidth={2.2}
+                transparent
+                opacity={0.9 * opacityScale}
+                depthTest={false}
+                toneMapped={false}
+              />
+            )}
           <AngleSpoke
             color={ringColors.ring}
             currentAngleRad={currentAngleRad}
             axisVisualFlip={axisVisualFlip}
+            showArc={!armed}
             hovered={!!effectiveHovered}
             active={ringIsActive}
             opacityScale={opacityScale}

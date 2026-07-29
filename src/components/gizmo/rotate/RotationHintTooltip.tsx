@@ -30,12 +30,12 @@ export function RotationHintTooltip() {
           whiteSpace: 'nowrap',
         }}
       >
-        <div>Drag to rotate</div>
+        <div>Click handle to aim</div>
         <div className="mt-0.5 opacity-70">
-          over ticks: 5° snap &nbsp;|&nbsp; over spokes: 45°
+          click a start tick, then an end tick to rotate
         </div>
         <div className="mt-0.5 opacity-70">
-          click a tick to rotate to it
+          Esc cancels &nbsp;|&nbsp; drag orbits
         </div>
       </div>
     </MouseTooltip>
