@@ -34,8 +34,11 @@ import type { GizmoHandleType } from '@/components/picking/types';
 const zoneRaycaster = new THREE.Raycaster();
 const zoneQuat = new THREE.Quaternion();
 const zoneCenter = new THREE.Vector3();
-/** Pointer travel below this is a click; above it the gesture is the camera's. */
+/** Pointer travel below this is a click; above it the gesture is a drag. */
 const DIAL_CLICK_SLOP_PX = 4;
+const ROTATION_CENTER_DEADZONE_PX = 24;
+const ROTATION_NEAR_CENTER_JUMP_GUARD_PX = 56;
+const ROTATION_NEAR_CENTER_MAX_DELTA = Math.PI / 2;
 
 interface GizmoRotationProps {
   axis: GizmoAxis;
@@ -102,6 +105,7 @@ export function GizmoRotation({
   gizmoPosition,
   disableRingBillboard = false,
   handleScale = 1.0,
+  worldAxisDir,
   axisVisualFlip = 1,
   currentAngleRad,
   armed,
@@ -135,6 +139,14 @@ export function GizmoRotation({
   const armedPointerDownRef = useRef<{ x: number; y: number } | null>(null);
   /** Set when the grabber consumes a gesture, so the armed commit skips it. */
   const suppressCommitRef = useRef(false);
+  /** True while the diamond is being dragged to rotate. */
+  const [isDragging, setIsDragging] = useState(false);
+  /** Diamond press awaiting classification: <slop release = arm, >slop = drag. */
+  const [pressOrigin, setPressOrigin] = useState<{ x: number; y: number } | null>(null);
+  const lastMouseAngle = useRef<number>(0);
+  const shouldFlipRef = useRef(false);
+  /** Object-space rotation accumulated by the current drag, for the readout. */
+  const dragAccumulatedRef = useRef<number>(0);
   // The grabber parks at the object's true angle in the ring frame — the
   // faithful behaviour — rather than facing the camera or sitting between the
   // positive axes. Same angle source as the spoke, so grabber and indicator
@@ -152,10 +164,14 @@ export function GizmoRotation({
   const pointLightRef = useRef<THREE.PointLight>(null);
   const { camera, gl, invalidate } = useThree();
 
+  const onDragStartRef = useRef(onDragStart);
+  const onArmedChangeRef = useRef(onArmedChange);
   useEffect(() => {
     onDragRef.current = onDrag;
     onDragEndRef.current = onDragEnd;
-  }, [onDrag, onDragEnd]);
+    onDragStartRef.current = onDragStart;
+    onArmedChangeRef.current = onArmedChange;
+  }, [onDrag, onDragEnd, onDragStart, onArmedChange]);
 
   // Follow live edits from the settings panel, mirroring how the snap toggle
   // broadcasts. invalidate() because under demand mode nothing else would draw.
@@ -221,6 +237,7 @@ export function GizmoRotation({
   // camera side, decides the sign, exactly as it did when the handle was
   // camera-parked.
   React.useEffect(() => {
+    if (isDragging) return;
     if (!disableRingBillboard && !suppressAxisAnimations) return;
     handleAngleRef.current = parkedAngle;
     targetHandleAngleRef.current = parkedAngle;
@@ -229,17 +246,17 @@ export function GizmoRotation({
       const cameraDir = new THREE.Vector3().subVectors(camera.position, gizmoPosition).normalize();
       billboardRotationRef.current = Math.atan2(cameraDir.y, cameraDir.x);
     }
-  }, [camera.position, gizmoPosition, parkedAngle, suppressAxisAnimations, disableRingBillboard]);
+  }, [camera.position, gizmoPosition, isDragging, parkedAngle, suppressAxisAnimations, disableRingBillboard]);
 
   // Ref-based temporal smoothing to avoid micro-shimmer from per-frame React state updates.
   useFrame(() => {
-    targetHandleAngleRef.current = parkedAngle;
+    if (!isDragging) targetHandleAngleRef.current = parkedAngle;
 
     let delta = targetHandleAngleRef.current - handleAngleRef.current;
     if (delta > Math.PI) delta -= 2 * Math.PI;
     if (delta < -Math.PI) delta += 2 * Math.PI;
 
-    const smoothing = suppressAxisAnimations ? 1 : 0.2;
+    const smoothing = isDragging || suppressAxisAnimations ? 1 : 0.2;
     handleAngleRef.current += delta * smoothing;
 
     const handleAngle = handleAngleRef.current;
@@ -296,11 +313,109 @@ export function GizmoRotation({
     e.stopPropagation();
     e.stopped = true; // Mark event as handled for OrbitControls
     // stopPropagation does not reach the armed window listeners — flag the
-    // gesture so toggling the diamond never doubles as a commit click.
+    // gesture so the diamond press never doubles as a sweep commit click.
     suppressCommitRef.current = true;
-    onArmedChange(!armed);
+    setPressOrigin({ x: e.clientX, y: e.clientY });
     window.dispatchEvent(new CustomEvent('dragonfruit:rotation-hint', { detail: { visible: false } }));
   };
+
+  const computeShouldFlip = useCallback(() => {
+    if (worldAxisDir) {
+      const cameraOffset = new THREE.Vector3().subVectors(camera.position, gizmoPosition);
+      return cameraOffset.dot(worldAxisDir) > 0;
+    }
+    if (axis === 'x') return camera.position.x - gizmoPosition.x > 0;
+    if (axis === 'y') return camera.position.y - gizmoPosition.y > 0;
+    return camera.position.z - gizmoPosition.z > 0;
+  }, [axis, camera.position, gizmoPosition, worldAxisDir]);
+
+  const getGizmoScreenCenter = useCallback(() => {
+    const rect = gl.domElement.getBoundingClientRect();
+    const projected = gizmoPosition.clone().project(camera);
+    return {
+      x: rect.left + ((projected.x + 1) * 0.5) * rect.width,
+      y: rect.top + ((1 - projected.y) * 0.5) * rect.height,
+    };
+  }, [camera, gl, gizmoPosition]);
+
+  const getMousePolar = useCallback((clientX: number, clientY: number) => {
+    const center = getGizmoScreenCenter();
+    const dx = clientX - center.x;
+    const dy = clientY - center.y;
+    return { angle: Math.atan2(dy, dx), distance: Math.hypot(dx, dy) };
+  }, [getGizmoScreenCenter]);
+
+  // --- Diamond gesture: click arms the picker, drag rotates freely ----------
+  useEffect(() => {
+    if (!pressOrigin && !isDragging) return;
+
+    const onMove = (e: PointerEvent) => {
+      if (!isDragging) {
+        // Still a press — promote to a drag once it travels past the slop.
+        if (!pressOrigin) return;
+        if (Math.hypot(e.clientX - pressOrigin.x, e.clientY - pressOrigin.y) <= DIAL_CLICK_SLOP_PX) return;
+        if (onDragStartRef.current() === false) { setPressOrigin(null); return; }
+        shouldFlipRef.current = computeShouldFlip();
+        lastMouseAngle.current = getMousePolar(e.clientX, e.clientY).angle;
+        dragAccumulatedRef.current = 0;
+        if (armed) onArmedChangeRef.current(false);
+        setIsDragging(true);
+        return;
+      }
+
+      const mousePolar = getMousePolar(e.clientX, e.clientY);
+      let deltaAngle = mousePolar.angle - lastMouseAngle.current;
+      if (deltaAngle > Math.PI) deltaAngle -= 2 * Math.PI;
+      if (deltaAngle < -Math.PI) deltaAngle += 2 * Math.PI;
+
+      // Near the projected centre the polar angle is unstable — swallow the
+      // sample rather than emitting a wild delta.
+      if (
+        mousePolar.distance < ROTATION_CENTER_DEADZONE_PX
+        || (
+          mousePolar.distance < ROTATION_NEAR_CENTER_JUMP_GUARD_PX
+          && Math.abs(deltaAngle) > ROTATION_NEAR_CENTER_MAX_DELTA
+        )
+      ) {
+        lastMouseAngle.current = mousePolar.angle;
+        return;
+      }
+
+      const flipMult = shouldFlipRef.current ? -1 : 1;
+      const objectDelta = deltaAngle * -flipMult;
+      lastMouseAngle.current = mousePolar.angle;
+      dragAccumulatedRef.current += objectDelta;
+
+      // The handle rides the drag; the parked target catches up on release.
+      const visualDelta = objectDelta * -1 * axisVisualFlip;
+      handleAngleRef.current += visualDelta;
+      targetHandleAngleRef.current = handleAngleRef.current;
+
+      onDragRef.current(objectDelta);
+      window.dispatchEvent(new CustomEvent('dragonfruit:snap-angle', {
+        detail: { active: true, angle: dragAccumulatedRef.current, axis },
+      }));
+    };
+
+    const onUp = () => {
+      if (isDragging) {
+        onDragEndRef.current();
+        setIsDragging(false);
+        window.dispatchEvent(new CustomEvent('dragonfruit:snap-angle', { detail: { active: false } }));
+      } else if (pressOrigin) {
+        // Released within the slop: it was a click — toggle the picker.
+        onArmedChangeRef.current(!armed);
+      }
+      setPressOrigin(null);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [pressOrigin, isDragging, armed, axis, axisVisualFlip, computeShouldFlip, getMousePolar]);
 
   // --- Armed tick sweep ----------------------------------------------------
   // Clicking the diamond arms this ring's dial. While armed, the selection
@@ -386,11 +501,11 @@ export function GizmoRotation({
         }
         // Second click: rotate by the sweep from start to here.
         const delta = sweepObjectDelta(from, tick);
-        if (delta !== 0 && onDragStart() !== false) {
+        if (delta !== 0 && onDragStartRef.current() !== false) {
           onDragRef.current(delta);
           onDragEndRef.current();
         }
-        onArmedChange(false);
+        onArmedChangeRef.current(false);
         return tick;
       });
     };
@@ -398,7 +513,7 @@ export function GizmoRotation({
     // Raw keydown listeners are forbidden here (hotkey-restriction rule);
     // the hotkey system re-broadcasts keys on this app event instead.
     const onAppHotkey = (e: Event) => {
-      if ((e as CustomEvent).detail?.key === 'Escape') onArmedChange(false);
+      if ((e as CustomEvent).detail?.key === 'Escape') onArmedChangeRef.current(false);
     };
 
     window.addEventListener('pointermove', trackPointer);
@@ -417,7 +532,12 @@ export function GizmoRotation({
       readout({ active: false });
       invalidate();
     };
-  }, [armed, axis, camera, gl.domElement, invalidate, onArmedChange, onDragStart, sweepObjectDelta]);
+    // Callback props are read through refs: TransformGizmo recreates them on
+    // every render (hover picking re-renders constantly), and having them as
+    // deps tore this effect down mid-flow — the cleanup wiped the picked start
+    // tick, so the second click always behaved like a first. Deps are now the
+    // genuinely stable identities only.
+  }, [armed, axis, camera, gl.domElement, invalidate, sweepObjectDelta]);
 
   const handlePointerEnterLocal = (e: ThreeEvent<PointerEvent>) => {
     if (!interactionsEnabled) return;

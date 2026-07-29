@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { GIZMO_SIZES } from '../constants';
 import type { GizmoAxis } from '../types';
 
 /** Snap angle to nearest increment using Math.round quantization. */
