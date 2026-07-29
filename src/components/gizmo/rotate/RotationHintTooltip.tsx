@@ -32,7 +32,7 @@ export function RotationHintTooltip() {
       >
         <div>Click handle to aim</div>
         <div className="mt-0.5 opacity-70">
-          click a start tick, then an end tick to rotate
+          click a tick to rotate by that angle
         </div>
         <div className="mt-0.5 opacity-70">
           Esc cancels &nbsp;|&nbsp; drag orbits

@@ -133,9 +133,6 @@ export function GizmoRotation({
   /** Tick the selection spoke is on while armed. */
   const [selectedTickRad, setSelectedTickRad] = useState<number | null>(null);
   const selectedTickRadRef = useRef<number | null>(null);
-  /** Start tick of the sweep — the first click while armed picks it. */
-  const [referenceTickRad, setReferenceTickRad] = useState<number | null>(null);
-  const referenceTickRadRef = useRef<number | null>(null);
   /** Pointer-down screen position while armed — a click commits, a drag orbits. */
   const armedPointerDownRef = useRef<{ x: number; y: number } | null>(null);
   /** Set when the grabber consumes a gesture, so the armed commit skips it. */
@@ -418,14 +415,12 @@ export function GizmoRotation({
     };
   }, [pressOrigin, isDragging, armed, axis, axisVisualFlip, computeShouldFlip, getMousePolar]);
 
-  // --- Armed tick sweep ----------------------------------------------------
+  // --- Armed tick pick -----------------------------------------------------
   // Clicking the diamond arms this ring's dial. While armed, the selection
-  // spoke follows the cursor in the ring's plane, sticking to ticks. The
-  // FIRST click picks the start tick; from then on the readout and the sweep
-  // arc show the SIGNED angle from that start to the current tick, and the
-  // SECOND click rotates the model by exactly that sweep — rotation is
-  // relative to the picked start, not to where the model happens to point.
-  // A drag still belongs to the camera; Esc or the diamond again cancels.
+  // spoke follows the cursor in the ring's plane, sticking to ticks; the
+  // readout and the sweep arc show the SIGNED angle from the dial's 0-degree
+  // reference to the tick, and ONE click rotates the model by exactly that
+  // angle. A drag still belongs to the camera; Esc or the diamond cancels.
 
   /** Object-space rotation for a ring-space sweep. The ring->object map is
    *  linear through zero, so it applies to deltas as well as absolutes. */
@@ -468,10 +463,7 @@ export function GizmoRotation({
       if (selectedTickRadRef.current === next) return;
       selectedTickRadRef.current = next;
       setSelectedTickRad(next);
-      const from = referenceTickRadRef.current;
-      if (from !== null) {
-        readout({ active: true, angle: sweepObjectDelta(from, next), axis });
-      }
+      readout({ active: true, angle: sweepObjectDelta(0, next), axis });
       invalidate();
     };
 
@@ -491,27 +483,16 @@ export function GizmoRotation({
       if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > DIAL_CLICK_SLOP_PX) return;
 
       // No setState updaters here: React double-invokes updaters in dev
-      // (StrictMode), and commit logic inside one ran twice — the first pass
-      // picked the start, the second saw it picked, swept 0 and disarmed.
-      // Refs are the source of truth; setters only receive plain values.
+      // (StrictMode) — refs are the source of truth, setters only get values.
       const tick = selectedTickRadRef.current;
       if (tick === null) return;
-      const from = referenceTickRadRef.current;
-      if (from === null) {
-        // First click: pick the sweep's start.
-        referenceTickRadRef.current = tick;
-        setReferenceTickRad(tick);
-        readout({ active: true, angle: 0, axis });
-        invalidate();
-        return;
-      }
-      // Second click: rotate by the sweep from start to here. The consumer
-      // applies emitted rotate deltas NEGATED (SceneCanvas: setFromAxisAngle
-      // (axis, -angle)) — the drag path is built around that inversion — so
-      // the emission must negate the on-dial sweep or the model turns against
-      // the arc. The readout keeps the un-negated sweep: it describes the
-      // dial, not the wire format.
-      const delta = -sweepObjectDelta(from, tick);
+      // One click rotates by the angle from the dial's 0 reference to the
+      // tick. The consumer applies emitted rotate deltas NEGATED (SceneCanvas:
+      // setFromAxisAngle(axis, -angle)) — the drag path is built around that
+      // inversion — so the emission negates the on-dial sweep or the model
+      // turns against the arc. The readout keeps the un-negated value: it
+      // describes the dial, not the wire format.
+      const delta = -sweepObjectDelta(0, tick);
       if (delta !== 0 && onDragStartRef.current() !== false) {
         onDragRef.current(delta);
         onDragEndRef.current();
@@ -537,8 +518,6 @@ export function GizmoRotation({
       armedPointerDownRef.current = null;
       selectedTickRadRef.current = null;
       setSelectedTickRad(null);
-      referenceTickRadRef.current = null;
-      setReferenceTickRad(null);
       readout({ active: false });
       invalidate();
     };
@@ -663,21 +642,6 @@ export function GizmoRotation({
             config={dialConfig}
             highlightRad={armed ? selectedTickRad : null}
           />
-          {armed && referenceTickRad !== null && (
-            // Sweep start — the first-clicked tick the rotation measures from.
-            <Line
-              points={[
-                polarToLocal(referenceTickRad, GIZMO_SIZES.spokeInnerRadius),
-                polarToLocal(referenceTickRad, GIZMO_SIZES.dialRadius),
-              ]}
-              color="#ffffff"
-              lineWidth={2.0}
-              transparent
-              opacity={0.95 * opacityScale}
-              depthTest={false}
-              toneMapped={false}
-            />
-          )}
           {armed && selectedTickRad !== null && (
             // Selection spoke — the sweep's end under the cursor.
             <Line
@@ -696,20 +660,15 @@ export function GizmoRotation({
               toneMapped={false}
             />
           )}
-          {armed &&
-            referenceTickRad !== null &&
-            selectedTickRad !== null &&
-            referenceTickRad !== selectedTickRad && (
-              // Sweep arc — the rotation a click will apply, drawn tick to tick.
+          {armed && selectedTickRad !== null && Math.abs(selectedTickRad) > 1e-9 && (
+              // Sweep arc — the rotation a click will apply, from 0 to the tick.
               <Line
                 points={(() => {
-                  const sweep = shortestAngleDelta(referenceTickRad, selectedTickRad);
+                  const sweep = shortestAngleDelta(0, selectedTickRad);
                   const steps = Math.max(2, Math.ceil(Math.abs(sweep) / (Math.PI / 64)));
                   const pts: [number, number, number][] = [];
                   for (let i = 0; i <= steps; i += 1) {
-                    pts.push(
-                      polarToLocal(referenceTickRad + (sweep * i) / steps, GIZMO_SIZES.dialRadius),
-                    );
+                    pts.push(polarToLocal((sweep * i) / steps, GIZMO_SIZES.dialRadius));
                   }
                   return pts;
                 })()}
