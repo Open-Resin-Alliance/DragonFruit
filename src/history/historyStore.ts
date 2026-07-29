@@ -71,16 +71,28 @@ export function undo() {
     appendHistoryDebugEvent('undo-empty');
     return;
   }
-  const handled = dispatch(action, 'undo');
-  if (handled) {
+  const outcome = dispatch(action, 'undo');
+  if (outcome === 'applied') {
     redoStack.push(structuredClone(action));
     notifyHistoryOperation('undo', action);
     appendHistoryDebugEvent('undo', action);
     notifySubscribers();
-  } else {
+    return;
+  }
+  if (outcome === 'no-handler') {
+    // Registration can lag the push, so keep the entry — it replays once a
+    // handler appears. Dropping it would be silent, unrecoverable loss.
+    undoStack.push(action);
     appendHistoryDebugEvent('undo-handler-missing', action);
     console.warn('[HistoryStore] undo handler missing for action', action.type);
+    return;
   }
+  // declined: a handler ran but refused (e.g. the state it needed is gone).
+  // Stable across retries, so discard it rather than let it pin the top of the
+  // stack and block undo of every entry beneath it.
+  appendHistoryDebugEvent('undo-declined', action);
+  console.warn('[HistoryStore] undo handler declined; discarding action', action.type);
+  notifySubscribers();
 }
 
 export function redo() {
@@ -89,16 +101,25 @@ export function redo() {
     appendHistoryDebugEvent('redo-empty');
     return;
   }
-  const handled = dispatch(action, 'redo');
-  if (handled) {
+  const outcome = dispatch(action, 'redo');
+  if (outcome === 'applied') {
     undoStack.push(structuredClone(action));
     notifyHistoryOperation('redo', action);
     appendHistoryDebugEvent('redo', action);
     notifySubscribers();
-  } else {
+    return;
+  }
+  if (outcome === 'no-handler') {
+    // See undo(): keep unhandled entries for a late-registering handler.
+    redoStack.push(action);
     appendHistoryDebugEvent('redo-handler-missing', action);
     console.warn('[HistoryStore] redo handler missing for action', action.type);
+    return;
   }
+  // declined: unrecoverable, so discard rather than pin the redo stack.
+  appendHistoryDebugEvent('redo-declined', action);
+  console.warn('[HistoryStore] redo handler declined; discarding action', action.type);
+  notifySubscribers();
 }
 
 export function clearHistory() {
@@ -154,14 +175,28 @@ export function getRedoCount() {
   return redoStack.length;
 }
 
-function dispatch(action: HistoryAction, direction: HistoryDirection) {
+/**
+ * Result of routing an action to its registered handlers.
+ *
+ * - `applied` — a handler ran and reported success.
+ * - `no-handler` — no handler is registered for this type. Usually transient:
+ *   registration can lag the first push, so callers keep the entry to replay.
+ * - `declined` — a handler ran but refused (e.g. the state it needed is gone).
+ *   Stable across retries, so callers discard the entry rather than let it pin
+ *   the stack.
+ *
+ * The two failure cases were a single `false` before; conflating them made an
+ * unrecoverable entry masquerade as a retryable one and jam the stack.
+ */
+type DispatchOutcome = 'applied' | 'no-handler' | 'declined';
+
+function dispatch(action: HistoryAction, direction: HistoryDirection): DispatchOutcome {
   const handlers = handlerMap.get(action.type);
-  if (!handlers || handlers.size === 0) return false;
+  if (!handlers || handlers.size === 0) return 'no-handler';
   for (const handler of handlers) {
-    const result = handler(action, direction);
-    if (result === false) {
-      return false;
+    if (handler(action, direction) === false) {
+      return 'declined';
     }
   }
-  return true;
+  return 'applied';
 }

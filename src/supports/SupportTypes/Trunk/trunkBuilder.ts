@@ -6,6 +6,7 @@
  */
 
 import * as THREE from 'three';
+import { v4 as uuidv4 } from 'uuid';
 import { Vec3, Roots, Trunk, Segment, Joint } from '../../types';
 import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition, getSocketPosition } from '../../SupportPrimitives/ContactCone/contactConeUtils';
@@ -22,13 +23,6 @@ import { gridSnappedXYFromKey } from '../../PlacementLogic/Grid/gridMath';
 import { normalizeFirstConstructionJoint, withCentralStraightSupportJoint } from './trunkConstructionJoints';
 import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
 import { perfMark, perfMeasureWithSpike } from '../../PlacementLogic/Pathfinding/pathfindingPerf';
-
-function uuidv4() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-        const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-    });
-}
 
 const JOINT_CHAIN_Z_EPSILON = 0.0001;
 

@@ -16,7 +16,7 @@ import { getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { calculateKnotPositionOnSegmentFromT } from '../../SupportPrimitives/Knot/knotUtils';
 import { isShaftBlocked, isCollisionSegmentBlocked } from '../CollisionAvoidance';
 import * as THREE from 'three';
-import { generateUuid } from '../../../utils/uuid';
+import { v4 as uuidv4 } from 'uuid';
 import { buildAnchorData } from '../../SupportTypes/Anchor/anchorBuilder';
 import { buildLeafData } from '../../SupportTypes/Leaf/leafBuilder';
 import { perfMark, perfMeasureWithSpike } from '../Pathfinding/pathfindingPerf';
@@ -356,7 +356,7 @@ function selectHighestValidAttachment(args: {
             if (!satisfiesMinAngleFromHorizontal(tipPos, pos, minAngleDeg)) continue;
 
             const knot: Knot = {
-                id: generateUuid(),
+                id: uuidv4(),
                 parentShaftId: segment.id,
                 t,
                 pos,

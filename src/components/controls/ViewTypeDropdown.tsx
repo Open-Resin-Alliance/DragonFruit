@@ -12,6 +12,8 @@ import {
   Wand2,
   Eye,
 } from 'lucide-react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import { MESH_SHADER_OPTIONS, type MeshShaderType } from '@/features/shaders/mesh';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 
@@ -53,28 +55,34 @@ export function ViewTypeDropdown({
   iconOnly = false,
   title,
 }: ViewTypeDropdownProps) {
+  const { _ } = useLingui();
   const dropdownValue = (value ?? '__default__') as MeshShaderType | '__default__';
 
   const currentLabel = React.useMemo(() => {
-    if (value === null) return 'Default';
-    return MESH_SHADER_OPTIONS.find((opt) => opt.value === value)?.label ?? 'Default';
-  }, [value]);
+    const fallback = _(msg({ message: 'Default', comment: 'View mode dropdown: the shader inherited from the project setting.' }));
+    if (value === null) return fallback;
+    const option = MESH_SHADER_OPTIONS.find((opt) => opt.value === value);
+    return option ? _(option.label) : fallback;
+  }, [_, value]);
 
   const dropdownOptions = React.useMemo(
     () => [
       {
         value: '__default__' as const,
-        label: 'Default (project setting)',
+        label: _(msg`Default (project setting)`),
         icon: getViewTypeIcon(null),
       },
       ...MESH_SHADER_OPTIONS.map((option) => ({
         value: option.value,
-        label: option.label,
+        label: _(option.label),
         icon: getViewTypeIcon(option.value),
       })),
     ],
-    [],
+    [_],
   );
+
+  const resolvedTitle = title
+    ?? (iconOnly ? _(msg`Camera view mode: ${currentLabel}`) : _(msg`View type`));
 
   return (
     <div className={`pointer-events-auto ${className ?? ''}`}>
@@ -87,8 +95,8 @@ export function ViewTypeDropdown({
           }
           onChange(nextValue as MeshShaderType);
         }}
-        ariaLabel={title ?? (iconOnly ? `Camera view mode: ${currentLabel}` : 'View type')}
-        title={title ?? (iconOnly ? `Camera view mode: ${currentLabel}` : 'View type')}
+        ariaLabel={resolvedTitle}
+        title={resolvedTitle}
         options={dropdownOptions}
         className="space-y-0"
         selectClassName={`${iconOnly ? '!h-8 !w-8 !p-0' : '!h-8 !px-2 !py-1.5 text-xs'} ${fullWidth ? 'w-full' : ''}`}

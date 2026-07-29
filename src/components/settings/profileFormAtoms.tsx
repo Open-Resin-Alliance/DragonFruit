@@ -1397,7 +1397,6 @@ function MaterialAntiAliasingSectionDense({ draft, onChange }: MaterialAntiAlias
     const gaussianXyEnabled = customXyBlurEnabled && settings.blurBrushKernel === 'gaussian' && settings.blurBrushRadiusPx > 0;
     const duplicateZEnabled = is3daa && sampleSteps >= 16;
     const customLookBackEnabled = is3daa && settings.useCustomZBlendLookBack;
-    const manualFadeEnabled = is3daa && settings.zBlendFadeMode === 'manual';
     const customZBlurEnabled = is3daa && settings.useCustomZBlurRadius;
     const gaussianZEnabled = customZBlurEnabled && settings.zBlurKernel === 'gaussian' && settings.zBlurRadiusLayers > 0;
 
@@ -1596,24 +1595,6 @@ function MaterialAntiAliasingSectionDense({ draft, onChange }: MaterialAntiAlias
                         disabled={!customLookBackEnabled}
                         value={settings.zBlendLookBack}
                         onChange={(value) => updateAaSettings({ zBlendLookBack: Math.round(clampAaNumber(value, 2, 1, 16)), useCustomZBlendLookBack: true })}
-                    />
-                    <AaSelectDropdown
-                        label="Fade mode"
-                        value={settings.zBlendFadeMode}
-                        disabled={!is3daa}
-                        helpText="Auto lets the engine derive fade distance. Manual uses the pixel distance below."
-                        onChange={(value) => updateAaSettings({
-                            zBlendFadeMode: value === 'manual' ? 'manual' : 'auto',
-                            useCustomZBlendFadePx: value === 'manual',
-                        })}
-                        options={[{ value: 'auto', label: 'Auto fade' }, { value: 'manual', label: 'Manual fade' }]}
-                    />
-                    <LabeledNumberInput
-                        label="Fade distance (px)"
-                        helpText="Manual pixel distance for the 3DAA grayscale fade. Higher values create a longer, softer transition."
-                        disabled={!manualFadeEnabled}
-                        value={settings.zBlendFadePx}
-                        onChange={(value) => updateAaSettings({ zBlendFadePx: Math.round(clampAaNumber(value, 20, 1, 256)), useCustomZBlendFadePx: true })}
                     />
                     <LabeledToggleInput
                         label="3DAA Auto Mode"
@@ -1854,19 +1835,6 @@ function MaterialAntiAliasingSectionLegacy({ draft, onChange }: MaterialAntiAlia
                             helpText="Number of earlier layers considered when blending 3DAA grayscale. Larger windows can smooth slow Z transitions, but may over-soften details."
                             value={settings.zBlendLookBack}
                             onChange={(value) => updateAaSettings({ zBlendLookBack: Math.round(clampAaNumber(value, 2, 1, 16)), useCustomZBlendLookBack: true })}
-                        />
-                    )}
-                    <div className="grid grid-cols-2 gap-1">
-                        {(['auto', 'manual'] as const).map((mode) => (
-                            <PresetButton key={mode} active={settings.zBlendFadeMode === mode} onClick={() => updateAaSettings({ zBlendFadeMode: mode })}>{mode === 'auto' ? 'Auto Fade' : 'Manual Fade'}</PresetButton>
-                        ))}
-                    </div>
-                    {settings.zBlendFadeMode === 'manual' && (
-                        <LabeledNumberInput
-                            label="Fade distance (px)"
-                            helpText="Manual pixel distance for the 3DAA grayscale fade. Higher values create a longer, softer transition."
-                            value={settings.zBlendFadePx}
-                            onChange={(value) => updateAaSettings({ zBlendFadePx: Math.round(clampAaNumber(value, 20, 1, 256)), useCustomZBlendFadePx: true })}
                         />
                     )}
                     <LabeledToggleInput label="3DAA Auto Mode" checked={settings.zBlendAutoMode} onChange={(value) => updateAaSettings({ zBlendAutoMode: value })} />

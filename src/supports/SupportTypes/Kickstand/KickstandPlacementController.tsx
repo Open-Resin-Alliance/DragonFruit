@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'r
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
-import { pushHistory } from '@/history/historyStore';
+import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { SUPPORT_ADD_KICKSTAND } from '@/supports/history/actionTypes';
 import { addKnot, addRoot, subscribe, getSnapshot } from '../../state';
 import type { SnapTarget } from '../../interaction/SnappingManager';
@@ -659,7 +659,7 @@ export function KickstandPlacementController() {
             addRoot(finalBuild.root);
             addKnot(finalBuild.hostKnot);
 
-            pushHistory({
+            pushSupportHistory({
                 type: SUPPORT_ADD_KICKSTAND,
                 payload: { build: finalBuild },
             });

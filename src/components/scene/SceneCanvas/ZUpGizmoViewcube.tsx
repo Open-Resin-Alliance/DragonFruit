@@ -8,6 +8,7 @@
 import * as React from 'react';
 import { useThree, type ThreeEvent } from '@react-three/fiber';
 import { CanvasTexture, Vector3 } from 'three';
+import { fitFontToWidth } from '@/utils/canvasTextFit';
 import { useGizmoContext } from './ZUpGizmoHelper';
 
 type XYZ = [number, number, number];
@@ -28,6 +29,8 @@ type EdgeCubeProps = { dimensions: XYZ; position: Vector3 } & Omit<GenericProps,
 
 const colors = { bg: '#f0f0f0', hover: '#999', text: 'black', stroke: 'black' };
 const defaultFaces = ['Front', 'Back', 'Right', 'Left', 'Top', 'Bottom'];
+/** Face canvas is 128px wide; leave a margin so the label never touches the stroked border. */
+const FACE_LABEL_MAX_WIDTH = 112;
 const GIZMO_Z_ROTATION = -Math.PI / 2;
 const Z_AXIS = new Vector3(0, 0, 1);
 const makePositionVector = (xyz: number[]) => new Vector3(...xyz).multiplyScalar(0.38);
@@ -88,8 +91,13 @@ const FaceMaterial = ({
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.strokeStyle = strokeColor;
     context.strokeRect(0, 0, canvas.width, canvas.height);
-    context.font = font;
+
+    const label = faces[index].toUpperCase();
+    context.font = fitFontToWidth(context, font, label, FACE_LABEL_MAX_WIDTH);
     context.textAlign = 'center';
+    // Centre on the box rather than on a baseline: the font size varies with
+    // the label length, so a fixed baseline would drift off-centre.
+    context.textBaseline = 'middle';
     context.fillStyle = textColor;
 
     // Corrected rotation values for Z-up coordinate space.
@@ -103,7 +111,7 @@ const FaceMaterial = ({
       context.translate(-64, -64);
     }
 
-    context.fillText(faces[index].toUpperCase(), 64, 76);
+    context.fillText(label, 64, 64);
     return new CanvasTexture(canvas);
   }, [index, faces, font, color, textColor, strokeColor]);
 

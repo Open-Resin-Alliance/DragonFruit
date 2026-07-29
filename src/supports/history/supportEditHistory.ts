@@ -1,4 +1,4 @@
-import { pushHistory } from '@/history/historyStore';
+import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { SUPPORT_EDIT_REPLACE } from './actionTypes';
 import { getSnapshot, type SupportState } from '../state';
 import { getKickstandSnapshot, type KickstandState } from '../SupportTypes/Kickstand/kickstandStore';
@@ -44,7 +44,7 @@ function flushPendingJobs() {
 
   const jobs = pendingJobs.splice(0, pendingJobs.length);
   for (const job of jobs) {
-    pushHistory({
+    pushSupportHistory({
       type: SUPPORT_EDIT_REPLACE,
       description: job.description,
       payload: {

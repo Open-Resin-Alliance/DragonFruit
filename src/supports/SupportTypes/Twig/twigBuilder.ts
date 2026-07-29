@@ -6,18 +6,12 @@ import { twigDiskJointStandoff } from './twigJointStandoff';
 import { twigJointDiameterForLocalDiameter } from './twigTaper';
 import { isShaftBlocked, isCollisionFrustumBlocked } from '../../PlacementLogic/CollisionAvoidance';
 import { clampConeAxisDeviationFromSurfaceNormal } from '../../PlacementLogic/ConeAxisPolicy';
+import { v4 as uuidv4 } from 'uuid';
 
 // Twig-local sizing: a joint at a disk-end is 10% larger than that disk's
 // contact diameter. SSOT for the 10% rule lives in ./twigTaper.ts.
 function twigJointDiameterForDisk(diskContactDiameter: number): number {
     return twigJointDiameterForLocalDiameter(diskContactDiameter);
-}
-
-function uuid() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-        const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-    });
 }
 
 export interface TwigBuildInput {
@@ -115,26 +109,26 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
     };
 
     const socketJointA: Joint = {
-        id: uuid(),
+        id: uuidv4(),
         pos: jointPosA,
         diameter: jointDiameterA,
     };
 
     const socketJointB: Joint = {
-        id: uuid(),
+        id: uuidv4(),
         pos: jointPosB,
         diameter: jointDiameterB,
     };
 
     const segment: Segment = {
-        id: uuid(),
+        id: uuidv4(),
         diameter: shaftDiameter,
         bottomJoint: socketJointA,
         topJoint: socketJointB,
     };
 
     const contactDiskA: ContactDisk = {
-        id: uuid(),
+        id: uuidv4(),
         pos: aPos,
         surfaceNormal: aNormal,
         profile: diskProfile,
@@ -144,7 +138,7 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
     };
 
     const contactDiskB: ContactDisk = {
-        id: uuid(),
+        id: uuidv4(),
         pos: bPos,
         surfaceNormal: bNormal,
         profile: diskProfile,
@@ -153,7 +147,7 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
         coneAxis: { x: _axisB.x, y: _axisB.y, z: _axisB.z },
     };
 
-        const twigId = uuid();
+        const twigId = uuidv4();
     const twig: Twig = {
         id: twigId,
         modelId,

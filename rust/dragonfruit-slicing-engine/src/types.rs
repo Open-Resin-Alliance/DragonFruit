@@ -65,14 +65,6 @@ fn default_z_blend_look_back() -> u32 {
     2
 }
 
-fn default_z_blend_fade_px() -> u32 {
-    20
-}
-
-fn default_z_blend_auto_fade() -> bool {
-    false
-}
-
 fn default_z_blend_minimum_alpha_percent() -> f32 {
     0.0
 }
@@ -220,24 +212,6 @@ pub struct SliceJobV3 {
     /// Higher values smooth shallower surface angles but cost more memory.
     #[serde(default = "default_z_blend_look_back")]
     pub z_blend_look_back: u32,
-    /// Fade-out distance in pixels for the 3DAA inter-layer gradient.
-    /// The gradient reaches 0 at this many pixels from the current layer's edge.
-    ///
-    /// When `z_blend_auto_fade` is `true` this value is ignored and the engine
-    /// auto-computes the physically correct fade from `layer_height_mm` and the
-    /// printer's XY pixel pitch.  Only used (and respected) when `z_blend_auto_fade`
-    /// is `false`.
-    #[serde(default = "default_z_blend_fade_px")]
-    pub z_blend_fade_px: u32,
-    /// When true the engine auto-computes `z_blend_fade_px` from physical
-    /// printer geometry: `fade_px = ceil(layer_height_mm / xy_pixel_pitch_mm) × look_back`.
-    ///
-    /// This is the physically correct calibration for most MSLA printers and
-    /// should be preferred over a manually-tuned `z_blend_fade_px`.  The manual
-    /// override exists only for advanced users who understand why they're
-    /// deviating from the physical calibration.
-    #[serde(default = "default_z_blend_auto_fade")]
-    pub z_blend_auto_fade: bool,
     /// Minimum gray level (0–100 %) for vertical/3DAA grayscale output.
     ///
     /// When no explicit custom cure LUT is provided, vertical/3DAA uses this
@@ -310,34 +284,6 @@ impl SliceJobV3 {
             return 1.0; // fallback: 1 mm/px to avoid division-by-zero
         }
         self.build_width_mm / self.source_width_px as f32
-    }
-
-    /// Effective z-blend fade distance in pixels, honouring `z_blend_auto_fade`.
-    ///
-    /// When auto-fade is enabled the fade is derived from physical printer
-    /// geometry so that the gradient is wide enough to smooth stair-stepping
-    /// on surfaces as shallow as 20° from horizontal:
-    ///
-    /// ```text
-    /// fade_px = ceil(layer_height_px / tan(20°)) × look_back
-    ///         = ceil(layer_height_px × 2.747) × look_back
-    /// ```
-    ///
-    /// At 20° each layer's silhouette edge is displaced ~2.75 layer-heights
-    /// laterally from the next, so this ensures the gradient spans the full
-    /// XY extent of the stair-step zone across the entire look-back window.
-    pub fn effective_z_blend_fade_px(&self) -> u32 {
-        if self.z_blend_auto_fade && self.layer_height_mm > 0.0 {
-            let pitch = self.xy_pixel_pitch_mm();
-            let layer_height_px = (self.layer_height_mm / pitch).ceil() as f32;
-            // 1/tan(20°) ≈ 2.747 — ensures smoothing at ≥20° surface angles.
-            let fade_per_layer = (layer_height_px * 2.747_f32).ceil() as u32;
-            // Clamp to a reasonable maximum to prevent runaway on degenerate
-            // input (e.g. very thick layers on a coarse-resolution printer).
-            (fade_per_layer.max(1) * self.z_blend_look_back.max(1)).min(256)
-        } else {
-            self.z_blend_fade_px.max(1)
-        }
     }
 
     #[inline]

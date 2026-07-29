@@ -1078,7 +1078,7 @@ export function SettingsModal({
     },
     performance: {
       label: 'Slicing',
-      description: 'PNG compression, spatial acceleration, and engine metadata',
+      description: 'PNG compression and engine metadata',
       icon: MonitorCog,
       tone: 'primary',
     },

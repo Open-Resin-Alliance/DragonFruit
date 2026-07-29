@@ -4,6 +4,10 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { Keyboard, RotateCcw } from 'lucide-react';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { HotkeyBinding } from '@/hotkeys/hotkeyConfig';
+import { getBindingTokens, toKeyLabel } from '@/hotkeys/hotkeyLabels';
+import { resumeHotkeyDispatch, suspendHotkeyDispatch } from '@/hotkeys/HotkeyRegistryManager';
+import { usePlatformModifier } from '@/hooks/usePlatformModifier';
+import { SECONDARY_DELETE_KEY } from '@/features/delete/useDeleteHotkey';
 
 const PINNED_SLOT_LABELS: Record<string, string> = {
   SLOT_1: 'Slot 1',
@@ -55,40 +59,23 @@ const SECTION_GROUPS: Array<{
   },
 ];
 
-function toModifierLabel(modifier: string): string {
-  const normalized = modifier.trim().toLowerCase();
-  if (normalized === 'ctrl') return 'Ctrl';
-  if (normalized === 'shift') return 'Shift';
-  if (normalized === 'alt') return 'Alt';
-  if (normalized === 'meta') return 'Meta';
-  return modifier;
-}
-
-function toKeyLabel(key: string): string {
-  if (key.length === 1) return key.toUpperCase();
-  if (key.toLowerCase() === ' ') return 'Space';
-  return key;
-}
-
 function normalizeRecordedKey(rawKey: string): string {
   if (rawKey === ' ') return 'Space';
   return rawKey.length === 1 ? rawKey.toLowerCase() : rawKey;
 }
 
-function getBindingTokens(binding: HotkeyBinding): string[] {
-  const modifierTokens = binding.modifier
-    ? binding.modifier.split('+').map(toModifierLabel)
-    : [];
-  return [...modifierTokens, toKeyLabel(binding.key)];
-}
 
 export function HotkeysSettingsTab() {
-  const { config, updateHotkey, resetToDefaults } = useHotkeyConfig();
+  const { config, updateHotkey, resetCategories } = useHotkeyConfig();
   const [recordingKey, setRecordingKey] = useState<{ category: string, action: string } | null>(null);
 
   // Effect to handle key recording
   useEffect(() => {
     if (!recordingKey) return;
+
+    // Silence the app while recording: otherwise the key being captured also reaches
+    // its normal handlers — Escape would close Settings instead of cancelling here.
+    suspendHotkeyDispatch();
 
     let pressedNonModifier = false;
 
@@ -167,6 +154,7 @@ export function HotkeysSettingsTab() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown, true);
       window.removeEventListener('keyup', handleKeyUp, true);
+      resumeHotkeyDispatch();
     };
   }, [recordingKey, config, updateHotkey]);
 
@@ -256,6 +244,21 @@ export function HotkeysSettingsTab() {
             {section.description}
           </p>
         </div>
+
+        <button
+          type="button"
+          onClick={() => resetCategories(section.categories.map((category) => category.category))}
+          title="Reset section to default shortcuts"
+          aria-label={`Reset ${section.title} section to default shortcuts`}
+          className="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md border transition-colors hover:brightness-125"
+          style={{
+            borderColor: 'color-mix(in srgb, var(--success), transparent 55%)',
+            background: 'color-mix(in srgb, var(--success), transparent 88%)',
+            color: 'var(--success)',
+          }}
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+        </button>
       </div>
 
       <div className="mt-2 space-y-2">
@@ -267,16 +270,20 @@ export function HotkeysSettingsTab() {
               </div>
             )}
 
-            {category.entries.map((entry) => (
-              <HotkeyRow
-                key={`${category.category}-${entry.action}`}
-                label={entry.label}
-                binding={entry.binding}
-                isRecording={recordingKey?.category === category.category && recordingKey?.action === entry.action}
-                onRecord={() => setRecordingKey({ category: category.category, action: entry.action })}
-                onCancel={() => setRecordingKey(null)}
-              />
-            ))}
+            {category.entries.map((entry) => {
+              const isDeleteAction = category.category === 'GLOBAL' && entry.action === 'DELETE';
+              return (
+                <HotkeyRow
+                  key={`${category.category}-${entry.action}`}
+                  label={entry.label}
+                  binding={entry.binding}
+                  isRecording={recordingKey?.category === category.category && recordingKey?.action === entry.action}
+                  onRecord={() => setRecordingKey({ category: category.category, action: entry.action })}
+                  onCancel={() => setRecordingKey(null)}
+                  secondaryToken={isDeleteAction ? toKeyLabel(SECONDARY_DELETE_KEY) : undefined}
+                />
+              );
+            })}
           </div>
         ))}
       </div>
@@ -295,25 +302,6 @@ export function HotkeysSettingsTab() {
             </div>
           ))}
         </div>
-      </div>
-
-      <div
-        className="mt-auto flex items-center justify-end border-t pt-2"
-        style={{ borderColor: 'var(--border-subtle)' }}
-      >
-        <button
-          type="button"
-          onClick={resetToDefaults}
-          className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
-          style={{
-            color: 'var(--accent-secondary-action-color)',
-            borderColor: 'var(--accent-secondary-action-border)',
-            background: 'var(--accent-secondary-action-bg-92)',
-          }}
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-          Reset to Defaults
-        </button>
       </div>
 
       {/* Recording Overlay/Hint */}
@@ -360,26 +348,19 @@ export function HotkeysSettingsTab() {
   );
 }
 
-function HotkeyRow({ label, binding, isRecording, onRecord, onCancel }: {
+function HotkeyRow({ label, binding, isRecording, onRecord, onCancel, secondaryToken }: {
   label: string,
   binding: HotkeyBinding,
   isRecording: boolean,
   onRecord: () => void,
-  onCancel: () => void
+  onCancel: () => void,
+  secondaryToken?: string,
 }) {
-  const tokens = getBindingTokens(binding);
+  const primaryModifierLabel = usePlatformModifier();
+  const tokens = getBindingTokens(binding, primaryModifierLabel);
 
   return (
-    <button
-      type="button"
-      onClick={(event) => {
-        event.stopPropagation();
-        if (isRecording) {
-          onCancel();
-        } else {
-          onRecord();
-        }
-      }}
+    <div
       className="flex w-full items-center justify-between gap-2 rounded-md border px-2 py-1.5 transition-colors"
       style={isRecording
         ? {
@@ -397,26 +378,53 @@ function HotkeyRow({ label, binding, isRecording, onRecord, onCancel }: {
         {label}
       </span>
 
-      <span className="inline-flex min-w-[108px] items-center justify-center gap-1">
-        {isRecording ? (
-          <span className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Press keys…</span>
-        ) : (
-          tokens.map((token) => <KbdToken key={`${binding.description}-${token}`}>{token}</KbdToken>)
+      <span className="inline-flex items-center justify-end gap-1">
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            if (isRecording) {
+              onCancel();
+            } else {
+              onRecord();
+            }
+          }}
+          title={isRecording ? 'Cancel' : 'Click to change'}
+          className="inline-flex min-w-[92px] items-center justify-center gap-1 rounded-md px-1 py-0.5 transition-colors hover:brightness-110"
+        >
+          {isRecording ? (
+            <span className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Press keys…</span>
+          ) : (
+            tokens.map((token) => <KbdToken key={`${binding.description}-${token}`}>{token}</KbdToken>)
+          )}
+        </button>
+
+        {!isRecording && secondaryToken && (
+          <span className="inline-flex items-center gap-1" title="Always available">
+            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }} aria-hidden>/</span>
+            <KbdToken muted>{secondaryToken}</KbdToken>
+          </span>
         )}
       </span>
-    </button>
+    </div>
   );
 }
 
-function KbdToken({ children }: { children: React.ReactNode }) {
+function KbdToken({ children, muted = false }: { children: React.ReactNode, muted?: boolean }) {
   return (
     <kbd
       className="inline-flex min-w-[20px] items-center justify-center rounded border px-1 py-1 font-mono text-[10px]"
-      style={{
-        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 50%)',
-        background: 'color-mix(in srgb, var(--surface-2), transparent 4%)',
-        color: 'var(--text-strong)',
-      }}
+      style={muted
+        ? {
+          borderColor: 'var(--border-subtle)',
+          background: 'color-mix(in srgb, var(--surface-2), transparent 40%)',
+          color: 'var(--text-muted)',
+        }
+        : {
+          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 50%)',
+          background: 'color-mix(in srgb, var(--surface-2), transparent 4%)',
+          color: 'var(--text-strong)',
+        }}
     >
       {children}
     </kbd>

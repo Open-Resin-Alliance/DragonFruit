@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
 import { MATCAP_OPTIONS, MESH_SHADER_OPTIONS, type MatcapVariant, type MeshShaderType } from '@/features/shaders/mesh';
 import { HexColorPicker } from 'react-colorful';
 import { MeshShaderPreviewSlot } from '@/components/settings/meshSettings/MeshShaderPreviewSlot';
@@ -92,6 +93,7 @@ export function MeshSettingsTab({
   selectedTintStrength,
   onSelectedTintStrengthChange,
 }: MeshSettingsTabProps) {
+  const { _ } = useLingui();
   const [previewModel, setPreviewModel] = React.useState<string>('knot');
   const [stlPreviewModels, setStlPreviewModels] = React.useState<PreviewModelConfig[]>([]);
   const [activeColorIndex, setActiveColorIndex] = React.useState<number>(0);
@@ -197,7 +199,7 @@ export function MeshSettingsTab({
               className="w-full !h-8"
             >
               {MESH_SHADER_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                <option key={opt.value} value={opt.value}>{_(opt.label)}</option>
               ))}
             </Select>
           </div>
@@ -326,7 +328,7 @@ export function MeshSettingsTab({
                   className="w-full !h-8"
                 >
                   {MATCAP_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    <option key={opt.value} value={opt.value}>{_(opt.label)}</option>
                   ))}
                 </Select>
               </div>

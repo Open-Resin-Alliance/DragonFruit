@@ -1,18 +1,12 @@
 import { Trunk, Branch, Twig, Stick, Segment, Joint, Vec3, Roots, Knot, BezierSegment } from '../../types';
 import * as THREE from 'three';
+import { v4 as uuidv4 } from 'uuid';
 import { getSocketPosition, getFinalSocketPosition } from '../ContactCone';
 import { calculateDiskThickness } from '../ContactDisk/contactDiskUtils';
 import { getJointDiameter } from '../../constants';
 import { getBezierPointAtT, toVector3, subdivideCubicBezier, toVec3 } from '../../Curves/BezierUtils';
 import { getKnotById } from '../../state';
 import { solveJointConstraint } from '../../PlacementLogic/JointConstraintSolver';
-
-function uuid() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-        const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-    });
-}
 
 /**
  * Splits a trunk shaft segment by inserting a new joint.
@@ -42,7 +36,7 @@ export function splitShaft(
 
     // 2. Create new Joint
     const joint: Joint = {
-        id: uuid(),
+        id: uuidv4(),
         pos: splitPoint,
         diameter: getJointDiameter(originalSegment.diameter)
     };
@@ -112,7 +106,7 @@ export function splitShaft(
         // Top (Right)
         topSegment = {
             ...originalSegment,
-            id: uuid(),
+            id: uuidv4(),
             bottomJoint: joint,
             topJoint: originalSegment.topJoint,
             controlPoint1: rightCurve[1],
@@ -130,7 +124,7 @@ export function splitShaft(
 
         topSegment = {
             ...originalSegment,
-            id: uuid(),
+            id: uuidv4(),
             bottomJoint: joint,
             topJoint: originalSegment.topJoint
         };
@@ -173,7 +167,7 @@ export function splitBranchShaft(
 
     // 2. Create new Joint
     const joint: Joint = {
-        id: uuid(),
+        id: uuidv4(),
         pos: splitPoint,
         diameter: getJointDiameter(originalSegment.diameter)
     };
@@ -221,7 +215,7 @@ export function splitBranchShaft(
 
         topSegment = {
             ...originalSegment,
-            id: uuid(),
+            id: uuidv4(),
             bottomJoint: joint,
             topJoint: originalSegment.topJoint,
             controlPoint1: rightCurve[1],
@@ -238,7 +232,7 @@ export function splitBranchShaft(
 
         topSegment = {
             ...originalSegment,
-            id: uuid(),
+            id: uuidv4(),
             bottomJoint: joint,
             topJoint: originalSegment.topJoint
         };
@@ -273,7 +267,7 @@ export function splitBranchShaft(
      const originalSegment = twig.segments[segIndex];
 
      const joint: Joint = {
-         id: uuid(),
+         id: uuidv4(),
          pos: splitPoint,
          diameter: getJointDiameter(originalSegment.diameter)
      };
@@ -310,7 +304,7 @@ export function splitBranchShaft(
 
          topSegment = {
              ...originalSegment,
-             id: uuid(),
+             id: uuidv4(),
              bottomJoint: joint,
              topJoint: originalSegment.topJoint,
              controlPoint1: rightCurve[1],
@@ -325,7 +319,7 @@ export function splitBranchShaft(
 
          topSegment = {
              ...originalSegment,
-             id: uuid(),
+             id: uuidv4(),
              bottomJoint: joint,
              topJoint: originalSegment.topJoint
          };
@@ -359,7 +353,7 @@ export function splitBranchShaft(
      const originalSegment = stick.segments[segIndex];
 
      const joint: Joint = {
-         id: uuid(),
+         id: uuidv4(),
          pos: splitPoint,
          diameter: getJointDiameter(originalSegment.diameter)
      };
@@ -396,7 +390,7 @@ export function splitBranchShaft(
 
          topSegment = {
              ...originalSegment,
-             id: uuid(),
+             id: uuidv4(),
              bottomJoint: joint,
              topJoint: originalSegment.topJoint,
              controlPoint1: rightCurve[1],
@@ -411,7 +405,7 @@ export function splitBranchShaft(
 
          topSegment = {
              ...originalSegment,
-             id: uuid(),
+             id: uuidv4(),
              bottomJoint: joint,
              topJoint: originalSegment.topJoint
          };

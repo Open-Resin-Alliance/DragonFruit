@@ -19,7 +19,7 @@ import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
 import { subscribe, getSnapshot, addBranch, addKnot, addTwig, addStick } from '../../state';
-import { pushHistory } from '@/history/historyStore';
+import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
 import { SUPPORT_ADD_BRANCH, SUPPORT_ADD_TWIG, SUPPORT_ADD_STICK } from '../../history/actionTypes';
 import { SnapTarget } from '../../interaction/SnappingManager';
@@ -32,7 +32,7 @@ import { calculateSmoothedNormal, findClosestMeshToPoint } from '../../Placement
 import { buildTwig } from '../Twig/twigBuilder';
 import { buildStick } from '../Stick/stickBuilder';
 import type { SupportData } from '../../rendering/SupportBuilder';
-import { generateUuid } from '@/utils/uuid';
+import { v4 as uuidv4 } from 'uuid';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
@@ -744,7 +744,7 @@ export function BranchPlacementController() {
                         }
                         : twig;
                     addTwig(markedTwig);
-                    pushHistory({
+                    pushSupportHistory({
                         type: SUPPORT_ADD_TWIG,
                         payload: { twig: markedTwig },
                     });
@@ -766,7 +766,7 @@ export function BranchPlacementController() {
                         }
                         : stick;
                     addStick(markedStick);
-                    pushHistory({
+                    pushSupportHistory({
                         type: SUPPORT_ADD_STICK,
                         payload: { stick: markedStick },
                     });
@@ -785,7 +785,7 @@ export function BranchPlacementController() {
             const hostDiameterMm = snapTarget.hostDiameterMm ?? fallbackHostDiameterMm;
             if (snapTarget.t === undefined) return;
 
-            const knotId = generateUuid();
+            const knotId = uuidv4();
             const segmentId = snapTarget.targetId;
 
             const parentKnot: Knot = {
@@ -815,7 +815,7 @@ export function BranchPlacementController() {
             addKnot(parentKnot);
             addBranch(markedBranch);
 
-            pushHistory({
+            pushSupportHistory({
                 type: SUPPORT_ADD_BRANCH,
                 payload: {
                     branch: markedBranch,

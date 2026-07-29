@@ -38,6 +38,7 @@ import {
     type SupportPathfindingDebugOutcome,
 } from './pathfindingDebugState';
 import { perfMark, perfMeasureWithSpike } from './pathfindingPerf';
+import { normalizeVectorOrFallback } from '../ConeAxisPolicy';
 import {
     distanceXY,
     distance3D,
@@ -454,14 +455,6 @@ function segmentCacheKey(start: Vec3, end: Vec3): string {
     const startKey = vec3CacheKey(start);
     const endKey = vec3CacheKey(end);
     return startKey <= endKey ? `${startKey}->${endKey}` : `${endKey}->${startKey}`;
-}
-
-function normalizeVectorOrFallback(vector: THREE.Vector3, fallback: THREE.Vector3): THREE.Vector3 {
-    if (vector.lengthSq() < 0.000001) {
-        return fallback.clone().normalize();
-    }
-
-    return vector.clone().normalize();
 }
 
 function getContactConeRescuePenaltyMetrics(args: {

@@ -23,7 +23,6 @@ import {
   type ProfileSettingsTab,
 } from '@/components/settings/profileModalEvents';
 import { OPEN_SETTINGS_MODAL_EVENT } from '@/components/settings/settingsModalEvents';
-import { OPEN_SETTINGS_ABOUT_EVENT } from '@/features/updater/updateNotificationEvents';
 import {
   getActivePrinterProfile,
   getProfileStoreSnapshot,
@@ -505,21 +504,6 @@ export function TopBar({
     };
   }, []);
 
-  // Listen for event to open Settings → About tab (from update notification).
-  React.useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const handleOpenSettingsAbout = () => {
-      setSettingsInitialTab('about');
-      setIsSettingsOpen(true);
-    };
-
-    window.addEventListener(OPEN_SETTINGS_ABOUT_EVENT, handleOpenSettingsAbout);
-    return () => {
-      window.removeEventListener(OPEN_SETTINGS_ABOUT_EVENT, handleOpenSettingsAbout);
-    };
-  }, []);
-
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
 
@@ -834,7 +818,7 @@ export function TopBar({
               <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <Save className="h-3.5 w-3.5" />
               </span>
-              <span>{_(msg`Save Scene`)}</span>
+              <span>{_(msg`Save scene`)}</span>
             </button>
 
             <button
@@ -854,7 +838,7 @@ export function TopBar({
               <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <SaveAll className="h-3.5 w-3.5" />
               </span>
-              <span>{_(msg`Save Scene As…`)}</span>
+              <span>{_(msg`Save scene as…`)}</span>
             </button>
 
             <button
@@ -874,7 +858,7 @@ export function TopBar({
               <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <FolderOpen className="h-3.5 w-3.5" />
               </span>
-              <span>{_(msg`Open Scene…`)}</span>
+              <span>{_(msg`Open scene…`)}</span>
             </button>
 
             <button
@@ -896,7 +880,7 @@ export function TopBar({
               <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <Upload className="h-3.5 w-3.5" />
               </span>
-              <span>{_(msg`Import Mesh…`)}</span>
+              <span>{_(msg`Import mesh…`)}</span>
             </button>
 
             <button
@@ -918,7 +902,7 @@ export function TopBar({
               <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <FolderInput className="h-3.5 w-3.5" />
               </span>
-              <span>{_(msg`Import Scene…`)}</span>
+              <span>{_(msg`Import scene…`)}</span>
             </button>
 
             <button
@@ -934,7 +918,7 @@ export function TopBar({
               <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <Power className="h-3.5 w-3.5" />
               </span>
-              <span>{_(msg`Close Program`)}</span>
+              <span>{_(msg`Close program`)}</span>
             </button>
           </div>
         </div>
@@ -970,7 +954,7 @@ export function TopBar({
           aria-label={_(msg({ message: 'Fleet quick switch', comment: '"Fleet" means the set of physical network printers discovered under the current printer profile, not a literal fleet of vehicles.' }))}
         >
           <div className="mb-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-            {_(msg({ message: 'Fleet Units', comment: 'Section heading above the list of network printers belonging to the current profile. "Units" = individual printers.' }))}
+            {_(msg({ message: 'Fleet units', comment: 'Section heading above the list of network printers belonging to the current profile. "Units" = individual printers.' }))}
           </div>
 
           <div className="max-h-[260px] overflow-y-auto custom-scrollbar space-y-0.5">
@@ -1046,7 +1030,7 @@ export function TopBar({
               role="menuitem"
             >
               <ChevronDown className="h-3.5 w-3.5 rotate-[-90deg]" />
-              {_(msg({ message: 'Show Manager', comment: 'Opens the Printer Manager screen (printer profile settings), reached from this quick-switch popover. "Manager" refers to that screen, kept as a menu-style label so it stays Title Case.' }))}
+              {_(msg({ message: 'Show manager', comment: 'Opens the printer manager screen (printer profile settings), reached from this quick-switch popover. "Manager" refers to that screen.' }))}
             </button>
           </div>
         </div>
@@ -1155,8 +1139,8 @@ export function TopBar({
             className="!p-2"
             onClick={() => onInteriorViewChange(!interiorView)}
             disabled={topbarActionsDisabled || !interiorViewAvailable}
-            title={interiorView ? _(msg({ message: 'Interior View: On', comment: 'Tooltip for a toggle button showing its current state, format "Feature name: state". Interior View is a 3D viewport mode that renders the inside of a hollowed model.' })) : interiorViewAvailable ? _(msg`Interior View: Off`) : _(msg`Interior View: Unavailable (apply hollowing first)`)}
-            aria-label={interiorView ? _(msg`Interior View: On`) : interiorViewAvailable ? _(msg`Interior View: Off`) : _(msg`Interior View: Unavailable`)}
+            title={interiorView ? _(msg({ message: 'Interior view: On', comment: 'Tooltip for a toggle button showing its current state, format "Feature name: state". Interior view is a 3D viewport mode that renders the inside of a hollowed model.' })) : interiorViewAvailable ? _(msg`Interior view: Off`) : _(msg`Interior view: Unavailable (apply hollowing first)`)}
+            aria-label={interiorView ? _(msg`Interior view: On`) : interiorViewAvailable ? _(msg`Interior view: Off`) : _(msg`Interior view: Unavailable`)}
             data-no-window-drag="true"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
@@ -1312,7 +1296,7 @@ export function TopBar({
                   className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
                   onClick={() => setShowProfileChangeWarning(false)}
                 >
-                  {_(msg({ message: 'Keep Current Profiles', comment: 'Cancels the pending profile change and closes this warning dialog, leaving the previous profile selection untouched. Paired with the "Continue" button below.' }))}
+                  {_(msg({ message: 'Keep current profiles', comment: 'Cancels the pending profile change and closes this warning dialog, leaving the previous profile selection untouched. Paired with the "Continue" button below.' }))}
                 </button>
                 <button
                   type="button"
@@ -1327,7 +1311,7 @@ export function TopBar({
                     openProfileSettings(profileModalTab);
                   }}
                 >
-                  {_(msg({ message: 'Continue', comment: 'Confirms proceeding with the profile change despite the re-slice warning above (paired with "Keep Current Profiles", which cancels).' }))}
+                  {_(msg({ message: 'Continue', comment: 'Confirms proceeding with the profile change despite the re-slice warning above (paired with "Keep current profiles", which cancels).' }))}
                 </button>
               </div>
             </div>

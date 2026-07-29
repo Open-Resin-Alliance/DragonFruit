@@ -6,3 +6,8 @@ export type MeshSmoothingStrokePayload = {
   before: Float32Array;
   after: Float32Array;
 };
+
+/** Action→payload map for the mesh-smoothing history domain. */
+export type MeshSmoothingHistoryPayloadMap = {
+  [MESH_SMOOTHING_STROKE]: MeshSmoothingStrokePayload;
+};

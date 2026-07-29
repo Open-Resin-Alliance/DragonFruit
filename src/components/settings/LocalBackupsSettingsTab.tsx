@@ -5,7 +5,7 @@ import { AlertTriangle, ArchiveRestore, CheckCircle2, Eye, FolderOpen, HardDrive
 import { getProfileStoreSnapshot } from '@/features/profiles/profileStore';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
-import { generateUuid } from '@/utils/uuid';
+import { v4 as uuidv4 } from 'uuid';
 
 type BackupSnapshot = {
   version: number;
@@ -152,7 +152,7 @@ function getOrCreateClientId(): string {
   const existing = window.localStorage.getItem(CLIENT_ID_KEY)?.trim();
   if (existing) return existing;
 
-  const created = generateUuid();
+  const created = uuidv4();
   window.localStorage.setItem(CLIENT_ID_KEY, created);
   return created;
 }

@@ -73,7 +73,7 @@ const TAGLINES: MessageDescriptor[] = [
   msg`The build volume misses you.`,
   msg`Drag a file in. The platform is judging you.`,
   // Movie / pop-culture references
-  msg({ message: 'Do or do not. There is no try... oh wait, just click Load Mesh.', comment: 'Paraphrase of Yoda\'s line from Star Wars: The Empire Strikes Back (1980): "Do or do not. There is no try."' }),
+  msg({ message: 'Do or do not. There is no try... oh wait, just click Load mesh.', comment: 'Paraphrase of Yoda\'s line from Star Wars: The Empire Strikes Back (1980): "Do or do not. There is no try."' }),
   msg({ message: 'In space, no one can hear you slice.', comment: 'Parody of the tagline for Alien (1979): "In space, no one can hear you scream."' }),
   msg({ message: 'You shall not pass... until you load a model.', comment: 'Paraphrase of Gandalf\'s line from The Lord of the Rings: The Fellowship of the Ring (2001): "You shall not pass!"' }),
   msg({ message: 'I am the one who slices.', comment: 'Paraphrase of Walter White\'s line from Breaking Bad, S04E06 "Cornered": "I am the one who knocks."' }),

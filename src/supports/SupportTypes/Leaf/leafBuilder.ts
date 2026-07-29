@@ -5,13 +5,7 @@ import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/Contac
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { getSettings } from '../../Settings';
 import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
-
-function uuid() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-        const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-    });
-}
+import { v4 as uuidv4 } from 'uuid';
 
 export interface LeafBuildInput {
     tipPos: Vec3;
@@ -108,10 +102,10 @@ export function buildLeafData(input: LeafBuildInput): LeafBuildResult {
             parentKnot.pos,
             mesh,
         ),
-        id: uuid(),
+        id: uuidv4(),
     };
 
-    const leafId = uuid();
+    const leafId = uuidv4();
     const leaf: Leaf = {
         id: leafId,
         modelId,

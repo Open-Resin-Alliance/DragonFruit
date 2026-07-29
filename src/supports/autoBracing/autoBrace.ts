@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { pushHistory } from '@/history/historyStore';
+import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { getSettings } from '../Settings/state';
 import {
     SUPPORT_AUTO_BRACE_REPLACE,
@@ -14,6 +14,7 @@ import {
 import { snapToGridIndex } from '../PlacementLogic/Grid/gridMath';
 import { JOINT_DIAMETER_OFFSET_MM } from '../constants';
 import { getKickstandSnapshot, setKickstandSnapshot } from '../SupportTypes/Kickstand/kickstandStore';
+import { normalizeAxisAngleRad, axisSeparationDeg } from './twoAxisDetection';
 import type { KickstandState } from '../SupportTypes/Kickstand/types';
 import type {
     Brace,
@@ -88,10 +89,6 @@ export interface AutoBraceResult {
     skippedSupportCount: number;
     changed: boolean;
     message: string;
-}
-
-function clamp(value: number, min: number, max: number): number {
-    return Math.min(max, Math.max(min, value));
 }
 
 function sortSupports(a: SupportSample, b: SupportSample): number {
@@ -223,7 +220,7 @@ function resolveAnchorAtZ(support: SupportSample, targetZ: number): AnchorPoint 
 
         const dz = segment.end.z - segment.start.z;
         const t = Math.abs(dz) < EPS ? 0 : (targetZ - segment.start.z) / dz;
-        const clampedT = clamp(t, 0, 1);
+        const clampedT = THREE.MathUtils.clamp(t, 0, 1);
         const pos = calculateKnotPositionOnSegmentFromT(segment.start, segment.end, segment.segment, clampedT);
         const score = Math.abs(pos.z - targetZ);
 
@@ -241,17 +238,6 @@ function resolveAnchorAtZ(support: SupportSample, targetZ: number): AnchorPoint 
         pos: best.pos,
         hostDiameterMm: best.segment.diameterMm,
     };
-}
-
-function normalizeAxisAngleRad(angleRad: number): number {
-    let n = angleRad % Math.PI;
-    if (n < 0) n += Math.PI;
-    return n;
-}
-
-function axisSeparationDeg(aRad: number, bRad: number): number {
-    const diff = Math.abs(aRad - bRad);
-    return (Math.min(diff, Math.PI - diff) * 180) / Math.PI;
 }
 
 type Edge = { a: SupportSample; b: SupportSample; hDist: number; angleRad: number };
@@ -949,7 +935,7 @@ export function runAutoBracing(): AutoBraceResult {
     if (!built.changed) return built;
 
     setSnapshot(built.snapshot);
-    pushHistory({
+    pushSupportHistory({
         type: SUPPORT_AUTO_BRACE_REPLACE,
         payload: {
             before,

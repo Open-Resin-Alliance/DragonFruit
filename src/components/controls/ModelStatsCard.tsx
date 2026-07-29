@@ -1,5 +1,8 @@
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { useIsLinux } from '@/hooks/usePlatform';
 import { formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
@@ -40,6 +43,7 @@ export function ModelStatsCard({
   estimatedPrintTimeLabelOverride,
   estimatedResinLabelOverride,
 }: ModelStatsCardProps) {
+  const { _ } = useLingui();
   // Match the same viewport-responsive width as floating panels
   const panelWidth = React.useMemo(() => {
     if (typeof window === 'undefined') return 320;
@@ -151,7 +155,7 @@ export function ModelStatsCard({
 
   const effectiveMaterialName = React.useMemo(() => {
     if (showRemoteOfflineMaterialPlaceholder) {
-      return 'N/A';
+      return _(msg({ message: 'N/A', comment: 'Value placeholder shown when the material is unknown because the printer is offline. Keep it as short as "N/A".' }));
     }
 
     const networkConnection = activePrinterProfile?.networkConnection;
@@ -159,7 +163,7 @@ export function ModelStatsCard({
       return networkConnection.selectedMaterialName || networkConnection.selectedMaterialId || '-';
     }
     return resolveCompositeMaterialLabel(activeMaterialProfile) ?? activeMaterialProfile?.name ?? '-';
-  }, [activeMaterialProfile, activePrinterProfile, showRemoteOfflineMaterialPlaceholder]);
+  }, [_, activeMaterialProfile, activePrinterProfile, showRemoteOfflineMaterialPlaceholder]);
 
   const effectiveLayerHeightMm = React.useMemo(() => {
     const networkConnection = activePrinterProfile?.networkConnection;
@@ -227,15 +231,19 @@ export function ModelStatsCard({
     return `${abs.toFixed(0)} B`;
   };
 
-  const formatDuration = (seconds: number) => {
-    const safeSeconds = Number.isFinite(seconds) ? Math.max(0, Math.round(seconds)) : 0;
-    const h = Math.floor(safeSeconds / 3600);
-    const m = Math.floor((safeSeconds % 3600) / 60);
-    const s = safeSeconds % 60;
+  // Compact duration for the narrow "Est. print time" row. The trailing letters
+  // are unit abbreviations — h(ours), min(utes), s(econds) — so "5 s" is five
+  // seconds, and "min" is minutes rather than the SI symbol for metres. Each
+  // form is one whole string so locales can set their own spacing and units.
+  const formatDuration = (totalSeconds: number) => {
+    const safeSeconds = Number.isFinite(totalSeconds) ? Math.max(0, Math.round(totalSeconds)) : 0;
+    const hours = Math.floor(safeSeconds / 3600);
+    const minutes = Math.floor((safeSeconds % 3600) / 60);
+    const seconds = safeSeconds % 60;
 
-    if (h > 0) return `${h}h ${m}m`;
-    if (m > 0) return `${m}m ${s}s`;
-    return `${s}s`;
+    if (hours > 0) return _(msg`${hours} h ${minutes} min`);
+    if (minutes > 0) return _(msg`${minutes} min ${seconds} s`);
+    return _(msg`${seconds} s`);
   };
 
 
@@ -463,7 +471,7 @@ export function ModelStatsCard({
     return `${currency} ${cost.toFixed(2)}`;
   }, [activeMaterialProfile, estimatedResinMl]);
 
-  const frontHeader = connectedHostName || activePrinterProfile?.name || 'No printer connected';
+  const frontHeader = connectedHostName || activePrinterProfile?.name || _(msg`No printer connected`);
   const frontHeaderColor = isNetworkPrinterOffline
     ? 'color-mix(in srgb, #f87171, var(--text-strong) 58%)'
     : (connectedHostName ? 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' : 'var(--text-strong)');
@@ -491,7 +499,7 @@ export function ModelStatsCard({
         <div
           role="button"
           tabIndex={0}
-          aria-label="Flip model stats card"
+          aria-label={_(msg`Flip model stats card`)}
           onClick={handleToggleFlip}
           onKeyDown={handleCardKeyDown}
           className={useFlatFlip
@@ -522,7 +530,7 @@ export function ModelStatsCard({
             </div>
 
             <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              <span>Printer:</span>
+              <span><Trans>Printer:</Trans></span>
               <button
                 type="button"
                 onMouseDown={stopEvent}
@@ -532,12 +540,12 @@ export function ModelStatsCard({
                 }}
                 className="min-w-0 truncate text-left underline decoration-dotted underline-offset-2 hover:opacity-85 transition-opacity"
                 style={{ color: 'var(--text-strong)' }}
-                title="Open printer profiles"
+                title={_(msg`Open printer profiles`)}
               >
                 {activePrinterProfile?.name ?? '-'}
               </button>
 
-              <span>Material:</span>
+              <span><Trans>Material:</Trans></span>
               <button
                 type="button"
                 onMouseDown={stopEvent}
@@ -547,17 +555,17 @@ export function ModelStatsCard({
                 }}
                 className="min-w-0 truncate text-left underline decoration-dotted underline-offset-2 hover:opacity-85 transition-opacity"
                 style={{ color: 'var(--text-strong)' }}
-                title="Open material profiles"
+                title={_(msg`Open material profiles`)}
               >
                 {effectiveMaterialName}
               </button>
 
-              <span>Layer profile:</span>
+              <span><Trans>Layer profile:</Trans></span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
-                {effectiveLayerHeightMm != null ? `${Math.round(effectiveLayerHeightMm * 1000)}μm` : '-'}
+                {effectiveLayerHeightMm != null ? `${Math.round(effectiveLayerHeightMm * 1000)} μm` : '-'}
               </span>
 
-              <span>Exposure:</span>
+              <span><Trans>Exposure:</Trans></span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
                 {effectiveNormalExposureSec != null
                   ? `${effectiveNormalExposureSec.toFixed(1)}s • ${(effectiveBottomExposureSec ?? effectiveNormalExposureSec).toFixed(1)}s`
@@ -565,17 +573,17 @@ export function ModelStatsCard({
               </span>
 
 
-              <span>Layers:</span>
+              <span><Trans>Layers:</Trans></span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
                 {resolvedLayerCount != null ? resolvedLayerCount : '-'}
               </span>
 
-              <span>Est. print time:</span>
+              <span><Trans comment='Row label on the printer card. "Est." is short for "estimated"; keep the abbreviation terse — the label column is narrow.'>Est. print time:</Trans></span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
                 {estimatedPrintTimeLabelOverride ?? (estimatedExposureOnlySeconds != null ? formatDuration(estimatedExposureOnlySeconds) : '-')}
               </span>
 
-              <span>Est. resin:</span>
+              <span><Trans comment='Row label on the printer card: estimated resin volume. Keep it terse — the label column is narrow.'>Est. resin:</Trans></span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
                 {estimatedResinLabelOverride ?? (estimatedResinMl != null
                   ? `${estimatedResinMl.toFixed(2)} ml${estimatedResinCost ? ` (${estimatedResinCost})` : ''}`
@@ -584,7 +592,7 @@ export function ModelStatsCard({
             </div>
 
             <div className="pt-0.5 text-[10px] mt-auto" style={{ color: 'var(--text-muted)' }}>
-              Click card to view model details
+              <Trans>Click card to view model details</Trans>
             </div>
           </div>
 
@@ -597,21 +605,21 @@ export function ModelStatsCard({
                 : { backfaceVisibility: 'hidden' as const, transform: 'rotateY(180deg)' }),
             }}
           >
-            <div className="w-full min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-[12px]" style={{ color: 'var(--text-strong)' }} title={model ? model.name : 'No model selected'}>
-              {model ? model.name : 'No model selected'}
+            <div className="w-full min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-[12px]" style={{ color: 'var(--text-strong)' }} title={model ? model.name : _(msg`No model selected`)}>
+              {model ? model.name : _(msg`No model selected`)}
             </div>
 
             <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              <span>STL size:</span>
+              <span><Trans>STL size:</Trans></span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model?.fileSizeBytes != null ? formatBytes(model.fileSizeBytes) : '-'}</span>
 
-              <span>Triangles:</span>
+              <span><Trans>Triangles:</Trans></span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? formatPolygonCountCompact(model.polygonCount) : '-'}</span>
 
-              <span>Shells:</span>
+              <span><Trans comment='Row label on the model details card: number of separate connected surfaces ("shells"/bodies) in the mesh.'>Shells:</Trans></span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model?.geometry.meshDefects?.nativeRepairReport?.post.component_count ?? '-'}</span>
 
-              <span>Height:</span>
+              <span><Trans>Height:</Trans></span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? `${heightMm.toFixed(2)} mm` : '-'}</span>
             </div>
 
@@ -633,14 +641,14 @@ export function ModelStatsCard({
                 <span>{model.geometry.meshDefects.repairedByManifold ? '✓' : '⚠'}</span>
                 <span>
                   {model.geometry.meshDefects.repairedByManifold
-                    ? `Auto-Repaired — ${model.geometry.meshDefects.repairedFloats} errors`
-                    : `Defective — ${model.geometry.meshDefects.repairedFloats} errors`}
+                    ? <Trans>Auto-repaired — {model.geometry.meshDefects.repairedFloats} errors</Trans>
+                    : <Trans>Defective — {model.geometry.meshDefects.repairedFloats} errors</Trans>}
                 </span>
               </div>
             )}
 
             <div className="pt-0.5 text-[10px] mt-auto" style={{ color: 'var(--text-muted)' }}>
-              Click card to return to print settings
+              <Trans>Click card to return to print settings</Trans>
             </div>
           </div>
         </div>

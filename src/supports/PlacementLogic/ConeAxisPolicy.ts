@@ -3,6 +3,13 @@ import { Vec3 } from '../types';
 
 export const MAX_CONE_AXIS_DEVIATION_FROM_SURFACE_NORMAL_DEG = 30;
 
+export function normalizeVectorOrFallback(vector: THREE.Vector3, fallback: THREE.Vector3): THREE.Vector3 {
+    if (vector.lengthSq() < 0.000001) {
+        return fallback.clone().normalize();
+    }
+    return vector.clone().normalize();
+}
+
 function normalizeOrFallback(vector: Vec3, fallback: Vec3): THREE.Vector3 {
     const candidate = new THREE.Vector3(vector.x, vector.y, vector.z);
     if (candidate.lengthSq() < 1e-10) {

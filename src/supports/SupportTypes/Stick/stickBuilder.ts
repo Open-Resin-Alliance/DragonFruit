@@ -7,13 +7,7 @@ import { getSettings } from '../../Settings';
 import { getJointDiameter } from '../../constants';
 import { isShaftBlocked, isCollisionFrustumBlocked } from '../../PlacementLogic/CollisionAvoidance';
 import { clampConeAxisDeviationFromSurfaceNormal } from '../../PlacementLogic/ConeAxisPolicy';
-
-function uuid() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-        const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-    });
-}
+import { v4 as uuidv4 } from 'uuid';
 
 export interface StickBuildInput {
     modelId: string;
@@ -128,26 +122,26 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
     const socketB = getSocketPosition(toVec3(coneStartB), toVec3(coneAxisB), tipProfile);
 
     const socketJointA: Joint = {
-        id: uuid(),
+        id: uuidv4(),
         pos: socketA,
         diameter: jointDiameter,
     };
 
     const socketJointB: Joint = {
-        id: uuid(),
+        id: uuidv4(),
         pos: socketB,
         diameter: jointDiameter,
     };
 
     const segment: Segment = {
-        id: uuid(),
+        id: uuidv4(),
         diameter: shaftDiameter,
         bottomJoint: socketJointA,
         topJoint: socketJointB,
     };
 
     const contactConeA: ContactCone = {
-        id: uuid(),
+        id: uuidv4(),
         pos: aPos,
         normal: toVec3(coneAxisA),
         surfaceNormal: toVec3(surfaceNormalA),
@@ -157,7 +151,7 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
     };
 
     const contactConeB: ContactCone = {
-        id: uuid(),
+        id: uuidv4(),
         pos: bPos,
         normal: toVec3(coneAxisB),
         surfaceNormal: toVec3(surfaceNormalB),
@@ -171,7 +165,7 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
     const b = new THREE.Vector3(bPos.x, bPos.y, bPos.z);
     const swap = a.z > b.z || (a.z === b.z && (a.y > b.y || (a.y === b.y && a.x > b.x)));
 
-    const stickId = uuid();
+    const stickId = uuidv4();
     const stick: Stick = {
         id: stickId,
         modelId,

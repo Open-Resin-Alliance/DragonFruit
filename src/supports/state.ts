@@ -10,7 +10,7 @@ import { addKickstand, getKickstandSnapshot, reassignAllKickstandModelIds, remov
 import type { Kickstand, KickstandBuildResult, KickstandRemoveResult } from './SupportTypes/Kickstand/types';
 import * as THREE from 'three';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
-import { generateUuid } from '@/utils/uuid';
+import { v4 as uuidv4 } from 'uuid';
 import { applyImportDefaultsToSupportPayload, getSavedImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
 import type { SupportSettings } from './Settings/types';
 import { createDefaultSettings } from './Settings/types';
@@ -2545,7 +2545,7 @@ export function loadFromImportFormat(data: DragonfruitImportFormat) {
 function getOrCreateMappedId(sourceId: string, idMap: Map<string, string>): string {
     const mapped = idMap.get(sourceId);
     if (mapped) return mapped;
-    const created = generateUuid();
+    const created = uuidv4();
     idMap.set(sourceId, created);
     return created;
 }
@@ -2580,11 +2580,11 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
     const kickstandKnotIdMap = new Map<string, string>();
 
     cloned.knots.forEach((knot) => {
-        knotIdMap.set(knot.id, generateUuid());
+        knotIdMap.set(knot.id, uuidv4());
     });
 
     cloned.roots = cloned.roots.map((root) => {
-        const nextId = generateUuid();
+        const nextId = uuidv4();
         rootIdMap.set(root.id, nextId);
         return {
             ...root,
@@ -2594,7 +2594,7 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
 
     cloned.trunks = cloned.trunks.map((trunk) => {
         const nextSegments = trunk.segments.map((segment) => {
-            const nextSegmentId = generateUuid();
+            const nextSegmentId = uuidv4();
             segmentIdMap.set(segment.id, nextSegmentId);
             return {
                 ...segment,
@@ -2606,13 +2606,13 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
 
         return {
             ...trunk,
-            id: generateUuid(),
+            id: uuidv4(),
             rootId: getOrCreateMappedId(trunk.rootId, rootIdMap),
             segments: nextSegments,
             contactCone: trunk.contactCone
                 ? {
                     ...trunk.contactCone,
-                    id: generateUuid(),
+                    id: uuidv4(),
                     socketJointId: trunk.contactCone.socketJointId
                         ? getOrCreateMappedId(trunk.contactCone.socketJointId, jointIdMap)
                         : trunk.contactCone.socketJointId,
@@ -2623,7 +2623,7 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
 
     cloned.branches = cloned.branches.map((branch) => {
         const nextSegments = branch.segments.map((segment) => {
-            const nextSegmentId = generateUuid();
+            const nextSegmentId = uuidv4();
             segmentIdMap.set(segment.id, nextSegmentId);
             return {
                 ...segment,
@@ -2635,13 +2635,13 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
 
         return {
             ...branch,
-            id: generateUuid(),
+            id: uuidv4(),
             parentKnotId: getOrCreateMappedId(branch.parentKnotId, knotIdMap),
             segments: nextSegments,
             contactCone: branch.contactCone
                 ? {
                     ...branch.contactCone,
-                    id: generateUuid(),
+                    id: uuidv4(),
                     socketJointId: branch.contactCone.socketJointId
                         ? getOrCreateMappedId(branch.contactCone.socketJointId, jointIdMap)
                         : branch.contactCone.socketJointId,
@@ -2651,7 +2651,7 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
     });
 
     cloned.leaves = cloned.leaves.map((leaf) => {
-        const nextId = generateUuid();
+        const nextId = uuidv4();
         leafIdMap.set(leaf.id, nextId);
         return {
             ...leaf,
@@ -2659,7 +2659,7 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
             parentKnotId: getOrCreateMappedId(leaf.parentKnotId, knotIdMap),
             contactCone: {
                 ...leaf.contactCone,
-                id: generateUuid(),
+                id: uuidv4(),
                 socketJointId: leaf.contactCone.socketJointId
                     ? getOrCreateMappedId(leaf.contactCone.socketJointId, jointIdMap)
                     : leaf.contactCone.socketJointId,
@@ -2669,7 +2669,7 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
 
     cloned.twigs = (cloned.twigs ?? []).map((twig) => {
         const nextSegments = twig.segments.map((segment) => {
-            const nextSegmentId = generateUuid();
+            const nextSegmentId = uuidv4();
             segmentIdMap.set(segment.id, nextSegmentId);
             return {
                 ...segment,
@@ -2681,22 +2681,22 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
 
         return {
             ...twig,
-            id: generateUuid(),
+            id: uuidv4(),
             segments: nextSegments,
             contactDiskA: {
                 ...twig.contactDiskA,
-                id: generateUuid(),
+                id: uuidv4(),
             },
             contactDiskB: {
                 ...twig.contactDiskB,
-                id: generateUuid(),
+                id: uuidv4(),
             },
         };
     });
 
     cloned.sticks = (cloned.sticks ?? []).map((stick) => {
         const nextSegments = stick.segments.map((segment) => {
-            const nextSegmentId = generateUuid();
+            const nextSegmentId = uuidv4();
             segmentIdMap.set(segment.id, nextSegmentId);
             return {
                 ...segment,
@@ -2708,18 +2708,18 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
 
         return {
             ...stick,
-            id: generateUuid(),
+            id: uuidv4(),
             segments: nextSegments,
             contactConeA: {
                 ...stick.contactConeA,
-                id: generateUuid(),
+                id: uuidv4(),
                 socketJointId: stick.contactConeA.socketJointId
                     ? getOrCreateMappedId(stick.contactConeA.socketJointId, jointIdMap)
                     : stick.contactConeA.socketJointId,
             },
             contactConeB: {
                 ...stick.contactConeB,
-                id: generateUuid(),
+                id: uuidv4(),
                 socketJointId: stick.contactConeB.socketJointId
                     ? getOrCreateMappedId(stick.contactConeB.socketJointId, jointIdMap)
                     : stick.contactConeB.socketJointId,
@@ -2728,7 +2728,7 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
     });
 
     cloned.braces = cloned.braces.map((brace) => {
-        const nextId = generateUuid();
+        const nextId = uuidv4();
         braceIdMap.set(brace.id, nextId);
         return {
             ...brace,
@@ -2758,14 +2758,14 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
     });
 
     cloned.kickstands = (cloned.kickstands ?? []).map((build) => {
-        const nextRootId = generateUuid();
+        const nextRootId = uuidv4();
         kickstandRootIdMap.set(build.root.id, nextRootId);
 
-        const nextHostKnotId = generateUuid();
+        const nextHostKnotId = uuidv4();
         kickstandKnotIdMap.set(build.hostKnot.id, nextHostKnotId);
 
         const nextKickstandSegments = build.kickstand.segments.map((segment) => {
-            const nextSegmentId = generateUuid();
+            const nextSegmentId = uuidv4();
             segmentIdMap.set(segment.id, nextSegmentId);
             return {
                 ...segment,
@@ -2793,7 +2793,7 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
             },
             kickstand: {
                 ...build.kickstand,
-                id: generateUuid(),
+                id: uuidv4(),
                 rootId: getOrCreateMappedId(build.kickstand.rootId, kickstandRootIdMap),
                 hostKnotId: getOrCreateMappedId(build.kickstand.hostKnotId, kickstandKnotIdMap),
                 hostSegmentId: getOrCreateMappedId(build.kickstand.hostSegmentId, segmentIdMap),

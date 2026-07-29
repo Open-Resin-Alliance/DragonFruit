@@ -22,7 +22,7 @@ import { getTrunkSegmentEndpoints } from '../Knot/knotUtils';
 import { Vec3, Trunk, Branch, Roots, Twig, Stick, ContactDisk } from '../../types';
 import { getKickstandSnapshot } from '../../SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
-import { pushHistory } from '@/history/historyStore';
+import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { calculateDiskThickness } from '../ContactDisk/contactDiskUtils';
@@ -900,7 +900,7 @@ export function useJointInteraction(enabled: boolean = true) {
             if (initialTrunkSnapshot.current && activeTrunkId.current) {
                 const currentTrunk = getTrunkById(activeTrunkId.current);
                 if (currentTrunk) {
-                    pushHistory({
+                    pushSupportHistory({
                         type: SUPPORT_UPDATE_TRUNK,
                         description: 'Move trunk joint',
                         payload: {

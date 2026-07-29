@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { v4 as uuidv4 } from 'uuid';
 import { Branch, Joint, Knot, Segment, Vec3 } from '../../types';
 import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition } from '../../SupportPrimitives/ContactCone/contactConeUtils';
@@ -7,7 +8,7 @@ import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/Contac
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { getSettings } from '../../Settings';
 import { getJointDiameter } from '../../constants';
-import { resolveConeAxisPolicy } from '../../PlacementLogic/ConeAxisPolicy';
+import { resolveConeAxisPolicy, normalizeVectorOrFallback } from '../../PlacementLogic/ConeAxisPolicy';
 import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
 import { isCollisionFrustumBlocked } from '../../PlacementLogic/CollisionAvoidance';
 import { perfMark, perfMeasureWithSpike } from '../../PlacementLogic/Pathfinding/pathfindingPerf';
@@ -21,14 +22,6 @@ const BRANCH_SOCKET_AZIMUTH_DEG = [0, 25, -25, 50, -50, 85, -85, 120, -120, 155,
 // Stretch factors: how much to extend the cone beyond nominal length.
 // Kept conservative — long stretched cones look unnatural on branches.
 const BRANCH_SOCKET_STRETCH_FACTORS = [1, 1.05, 1.12, 1.2];
-
-function normalizeOrFallback(vector: THREE.Vector3, fallback: THREE.Vector3): THREE.Vector3 {
-    if (vector.lengthSq() < 0.000001) {
-        return fallback.clone().normalize();
-    }
-
-    return vector.clone().normalize();
-}
 
 function getConeStartPosition(cone: ContactCone): Vec3 {
     const surfaceNormal = cone.surfaceNormal ?? cone.normal;
@@ -102,7 +95,7 @@ function scoreBranchConeCandidate(args: {
     nominalLengthMm: number;
 }): number {
     const { socketPos, desiredSocket, cone, surfaceNormal, desiredDirection, nominalLengthMm } = args;
-    const axis = normalizeOrFallback(
+    const axis = normalizeVectorOrFallback(
         new THREE.Vector3(cone.normal.x, cone.normal.y, cone.normal.z),
         surfaceNormal,
     );
@@ -133,7 +126,7 @@ function findBestBranchConePlacement(args: {
     const directCone = buildAuthoredBranchCone(tipPos, tipNormal, effectiveConeAxis, tipProfile, nominalSocketTarget);
     const directSocketPos = getFinalSocketPosition(directCone);
 
-    const surfaceNormal = normalizeOrFallback(
+    const surfaceNormal = normalizeVectorOrFallback(
         new THREE.Vector3(tipNormal.x, tipNormal.y, tipNormal.z),
         new THREE.Vector3(0, 0, 1),
     );
@@ -145,7 +138,7 @@ function findBestBranchConePlacement(args: {
     const desiredSocket = new THREE.Vector3(nominalSocketTarget.x, nominalSocketTarget.y, nominalSocketTarget.z);
     const desiredVector = desiredSocket.clone().sub(coneStart);
     const desiredDistance = Math.max(0.25, desiredVector.length());
-    const desiredDirection = normalizeOrFallback(desiredVector, surfaceNormal);
+    const desiredDirection = normalizeVectorOrFallback(desiredVector, surfaceNormal);
     const nominalLengthMm = tipProfile.lengthMm;
 
     const tangentForward = desiredDirection.clone().sub(
@@ -251,13 +244,6 @@ function findBestBranchConePlacement(args: {
     };
 }
 
-function uuid() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-        const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-    });
-}
-
 export interface BranchBuildInput {
     tipPos: Vec3;
     tipNormal: Vec3;
@@ -317,7 +303,7 @@ export function buildBranchData(input: BranchBuildInput): BranchBuildResult {
     perfMeasureWithSpike('branch:cone-search', 'branch:cone-search');
 
     const socketJoint: Joint = {
-        id: uuid(),
+        id: uuidv4(),
         pos: socketPos,
         diameter: jointDiameter,
     };
@@ -335,7 +321,7 @@ export function buildBranchData(input: BranchBuildInput): BranchBuildResult {
     const segments: Segment[] = [];
 
     const addJoint = (pos: Vec3): Joint => ({
-        id: uuid(),
+        id: uuidv4(),
         pos,
         diameter: jointDiameter,
     });
@@ -353,19 +339,19 @@ export function buildBranchData(input: BranchBuildInput): BranchBuildResult {
 
             segments.push(
                 {
-                    id: uuid(),
+                    id: uuidv4(),
                     diameter: shaftDiameter,
                     topJoint: middleJoint,
                     bottomJoint: undefined,
                 },
                 {
-                    id: uuid(),
+                    id: uuidv4(),
                     diameter: shaftDiameter,
                     topJoint: approachJoint,
                     bottomJoint: middleJoint,
                 },
                 {
-                    id: uuid(),
+                    id: uuidv4(),
                     diameter: shaftDiameter,
                     topJoint: socketJoint,
                     bottomJoint: approachJoint,
@@ -386,13 +372,13 @@ export function buildBranchData(input: BranchBuildInput): BranchBuildResult {
 
         segments.push(
             {
-                id: uuid(),
+                id: uuidv4(),
                 diameter: shaftDiameter,
                 topJoint: middleJoint,
                 bottomJoint: undefined,
             },
             {
-                id: uuid(),
+                id: uuidv4(),
                 diameter: shaftDiameter,
                 topJoint: socketJoint,
                 bottomJoint: middleJoint,
@@ -402,11 +388,11 @@ export function buildBranchData(input: BranchBuildInput): BranchBuildResult {
 
     const contactCone: ContactCone = {
         ...authoredCone,
-        id: uuid(),
+        id: uuidv4(),
         socketJointId: socketJoint.id,
     };
 
-    const branchId = uuid();
+    const branchId = uuidv4();
     const branch: Branch = {
         id: branchId,
         modelId,

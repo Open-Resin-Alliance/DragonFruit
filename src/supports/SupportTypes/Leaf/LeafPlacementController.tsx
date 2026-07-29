@@ -3,7 +3,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { subscribe, getSnapshot, addKnot, addLeaf } from '../../state';
-import { pushHistory } from '@/history/historyStore';
+import { pushSupportHistory } from '@/supports/history/supportHistory';
 import type { SnapTarget } from '../../interaction/SnappingManager';
 import type { Vec3, Knot, Joint, Segment } from '../../types';
 import { leafPlacementStore, useLeafPlacementState } from './leafPlacementState';
@@ -14,7 +14,7 @@ import type { SupportData } from '../../rendering/SupportBuilder';
 import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from '../Twig/twigTaper';
 import { SUPPORT_ADD_LEAF } from '../../history/actionTypes';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
-import { generateUuid } from '@/utils/uuid';
+import { v4 as uuidv4 } from 'uuid';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
@@ -611,7 +611,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     }
 
                     if (closestJoint && minJointDist < 3.0) {
-                        const newKnotId = generateUuid();
+                        const newKnotId = uuidv4();
                         const newKnot: Knot = {
                             id: newKnotId,
                             parentShaftId: closestJointSeg!.id,
@@ -624,7 +624,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                         leafPlacementStore.setStage('awaitingSproutTip');
                     } else {
                         // Create knot on the segment at snappedPos
-                        const newKnotId = generateUuid();
+                        const newKnotId = uuidv4();
                         const segmentId = snapTarget.targetId;
                         const committedKnotIsOnTwig = !!twigBySegmentId.get(segmentId);
                         const hostDiameterMm = snapTarget.hostDiameterMm ?? getSettings().shaft.diameterMm;
@@ -689,7 +689,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 addLeaf(markedLeaf);
 
                 // Reload pattern: create new knot at the same position and lock junctionHubId to it
-                const newParentKnotId = generateUuid();
+                const newParentKnotId = uuidv4();
                 const newParentKnot: Knot = {
                     ...parentKnot,
                     id: newParentKnotId,
@@ -697,7 +697,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 addKnot(newParentKnot);
                 leafPlacementStore.setJunctionHub(newParentKnotId, true);
 
-                pushHistory({
+                pushSupportHistory({
                     type: SUPPORT_ADD_LEAF,
                     payload: {
                         leaf: markedLeaf,
@@ -727,7 +727,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     : hostDiameterMm + 0.1;
 
                 const parentKnot: Knot = {
-                    id: generateUuid(),
+                    id: uuidv4(),
                     parentShaftId: segmentId,
                     t: snapTarget.t,
                     pos: snapTarget.snappedPos,
@@ -765,7 +765,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 addKnot(parentKnot);
                 addLeaf(markedLeaf);
 
-                pushHistory({
+                pushSupportHistory({
                     type: SUPPORT_ADD_LEAF,
                     payload: {
                         leaf: markedLeaf,
@@ -774,7 +774,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 });
 
                 if (snap.sproutParentingLockHeld) {
-                    const reloadKnotId = generateUuid();
+                    const reloadKnotId = uuidv4();
                     const reloadKnot: Knot = {
                         ...parentKnot,
                         id: reloadKnotId,

@@ -4324,7 +4324,7 @@ export function ProfileSettingsModal({
                                 {isOfficial && <Lock className="w-3.5 h-3.5 shrink-0" />}
                                 <span className="truncate">{material.name}</span>
                               </span>
-                              <span className="tabular-nums">{Math.round(material.layerHeightMm * 1000)}μm</span>
+                              <span className="tabular-nums">{Math.round(material.layerHeightMm * 1000)} μm</span>
                             </div>
                           </button>
                         );
