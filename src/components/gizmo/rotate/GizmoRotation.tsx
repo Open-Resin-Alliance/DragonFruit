@@ -390,6 +390,9 @@ export function GizmoRotation({
       targetHandleAngleRef.current = handleAngleRef.current;
 
       onDragRef.current(objectDelta);
+      // ADR-0001: the consumer mutates three objects directly off this
+      // callback — demand mode renders nothing without an invalidate.
+      invalidate();
       window.dispatchEvent(new CustomEvent('dragonfruit:snap-angle', {
         detail: { active: true, angle: dragAccumulatedRef.current, axis },
       }));
@@ -413,7 +416,7 @@ export function GizmoRotation({
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [pressOrigin, isDragging, armed, axis, axisVisualFlip, computeShouldFlip, getMousePolar]);
+  }, [pressOrigin, isDragging, armed, axis, axisVisualFlip, computeShouldFlip, getMousePolar, invalidate]);
 
   // --- Armed tick pick -----------------------------------------------------
   // Clicking the diamond arms this ring's dial. While armed, the selection
@@ -496,6 +499,8 @@ export function GizmoRotation({
       if (delta !== 0 && onDragStartRef.current() !== false) {
         onDragRef.current(delta);
         onDragEndRef.current();
+        // ADR-0001: the commit mutates the model via the callback chain.
+        invalidate();
       }
       onArmedChangeRef.current(false);
     };

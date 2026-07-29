@@ -27,7 +27,14 @@ Quick actions:
 ## 3) Rotate
 
 - Edit X/Y/Z angles directly.
-- Use **Angle-Snap** toggle for snapped rotation behavior.
+- **Drag** a ring's diamond handle for free rotation.
+- **Click** a ring's diamond handle to open the protractor dial:
+  - Aim — the pointer sticks to tick marks; the readout shows the angle
+    from the dial's 0° reference.
+  - Click a tick to rotate the model by exactly that angle.
+  - Press **Esc** (or click the diamond again) to cancel.
+- Set tick spacing with the **Short / Long / Spoke** fields (degrees;
+  Short must divide 360; 0 hides Long or Spoke marks).
 - Use **Reset Rotation** when needed.
 
 ## 4) Scale
