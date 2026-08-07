@@ -51,10 +51,16 @@ import { computePhysicalAaConfig, type AaPreset } from '../src/features/slicing/
 // keyed by model id. Populated by loadVoxl for `embedded-chunk`/`embedded-file`
 // models; the slice path prefers these over hitting the filesystem.
 let LOADED_MESH_BYTES = new Map<string, Uint8Array>();
+// Pre-decoded full-resolution original mesh bytes (ORIG chunk), keyed by model
+// id. Present only for VOXLs saved with "Save original model along with
+// decimated"; the slice path prefers these over the decimated MESH bytes so it
+// slices the same geometry the GUI would.
+let LOADED_ORIG_BYTES = new Map<string, Uint8Array>();
 function loadVoxl(path: string): VoxlDocumentV1 {
   const raw = readFileSync(path);
   const result = parseVoxlAuto(raw);
   LOADED_MESH_BYTES = result.meshBytes;
+  LOADED_ORIG_BYTES = result.originalMeshBytes ?? new Map();
   return result.document;
 }
 
@@ -1546,12 +1552,15 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
   for (const model of visibleModels) {
     let positions: Float32Array;
 
-    const embedded = LOADED_MESH_BYTES.get(model.id);
+    // Prefer the full-res original (ORIG chunk) when present, else the decimated
+    // MESH bytes — either way the codec already decoded the geometry to STL.
+    const embedded = LOADED_ORIG_BYTES.get(model.id) ?? LOADED_MESH_BYTES.get(model.id);
     if (embedded) {
       // `embedded-chunk`/`embedded-file`: the codec already decoded the geometry
       // to STL bytes — no filesystem lookup needed.
       positions = parseBinaryStl(Buffer.from(embedded.buffer, embedded.byteOffset, embedded.byteLength));
-      console.error(`  loading ${model.name}: <embedded ${model.mesh.mode}>`);
+      const src = LOADED_ORIG_BYTES.has(model.id) ? 'orig' : model.mesh.mode;
+      console.error(`  loading ${model.name}: <embedded ${src}>`);
     } else if (model.mesh.mode === 'external-file' || model.mesh.fileName) {
       const meshFileName = model.mesh.fileName ?? model.name + '.stl';
       // Try mesh-dir, then absolute path, then cwd
