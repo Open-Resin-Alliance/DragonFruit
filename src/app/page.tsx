@@ -819,6 +819,11 @@ export default function Home() {
   const [pluginImportWarningSkipFuture, setPluginImportWarningSkipFuture] = React.useState(false);
   const [activeSceneFilePath, setActiveSceneFilePath] = React.useState<string | null>(null);
   const [loadedSceneSaveSource, setLoadedSceneSaveSource] = React.useState<{ name: string; path: string | null } | null>(null);
+  // Save-format tracking: whether the current scene is the chunked VOXL 2.2
+  // layout. Autosave preserves a loaded old file's inline format but never
+  // downgrades a 2.2 file; manual saves always write 2.2 and latch this true.
+  // Defaults true (newest) for fresh scenes.
+  const [sceneFormatChunked, setSceneFormatChunked] = React.useState(true);
   const [showSceneSaveChoiceModal, setShowSceneSaveChoiceModal] = React.useState(false);
   const [sceneSaveChoiceFileName, setSceneSaveChoiceFileName] = React.useState<string | null>(null);
   const [sceneSaveChoicePath, setSceneSaveChoicePath] = React.useState<string | null>(null);
@@ -883,6 +888,11 @@ export default function Home() {
     // state (set on every successful save and on every scene open), so the
     // sidecar follows the project.
     preferredSavePath: activeSceneFilePath,
+    sceneFormatChunked,
+    // Inline autosave hit the string ceiling and escalated to 2.2 — latch the
+    // scene there so later ticks skip the failing inline attempt and never
+    // downgrade the now-2.2 file.
+    onSceneFormatUpgraded: React.useCallback(() => setSceneFormatChunked(true), []),
   });
 
   /**
@@ -1413,6 +1423,7 @@ export default function Home() {
     markSceneSaveBaseline,
     setActiveSceneFilePath,
     setLoadedSceneSaveSource,
+    setSceneFormatChunked,
     sceneImportAutosaveSuppressMs,
     deps: importExportDepsRef,
   });
@@ -4222,6 +4233,10 @@ export default function Home() {
         exportSuccessToastFadeTimeoutRef.current = null;
       }, 3800);
 
+      // Manual save always writes the newest (2.2) layout, so the scene is now
+      // 2.2 on disk — latch it so autosave keeps it there instead of trying to
+      // preserve a stale inline format and downgrading it.
+      setSceneFormatChunked(true);
       markSceneSaveBaseline();
       void clearAutosave();
     }
@@ -4470,6 +4485,7 @@ export default function Home() {
     preferredOverwriteScenePathRef.current = null;
     setActiveSceneFilePath(null);
     setLoadedSceneSaveSource(null);
+    setSceneFormatChunked(true);
     setShowCloseUnsavedChangesModal(false);
     setCloseUnsavedChangesBusy('none');
     if (sceneSaveChoiceResolveRef.current) {

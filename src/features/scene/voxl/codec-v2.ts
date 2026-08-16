@@ -15,7 +15,7 @@
  *   12..15 reserved  uint32 LE (0)
  *
  * Chunk directory entry (20 bytes each):
- *   0..3   type        4 ASCII chars (META, SCNE, MODL, MESH, SUPP, EXTD)
+ *   0..3   type        4 ASCII chars (META, SCNE, MODL, MESH, SUPP, EXTD, HSRC, CAVT, PSRC)
  *   4..5   index       uint16 LE (multi-instance ordinal, e.g. MESH per model)
  *   6..7   compression uint16 LE (0 = none, 1 = zlib)
  *   8..11  offset      uint32 LE (byte offset from file start)
@@ -39,6 +39,8 @@ import {
   type PrecompressedChunk,
 } from './types';
 import type { DragonfruitImportFormat } from '@/supports/types';
+import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
+import { base64ToBytes, bytesToBase64 } from '@/utils/base64';
 
 type ZlibCompressionLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 
@@ -54,7 +56,14 @@ const compressAsync = (data: Uint8Array, level: ZlibCompressionLevel): Promise<U
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 export const VOXL_V2 = 2;
-export const VOXL_V2_SEMANTIC_REVISION = 2.1;
+export const VOXL_V2_SEMANTIC_REVISION = 2.2;
+/**
+ * Semantic revision reported for a binary V2 file that has NO modifier-snapshot
+ * chunks — either a genuinely pre-2.2 ("2.1") file with inline base64, or a
+ * 2.2-capable write of a scene that had no snapshots to chunk (byte-identical).
+ * Save-time format preservation treats such files as "inline".
+ */
+export const VOXL_V2_INLINE_REVISION = 2.1;
 /**
  * Container version written when identical-geometry MESH chunk dedup removed
  * at least one chunk (duplicate models share one chunk via meshRef.chunkIndex).
@@ -81,6 +90,13 @@ const CHUNK_MESH = 'MESH';
 export const CHUNK_ORIG = 'ORIG';
 const CHUNK_SUPP = 'SUPP';
 const CHUNK_EXTD = 'EXTD';
+// VOXL 2.2 modifier-snapshot chunks: the large Float32 position snapshots that
+// hollowing / hole-punch bakes into meshModifiers, moved OUT of the MODL JSON
+// (where they were base64 strings that summed past V8's ~512 MiB single-string
+// ceiling) and into raw-bytes chunks indexed by owning model, like MESH.
+const CHUNK_HSRC = 'HSRC'; // hollowing.sourcePositions (raw Float32 bytes)
+const CHUNK_CAVT = 'CAVT'; // hollowing.cavityPositions (raw Float32 bytes)
+const CHUNK_PSRC = 'PSRC'; // holePunchSourcePositions  (raw Float32 bytes)
 
 // ─── Internal Types ───────────────────────────────────────────────────────────
 
@@ -260,6 +276,15 @@ export interface VoxlSerializeOptions {
   /** Model index → raw uncompressed ORIG payload. */
   originalMeshBytes?: Map<number, Uint8Array>;
   embedOriginalMesh?: boolean;
+  /**
+   * VOXL 2.2 modifier-snapshot chunking. `true` (default) moves the large
+   * hollow/hole position snapshots out of MODL into HSRC/CAVT/PSRC chunks.
+   * `false` keeps them inline as base64 (the pre-2.2 = "2.1" layout), used by
+   * autosave to preserve the loaded file's format; the caller escalates to
+   * `true` if the inline write throws (e.g. the MODL string ceiling). Scenes
+   * without modifier snapshots serialize identically either way.
+   */
+  chunkModifierSnapshots?: boolean;
 }
 
 interface ResolvedChunk {
@@ -293,6 +318,7 @@ async function prepareVoxlDocumentV2(
   const precompressedOriginal = options?.precompressedOriginal;
   const originalMeshBytes = options?.originalMeshBytes;
   const embedOriginalMesh = options?.embedOriginalMesh ?? true;
+  const chunkModifierSnapshots = options?.chunkModifierSnapshots ?? true;
   const nowIso = new Date().toISOString();
 
   // ── Build chunk payloads ──────────────────────────────────────────────
@@ -345,6 +371,93 @@ async function prepareVoxlDocumentV2(
   }
   const dedupRemovedChunks = chunkCandidateCount > dedupedChunkIndices.length;
 
+  // ── Modifier-snapshot chunks (V2.2): HSRC / CAVT / PSRC ────────────────
+  // The hollowing/hole-punch bake stores three full-mesh position snapshots as
+  // base64 inside meshModifiers. Summed across models these blow past V8's
+  // ~512 MiB single-string ceiling when JSON.stringify(models) concatenates
+  // them, throwing RangeError. Move each into a raw-bytes chunk indexed by
+  // owning model, and content-dedup PER TYPE keyed by the base64 string itself:
+  // identical snapshots across models share one chunk (first occurrence owns
+  // it; duplicates carry a *ChunkIndex pointer in the stripped MODL entry).
+  //
+  // Independent of MESH dedup — a MESH-duplicate model may still own its own
+  // HSRC/CAVT/PSRC, and vice-versa — and invisible to old readers, so it does
+  // NOT bump the header version (only MESH dedup does).
+  interface ModifierChunk { type: string; index: number; raw: Uint8Array; }
+  const modifierChunks: ModifierChunk[] = [];
+  const strippedModifiersByModel = new Map<number, ModelMeshModifiers>();
+  const hollowSourceOwner = new Map<string, number>();
+  const hollowCavityOwner = new Map<string, number>();
+  const holeSourceOwner = new Map<string, number>();
+
+  // Skipped entirely when chunkModifierSnapshots is false: the base64 blobs stay
+  // inline in the MODL entries (pre-2.2 "2.1" layout) and no HSRC/CAVT/PSRC
+  // chunk is emitted. Autosave uses this to preserve an old file's format.
+  for (let i = 0; chunkModifierSnapshots && i < input.models.length; i += 1) {
+    const mm = input.models[i].meshModifiers;
+    if (!mm) continue;
+
+    let nextHollowing = mm.hollowing;
+    if (mm.hollowing) {
+      const h = mm.hollowing;
+      let sourceChunkIndex: number | undefined;
+      let cavityChunkIndex: number | undefined;
+      let hollowChanged = false;
+
+      if (h.sourcePositionsBase64) {
+        const owner = hollowSourceOwner.get(h.sourcePositionsBase64);
+        if (owner === undefined) {
+          hollowSourceOwner.set(h.sourcePositionsBase64, i);
+          modifierChunks.push({ type: CHUNK_HSRC, index: i, raw: base64ToBytes(h.sourcePositionsBase64) });
+        } else {
+          sourceChunkIndex = owner;
+        }
+        hollowChanged = true;
+      }
+      if (h.cavityPositionsBase64) {
+        const owner = hollowCavityOwner.get(h.cavityPositionsBase64);
+        if (owner === undefined) {
+          hollowCavityOwner.set(h.cavityPositionsBase64, i);
+          modifierChunks.push({ type: CHUNK_CAVT, index: i, raw: base64ToBytes(h.cavityPositionsBase64) });
+        } else {
+          cavityChunkIndex = owner;
+        }
+        hollowChanged = true;
+      }
+      if (hollowChanged) {
+        nextHollowing = { ...h };
+        delete nextHollowing.sourcePositionsBase64;
+        delete nextHollowing.cavityPositionsBase64;
+        // Owners default to their own index (no pointer) so single-owner files
+        // stay byte-identical to the non-dedup case.
+        if (sourceChunkIndex !== undefined) nextHollowing.sourceChunkIndex = sourceChunkIndex;
+        if (cavityChunkIndex !== undefined) nextHollowing.cavityChunkIndex = cavityChunkIndex;
+      }
+    }
+
+    let holePunchSourceChunkIndex: number | undefined;
+    let holeSourceStripped = false;
+    if (mm.holePunchSourcePositionsBase64) {
+      const owner = holeSourceOwner.get(mm.holePunchSourcePositionsBase64);
+      if (owner === undefined) {
+        holeSourceOwner.set(mm.holePunchSourcePositionsBase64, i);
+        modifierChunks.push({ type: CHUNK_PSRC, index: i, raw: base64ToBytes(mm.holePunchSourcePositionsBase64) });
+      } else {
+        holePunchSourceChunkIndex = owner;
+      }
+      holeSourceStripped = true;
+    }
+
+    if (nextHollowing !== mm.hollowing || holeSourceStripped) {
+      const stripped: ModelMeshModifiers = { ...mm, hollowing: nextHollowing };
+      if (holeSourceStripped) {
+        delete stripped.holePunchSourcePositionsBase64;
+        if (holePunchSourceChunkIndex !== undefined) stripped.holePunchSourceChunkIndex = holePunchSourceChunkIndex;
+      }
+      strippedModifiersByModel.set(i, stripped);
+    }
+  }
+
   const models: VoxlModelEntry[] = input.models.map((m, i) => {
     const hasChunk = hasChunkFor(i);
     const ownerIndex = chunkOwnerByModelIndex.get(i);
@@ -391,7 +504,7 @@ async function prepareVoxlDocumentV2(
         rotation: { x: m.transform.rotation.x, y: m.transform.rotation.y, z: m.transform.rotation.z },
         scale: { x: m.transform.scale.x, y: m.transform.scale.y, z: m.transform.scale.z },
       },
-      meshModifiers: m.meshModifiers,
+      meshModifiers: strippedModifiersByModel.get(i) ?? m.meshModifiers,
       mesh: meshRef,
       isSupportGeometry: m.isSupportGeometry,
       linkGroupId: m.linkGroupId,
@@ -438,6 +551,13 @@ async function prepareVoxlDocumentV2(
         pending.push({ type: CHUNK_ORIG, index: modelIndex, raw: rawOrig, compress: true });
       }
     }
+  }
+
+  // V2.2 modifier-snapshot chunks (owners only; duplicates were pointer-linked
+  // above). Insertion order is deterministic (models ascending, HSRC/CAVT/PSRC
+  // per model), so both writers stay byte-identical.
+  for (const chunk of modifierChunks) {
+    pending.push({ type: chunk.type, index: chunk.index, raw: chunk.raw, compress: true });
   }
 
   pending.push({ type: CHUNK_SUPP, index: 0, raw: textEncoder.encode(JSON.stringify(input.supports)), compress: true });
@@ -812,8 +932,61 @@ export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
     }
   }
 
-  const lazyOriginalMeshBytesMap = originalMeshChunksMap.size > 0 
-    ? new LazyOriginalMeshBytesMap(originalMeshChunksMap) 
+  // ── Re-attach V2.2 modifier-snapshot chunks (HSRC/CAVT/PSRC) ──────────
+  // The writer moved these Float32 position snapshots out of the MODL JSON into
+  // raw-bytes chunks (§ CHUNK_HSRC). A snapshot lives in a chunk when its
+  // *PositionCount is non-zero but the matching *Base64 is absent. Resolve the
+  // owning chunk at `*ChunkIndex ?? modelIndex` (dedup pointer; owners default
+  // to their own index) and re-encode as base64 so downstream consumers see the
+  // exact V2.1 in-memory shape. Older V2 files simply have the base64 already
+  // present and skip every branch here.
+  const modifierChunkCache = new Map<string, Uint8Array>();
+  const readModifierChunk = (type: string, index: number): Uint8Array | undefined => {
+    const key = `${type}:${index}`;
+    const cached = modifierChunkCache.get(key);
+    if (cached) return cached;
+    const entry = entries.find((e) => e.type === type && e.index === index);
+    if (!entry) return undefined;
+    const bytes = readChunk(entry);
+    modifierChunkCache.set(key, bytes);
+    return bytes;
+  };
+
+  for (let i = 0; i < models.length; i += 1) {
+    const mm = models[i].meshModifiers;
+    if (!mm) continue;
+
+    const h = mm.hollowing;
+    if (h) {
+      if (h.sourcePositionCount && !h.sourcePositionsBase64) {
+        const bytes = readModifierChunk(CHUNK_HSRC, h.sourceChunkIndex ?? i);
+        if (bytes) h.sourcePositionsBase64 = bytesToBase64(bytes);
+      }
+      delete h.sourceChunkIndex;
+      if (h.cavityPositionCount && !h.cavityPositionsBase64) {
+        const bytes = readModifierChunk(CHUNK_CAVT, h.cavityChunkIndex ?? i);
+        if (bytes) h.cavityPositionsBase64 = bytesToBase64(bytes);
+      }
+      delete h.cavityChunkIndex;
+    }
+    if (mm.holePunchSourcePositionCount && !mm.holePunchSourcePositionsBase64) {
+      const bytes = readModifierChunk(CHUNK_PSRC, mm.holePunchSourceChunkIndex ?? i);
+      if (bytes) mm.holePunchSourcePositionsBase64 = bytesToBase64(bytes);
+    }
+    delete mm.holePunchSourceChunkIndex;
+  }
+
+  // A file is 2.2 iff it actually carries modifier-snapshot chunks; otherwise it
+  // is the inline ("2.1") layout — including 2.2-capable writes of scenes that
+  // simply had no snapshots to chunk (byte-identical either way). Save-time
+  // format preservation keys off this: a 2.2 file must never be autosaved back
+  // to inline.
+  const hasModifierChunks = entries.some(
+    (e) => e.type === CHUNK_HSRC || e.type === CHUNK_CAVT || e.type === CHUNK_PSRC,
+  );
+
+  const lazyOriginalMeshBytesMap = originalMeshChunksMap.size > 0
+    ? new LazyOriginalMeshBytesMap(originalMeshChunksMap)
     : undefined;
 
   return {
@@ -829,7 +1002,7 @@ export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
     meshBytes: meshBytesMap,
     ...(lazyOriginalMeshBytesMap ? { originalMeshBytes: lazyOriginalMeshBytesMap } : {}),
     ...(originalMeshChunksMap.size > 0 ? { originalMeshChunks: originalMeshChunksMap } : {}),
-    sourceVersion: VOXL_V2_SEMANTIC_REVISION,
+    sourceVersion: hasModifierChunks ? VOXL_V2_SEMANTIC_REVISION : VOXL_V2_INLINE_REVISION,
   };
 }
 

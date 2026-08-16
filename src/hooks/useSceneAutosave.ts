@@ -320,6 +320,19 @@ export type UseSceneAutosaveOptions = {
   debounceMs?: number;
   capMs?: number;
   preferredSavePath?: string | null;
+  /**
+   * Whether the current scene's on-disk format is the chunked VOXL 2.2 layout.
+   * Autosave preserves the inline (pre-2.2) layout only when this is `false`; a
+   * scene that is already 2.2 is never written back to inline (no downgrade).
+   * Defaults to `true` (newest) so an unknown/new scene autosaves as 2.2.
+   */
+  sceneFormatChunked?: boolean;
+  /**
+   * Fired when autosave had to escalate an inline write to the 2.2 chunked
+   * layout (the inline write threw). The owner latches the scene to chunked so
+   * later ticks stop re-attempting — and never downgrade — the now-2.2 file.
+   */
+  onSceneFormatUpgraded?: () => void;
 };
 
 export type UseSceneAutosaveResult = {
@@ -346,6 +359,8 @@ export function useSceneAutosave({
   debounceMs = AUTOSAVE_DEBOUNCE_MS,
   capMs = AUTOSAVE_CAP_MS,
   preferredSavePath = null,
+  sceneFormatChunked = true,
+  onSceneFormatUpgraded,
 }: UseSceneAutosaveOptions): UseSceneAutosaveResult {
   const [isAutosaving, setIsAutosaving] = React.useState(false);
   const [lastAutosaveAt, setLastAutosaveAt] = React.useState<string | null>(null);
@@ -367,6 +382,10 @@ export function useSceneAutosave({
   capMsRef.current = capMs;
   const preferredSavePathRef = React.useRef(preferredSavePath);
   preferredSavePathRef.current = preferredSavePath;
+  const sceneFormatChunkedRef = React.useRef(sceneFormatChunked);
+  sceneFormatChunkedRef.current = sceneFormatChunked;
+  const onSceneFormatUpgradedRef = React.useRef(onSceneFormatUpgraded);
+  onSceneFormatUpgradedRef.current = onSceneFormatUpgraded;
 
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const capRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -454,25 +473,44 @@ export function useSceneAutosave({
         const paths = await getAutosavePaths(preferredSavePathRef.current);
         const { voxlPath } = paths;
 
-        await ExportManager.exportScene(
-          null,
-          null,
-          {
-            filename: 'autosave',
-            format: 'voxl',
-            binary: true,
-            separateFiles: false,
-            includeRaft: false,
-            includeSupports: true,
-            includeModel: true,
-          },
-          {
-            models: currentModels,
-            activeModelId: activeModelIdRef.current,
-            selectedModelIds: selectedModelIdsRef.current,
-          },
-          { nativePath: voxlPath },
-        );
+        // Format preservation: keep a pre-2.2 file inline, but never downgrade a
+        // file that is already 2.2. If the inline write throws (typically the
+        // MODL string ceiling on snapshots too large to inline), escalate to the
+        // chunked 2.2 layout and latch the scene there so later ticks stop
+        // re-attempting inline.
+        const runExport = (chunkModifierSnapshots: boolean): Promise<string | null> =>
+          ExportManager.exportScene(
+            null,
+            null,
+            {
+              filename: 'autosave',
+              format: 'voxl',
+              binary: true,
+              separateFiles: false,
+              includeRaft: false,
+              includeSupports: true,
+              includeModel: true,
+            },
+            {
+              models: currentModels,
+              activeModelId: activeModelIdRef.current,
+              selectedModelIds: selectedModelIdsRef.current,
+            },
+            { nativePath: voxlPath, chunkModifierSnapshots },
+          );
+
+        if (sceneFormatChunkedRef.current) {
+          await runExport(true);
+        } else {
+          try {
+            await runExport(false);
+          } catch (error) {
+            console.warn('[autosave] Inline VOXL write failed; upgrading scene to the 2.2 chunked layout.', error);
+            onSceneFormatUpgradedRef.current?.();
+            sceneFormatChunkedRef.current = true;
+            await runExport(true);
+          }
+        }
 
         // Ordering is load-bearing and must stay this way: payload first, then
         // manifest. `exportScene` above commits the VOXL through the atomic

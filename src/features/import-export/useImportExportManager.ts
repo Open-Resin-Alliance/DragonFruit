@@ -53,6 +53,10 @@ export type UseImportExportManagerOptions = {
   markSceneSaveBaseline: () => void;
   setActiveSceneFilePath: React.Dispatch<React.SetStateAction<string | null>>;
   setLoadedSceneSaveSource: React.Dispatch<React.SetStateAction<{ name: string; path: string | null } | null>>;
+  /** Seeds the scene's save-format on load: a loaded 2.2 file autosaves as 2.2
+   *  (never downgraded); anything else preserves its inline format. Non-voxl and
+   *  fresh scenes are the newest (chunked) format. */
+  setSceneFormatChunked: React.Dispatch<React.SetStateAction<boolean>>;
   sceneImportAutosaveSuppressMs: number;
   /** Late / cross-domain deps (see ImportExportManagerDeps). */
   deps: React.MutableRefObject<ImportExportManagerDeps>;
@@ -68,6 +72,7 @@ export function useImportExportManager({
   markSceneSaveBaseline,
   setActiveSceneFilePath,
   setLoadedSceneSaveSource,
+  setSceneFormatChunked,
   sceneImportAutosaveSuppressMs,
   deps,
 }: UseImportExportManagerOptions) {
@@ -157,9 +162,13 @@ export function useImportExportManager({
           name: importedSingleFile.name,
           path: normalizedScenePath,
         });
+        // Preserve the loaded .voxl's format on autosave; a 2.2 file stays 2.2.
+        setSceneFormatChunked(scene.lastLoadedVoxlFormatChunkedRef.current);
         markSceneSaveBaseline();
       } else {
         setLoadedSceneSaveSource(null);
+        // Non-voxl scene import → newest format.
+        setSceneFormatChunked(true);
       }
 
       suppressSceneAutosave(sceneImportAutosaveSuppressMs);
@@ -358,9 +367,12 @@ export function useImportExportManager({
           name: entry.name,
           path: normalizeActiveVoxlScenePath(sourcePath),
         });
+        // Preserve the reopened .voxl's format on autosave; a 2.2 file stays 2.2.
+        setSceneFormatChunked(scene.lastLoadedVoxlFormatChunkedRef.current);
         markSceneSaveBaseline();
       } else {
         setLoadedSceneSaveSource(null);
+        setSceneFormatChunked(true);
       }
     }
     return reopened;

@@ -40,6 +40,14 @@ export interface ExportSceneContext {
 
 export interface ExportSceneSaveTarget {
   nativePath?: string | null;
+  /**
+   * VOXL 2.2 modifier-snapshot chunking. Omitted/`true` writes the newest
+   * (chunked 2.2) layout — the manual-save default. Autosave passes `false` to
+   * preserve a pre-2.2 file's inline layout, and escalates to `true` itself if
+   * that write throws (see `useSceneAutosave`). Never write `false` for a file
+   * that is already 2.2 — that would downgrade it.
+   */
+  chunkModifierSnapshots?: boolean;
 }
 
 export class ExportManager {
@@ -970,7 +978,7 @@ export class ExportManager {
 
     // VOXL path: serialization can be expensive, so destination is pre-picked above.
     if (options.format === 'voxl') {
-      return this.exportVoxl(sceneContext, options, prePickedNativePath, useNativeWrite);
+      return this.exportVoxl(sceneContext, options, prePickedNativePath, useNativeWrite, saveTarget?.chunkModifierSnapshots ?? true);
     }
 
     // Collect live scene objects for serialization — no cloning, no InstancedMesh expansion.
@@ -1166,6 +1174,7 @@ export class ExportManager {
     options: ExportOptions,
     prePickedNativePath: string | null,
     useNativeWrite: boolean,
+    chunkModifierSnapshots = true,
   ): Promise<string | null> {
     // Yield before the (synchronous) support snapshot so the render loop stays
     // alive on scenes with many support nodes.
@@ -1359,10 +1368,15 @@ export class ExportManager {
       },
       extensions: voxlExtensions,
     };
+    // `chunkModifierSnapshots` selects the VOXL 2.2 layout (chunked, the default
+    // and the manual-save path) or the pre-2.2 inline layout (autosave preserving
+    // an old file's format). Autosave owns the escalate-on-failure decision so it
+    // can also latch the scene to 2.2 — see `useSceneAutosave`.
     const serializeOptions = {
       precompressed: precompressedMap,
       precompressedOriginal: precompressedOriginalMap,
       embedOriginalMesh: options.embedOriginalMesh ?? true,
+      chunkModifierSnapshots,
     };
 
     // Native path: stream straight into the atomic writer's temp file, so the

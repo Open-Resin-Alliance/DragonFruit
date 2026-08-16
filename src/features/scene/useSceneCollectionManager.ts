@@ -1144,6 +1144,11 @@ export function useSceneCollectionManager() {
   const modelsRef = useRef<LoadedModel[]>([]);
   const activeModelIdRef = useRef<string | null>(null);
   const selectedModelIdsRef = useRef<string[]>([]);
+  // Whether the most recently loaded .voxl was the chunked 2.2 layout. Read by
+  // the import/export manager right after a load to seed the scene's save-format
+  // so autosave preserves an old file's format without ever downgrading a 2.2
+  // one. Defaults to true (newest) for non-voxl / fresh scenes.
+  const lastLoadedVoxlFormatChunkedRef = useRef<boolean>(true);
   modelsRef.current = models;
   activeModelIdRef.current = activeModelId;
   selectedModelIdsRef.current = selectedModelIds;
@@ -4854,6 +4859,9 @@ export function useSceneCollectionManager() {
         resolvedMeshBytes = r.meshBytes;
         resolvedOriginalMeshBytes = r.originalMeshBytes;
         originalMeshChunks = r.originalMeshChunks;
+        // sourceVersion is 2.2 only when the file actually carries modifier
+        // chunks; anything lower is treated as inline for format preservation.
+        lastLoadedVoxlFormatChunkedRef.current = r.sourceVersion >= 2.2;
       } else {
         document = parseVoxlDocument(await file.text());
         resolvedMeshBytes = new Map();
@@ -5698,6 +5706,7 @@ export function useSceneCollectionManager() {
     setActiveModelId,
     selectedModelIds,
     setSelectedModelIds,
+    lastLoadedVoxlFormatChunkedRef,
     selectModel,
     clearModelSelection,
     activeModel,
