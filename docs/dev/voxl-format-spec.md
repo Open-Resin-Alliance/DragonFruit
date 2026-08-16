@@ -165,7 +165,7 @@ means the data lives in the corresponding `HSRC`/`CAVT`/`PSRC` chunk, read at
 `*ChunkIndex` names the owner).
 
 Backward compatibility (accepted tradeoff): because the header does not bump and unknown chunk
-types may be ignored, older V2/V3 readers still open a V2.2 file — baked geometry loads from
+types may be ignored, older V2/V2.1 readers still open a V2.2 file — baked geometry loads from
 `MESH`, and they silently drop only the hollow/hole re-editability snapshots.
 
 ## Supports and extensions
