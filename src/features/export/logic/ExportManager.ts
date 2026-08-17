@@ -6,6 +6,7 @@ import { resolveModelMeshModifiers } from '@/features/mesh-modifiers/meshModifie
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
 import { buildSupportExportFromStores, serializeVoxlDocumentV2, serializeVoxlDocumentV2Streaming, VoxlSizeLimitError, VoxlUnchangedError, type PrecompressedChunk, type VoxlChunkCache, type VoxlChunkReportEntry } from '@/features/scene/voxl';
 import { type BakedChunk, meshChunkStore } from '@/features/scene/voxl/meshChunkStore';
+import { serializeSupportsChunk } from '@/features/scene/voxl/supportsSerializeWorkerClient';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
 import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath, writeFileAtomicToNativePath, writeFileAtomicStreamedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { info as logInfo } from '@tauri-apps/plugin-log';
@@ -1485,6 +1486,11 @@ export class ExportManager {
       chunkCache,
       sha256Original: sha256OriginalMap,
       supportsCacheKey,
+      // Serialize SUPP (JSON.stringify + zlib + digest) off the main thread. Only
+      // runs on a SUPP cache miss — i.e. exactly when supports changed (a
+      // supported-model transform reanchors world-space supports), which is the
+      // freeze this removes. Byte-identical to the inline path.
+      supportsCodec: serializeSupportsChunk,
       previousFingerprint,
     };
 

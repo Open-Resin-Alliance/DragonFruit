@@ -305,6 +305,17 @@ export interface VoxlSerializeOptions {
    */
   supportsCacheKey?: string;
   /**
+   * Off-thread SUPP producer (autosave freeze fix). When present, the SUPP
+   * chunk's `JSON.stringify` + zlib + SHA-256 run here (a Web Worker) instead of
+   * synchronously on the main thread — the freeze source, since world-anchored
+   * supports genuinely change on every supported-model transform and so cannot
+   * be served from the chunk cache. Consulted ONLY on a SUPP cache miss; the
+   * result must be byte-identical to the inline path (see
+   * `supportsSerialize.worker.shared.ts`). Absent ⇒ inline main-thread
+   * `JSON.stringify` (tests, manual saves without a worker).
+   */
+  supportsCodec?: (supports: DragonfruitImportFormat) => Promise<CachedChunkPayload>;
+  /**
    * The fingerprint of the last committed write to this destination. When it
    * equals the freshly-prepared fingerprint the streaming writer emits NOTHING
    * and reports `skipped: true`, so the caller can abort the atomic commit and
@@ -603,6 +614,10 @@ async function prepareVoxlDocumentV2(
     /** Deferred raw builder — invoked only on a cache MISS, so a hit skips the
      *  base64 decode / `JSON.stringify` that produces the bytes. */
     rawThunk?: () => Uint8Array;
+    /** Deferred FULL payload builder (compression + data + size + digest) — used
+     *  for the off-thread SUPP worker path. Invoked only on a cache MISS; its
+     *  result bypasses the generic compress + hash steps entirely. */
+    payloadThunk?: () => Promise<CachedChunkPayload>;
     pre?: PrecompressedChunk;
     compress: boolean;
     /** Small stable cache key; paired with `cacheSignal` compared by `===`. */
@@ -661,13 +676,22 @@ async function prepareVoxlDocumentV2(
     });
   }
 
-  // SUPP: `JSON.stringify` of the (potentially huge) support forest is deferred
-  // so a cache hit — a model transform never touches support state — skips it.
+  // SUPP: the whole scene's world-space support forest. World-anchored supports
+  // move with any supported model, so a transform DOES change these bytes (unlike
+  // the local-frame HSRC/CAVT snapshots) — the cache misses on the dominant edit
+  // and the `JSON.stringify` + zlib runs. When a `supportsCodec` is supplied that
+  // work is done off the main thread (a Web Worker) via `payloadThunk`, which
+  // returns the full compressed payload + digest byte-identically; otherwise it
+  // falls back to the inline `rawThunk` (tests, manual saves without a worker).
+  // Either way the deferral means a cache hit still skips it entirely.
   const supportsCacheKey = options?.supportsCacheKey;
+  const supportsCodec = options?.supportsCodec;
   pending.push({
     type: CHUNK_SUPP,
     index: 0,
-    rawThunk: () => textEncoder.encode(JSON.stringify(input.supports)),
+    ...(supportsCodec
+      ? { payloadThunk: () => supportsCodec(input.supports) }
+      : { rawThunk: () => textEncoder.encode(JSON.stringify(input.supports)) }),
     compress: true,
     ...(supportsCacheKey !== undefined ? { cacheKey: 'supp', cacheSignal: supportsCacheKey } : {}),
   });
@@ -704,6 +728,25 @@ async function prepareVoxlDocumentV2(
           source: 'cache',
         };
       }
+    }
+
+    if (chunk.payloadThunk) {
+      // Off-thread SUPP path: the worker already produced the compressed bytes +
+      // raw-content digest, byte-identical to the inline branch below. Store it in
+      // the cache and feed its digest to the fingerprint unchanged.
+      const payload = await chunk.payloadThunk();
+      if (wantFingerprint && cache && chunk.cacheKey !== undefined && chunk.cacheSignal !== undefined) {
+        cache.set(chunk.cacheKey, chunk.cacheSignal, payload);
+      }
+      return {
+        type: chunk.type,
+        index: chunk.index,
+        compression: payload.compression,
+        data: payload.data,
+        uncompressedSize: payload.uncompressedSize,
+        digest: wantFingerprint ? payload.digest : undefined,
+        source: 'built',
+      };
     }
 
     if (chunk.pre) {
