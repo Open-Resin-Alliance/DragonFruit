@@ -1276,6 +1276,7 @@ export class ExportManager {
     const scopedModelIds = new Set((sceneContext?.models ?? []).map((model) => model.id));
     const hasScopedModelFilter = scopedModelIds.size > 0;
 
+    const supportBuildStart = globalThis.performance?.now?.() ?? 0;
     const supports = hasScopedModelFilter
       ? buildScopedSupportExportDocument(
           supportSnapshot,
@@ -1288,6 +1289,17 @@ export class ExportManager {
           kickstandSnapshot,
           'dragonfruit-voxl-export',
         );
+    // DIAGNOSTIC: this build is a synchronous main-thread pass over the whole
+    // support forest (scoped variant reconstructs per model). If this is the
+    // freeze, the SUPP worker cannot help it — the fix would be to offload/skip
+    // THIS, not the stringify.
+    if (chunkCache) {
+      const kind = hasScopedModelFilter ? 'scoped' : 'flat';
+      void logInfo(
+        `[SceneAutosave] support-doc build (${kind}, main-thread) `
+        + `${((globalThis.performance?.now?.() ?? 0) - supportBuildStart).toFixed(0)}ms`,
+      ).catch(() => {});
+    }
 
     if (!options.includeSupports) {
       supports.roots = [];
