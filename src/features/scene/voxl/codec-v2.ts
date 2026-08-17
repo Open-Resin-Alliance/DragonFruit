@@ -327,6 +327,13 @@ export class VoxlUnchangedError extends Error {
   }
 }
 
+/** How a chunk's bytes were obtained this tick — the "did we do work" axis, as
+ *  opposed to `changed` (the "did content move" axis) in the report below. */
+export type VoxlChunkSource =
+  | 'cache' // reused already-compressed bytes from the cross-tick chunk cache
+  | 'precompressed' // reused the mesh store's precompressed bytes (no zlib here)
+  | 'built'; // decoded/stringified + (maybe) compressed this tick
+
 interface ResolvedChunk {
   type: string;
   index: number;
@@ -335,6 +342,24 @@ interface ResolvedChunk {
   uncompressedSize: number;
   /** SHA-256 hex of the raw content; populated only when a `chunkCache` is in use. */
   digest?: string;
+  /** How the bytes were produced; populated only when a `chunkCache` is in use. */
+  source?: VoxlChunkSource;
+}
+
+/**
+ * One row of the per-tick change report (built only when a `chunkCache` is in
+ * use — i.e. autosave). `changed` is a true content-digest comparison against
+ * the previous prepared document; `source` says whether real work ran to make
+ * the bytes. Surfaced so autosave can log which chunks moved and which didn't.
+ */
+export interface VoxlChunkReportEntry {
+  type: string;
+  index: number;
+  changed: boolean;
+  isNew: boolean;
+  source: VoxlChunkSource;
+  compressedSize: number;
+  uncompressedSize: number;
 }
 
 interface PreparedDocument {
@@ -348,6 +373,11 @@ interface PreparedDocument {
    * non-empty fingerprints would emit byte-identical files.
    */
   fingerprint: string;
+  /**
+   * Per-chunk change report vs. the last prepared document. Empty unless a
+   * `chunkCache` was supplied (autosave); the caller logs it.
+   */
+  chunkReport: VoxlChunkReportEntry[];
 }
 
 /**
@@ -671,6 +701,7 @@ async function prepareVoxlDocumentV2(
           data: hit.data,
           uncompressedSize: hit.uncompressedSize,
           digest: hit.digest,
+          source: 'cache',
         };
       }
     }
@@ -684,6 +715,7 @@ async function prepareVoxlDocumentV2(
         data: chunk.pre.data,
         uncompressedSize: chunk.pre.uncompressedSize,
         digest,
+        source: 'precompressed',
       };
     }
 
@@ -695,10 +727,10 @@ async function prepareVoxlDocumentV2(
 
       const compressed = await compressAsync(raw, 6);
       result = compressed.length < raw.length
-        ? { type: chunk.type, index: chunk.index, compression: COMPRESSION_ZLIB, data: compressed, uncompressedSize: raw.length }
-        : { type: chunk.type, index: chunk.index, compression: COMPRESSION_NONE, data: raw, uncompressedSize: raw.length };
+        ? { type: chunk.type, index: chunk.index, compression: COMPRESSION_ZLIB, data: compressed, uncompressedSize: raw.length, source: 'built' }
+        : { type: chunk.type, index: chunk.index, compression: COMPRESSION_NONE, data: raw, uncompressedSize: raw.length, source: 'built' };
     } else {
-      result = { type: chunk.type, index: chunk.index, compression: COMPRESSION_NONE, data: raw, uncompressedSize: raw.length };
+      result = { type: chunk.type, index: chunk.index, compression: COMPRESSION_NONE, data: raw, uncompressedSize: raw.length, source: 'built' };
     }
 
     if (wantFingerprint) {
@@ -755,11 +787,31 @@ async function prepareVoxlDocumentV2(
   // an unchanged file. Built from cached/hinted digests, so no big blob is
   // re-hashed here; only the small descriptor string is hashed per tick.
   let fingerprint = '';
+  let chunkReport: VoxlChunkReportEntry[] = [];
   if (wantFingerprint) {
     const descriptor = resolved
       .map((c) => `${c.type}:${c.index}:${c.compression}:${c.uncompressedSize}:${c.digest ?? ''}`)
       .join('\n');
     fingerprint = await sha256Hex(textEncoder.encode(`v${version}\n${descriptor}`));
+
+    // Per-chunk change report (autosave logging). Diff each chunk's content
+    // digest against the last prepared document; `source` records whether work
+    // ran. `cache!` is safe here — `wantFingerprint === (cache !== undefined)`.
+    const status = cache!.diffAndRecordDocument(
+      resolved.map((c) => ({ type: c.type, index: c.index, digest: c.digest ?? '' })),
+    );
+    chunkReport = resolved.map((c, i) => {
+      const change = status.get(`${c.type}:${c.index}`) ?? 'changed';
+      return {
+        type: c.type,
+        index: c.index,
+        changed: change !== 'unchanged',
+        isNew: change === 'new',
+        source: c.source ?? 'built',
+        compressedSize: directory[i].compressedSize,
+        uncompressedSize: c.uncompressedSize,
+      };
+    });
   }
 
   return {
@@ -768,6 +820,7 @@ async function prepareVoxlDocumentV2(
     totalSize,
     version,
     fingerprint,
+    chunkReport,
   };
 }
 
@@ -859,7 +912,13 @@ export async function serializeVoxlDocumentV2Streaming(
   sha256Map: Map<number, string> | undefined,
   sink: (bytes: Uint8Array) => void | Promise<void>,
   options?: VoxlSerializeOptions,
-): Promise<{ totalSize: number; version: number; fingerprint: string; skipped: boolean }> {
+): Promise<{
+  totalSize: number;
+  version: number;
+  fingerprint: string;
+  skipped: boolean;
+  chunkReport: VoxlChunkReportEntry[];
+}> {
   const prepared = await prepareVoxlDocumentV2(input, meshBytes, sha256Map, options);
 
   // Write-skip: identical, non-empty fingerprint ⇒ the bytes would match the
@@ -870,7 +929,13 @@ export async function serializeVoxlDocumentV2Streaming(
     prepared.fingerprint !== '' &&
     prepared.fingerprint === previousFingerprint
   ) {
-    return { totalSize: 0, version: prepared.version, fingerprint: prepared.fingerprint, skipped: true };
+    return {
+      totalSize: 0,
+      version: prepared.version,
+      fingerprint: prepared.fingerprint,
+      skipped: true,
+      chunkReport: prepared.chunkReport,
+    };
   }
 
   await sink(buildVoxlPreamble(prepared));
@@ -878,7 +943,13 @@ export async function serializeVoxlDocumentV2Streaming(
     await sink(chunk.data);
   }
 
-  return { totalSize: prepared.totalSize, version: prepared.version, fingerprint: prepared.fingerprint, skipped: false };
+  return {
+    totalSize: prepared.totalSize,
+    version: prepared.version,
+    fingerprint: prepared.fingerprint,
+    skipped: false,
+    chunkReport: prepared.chunkReport,
+  };
 }
 
 // ─── V2 Binary Reader ─────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import { resolveModelMeshModifiers } from '@/features/mesh-modifiers/meshModifierStore';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
-import { buildSupportExportFromStores, serializeVoxlDocumentV2, serializeVoxlDocumentV2Streaming, VoxlSizeLimitError, VoxlUnchangedError, type PrecompressedChunk, type VoxlChunkCache } from '@/features/scene/voxl';
+import { buildSupportExportFromStores, serializeVoxlDocumentV2, serializeVoxlDocumentV2Streaming, VoxlSizeLimitError, VoxlUnchangedError, type PrecompressedChunk, type VoxlChunkCache, type VoxlChunkReportEntry } from '@/features/scene/voxl';
 import { type BakedChunk, meshChunkStore } from '@/features/scene/voxl/meshChunkStore';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
 import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath, writeFileAtomicToNativePath, writeFileAtomicStreamedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
@@ -1210,6 +1210,42 @@ export class ExportManager {
     return this.downloadFile(stlBytes, options.filename, 'stl', 'application/octet-stream', null, false);
   }
 
+  /**
+   * Emit the per-autosave "which chunks changed" line (info level → Tauri log
+   * file). Called only when a chunkCache is in play, i.e. autosave. A skipped
+   * write means the whole document matched disk; otherwise we list the chunks
+   * that moved and note the ones reused untouched.
+   */
+  private static logVoxlChunkReport(report: VoxlChunkReportEntry[], skipped: boolean): void {
+    if (report.length === 0) return;
+
+    const label = (c: VoxlChunkReportEntry): string => `${c.type}[${c.index}]`;
+    const changed = report.filter((c) => c.changed);
+    const unchanged = report.filter((c) => !c.changed);
+
+    if (skipped) {
+      console.info(
+        `[SceneAutosave] VOXL unchanged — write skipped; all ${report.length} chunk(s) identical to disk.`,
+      );
+      return;
+    }
+
+    const changedList = changed
+      .map((c) => `${label(c)} ${c.isNew ? 'new' : 'changed'} (${c.source}, ${(c.compressedSize / 1024).toFixed(1)} KB)`)
+      .join(', ');
+    const reusedList = unchanged
+      .map((c) => `${label(c)} (${c.source})`)
+      .join(', ');
+
+    console.info(
+      `[SceneAutosave] VOXL chunk delta — ${changed.length} changed, ${unchanged.length} unchanged.`,
+      {
+        changed: changedList || '(none)',
+        unchanged: reusedList || '(none)',
+      },
+    );
+  }
+
   private static async exportVoxl(
     sceneContext: ExportSceneContext | undefined,
     options: ExportOptions,
@@ -1467,6 +1503,9 @@ export class ExportManager {
             serializeOptions,
           );
           streamFingerprint = streamResult.fingerprint;
+          // Only autosave supplies a chunkCache; that is exactly when the report
+          // is populated and the "which chunks changed" log is wanted.
+          if (chunkCache) this.logVoxlChunkReport(streamResult.chunkReport, streamResult.skipped);
           // Fingerprint matched the file already on disk: nothing was emitted.
           // Throw so the atomic writer discards its (empty) temp and leaves the
           // correct file untouched; caught just below as success.

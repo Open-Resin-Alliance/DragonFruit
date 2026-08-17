@@ -41,12 +41,45 @@ interface CacheEntry {
  * `VoxlSerializeOptions.chunkCache`. Manual/one-off saves pass none, so they
  * behave exactly as before.
  */
+/** Per-chunk change status vs. the previously-prepared document. */
+export type VoxlChunkChange = 'new' | 'changed' | 'unchanged';
+
 export class VoxlChunkCache {
   private readonly entries = new Map<string, CacheEntry>();
   private readonly maxEntries: number;
 
+  /**
+   * The previous prepared document's per-chunk content digests, keyed by
+   * `${type}:${index}`. Powers the per-autosave "which chunks changed" log —
+   * a true digest comparison, so a MODL that was rebuilt but is byte-identical
+   * still reads as `unchanged`, and META (its timestamp moves every tick) reads
+   * as `changed`.
+   */
+  private prevDocDigests = new Map<string, string>();
+
   constructor(maxEntries = 256) {
     this.maxEntries = Math.max(1, maxEntries);
+  }
+
+  /**
+   * Diff this document's chunk digests against the last one this cache saw, then
+   * record the new set as the baseline for next tick. Returns a status per chunk
+   * keyed by `${type}:${index}`. A chunk unseen last tick is `new`; a chunk whose
+   * digest moved is `changed`; an identical digest is `unchanged`.
+   */
+  diffAndRecordDocument(
+    chunks: ReadonlyArray<{ type: string; index: number; digest: string }>,
+  ): Map<string, VoxlChunkChange> {
+    const status = new Map<string, VoxlChunkChange>();
+    const next = new Map<string, string>();
+    for (const chunk of chunks) {
+      const key = `${chunk.type}:${chunk.index}`;
+      const prev = this.prevDocDigests.get(key);
+      status.set(key, prev === undefined ? 'new' : prev === chunk.digest ? 'unchanged' : 'changed');
+      next.set(key, chunk.digest);
+    }
+    this.prevDocDigests = next;
+    return status;
   }
 
   /**
@@ -77,6 +110,7 @@ export class VoxlChunkCache {
 
   clear(): void {
     this.entries.clear();
+    this.prevDocDigests.clear();
   }
 
   get size(): number {

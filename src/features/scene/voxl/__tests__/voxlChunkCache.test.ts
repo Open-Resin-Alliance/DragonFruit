@@ -149,6 +149,41 @@ test('write-skip: a matching previousFingerprint emits nothing and reports skipp
   });
 });
 
+test('the chunk report flags a transform edit as MODL-changed, snapshots unchanged', async () => {
+  await withFrozenClock(async () => {
+    const cache = new VoxlChunkCache();
+    const base = testModel('m0', { meshModifiers: hollowMods(SOURCE, CAVITY, HOLE) });
+
+    // First tick: every chunk is new.
+    const first = await streamSerialize(testInput([base]), { chunkCache: cache });
+    assert.ok(first.chunkReport.length > 0, 'a cache-enabled serialize must report chunks');
+    assert.ok(first.chunkReport.every((c) => c.isNew && c.changed), 'first tick ⇒ all chunks new');
+
+    // Second tick: only the transform moved. MODL carries the transform JSON so
+    // it changes; the HSRC/CAVT/PSRC snapshot chunks are byte-identical (local
+    // frame) and must report unchanged + reused from cache.
+    const moved = testModel('m0', {
+      meshModifiers: hollowMods(SOURCE, CAVITY, HOLE),
+      transform: {
+        position: { x: 7, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+    });
+    const second = await streamSerialize(testInput([moved]), { chunkCache: cache });
+
+    const byKey = (t: string) => second.chunkReport.find((c) => c.type === t);
+    assert.equal(byKey('MODL')?.changed, true, 'a moved model must mark MODL changed');
+    assert.equal(byKey('MODL')?.isNew, false, 'MODL existed last tick, so not new');
+    for (const t of ['HSRC', 'CAVT', 'PSRC']) {
+      const row = byKey(t);
+      assert.ok(row, `expected a ${t} chunk in the report`);
+      assert.equal(row?.changed, false, `${t} snapshot must be unchanged on a transform edit`);
+      assert.equal(row?.source, 'cache', `${t} must be reused from the chunk cache`);
+    }
+  });
+});
+
 test('write-skip does not fire when the content changed', async () => {
   await withFrozenClock(async () => {
     const cache = new VoxlChunkCache();
