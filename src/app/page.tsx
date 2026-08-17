@@ -85,6 +85,7 @@ import { EditorContextMenu, ORGANIC_CUT_ADD_WAYPOINT_ITEM, ORGANIC_CUT_DELETE_WA
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { setStallPhase } from '@/utils/mainThreadStallWatch';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
@@ -5395,6 +5396,7 @@ export default function Home() {
       : undefined;
 
     const undoCountBefore = getUndoCount();
+    const restoreStallPhase = setStallPhase('transform-commit');  // DIAGNOSTIC
     const pushed = scene.commitModelTransformHistory(
       pending.modelId,
       pending.before,
@@ -5402,6 +5404,7 @@ export default function Home() {
       pending.description,
       supportHistoryOptions,
     );
+    setStallPhase(restoreStallPhase);  // DIAGNOSTIC
     const undoCountAfter = getUndoCount();
     const equalTransform = transformsApproximatelyEqual(pending.before, afterTransform);
     transformHistoryDebugRef.current = {

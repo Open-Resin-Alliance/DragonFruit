@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { subscribeHistory } from '@/history/historyStore';
+import { armStallWatch, setStallPhase } from '@/utils/mainThreadStallWatch';
 import { ExportManager } from '@/features/export/logic/ExportManager';
 import { VoxlChunkCache } from '@/features/scene/voxl';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
@@ -507,6 +508,7 @@ export function useSceneAutosave({
       inFlightRef.current = true;
       dirtyRef.current = false;
       setIsAutosaving(true);
+      setStallPhase('autosave-tick');  // DIAGNOSTIC
 
       try {
         // Resolved per tick, not per render: `preferredSavePathRef` now tracks
@@ -634,6 +636,7 @@ export function useSceneAutosave({
       } finally {
         inFlightRef.current = false;
         setIsAutosaving(false);
+        setStallPhase('idle');  // DIAGNOSTIC
       }
     };
 
@@ -685,6 +688,13 @@ export function useSceneAutosave({
       }, capMsRef.current);
     }
   }, [performAutosave]);
+
+  // DIAGNOSTIC: arm the main-thread stall detector for the whole app lifetime so
+  // a freeze is caught and timestamped wherever it happens (edit-commit vs the
+  // autosave tick), regardless of whether autosave is enabled.
+  React.useEffect(() => {
+    armStallWatch();
+  }, []);
 
   // Subscribe to history events (push / undo / redo)
   React.useEffect(() => {
