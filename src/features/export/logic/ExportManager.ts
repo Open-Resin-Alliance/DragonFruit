@@ -8,6 +8,7 @@ import { buildSupportExportFromStores, serializeVoxlDocumentV2, serializeVoxlDoc
 import { type BakedChunk, meshChunkStore } from '@/features/scene/voxl/meshChunkStore';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
 import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath, writeFileAtomicToNativePath, writeFileAtomicStreamedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
+import { info as logInfo } from '@tauri-apps/plugin-log';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getSnapshot } from '@/supports/state';
 import { getRaftSettings, getRaftSettingsForModel } from '@/supports/Rafts/Crenelated/RaftState';
@@ -1211,39 +1212,39 @@ export class ExportManager {
   }
 
   /**
-   * Emit the per-autosave "which chunks changed" line (info level → Tauri log
-   * file). Called only when a chunkCache is in play, i.e. autosave. A skipped
-   * write means the whole document matched disk; otherwise we list the chunks
-   * that moved and note the ones reused untouched.
+   * Emit the per-autosave "which chunks changed" line to the platform log file
+   * via the Tauri log plugin's `info` (plain `console.*` never reaches the file —
+   * `attachConsole` only mirrors Rust records INTO the devtools console). Called
+   * only when a chunkCache is in play, i.e. autosave. A skipped write means the
+   * whole document matched disk; otherwise we list the chunks that moved and note
+   * the ones reused untouched. `info` takes a single string, so the whole report
+   * is folded into `message`; fire-and-forget (a reject outside Tauri is ignored).
    */
   private static logVoxlChunkReport(report: VoxlChunkReportEntry[], skipped: boolean): void {
     if (report.length === 0) return;
+
+    if (skipped) {
+      void logInfo(
+        `[SceneAutosave] VOXL unchanged — write skipped; all ${report.length} chunk(s) identical to disk.`,
+      ).catch(() => {});
+      return;
+    }
 
     const label = (c: VoxlChunkReportEntry): string => `${c.type}[${c.index}]`;
     const changed = report.filter((c) => c.changed);
     const unchanged = report.filter((c) => !c.changed);
 
-    if (skipped) {
-      console.info(
-        `[SceneAutosave] VOXL unchanged — write skipped; all ${report.length} chunk(s) identical to disk.`,
-      );
-      return;
-    }
-
     const changedList = changed
       .map((c) => `${label(c)} ${c.isNew ? 'new' : 'changed'} (${c.source}, ${(c.compressedSize / 1024).toFixed(1)} KB)`)
-      .join(', ');
+      .join(', ') || '(none)';
     const reusedList = unchanged
       .map((c) => `${label(c)} (${c.source})`)
-      .join(', ');
+      .join(', ') || '(none)';
 
-    console.info(
-      `[SceneAutosave] VOXL chunk delta — ${changed.length} changed, ${unchanged.length} unchanged.`,
-      {
-        changed: changedList || '(none)',
-        unchanged: reusedList || '(none)',
-      },
-    );
+    void logInfo(
+      `[SceneAutosave] VOXL chunk delta — ${changed.length} changed, ${unchanged.length} unchanged`
+      + ` | changed: ${changedList} | unchanged: ${reusedList}`,
+    ).catch(() => {});
   }
 
   private static async exportVoxl(
