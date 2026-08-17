@@ -66,38 +66,127 @@ function firstAllowedModelId(
   return null;
 }
 
-function resolveBranchModelId(branch: Branch, allowedModelIds: ReadonlySet<string>): string | null {
+/** Resolves an entity id to its owning modelId. */
+type ModelIdResolver = (id: string | null | undefined) => string | null;
+
+/**
+ * Builds an O(1) `entityId → modelId` resolver behaviourally identical to
+ * {@link getModelIdForSupportEntityId}, but backed by reverse indices computed
+ * once (O(N)) instead of scanning the entire support graph per call. The scoped
+ * export used to invoke the linear-scan resolver once per knot/branch/leaf,
+ * which is O(N²) and froze the main thread for tens of seconds on large scenes.
+ *
+ * The index order mirrors the scan order in the canonical resolver so ambiguous
+ * ids resolve to the same owner (first registration wins).
+ */
+function createScopedModelIdResolver(
+  supportState: SupportState,
+  kickstandState: KickstandState,
+): ModelIdResolver {
+  // Ids reachable in the canonical resolver only via linear scans: segment and
+  // joint ids, brace start/end knots, and kickstand host knots + segments.
+  const scanModelId = new Map<string, string | null>();
+  const registerScan = (id: string | null | undefined, modelId: string | null): void => {
+    if (id && !scanModelId.has(id)) scanModelId.set(id, modelId);
+  };
+  const registerSegments = (segments: Segment[], modelId: string | null): void => {
+    for (const segment of segments) {
+      registerScan(segment.id, modelId);
+      registerScan(segment.topJoint?.id, modelId);
+      registerScan(segment.bottomJoint?.id, modelId);
+    }
+  };
+
+  for (const trunk of Object.values(supportState.trunks)) registerSegments(trunk.segments, trunk.modelId ?? null);
+  for (const branch of Object.values(supportState.branches)) registerSegments(branch.segments, branch.modelId ?? null);
+  for (const twig of Object.values(supportState.twigs)) registerSegments(twig.segments, twig.modelId ?? null);
+  for (const stick of Object.values(supportState.sticks)) registerSegments(stick.segments, stick.modelId ?? null);
+  for (const brace of Object.values(supportState.braces)) {
+    registerScan(brace.startKnotId, brace.modelId ?? null);
+    registerScan(brace.endKnotId, brace.modelId ?? null);
+  }
+  for (const kickstand of Object.values(kickstandState.kickstands)) {
+    registerScan(kickstand.hostKnotId, kickstand.modelId ?? null);
+    registerSegments(kickstand.segments, kickstand.modelId ?? null);
+  }
+
+  // Knot fallbacks: a knot inherits from a branch/leaf that names it as parent.
+  const branchByParentKnot = new Map<string, string | null>();
+  for (const branch of Object.values(supportState.branches)) {
+    if (!branchByParentKnot.has(branch.parentKnotId)) branchByParentKnot.set(branch.parentKnotId, branch.modelId ?? null);
+  }
+  const leafByParentKnot = new Map<string, string | null>();
+  for (const leaf of Object.values(supportState.leaves)) {
+    if (!leafByParentKnot.has(leaf.parentKnotId)) leafByParentKnot.set(leaf.parentKnotId, leaf.modelId ?? null);
+  }
+
+  const resolve: ModelIdResolver = (id) => {
+    if (!id) return null;
+
+    if (id.startsWith('braceSegment:')) {
+      return supportState.braces[id.slice('braceSegment:'.length)]?.modelId ?? null;
+    }
+
+    if (supportState.roots[id]) return supportState.roots[id].modelId ?? null;
+    if (supportState.trunks[id]) return supportState.trunks[id].modelId ?? null;
+    if (supportState.branches[id]) return supportState.branches[id].modelId ?? null;
+    if (supportState.leaves[id]) return supportState.leaves[id].modelId ?? null;
+    if (supportState.twigs[id]) return supportState.twigs[id].modelId ?? null;
+    if (supportState.sticks[id]) return supportState.sticks[id].modelId ?? null;
+    if (supportState.braces[id]) return supportState.braces[id].modelId ?? null;
+    if (supportState.anchors[id]) return supportState.anchors[id].modelId ?? null;
+    if (kickstandState.kickstands[id]) return kickstandState.kickstands[id].modelId ?? null;
+
+    if (scanModelId.has(id)) return scanModelId.get(id) ?? null;
+
+    const knot = supportState.knots[id];
+    if (knot) {
+      if (knot.parentShaftId) {
+        const byParent = resolve(knot.parentShaftId);
+        if (byParent) return byParent;
+      }
+      if (branchByParentKnot.has(id)) return branchByParentKnot.get(id) ?? null;
+      if (leafByParentKnot.has(id)) return leafByParentKnot.get(id) ?? null;
+    }
+
+    return null;
+  };
+
+  return resolve;
+}
+
+function resolveBranchModelId(branch: Branch, allowedModelIds: ReadonlySet<string>, resolveModelId: ModelIdResolver): string | null {
   return firstAllowedModelId(
     allowedModelIds,
     branch.modelId,
-    getModelIdForSupportEntityId(branch.parentKnotId),
+    resolveModelId(branch.parentKnotId),
   );
 }
 
-function resolveLeafModelId(leaf: Leaf, allowedModelIds: ReadonlySet<string>): string | null {
+function resolveLeafModelId(leaf: Leaf, allowedModelIds: ReadonlySet<string>, resolveModelId: ModelIdResolver): string | null {
   return firstAllowedModelId(
     allowedModelIds,
     leaf.modelId,
-    getModelIdForSupportEntityId(leaf.parentKnotId),
+    resolveModelId(leaf.parentKnotId),
   );
 }
 
-function resolveBraceModelId(brace: Brace, allowedModelIds: ReadonlySet<string>): string | null {
+function resolveBraceModelId(brace: Brace, allowedModelIds: ReadonlySet<string>, resolveModelId: ModelIdResolver): string | null {
   return firstAllowedModelId(
     allowedModelIds,
     brace.modelId,
-    getModelIdForSupportEntityId(brace.startKnotId),
-    getModelIdForSupportEntityId(brace.endKnotId),
+    resolveModelId(brace.startKnotId),
+    resolveModelId(brace.endKnotId),
   );
 }
 
-function resolveKickstandModelId(kickstand: Kickstand, allowedModelIds: ReadonlySet<string>): string | null {
+function resolveKickstandModelId(kickstand: Kickstand, allowedModelIds: ReadonlySet<string>, resolveModelId: ModelIdResolver): string | null {
   return firstAllowedModelId(
     allowedModelIds,
     kickstand.modelId,
-    getModelIdForSupportEntityId(kickstand.rootId),
-    getModelIdForSupportEntityId(kickstand.hostKnotId),
-    getModelIdForSupportEntityId(kickstand.hostSegmentId),
+    resolveModelId(kickstand.rootId),
+    resolveModelId(kickstand.hostKnotId),
+    resolveModelId(kickstand.hostSegmentId),
   );
 }
 
@@ -384,24 +473,30 @@ export function extractScopedSupportPayload(
 ): ScopedSupportPayload {
   const allowedModelIds = new Set(Array.from(modelIds).filter((modelId) => modelId.trim().length > 0));
 
+  // Reverse-indexed resolver: O(1) per lookup after an O(N) build, versus the
+  // canonical getModelIdForSupportEntityId which linear-scans the whole graph
+  // per call. Called once per branch/leaf/brace/kickstand/knot below, so the
+  // linear-scan form made this O(N²) — the multi-second autosave freeze.
+  const resolveModelId = createScopedModelIdResolver(supportState, kickstandState);
+
   const roots = Object.values(supportState.roots)
     .filter((item) => hasAllowedModelId(allowedModelIds, item.modelId));
   const trunks = Object.values(supportState.trunks)
     .filter((item) => hasAllowedModelId(allowedModelIds, item.modelId));
   const branches = Object.values(supportState.branches)
-    .filter((item) => resolveBranchModelId(item, allowedModelIds) !== null);
+    .filter((item) => resolveBranchModelId(item, allowedModelIds, resolveModelId) !== null);
   const leaves = Object.values(supportState.leaves)
-    .filter((item) => resolveLeafModelId(item, allowedModelIds) !== null);
+    .filter((item) => resolveLeafModelId(item, allowedModelIds, resolveModelId) !== null);
   const twigs = Object.values(supportState.twigs)
     .filter((item) => hasAllowedModelId(allowedModelIds, item.modelId));
   const sticks = Object.values(supportState.sticks)
     .filter((item) => hasAllowedModelId(allowedModelIds, item.modelId));
   const braces = Object.values(supportState.braces)
-    .filter((item) => resolveBraceModelId(item, allowedModelIds) !== null);
+    .filter((item) => resolveBraceModelId(item, allowedModelIds, resolveModelId) !== null);
   const anchors = Object.values(supportState.anchors)
     .filter((item) => hasAllowedModelId(allowedModelIds, item.modelId));
   const kickstands = Object.values(kickstandState.kickstands)
-    .filter((item) => resolveKickstandModelId(item, allowedModelIds) !== null);
+    .filter((item) => resolveKickstandModelId(item, allowedModelIds, resolveModelId) !== null);
 
   const kickstandRootIds = new Set(kickstands.map((item) => item.rootId));
   const kickstandKnotIds = new Set(kickstands.map((item) => item.hostKnotId));
@@ -439,7 +534,7 @@ export function extractScopedSupportPayload(
       if (item.parentShaftId.startsWith('braceSegment:')) {
         return braceIds.has(item.parentShaftId.slice('braceSegment:'.length));
       }
-      return hasAllowedModelId(allowedModelIds, getModelIdForSupportEntityId(item.id));
+      return hasAllowedModelId(allowedModelIds, resolveModelId(item.id));
     });
 
   return {
