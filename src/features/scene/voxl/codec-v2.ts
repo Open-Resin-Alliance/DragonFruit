@@ -41,6 +41,8 @@ import {
 import type { DragonfruitImportFormat } from '@/supports/types';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import { base64ToBytes, bytesToBase64 } from '@/utils/base64';
+import { sha256Hex } from './meshChunkStore';
+import type { VoxlChunkCache, CachedChunkPayload } from './voxlChunkCache';
 
 type ZlibCompressionLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 
@@ -285,6 +287,44 @@ export interface VoxlSerializeOptions {
    * without modifier snapshots serialize identically either way.
    */
   chunkModifierSnapshots?: boolean;
+  /**
+   * Cross-tick compressed-chunk cache (autosave Phase 1). When present, the
+   * modifier-snapshot and SUPP chunks reuse their already-compressed bytes and
+   * content digest whenever their content is unchanged (see `voxlChunkCache`),
+   * and the prepared document carries a `fingerprint` for the caller's
+   * write-skip. Absent ⇒ no caching, no fingerprint, byte-identical to before.
+   */
+  chunkCache?: VoxlChunkCache;
+  /** Model index → hex SHA-256 of the ORIG (original-mesh) payload, for the fingerprint. */
+  sha256Original?: Map<number, string>;
+  /**
+   * Small, stable identity for the SUPP chunk's content — derived by the caller
+   * from the support-store snapshot references. Equal keys across ticks ⇒
+   * identical support bytes ⇒ the codec reuses the cached SUPP chunk and skips
+   * the `JSON.stringify` + zlib entirely.
+   */
+  supportsCacheKey?: string;
+  /**
+   * The fingerprint of the last committed write to this destination. When it
+   * equals the freshly-prepared fingerprint the streaming writer emits NOTHING
+   * and reports `skipped: true`, so the caller can abort the atomic commit and
+   * leave the already-correct file in place. Requires `chunkCache` (no cache ⇒
+   * no fingerprint ⇒ never skips).
+   */
+  previousFingerprint?: string;
+}
+
+/**
+ * Thrown by the export path to abort an atomic streamed write when the document
+ * fingerprint matches the last committed one. The atomic writer discards its
+ * temp on any thrown error, so the original file is left untouched; `exportVoxl`
+ * catches this and reports success. It must never escape the export layer.
+ */
+export class VoxlUnchangedError extends Error {
+  constructor(public readonly fingerprint: string) {
+    super('VOXL document unchanged since last write; skipping.');
+    this.name = 'VoxlUnchangedError';
+  }
 }
 
 interface ResolvedChunk {
@@ -293,6 +333,8 @@ interface ResolvedChunk {
   compression: number;
   data: Uint8Array;
   uncompressedSize: number;
+  /** SHA-256 hex of the raw content; populated only when a `chunkCache` is in use. */
+  digest?: string;
 }
 
 interface PreparedDocument {
@@ -300,6 +342,12 @@ interface PreparedDocument {
   directory: ChunkDirEntry[];
   totalSize: number;
   version: number;
+  /**
+   * Content fingerprint of the whole document (ordered per-chunk digests).
+   * Empty string when no `chunkCache` was supplied. Two prepares with equal,
+   * non-empty fingerprints would emit byte-identical files.
+   */
+  fingerprint: string;
 }
 
 /**
@@ -383,7 +431,11 @@ async function prepareVoxlDocumentV2(
   // Independent of MESH dedup — a MESH-duplicate model may still own its own
   // HSRC/CAVT/PSRC, and vice-versa — and invisible to old readers, so it does
   // NOT bump the header version (only MESH dedup does).
-  interface ModifierChunk { type: string; index: number; raw: Uint8Array; }
+  // Decode of the (potentially ~512 MiB) base64 is DEFERRED to `b64` so a cache
+  // hit in the resolve step below can reuse the compressed bytes without ever
+  // decoding. `cacheKey` is a small, stable per-model handle; the base64 string
+  // itself is the cache's `===` signal.
+  interface ModifierChunk { type: string; index: number; b64: string; cacheKey: string; }
   const modifierChunks: ModifierChunk[] = [];
   const strippedModifiersByModel = new Map<number, ModelMeshModifiers>();
   const hollowSourceOwner = new Map<string, number>();
@@ -396,6 +448,7 @@ async function prepareVoxlDocumentV2(
   for (let i = 0; chunkModifierSnapshots && i < input.models.length; i += 1) {
     const mm = input.models[i].meshModifiers;
     if (!mm) continue;
+    const modelId = input.models[i].id ?? String(i);
 
     let nextHollowing = mm.hollowing;
     if (mm.hollowing) {
@@ -408,7 +461,7 @@ async function prepareVoxlDocumentV2(
         const owner = hollowSourceOwner.get(h.sourcePositionsBase64);
         if (owner === undefined) {
           hollowSourceOwner.set(h.sourcePositionsBase64, i);
-          modifierChunks.push({ type: CHUNK_HSRC, index: i, raw: base64ToBytes(h.sourcePositionsBase64) });
+          modifierChunks.push({ type: CHUNK_HSRC, index: i, b64: h.sourcePositionsBase64, cacheKey: `${modelId}:hsrc` });
         } else {
           sourceChunkIndex = owner;
         }
@@ -418,7 +471,7 @@ async function prepareVoxlDocumentV2(
         const owner = hollowCavityOwner.get(h.cavityPositionsBase64);
         if (owner === undefined) {
           hollowCavityOwner.set(h.cavityPositionsBase64, i);
-          modifierChunks.push({ type: CHUNK_CAVT, index: i, raw: base64ToBytes(h.cavityPositionsBase64) });
+          modifierChunks.push({ type: CHUNK_CAVT, index: i, b64: h.cavityPositionsBase64, cacheKey: `${modelId}:cavt` });
         } else {
           cavityChunkIndex = owner;
         }
@@ -441,7 +494,7 @@ async function prepareVoxlDocumentV2(
       const owner = holeSourceOwner.get(mm.holePunchSourcePositionsBase64);
       if (owner === undefined) {
         holeSourceOwner.set(mm.holePunchSourcePositionsBase64, i);
-        modifierChunks.push({ type: CHUNK_PSRC, index: i, raw: base64ToBytes(mm.holePunchSourcePositionsBase64) });
+        modifierChunks.push({ type: CHUNK_PSRC, index: i, b64: mm.holePunchSourcePositionsBase64, cacheKey: `${modelId}:psrc` });
       } else {
         holePunchSourceChunkIndex = owner;
       }
@@ -517,8 +570,16 @@ async function prepareVoxlDocumentV2(
     type: string;
     index: number;
     raw?: Uint8Array;
+    /** Deferred raw builder — invoked only on a cache MISS, so a hit skips the
+     *  base64 decode / `JSON.stringify` that produces the bytes. */
+    rawThunk?: () => Uint8Array;
     pre?: PrecompressedChunk;
     compress: boolean;
+    /** Small stable cache key; paired with `cacheSignal` compared by `===`. */
+    cacheKey?: string;
+    cacheSignal?: string;
+    /** Known content digest (mesh/orig sha) — lets the fingerprint skip re-hashing big blobs. */
+    digestHint?: string;
   };
   const pending: PendingChunk[] = [];
 
@@ -531,36 +592,55 @@ async function prepareVoxlDocumentV2(
   for (const modelIndex of [...dedupedChunkIndices].sort((a, b) => a - b)) {
     const pre = precompressed?.get(modelIndex);
     if (pre) {
-      pending.push({ type: CHUNK_MESH, index: modelIndex, pre, compress: true });
+      pending.push({ type: CHUNK_MESH, index: modelIndex, pre, compress: true, digestHint: sha256Map?.get(modelIndex) });
     } else {
       const raw = meshBytes.get(modelIndex);
       if (raw) {
-        pending.push({ type: CHUNK_MESH, index: modelIndex, raw, compress: true });
+        pending.push({ type: CHUNK_MESH, index: modelIndex, raw, compress: true, digestHint: sha256Map?.get(modelIndex) });
       }
     }
   }
 
   // Additive ORIG chunks for full-res original mesh embedding
   if (embedOriginalMesh) {
+    const sha256Original = options?.sha256Original;
     for (const modelIndex of [...dedupedChunkIndices].sort((a, b) => a - b)) {
       const preOrig = precompressedOriginal?.get(modelIndex);
       const rawOrig = originalMeshBytes?.get(modelIndex);
       if (preOrig) {
-        pending.push({ type: CHUNK_ORIG, index: modelIndex, pre: preOrig, compress: true });
+        pending.push({ type: CHUNK_ORIG, index: modelIndex, pre: preOrig, compress: true, digestHint: sha256Original?.get(modelIndex) });
       } else if (rawOrig) {
-        pending.push({ type: CHUNK_ORIG, index: modelIndex, raw: rawOrig, compress: true });
+        pending.push({ type: CHUNK_ORIG, index: modelIndex, raw: rawOrig, compress: true, digestHint: sha256Original?.get(modelIndex) });
       }
     }
   }
 
   // V2.2 modifier-snapshot chunks (owners only; duplicates were pointer-linked
   // above). Insertion order is deterministic (models ascending, HSRC/CAVT/PSRC
-  // per model), so both writers stay byte-identical.
+  // per model), so both writers stay byte-identical. The base64 decode is
+  // deferred via `rawThunk` so a cache hit (the common transform-edit case)
+  // reuses the compressed bytes without decoding the up-to-512-MiB string.
   for (const chunk of modifierChunks) {
-    pending.push({ type: chunk.type, index: chunk.index, raw: chunk.raw, compress: true });
+    pending.push({
+      type: chunk.type,
+      index: chunk.index,
+      rawThunk: () => base64ToBytes(chunk.b64),
+      compress: true,
+      cacheKey: chunk.cacheKey,
+      cacheSignal: chunk.b64,
+    });
   }
 
-  pending.push({ type: CHUNK_SUPP, index: 0, raw: textEncoder.encode(JSON.stringify(input.supports)), compress: true });
+  // SUPP: `JSON.stringify` of the (potentially huge) support forest is deferred
+  // so a cache hit — a model transform never touches support state — skips it.
+  const supportsCacheKey = options?.supportsCacheKey;
+  pending.push({
+    type: CHUNK_SUPP,
+    index: 0,
+    rawThunk: () => textEncoder.encode(JSON.stringify(input.supports)),
+    compress: true,
+    ...(supportsCacheKey !== undefined ? { cacheKey: 'supp', cacheSignal: supportsCacheKey } : {}),
+  });
 
   if (input.extensions && Object.keys(input.extensions).length > 0) {
     pending.push({ type: CHUNK_EXTD, index: 0, raw: textEncoder.encode(JSON.stringify(input.extensions)), compress: false });
@@ -568,44 +648,72 @@ async function prepareVoxlDocumentV2(
 
   // ── Compress (async – does not block the main thread) ─────────────────
   //
-  // A chunk that arrives pre-compressed skips this entirely. That is the whole
-  // sub-phase-C win: for an unchanged scene, every MESH chunk takes this branch
-  // and the per-tick zlib cost collapses to the KB-scale JSON chunks.
+  // A chunk that arrives pre-compressed, or that hits the cross-tick chunk
+  // cache, skips zlib entirely. That is the sub-phase-C + Phase-1 win: for an
+  // unchanged scene, MESH takes the `pre` branch and modifier/SUPP take the
+  // cache branch, collapsing the per-tick cost to the KB-scale JSON chunks.
+  //
+  // `digest` (SHA-256 of the raw content) is computed only when a `chunkCache`
+  // is supplied — it feeds the document fingerprint the caller uses to skip an
+  // unchanged write. Big chunks reuse a `digestHint` (mesh/orig sha) or a cached
+  // digest, so no large blob is re-hashed per tick.
+  const cache = options?.chunkCache;
+  const wantFingerprint = cache !== undefined;
 
   const resolved: ResolvedChunk[] = await Promise.all(pending.map(async (chunk): Promise<ResolvedChunk> => {
+    if (cache && chunk.cacheKey !== undefined && chunk.cacheSignal !== undefined) {
+      const hit = cache.get(chunk.cacheKey, chunk.cacheSignal);
+      if (hit) {
+        return {
+          type: chunk.type,
+          index: chunk.index,
+          compression: hit.compression,
+          data: hit.data,
+          uncompressedSize: hit.uncompressedSize,
+          digest: hit.digest,
+        };
+      }
+    }
+
     if (chunk.pre) {
+      const digest = wantFingerprint ? (chunk.digestHint ?? await sha256Hex(chunk.pre.data)) : undefined;
       return {
         type: chunk.type,
         index: chunk.index,
         compression: chunk.pre.compression,
         data: chunk.pre.data,
         uncompressedSize: chunk.pre.uncompressedSize,
+        digest,
       };
     }
 
-    const raw = chunk.raw!;
+    const raw = chunk.raw ?? chunk.rawThunk!();
+    let result: ResolvedChunk;
     if (chunk.compress && raw.length > 64) {
       if (chunk.type === CHUNK_MESH) voxlCodecStats.meshChunkCompressions += 1;
       else voxlCodecStats.jsonChunkCompressions += 1;
 
       const compressed = await compressAsync(raw, 6);
-      if (compressed.length < raw.length) {
-        return {
-          type: chunk.type,
-          index: chunk.index,
-          compression: COMPRESSION_ZLIB,
-          data: compressed,
-          uncompressedSize: raw.length,
-        };
+      result = compressed.length < raw.length
+        ? { type: chunk.type, index: chunk.index, compression: COMPRESSION_ZLIB, data: compressed, uncompressedSize: raw.length }
+        : { type: chunk.type, index: chunk.index, compression: COMPRESSION_NONE, data: raw, uncompressedSize: raw.length };
+    } else {
+      result = { type: chunk.type, index: chunk.index, compression: COMPRESSION_NONE, data: raw, uncompressedSize: raw.length };
+    }
+
+    if (wantFingerprint) {
+      const digest = chunk.digestHint ?? await sha256Hex(raw);
+      result.digest = digest;
+      if (cache && chunk.cacheKey !== undefined && chunk.cacheSignal !== undefined) {
+        cache.set(chunk.cacheKey, chunk.cacheSignal, {
+          compression: result.compression,
+          data: result.data,
+          uncompressedSize: result.uncompressedSize,
+          digest,
+        });
       }
     }
-    return {
-      type: chunk.type,
-      index: chunk.index,
-      compression: COMPRESSION_NONE,
-      data: raw,
-      uncompressedSize: raw.length,
-    };
+    return result;
   }));
 
   // ── Calculate layout ──────────────────────────────────────────────────
@@ -636,14 +744,30 @@ async function prepareVoxlDocumentV2(
   // typed, user-readable error instead of wrapping its offsets silently.
   assertVoxlSizeLimits(directory, totalSize, { modelNames: input.models.map((m) => m.name) });
 
+  // Version bumps to 3 only when dedup removed chunks, so old readers reject
+  // deduped files cleanly rather than losing the shared-chunk models;
+  // non-deduped scenes stay V2 and remain readable by older builds.
+  const version = dedupRemovedChunks ? VOXL_V3 : VOXL_V2;
+
+  // Document fingerprint (only when a chunk cache is in use): an ordered digest
+  // of every chunk's identity. Equal, non-empty fingerprints across two prepares
+  // guarantee byte-identical output — the signal the caller uses to skip writing
+  // an unchanged file. Built from cached/hinted digests, so no big blob is
+  // re-hashed here; only the small descriptor string is hashed per tick.
+  let fingerprint = '';
+  if (wantFingerprint) {
+    const descriptor = resolved
+      .map((c) => `${c.type}:${c.index}:${c.compression}:${c.uncompressedSize}:${c.digest ?? ''}`)
+      .join('\n');
+    fingerprint = await sha256Hex(textEncoder.encode(`v${version}\n${descriptor}`));
+  }
+
   return {
     resolved,
     directory,
     totalSize,
-    // Version bumps to 3 only when dedup removed chunks, so old readers reject
-    // deduped files cleanly rather than losing the shared-chunk models;
-    // non-deduped scenes stay V2 and remain readable by older builds.
-    version: dedupRemovedChunks ? VOXL_V3 : VOXL_V2,
+    version,
+    fingerprint,
   };
 }
 
@@ -735,15 +859,26 @@ export async function serializeVoxlDocumentV2Streaming(
   sha256Map: Map<number, string> | undefined,
   sink: (bytes: Uint8Array) => void | Promise<void>,
   options?: VoxlSerializeOptions,
-): Promise<{ totalSize: number; version: number }> {
+): Promise<{ totalSize: number; version: number; fingerprint: string; skipped: boolean }> {
   const prepared = await prepareVoxlDocumentV2(input, meshBytes, sha256Map, options);
+
+  // Write-skip: identical, non-empty fingerprint ⇒ the bytes would match the
+  // file already on disk. Emit nothing and let the caller abort the commit.
+  const previousFingerprint = options?.previousFingerprint;
+  if (
+    previousFingerprint !== undefined &&
+    prepared.fingerprint !== '' &&
+    prepared.fingerprint === previousFingerprint
+  ) {
+    return { totalSize: 0, version: prepared.version, fingerprint: prepared.fingerprint, skipped: true };
+  }
 
   await sink(buildVoxlPreamble(prepared));
   for (const chunk of prepared.resolved) {
     await sink(chunk.data);
   }
 
-  return { totalSize: prepared.totalSize, version: prepared.version };
+  return { totalSize: prepared.totalSize, version: prepared.version, fingerprint: prepared.fingerprint, skipped: false };
 }
 
 // ─── V2 Binary Reader ─────────────────────────────────────────────────────────

@@ -86,10 +86,30 @@ describe('autosave contention policy (D4)', () => {
     modelCount: 3,
     navigationBusy: false,
     forced: false,
+    // Dirty by default: one edit since the last committed write.
+    revision: 1,
+    lastPersistedRevision: 0,
   };
 
   test('a quiet desktop scene with models runs', () => {
     assert.deepEqual(decideAutosaveGate(base), { action: 'run' });
+  });
+
+  test('a scene unchanged since the last committed write is skipped', () => {
+    const decision = decideAutosaveGate({ ...base, revision: 4, lastPersistedRevision: 4 });
+    assert.equal(decision.action, 'skip');
+    assert.equal(decision.reason, 'unchanged');
+    assert.equal(decision.retainDirty, false);
+  });
+
+  test('a forced flush writes even when the revision is unchanged', () => {
+    const decision = decideAutosaveGate({
+      ...base,
+      revision: 4,
+      lastPersistedRevision: 4,
+      forced: true,
+    });
+    assert.equal(decision.action, 'run');
   });
 
   test('a suppressed window DEFERS and keeps the scene dirty', () => {

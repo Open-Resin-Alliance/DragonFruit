@@ -3,6 +3,7 @@
 import React from 'react';
 import { subscribeHistory } from '@/history/historyStore';
 import { ExportManager } from '@/features/export/logic/ExportManager';
+import { VoxlChunkCache } from '@/features/scene/voxl';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 
 // ---------------------------------------------------------------------------
@@ -197,12 +198,22 @@ export type AutosaveGateInput = {
   navigationBusy: boolean;
   /** An explicit flush: quit, or a hand-off from the save path. */
   forced: boolean;
+  /**
+   * Monotonic scene-content revision at the moment this tick started, and the
+   * revision the last SUCCESSFUL persist committed. Equal ⇒ nothing has changed
+   * since the file on disk was written, so the whole tick is skipped before any
+   * build/stringify/hash/I/O. `revision` bumps on every autosave trigger
+   * (history push, model add/remove); `lastPersistedRevision` advances only on a
+   * committed write, so a failed save is never mistaken for a clean scene.
+   */
+  revision: number;
+  lastPersistedRevision: number;
 };
 
 export type AutosaveGateDecision =
   | { action: 'run' }
   | { action: 'defer'; reason: 'navigation' | 'suppressed'; retainDirty: true }
-  | { action: 'skip'; reason: 'disabled' | 'not-desktop' | 'empty-scene'; retainDirty: boolean };
+  | { action: 'skip'; reason: 'disabled' | 'not-desktop' | 'empty-scene' | 'unchanged'; retainDirty: boolean };
 
 /**
  * Decides whether a tick runs now, later, or not at all.
@@ -233,6 +244,13 @@ export function decideAutosaveGate(input: AutosaveGateInput): AutosaveGateDecisi
     }
     if (input.navigationBusy) {
       return { action: 'defer', reason: 'navigation', retainDirty: true };
+    }
+    // Nothing changed since the last committed write — skip the entire tick.
+    // retainDirty:false because there is genuinely nothing outstanding; a real
+    // edit bumps `revision` and re-arms a tick. Forced flushes bypass this so
+    // the quit/hand-off path always reaches disk.
+    if (input.revision === input.lastPersistedRevision) {
+      return { action: 'skip', reason: 'unchanged', retainDirty: false };
     }
   }
 
@@ -397,6 +415,22 @@ export function useSceneAutosave({
   const autosavePromiseRef = React.useRef<Promise<void> | null>(null);
   const dirtyRef = React.useRef(false);
 
+  // Monotonic scene-content revision: bumped by `scheduleSave` on every autosave
+  // trigger, and snapshotted into `lastPersistedRevisionRef` only when a write
+  // commits. The gate skips a tick whose revision already matches the last
+  // committed one, so an idle/duplicate tick does no build/stringify/hash/I/O.
+  // Starts at 0 == lastPersisted so a freshly loaded scene (disk already current)
+  // does not autosave until the first real edit.
+  const revisionRef = React.useRef(0);
+  const lastPersistedRevisionRef = React.useRef(0);
+
+  // Incremental-write state (Phase 1). The chunk cache persists across ticks so
+  // unchanged modifier/SUPP chunks reuse their compressed bytes; the last-write
+  // fingerprint (scoped to its path) drives the "content unchanged → skip the
+  // disk write" decision inside `ExportManager.exportVoxl`.
+  const chunkCacheRef = React.useRef<VoxlChunkCache | null>(null);
+  const lastWriteFingerprintRef = React.useRef<{ path: string; fingerprint: string } | null>(null);
+
   const clearDeferredAutosave = React.useCallback(() => {
     if (deferredAutosaveRef.current === null) return;
     clearTimeout(deferredAutosaveRef.current);
@@ -436,6 +470,12 @@ export function useSceneAutosave({
     const run = async () => {
       const currentModels = modelsRef.current;
 
+      // Snapshot the revision BEFORE the gate/write: edits that land while this
+      // tick is in flight bump `revisionRef` past this value, so committing this
+      // one only advances `lastPersistedRevision` to what it actually wrote,
+      // leaving the scene correctly dirty for a follow-up tick.
+      const revisionAtStart = revisionRef.current;
+
       // One explicit policy decision instead of five early returns, so
       // "does the dirtiness survive this?" is answerable by reading it (D4).
       const decision = decideAutosaveGate({
@@ -446,6 +486,8 @@ export function useSceneAutosave({
         modelCount: currentModels.length,
         navigationBusy: shouldDeferAutosaveForNavigation(),
         forced: options?.force === true,
+        revision: revisionAtStart,
+        lastPersistedRevision: lastPersistedRevisionRef.current,
       });
 
       if (decision.action !== 'run') {
@@ -478,6 +520,16 @@ export function useSceneAutosave({
         // MODL string ceiling on snapshots too large to inline), escalate to the
         // chunked 2.2 layout and latch the scene there so later ticks stop
         // re-attempting inline.
+        // Incremental-write cache (Phase 1): reuse compressed chunks across
+        // ticks and skip the disk write entirely when the document fingerprint
+        // matches what is already on `voxlPath`. The fingerprint is trusted only
+        // for the SAME path — a Save As moves `voxlPath`, so a stale fingerprint
+        // must not authorize a skip.
+        if (chunkCacheRef.current === null) chunkCacheRef.current = new VoxlChunkCache();
+        const priorWrite = lastWriteFingerprintRef.current;
+        const previousFingerprint =
+          priorWrite !== null && priorWrite.path === voxlPath ? priorWrite.fingerprint : undefined;
+
         const runExport = (chunkModifierSnapshots: boolean): Promise<string | null> =>
           ExportManager.exportScene(
             null,
@@ -496,7 +548,17 @@ export function useSceneAutosave({
               activeModelId: activeModelIdRef.current,
               selectedModelIds: selectedModelIdsRef.current,
             },
-            { nativePath: voxlPath, chunkModifierSnapshots },
+            {
+              nativePath: voxlPath,
+              chunkModifierSnapshots,
+              chunkCache: chunkCacheRef.current ?? undefined,
+              previousFingerprint,
+              onFingerprint: (fingerprint) => {
+                lastWriteFingerprintRef.current = fingerprint
+                  ? { path: voxlPath, fingerprint }
+                  : null;
+              },
+            },
           );
 
         if (sceneFormatChunkedRef.current) {
@@ -528,6 +590,11 @@ export function useSceneAutosave({
           projectPath: paths.projectPath,
           fallbackReason: paths.fallbackReason,
         });
+        // Commit succeeded: the file on disk now reflects `revisionAtStart`.
+        // Advance the persisted marker so the gate skips ticks until the next
+        // real edit. Set to the snapshot, NOT the current revision — edits that
+        // arrived mid-write are not in this file and must remain outstanding.
+        lastPersistedRevisionRef.current = revisionAtStart;
         failureTrackerRef.current.recordSuccess(savedAt);
         setLastAutosaveAt(savedAt);
         setLastAutosaveError(null);
@@ -590,6 +657,9 @@ export function useSceneAutosave({
     // waited for the next unrelated history push to be persisted. Recording it
     // here costs nothing and means the window closing is enough to fire a tick.
     dirtyRef.current = true;
+    // Every trigger advances the content revision; the gate compares this to the
+    // revision of the last committed write to skip idle/duplicate ticks.
+    revisionRef.current += 1;
     if (!enabledRef.current) return;
 
     // Reset the debounce window

@@ -4,7 +4,7 @@ import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import { resolveModelMeshModifiers } from '@/features/mesh-modifiers/meshModifierStore';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
-import { buildSupportExportFromStores, serializeVoxlDocumentV2, serializeVoxlDocumentV2Streaming, VoxlSizeLimitError, type PrecompressedChunk } from '@/features/scene/voxl';
+import { buildSupportExportFromStores, serializeVoxlDocumentV2, serializeVoxlDocumentV2Streaming, VoxlSizeLimitError, VoxlUnchangedError, type PrecompressedChunk, type VoxlChunkCache } from '@/features/scene/voxl';
 import { type BakedChunk, meshChunkStore } from '@/features/scene/voxl/meshChunkStore';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
 import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath, writeFileAtomicToNativePath, writeFileAtomicStreamedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
@@ -48,6 +48,42 @@ export interface ExportSceneSaveTarget {
    * that is already 2.2 — that would downgrade it.
    */
   chunkModifierSnapshots?: boolean;
+  /**
+   * Cross-tick chunk cache (autosave incremental writes, Phase 1). When present,
+   * unchanged modifier/SUPP chunks reuse their compressed bytes and the write is
+   * skipped when the document fingerprint matches `previousFingerprint`. Manual
+   * saves omit it (they always write fresh).
+   */
+  chunkCache?: VoxlChunkCache;
+  /** Fingerprint of the last committed autosave to this path; enables the write-skip. */
+  previousFingerprint?: string;
+  /**
+   * Reports the fingerprint of the file now on disk (whether freshly written or
+   * confirmed-unchanged), or `undefined` when it could not be determined (browser
+   * fallback) so the caller invalidates its stored value rather than skipping on
+   * a stale one.
+   */
+  onFingerprint?: (fingerprint: string | undefined) => void;
+}
+
+/**
+ * Assigns each distinct store-snapshot object a stable token so the SUPP chunk
+ * can be content-keyed by identity. The support/kickstand stores replace their
+ * snapshot immutably on every mutation, so an unchanged snapshot keeps the same
+ * reference → same token → cache hit; any edit yields a new reference → new
+ * token → miss. Keyed weakly so retired snapshots are collected.
+ */
+const snapshotTokens = new WeakMap<object, string>();
+let snapshotTokenCounter = 0;
+function snapshotToken(obj: unknown): string {
+  if (obj === null || typeof obj !== 'object') return '0';
+  let token = snapshotTokens.get(obj);
+  if (token === undefined) {
+    snapshotTokenCounter += 1;
+    token = `s${snapshotTokenCounter}`;
+    snapshotTokens.set(obj, token);
+  }
+  return token;
 }
 
 export class ExportManager {
@@ -978,7 +1014,12 @@ export class ExportManager {
 
     // VOXL path: serialization can be expensive, so destination is pre-picked above.
     if (options.format === 'voxl') {
-      return this.exportVoxl(sceneContext, options, prePickedNativePath, useNativeWrite, saveTarget?.chunkModifierSnapshots ?? true);
+      return this.exportVoxl(sceneContext, options, prePickedNativePath, useNativeWrite, {
+        chunkModifierSnapshots: saveTarget?.chunkModifierSnapshots ?? true,
+        chunkCache: saveTarget?.chunkCache,
+        previousFingerprint: saveTarget?.previousFingerprint,
+        onFingerprint: saveTarget?.onFingerprint,
+      });
     }
 
     // Collect live scene objects for serialization — no cloning, no InstancedMesh expansion.
@@ -1174,8 +1215,19 @@ export class ExportManager {
     options: ExportOptions,
     prePickedNativePath: string | null,
     useNativeWrite: boolean,
-    chunkModifierSnapshots = true,
+    voxlOptions: {
+      chunkModifierSnapshots?: boolean;
+      chunkCache?: VoxlChunkCache;
+      previousFingerprint?: string;
+      onFingerprint?: (fingerprint: string | undefined) => void;
+    } = {},
   ): Promise<string | null> {
+    const {
+      chunkModifierSnapshots = true,
+      chunkCache,
+      previousFingerprint,
+      onFingerprint,
+    } = voxlOptions;
     // Yield before the (synchronous) support snapshot so the render loop stays
     // alive on scenes with many support nodes.
     await this.yieldToBrowserFrame();
@@ -1220,6 +1272,8 @@ export class ExportManager {
     const sha256Map = new Map<number, string>();
     const precompressedMap = new Map<number, PrecompressedChunk>();
     const precompressedOriginalMap = new Map<number, PrecompressedChunk>();
+    // ORIG content digests, for the document fingerprint (autosave write-skip).
+    const sha256OriginalMap = new Map<number, string>();
     const staleModelIds = new Set<string>();
 
     const models = options.includeModel
@@ -1279,6 +1333,7 @@ export class ExportManager {
                 compression: origChunk.compression,
                 uncompressedSize: origChunk.uncompressedSize,
               });
+              sha256OriginalMap.set(index, origChunk.sha256);
             }
 
             exportedModels.push({
@@ -1368,6 +1423,19 @@ export class ExportManager {
       },
       extensions: voxlExtensions,
     };
+    // The SUPP chunk's bytes are a pure function of the two store snapshots plus
+    // the include/scope flags. Key on the snapshot identities so an unchanged
+    // support forest (every non-support edit) reuses the cached compressed SUPP
+    // chunk and skips its `JSON.stringify`. Only derived when a cache is in play.
+    const supportsCacheKey = chunkCache
+      ? [
+          snapshotToken(supportSnapshot),
+          snapshotToken(kickstandSnapshot),
+          options.includeSupports ? 'S1' : 'S0',
+          hasScopedModelFilter ? [...scopedModelIds].sort().join(',') : '*',
+        ].join('|')
+      : undefined;
+
     // `chunkModifierSnapshots` selects the VOXL 2.2 layout (chunked, the default
     // and the manual-save path) or the pre-2.2 inline layout (autosave preserving
     // an old file's format). Autosave owns the escalate-on-failure decision so it
@@ -1377,6 +1445,10 @@ export class ExportManager {
       precompressedOriginal: precompressedOriginalMap,
       embedOriginalMesh: options.embedOriginalMesh ?? true,
       chunkModifierSnapshots,
+      chunkCache,
+      sha256Original: sha256OriginalMap,
+      supportsCacheKey,
+      previousFingerprint,
     };
 
     // Native path: stream straight into the atomic writer's temp file, so the
@@ -1385,21 +1457,37 @@ export class ExportManager {
     // one that runs unattended and the one that most needed the buffer gone.
     if (useNativeWrite && prePickedNativePath && this.requiresAtomicCommit('voxl')) {
       try {
+        let streamFingerprint = '';
         await writeFileAtomicStreamedToNativePath(prePickedNativePath, async (emit) => {
-          await serializeVoxlDocumentV2Streaming(
+          const streamResult = await serializeVoxlDocumentV2Streaming(
             documentInput,
             meshBytesMap,
             sha256Map,
             emit,
             serializeOptions,
           );
+          streamFingerprint = streamResult.fingerprint;
+          // Fingerprint matched the file already on disk: nothing was emitted.
+          // Throw so the atomic writer discards its (empty) temp and leaves the
+          // correct file untouched; caught just below as success.
+          if (streamResult.skipped) throw new VoxlUnchangedError(streamResult.fingerprint);
         });
+        onFingerprint?.(streamFingerprint || undefined);
         return prePickedNativePath;
       } catch (error) {
+        if (error instanceof VoxlUnchangedError) {
+          onFingerprint?.(error.fingerprint);
+          return prePickedNativePath;
+        }
         if (error instanceof VoxlSizeLimitError) throw error;
         console.warn('[ExportManager] Streamed VOXL write failed, retrying buffered.', error);
       }
     }
+
+    // Buffered fallback (browser download, or after a streamed failure). It does
+    // not surface a fingerprint, so invalidate any stored one — the caller must
+    // not skip a future write against a fingerprint we did not confirm on disk.
+    onFingerprint?.(undefined);
 
     // serializeVoxlDocumentV2 is async — compression runs off the main thread.
     const binary = await serializeVoxlDocumentV2(
