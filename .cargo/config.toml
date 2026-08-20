@@ -8,17 +8,31 @@
 #
 # x86_64 codegen tuning
 # ---------------------
-# Keep the shipped x86 baseline at x86-64-v2. Slicing kernels may use AVX2 only
-# through runtime detection and function-scoped target features; enabling it
-# globally would make their scalar fallback unusable on older CPUs.
-# Do not use `target-cpu=native`, which makes compatibility build-host-dependent.
+# We target the `x86-64-v2` microarchitecture level (SSE4.2 baseline, NO AVX/
+# AVX2). This runs on every 64-bit x86 CPU ever shipped while still giving the
+# slicer good auto-vectorization.
+#
+# Do NOT re-add `+avx2`: AVX2 arrived on Intel with Haswell (2013) but on AMD
+# only with Zen (2017). The entire AMD FX/Bulldozer line (e.g. FX-8300) plus
+# many budget Intel parts have no AVX2, so a `+avx2` binary dies with
+# STATUS_ILLEGAL_INSTRUCTION (0xC000001D) at startup on those machines — the
+# fault lands in our own .text before any window is drawn, so the user sees
+# nothing and Task Manager shows the process "Suspended" (WerFault freezing it
+# to collect a dump). Confirmed crash on an AMD FX-8300, released v0.1.13.
+#
+# Do NOT use `target-cpu=native` either: that bakes in whatever the build
+# machine supports and causes the same crash on older hardware.
 #
 # These per-target `rustflags` replace the RUSTFLAGS env-var injection that used
 # to live in scripts/tauri-build.mjs and scripts/tauri-bundle-all.mjs. Config and
 # the RUSTFLAGS env var are mutually exclusive in cargo (env wins and clobbers
 # the lot), so the env injection had to go for these flags to take effect.
 #
-# Apple Silicon keeps its default codegen; x86-only kernels are cfg-gated.
+# There is intentionally NO aarch64-apple-darwin entry: this tuning is x86-only.
+# Apple Silicon uses its own NEON SIMD via the default codegen. A universal
+# (`--target universal-apple-darwin`) build compiles both the x86_64-apple-darwin
+# half (which picks up the flags below) and the aarch64-apple-darwin half (which
+# does not), which is exactly what we want.
 
 [target.x86_64-apple-darwin]
 rustflags = ["-C", "target-cpu=x86-64-v2"]
