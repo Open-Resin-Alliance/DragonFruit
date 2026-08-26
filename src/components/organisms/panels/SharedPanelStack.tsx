@@ -93,6 +93,10 @@ type SupportDebugStats = {
   externalHoverModelId: string | null;
   effectiveHoverModelId: string | null;
   sceneHoveredSupportId: string | null;
+  /** modelId of the hovered support -- the model<->support link the import bridge establishes. */
+  hoveredSupportModelId: string | null;
+  /** Whether that owner is the active model; null when nothing resolvable is hovered. */
+  hoveredSupportOwnedByActiveModel: boolean | null;
   marqueeHoveredSupportId: string | null;
   rawHoveredCategory: string | null;
   rawHoveredId: string | null;
@@ -339,6 +343,12 @@ export function SharedPanelStack({
               <div>External hover model: {supportDebugStats.externalHoverModelId ?? 'none'}</div>
               <div>Effective hover model: {supportDebugStats.effectiveHoverModelId ?? 'none'}</div>
               <div>Scene hovered support: {supportDebugStats.sceneHoveredSupportId ?? 'none'}</div>
+              <div>
+                {'Hovered support owner: '}
+                {supportDebugStats.hoveredSupportModelId ?? 'none'}
+                {supportDebugStats.hoveredSupportOwnedByActiveModel === true ? ' (active model)' : null}
+                {supportDebugStats.hoveredSupportOwnedByActiveModel === false ? ' (OTHER MODEL)' : null}
+              </div>
               <div>Marquee hovered support: {supportDebugStats.marqueeHoveredSupportId ?? 'none'}</div>
               <div>Raw hovered category/id: {supportDebugStats.rawHoveredCategory ?? 'none'} / {supportDebugStats.rawHoveredId ?? 'none'}</div>
               <div>Visual hovered category/id: {supportDebugStats.hoveredCategoryForVisual ?? 'none'} / {supportDebugStats.hoveredIdForVisual ?? 'none'}</div>

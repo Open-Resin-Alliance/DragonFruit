@@ -2847,9 +2847,73 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
  * preserving supports for all models already in the scene.
  * Use this when importing an additional scene file into an already-populated scene.
  */
-export function mergeFromImportFormat(data: DragonfruitImportFormat) {
+/**
+ * Stamp `modelId` onto every support entity in an imported payload.
+ *
+ * Every top-level support type carries its own `modelId` (they are all
+ * `SupportEntity`), and kickstands carry one on the nested build result -- so
+ * each collection has to be walked. A type missed here is a support that stays
+ * bound to whatever the plugin wrote, which is the failure mode this function
+ * exists to prevent.
+ */
+function reconcileSupportModelIds(
+    data: DragonfruitImportFormat,
+    ownerModelId: string,
+): DragonfruitImportFormat {
+    const mismatched = new Set<string>();
+    const stamp = <T extends { modelId?: string }>(entity: T): T => {
+        if (entity.modelId && entity.modelId !== ownerModelId) mismatched.add(entity.modelId);
+        return entity.modelId === ownerModelId ? entity : { ...entity, modelId: ownerModelId };
+    };
+    const stampAll = <T extends { modelId?: string }>(list: T[] | undefined): T[] | undefined =>
+        list ? list.map(stamp) : list;
+
+    const next: DragonfruitImportFormat = {
+        ...data,
+        roots: stampAll(data.roots) ?? data.roots,
+        trunks: stampAll(data.trunks) ?? data.trunks,
+        branches: stampAll(data.branches) ?? data.branches,
+        leaves: stampAll(data.leaves) ?? data.leaves,
+        twigs: stampAll(data.twigs),
+        sticks: stampAll(data.sticks),
+        braces: stampAll(data.braces) ?? data.braces,
+        anchors: stampAll(data.anchors),
+        kickstands: data.kickstands?.map((build) => ({
+            ...build,
+            kickstand: stamp(build.kickstand),
+            root: stamp(build.root),
+        })),
+    };
+
+    if (mismatched.size > 0) {
+        console.warn(
+            '[SupportStore] Imported supports carried a modelId that does not match the model '
+            + 'they were imported with; reconciling to the host model id. This indicates a plugin '
+            + 'returning a payload modelId that differs from the id stamped on its supports.',
+            { ownerModelId, foundModelIds: [...mismatched] },
+        );
+    }
+
+    return next;
+}
+
+/**
+ * Merge an imported support payload into the store.
+ *
+ * `ownerModelId` binds every support in `data` to that model. The host passes
+ * the id of the model this payload was imported alongside, so the model->support
+ * association is GUARANTEED by the host rather than assumed from whatever the
+ * plugin happened to stamp. A plugin that disagrees with itself (payload
+ * `modelId` != the id on its supports) previously produced supports owned by no
+ * model: skipped by `getSupportsForModel`, unmoved by per-model transforms.
+ *
+ * Mismatches are logged rather than silently accepted, so a plugin bug surfaces
+ * instead of being masked by the reconciliation.
+ */
+export function mergeFromImportFormat(data: DragonfruitImportFormat, ownerModelId?: string) {
     const importDefaults = getSavedImportDefaultsSettings();
-    const effectiveData = applyImportDefaultsToSupportPayload(data, importDefaults);
+    const reconciled = ownerModelId ? reconcileSupportModelIds(data, ownerModelId) : data;
+    const effectiveData = applyImportDefaultsToSupportPayload(reconciled, importDefaults);
     const isolated = isolateImportedSupportPayload(effectiveData);
 
     const merged: SupportState = {

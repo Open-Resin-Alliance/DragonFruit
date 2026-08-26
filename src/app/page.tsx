@@ -307,7 +307,7 @@ import {
   getSavedUvToolsSettings,
   resolveUvToolsExecutablePath,
 } from '@/components/settings/uvToolsPreferences';
-import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, toggleSegmentCurve, transformSupportsForModel, updateTrunk, updateBranch, updateTwig, updateStick } from '@/supports/state';
+import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot, getModelIdForSupportEntityId, toggleSegmentCurve, transformSupportsForModel, updateTrunk, updateBranch, updateTwig, updateStick } from '@/supports/state';
 import {
   getKickstandSnapshot,
   subscribeToKickstandStore,
@@ -2003,6 +2003,8 @@ export default function Home() {
         externalHoverModelId?: string | null;
         effectiveHoverModelId?: string | null;
         sceneHoveredSupportId?: string | null;
+        hoveredSupportModelId?: string | null;
+        hoveredSupportOwnedByActiveModel?: boolean | null;
         marqueeHoveredSupportId?: string | null;
         rawHoveredCategory?: string | null;
         rawHoveredId?: string | null;
@@ -2047,6 +2049,15 @@ export default function Home() {
       externalHoverModelId: supportRendererDebug?.externalHoverModelId ?? null,
       effectiveHoverModelId: supportRendererDebug?.effectiveHoverModelId ?? null,
       sceneHoveredSupportId: supportRendererDebug?.sceneHoveredSupportId ?? null,
+      // Ownership of the hovered support: which model it is bound to, and
+      // whether that is the model currently active. This is the association the
+      // import bridge establishes (payload modelId -> every support's modelId);
+      // nothing else in the UI surfaces it.
+      hoveredSupportModelId: getModelIdForSupportEntityId(supportRendererDebug?.sceneHoveredSupportId),
+      hoveredSupportOwnedByActiveModel: (() => {
+        const owner = getModelIdForSupportEntityId(supportRendererDebug?.sceneHoveredSupportId);
+        return owner ? owner === scene.activeModelId : null;
+      })(),
       marqueeHoveredSupportId: supportRendererDebug?.marqueeHoveredSupportId ?? null,
       rawHoveredCategory: supportRendererDebug?.rawHoveredCategory ?? null,
       rawHoveredId: supportRendererDebug?.rawHoveredId ?? null,

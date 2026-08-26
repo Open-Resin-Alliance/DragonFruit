@@ -774,6 +774,13 @@ type PluginSceneImportPayload = {
     scale: THREE.Vector3;
   };
   modelId?: string;
+  /**
+   * Display name from the SOURCE file, where the format carries one (LYS object
+   * `name`, Chitubox per-model filename). Preferred over deriving a name from
+   * the imported filename, which cannot distinguish models inside one container
+   * and falls back to numeric suffixes ("project (2)", "project (3)").
+   */
+  objName?: string;
   supportData?: DragonfruitImportFormat | null;
   meshModifiers?: ModelMeshModifiers;
 };
@@ -841,6 +848,7 @@ function normalizePluginSceneImportPayload(payload: unknown): PluginSceneImportP
     geometry?: unknown;
     transform?: unknown;
     modelId?: unknown;
+    objName?: unknown;
     supportData?: unknown;
     meshModifiers?: unknown;
   };
@@ -875,6 +883,9 @@ function normalizePluginSceneImportPayload(payload: unknown): PluginSceneImportP
     },
     modelId: typeof source.modelId === 'string' && source.modelId.trim().length > 0
       ? source.modelId
+      : undefined,
+    objName: typeof source.objName === 'string' && source.objName.trim().length > 0
+      ? source.objName.trim()
       : undefined,
     supportData: asDragonfruitImportFormat(source.supportData),
     meshModifiers,
@@ -4728,9 +4739,13 @@ export function useSceneCollectionManager() {
           originalPosition.z,
         );
 
-        const modelName = processedItems.length === 1
-          ? sanitizeImportedModelDisplayName(file.name)
-          : `${sanitizeImportedModelDisplayName(file.name)} (${i + 1})`;
+        // Prefer the source file's own object name; fall back to the imported
+        // filename (with an index when the container held several models).
+        const modelName = normalized.objName
+          ? sanitizeImportedModelDisplayName(normalized.objName)
+          : processedItems.length === 1
+            ? sanitizeImportedModelDisplayName(file.name)
+            : `${sanitizeImportedModelDisplayName(file.name)} (${i + 1})`;
 
         const model: LoadedModel = {
           id: importedModelId || uuidv4(),
@@ -4774,7 +4789,10 @@ export function useSceneCollectionManager() {
         const applySupports = () => {
           for (const { model, sourceTransform, supportData } of pendingSupports) {
             applyImportDefaultsToRaftState();
-            mergeFromImportFormat(supportData!);
+            // Bind these supports to THIS model. The plugin already stamps a
+            // modelId, but nothing verified it matched the id the host assigned
+            // the model -- so pass the host id and let the store reconcile.
+            mergeFromImportFormat(supportData!, model.id);
             if (!transformsEqual(sourceTransform, model.transform)) {
               transformSupportsForModel(model.id, sourceTransform, model.transform);
             }
