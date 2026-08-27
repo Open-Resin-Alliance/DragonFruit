@@ -15,15 +15,12 @@
  * resolves to `null` and the caller falls back to the Gamepad-API path
  * (`SpaceMouseController`).
  */
+import { isTauriRuntime } from '@/utils/tauriRuntime';
 
 type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
 let tauriCorePromise: Promise<{ invoke: TauriInvoke } | null> | null = null;
 
-export function isTauriRuntime(): boolean {
-  if (typeof window === 'undefined') return false;
-  return '__TAURI_INTERNALS__' in window;
-}
 
 async function loadInvoke(): Promise<TauriInvoke | null> {
   if (!isTauriRuntime()) return null;

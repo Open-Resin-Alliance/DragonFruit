@@ -1,3 +1,4 @@
+import { createProgressThrottle, yieldToEventLoop } from '@/utils/yieldToEventLoop';
 import * as THREE from 'three';
 import { IslandTracker } from './islandTracker';
 import { type RleMask, type RleLabels, rleDecode, rleEncodeLabels } from './rle';
@@ -43,11 +44,36 @@ export type ScanParams = {
   useSurfaceContiguity?: boolean; // If true, favors surface connectivity (neighbors) over internal volume proximity
 };
 
+/**
+ * Progress reporting for the whole scan, not just the slicing phase. `phase`
+ * names the pass so the modal can say which of the four is running — the bar
+ * restarts at zero for each.
+ */
+export type ScanProgressCallback = (
+  done: number,
+  total: number,
+  phase: string,
+  phaseNumber: number,
+  phaseCount: number,
+) => void;
+
+/** This path's phases, in order. See the note on ScanProgressCallback. */
+const SCAN_PHASES = ['Slicing', 'Tracking islands', 'Tracking territories', 'Compiling results'] as const;
+
+function orchestratorPhaseNumber(phase: string): number {
+  const index = SCAN_PHASES.indexOf(phase as typeof SCAN_PHASES[number]);
+  return index < 0 ? 1 : index + 1;
+}
+
+/** Layers processed between yields in the single-threaded passes. */
+const YIELD_INTERVAL_LAYERS = 64;
+
+
 export async function runIslandScan(
   geom: { geometry: THREE.BufferGeometry; bbox: THREE.Box3 },
   layerHeightMm: number,
   params: ScanParams,
-  onProgress?: (done: number, total: number) => void,
+  onProgress?: ScanProgressCallback,
 ): Promise<ScanResults> {
   return runScanInternal(
     geom,
@@ -62,7 +88,7 @@ export async function runScanlineScan(
   geom: { geometry: THREE.BufferGeometry; bbox: THREE.Box3 },
   layerHeightMm: number,
   params: ScanParams,
-  onProgress?: (done: number, total: number) => void,
+  onProgress?: ScanProgressCallback,
 ): Promise<ScanResults> {
   return runScanInternal(
     geom,
@@ -78,7 +104,7 @@ async function runScanInternal(
   layerHeightMm: number,
   params: ScanParams,
   createWorker: () => Worker,
-  onProgress?: (done: number, total: number) => void,
+  onProgress?: ScanProgressCallback,
 ): Promise<ScanResults> {
   const bb = geom.bbox;
   const minX = bb.min.x, maxX = bb.max.x;
@@ -114,6 +140,7 @@ async function runScanInternal(
   let nextIndex = 0;
   let done = 0;
 
+  const reportProgress = createProgressThrottle();
   console.time('Total Scan');
   console.time('Slicing & Worker Dispatch');
 
@@ -135,7 +162,7 @@ async function runScanInternal(
 
         workerResults[idx] = { islandMaskRle, solidMaskRle, islandCount, islandLabelsRle, components, territoryLabelsRle };
         done++;
-        onProgress?.(done, numLayers);
+        reportProgress(() => onProgress?.(done, numLayers, 'Slicing', orchestratorPhaseNumber('Slicing'), SCAN_PHASES.length));
         runNext();
       };
       w.addEventListener('message', onMessage);
@@ -163,6 +190,10 @@ async function runScanInternal(
 
   // Process layers sequentially to propagate island IDs
   for (let L = 0; L < numLayers; L++) {
+    if (L % YIELD_INTERVAL_LAYERS === 0) {
+      reportProgress(() => onProgress?.(L, numLayers, 'Tracking islands', orchestratorPhaseNumber('Tracking islands'), SCAN_PHASES.length));
+      await yieldToEventLoop();
+    }
     const workerResult = workerResults[L];
 
     const prevIslandLabels = L > 0 ? islandLabelsPerLayer[L - 1] : null;
@@ -190,6 +221,10 @@ async function runScanInternal(
   let prevTerritoryMap: RleLabels | null = null;
 
   for (let L = 0; L < numLayers; L++) {
+    if (L % YIELD_INTERVAL_LAYERS === 0) {
+      reportProgress(() => onProgress?.(L, numLayers, 'Tracking territories', orchestratorPhaseNumber('Tracking territories'), SCAN_PHASES.length));
+      await yieldToEventLoop();
+    }
     const workerResult = workerResults[L];
 
     // Decode RLE solid mask to dense grid for TerritoryTracker -- NO LONGER NEEDED (RLE LOGIC)
@@ -243,6 +278,10 @@ async function runScanInternal(
 
   // Optimized RLE iteration for firstHit/lastHit and baseLabels
   for (let L = 0; L < results.length; L++) {
+    if (L % YIELD_INTERVAL_LAYERS === 0) {
+      reportProgress(() => onProgress?.(L, results.length, 'Compiling results', orchestratorPhaseNumber('Compiling results'), SCAN_PHASES.length));
+      await yieldToEventLoop();
+    }
     const rleLabels = results[L].islandLabels;
     // Iterate RLE rows
     for (let y = 0; y < rleLabels.height; y++) {

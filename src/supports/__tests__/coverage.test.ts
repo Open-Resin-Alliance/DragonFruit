@@ -1,3 +1,4 @@
+import { footprintFromPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
@@ -30,7 +31,7 @@ function rectRegion(id: string, minX: number, maxX: number, minY: number, maxY: 
         baseZ: 10,
         areaMm2: (maxX - minX) * (maxY - minY),
         surfaceNormal: { x: 0, y: 0, z: -1 },
-        contactVoxels,
+        contactVoxels: footprintFromPoints(contactVoxels),
     };
 }
 

@@ -1,5 +1,6 @@
 import { AlertTriangle, Loader2, Wrench, X } from 'lucide-react';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { MeshRepairConfirmModal } from '@/components/scene/MeshRepairConfirmModal';
 import { MeshRepairReportModal } from '@/components/scene/MeshRepairReportModal';
 import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
@@ -24,6 +25,12 @@ export function MeshRepairModals({
   setShowDamagedModelDialog,
   showDamagedModelDialog,
 }: MeshRepairModalsProps) {
+  // Escape mirrors the backdrop click: it cannot leave mid-repair.
+  useEscapeToClose(
+    manualRepairModelId !== null,
+    isManualRepairing ? undefined : () => setManualRepairModelId(null),
+  );
+
   return (
     <>
       <StructuredDialogModal

@@ -35,7 +35,8 @@ import type { ScanResults } from '@/volumeAnalysis/islandVolume/steps/voxelizati
 import type { BasinFillSimulator } from '@/volumeAnalysis/islandVolume/steps/expansion/BasinFillSimulator';
 import type { BasinFillProxy } from '@/volumeAnalysis/islandVolume/steps/expansion/BasinFillProxy';
 import type { TransformMode, ModelTransform } from '@/hooks/useModelTransform';
-import type { SupportMode } from '@/supports/types';
+import type { Segment, SupportMode } from '@/supports/types';
+import type { ContactCone } from '@/supports/SupportPrimitives/ContactCone/types';
 import type { SupportData } from '@/supports/rendering';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { getModelIdForSupportEntityId } from '@/supports/state';
@@ -99,6 +100,16 @@ import {
   OrbitPivotIndicator,
 } from './SceneCanvasCameraControllers';
 import { useMarqueeSelectionHandlers } from './useMarqueeSelectionHandlers';
+import {
+  marqueeModeForDrag,
+  marqueeRectForDrag,
+  meshHitsMarquee,
+  ringHitsMarquee,
+  shapeHitsMarquee,
+  type MarqueePoint,
+  type MarqueeSegment,
+  type ProjectedMesh,
+} from './marqueeHitTest';
 import { PickingEmptySpaceHoverResetter, SceneRenderBindings } from './SceneCanvasInteractionBits';
 
 import { PickingProviderWrapper, SelectionSync, useInteractionWarning } from './SceneSelectionAndPicking';
@@ -151,6 +162,8 @@ import {
 } from '@/utils/modelBounds';
 import { computeLowestZ } from '@/utils/geometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { Toast } from '@/components/atoms';
+import { getCenteredPositions } from '@/utils/modelBounds';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 import { SupportPathfindingDebugHud, SupportPathfindingDebugOverlay } from '@/components/scene/SupportPathfindingDebugOverlay';
 import {
@@ -161,6 +174,7 @@ import {
 } from '@/supports/PlacementLogic/Pathfinding/pathfindingDebugState';
 import { applyScaleFactor } from '@/components/gizmo/scale/applyScaleFactor';
 import { createWheelDeviceClassifier, type WheelDevice } from '@/components/scene/SceneCanvas/wheelDeviceClassifier';
+import { getSelectionGizmoCenter } from '@/features/scene/selectionPosition';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
@@ -186,6 +200,95 @@ function formatOutOfBoundsLabel(
   }), { count });
 }
 
+/**
+ * Projects a model's mesh to container pixels for the marquee hit test. Runs
+ * once per drag — the camera cannot move while the marquee is up — and the
+ * result is reused for every pointer move.
+ */
+function projectModelMesh(
+  positions: Float32Array,
+  modelMatrix: THREE.Matrix4,
+  camera: THREE.Camera,
+  rect: DOMRect,
+): ProjectedMesh {
+  const clip = new THREE.Matrix4()
+    .multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+    .multiply(modelMatrix);
+  const m = clip.elements;
+
+  const count = positions.length / 3;
+  const xs = new Float32Array(count);
+  const ys = new Float32Array(count);
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let dropped = false;
+
+  for (let i = 0; i < count; i += 1) {
+    const px = positions[i * 3];
+    const py = positions[(i * 3) + 1];
+    const pz = positions[(i * 3) + 2];
+
+    const w = (m[3] * px) + (m[7] * py) + (m[11] * pz) + m[15];
+    if (w <= 0) {
+      // Behind the camera: no screen position to compare against.
+      xs[i] = NaN;
+      ys[i] = NaN;
+      dropped = true;
+      continue;
+    }
+
+    const ndcX = ((m[0] * px) + (m[4] * py) + (m[8] * pz) + m[12]) / w;
+    const ndcY = ((m[1] * px) + (m[5] * py) + (m[9] * pz) + m[13]) / w;
+
+    const x = ((ndcX + 1) * 0.5) * rect.width;
+    const y = ((1 - ndcY) * 0.5) * rect.height;
+
+    xs[i] = x;
+    ys[i] = y;
+
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+
+  return {
+    xs,
+    ys,
+    count,
+    bounds: minX > maxX ? null : { minX, minY, maxX, maxY },
+    dropped,
+  };
+}
+
+/**
+ * Projects support positions to container pixels for the marquee hit test.
+ * Points that fall outside clip space come back as null.
+ */
+function makeSupportPointProjector(rect: DOMRect, camera: THREE.Camera) {
+  const point = new THREE.Vector3();
+  const projected = new THREE.Vector3();
+
+  return (positions: Array<{ x: number; y: number; z: number }>): Array<MarqueePoint | null> => (
+    positions.map((position) => {
+      projected.copy(point.set(position.x, position.y, position.z)).project(camera);
+
+      if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y) || !Number.isFinite(projected.z)) {
+        return null;
+      }
+      if (projected.z < -1 || projected.z > 1) return null;
+
+      return {
+        x: ((projected.x + 1) * 0.5) * rect.width,
+        y: ((1 - projected.y) * 0.5) * rect.height,
+      };
+    })
+  );
+}
+
 function isTrackpadModifierPressed(event: WheelEvent, modifierKey: CameraTrackpadModifierKey): boolean {
   return modifierKey === 'shift' ? event.shiftKey : event.altKey;
 }
@@ -204,6 +307,8 @@ function resolveTrackpadGestureAction(
   if (!modifierPressed) return primaryAction;
   return primaryAction === 'pan' ? 'orbit' : 'pan';
 }
+
+const EMPTY_MODEL_ID_LIST: readonly string[] = Object.freeze([]);
 
 const FLOATING_PANEL_RIGHT_INSET_PX = 12;
 // Drei GizmoHelper positions by gizmo center, not right edge.
@@ -2492,19 +2597,10 @@ export function SceneCanvas({
   const multiGizmoAnchorRef = React.useRef<THREE.Group | null>(null);
 
   const computeCenterFromTransforms = React.useCallback((byModelId: Record<string, ModelTransform>) => {
-    const ids = selectedTransformableModelIds;
-    if (ids.length === 0) return null;
-
-    const sum = new THREE.Vector3();
-    let count = 0;
-    for (const modelId of ids) {
-      const t = byModelId[modelId];
-      if (!t) continue;
-      sum.add(t.position);
-      count += 1;
-    }
-    if (count === 0) return null;
-    return sum.multiplyScalar(1 / count);
+    return getSelectionGizmoCenter(
+      selectedTransformableModelIds,
+      (modelId) => byModelId[modelId]?.position,
+    );
   }, [selectedTransformableModelIds]);
 
   const setMultiGizmoAnchorPosition = React.useCallback((position: THREE.Vector3 | null) => {
@@ -2574,6 +2670,247 @@ export function SceneCanvas({
     return map;
   }, [models]);
 
+  // Model matrices for the marquee, rebuilt whenever a model moves.
+  const modelMarqueeMatrices = React.useMemo(() => {
+    const map = new Map<string, THREE.Matrix4>();
+
+    for (const model of models) {
+      if (!model.visible) continue;
+
+      const t = (model.id === activeTransformOverrideModelId && transform) ? transform : model.transform;
+      map.set(model.id, new THREE.Matrix4().compose(
+        t.position,
+        quaternionFromGlobalEuler(t.rotation),
+        t.scale,
+      ));
+    }
+
+    return map;
+  }, [activeTransformOverrideModelId, models, transform]);
+
+  // Projected meshes are heavy to build and identical for every pointer move of
+  // one drag, so they are cached until the camera, the viewport or a model
+  // transform makes them stale.
+  const projectedModelMeshesRef = React.useRef<{
+    matrices: Map<string, THREE.Matrix4>;
+    cameraKey: string;
+    viewportKey: string;
+    meshes: Map<string, ProjectedMesh>;
+  } | null>(null);
+
+  const getProjectedModelMeshes = React.useCallback((rect: DOMRect, camera: THREE.Camera) => {
+    const cameraKey = `${camera.projectionMatrix.elements.join(',')}|${camera.matrixWorldInverse.elements.join(',')}`;
+    const viewportKey = `${rect.width}x${rect.height}`;
+    const cached = projectedModelMeshesRef.current;
+
+    if (
+      cached
+      && cached.matrices === modelMarqueeMatrices
+      && cached.cameraKey === cameraKey
+      && cached.viewportKey === viewportKey
+    ) {
+      return cached.meshes;
+    }
+
+    const meshes = new Map<string, ProjectedMesh>();
+    for (const model of models) {
+      if (!model.visible) continue;
+
+      const matrix = modelMarqueeMatrices.get(model.id);
+      const positions = getCenteredPositions(model.geometry);
+      if (!matrix || !positions) continue;
+
+      meshes.set(model.id, projectModelMesh(positions, matrix, camera, rect));
+    }
+
+    projectedModelMeshesRef.current = { matrices: modelMarqueeMatrices, cameraKey, viewportKey, meshes };
+    return meshes;
+  }, [modelMarqueeMatrices, models]);
+
+  // The outline of each model's raft, at the plate and at its top, so a drag
+  // can catch the raft the same way it catches the model and its supports.
+  const raftMarqueeRingsByModelId = React.useMemo(() => {
+    const map = new Map<string, Array<Array<{ x: number; y: number; z: number }>>>();
+    if (raftSettingsForBounds.bottomMode === 'off') return map;
+
+    const circlesByModelId = new Map<string, SupportBaseCircle[]>();
+    const collectRoot = (modelId: string | undefined, pos: { x: number; y: number }, diameter: number) => {
+      if (!modelId) return;
+      const circles = circlesByModelId.get(modelId) ?? [];
+      circles.push({ x: pos.x, y: pos.y, r: diameter / 2 });
+      circlesByModelId.set(modelId, circles);
+    };
+
+    for (const root of Object.values(supportStateForBounds.roots)) {
+      collectRoot(root.modelId, root.transform.pos, root.diameter);
+    }
+    for (const root of Object.values(kickstandStateForBounds.roots)) {
+      collectRoot(root.modelId, root.transform.pos, root.diameter);
+    }
+
+    const thickness = raftSettingsForBounds.bottomMode === 'line'
+      ? raftSettingsForBounds.lineHeightMm
+      : raftSettingsForBounds.thickness;
+    const chamferInset = Math.max(0, thickness) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettingsForBounds.chamferAngle))));
+    const wallInset = raftSettingsForBounds.wallEnabled ? Math.max(0, raftSettingsForBounds.wallThickness) : 0;
+    const dynamicMargin = 0.2 + Math.max(chamferInset, wallInset);
+    const raftMaxZ = thickness + (raftSettingsForBounds.wallEnabled ? raftSettingsForBounds.wallHeight : 0);
+
+    for (const [modelId, circles] of circlesByModelId) {
+      const baseProfile = computeFootprint(circles, { marginMm: dynamicMargin, samplesPerCircle: 24 });
+      if (!baseProfile || baseProfile.length < 3) continue;
+
+      const outerProfile = raftSettingsForBounds.wallEnabled
+        ? computeRaftOuterBoundary(baseProfile, raftSettingsForBounds)
+        : baseProfile;
+      if (!outerProfile || outerProfile.length < 3) continue;
+
+      map.set(modelId, [
+        outerProfile.map((p) => ({ x: p.x, y: p.y, z: 0 })),
+        outerProfile.map((p) => ({ x: p.x, y: p.y, z: raftMaxZ })),
+      ]);
+    }
+
+    return map;
+  }, [kickstandStateForBounds.roots, raftSettingsForBounds, supportStateForBounds.roots]);
+
+  // Every support drawn as the polyline that runs along it: root or host knot,
+  // each joint in order, and the contact cone at the tip. Built once per state
+  // change — the marquee walks this on every pointer move. A curved segment is
+  // approximated by its chord.
+  const supportMarqueeShapes = React.useMemo(() => {
+    type SupportPoint = { x: number; y: number; z: number };
+
+    const shapes: Array<{
+      id: string;
+      modelId: string | undefined;
+      points: SupportPoint[];
+      struts: MarqueeSegment[];
+    }> = [];
+
+    const chain = (
+      id: string,
+      modelId: string | undefined,
+      positions: Array<SupportPoint | null | undefined>,
+    ) => {
+      if (!id) return;
+
+      const points: SupportPoint[] = [];
+      for (const position of positions) {
+        if (!position) continue;
+        const previous = points[points.length - 1];
+        // Consecutive segments share a joint; keep it once.
+        if (previous && previous.x === position.x && previous.y === position.y && previous.z === position.z) {
+          continue;
+        }
+        points.push(position);
+      }
+
+      if (points.length === 0) return;
+
+      const struts: MarqueeSegment[] = [];
+      for (let i = 1; i < points.length; i += 1) {
+        struts.push([i - 1, i]);
+      }
+
+      shapes.push({ id, modelId, points, struts });
+    };
+
+    const jointPositions = (segments: Segment[]) => segments.flatMap((segment) => [
+      segment.bottomJoint?.pos,
+      segment.topJoint?.pos,
+    ]);
+
+    const conePositions = (cone: ContactCone) => [getFinalSocketPosition(cone), cone.pos];
+
+    for (const root of Object.values(supportStateForBounds.roots)) {
+      chain(root.id, root.modelId, [root.transform.pos]);
+    }
+
+    for (const trunk of Object.values(supportStateForBounds.trunks)) {
+      const root = supportStateForBounds.roots[trunk.rootId];
+      chain(trunk.id, trunk.modelId, [
+        root?.transform.pos,
+        ...jointPositions(trunk.segments),
+        ...(trunk.contactCone ? conePositions(trunk.contactCone) : []),
+      ]);
+    }
+
+    for (const branch of Object.values(supportStateForBounds.branches)) {
+      chain(branch.id, branch.modelId, [
+        supportStateForBounds.knots[branch.parentKnotId]?.pos,
+        ...jointPositions(branch.segments),
+        ...(branch.contactCone ? conePositions(branch.contactCone) : []),
+      ]);
+    }
+
+    for (const leaf of Object.values(supportStateForBounds.leaves)) {
+      if (!leaf.contactCone) continue;
+      chain(leaf.id, leaf.modelId, [
+        supportStateForBounds.knots[leaf.parentKnotId]?.pos,
+        ...conePositions(leaf.contactCone),
+      ]);
+    }
+
+    for (const twig of Object.values(supportStateForBounds.twigs)) {
+      chain(twig.id, twig.modelId, [
+        twig.contactDiskA.pos,
+        ...jointPositions(twig.segments),
+        twig.contactDiskB.pos,
+      ]);
+    }
+
+    for (const stick of Object.values(supportStateForBounds.sticks)) {
+      chain(stick.id, stick.modelId, [
+        stick.contactConeA.pos,
+        getFinalSocketPosition(stick.contactConeA),
+        ...jointPositions(stick.segments),
+        getFinalSocketPosition(stick.contactConeB),
+        stick.contactConeB.pos,
+      ]);
+    }
+
+    for (const brace of Object.values(supportStateForBounds.braces)) {
+      chain(brace.id, brace.modelId, [
+        supportStateForBounds.knots[brace.startKnotId]?.pos,
+        supportStateForBounds.knots[brace.endKnotId]?.pos,
+      ]);
+    }
+
+    for (const anchor of Object.values(supportStateForBounds.anchors)) {
+      chain(anchor.id, anchor.modelId, [
+        anchor.rootPos,
+        anchor.joint?.pos,
+        ...jointPositions(anchor.segments),
+        ...(anchor.contactCone ? conePositions(anchor.contactCone) : []),
+      ]);
+    }
+
+    for (const kickstand of Object.values(kickstandStateForBounds.kickstands)) {
+      const kickstandModelId = kickstand.modelId
+        ?? kickstandStateForBounds.roots[kickstand.rootId]?.modelId;
+      chain(kickstand.id, kickstandModelId, [
+        kickstandStateForBounds.roots[kickstand.rootId]?.transform.pos,
+        ...jointPositions(kickstand.segments),
+        supportStateForBounds.knots[kickstand.hostKnotId]?.pos
+          ?? kickstandStateForBounds.knots[kickstand.hostKnotId]?.pos,
+      ]);
+    }
+
+    return shapes;
+  }, [kickstandStateForBounds, supportStateForBounds]);
+
+  const supportMarqueeShapesByModelId = React.useMemo(() => {
+    const map = new Map<string, typeof supportMarqueeShapes>();
+    for (const shape of supportMarqueeShapes) {
+      if (!shape.modelId) continue;
+      const forModel = map.get(shape.modelId);
+      if (forModel) forModel.push(shape);
+      else map.set(shape.modelId, [shape]);
+    }
+    return map;
+  }, [supportMarqueeShapes]);
+
   const resolveMarqueeSelectedIds = React.useCallback((selection: {
     start: { x: number; y: number };
     current: { x: number; y: number };
@@ -2582,64 +2919,83 @@ export function SceneCanvas({
     const camera = cameraRef.current;
     if (!rect || !camera) return [] as string[];
 
-    if (customPrepareMarqueeSelection?.enabled) {
-      const projected = new THREE.Vector3();
-      return customPrepareMarqueeSelection.resolveSelection(selection, {
-        projectWorldPoint: (point: THREE.Vector3) => {
-          projected.copy(point).project(camera);
-          if (
-            !Number.isFinite(projected.x)
-            || !Number.isFinite(projected.y)
-            || !Number.isFinite(projected.z)
-            || projected.z < -1
-            || projected.z > 1
-          ) {
-            return null;
-          }
+    const projected = new THREE.Vector3();
+    const projectWorldPoint = (point: THREE.Vector3) => {
+      projected.copy(point).project(camera);
+      if (
+        !Number.isFinite(projected.x)
+        || !Number.isFinite(projected.y)
+        || !Number.isFinite(projected.z)
+        || projected.z < -1
+        || projected.z > 1
+      ) {
+        return null;
+      }
 
-          return {
-            x: ((projected.x + 1) * 0.5) * rect.width,
-            y: ((1 - projected.y) * 0.5) * rect.height,
-            z: projected.z,
-          };
-        },
-      });
+      return {
+        x: ((projected.x + 1) * 0.5) * rect.width,
+        y: ((1 - projected.y) * 0.5) * rect.height,
+        z: projected.z,
+      };
+    };
+
+    if (customPrepareMarqueeSelection?.enabled) {
+      return customPrepareMarqueeSelection.resolveSelection(selection, { projectWorldPoint });
     }
 
-    const minX = Math.min(selection.start.x, selection.current.x);
-    const maxX = Math.max(selection.start.x, selection.current.x);
-    const minY = Math.min(selection.start.y, selection.current.y);
-    const maxY = Math.max(selection.start.y, selection.current.y);
+    const marqueeRect = marqueeRectForDrag(selection.start, selection.current);
+    const marqueeMode = marqueeModeForDrag(selection.start, selection.current);
+    const projectSupportPoints = makeSupportPointProjector(rect, camera);
+    const projectedMeshes = getProjectedModelMeshes(rect, camera);
 
-    const projected = new THREE.Vector3();
     const selectedIds: string[] = [];
 
     for (const model of models) {
       if (!model.visible) continue;
 
-      const bounds = modelWorldBounds.get(model.id) ?? computeModelWorldBounds(model, model.transform, buildVolumeBounds);
-      if (bounds.isEmpty()) continue;
+      const mesh = projectedMeshes.get(model.id);
+      if (!mesh) continue;
 
-      projected.copy(bounds.getCenter(new THREE.Vector3()));
-      projected.project(camera);
+      const meshHit = meshHitsMarquee(marqueeRect, mesh, marqueeMode);
 
-      if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y) || !Number.isFinite(projected.z)) {
-        continue;
-      }
+      // A model is selected together with its supports: they are on screen, so
+      // a drag has to enclose them too, and touching one touches the model.
+      const supportShapes = supportMarqueeShapesByModelId.get(model.id) ?? [];
+      const supportHit = marqueeMode === 'window'
+        ? supportShapes.every((shape) => shapeHitsMarquee(
+          marqueeRect,
+          projectSupportPoints(shape.points),
+          shape.struts,
+          'window',
+        ))
+        : supportShapes.some((shape) => shapeHitsMarquee(
+          marqueeRect,
+          projectSupportPoints(shape.points),
+          shape.struts,
+          'crossing',
+        ));
 
-      // Skip centers outside clip space.
-      if (projected.z < -1 || projected.z > 1) continue;
+      const raftRings = raftMarqueeRingsByModelId.get(model.id) ?? [];
+      const raftHit = marqueeMode === 'window'
+        ? raftRings.every((ring) => ringHitsMarquee(marqueeRect, projectSupportPoints(ring), 'window'))
+        : raftRings.some((ring) => ringHitsMarquee(marqueeRect, projectSupportPoints(ring), 'crossing'));
 
-      const sx = ((projected.x + 1) * 0.5) * rect.width;
-      const sy = ((1 - projected.y) * 0.5) * rect.height;
-
-      if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) {
+      const hit = marqueeMode === 'window'
+        ? (meshHit && supportHit && raftHit)
+        : (meshHit || supportHit || raftHit);
+      if (hit) {
         selectedIds.push(model.id);
       }
     }
 
     return selectedIds;
-  }, [buildVolumeBounds, computeModelWorldBounds, customPrepareMarqueeSelection, modelWorldBounds, models]);
+  }, [
+    customPrepareMarqueeSelection,
+    getProjectedModelMeshes,
+    models,
+    raftMarqueeRingsByModelId,
+    supportMarqueeShapesByModelId,
+  ]);
 
   const resolveMarqueeSelectedSupportIds = React.useCallback((selection: {
     start: { x: number; y: number };
@@ -2649,118 +3005,25 @@ export function SceneCanvas({
     const camera = cameraRef.current;
     if (!rect || !camera) return [] as string[];
 
-    const minX = Math.min(selection.start.x, selection.current.x);
-    const maxX = Math.max(selection.start.x, selection.current.x);
-    const minY = Math.min(selection.start.y, selection.current.y);
-    const maxY = Math.max(selection.start.y, selection.current.y);
+    const marqueeRect = marqueeRectForDrag(selection.start, selection.current);
+    const marqueeMode = marqueeModeForDrag(selection.start, selection.current);
+    const projectSupportPoints = makeSupportPointProjector(rect, camera);
 
-    const point = new THREE.Vector3();
-    const projected = new THREE.Vector3();
     const selectedSupportIds: string[] = [];
 
-    const pushIfProjectedInside = (id: string, points: Array<{ x: number; y: number; z: number }>) => {
-      if (!id || points.length === 0) return;
+    // Support mode only draws the active model's supports (SupportRenderer's
+    // `restrictToActiveModel`), so the marquee must not reach the rest.
+    const restrictedToModelId = activeModelId || null;
 
-      point.set(0, 0, 0);
-      for (const p of points) {
-        point.x += p.x;
-        point.y += p.y;
-        point.z += p.z;
+    for (const shape of supportMarqueeShapes) {
+      if (restrictedToModelId && shape.modelId !== restrictedToModelId) continue;
+      if (shapeHitsMarquee(marqueeRect, projectSupportPoints(shape.points), shape.struts, marqueeMode)) {
+        selectedSupportIds.push(shape.id);
       }
-
-      point.multiplyScalar(1 / points.length);
-      projected.copy(point).project(camera);
-
-      if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y) || !Number.isFinite(projected.z)) {
-        return;
-      }
-      if (projected.z < -1 || projected.z > 1) return;
-
-      const sx = ((projected.x + 1) * 0.5) * rect.width;
-      const sy = ((1 - projected.y) * 0.5) * rect.height;
-      if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) {
-        selectedSupportIds.push(id);
-      }
-    };
-
-    const segmentPoints = (segments: Array<{
-      topJoint?: { pos?: { x: number; y: number; z: number } };
-      bottomJoint?: { pos?: { x: number; y: number; z: number } };
-    }>) => {
-      const points: Array<{ x: number; y: number; z: number }> = [];
-      for (const segment of segments) {
-        const top = segment.topJoint?.pos;
-        const bottom = segment.bottomJoint?.pos;
-        if (top) points.push(top);
-        if (bottom) points.push(bottom);
-      }
-      return points;
-    };
-
-    for (const root of Object.values(supportStateForBounds.roots)) {
-      pushIfProjectedInside(root.id, [root.transform.pos]);
-    }
-
-    for (const trunk of Object.values(supportStateForBounds.trunks)) {
-      const points = segmentPoints(trunk.segments);
-      if (trunk.contactCone) {
-        points.push(trunk.contactCone.pos);
-        points.push(getFinalSocketPosition(trunk.contactCone));
-      }
-      pushIfProjectedInside(trunk.id, points);
-    }
-
-    for (const branch of Object.values(supportStateForBounds.branches)) {
-      const points = segmentPoints(branch.segments);
-      if (branch.contactCone) {
-        points.push(branch.contactCone.pos);
-        points.push(getFinalSocketPosition(branch.contactCone));
-      }
-      pushIfProjectedInside(branch.id, points);
-    }
-
-    for (const leaf of Object.values(supportStateForBounds.leaves)) {
-      if (!leaf.contactCone) continue;
-      pushIfProjectedInside(leaf.id, [leaf.contactCone.pos, getFinalSocketPosition(leaf.contactCone)]);
-    }
-
-    for (const twig of Object.values(supportStateForBounds.twigs)) {
-      const points = segmentPoints(twig.segments);
-      points.push(twig.contactDiskA.pos, twig.contactDiskB.pos);
-      pushIfProjectedInside(twig.id, points);
-    }
-
-    for (const stick of Object.values(supportStateForBounds.sticks)) {
-      const points = segmentPoints(stick.segments);
-      points.push(stick.contactConeA.pos, stick.contactConeB.pos);
-      points.push(getFinalSocketPosition(stick.contactConeA), getFinalSocketPosition(stick.contactConeB));
-      pushIfProjectedInside(stick.id, points);
-    }
-
-    for (const brace of Object.values(supportStateForBounds.braces)) {
-      const startKnot = supportStateForBounds.knots[brace.startKnotId];
-      const endKnot = supportStateForBounds.knots[brace.endKnotId];
-      const points: Array<{ x: number; y: number; z: number }> = [];
-      if (startKnot?.pos) points.push(startKnot.pos);
-      if (endKnot?.pos) points.push(endKnot.pos);
-      pushIfProjectedInside(brace.id, points);
-    }
-
-    for (const anchor of Object.values(supportStateForBounds.anchors)) {
-      const points: Array<{ x: number; y: number; z: number }> = [anchor.rootPos];
-      if (anchor.contactCone) {
-        points.push(anchor.contactCone.pos);
-      }
-      pushIfProjectedInside(anchor.id, points);
-    }
-
-    for (const kickstand of Object.values(kickstandStateForBounds.kickstands)) {
-      const points = segmentPoints(kickstand.segments);
-      pushIfProjectedInside(kickstand.id, points);
     }
 
     return selectedSupportIds;
-  }, [kickstandStateForBounds.kickstands, supportStateForBounds]);
+  }, [activeModelId, supportMarqueeShapes]);
 
   const {
     marqueeSelection,
@@ -2780,11 +3043,7 @@ export function SceneCanvas({
     isPostGizmoInteractionGuardActive,
     hoveredModelId,
     supportHoveredCategory: supportStateForBounds.hoveredCategory,
-    onActiveModelChange,
-    activeModelId,
     selectedModelIds,
-    isOrbitInteracting,
-    spaceMouseNavigationActive,
     onMarqueeSelectionChange: customPrepareMarqueeSelection?.enabled
       ? customPrepareMarqueeSelection.onSelectionChange
       : onMarqueeSelectionChange,
@@ -2792,6 +3051,27 @@ export function SceneCanvas({
     resolveMarqueeSelectedSupportIds,
     suppressNextCanvasClickRef,
   });
+
+  // The projected meshes are worth a few MB per model, and only a live drag
+  // reads them.
+  React.useEffect(() => {
+    if (!marqueeSelection) projectedModelMeshesRef.current = null;
+  }, [marqueeSelection]);
+
+  const marqueeMode = React.useMemo(
+    () => (marqueeSelection ? marqueeModeForDrag(marqueeSelection.start, marqueeSelection.current) : null),
+    [marqueeSelection],
+  );
+  const marqueeHue = marqueeMode === 'crossing' ? 'var(--accent)' : 'var(--accent-secondary)';
+  const marqueeModeLabel = marqueeMode === 'crossing'
+    ? _(msg({
+      message: 'Selection Mode: Contact (Right to Left)',
+      comment: 'Shown while dragging a selection rectangle right to left, which takes every object the rectangle touches. Mirrors the CAD convention; keep it on one short line.',
+    }))
+    : _(msg({
+      message: 'Selection Mode: Enclosed (Left to Right)',
+      comment: 'Shown while dragging a selection rectangle left to right, which takes only the objects the rectangle fully encloses. Mirrors the CAD convention; keep it on one short line.',
+    }));
 
   const marqueeCandidateIdSet = React.useMemo(() => {
     if (!marqueeSelection || mode !== 'prepare') return new Set<string>();
@@ -2803,6 +3083,13 @@ export function SceneCanvas({
 
     return new Set(resolveMarqueeSelectedIds(marqueeSelection));
   }, [marqueeSelection, mode, resolveMarqueeSelectedIds]);
+
+  // Models the marquee would take if the drag ended now, so their supports can
+  // tint along with them.
+  const marqueeCandidateModelIds = React.useMemo(
+    () => (isMarqueeSelecting ? Array.from(marqueeCandidateIdSet) : EMPTY_MODEL_ID_LIST),
+    [isMarqueeSelecting, marqueeCandidateIdSet],
+  );
 
   const supportMarqueeCandidateIdSet = React.useMemo(() => {
     if (!marqueeSelection || mode !== 'support') return new Set<string>();
@@ -3271,28 +3558,17 @@ export function SceneCanvas({
   const multiGizmoCenter = React.useMemo(() => {
     if (!isMultiGizmoSelection || selectedTransformableModelIds.length === 0) return null;
 
-    const sum = new THREE.Vector3();
-    let count = 0;
-
-    for (const modelId of selectedTransformableModelIds) {
+    return getSelectionGizmoCenter(selectedTransformableModelIds, (modelId) => {
       const preview = multiGizmoPreviewTransformsById[modelId];
-      if (preview) {
-        sum.add(preview.position);
-        count += 1;
-        continue;
-      }
+      if (preview) return preview.position;
 
       const model = models.find((entry) => entry.id === modelId);
-      if (!model) continue;
+      if (!model) return undefined;
       const sourceTransform = (modelId === activeModelId && liveActiveTransformForMultiPreview)
         ? liveActiveTransformForMultiPreview
         : model.transform;
-      sum.add(sourceTransform.position);
-      count += 1;
-    }
-
-    if (count === 0) return null;
-    return sum.multiplyScalar(1 / count);
+      return sourceTransform.position;
+    });
   }, [
     activeModelId,
     isMultiGizmoSelection,
@@ -5954,7 +6230,8 @@ export function SceneCanvas({
                             selectedTintStrength={selectedTintStrength}
                             activeModelId={activeModelId}
                             selectedModelIds={selectedModelIds}
-                            hoverModelId={supportHoverModelId}
+                            marqueeCandidateModelIds={marqueeCandidateModelIds}
+                  hoverModelId={supportHoverModelId}
                             modelDropOffsetsById={entryDropOffsets}
                             navigationLodActive={navigationLodActive}
                             disableSelectionAndHover={suppressSupportProxyPointerInteraction}
@@ -6273,6 +6550,7 @@ export function SceneCanvas({
                   selectedTintStrength={selectedTintStrength}
                   activeModelId={activeModelId}
                   selectedModelIds={selectedModelIds}
+                  marqueeCandidateModelIds={marqueeCandidateModelIds}
                   hoverModelId={supportHoverModelId}
                   modelDropOffsetsById={entryDropOffsets}
                   navigationLodActive={navigationLodActive}
@@ -6397,6 +6675,7 @@ export function SceneCanvas({
                   selectedTintStrength={selectedTintStrength}
                   activeModelId={activeModelId}
                   selectedModelIds={selectedModelIds}
+                  marqueeCandidateModelIds={marqueeCandidateModelIds}
                   hoverModelId={supportHoverModelId}
                   modelDropOffsetsById={entryDropOffsets}
                   navigationLodActive={transformMode !== 'select'}
@@ -6439,6 +6718,7 @@ export function SceneCanvas({
                         selectedTintStrength={selectedTintStrength}
                         activeModelId={activeModelId}
                         selectedModelIds={selectedModelIds}
+                        marqueeCandidateModelIds={marqueeCandidateModelIds}
                         hoverModelId={supportHoverModelId}
                         modelDropOffsetsById={entryDropOffsets}
                         modelFilterId={modelId}
@@ -7420,14 +7700,30 @@ export function SceneCanvas({
             top: Math.min(marqueeSelection.start.y, marqueeSelection.current.y),
             width: Math.abs(marqueeSelection.current.x - marqueeSelection.start.x),
             height: Math.abs(marqueeSelection.current.y - marqueeSelection.start.y),
-            border: '1px solid color-mix(in srgb, var(--accent), white 18%)',
-            background: 'color-mix(in srgb, var(--accent), transparent 82%)',
-            boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--accent-secondary), transparent 68%)',
+            // Green for a window drag, magenta for a crossing one. The dashed
+            // border is the same in both: the app draws one kind of marquee.
+            border: `1px dashed color-mix(in srgb, ${marqueeHue}, white 18%)`,
+            background: `color-mix(in srgb, ${marqueeHue}, transparent 82%)`,
+            boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${marqueeHue}, transparent 62%)`,
             borderRadius: 6,
             pointerEvents: 'none',
             zIndex: 45,
           }}
         />
+      )}
+
+      {marqueeSelection && (
+        <div className="pointer-events-none absolute bottom-6 left-1/2 z-50 -translate-x-1/2">
+          <Toast
+            tone="neutral"
+            style={{
+              borderColor: `color-mix(in srgb, ${marqueeHue}, var(--border-subtle) 40%)`,
+              color: `color-mix(in srgb, ${marqueeHue}, var(--text-strong) 40%)`,
+            }}
+          >
+            {marqueeModeLabel}
+          </Toast>
+        </div>
       )}
 
       {prepareLassoPath && prepareLassoPath.length > 1 && (

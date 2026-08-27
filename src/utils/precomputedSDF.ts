@@ -9,7 +9,7 @@
 
 import { PrecomputedSDFGrid } from '../supports/PlacementLogic/Pathfinding/PrecomputedSDFGrid';
 import type { ClearanceHeightmap } from '../supports/PlacementLogic/Pathfinding/ClearanceHeightmap';
-import { isTauriRuntime } from './meshRepair';
+import { isTauriRuntime } from './tauriRuntime';
 
 type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 

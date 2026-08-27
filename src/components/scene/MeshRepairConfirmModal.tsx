@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Wrench, X, AlertTriangle } from 'lucide-react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import type { MeshRepairConfirmPrompt } from '@/features/scene/useSceneCollectionManager';
 
 type Props = {
@@ -23,6 +24,8 @@ function StatRow({ label, value }: { label: string; value: string | number }) {
 }
 
 export function MeshRepairConfirmModal({ prompt, onRepair, onLoadAsIs, onCancelImport }: Props) {
+  useEscapeToClose(true, onCancelImport);
+
   const { fileName, analysis } = prompt;
 
   return (

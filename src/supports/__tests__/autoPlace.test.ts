@@ -1,3 +1,4 @@
+import { footprintFromPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
@@ -125,7 +126,7 @@ test('runAutoPlace anchors a large flat region as a densified grid (planar → g
         contact: new THREE.Vector3(0, 0, 6.5),
         baseZ: 6.5,
         areaMm2: 400,
-        contactVoxels,
+        contactVoxels: footprintFromPoints(contactVoxels),
     };
 
     const result = runAutoPlace([facet], 'model-a', { debugSkipAutoBracing: true });
@@ -191,7 +192,7 @@ test('runAutoPlace places grid trunks on a rotated mesh via the region normal', 
         baseZ: 6.34,
         areaMm2: 400 * (Math.sqrt(3) / 2), // projected area ≈ 346
         surfaceNormal: normal,
-        contactVoxels,
+        contactVoxels: footprintFromPoints(contactVoxels),
     };
 
     const result = runAutoPlace([facet], 'model-a', { debugSkipAutoBracing: true });
@@ -227,7 +228,7 @@ test('runAutoPlace gap-fills under-covered regions (coverage convergence)', () =
         baseZ: 6.5,
         areaMm2: 400,
         surfaceNormal: { x: 0, y: 0, z: -1 },
-        contactVoxels,
+        contactVoxels: footprintFromPoints(contactVoxels),
     };
 
     const result = runAutoPlace([facet], 'model-a', {
@@ -266,7 +267,7 @@ test('runAutoPlace densifies small anchor regions below the grid threshold', () 
         contact: new THREE.Vector3(0, 0, 6.5),
         baseZ: 6.5,
         areaMm2: 16,
-        contactVoxels,
+        contactVoxels: footprintFromPoints(contactVoxels),
     };
 
     const result = runAutoPlace([foot], 'model-a', { debugSkipAutoBracing: true });
@@ -298,11 +299,11 @@ test('runAutoPlace fans sub-threshold overhang candidates instead of standalone 
                 contact: new THREE.Vector3(3, 0, 33),
                 baseZ: 33,
                 areaMm2: 16,
-                contactVoxels: [
+                contactVoxels: footprintFromPoints([
                     { x: 2.75, y: -0.25 }, { x: 3, y: -0.25 }, { x: 3.25, y: -0.25 },
                     { x: 2.75, y: 0 }, { x: 3, y: 0 }, { x: 3.25, y: 0 },
                     { x: 2.75, y: 0.25 }, { x: 3, y: 0.25 }, { x: 3.25, y: 0.25 },
-                ],
+                ]),
             },
         ],
         'model-a',
@@ -349,7 +350,7 @@ test('runAutoPlace falls back to a standalone trunk when no fan host exists', ()
                 contact: new THREE.Vector3(20, 0, 30),
                 baseZ: 30,
                 areaMm2: 16,
-                contactVoxels: [{ x: 19.75, y: 0 }, { x: 20, y: 0 }, { x: 20.25, y: 0 }],
+                contactVoxels: footprintFromPoints([{ x: 19.75, y: 0 }, { x: 20, y: 0 }, { x: 20.25, y: 0 }]),
             },
         ],
         'model-a',
@@ -387,7 +388,7 @@ test('runAutoPlace dispatches by shape: planar → grid, organic → Poisson', (
         contact: new THREE.Vector3(0, 0, 6.5),
         baseZ: 6.5,
         areaMm2: 400,
-        contactVoxels: planarVoxels,
+        contactVoxels: footprintFromPoints(planarVoxels),
     };
 
     // Curved region (z = 6.5 + x²/20) offset far away, higher cluster →
@@ -404,7 +405,7 @@ test('runAutoPlace dispatches by shape: planar → grid, organic → Poisson', (
         contact: new THREE.Vector3(40, 40, 25),
         baseZ: 25,
         areaMm2: 400,
-        contactVoxels: curvedVoxels,
+        contactVoxels: footprintFromPoints(curvedVoxels),
     };
 
     const result = runAutoPlace([planar, organic], 'model-a', { debugSkipAutoBracing: true });
@@ -444,7 +445,7 @@ test('runAutoPlace fans organic poisson points into island trunks instead of dup
                 contact: new THREE.Vector3(0, 0, 33),
                 baseZ: 33,
                 areaMm2: 400,
-                contactVoxels: curvedVoxels,
+                contactVoxels: footprintFromPoints(curvedVoxels),
             },
         ],
         'model-a',
@@ -500,7 +501,7 @@ test('runAutoPlace consolidates organic poisson trunks into island trunks placed
                 contact: new THREE.Vector3(0, 0, 25),
                 baseZ: 25,
                 areaMm2: 400,
-                contactVoxels: curvedVoxels,
+                contactVoxels: footprintFromPoints(curvedVoxels),
             },
             makeIsland('A', 2.5, 0, 30, 0.5),
         ],
@@ -596,17 +597,17 @@ test('runAutoPlace keeps low undersides a standalone anchor pillar forest', () =
             {
                 id: 'o0', source: 'overhang',
                 contact: new THREE.Vector3(0, 0, 6.5), baseZ: 6.5,
-                areaMm2: 64, contactVoxels,
+                areaMm2: 64, contactVoxels: footprintFromPoints(contactVoxels),
             },
             {
                 id: 'o15', source: 'overhang',
                 contact: new THREE.Vector3(3, 0, 8), baseZ: 8,
                 areaMm2: 16,
-                contactVoxels: [
+                contactVoxels: footprintFromPoints([
                     { x: 2.75, y: -0.25 }, { x: 3, y: -0.25 }, { x: 3.25, y: -0.25 },
                     { x: 2.75, y: 0 }, { x: 3, y: 0 }, { x: 3.25, y: 0 },
                     { x: 2.75, y: 0.25 }, { x: 3, y: 0.25 }, { x: 3.25, y: 0.25 },
-                ],
+                ]),
             },
         ],
         'model-a',

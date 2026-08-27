@@ -1,3 +1,4 @@
+import { isTauriRuntime } from '@/utils/tauriRuntime';
 import {
   getExperimentOverrides,
   subscribeToExperiments,
@@ -22,9 +23,6 @@ import {
 
 type TauriCoreModule = typeof import('@tauri-apps/api/core');
 
-function isTauriRuntime(): boolean {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-}
 
 let tauriCorePromise: Promise<TauriCoreModule | null> | null = null;
 

@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { AlertTriangle, X } from 'lucide-react';
 
 type DestructiveTransformModalProps = {
@@ -20,18 +21,7 @@ export function DestructiveTransformModal({
   onCancel,
   onConfirm,
 }: DestructiveTransformModalProps) {
-  React.useEffect(() => {
-    if (!isOpen) return;
-
-    const handleKeyDown = (event: CustomEvent) => {
-      if (event.detail.key === 'Escape') {
-        onCancel();
-      }
-    };
-
-    window.addEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
-    return () => window.removeEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
-  }, [isOpen, onCancel]);
+  useEscapeToClose(isOpen, onCancel);
 
   if (!isOpen) return null;
 

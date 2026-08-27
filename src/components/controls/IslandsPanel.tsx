@@ -66,7 +66,6 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
 
   const {
     scanning,
-    scanProgress,
     showVoxelOnly,
     setShowVoxelOnly,
     showMinimaOnly,
@@ -195,23 +194,9 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                 color: 'var(--accent)',
               }}
             >
-              {scanning
-                ? `Scanning… ${scanProgress?.done ?? 0}/${scanProgress?.total ?? 0}`
-                : 'Scan Islands'}
+              {scanning ? 'Scanning…' : 'Scan Islands'}
             </button>
 
-            {/* Progress bar */}
-            {scanning && scanProgress && (
-              <div className="h-1 rounded-full overflow-hidden" style={{ background: 'var(--surface-2)' }}>
-                <div
-                  className="h-full rounded-full transition-all duration-200"
-                  style={{
-                    width: `${Math.min(100, (scanProgress.done / Math.max(1, scanProgress.total)) * 100)}%`,
-                    background: 'var(--accent)',
-                  }}
-                />
-              </div>
-            )}
 
             {/* --- Post-scan content --- */}
             {hasData && !scanning && (

@@ -47,6 +47,7 @@ import {
   applyModelGroupUngrouping,
   applyModelUngrouping,
 } from '@/features/scene/modelGroupingHistory';
+import { performModelCut, selectModelsForClipboard } from '@/features/scene/modelCut';
 
 type PersistedMeshAppearance = {
   v: 1;
@@ -2632,7 +2633,59 @@ export function useSceneCollectionManager() {
     return true;
   }, [pushSceneSnapshotHistory]);
 
-  const updateModelTransforms = useCallback((updates: Array<{ id: string; transform: ModelTransform }>) => {
+  const commitModelTransformsHistory = useCallback((
+    beforeTransforms: Array<{ id: string; transform: ModelTransform }>,
+    description?: string,
+    supportSnapshotOptions?: TransformHistorySupportSnapshotOptions,
+  ) => {
+    const currentModels = modelsRef.current;
+    const currentActiveModelId = activeModelIdRef.current;
+    const currentSelectedModelIds = selectedModelIdsRef.current;
+    const beforeTransformMap = new Map(beforeTransforms.map((entry) => [entry.id, entry.transform]));
+    const changedIds = currentModels
+      .filter((model) => {
+        const beforeTransform = beforeTransformMap.get(model.id);
+        return beforeTransform && !transformsEqual(beforeTransform, model.transform);
+      })
+      .map((model) => model.id);
+    if (changedIds.length === 0) return false;
+
+    const beforeModels = currentModels.map((model) => {
+      const beforeTransform = beforeTransformMap.get(model.id);
+      return beforeTransform
+        ? { ...model, transform: cloneTransform(beforeTransform) }
+        : model;
+    });
+    const includeSupportByOption = supportSnapshotOptions?.includeSupportState === true
+      || !!supportSnapshotOptions?.supportBefore
+      || !!supportSnapshotOptions?.supportAfter
+      || !!supportSnapshotOptions?.kickstandBefore
+      || !!supportSnapshotOptions?.kickstandAfter;
+    const supportStateNow = getSnapshot();
+    const kickstandStateNow = getKickstandSnapshot();
+    const includeSupportByState = changedIds.some((id) => (
+      hasSupportsOrKickstandsForModel(id, supportStateNow, kickstandStateNow)
+    ));
+    const includeSupportHistory = includeSupportByOption || includeSupportByState;
+
+    const before = captureSceneSnapshot(beforeModels, currentActiveModelId, currentSelectedModelIds, {
+      includeSupportState: includeSupportHistory,
+      supportStateOverride: supportSnapshotOptions?.supportBefore,
+      kickstandStateOverride: supportSnapshotOptions?.kickstandBefore,
+    });
+    const after = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, {
+      includeSupportState: includeSupportHistory,
+      supportStateOverride: supportSnapshotOptions?.supportAfter,
+      kickstandStateOverride: supportSnapshotOptions?.kickstandAfter,
+    });
+    pushSceneSnapshotHistory(before, after, description ?? 'Update Model Transforms');
+    return true;
+  }, [pushSceneSnapshotHistory]);
+
+  const updateModelTransforms = useCallback((
+    updates: Array<{ id: string; transform: ModelTransform }>,
+    options?: { pushHistory?: boolean },
+  ) => {
     if (updates.length === 0) {
       return {
         updated: false,
@@ -2685,11 +2738,14 @@ export function useSceneCollectionManager() {
     const allUpdatedIds = Array.from(updateMap.keys());
     const includeSupportHistory = allUpdatedIds.some((id) => hasSupportsOrKickstandsForModel(id, supportStateBefore, kickstandStateBefore));
 
-    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, {
-      includeSupportState: includeSupportHistory,
-      supportStateOverride: includeSupportHistory ? supportStateBefore : undefined,
-      kickstandStateOverride: includeSupportHistory ? kickstandStateBefore : undefined,
-    });
+    const shouldPushHistory = options?.pushHistory !== false;
+    const before = shouldPushHistory
+      ? captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, {
+          includeSupportState: includeSupportHistory,
+          supportStateOverride: includeSupportHistory ? supportStateBefore : undefined,
+          kickstandStateOverride: includeSupportHistory ? kickstandStateBefore : undefined,
+        })
+      : null;
 
     let supportsChanged = false;
     let kickstandsChanged = false;
@@ -2717,16 +2773,19 @@ export function useSceneCollectionManager() {
       return nextTransform ? { ...m, transform: nextTransform } : m;
     });
 
+    if (!shouldPushHistory) modelsRef.current = nextModels;
     setModels(nextModels);
 
-    const supportStateAfter = includeSupportHistory ? getSnapshot() : undefined;
-    const kickstandStateAfter = includeSupportHistory ? getKickstandSnapshot() : undefined;
-    const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds, {
-      includeSupportState: includeSupportHistory,
-      supportStateOverride: supportStateAfter,
-      kickstandStateOverride: kickstandStateAfter,
-    });
-    pushSceneSnapshotHistory(before, after, updates.length === 1 ? 'Update Model Transform' : 'Update Model Transforms');
+    if (shouldPushHistory && before) {
+      const supportStateAfter = includeSupportHistory ? getSnapshot() : undefined;
+      const kickstandStateAfter = includeSupportHistory ? getKickstandSnapshot() : undefined;
+      const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds, {
+        includeSupportState: includeSupportHistory,
+        supportStateOverride: supportStateAfter,
+        kickstandStateOverride: kickstandStateAfter,
+      });
+      pushSceneSnapshotHistory(before, after, updates.length === 1 ? 'Update Model Transform' : 'Update Model Transforms');
+    }
 
     return {
       updated,
@@ -3932,10 +3991,10 @@ export function useSceneCollectionManager() {
   }, [models]);
 
   const copySelectedModels = useCallback((ids?: string[]) => {
-    const idSet = new Set((ids && ids.length > 0) ? ids : selectedModelIds);
-    if (idSet.size === 0) return false;
+    const targetIds = (ids && ids.length > 0) ? ids : selectedModelIds;
+    if (targetIds.length === 0) return false;
 
-    const selected = models.filter((m) => idSet.has(m.id));
+    const selected = selectModelsForClipboard(models, targetIds);
     if (selected.length === 0) return false;
 
     setModelClipboard(selected.map((source) => {
@@ -3962,12 +4021,13 @@ export function useSceneCollectionManager() {
     return true;
   }, [models, selectedModelIds]);
 
+  const cutSelectedModels = useCallback((ids: string[]) => {
+    return performModelCut(ids, copySelectedModels, deleteModels);
+  }, [copySelectedModels, deleteModels]);
+
   const cutModel = useCallback((id: string) => {
-    const copied = copyModel(id);
-    if (!copied) return false;
-    deleteModel(id);
-    return true;
-  }, [copyModel, deleteModel]);
+    return cutSelectedModels([id]);
+  }, [cutSelectedModels]);
 
   const pasteModel = useCallback(() => {
     if (modelClipboard.length === 0) return null;
@@ -5747,6 +5807,7 @@ export function useSceneCollectionManager() {
     onFileChange,
     updateModelTransform,
     commitModelTransformHistory,
+    commitModelTransformsHistory,
     updateModelTransforms,
     setModelTransformRaw,
     replaceModelGeometry,
@@ -5774,6 +5835,7 @@ export function useSceneCollectionManager() {
     deleteSupportsForModels,
     copyModel,
     copySelectedModels,
+    cutSelectedModels,
     cutModel,
     pasteModel,
     pasteCopiedModelsAutoArrange,

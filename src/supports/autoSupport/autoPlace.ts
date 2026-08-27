@@ -1,4 +1,15 @@
+import { footprintX, footprintY } from '@/volumeAnalysis/Islands/voxelFootprint';
 import * as THREE from 'three';
+import { quantizeToScale } from '@/utils/math';
+
+/**
+ * Diagnostics are reported to 2dp. `quantizeToScale` is the shared form of the
+ * `Math.round(v * 100) / 100` this file used to define locally, so the numbers
+ * are unchanged. Note it is NOT interchangeable with `round(v, 2)` from the same
+ * module: that rounds the decimal representation and the two disagree on values
+ * that land exactly halfway, which authored 0.001-grid dimensions often do.
+ */
+const round2Mm = (v: number): number => quantizeToScale(v, 100);
 import type { CandidatePoint, AutoPlaceResult, AutoPlaceAnalytics, RejectReason, AutoSupportPlan, PlacementDiagnostics, FanLeafRefusal, ForestLedgerEntry, ForestReport, ForestTree } from './types';
 import type { SupportState, SupportOrigin } from '../types';
 import type { AutoSupportSettings } from './settings';
@@ -60,7 +71,6 @@ function logPlacement(message: string): void {
     if (verboseLogging) console.log(LOG_PREFIX, message);
 }
 
-function round2(v: number): number { return Math.round(v * 100) / 100; }
 
 // ---------------------------------------------------------------------------
 // Mesh volume helper
@@ -1881,7 +1891,7 @@ export function computeAutoSupportPlan(
         // grid read 1% covered — which sent the fanning pass after
         // already-supported surfaces (redundant "floating" leaves).
         let fraction: number;
-        if (island.contactVoxels && island.contactVoxels.length > 0) {
+        if (island.contactVoxels && island.contactVoxels.count > 0) {
             fraction = computeRegionCoverage(island, allTips, SUPPORT_COVERAGE_RADIUS_MM);
         } else {
             // No footprint (minima islands): centroid proximity fallback.
@@ -1922,17 +1932,17 @@ export function computeAutoSupportPlan(
         const sAvg = sizeParameters(makeSample(avgArea, zMax / 2), getSettings().autoSupport?.sizeScale ?? 1);
         sizingDebug = {
             modelVolumeMm3: Math.round(modelCtx.modelVolumeMm3),
-            estimatedWeightG: round2(weightG),
+            estimatedWeightG: round2Mm(weightG),
             totalCandidates: modelCtx.totalCandidates,
             // Honest mass share: total model weight divided by the number of
             // placed supports. A load share, not a force estimate.
-            weightPerSupportG: round2(placedTrunks > 0 ? weightG / placedTrunks : 0),
-            avgIslandAreaMm2: round2(avgArea),
+            weightPerSupportG: round2Mm(placedTrunks > 0 ? weightG / placedTrunks : 0),
+            avgIslandAreaMm2: round2Mm(avgArea),
             // Anchor-layer stats (per-contact-patch bands, anchorBands.ts):
             // counts and projected area only — no force/load values.
             anchorClusterCount: anchorBands.clusterCount,
             anchorInBandRegions: anchorBands.inBandIds.length,
-            anchorLayerAreaMm2: round2(
+            anchorLayerAreaMm2: round2Mm(
                 anchorBands.inBandIds.length > 0
                     ? overhangIslands.reduce(
                         (sum, i) => sum + (anchorBands.inBandIds.includes(i.id) ? (i.areaMm2 ?? 0) : 0),
@@ -1946,14 +1956,14 @@ export function computeAutoSupportPlan(
             poissonDiskTrunks: diagnostics.trunksByKind.poissonDisk,
             gridInfillTrunks: diagnostics.trunksByKind.gridInfill + diagnostics.trunksByKind.coverageFill,
             shaftDiameterRange: {
-                min: round2(sMin.shaftDiameterMm ?? 0),
-                max: round2(sMax.shaftDiameterMm ?? 0),
-                avg: round2(sAvg.shaftDiameterMm ?? 0),
+                min: round2Mm(sMin.shaftDiameterMm ?? 0),
+                max: round2Mm(sMax.shaftDiameterMm ?? 0),
+                avg: round2Mm(sAvg.shaftDiameterMm ?? 0),
             },
             tipContactRange: {
-                min: round2(sMin.tipContactDiameterMm ?? 0),
-                max: round2(sMax.tipContactDiameterMm ?? 0),
-                avg: round2(sAvg.tipContactDiameterMm ?? 0),
+                min: round2Mm(sMin.tipContactDiameterMm ?? 0),
+                max: round2Mm(sMax.tipContactDiameterMm ?? 0),
+                avg: round2Mm(sAvg.tipContactDiameterMm ?? 0),
             },
         };
     }
@@ -2091,15 +2101,17 @@ export function computeAutoSupportPlan(
 
         const area = bestIsland.areaMm2 ?? 0;
         const voxels = bestIsland.contactVoxels;
-        if (area < OVERHANG_AREA_THRESHOLD_MM2 || !voxels || voxels.length < 3) continue;
+        if (area < OVERHANG_AREA_THRESHOLD_MM2 || !voxels || voxels.count < 3) continue;
 
         // Compute bounding box of contact voxels.
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const v of voxels) {
-            if (v.x < minX) minX = v.x;
-            if (v.y < minY) minY = v.y;
-            if (v.x > maxX) maxX = v.x;
-            if (v.y > maxY) maxY = v.y;
+        for (let vi = 0; vi < voxels.count; vi++) {
+            const vx = footprintX(voxels, vi);
+            const vy = footprintY(voxels, vi);
+            if (vx < minX) minX = vx;
+            if (vy < minY) minY = vy;
+            if (vx > maxX) maxX = vx;
+            if (vy > maxY) maxY = vy;
         }
         const width = maxX - minX;
         const height = maxY - minY;
@@ -2117,9 +2129,9 @@ export function computeAutoSupportPlan(
                 // Check if this grid point is within the voxel footprint
                 // (simple containment: near any contact voxel).
                 let inFootprint = false;
-                for (const v of voxels) {
-                    const dx = gx - v.x;
-                    const dy = gy - v.y;
+                for (let vi = 0; vi < voxels.count; vi++) {
+                    const dx = gx - footprintX(voxels, vi);
+                    const dy = gy - footprintY(voxels, vi);
                     if (dx * dx + dy * dy <= OVERHANG_GRID_SPACING_MM * OVERHANG_GRID_SPACING_MM) {
                         inFootprint = true;
                         break;

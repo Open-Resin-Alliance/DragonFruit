@@ -24,14 +24,11 @@ import {
     getSnapshot as getSupportSnapshot,
     resolveEditableSupportTarget,
     getSupportSettingsForTarget,
-    applySettingsToSupportTarget,
-    beginSupportStateBatch,
-    endSupportStateBatch,
     type EditableSupportTarget,
 } from '../state';
-import { getSelectedSupportIds } from '../interaction/supportMultiSelection';
 import { checkPresetDrift, findMatchingPresetIdForSettings, getPresetById } from './presets';
 import { createDefaultSettings, type SupportSettings } from './types';
+import { applySettingsToSelectedSupports } from './applySettingsToSelectedSupports';
 import { areSupportGeometrySettingsEqual } from './supportSettingsCodec';
 import { captureSupportEditSnapshot, pushSupportEditHistory, type SupportEditHistorySnapshot } from '../history/supportEditHistory';
 import {
@@ -168,40 +165,6 @@ function fieldFocusProps(
         onBlurCapture: onBlur,
         'data-setting-key': key,
     };
-}
-
-/** Apply settings to all currently selected supports (multi-selection aware). */
-function applySettingsToAllSelectedSupports(settings: SupportSettings): void {
-    const snap = getSupportSnapshot();
-    const selectedIds = getSelectedSupportIds();
-    const idsToApply = selectedIds.length > 0
-        ? selectedIds
-        : (snap.selectedId ? [snap.selectedId] : []);
-
-    if (idsToApply.length === 0) return;
-
-    // Batch all mutations so notify() only fires once after the loop,
-    // preventing cascading re-renders from useSyncExternalStore listeners.
-    beginSupportStateBatch();
-    try {
-        for (const id of idsToApply) {
-            let target: EditableSupportTarget | null = null;
-            if (snap.trunks[id]) {
-                target = { kind: 'trunk', id };
-            } else if (snap.branches[id]) {
-                target = { kind: 'branch', id };
-            } else if (snap.leaves[id]) {
-                target = { kind: 'leaf', id };
-            } else {
-                target = resolveEditableSupportTarget(id, snap.selectedCategory ?? undefined);
-            }
-            if (target) {
-                applySettingsToSupportTarget(target, settings);
-            }
-        }
-    } finally {
-        endSupportStateBatch();
-    }
 }
 
 /**
@@ -417,7 +380,7 @@ export function SupportSidebar() {
         const latestSettings = editSessionLatestSettingsRef.current ?? getSettings();
         const persisted = getSupportSettingsForTarget(target);
         if (!persisted || !areSupportGeometrySettingsEqual(persisted, latestSettings)) {
-            applySettingsToAllSelectedSupports(latestSettings);
+            applySettingsToSelectedSupports(latestSettings);
         }
 
         if (before) {
@@ -558,7 +521,7 @@ export function SupportSidebar() {
 
         supportEditSessionDirtyRef.current = true;
         editSessionLatestSettingsRef.current = settings;
-        applySettingsToAllSelectedSupports(settings);
+        applySettingsToSelectedSupports(settings);
     }, [editableTarget, settings]);
 
     React.useEffect(() => {
@@ -1336,7 +1299,7 @@ export function SupportSidebar() {
                                                         };
                                                         editSessionLatestSettingsRef.current = nextSettings;
                                                         setSettings(nextSettings);
-                                                        applySettingsToAllSelectedSupports(nextSettings);
+                                                        applySettingsToSelectedSupports(nextSettings);
                                                         setOptimisticPresetId(presetId);
                                                     }}
                                                 />

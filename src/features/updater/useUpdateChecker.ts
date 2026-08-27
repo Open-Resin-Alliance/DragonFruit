@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useIsLinux } from '@/hooks/usePlatform';
 import {
   fetchUpdateInfo,
   downloadAndInstall,
@@ -22,7 +23,8 @@ export type UpdateState =
   | { status: 'error'; message: string }
   | { status: 'downloading'; progress: DownloadProgress }
   | { status: 'installing' }
-  | { status: 'installed' };
+  | { status: 'installed' }
+  | { status: 'external' };
 
 // ---------------------------------------------------------------------------
 // Hook
@@ -31,9 +33,13 @@ export type UpdateState =
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const STORAGE_KEY_LAST_CHECK = 'dragonfruit-updater-last-check';
 
+const EXTERNAL_STATE: UpdateState = { status: 'external' };
+
 export function useUpdateChecker() {
-  const [state, setState] = useState<UpdateState>({ status: 'idle' });
+  const [internalState, setState] = useState<UpdateState>({ status: 'idle' });
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(true);
+  // Linux updates through Flatpak, not through the app.
+  const isExternal = useIsLinux();
   const [channel, setChannel] = useState<UpdateChannel>('stable');
   const [channelLoaded, setChannelLoaded] = useState(false);
 
@@ -45,7 +51,12 @@ export function useUpdateChecker() {
     });
   }, []);
 
+  const state = isExternal ? EXTERNAL_STATE : internalState;
+
   const handleCheck = useCallback(async () => {
+    // Nothing to check: Flatpak installs the update, not the app.
+    if (isExternal) return;
+
     setState({ status: 'checking' });
     console.log('[updater] checking for updates on channel:', channel);
 
@@ -79,7 +90,7 @@ export function useUpdateChecker() {
         err instanceof Error ? err.message : 'Unknown error checking for updates.';
       setState({ status: 'error', message });
     }
-  }, [channel]);
+  }, [channel, isExternal]);
 
   const handleDownloadAndInstall = useCallback(async () => {
     setState({ status: 'downloading', progress: { contentLength: 0, downloaded: 0 } });
@@ -105,7 +116,7 @@ export function useUpdateChecker() {
 
   // Auto-check once the channel is loaded from disk and enough time has passed.
   useEffect(() => {
-    if (!autoCheckEnabled || !channelLoaded) return;
+    if (!autoCheckEnabled || !channelLoaded || isExternal) return;
 
     const lastCheck = (() => {
       if (typeof window === 'undefined') return 0;
@@ -121,7 +132,7 @@ export function useUpdateChecker() {
     if (elapsed >= CHECK_INTERVAL_MS || lastCheck === 0) {
       handleCheck();
     }
-  }, [autoCheckEnabled, channelLoaded, handleCheck]);
+  }, [autoCheckEnabled, channelLoaded, isExternal, handleCheck]);
 
   return {
     state,

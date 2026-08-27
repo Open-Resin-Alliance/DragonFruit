@@ -2,6 +2,7 @@ import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import type { CandidatePoint } from './types';
 import type { AutoSupportSettings } from './settings';
 import type { SupportState } from '../types';
+import { footprintX, footprintY, footprintZ } from '@/volumeAnalysis/Islands/voxelFootprint';
 
 /** A tip covers surface within this radius (mm) — mirrors ALREADY_SUPPORTED_RADIUS_MM. */
 export const TIP_COVERAGE_RADIUS_MM = 3.0;
@@ -37,16 +38,18 @@ export function computeRegionCoverage(
     radiusMm: number = TIP_COVERAGE_RADIUS_MM,
 ): number {
     const voxels = region.contactVoxels;
-    if (!voxels || voxels.length === 0) return 0;
+    if (!voxels || voxels.count === 0) return 0;
     if (tips.length === 0) return 0;
 
     const r2 = radiusMm * radiusMm;
     let covered = 0;
-    for (const v of voxels) {
+    for (let i = 0; i < voxels.count; i++) {
+        const vx = footprintX(voxels, i);
+        const vy = footprintY(voxels, i);
         let hit = false;
         for (const tip of tips) {
-            const dx = v.x - tip.x;
-            const dy = v.y - tip.y;
+            const dx = vx - tip.x;
+            const dy = vy - tip.y;
             if (dx * dx + dy * dy <= r2) {
                 hit = true;
                 break;
@@ -54,7 +57,7 @@ export function computeRegionCoverage(
         }
         if (hit) covered++;
     }
-    return covered / voxels.length;
+    return covered / voxels.count;
 }
 
 /**
@@ -69,7 +72,7 @@ export function findUncoveredClusters(
     minClusterMm2: number = MIN_GAP_CLUSTER_MM2,
 ): Array<{ x: number; y: number; z: number }> {
     const voxels = region.contactVoxels;
-    if (!voxels || voxels.length === 0) return [];
+    if (!voxels || voxels.count === 0) return [];
     if (tips.length === 0) {
         // No tips at all — a single cluster covering everything is not useful;
         // return [] so the caller's main grid handles the region instead.
@@ -90,7 +93,8 @@ export function findUncoveredClusters(
     const cellSize = Math.max(0.5, radiusMm / 2);
     const uncovered = new Map<string, Array<{ x: number; y: number; z?: number }>>();
     const cells: Array<{ x: number; y: number; z?: number }> = [];
-    for (const v of voxels) {
+    for (let i = 0; i < voxels.count; i++) {
+        const v = { x: footprintX(voxels, i), y: footprintY(voxels, i), z: footprintZ(voxels, i) ?? undefined };
         if (isCovered(v)) continue;
         const key = `${Math.floor(v.x / cellSize)},${Math.floor(v.y / cellSize)}`;
         let bucket = uncovered.get(key);
@@ -176,7 +180,7 @@ export function buildGapFillCandidates(
     const coverageTarget = (settings.coverageTargetPercent ?? 95) / 100;
     for (const region of overhangIslands) {
         if (region.source !== 'overhang') continue;
-        if (!region.contactVoxels || region.contactVoxels.length === 0) continue;
+        if (!region.contactVoxels || region.contactVoxels.count === 0) continue;
         if (computeRegionCoverage(region, tips) >= coverageTarget) continue;
 
         const clusters = findUncoveredClusters(region, tips);

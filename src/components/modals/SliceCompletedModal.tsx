@@ -23,19 +23,6 @@ export function SliceCompletedModal({
   const [openDirectoryError, setOpenDirectoryError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    if (!isOpen) return;
-
-    const handleKeyDown = (event: CustomEvent) => {
-      if (event.detail.key === 'Escape') {
-        onClose();
-      }
-    };
-
-    window.addEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
-    return () => window.removeEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
-  }, [isOpen, onClose]);
-
-  React.useEffect(() => {
     if (!isOpen) {
       setOpenDirectoryError(null);
     }

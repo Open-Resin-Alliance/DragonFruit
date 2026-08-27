@@ -33,6 +33,27 @@ The vocabulary — and the distinctions people get wrong, like knot versus joint
 
 **Cascades are one history action.** Deleting a trunk rehosts or removes its dependents; that whole cascade is a single entry with before/after state, so undo restores a consistent graph rather than half of one. See [History and Undo/Redo](history-and-undo-redo.md).
 
+## Multi-support settings
+
+`applySettingsToSelectedSupports` in
+`src/supports/Settings/applySettingsToSelectedSupports.ts` is the mutation path
+for editing settings when one or more supports are selected. It reads the
+current support selection, resolves every selected support to its editable
+target, and batches all store mutations into one notification. When no
+multi-selection exists, it falls back to the primary selected support.
+
+The settings sidebar shows the last selected support's values. Changing a value
+applies those settings to the complete selection. The sidebar captures one
+before/after support edit snapshot around the editing session, so undo restores
+the whole selection in one step. Selection controllers must therefore keep a
+primary selected support alongside the selected-ID set; clearing the primary
+representative makes the sidebar non-editable even when IDs remain selected.
+Shift-click toggles one support without disturbing the rest of the set. Detailed
+primitive renderers must defer to the parent support while a multi-selection is
+active: a normal click replaces the set with that support, while Shift-click
+toggles only that support. Selecting a shaft, joint, knot, or contact cone in
+either case would clear the support selection set.
+
 ## Placing supports
 
 - By hand: modifier keys choose the family, the first click's target chooses the type — [Support Placement Modifiers](../reference/support-placement-modifiers.md).

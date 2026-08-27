@@ -79,11 +79,6 @@ export function selectSupportById(id: string, toggle: boolean) {
         return;
     }
 
-    if (next.length > 1) {
-        setSelectedId(null);
-        return;
-    }
-
     setSelectedId(id);
 }
 

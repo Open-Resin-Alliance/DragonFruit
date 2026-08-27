@@ -28,9 +28,14 @@ finish-args:
   # Printer HTTP discovery + uploads (SDCP 3.0.0, Anycubic, Elegoo, Athena)
   - --share=network
 
-  # Display
-  - --socket=wayland
-  - --socket=fallback-x11
+  # Display — X11 only, on purpose. Since tauri-apps/tauri#15588 the CEF
+  # runtime creates its window with winit and embeds the browser as a child,
+  # and CEF's Linux embedding API only accepts an X11 window id (XID). Wayland
+  # has no equivalent handle, so the runtime forces ozone-platform=x11.
+  # Granting --socket=wayland makes flatpak resolve --socket=fallback-x11 to
+  # nothing, leaving the sandbox with no X display: the app then dies with
+  # Runtime(CreateWindow). See ADR 0040.
+  - --socket=x11
 
   # Audio (optional, tauri-plugin-log writes to journal; harmless)
   - --socket=pulseaudio
@@ -59,6 +64,11 @@ modules:
       - install -Dm755 staging/bin/dragonfruit-desktop /app/lib/dragonfruit/dragonfruit-desktop
       - install -d /app/lib/dragonfruit/cef
       - "cp -a staging/cef/. /app/lib/dragonfruit/cef/"
+
+      # CEF is built on Ubuntu and requests the Debian soname libbz2.so.1.0;
+      # the freedesktop runtime only ships libbz2.so.1 (same library). Without
+      # this link libcef.so fails to load and the app never starts.
+      - ln -s /usr/lib/x86_64-linux-gnu/libbz2.so.1 /app/lib/dragonfruit/cef/libbz2.so.1.0
 
       # Launcher at /app/bin/dragonfruit
       - install -Dm755 staging/launcher.sh /app/bin/dragonfruit

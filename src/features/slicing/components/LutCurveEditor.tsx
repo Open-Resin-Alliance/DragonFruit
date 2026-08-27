@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { AlertTriangle, Check, Download, Edit3, Pencil, Plus, Trash2, Upload, X, RotateCcw, TrendingUp } from 'lucide-react';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
@@ -842,6 +843,8 @@ export function LutCurveEditorModal({
   const handleCancelDiscardClose = useCallback(() => {
     setShowDiscardConfirm(false);
   }, []);
+
+  useEscapeToClose(isOpen, requestClose);
 
   const handleConfirmDelete = useCallback(() => {
     if (!editingCurve || !onDelete) return;

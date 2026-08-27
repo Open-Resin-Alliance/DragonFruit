@@ -5,6 +5,7 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import { AlertTriangle, ArchiveRestore, Trash2, X } from 'lucide-react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 
 type Props = {
   savedAt: string;
@@ -17,6 +18,9 @@ type Props = {
 };
 
 export function SceneAutosaveRecoveryModal({ savedAt, voxlPath, origin, onRestore, onDiscard }: Props) {
+  // Restore or discard is a deliberate choice: swallow Escape, never guess one.
+  useEscapeToClose(true, undefined);
+
   const { _, i18n } = useLingui();
   const [busy, setBusy] = React.useState<'none' | 'restore' | 'discard'>('none');
 

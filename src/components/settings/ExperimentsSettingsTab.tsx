@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, FlaskConical, X } from 'lucide-react';
 import {
@@ -29,6 +30,8 @@ type ExperimentsDisclaimerProps = {
  * entry animation transform (which would otherwise offset a fixed overlay).
  */
 function ExperimentsDisclaimer({ onAcknowledge, onExit }: ExperimentsDisclaimerProps) {
+  useEscapeToClose(true, onExit);
+
   return (
     <div
       className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"

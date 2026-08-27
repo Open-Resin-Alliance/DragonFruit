@@ -227,7 +227,7 @@ export function IslandScanCard({
 
             {islands.scanProgress && (
                 <div className="text-[11px] px-1" style={{ color: 'var(--text-muted)' }}>
-                    {islands.scanProgress.done} / {islands.scanProgress.total} layers
+                    {islands.scanProgress.phase ? `${islands.scanProgress.phase}: ` : ''}{islands.scanProgress.done} / {islands.scanProgress.total} layers
                     {islands.scanData && islands.scanData.islands.length > 0 && (
                         <span className="ml-1" style={{ color: 'var(--text-strong)' }}>({islands.scanData.islands.length} islands)</span>
                     )}

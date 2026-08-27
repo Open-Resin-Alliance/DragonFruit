@@ -1,6 +1,7 @@
 import React from 'react';
 import { AlertTriangle, CheckCircle2, LayoutGrid, Trash2, X } from 'lucide-react';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
 import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
 import { ZipFilePickerModal } from '@/components/modals/ZipFilePickerModal';
@@ -76,6 +77,13 @@ export function SceneFileModals({
   zipPickerResolveRef,
   zipPickerState,
 }: SceneFileModalsProps) {
+  // Escape mirrors each dialog's backdrop click; the arrange overlay is a
+  // blocking progress state, so it swallows the key instead.
+  useEscapeToClose(Boolean(scene.sceneImportPlacementPrompt), () => scene.resolveSceneImportPlacementPrompt('load_as_is'));
+  useEscapeToClose(showPluginImportWarningModal, handleCancelPluginImportWarning);
+  useEscapeToClose(showSceneSaveChoiceModal, () => resolveSceneSaveChoice('cancel'));
+  useEscapeToClose(showArrangeBlockingOverlay, undefined);
+
   return (
     <>
       <StructuredDialogModal

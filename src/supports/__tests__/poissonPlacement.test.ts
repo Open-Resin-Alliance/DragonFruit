@@ -1,3 +1,4 @@
+import { footprintFromPoints, footprintToPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
@@ -31,7 +32,7 @@ function rectRegion(
         baseZ,
         areaMm2,
         overhangAngleDeg: angleDeg,
-        contactVoxels,
+        contactVoxels: footprintFromPoints(contactVoxels),
     };
 }
 
@@ -50,7 +51,7 @@ function ringRegion(id: string, areaMm2: number): DetectedIsland {
         contact: new THREE.Vector3(0, 0, 6.5),
         baseZ: 6.5,
         areaMm2,
-        contactVoxels,
+        contactVoxels: footprintFromPoints(contactVoxels),
     };
 }
 
@@ -184,8 +185,8 @@ test('tighter anchor perimeter factor yields a denser ring', () => {
 // ---------------------------------------------------------------------------
 
 test('erodeFootprint insets by the contact radius and empties thin regions', () => {
-    const rect = rectRegion('o0', -2, 2, -2, 2, 16, 6.5, 0).contactVoxels ?? [];
-    const eroded = erodeFootprint(rect);
+    const rect = rectRegion('o0', -2, 2, -2, 2, 16, 6.5, 0).contactVoxels;
+    const eroded = erodeFootprint(rect ? footprintToPoints(rect) : []);
 
     assert.ok(eroded.length > 0, '4×4 mm foot survives erosion');
     const xs = eroded.map((v) => v.x);
@@ -194,9 +195,9 @@ test('erodeFootprint insets by the contact radius and empties thin regions', () 
     assert.ok(Math.min(...ys) >= -1.9 && Math.max(...ys) <= 1.9);
 
     // A 1-voxel-thin strip erodes to nothing → callers fall back to the raw boundary.
-    const strip: DetectedIsland['contactVoxels'] = [];
+    const strip: Array<{ x: number; y: number; z?: number }> = [];
     for (let x = -4; x <= 4; x += 0.25) strip.push({ x, y: 0, z: 6.5 });
-    assert.equal(erodeFootprint(strip ?? []).length, 0);
+    assert.equal(erodeFootprint(strip).length, 0);
 });
 
 test('perimeter ring is inset so the contact disc stays on the surface', () => {
@@ -235,7 +236,7 @@ test('flatness metric: curved region reads organic (above the threshold)', () =>
         contact: new THREE.Vector3(0, 0, 6.5),
         baseZ: 6.5,
         areaMm2: 400,
-        contactVoxels,
+        contactVoxels: footprintFromPoints(contactVoxels),
     };
 
     const metric = computeRegionFlatnessDeg(curved);

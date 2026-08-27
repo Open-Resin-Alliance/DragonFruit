@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { ArchiveRestore, FileArchive, X } from 'lucide-react';
 import { getFileExtensionLower } from '@/utils/zipImport';
 import { SCENE_FILE_EXTENSIONS } from '@/features/plugins/pluginFileTypeExtensions';
@@ -137,13 +138,7 @@ export function ZipFilePickerModal({
     setSelectedIndices(defaultSelectedIndices);
   }, [defaultSelectedIndices]);
 
-  React.useEffect(() => {
-    const handleKeyDown = (e: CustomEvent) => {
-      if (e.detail.key === 'Escape') onCancel();
-    };
-    window.addEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
-    return () => window.removeEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
-  }, [onCancel]);
+  useEscapeToClose(true, onCancel);
 
   const toggleFile = (index: number) => {
     setSelectedIndices((prev) => {

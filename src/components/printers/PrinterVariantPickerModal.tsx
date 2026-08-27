@@ -1,6 +1,7 @@
 "use client";
 
 import React from 'react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
@@ -165,14 +166,7 @@ export function PrinterVariantPickerModal({
   // show the connection progress instead of the scanning bar.
   const scanAbortRef = React.useRef(false);
 
-  React.useEffect(() => {
-    const handleHotkey = (event: CustomEvent) => {
-      if (event.detail.key !== 'Escape') return;
-      onClose();
-    };
-    window.addEventListener('app-hotkey-keydown', handleHotkey as EventListener);
-    return () => window.removeEventListener('app-hotkey-keydown', handleHotkey as EventListener);
-  }, [onClose]);
+  useEscapeToClose(true, onClose);
 
   const runScan = React.useCallback(async () => {
     if (!networkAdapter) return;

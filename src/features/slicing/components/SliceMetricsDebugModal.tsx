@@ -1,5 +1,6 @@
 import React from 'react';
 import { Activity, Cpu, Layers3, Timer, X } from 'lucide-react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import type { SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 
 type SliceMetricsDebugModalProps = {
@@ -66,6 +67,8 @@ export function SliceMetricsDebugModal({
   outputName,
   outputSizeLabel,
 }: SliceMetricsDebugModalProps) {
+  useEscapeToClose(isOpen, onClose);
+
   const [copyState, setCopyState] = React.useState<'idle' | 'copied' | 'error'>('idle');
 
   const copyPayload = React.useMemo(() => {

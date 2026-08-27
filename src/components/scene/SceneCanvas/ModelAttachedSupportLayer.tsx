@@ -25,6 +25,7 @@ export type ModelAttachedSupportLayerProps = {
   selectedTintStrength?: number;
   activeModelId?: string | null;
   selectedModelIds?: string[];
+  marqueeCandidateModelIds?: readonly string[];
   hoverModelId?: string | null;
   modelDropOffsetsById?: Record<string, number>;
   navigationLodActive?: boolean;
@@ -78,6 +79,7 @@ export function ModelAttachedSupportLayer({
   selectedTintStrength,
   activeModelId = null,
   selectedModelIds = [],
+  marqueeCandidateModelIds,
   hoverModelId = null,
   modelDropOffsetsById,
   navigationLodActive = false,
@@ -120,6 +122,7 @@ export function ModelAttachedSupportLayer({
           clipUpper={clipUpper}
           activeModelId={activeModelId}
           selectedModelIds={selectedModelIds}
+          marqueeCandidateModelIds={marqueeCandidateModelIds}
           hoverModelId={hoverModelId}
           excludeModelId={excludeModelId}
           excludeModelIds={excludeModelIds}
@@ -181,6 +184,7 @@ export function ModelAttachedSupportLayer({
             supportColorsByModelId={supportColorsByModelId}
             activeModelId={activeModelId}
             selectedModelIds={selectedModelIds}
+            marqueeCandidateModelIds={marqueeCandidateModelIds}
             hoverModelId={hoverModelId}
             hoverTintColor={hoverTintColor}
             hoverTintStrength={hoverTintStrength}
@@ -215,6 +219,7 @@ export function ModelAttachedSupportLayer({
             selectedTintStrength={selectedTintStrength}
             activeModelId={activeModelId}
             selectedModelIds={selectedModelIds}
+            marqueeCandidateModelIds={marqueeCandidateModelIds}
             hoverModelId={hoverModelId}
             modelDropOffsetsById={modelDropOffsetsById}
             modelFilterId={modelFilterId}

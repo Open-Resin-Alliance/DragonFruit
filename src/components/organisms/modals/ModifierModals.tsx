@@ -1,5 +1,6 @@
 import { AlertTriangle } from 'lucide-react';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { DestructiveTransformModal } from '@/components/modals/DestructiveTransformModal';
 import { type HollowingPanelState } from '@/features/hollowing';
 
@@ -47,6 +48,9 @@ export function ModifierModals({
   showUnappliedHolePunchModal,
   unappliedHolePunchResolveRef,
 }: ModifierModalsProps) {
+  // A blocking progress overlay: swallow Escape rather than let it through.
+  useEscapeToClose(showModifierApplyBlockingOverlay, undefined);
+
   return (
     <>
       <StructuredDialogModal

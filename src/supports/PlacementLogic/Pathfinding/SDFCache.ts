@@ -19,6 +19,7 @@
 import * as THREE from 'three';
 import { PrecomputedSDFGrid } from './PrecomputedSDFGrid';
 import type { ClearanceHeightmap } from './ClearanceHeightmap';
+import { quantizeToCell } from '@/utils/math';
 
 // ---------- Types ----------
 
@@ -49,10 +50,6 @@ interface MeshBVHLike {
 }
 
 // ---------- Helpers ----------
-
-function quantize(v: number, cellSize: number): number {
-    return Math.round(v / cellSize);
-}
 
 function cellKey(qx: number, qy: number, qz: number): number {
     // Cantor-style hash for three integers — faster than string keys.
@@ -262,9 +259,9 @@ export class SDFCache {
         }
 
         const cs = this.cellSize;
-        const qx = quantize(wx, cs);
-        const qy = quantize(wy, cs);
-        const qz = quantize(wz, cs);
+        const qx = quantizeToCell(wx, cs);
+        const qy = quantizeToCell(wy, cs);
+        const qz = quantizeToCell(wz, cs);
         const key = cellKey(qx, qy, qz);
 
         const cached = this.cache.get(key);
@@ -293,9 +290,9 @@ export class SDFCache {
 
         // Quantise in local space using the pre-computed cell size
         const cs = pg.cellSize;
-        const qx = quantize(lx, cs);
-        const qy = quantize(ly, cs);
-        const qz = quantize(lz, cs);
+        const qx = quantizeToCell(lx, cs);
+        const qy = quantizeToCell(ly, cs);
+        const qz = quantizeToCell(lz, cs);
 
         const dist = pg.get(qx, qy, qz);
         if (dist === undefined) return undefined;
@@ -321,9 +318,9 @@ export class SDFCache {
             const lx = this._localPoint.x;
             const ly = this._localPoint.y;
             const lz = this._localPoint.z;
-            const lqx = quantize(lx, pg.cellSize);
-            const lqy = quantize(ly, pg.cellSize);
-            const lqz = quantize(lz, pg.cellSize);
+            const lqx = quantizeToCell(lx, pg.cellSize);
+            const lqy = quantizeToCell(ly, pg.cellSize);
+            const lqz = quantizeToCell(lz, pg.cellSize);
             const preDist = pg.get(lqx, lqy, lqz);
             if (preDist !== undefined) {
                 const dist = preDist * this.worldScale;
@@ -490,9 +487,9 @@ export class SDFCache {
      */
     distanceAtWithin(wx: number, wy: number, wz: number, maxDistance: number): number {
         const cs = this.cellSize;
-        const qx = quantize(wx, cs);
-        const qy = quantize(wy, cs);
-        const qz = quantize(wz, cs);
+        const qx = quantizeToCell(wx, cs);
+        const qy = quantizeToCell(wy, cs);
+        const qz = quantizeToCell(wz, cs);
         const key = cellKey(qx, qy, qz);
 
         const cached = this.cache.get(key);

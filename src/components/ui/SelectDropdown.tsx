@@ -1,4 +1,5 @@
 import React from 'react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { ChevronDown } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
@@ -121,20 +122,16 @@ export function SelectDropdown<T extends string | number = string>({
       setIsOpen(false);
     };
 
-    const onEscape = (event: CustomEvent) => {
-      if (event.detail.key === 'Escape') {
-        setIsOpen(false);
-      }
-    };
-
     window.addEventListener('pointerdown', onPointerDown);
-    window.addEventListener('app-hotkey-keydown', onEscape as EventListener);
 
     return () => {
       window.removeEventListener('pointerdown', onPointerDown);
-      window.removeEventListener('app-hotkey-keydown', onEscape as EventListener);
     };
   }, [isOpen]);
+
+  // An open menu takes Escape ahead of the dialog it sits in, so the first
+  // press closes the menu and not the whole modal.
+  useEscapeToClose(isOpen, () => setIsOpen(false));
 
   const updateMenuPosition = React.useCallback((measureMenu: boolean) => {
     const trigger = containerRef.current;

@@ -9,8 +9,10 @@ import {
   Download,
   ExternalLink,
   Loader2,
+  Package,
   RotateCcw,
 } from 'lucide-react';
+import { FLATPAK_APP_ID, LINUX_RELEASES_URL } from '@/features/updater/updateBridge';
 import { useUpdateChecker } from '@/features/updater/useUpdateChecker';
 import type { UpdateState } from '@/features/updater/useUpdateChecker';
 
@@ -22,6 +24,15 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function openExternal(url: string): Promise<void> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('open_external_url', { url });
+  } catch {
+    window.open(url, '_blank');
+  }
 }
 
 function ProgressBar({ pct }: { pct: number }) {
@@ -229,14 +240,10 @@ function AvailableState({
         </button>
 
         <button
-          onClick={async () => {
-            const url = `https://github.com/Open-Resin-Alliance/DragonFruit/releases/tag/v${info.version}`;
-            try {
-              const { invoke } = await import('@tauri-apps/api/core');
-              await invoke('open_external_url', { url });
-            } catch {
-              window.open(url, '_blank');
-            }
+          onClick={() => {
+            void openExternal(
+              `https://github.com/Open-Resin-Alliance/DragonFruit/releases/tag/v${info.version}`,
+            );
           }}
           className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12px] transition-all duration-150"
           style={{
@@ -370,6 +377,62 @@ function InstalledState() {
   );
 }
 
+function ExternalState() {
+  return (
+    <div
+      className="w-full rounded-md border p-2.5"
+      style={{
+        borderColor: 'var(--border-subtle)',
+        background: 'var(--surface-0)',
+      }}
+    >
+      <div className="flex items-center gap-2.5">
+        <span
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border"
+          style={{
+            borderColor: 'var(--border-subtle)',
+            background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+          }}
+        >
+          <Package className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+            Managed by Flatpak
+          </span>
+          <span className="block text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+            DragonFruit for Linux ships as a Flatpak, so updates are installed
+            outside the app.
+          </span>
+        </span>
+        <button
+          type="button"
+          onClick={() => void openExternal(LINUX_RELEASES_URL)}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs transition-all duration-150"
+          style={{
+            color: 'var(--text-muted)',
+            borderColor: 'var(--border-subtle)',
+            background: 'var(--surface-2)',
+          }}
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+          Releases
+        </button>
+      </div>
+      <code
+        className="mt-2 block rounded-md border px-2 py-1.5 text-[11px]"
+        style={{
+          borderColor: 'var(--border-subtle)',
+          background: 'var(--surface-1)',
+          color: 'var(--text-muted)',
+        }}
+      >
+        flatpak update {FLATPAK_APP_ID}
+      </code>
+    </div>
+  );
+}
+
 function ErrorState({
   message,
   onRetry,
@@ -441,6 +504,7 @@ export function UpdateCheckerSection({
 
   return (
     <div className={className}>
+      {state.status === 'external' && <ExternalState />}
       {state.status === 'idle' && <IdleState onCheck={checkForUpdates} />}
       {state.status === 'checking' && <CheckingState />}
       {state.status === 'up-to-date' && <UpToDateState onCheck={checkForUpdates} />}

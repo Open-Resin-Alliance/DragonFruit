@@ -4,6 +4,20 @@ import { ComponentInfo } from './types';
 // Represents a single row of binary data.
 export type RleRow = Int32Array;
 
+/**
+ * The one empty row, shared by every row that has no spans.
+ *
+ * A layer is 1814 rows tall and a scan is 5292 layers deep, so the naive
+ * `new Int32Array(0)` per empty row produced 9.6 million typed arrays holding
+ * half a megabyte of data between them — over a gigabyte of pure object and
+ * buffer overhead, and most of the live object count.
+ *
+ * Sharing is safe because RLE rows are never written in place: every producer
+ * builds a fresh row and assigns it. Structured clone preserves identity within
+ * a message, so the sharing survives the trip from the worker.
+ */
+export const EMPTY_ROW: RleRow = new Int32Array(0);
+
 // RLE Mask: Array of rows
 export type RleMask = {
     rows: RleRow[];
@@ -44,7 +58,7 @@ export function rleEncode(data: Uint8Array, width: number, height: number): RleM
         if (runStart !== -1) {
             rowSpans.push(runStart, width - runStart);
         }
-        rows[y] = new Int32Array(rowSpans);
+        rows[y] = rowSpans.length === 0 ? EMPTY_ROW : new Int32Array(rowSpans);
     }
 
     return { rows, width, height };
@@ -88,7 +102,7 @@ export function rleEncodeLabels(data: Int32Array | Uint8Array, width: number, he
             rowSpans.push(runStart, width - runStart, currentId);
         }
 
-        rows[y] = new Int32Array(rowSpans);
+        rows[y] = rowSpans.length === 0 ? EMPTY_ROW : new Int32Array(rowSpans);
     }
 
     return { rows, width, height };
@@ -131,7 +145,7 @@ export function rleIntersectDilated(a: RleMask, b: RleMask, buffer: number): Rle
     for (let y = 0; y < height; y++) {
         const aRow = a.rows[y];
         if (aRow.length === 0) {
-            resultRows[y] = new Int32Array(0);
+            resultRows[y] = EMPTY_ROW;
             continue;
         }
 
@@ -151,7 +165,7 @@ export function rleIntersectDilated(a: RleMask, b: RleMask, buffer: number): Rle
         }
 
         if (relevantBRows.length === 0) {
-            resultRows[y] = new Int32Array(0);
+            resultRows[y] = EMPTY_ROW;
             continue;
         }
 
@@ -238,7 +252,7 @@ export function rleSubtract(a: RleMask, b: RleMask): RleMask {
         const bRow = b.rows[y];
 
         if (aRow.length === 0) {
-            resultRows[y] = new Int32Array(0);
+            resultRows[y] = EMPTY_ROW;
             continue;
         }
         if (bRow.length === 0) {

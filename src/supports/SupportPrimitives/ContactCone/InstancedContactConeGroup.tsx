@@ -7,6 +7,7 @@ import { getConeCenterPosition, getConeQuaternion } from './contactConeUtils';
 import { calculateDiskThickness, getDiskCenter, getDiskRotation } from '../ContactDisk/contactDiskUtils';
 import { subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot, getActiveMaterialProfile, getActivePrinterProfile } from '@/features/profiles/profileStore';
 import { calculateTipOffset } from '@/supports/rendering/calculateTipOffset';
+import { quantizeToScale } from '@/utils/math';
 
 export interface InstancedContactCone {
     id: string;
@@ -44,8 +45,6 @@ interface ConeBucket {
     diskThickness: number;
     penetration: number;
 }
-
-const quantize = (value: number) => Math.round(value * 1000) / 1000;
 
 const getProfileType = (profile: SupportTipProfile): 'disk' | 'sphere' | 'legacy' => {
     if (profile.type === 'disk') return 'disk';
@@ -425,11 +424,11 @@ export function InstancedContactConeGroup({
 
             const key = [
                 profileType,
-                quantize(contactRadius),
-                quantize(bodyRadius),
-                quantize(length),
-                quantize(diskThickness),
-                quantize(penetration),
+                quantizeToScale(contactRadius, 1000),
+                quantizeToScale(bodyRadius, 1000),
+                quantizeToScale(length, 1000),
+                quantizeToScale(diskThickness, 1000),
+                quantizeToScale(penetration, 1000),
             ].join(':');
 
             const existing = grouped.get(key);

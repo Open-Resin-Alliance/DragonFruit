@@ -1,10 +1,35 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import type { MessageDescriptor } from '@lingui/core';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { ArchiveRestore, CheckCircle2, CircleHelp, Eye, Github, Loader2, RefreshCcw, ShieldCheck, ShieldX, Trash2, UploadCloud, X } from 'lucide-react';
 import { getProfileStoreSnapshot } from '@/features/profiles/profileStore';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { v4 as uuidv4 } from 'uuid';
+
+type Translate = (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string;
+
+// Interpolated messages live in module-level formatters: React Compiler renames
+// locals before the Lingui macro computes the id, so interpolating inside a
+// component leaves the placeholder raw in production builds.
+function formatUsingExistingRepoMessage(translate: Translate, repoName: string): string {
+  return translate(msg`Using existing repository: ${repoName}`);
+}
+
+function formatCreatingNewRepoMessage(translate: Translate, repoName: string): string {
+  return translate(msg`Creating new repository: ${repoName}`);
+}
+
+function formatMaterialCountLabel(translate: Translate, count: number): string {
+  return translate(msg({
+    message: '{count, plural, one {# material} other {# materials}}',
+    comment: 'Counter under a printer profile in a backup snapshot: how many materials belong to it.',
+  }), { count });
+}
 
 type StatusResponse = {
   ok: boolean;
@@ -341,11 +366,11 @@ function parseProfilesSnapshot(value: unknown): ParsedProfilesSnapshot | null {
   };
 }
 
-async function startGithubAuthPopup(): Promise<Window | null> {
+async function startGithubAuthPopup(translate: Translate): Promise<Window | null> {
   const response = await fetch('/api/backups/github/auth/start?popup=1', { cache: 'no-store' });
   const payload = await response.json().catch(() => null) as { ok?: boolean; authUrl?: string; error?: string } | null;
   if (!response.ok || !payload?.ok || !payload.authUrl) {
-    throw new Error(payload?.error || 'Failed to start GitHub OAuth.');
+    throw new Error(payload?.error || translate(msg`Failed to start GitHub OAuth.`));
   }
 
   const width = 520;
@@ -400,6 +425,7 @@ function shouldAlignToExpectedOrigin(expectedOrigin?: string | null): string | n
 }
 
 export function BackupsSettingsTab() {
+  const { _ } = useLingui();
   const [status, setStatus] = React.useState<StatusResponse | null>(null);
   const [loadingStatus, setLoadingStatus] = React.useState(true);
   const [busy, setBusy] = React.useState<'none' | 'auth' | 'ensure' | 'sync' | 'restore' | 'logout'>('none');
@@ -414,6 +440,8 @@ export function BackupsSettingsTab() {
   const [selectedStorageKey, setSelectedStorageKey] = React.useState<string | null>(null);
   const [selectedProfilesPrinterId, setSelectedProfilesPrinterId] = React.useState<string | null>(null);
   const [showOAuthSetupModal, setShowOAuthSetupModal] = React.useState(false);
+  useEscapeToClose(showSnapshotModal, () => setShowSnapshotModal(false));
+  useEscapeToClose(showOAuthSetupModal, () => setShowOAuthSetupModal(false));
   const [oauthCookieSecretDraft, setOauthCookieSecretDraft] = React.useState<string>(() => {
     if (typeof window === 'undefined') return '';
     return window.localStorage.getItem('dragonfruit-backups:oauth-cookie-secret-draft') ?? '';
@@ -476,14 +504,14 @@ export function BackupsSettingsTab() {
         setMessage({ kind: 'error', text: next.error });
       }
     } catch (error) {
-      setStatus({ ok: false, configured: false, authenticated: false, error: 'Failed to load backup status.' });
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Failed to load backup status.' });
+      setStatus({ ok: false, configured: false, authenticated: false, error: _(msg`Failed to load backup status.`) });
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : _(msg`Failed to load backup status.`) });
     } finally {
       if (showSpinner) {
         setLoadingStatus(false);
       }
     }
-  }, [selectedBackupRepoName]);
+  }, [_, selectedBackupRepoName]);
 
   const loadHistory = React.useCallback(async () => {
     setHistoryLoading(true);
@@ -491,15 +519,15 @@ export function BackupsSettingsTab() {
       const response = await fetch(`/api/backups/github/history?repoName=${encodeURIComponent(selectedBackupRepoName)}`, { cache: 'no-store' });
       const payload = await response.json().catch(() => null) as HistoryListResponse | null;
       if (!response.ok || !payload?.ok || !payload.items) {
-        throw new Error(payload?.error || 'Failed to load backup history.');
+        throw new Error(payload?.error || _(msg`Failed to load backup history.`));
       }
       setHistoryItems(payload.items);
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Failed to load backup history.' });
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : _(msg`Failed to load backup history.`) });
     } finally {
       setHistoryLoading(false);
     }
-  }, [selectedBackupRepoName]);
+  }, [_, selectedBackupRepoName]);
 
   const runSync = React.useCallback(async (forcePush = false) => {
     setBusy('sync');
@@ -515,32 +543,32 @@ export function BackupsSettingsTab() {
 
       const payload = await response.json().catch(() => null) as SyncResponse | null;
       if (!response.ok || !payload?.ok) {
-        throw new Error(payload?.error || 'Backup sync failed.');
+        throw new Error(payload?.error || _(msg`Backup sync failed.`));
       }
 
       if (payload.conflict && payload.remoteSnapshot) {
         setRemoteConflictSnapshot(payload.remoteSnapshot);
-        setMessage({ kind: 'error', text: payload.reason || 'Remote backup is newer. Choose restore or force sync.' });
+        setMessage({ kind: 'error', text: payload.reason || _(msg`Remote backup is newer. Choose restore or force sync.`) });
         return;
       }
 
       window.localStorage.setItem(LAST_SYNC_AT_KEY, payload.syncedAt ?? new Date().toISOString());
       setLastLocalSyncAt(payload.syncedAt ?? new Date().toISOString());
       setRemoteConflictSnapshot(null);
-      setMessage({ kind: 'success', text: 'Backup synced to GitHub repository.' });
+      setMessage({ kind: 'success', text: _(msg`Backup synced to GitHub repository.`) });
       await loadStatus();
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Backup sync failed.' });
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : _(msg`Backup sync failed.`) });
     } finally {
       setBusy('none');
     }
-  }, [loadStatus, selectedBackupRepoName]);
+  }, [_, loadStatus, selectedBackupRepoName]);
 
   const handleConnectGithub = React.useCallback(async () => {
     setBusy('auth');
     try {
-      const popup = await startGithubAuthPopup();
-      setMessage({ kind: 'success', text: 'GitHub OAuth popup opened.' });
+      const popup = await startGithubAuthPopup(_);
+      setMessage({ kind: 'success', text: _(msg`GitHub OAuth popup opened.`) });
 
       if (popup) {
         const startedAt = Date.now();
@@ -553,11 +581,11 @@ export function BackupsSettingsTab() {
         }, 500);
       }
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Failed to start OAuth.' });
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : _(msg`Failed to start OAuth.`) });
     } finally {
       setBusy('none');
     }
-  }, [loadStatus]);
+  }, [_, loadStatus]);
 
   const handleEnsureRepo = React.useCallback(async () => {
     setBusy('ensure');
@@ -569,29 +597,29 @@ export function BackupsSettingsTab() {
         body: JSON.stringify({ repoName: selectedBackupRepoName }),
       });
       const payload = await response.json().catch(() => null) as { ok?: boolean; error?: string } | null;
-      if (!response.ok || !payload?.ok) throw new Error(payload?.error || 'Failed to ensure repository.');
-      setMessage({ kind: 'success', text: 'Backup repository is ready.' });
+      if (!response.ok || !payload?.ok) throw new Error(payload?.error || _(msg`Failed to ensure repository.`));
+      setMessage({ kind: 'success', text: _(msg`Backup repository is ready.`) });
       await loadStatus();
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Failed to ensure repository.' });
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : _(msg`Failed to ensure repository.`) });
     } finally {
       setBusy('none');
     }
-  }, [loadStatus, selectedBackupRepoName]);
+  }, [_, loadStatus, selectedBackupRepoName]);
 
   const handleDisconnect = React.useCallback(async () => {
     setBusy('logout');
     try {
       await fetch('/api/backups/github/auth/logout', { method: 'POST' });
       setRemoteConflictSnapshot(null);
-      setMessage({ kind: 'success', text: 'Disconnected GitHub account.' });
+      setMessage({ kind: 'success', text: _(msg`Disconnected GitHub account.`) });
       await loadStatus();
     } catch {
-      setMessage({ kind: 'error', text: 'Failed to disconnect GitHub account.' });
+      setMessage({ kind: 'error', text: _(msg`Failed to disconnect GitHub account.`) });
     } finally {
       setBusy('none');
     }
-  }, [loadStatus]);
+  }, [_, loadStatus]);
 
   const handleViewHistory = React.useCallback(async (id: string) => {
     setSelectedHistoryId(id);
@@ -603,24 +631,24 @@ export function BackupsSettingsTab() {
       const response = await fetch(`/api/backups/github/history/${encodeURIComponent(id)}?repoName=${encodeURIComponent(selectedBackupRepoName)}`, { cache: 'no-store' });
       const payload = await response.json().catch(() => null) as HistoryItemResponse | null;
       if (!response.ok || !payload?.ok || !payload.item) {
-        throw new Error(payload?.error || 'Failed to load backup snapshot.');
+        throw new Error(payload?.error || _(msg`Failed to load backup snapshot.`));
       }
       setSelectedHistoryDocument(payload.item.document);
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Failed to load backup snapshot.' });
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : _(msg`Failed to load backup snapshot.`) });
       setShowSnapshotModal(false);
       setSelectedHistoryId(null);
     }
-  }, [selectedBackupRepoName]);
+  }, [_, selectedBackupRepoName]);
 
   const handleDeleteHistory = React.useCallback(async (id: string) => {
-    if (!window.confirm('Delete this backup snapshot from GitHub history? This cannot be undone.')) return;
+    if (!window.confirm(_(msg`Delete this backup snapshot from GitHub history? This cannot be undone.`))) return;
 
     try {
       const response = await fetch(`/api/backups/github/history/${encodeURIComponent(id)}?repoName=${encodeURIComponent(selectedBackupRepoName)}`, { method: 'DELETE' });
       const payload = await response.json().catch(() => null) as { ok?: boolean; error?: string } | null;
       if (!response.ok || !payload?.ok) {
-        throw new Error(payload?.error || 'Failed to delete backup snapshot.');
+        throw new Error(payload?.error || _(msg`Failed to delete backup snapshot.`));
       }
 
       if (selectedHistoryId === id) {
@@ -630,11 +658,11 @@ export function BackupsSettingsTab() {
       }
 
       await loadHistory();
-      setMessage({ kind: 'success', text: 'Backup snapshot deleted.' });
+      setMessage({ kind: 'success', text: _(msg`Backup snapshot deleted.`) });
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Failed to delete backup snapshot.' });
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : _(msg`Failed to delete backup snapshot.`) });
     }
-  }, [loadHistory, selectedBackupRepoName, selectedHistoryId]);
+  }, [_, loadHistory, selectedBackupRepoName, selectedHistoryId]);
 
   const handleRestoreHistory = React.useCallback(async (id: string) => {
     setBusy('restore');
@@ -642,17 +670,17 @@ export function BackupsSettingsTab() {
       const response = await fetch(`/api/backups/github/history/${encodeURIComponent(id)}/restore?repoName=${encodeURIComponent(selectedBackupRepoName)}`, { method: 'POST' });
       const payload = await response.json().catch(() => null) as { ok?: boolean; error?: string } | null;
       if (!response.ok || !payload?.ok) {
-        throw new Error(payload?.error || 'Failed to restore backup snapshot.');
+        throw new Error(payload?.error || _(msg`Failed to restore backup snapshot.`));
       }
 
-      setMessage({ kind: 'success', text: 'Backup restored. Run "Restore Remote" in conflict mode or sync this device if needed.' });
+      setMessage({ kind: 'success', text: _(msg`Backup restored. Run "Restore Remote" in conflict mode or sync this device if needed.`) });
       await Promise.all([loadStatus(false), loadHistory()]);
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Failed to restore backup snapshot.' });
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : _(msg`Failed to restore backup snapshot.`) });
     } finally {
       setBusy('none');
     }
-  }, [loadHistory, loadStatus, selectedBackupRepoName]);
+  }, [_, loadHistory, loadStatus, selectedBackupRepoName]);
 
   React.useEffect(() => {
     const cached = readCachedStatus(selectedBackupRepoName);
@@ -827,14 +855,14 @@ export function BackupsSettingsTab() {
   const chooseExistingRepo = React.useCallback(() => {
     setSelectedBackupRepoName(defaultRepoName);
     setRepoChoiceResolved(true);
-    setMessage({ kind: 'success', text: `Using existing repository: ${defaultRepoName}` });
-  }, [defaultRepoName]);
+    setMessage({ kind: 'success', text: formatUsingExistingRepoMessage(_, defaultRepoName) });
+  }, [_, defaultRepoName]);
 
   const chooseCreateNewRepo = React.useCallback(() => {
     setSelectedBackupRepoName(suggestedNewRepoName);
     setRepoChoiceResolved(true);
-    setMessage({ kind: 'success', text: `Creating new repository: ${suggestedNewRepoName}` });
-  }, [suggestedNewRepoName]);
+    setMessage({ kind: 'success', text: formatCreatingNewRepoMessage(_, suggestedNewRepoName) });
+  }, [_, suggestedNewRepoName]);
 
   const generateCookieSecretDraft = React.useCallback(() => {
     const token = `${uuidv4().replace(/-/g, '')}${uuidv4().replace(/-/g, '')}`;
@@ -853,11 +881,11 @@ export function BackupsSettingsTab() {
 
     try {
       await navigator.clipboard.writeText(text);
-      setMessage({ kind: 'success', text: 'OAuth .env template copied to clipboard.' });
+      setMessage({ kind: 'success', text: _(msg`OAuth .env template copied to clipboard.`) });
     } catch {
-      setMessage({ kind: 'error', text: 'Failed to copy OAuth template. Copy it manually from the setup dialog.' });
+      setMessage({ kind: 'error', text: _(msg`Failed to copy OAuth template. Copy it manually from the setup dialog.`) });
     }
-  }, [oauthCallbackUrl, oauthCookieSecretDraft]);
+  }, [_, oauthCallbackUrl, oauthCookieSecretDraft]);
 
   return (
     <div className="space-y-3">
@@ -871,7 +899,7 @@ export function BackupsSettingsTab() {
               color: '#fcd34d',
             }}
           >
-            Env config required
+            <Trans>Env config required</Trans>
           </div>
         )}
 
@@ -890,14 +918,14 @@ export function BackupsSettingsTab() {
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Private GitHub Backups</h3>
+                <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Private GitHub Backups</Trans></h3>
                 {!backupsConfigured && (
                   <button
                     type="button"
                     onClick={() => setShowOAuthSetupModal(true)}
                     className="ui-button ui-button-secondary !h-7 !px-2 !py-0 text-xs"
                   >
-                    OAuth setup
+                    <Trans>OAuth setup</Trans>
                   </button>
                 )}
                 <div className="relative group">
@@ -905,7 +933,7 @@ export function BackupsSettingsTab() {
                     type="button"
                     className="inline-flex h-6 w-6 items-center justify-center rounded-full border transition-colors"
                     style={{ borderColor: 'var(--border-subtle)', color: 'var(--accent-secondary)' }}
-                    aria-label="View privacy commitments"
+                    aria-label={_(msg`View privacy commitments`)}
                   >
                     <CircleHelp className="h-3.5 w-3.5" />
                   </button>
@@ -914,38 +942,38 @@ export function BackupsSettingsTab() {
                     style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', color: 'var(--text-strong)' }}
                   >
                     <p>
-                      Backups are stored in your own private GitHub repository. DragonFruit does not run a central backup server and does not keep a copy of your backup data outside your repository.
+                      <Trans>Backups are stored in your own private GitHub repository. DragonFruit does not run a central backup server and does not keep a copy of your backup data outside your repository.</Trans>
                     </p>
                     <p className="mt-2" style={{ color: 'var(--text-muted)' }}>
-                      You can disconnect GitHub at any time. OAuth access is used only for repository checks and syncing backup files.
+                      <Trans>You can disconnect GitHub at any time. OAuth access is used only for repository checks and syncing backup files.</Trans>
                     </p>
                   </div>
                 </div>
               </div>
               <p className="mt-0.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-                DragonFruit stores backups in your own private GitHub repository. We intentionally avoid ORA-hosted cloud storage and we do not operate a DragonFruit backup server.
+                <Trans>DragonFruit stores backups in your own private GitHub repository. We intentionally avoid ORA-hosted cloud storage and we do not operate a DragonFruit backup server.</Trans>
               </p>
             </div>
           </div>
 
         {!setupComplete && (
           <div className="mt-3 rounded-lg border p-3" style={{ borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 54%)', background: 'color-mix(in srgb, var(--accent), var(--surface-1) 95%)' }}>
-            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Onboarding</div>
-            <h4 className="mt-0.5 text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Set up private backups</h4>
+            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}><Trans>Onboarding</Trans></div>
+            <h4 className="mt-0.5 text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Set up private backups</Trans></h4>
             <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-              DragonFruit handles setup automatically and uses only your own private GitHub repository.
+              <Trans>DragonFruit handles setup automatically and uses only your own private GitHub repository.</Trans>
             </p>
 
             <div className="mt-3 rounded-md border p-3 text-center" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
               {!authenticated ? (
                 <>
                   <h5 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    {backupsConfigured ? 'Connect your GitHub account' : 'Set up GitHub OAuth'}
+                    {backupsConfigured ? <Trans>Connect your GitHub account</Trans> : <Trans>Set up GitHub OAuth</Trans>}
                   </h5>
                   <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
                     {backupsConfigured
-                      ? 'Authorize DragonFruit so backups can be saved into your private repository.'
-                      : 'This self-compiled build needs your own GitHub OAuth app in .env before sign-in can work.'}
+                      ? <Trans>Authorize DragonFruit so backups can be saved into your private repository.</Trans>
+                      : <Trans>This self-compiled build needs your own GitHub OAuth app in .env before sign-in can work.</Trans>}
                   </p>
                   <div className="mt-2.5 flex items-center justify-center gap-2">
                     <button
@@ -962,7 +990,7 @@ export function BackupsSettingsTab() {
                       style={{ background: 'linear-gradient(135deg, #8250df, #6f42c1)', borderColor: 'color-mix(in srgb, #8250df, white 14%)', color: '#ffffff' }}
                     >
                       {busy === 'auth' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4" />}
-                      {backupsConfigured ? 'Connect GitHub now' : 'Set up OAuth'}
+                      {backupsConfigured ? <Trans>Connect GitHub now</Trans> : <Trans>Set up OAuth</Trans>}
                     </button>
                     {!backupsConfigured && (
                       <button
@@ -971,21 +999,21 @@ export function BackupsSettingsTab() {
                         className="ui-button ui-button-secondary !h-10 !px-3 !py-0 text-sm inline-flex items-center gap-1.5"
                       >
                         <RefreshCcw className="h-4 w-4" />
-                        I configured it
+                        <Trans>I configured it</Trans>
                       </button>
                     )}
                   </div>
                   <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
                     {backupsConfigured
-                      ? 'We’ll open a secure GitHub popup to connect your account.'
-                      : 'After updating .env, restart the app, then click “I configured it”.'}
+                      ? <Trans>We’ll open a secure GitHub popup to connect your account.</Trans>
+                      : <Trans>After updating .env, restart the app, then click “I configured it”.</Trans>}
                   </div>
                 </>
               ) : needsRepoChoice ? (
                 <>
-                  <h5 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Existing backup repository detected</h5>
+                  <h5 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Existing backup repository detected</Trans></h5>
                   <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    We found <span style={{ color: 'var(--text-strong)' }}>{defaultRepoName}</span>. Choose whether to keep using it or create a fresh repository.
+                    <Trans>We found <span style={{ color: 'var(--text-strong)' }}>{defaultRepoName}</span>. Choose whether to keep using it or create a fresh repository.</Trans>
                   </p>
                   <div className="mt-2.5 grid gap-2 sm:grid-cols-2 text-left">
                     <button
@@ -993,33 +1021,33 @@ export function BackupsSettingsTab() {
                       onClick={chooseExistingRepo}
                       className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5"
                     >
-                      Use existing repo
+                      <Trans>Use existing repo</Trans>
                     </button>
                     <button
                       type="button"
                       onClick={chooseCreateNewRepo}
                       className="ui-button ui-button-primary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5"
                     >
-                      Create {suggestedNewRepoName}
+                      <Trans>Create {suggestedNewRepoName}</Trans>
                     </button>
                   </div>
                 </>
               ) : !repoExists ? (
                 <>
-                  <h5 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Preparing things…</h5>
+                  <h5 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Preparing things…</Trans></h5>
                   <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Preparing your repository <span style={{ color: 'var(--text-strong)' }}>{selectedBackupRepoName}</span>. This usually takes a moment.
+                    <Trans>Preparing your repository <span style={{ color: 'var(--text-strong)' }}>{selectedBackupRepoName}</span>. This usually takes a moment.</Trans>
                   </p>
                   <div className="mt-2 inline-flex items-center justify-center gap-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    {busy === 'ensure' ? 'Creating and configuring repository…' : 'Waiting for repository check…'}
+                    {busy === 'ensure' ? <Trans>Creating and configuring repository…</Trans> : <Trans>Waiting for repository check…</Trans>}
                   </div>
                 </>
               ) : (
                 <>
-                  <h5 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Create your first backup snapshot</h5>
+                  <h5 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Create your first backup snapshot</Trans></h5>
                   <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Repository <span style={{ color: 'var(--text-strong)' }}>{selectedBackupRepoName}</span> is ready. Run your first backup to finish onboarding.
+                    <Trans>Repository <span style={{ color: 'var(--text-strong)' }}>{selectedBackupRepoName}</span> is ready. Run your first backup to finish onboarding.</Trans>
                   </p>
                   <div className="mt-2.5 flex items-center justify-center gap-2">
                     <button
@@ -1029,7 +1057,7 @@ export function BackupsSettingsTab() {
                       className="ui-button ui-button-primary !h-9 !px-3 !py-0 text-sm inline-flex items-center gap-1.5 disabled:opacity-60"
                     >
                       {busy === 'sync' ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
-                      Run first backup now
+                      <Trans>Run first backup now</Trans>
                     </button>
                   </div>
                 </>
@@ -1042,43 +1070,43 @@ export function BackupsSettingsTab() {
           {loadingStatus ? (
             <div className="text-xs inline-flex items-center gap-1.5" style={{ color: 'var(--text-muted)' }}>
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Loading backup status…
+              <Trans>Loading backup status…</Trans>
             </div>
           ) : !status?.configured ? (
             <div className="text-xs" style={{ color: 'var(--danger)' }}>
-              Backups are not configured on this build yet. Add GitHub OAuth env values to enable this tab.
+              <Trans>Backups are not configured on this build yet. Add GitHub OAuth env values to enable this tab.</Trans>
             </div>
           ) : (
             <div className="grid gap-2 sm:grid-cols-2">
               <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Connection</div>
+                <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Connection</Trans></div>
                 <div className="mt-1 inline-flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-strong)' }}>
                   {authenticated ? <CheckCircle2 className="h-3.5 w-3.5" style={{ color: 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' }} /> : <ShieldX className="h-3.5 w-3.5" style={{ color: 'var(--danger)' }} />}
-                  {authenticated ? `@${status.user?.login ?? 'unknown'}` : 'Not connected'}
+                  {authenticated ? `@${status.user?.login ?? 'unknown'}` : <Trans>Not connected</Trans>}
                 </div>
               </div>
 
               <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Repository</div>
+                <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Repository</Trans></div>
                 <div className="mt-1 text-xs font-medium" style={{ color: 'var(--text-strong)' }}>
                   {status.repository?.name ?? 'dragonfruit-backups'}
                 </div>
                 <div className="text-xs" style={{ color: repoExists ? 'color-mix(in srgb, #22c55e, var(--text-strong) 18%)' : 'var(--text-muted)' }}>
-                  {repoExists ? 'Private repo ready' : 'Not created yet'}
+                  {repoExists ? <Trans>Private repo ready</Trans> : <Trans>Not created yet</Trans>}
                 </div>
               </div>
 
               <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Last remote backup</div>
+                <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Last remote backup</Trans></div>
                 <div className="mt-1 text-xs" style={{ color: 'var(--text-strong)' }}>
-                  {status.remoteUpdatedAt ? new Date(status.remoteUpdatedAt).toLocaleString() : 'Never'}
+                  {status.remoteUpdatedAt ? new Date(status.remoteUpdatedAt).toLocaleString() : <Trans>Never</Trans>}
                 </div>
               </div>
 
               <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Last local sync</div>
+                <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Last local sync</Trans></div>
                 <div className="mt-1 text-xs" style={{ color: 'var(--text-strong)' }}>
-                  {lastLocalSyncAt ? new Date(lastLocalSyncAt).toLocaleString() : 'Never'}
+                  {lastLocalSyncAt ? new Date(lastLocalSyncAt).toLocaleString() : <Trans>Never</Trans>}
                 </div>
               </div>
             </div>
@@ -1091,16 +1119,16 @@ export function BackupsSettingsTab() {
         <section className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
           <div className="flex items-center gap-2">
             <RefreshCcw className="h-4 w-4" style={{ color: 'var(--accent-secondary)' }} />
-            <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Backup Management</h4>
+            <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Backup Management</Trans></h4>
           </div>
           <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-            If GitHub has a newer backup, DragonFruit pauses sync and asks whether to restore remote or force-push local.
+            <Trans>If GitHub has a newer backup, DragonFruit pauses sync and asks whether to restore remote or force-push local.</Trans>
           </p>
 
           <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-            <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Quick actions</div>
+            <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Quick actions</Trans></div>
             <div className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-              Run a sync, verify repository readiness, or disconnect this GitHub account.
+              <Trans>Run a sync, verify repository readiness, or disconnect this GitHub account.</Trans>
             </div>
             <div className="mt-2 grid gap-2 sm:grid-cols-3">
               <button
@@ -1110,7 +1138,7 @@ export function BackupsSettingsTab() {
                 className="ui-button ui-button-primary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
               >
                 {busy === 'sync' ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
-                Backup Now
+                <Trans>Backup Now</Trans>
               </button>
 
               <button
@@ -1120,7 +1148,7 @@ export function BackupsSettingsTab() {
                 className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
               >
                 {busy === 'ensure' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArchiveRestore className="h-4 w-4" />}
-                Verify Repo
+                <Trans>Verify Repo</Trans>
               </button>
 
               <button
@@ -1130,16 +1158,16 @@ export function BackupsSettingsTab() {
                 className="ui-button ui-button-danger !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
               >
                 {busy === 'logout' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldX className="h-4 w-4" />}
-                Disconnect
+                <Trans>Disconnect</Trans>
               </button>
             </div>
           </div>
 
           {remoteConflictSnapshot && (
             <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 40%)', background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 95%)' }}>
-              <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: '#fcd34d' }}>Conflict detected</div>
+              <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: '#fcd34d' }}><Trans>Conflict detected</Trans></div>
               <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                Remote backup is newer than your local snapshot. Choose how to resolve this sync.
+                <Trans>Remote backup is newer than your local snapshot. Choose how to resolve this sync.</Trans>
               </p>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <button
@@ -1153,7 +1181,7 @@ export function BackupsSettingsTab() {
                   style={{ color: '#facc15' }}
                 >
                   <ArchiveRestore className="h-4 w-4" />
-                  Restore Remote
+                  <Trans>Restore Remote</Trans>
                 </button>
 
                 <button
@@ -1164,19 +1192,19 @@ export function BackupsSettingsTab() {
                   style={{ color: 'var(--danger)' }}
                 >
                   <RefreshCcw className="h-4 w-4" />
-                  Force Push Local
+                  <Trans>Force Push Local</Trans>
                 </button>
               </div>
             </div>
           )}
 
           <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-            <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Automation</div>
+            <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Automation</Trans></div>
             <div className="mt-2 grid gap-2">
               <div className="rounded-md border px-2.5 py-2 flex items-center justify-between gap-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div>
-                  <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Enable automatic backups</div>
-                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Automatically sync to your private GitHub backup on an interval.</div>
+                  <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Enable automatic backups</Trans></div>
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>Automatically sync to your private GitHub backup on an interval.</Trans></div>
                 </div>
                 <button
                   type="button"
@@ -1195,7 +1223,7 @@ export function BackupsSettingsTab() {
                         color: 'var(--text-muted)',
                       }}
                 >
-                  {autoSyncEnabled ? 'ON' : 'OFF'}
+                  {autoSyncEnabled ? <Trans>ON</Trans> : <Trans>OFF</Trans>}
                 </button>
               </div>
 
@@ -1208,8 +1236,8 @@ export function BackupsSettingsTab() {
                 }}
               >
                 <div>
-                  <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Sync interval</div>
-                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Minutes between automatic sync attempts.</div>
+                  <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Sync interval</Trans></div>
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>Minutes between automatic sync attempts.</Trans></div>
                 </div>
                 <div className="inline-flex items-center gap-2">
                   <NumberInput
@@ -1224,21 +1252,21 @@ export function BackupsSettingsTab() {
                     className="ui-input h-[34px] w-[120px] pl-2.5 pr-5 py-1.5 text-sm"
                     disabled={!autoSyncEnabled}
                   />
-                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>min</span>
+                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>min</Trans></span>
                 </div>
               </div>
             </div>
 
             <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-              Last local sync: {lastLocalSyncAt ? new Date(lastLocalSyncAt).toLocaleString() : 'never'}
+              <Trans>Last local sync: {lastLocalSyncAt ? new Date(lastLocalSyncAt).toLocaleString() : _(msg`never`)}</Trans>
             </div>
           </div>
 
           <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
             <div className="flex items-center justify-between gap-2">
               <div>
-                <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Manage Backups</div>
-                <div className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>View, restore, or delete older snapshots from your private repository.</div>
+                <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Manage Backups</Trans></div>
+                <div className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}><Trans>View, restore, or delete older snapshots from your private repository.</Trans></div>
               </div>
               <button
                 type="button"
@@ -1247,7 +1275,7 @@ export function BackupsSettingsTab() {
                 className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center gap-1.5 disabled:opacity-60"
               >
                 {historyLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
-                Refresh
+                <Trans>Refresh</Trans>
               </button>
             </div>
 
@@ -1255,7 +1283,7 @@ export function BackupsSettingsTab() {
               <div className="max-h-64 overflow-auto rounded-md border custom-scrollbar" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 {historyItems.length === 0 ? (
                   <div className="px-3 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    No history snapshots yet. New syncs will appear here.
+                    <Trans>No history snapshots yet. New syncs will appear here.</Trans>
                   </div>
                 ) : (
                   <ul className="p-1.5 space-y-1.5">
@@ -1270,7 +1298,7 @@ export function BackupsSettingsTab() {
                             {new Date(item.createdAt).toLocaleString()}
                           </div>
                           <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                            ID {item.id}
+                            <Trans>ID {item.id}</Trans>
                           </div>
                         </button>
                         <div className="flex items-center gap-1">
@@ -1279,7 +1307,7 @@ export function BackupsSettingsTab() {
                             onClick={() => { void handleViewHistory(item.id); }}
                             className="inline-flex h-7 w-7 items-center justify-center rounded border transition-colors"
                             style={{ borderColor: 'var(--border-subtle)', color: 'var(--accent-secondary)' }}
-                            title="View snapshot"
+                            title={_(msg`View snapshot`)}
                           >
                             <Eye className="h-3.5 w-3.5" />
                           </button>
@@ -1288,7 +1316,7 @@ export function BackupsSettingsTab() {
                             onClick={() => { void handleDeleteHistory(item.id); }}
                             className="inline-flex h-7 w-7 items-center justify-center rounded border"
                             style={{ borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 55%)', color: 'var(--danger)' }}
-                            title="Delete snapshot"
+                            title={_(msg`Delete snapshot`)}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
@@ -1318,10 +1346,12 @@ export function BackupsSettingsTab() {
             <div className="flex items-center justify-between gap-2 px-4 py-3" style={{ background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
               <div>
                 <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Backup Snapshot Content
+                  <Trans>Backup Snapshot Content</Trans>
                 </h4>
                 <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                  {selectedHistoryId ? `Snapshot ${new Date(Number(selectedHistoryId)).toLocaleString()}` : 'Loading snapshot...'}
+                  {selectedHistoryId
+                    ? <Trans>Snapshot {new Date(Number(selectedHistoryId)).toLocaleString()}</Trans>
+                    : <Trans>Loading snapshot...</Trans>}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -1334,7 +1364,7 @@ export function BackupsSettingsTab() {
                     style={{ color: 'var(--accent-secondary)' }}
                   >
                     <ArchiveRestore className="h-3.5 w-3.5" />
-                    Restore as Current
+                    <Trans>Restore as Current</Trans>
                   </button>
                 )}
                 <button
@@ -1342,7 +1372,7 @@ export function BackupsSettingsTab() {
                   onClick={() => setShowSnapshotModal(false)}
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
                   style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-1)' }}
-                  aria-label="Close snapshot details"
+                  aria-label={_(msg`Close snapshot details`)}
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -1354,17 +1384,17 @@ export function BackupsSettingsTab() {
                 <div className="h-full min-h-0 flex items-center justify-center">
                   <div className="inline-flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Loading snapshot content…
+                    <Trans>Loading snapshot content…</Trans>
                   </div>
                 </div>
               ) : (
                 <div className="h-full min-h-0 grid gap-3 lg:grid-cols-[190px_minmax(0,1fr)]">
                   <aside className="h-full min-h-0 rounded-lg border p-2 overflow-auto custom-scrollbar" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                     {([
-                      { id: 'overview' as const, label: 'Overview' },
-                      { id: 'localStorage' as const, label: 'Local Storage' },
-                      { id: 'profiles' as const, label: 'Profiles' },
-                      { id: 'raw' as const, label: 'Raw JSON' },
+                      { id: 'overview' as const, label: _(msg`Overview`) },
+                      { id: 'localStorage' as const, label: _(msg`Local Storage`) },
+                      { id: 'profiles' as const, label: _(msg`Profiles`) },
+                      { id: 'raw' as const, label: _(msg`Raw JSON`) },
                     ]).map((tab) => (
                       <button
                         key={tab.id}
@@ -1392,19 +1422,19 @@ export function BackupsSettingsTab() {
                       <div className="h-full min-h-0 overflow-auto custom-scrollbar pr-1">
                         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                           <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                            <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Snapshot ID</div>
+                            <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Snapshot ID</Trans></div>
                             <div className="mt-1 text-xs font-medium" style={{ color: 'var(--text-strong)' }}>{selectedHistoryId}</div>
                           </div>
                           <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                            <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Document Updated</div>
+                            <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Document Updated</Trans></div>
                             <div className="mt-1 text-xs font-medium" style={{ color: 'var(--text-strong)' }}>{new Date(selectedHistoryDocument.updatedAt).toLocaleString()}</div>
                           </div>
                           <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                            <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>Client ID</div>
+                            <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>Client ID</Trans></div>
                             <div className="mt-1 text-xs font-medium break-all" style={{ color: 'var(--text-strong)' }}>{selectedHistoryDocument.snapshot.clientId}</div>
                           </div>
                           <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                            <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>LocalStorage Keys</div>
+                            <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>LocalStorage Keys</Trans></div>
                             <div className="mt-1 text-xs font-medium" style={{ color: 'var(--text-strong)' }}>{Object.keys(selectedHistoryDocument.snapshot.localStorage ?? {}).length}</div>
                           </div>
                         </div>
@@ -1415,7 +1445,7 @@ export function BackupsSettingsTab() {
                       <div className="h-full min-h-0 grid gap-2 lg:grid-cols-[minmax(220px,30%)_minmax(0,1fr)]">
                         <div className="rounded-md border p-1.5 min-h-0 overflow-auto custom-scrollbar" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                           {Object.keys(selectedHistoryDocument.snapshot.localStorage ?? {}).length === 0 ? (
-                            <div className="px-2 py-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>No LocalStorage keys found.</div>
+                            <div className="px-2 py-1.5 text-xs" style={{ color: 'var(--text-muted)' }}><Trans>No LocalStorage keys found.</Trans></div>
                           ) : (
                             Object.keys(selectedHistoryDocument.snapshot.localStorage ?? {}).map((key) => (
                               <button
@@ -1443,12 +1473,12 @@ export function BackupsSettingsTab() {
 
                         <div className="rounded-md border p-2.5 min-h-0 flex flex-col" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                           <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>
-                            {selectedStorageKey ?? 'Select a key'}
+                            {selectedStorageKey ?? _(msg`Select a key`)}
                           </div>
                           <pre className="mt-2 flex-1 min-h-0 w-full rounded-md border p-2 text-xs leading-relaxed overflow-auto custom-scrollbar whitespace-pre" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
                             {selectedStorageKey
                               ? renderHighlightedJson(stringifyReadable((selectedHistoryDocument.snapshot.localStorage ?? {})[selectedStorageKey]))
-                              : 'Select a LocalStorage key from the left to view its value.'}
+                              : _(msg`Select a LocalStorage key from the left to view its value.`)}
                           </pre>
                         </div>
                       </div>
@@ -1459,11 +1489,11 @@ export function BackupsSettingsTab() {
                         <div className="h-full min-h-0 grid gap-2 lg:grid-cols-[minmax(230px,32%)_minmax(0,1fr)]">
                           <div className="rounded-md border p-2 min-h-0 overflow-auto custom-scrollbar" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                             <div className="text-[11px] uppercase tracking-wide font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>
-                              Printer Profiles ({parsedProfiles.printerProfiles.length})
+                              <Trans>Printer Profiles ({parsedProfiles.printerProfiles.length})</Trans>
                             </div>
                             <div className="space-y-1.5">
                               {parsedProfiles.printerProfiles.length === 0 ? (
-                                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>No printer profiles.</div>
+                                <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>No printer profiles.</Trans></div>
                               ) : parsedProfiles.printerProfiles.map((printer) => {
                                 const isSelected = selectedProfilesPrinterId === printer.id;
                                 const isActiveSnapshot = parsedProfiles.activePrinterProfileId === printer.id;
@@ -1485,13 +1515,13 @@ export function BackupsSettingsTab() {
                                   >
                                     <div className="flex items-center justify-between gap-2">
                                       <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{printer.name ?? printer.id}</div>
-                                      {isActiveSnapshot && <span className="text-[11px] font-semibold" style={{ color: 'var(--accent-secondary)' }}>ACTIVE</span>}
+                                      {isActiveSnapshot && <span className="text-[11px] font-semibold" style={{ color: 'var(--accent-secondary)' }}><Trans>ACTIVE</Trans></span>}
                                     </div>
                                     <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                                      {printer.manufacturer ?? 'Unknown manufacturer'}
+                                      {printer.manufacturer ?? _(msg`Unknown manufacturer`)}
                                     </div>
                                     <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                                      {materialCount} material{materialCount === 1 ? '' : 's'}
+                                      {formatMaterialCountLabel(_, materialCount)}
                                     </div>
                                   </button>
                                 );
@@ -1501,30 +1531,30 @@ export function BackupsSettingsTab() {
 
                           <div className="rounded-md border p-2 min-h-0 overflow-auto custom-scrollbar" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                             {!selectedProfilesPrinter ? (
-                              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Select a printer profile to view details.</div>
+                              <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>Select a printer profile to view details.</Trans></div>
                             ) : (
                               <div className="space-y-2">
                                 <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                                   <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{selectedProfilesPrinter.name ?? selectedProfilesPrinter.id}</div>
                                   <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                                    {selectedProfilesPrinter.manufacturer ?? 'Unknown manufacturer'}
+                                    {selectedProfilesPrinter.manufacturer ?? _(msg`Unknown manufacturer`)}
                                     {selectedProfilesPrinter.networkSupport ? ` • ${selectedProfilesPrinter.networkSupport}` : ''}
                                   </div>
                                   <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                                    Build: {selectedProfilesPrinter.buildVolumeMm?.width ?? '-'} × {selectedProfilesPrinter.buildVolumeMm?.depth ?? '-'} × {selectedProfilesPrinter.buildVolumeMm?.height ?? '-'} mm
+                                    <Trans>Build: {selectedProfilesPrinter.buildVolumeMm?.width ?? '-'} × {selectedProfilesPrinter.buildVolumeMm?.depth ?? '-'} × {selectedProfilesPrinter.buildVolumeMm?.height ?? '-'} mm</Trans>
                                   </div>
                                   <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                                    Display: {selectedProfilesPrinter.display?.resolutionX ?? '-'} × {selectedProfilesPrinter.display?.resolutionY ?? '-'}{selectedProfilesPrinter.display?.outputFormat ? ` (${selectedProfilesPrinter.display.outputFormat})` : ''}
+                                    <Trans>Display: {selectedProfilesPrinter.display?.resolutionX ?? '-'} × {selectedProfilesPrinter.display?.resolutionY ?? '-'}{selectedProfilesPrinter.display?.outputFormat ? ` (${selectedProfilesPrinter.display.outputFormat})` : ''}</Trans>
                                   </div>
                                 </div>
 
                                 <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                                   <div className="text-[11px] uppercase tracking-wide font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>
-                                    Materials for this printer ({filteredMaterialsForSelectedPrinter.length})
+                                    <Trans>Materials for this printer ({filteredMaterialsForSelectedPrinter.length})</Trans>
                                   </div>
                                   <div className="space-y-1.5">
                                     {filteredMaterialsForSelectedPrinter.length === 0 ? (
-                                      <div className="text-xs" style={{ color: 'var(--text-muted)' }}>No materials linked to this printer.</div>
+                                      <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>No materials linked to this printer.</Trans></div>
                                     ) : filteredMaterialsForSelectedPrinter.map((material) => {
                                       const isActiveSnapshot = parsedProfiles.activeMaterialProfileId === material.id;
                                       return (
@@ -1538,13 +1568,13 @@ export function BackupsSettingsTab() {
                                         }}>
                                           <div className="flex items-center justify-between gap-2">
                                             <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{material.name ?? material.id}</div>
-                                            {isActiveSnapshot && <span className="text-[11px] font-semibold" style={{ color: 'var(--accent-secondary)' }}>ACTIVE</span>}
+                                            {isActiveSnapshot && <span className="text-[11px] font-semibold" style={{ color: 'var(--accent-secondary)' }}><Trans>ACTIVE</Trans></span>}
                                           </div>
                                           <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                                            {material.brand ?? 'Unknown brand'}{material.resinFamily ? ` • ${material.resinFamily}` : ''}
+                                            {material.brand ?? _(msg`Unknown brand`)}{material.resinFamily ? ` • ${material.resinFamily}` : ''}
                                           </div>
                                           <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                                            Layer {material.layerHeightMm ?? '-'} mm • Normal {material.normalExposureSec ?? '-'}s • Bottom {material.bottomExposureSec ?? '-'}s × {material.bottomLayerCount ?? '-'}
+                                            <Trans>Layer {material.layerHeightMm ?? '-'} mm • Normal {material.normalExposureSec ?? '-'}s • Bottom {material.bottomExposureSec ?? '-'}s × {material.bottomLayerCount ?? '-'}</Trans>
                                           </div>
                                         </div>
                                       );
@@ -1580,9 +1610,9 @@ export function BackupsSettingsTab() {
           <div className="w-full max-w-2xl rounded-xl border shadow-2xl overflow-hidden" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
             <div className="flex items-center justify-between gap-2 px-4 py-3" style={{ background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
               <div>
-                <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Set up GitHub OAuth</h4>
+                <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Set up GitHub OAuth</Trans></h4>
                 <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Required for self-compiled builds that do not ship with backup OAuth env values.
+                  <Trans>Required for self-compiled builds that do not ship with backup OAuth env values.</Trans>
                 </p>
               </div>
               <button
@@ -1590,7 +1620,7 @@ export function BackupsSettingsTab() {
                 onClick={() => setShowOAuthSetupModal(false)}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
                 style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-1)' }}
-                aria-label="Close OAuth setup"
+                aria-label={_(msg`Close OAuth setup`)}
               >
                 <X className="h-4 w-4" />
               </button>
@@ -1598,17 +1628,17 @@ export function BackupsSettingsTab() {
 
             <div className="p-4 space-y-3">
               <ol className="list-decimal list-inside space-y-1.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                <li>Open GitHub Developer Settings and create a new OAuth App.</li>
-                <li>Set <span style={{ color: 'var(--text-strong)' }}>Homepage URL</span> to <span style={{ color: 'var(--text-strong)' }}>{oauthHomepageUrl}</span>.</li>
-                <li>Set <span style={{ color: 'var(--text-strong)' }}>Authorization callback URL</span> to <span style={{ color: 'var(--text-strong)' }}>{oauthCallbackUrl}</span>.</li>
-                <li>Copy the Client ID and Client Secret into your local <span style={{ color: 'var(--text-strong)' }}>.env</span>.</li>
-                <li>Restart DragonFruit, then click <span style={{ color: 'var(--text-strong)' }}>I configured it</span>.</li>
+                <li><Trans>Open GitHub Developer Settings and create a new OAuth App.</Trans></li>
+                <li><Trans>Set <span style={{ color: 'var(--text-strong)' }}>Homepage URL</span> to <span style={{ color: 'var(--text-strong)' }}>{oauthHomepageUrl}</span>.</Trans></li>
+                <li><Trans>Set <span style={{ color: 'var(--text-strong)' }}>Authorization callback URL</span> to <span style={{ color: 'var(--text-strong)' }}>{oauthCallbackUrl}</span>.</Trans></li>
+                <li><Trans>Copy the Client ID and Client Secret into your local <span style={{ color: 'var(--text-strong)' }}>.env</span>.</Trans></li>
+                <li><Trans>Restart DragonFruit, then click <span style={{ color: 'var(--text-strong)' }}>I configured it</span>.</Trans></li>
               </ol>
 
               <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>BACKUP_COOKIE_SECRET helper</div>
+                <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>BACKUP_COOKIE_SECRET helper</Trans></div>
                 <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Generate a local secret (at least 32 chars) and use it in your .env.
+                  <Trans>Generate a local secret (at least 32 chars) and use it in your .env.</Trans>
                 </div>
                 <div className="mt-2 flex items-center gap-2">
                   <input
@@ -1616,20 +1646,20 @@ export function BackupsSettingsTab() {
                     value={oauthCookieSecretDraft}
                     onChange={(event) => setOauthCookieSecretDraft(event.target.value)}
                     className="ui-input h-9 w-full px-2 text-[12px]"
-                    placeholder="Generate a secret…"
+                    placeholder={_(msg`Generate a secret…`)}
                   />
                   <button
                     type="button"
                     onClick={generateCookieSecretDraft}
                     className="ui-button ui-button-secondary !h-9 !px-2.5 !py-0 text-xs"
                   >
-                    Generate
+                    <Trans>Generate</Trans>
                   </button>
                 </div>
               </div>
 
               <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>.env template</div>
+                <div className="text-[11px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}><Trans>.env template</Trans></div>
                 <pre className="mt-2 rounded-md border p-2 text-xs leading-relaxed overflow-auto custom-scrollbar whitespace-pre" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', color: 'var(--text-muted)' }}>{`GITHUB_OAUTH_CLIENT_ID=<your_github_oauth_client_id>\nGITHUB_OAUTH_CLIENT_SECRET=<your_github_oauth_client_secret>\nGITHUB_OAUTH_REDIRECT_URI=${oauthCallbackUrl}\nBACKUP_COOKIE_SECRET=${oauthCookieSecretDraft.trim() || '<generate_a_64_char_secret>'}`}</pre>
                 <div className="mt-2 flex items-center justify-end">
                   <button
@@ -1637,7 +1667,7 @@ export function BackupsSettingsTab() {
                     onClick={() => { void copyOAuthEnvTemplate(); }}
                     className="ui-button ui-button-primary !h-8 !px-2.5 !py-0 text-xs"
                   >
-                    Copy template
+                    <Trans>Copy template</Trans>
                   </button>
                 </div>
               </div>

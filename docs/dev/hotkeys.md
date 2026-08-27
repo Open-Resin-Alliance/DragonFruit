@@ -21,7 +21,16 @@ for working with it.
    less-specific binding that is a strict subset of a held one — e.g. `GLOBAL.REDO`
    (Ctrl+Shift+Z) suppresses `GLOBAL.UNDO` (Ctrl+Z) while Shift is held. When reading
    both, check the more specific one first.
-7. **The delete hotkey goes through the delete registry**: `useDeleteHotkey` calls
+7. **Escape in a modal goes through `useEscapeToClose`**: dialogs do not wire
+   their own `app-hotkey-keydown` listener. `useEscapeToClose(open, onClose)`
+   (`src/hotkeys/useEscapeToClose.ts`) registers the dialog while it is open;
+   only the most recently registered one reacts, and it consumes the press, so
+   a nested dialog closes before its parent and one press never closes two.
+   Pass no handler for a dialog that must not be dismissed by Escape (a
+   blocking progress overlay, a decision the user has to make): it then
+   swallows the key instead of letting it through to the scene. Dialogs built
+   on `StructuredDialogModal` get this for free.
+8. **The delete hotkey goes through the delete registry**: `useDeleteHotkey` calls
    `triggerDelete()` (`src/features/delete/deleteRegistry.ts`), not a direct handler —
    see `registration-seams.md`.
 

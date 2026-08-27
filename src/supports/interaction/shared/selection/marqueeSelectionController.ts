@@ -1,4 +1,5 @@
 import { selectSupportIds } from './selectionController';
+import { getSelectedSupportIds } from '@/supports/interaction/supportMultiSelection';
 import {
     setMarqueeSelectionActive,
     setMarqueeSelectionCandidateIds,
@@ -20,7 +21,15 @@ export function updateSupportMarqueeCandidates(ids: string[]) {
 }
 
 export function commitSupportMarqueeSelection(ids: string[]) {
-    selectSupportIds(ids);
+    // A marquee only ever adds, as CAD applications do: a drag that catches
+    // nothing leaves the selection alone rather than clearing it.
+    if (ids.length === 0) {
+        endSupportMarqueeSelection();
+        return;
+    }
+
+    const merged = Array.from(new Set([...getSelectedSupportIds(), ...ids]));
+    selectSupportIds(merged);
     setMarqueeSelectionCandidateIds(ids);
     endSupportMarqueeSelection();
 }

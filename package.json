@@ -1,11 +1,11 @@
 {
   "name": "dragonfruit",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "buildChannel": "beta",
   "private": true,
   "scripts": {
     "sync:version": "node scripts/sync-app-version.mjs",
-    "sync:contributors": "node scripts/sync-contributors.mjs",
+    "sync:sponsors": "node scripts/sync-sponsors.mjs",
     "postversion": "npm run sync:version && npm run sync:contributors",
     "generate:builtin-simple-plugins": "node scripts/generate-builtin-simple-plugins.mjs",
     "generate:plugin-registry": "node scripts/generate-plugin-registry.mjs",
@@ -56,7 +56,7 @@
     "@react-three/drei": "^10.7.6",
     "@react-three/fiber": "^9.4.0",
     "@react-three/postprocessing": "^3.0.4",
-    "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-log": "^2.8.0",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
@@ -87,7 +87,7 @@
     "@lingui/swc-plugin": "^6.4.0",
     "@tailwindcss/postcss": "^4",
     "@tailwindcss/typography": "^0.5.20",
-    "@tauri-apps/cli": "^2.8.0",
+    "@tauri-apps/cli": "^2.11.0",
     "@types/express": "^5.0.6",
     "@types/node": "^22",
     "@types/react": "^19",
@@ -102,6 +102,8 @@
     "typescript": "^5"
   },
   "overrides": {
-    "minimatch": "^10.2.2"
+    "minimatch": "^10.2.2",
+    "postcss": "^8.5.26",
+    "sharp": "^0.35.3"
   }
 }

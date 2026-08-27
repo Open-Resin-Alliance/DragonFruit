@@ -238,6 +238,15 @@ channel."
   stable feed by default; `src-tauri/src/updater_channel.rs` overrides the
   endpoint at runtime based on the user's saved channel preference
   (`STABLE_ENDPOINT` / `DEV_ENDPOINT`), independent of the static config.
+- **Linux never runs the check.** The release job builds only a `.flatpak`
+  (`build_kind: flatpak`, `--no-bundle`), so `latest.json` / `latest-dev.json`
+  have no `linux-x86_64` key — and the updater could not install over a running
+  Flatpak anyway, since `/app` is read-only inside the sandbox. `check_updates`
+  returns `None` early on Linux and the Settings → Updates tab shows a
+  "Managed by Flatpak" card with the `flatpak update` command instead of the
+  channel picker (`updatesAreExternal()` in
+  `src/features/updater/updateBridge.ts`). Adding a Linux entry to the feed
+  would only make sense alongside an AppImage build.
 - The plugin's default version comparator is a plain `release.version >
   current_version` using `semver::Version::Ord` — no custom comparator is
   registered. This means there's no downgrade support: a user who updates to

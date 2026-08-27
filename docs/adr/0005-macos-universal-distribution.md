@@ -36,8 +36,9 @@ Complications discovered while implementing:
   (`tauri-build.mjs`), which **CI never ran** — CI uses `tauri-action`
   (`npx tauri build`), which has no PlugIns/ support. So shipped (CI/release) DMGs
   never contained a working QuickLook extension on any arch.
-- The Tauri crates are pulled from the `feat/cef` branch. `Cargo.lock` does not
-  resolve them all to one commit (see "Pinning the tauri rev").
+- The Tauri crates are pulled from the `feat/cef` line. Under the original
+  rev-based pinning `Cargo.lock` did not resolve them all to one commit; the
+  tag-based pinning adopted in 2026-08 does (see "Pinning the tauri tag").
 
 ## Decision
 
@@ -90,7 +91,8 @@ Built end-to-end on an **Intel (x86_64) Mac on 2026-05-24** via
 
 The rev pin resolved cleanly. One side effect: it un-dedupes `tauri-utils` into two
 `Cargo.lock` entries (one per pinned rev) because rev-sources don't unify the way
-the shared `branch` source did — benign and build-validated.
+the shared `branch` source did — benign and build-validated. **Resolved 2026-08-24**
+by moving to a single tag: one source, one `tauri-utils` (2.9.3).
 
 Hardware validation (2026-08-18): Mag has both arm64 and Intel Macs available
 (confirmed in project memory). The native-arm64 and Intel runtime smoke tests
@@ -107,7 +109,7 @@ next release cycle.
 - **manifold env-var strategy:** we rely on `CMAKE_OSX_ARCHITECTURES` rather than
   patching `manifold-csg-sys`. It is the upstream-supported knob and needs no fork;
   the cost is the doubled C++ compile.
-- **tauri rev pin:** branch-tracking is replaced with explicit revs for
+- **tauri tag pin:** branch-tracking is replaced with a release tag for
   reproducibility, at the cost of having to bump manually for upstream fixes (see
   procedure below).
 
@@ -156,23 +158,68 @@ This is a deliberate change to the release upload mechanism (away from
 tauri-action's release integration) to make embed-before-upload possible and
 uniform across platforms.
 
-## Pinning the tauri rev
+## Pinning the tauri tag
 
 `src-tauri/Cargo.toml` pins the tauri crates (direct deps + `[patch.crates-io]`)
-to explicit `rev`s instead of `branch = "feat/cef"`, so the build cannot silently
+to a release tag instead of `branch = "feat/cef"`, so the build cannot silently
 drift when the branch moves.
 
-**The crates are not all on one commit.** `Cargo.lock` resolves `tauri-plugin`
-(a build-time codegen crate) to `a94e1b8…` and the other eight tauri crates to
-`562bc59…`. Each entry is pinned to the exact rev it was already locked at, to
-preserve the validated resolution. Do **not** unify them to a single rev casually:
-that re-resolves `tauri-plugin` and must be re-validated.
+**Current pin: `tauri-cef-v3.0.0-alpha.22`** (`f5bf953f`, 2026-08-19), adopted
+2026-08-24. All nine entries carry the same tag, so every crate resolves to one
+commit.
 
-**Bump procedure:** in a branch, update the rev(s) → run the cross-arch pre-flight
-(`cargo build --release --target {aarch64,x86_64}-apple-darwin` from `src-tauri/`
-with `CMAKE_OSX_ARCHITECTURES="arm64;x86_64"`) → `npm run tauri:bundle:macos:universal`
-→ confirm CI `verify-universal-bundle.mjs` (lipo + codesign + hdiutil) passes →
-update this ADR with the new rev(s) + verification date.
+**History.** The original pin used two explicit revs — `tauri-plugin` on
+`a94e1b8…`, the other eight crates on `562bc59…` (2026-04-16) — because that was
+the resolution `Cargo.lock` had already validated. That split had a cost this ADR
+recorded but under-stated: it also resolved `tauri-utils` **twice** (both 2.8.3,
+one per rev source), compiling two copies into the binary. The tag pin collapses
+both problems: one source line, one `tauri-utils` (2.9.3).
+
+**Why the bump.** The April pin predated two upstream fixes that matter on Linux:
+tauri-apps/tauri#15479 ("fix(cef): cpu on idle", 2026-06-12) and #15531 (shutdown
+drain), which removed a busy-spin in `CefRuntime::run` that pegged a full core at
+idle. Measured on Debian 13 / KDE Wayland: browser-process CPU at idle went from
+**102% to 9%**. The CEF `data directory is not yet implemented` stub is also gone.
+
+**Ancestry check (do this on every bump).** Confirm the new tag is a descendant of
+the outgoing pin, so the bump is a fast-forward and not a rewritten history:
+
+    gh api repos/tauri-apps/tauri/compare/<old-rev>...<new-tag-sha> \
+      --jq '"\(.status) ahead=\(.ahead_by) behind=\(.behind_by)"'
+
+For this bump both outgoing revs reported `behind=0` (ahead 293 and 299).
+
+**Bump procedure:** in a branch, update the tag → verify ancestry as above → bump
+the npm side to the matching minor (`@tauri-apps/api`, `@tauri-apps/cli`) → run
+`npm run tauri:bundle:macos:universal` on a Mac with
+`CMAKE_OSX_ARCHITECTURES="arm64;x86_64"` → run `verify-universal-bundle.mjs` →
+update this ADR with the new tag + verification date.
+
+Three things the alpha.22 bump taught, all of which a `cargo`-only pre-flight
+misses:
+
+1. **The npm packages must move with the crates.** The Tauri CLI refuses to build
+   on a major/minor mismatch (`tauri (v2.11.5) : @tauri-apps/api (v2.10.1)`), and
+   that check only runs through the CLI — `cargo build` never sees it. Bumping
+   the tag without `package.json` produces a tree that compiles and cannot bundle.
+2. **A bump can break third-party crates that only exist in one platform's graph.**
+   `tauri-plugin-macos-fps` is a `cfg(target_os = "macos")` dependency, so Linux
+   builds cannot see it at all; it broke on the new `PlatformWebview` API and is
+   now vendored under `rust/tauri-plugin-macos-fps/` (see its README). Verifying a
+   bump on Linux alone proves nothing about macOS.
+3. **Locally the pre-flight cannot cover signing.** The Developer ID identity in
+   `tauri.macos.conf.json` and the updater's `TAURI_SIGNING_PRIVATE_KEY` both live
+   in CI, so a local run signs ad-hoc and stops before the updater artifact. Real
+   signing is validated in CI, not here.
+
+**Verification status for the alpha.22 bump (2026-08-24).** Linux: CEF and wry
+`cargo check` clean; CEF release build smoke-tested on real hardware (log file
+written, idle CPU 102% → 9%, no new warnings). macOS: universal bundle built and
+`verify-universal-bundle.mjs` run — main binary and `externalBin` sidecar both fat
+(x86_64 + arm64), `.app` signature valid, DMG passes `hdiutil verify`. The two
+`.appex` checks did not run: the build stops at the missing updater signing key
+before the QuickLook post-build step. That step is Swift and does not depend on
+tauri, so it is unaffected by the bump; CI covers it.
 
 ## Audit (downstream consumers of the old artifact names)
 

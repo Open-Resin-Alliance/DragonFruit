@@ -1,3 +1,4 @@
+import { isTauriRuntime } from '@/utils/tauriRuntime';
 import { clampSliceJobNumber } from '../sliceJobLimits';
 
 type TauriCoreModule = {
@@ -136,10 +137,6 @@ function createAbortError(message = 'Slicing canceled by user.'): Error {
   return error;
 }
 
-function isTauriRuntime(): boolean {
-  if (typeof window === 'undefined') return false;
-  return '__TAURI_INTERNALS__' in window;
-}
 
 async function loadTauriCore(): Promise<TauriCoreModule | null> {
   if (!isTauriRuntime()) return null;

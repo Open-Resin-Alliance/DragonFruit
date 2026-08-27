@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/capability/2",
   "identifier": "logging",
-  "description": "Log plugin permissions for macOS/Windows (plugin disabled on Linux CEF)",
-  "platforms": ["macOS", "windows"],
+  "description": "Log plugin permissions",
+  "platforms": ["linux", "macOS", "windows"],
   "windows": ["main"],
   "permissions": [
     "log:default"

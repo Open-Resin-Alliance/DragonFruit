@@ -4,6 +4,7 @@ import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Check, ChevronLeft, Moon, Sun } from 'lucide-react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import {
   applyThemeCustomColors,
   applyThemePreference,
@@ -38,6 +39,9 @@ function applyBuiltInThemePreference(preference: ThemePreference): void {
 }
 
 export function FirstRunOnboarding({ onExit }: FirstRunOnboardingProps) {
+  // The wizard is finished by its own controls, not dismissed: swallow Escape.
+  useEscapeToClose(true, undefined);
+
   const { _ } = useLingui();
   const [step, setStep] = React.useState<WizardStep>('welcome');
   const [direction, setDirection] = React.useState<'forward' | 'backward'>('forward');

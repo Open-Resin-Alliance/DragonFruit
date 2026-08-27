@@ -66,6 +66,14 @@ const filteredPassThroughArgs = noBundles
   ? passThroughArgs.filter((_, i) => i !== bundlesIdx && i !== bundlesIdx + 1)
   : passThroughArgs;
 
+// `--target <triple>` makes cargo write to target/<triple>/release instead of
+// target/release. The Flatpak staging below has to look where THIS build wrote.
+const explicitTargetIdx = filteredPassThroughArgs.indexOf("--target");
+const explicitTarget =
+  explicitTargetIdx !== -1
+    ? filteredPassThroughArgs[explicitTargetIdx + 1]
+    : (process.env.CARGO_BUILD_TARGET ?? null);
+
 const cmdArgs = ["tauri", "build", ...filteredPassThroughArgs];
 const hasBundlesArg = filteredPassThroughArgs.includes("--bundles");
 
@@ -183,13 +191,16 @@ if (isLinux) {
           console.error("[tauri-build] desktop-file-validate failed — skipping Flatpak bundle.");
           console.error(desktopValid.stdout?.toString());
         } else {
-          // (d) Find CEF binary — we just built it, so search known paths
+          // (d) Find CEF binary — we just built it, so search known paths.
+          // Search this build's own output layout first: a leftover binary from
+          // the other layout would otherwise be packaged instead, silently.
           const rel = path.join(repoRoot, "src-tauri", "target", "release");
           const tripleRel = path.join(
-            repoRoot, "src-tauri", "target", "x86_64-unknown-linux-gnu", "release"
+            repoRoot, "src-tauri", "target",
+            explicitTarget ?? "x86_64-unknown-linux-gnu", "release"
           );
           const binaryName = "dragonfruit-desktop";
-          const releaseDir = [rel, tripleRel]
+          const releaseDir = (explicitTarget ? [tripleRel, rel] : [rel, tripleRel])
             .map((dir) => ({ dir, binPath: path.join(dir, binaryName) }))
             .find(({ binPath }) => existsSync(binPath))?.dir;
           const binPath = releaseDir

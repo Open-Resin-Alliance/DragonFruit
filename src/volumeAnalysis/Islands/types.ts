@@ -1,3 +1,4 @@
+import type { VoxelFootprint } from './voxelFootprint';
 import type * as THREE from 'three';
 
 /**
@@ -74,7 +75,7 @@ export interface DetectedIsland {
   layerSpan?: readonly [number, number];
   /** Contact voxel 2D positions (x, y coordinates in world mm) at the base layer.
    *  Overhang regions also carry the surface Z at each voxel. */
-  contactVoxels?: { x: number; y: number; z?: number }[];
+  contactVoxels?: VoxelFootprint;
 
   // --- minima-detector extras (undefined for voxel) ---
   /** Source mesh vertex index. */

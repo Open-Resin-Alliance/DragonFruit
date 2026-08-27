@@ -15,6 +15,7 @@ import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactC
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { emitSupportModelPointerHover } from './interaction/clickHandlers';
 import type { ContactDisk, Vec3 } from './types';
+import { MARQUEE_CANDIDATE_TINT_FACTOR } from '@/utils/marqueeCandidateTint';
 
 // Tapered straight shaft type (kept for data flow, no longer creates per-item meshes -
 // all proxy shafts go through InstancedShaftGroup now).
@@ -52,6 +53,8 @@ interface SupportProxyMeshLayerProps {
   supportColorsByModelId?: Record<string, string>;
   activeModelId?: string | null;
   selectedModelIds?: string[];
+  /** Models the marquee would take if the drag ended now. */
+  marqueeCandidateModelIds?: readonly string[];
   hoverModelId?: string | null;
   hoverTintColor?: string;
   hoverTintStrength?: number;
@@ -84,6 +87,7 @@ interface SupportProxyMeshLayerProps {
 
 const DEFAULT_SUPPORT_COLOR = '#9a9a9a';
 const ACTIVE_SUPPORT_COLOR = '#c8752a';
+const EMPTY_MARQUEE_CANDIDATES: readonly string[] = Object.freeze([]);
 const PROXY_JOINT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
 
 type ProxyModelGeometry = {
@@ -155,6 +159,7 @@ export function SupportProxyMeshLayer({
   clipUpper,
   activeModelId = null,
   selectedModelIds = [],
+  marqueeCandidateModelIds = EMPTY_MARQUEE_CANDIDATES,
   hoverModelId = null,
   hoverTintColor = '#d18a4a',
   hoverTintStrength = 0.35,
@@ -1235,27 +1240,51 @@ export function SupportProxyMeshLayer({
     scheduleSupportHoverClear();
   }, [pointerHoverEnabled, scheduleSupportHoverClear]);
 
-  const hoveredOverlayEntry = React.useMemo(() => {
-    if (!effectiveHoverModelId) return null;
-    if (highlightedModelIdSet.has(effectiveHoverModelId)) return null;
-    if (!resolveModelVisible(effectiveHoverModelId)) return null;
+  // The hover tint also covers the models a marquee drag is about to take, so
+  // their supports light up with the model instead of after the mouse is up.
+  const hoveredOverlayEntries = React.useMemo(() => {
+    const modelIds = new Set<string>();
+    if (effectiveHoverModelId) modelIds.add(effectiveHoverModelId);
+    for (const modelId of marqueeCandidateModelIds) modelIds.add(modelId);
 
-    const modelKey = toModelKey(effectiveHoverModelId);
-    const geometry = baseProxyByModel.get(modelKey);
-    if (!geometry) return null;
+    const entries: Array<{
+      modelId: string;
+      modelKey: string;
+      zOffset: number;
+      geometry: NonNullable<ReturnType<typeof baseProxyByModel.get>>;
+      opacity: number;
+    }> = [];
 
-    return {
-      modelId: effectiveHoverModelId,
-      modelKey,
-      zOffset: modelDropOffsetsById?.[effectiveHoverModelId] ?? 0,
-      geometry,
-    };
+    for (const modelId of modelIds) {
+      if (highlightedModelIdSet.has(modelId)) continue;
+      if (!resolveModelVisible(modelId)) continue;
+
+      const modelKey = toModelKey(modelId);
+      const geometry = baseProxyByModel.get(modelKey);
+      if (!geometry) continue;
+
+      entries.push({
+        modelId,
+        modelKey,
+        zOffset: modelDropOffsetsById?.[modelId] ?? 0,
+        geometry,
+        // A candidate tints lighter than a hover, so a marquee lighting up
+        // model, supports and raft at once still reads apart from a selection.
+        opacity: modelId === effectiveHoverModelId
+          ? hoverOverlayOpacity
+          : hoverOverlayOpacity * MARQUEE_CANDIDATE_TINT_FACTOR,
+      });
+    }
+
+    return entries;
   }, [
     effectiveHoverModelId,
+    marqueeCandidateModelIds,
     highlightedModelIdSet,
     resolveModelVisible,
     baseProxyByModel,
     modelDropOffsetsById,
+    hoverOverlayOpacity,
   ]);
 
   // Flatten all visible model geometries into two batched groups (base + highlighted) so the
@@ -1461,7 +1490,7 @@ export function SupportProxyMeshLayer({
         </group>
       )}
 
-      {hoveredOverlayEntry && (
+      {hoveredOverlayEntries.map((hoveredOverlayEntry) => (
         <group
           key={`proxy-hover:${hoveredOverlayEntry.modelKey}`}
           userData={{ modelId: hoveredOverlayEntry.modelId ?? null }}
@@ -1474,7 +1503,7 @@ export function SupportProxyMeshLayer({
               emissive={hoveredOverlayColor}
               emissiveIntensity={0.1}
               transparent={hoverOverlayTransparent}
-              opacity={hoverOverlayOpacity}
+              opacity={hoveredOverlayEntry.opacity}
               radialSegments={10}
               clippingPlanes={clippingPlanes}
               onShaftClick={pointerSelectionEnabled ? handleProxyShaftClick : undefined}
@@ -1491,7 +1520,7 @@ export function SupportProxyMeshLayer({
               emissive={hoveredOverlayColor}
               emissiveIntensity={0.1}
               transparent={hoverOverlayTransparent}
-              opacity={hoverOverlayOpacity}
+              opacity={hoveredOverlayEntry.opacity}
               clippingPlanes={clippingPlanes}
               onRootClick={pointerSelectionEnabled ? handleProxyRootClick : undefined}
               onRootPointerDown={pointerDragStartEnabled ? (root, event) => reportModelDragStart(root.modelId, event) : undefined}
@@ -1507,7 +1536,7 @@ export function SupportProxyMeshLayer({
               emissive={hoveredOverlayColor}
               emissiveIntensity={0.1}
               transparent={hoverOverlayTransparent}
-              opacity={hoverOverlayOpacity}
+              opacity={hoveredOverlayEntry.opacity}
               clippingPlanes={clippingPlanes}
               onJointClick={pointerSelectionEnabled ? (joint) => handleProxyJointClick(joint) : undefined}
               onJointPointerDown={pointerDragStartEnabled ? (joint, event) => reportModelDragStart(joint.modelId, event) : undefined}
@@ -1523,7 +1552,7 @@ export function SupportProxyMeshLayer({
               emissive={hoveredOverlayColor}
               emissiveIntensity={0.1}
               transparent={hoverOverlayTransparent}
-              opacity={hoverOverlayOpacity}
+              opacity={hoveredOverlayEntry.opacity}
               clippingPlanes={clippingPlanes}
               onConeClick={pointerSelectionEnabled ? (cone) => handleProxyConeClick(cone) : undefined}
               onConePointerDown={pointerDragStartEnabled ? (cone, event) => reportModelDragStart(cone.modelId, event) : undefined}
@@ -1532,7 +1561,7 @@ export function SupportProxyMeshLayer({
             />
           )}
         </group>
-      )}
+      ))}
     </group>
   );
 }

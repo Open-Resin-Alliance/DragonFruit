@@ -1,3 +1,4 @@
+import { toVec3 } from '@/supports/Curves/BezierUtils';
 import * as THREE from 'three';
 import type { ContactCone } from '../ContactCone/types';
 import type { ContactDisk, Vec3 } from '../../types';
@@ -61,9 +62,6 @@ function resolveCollisionAwareDiskThickness(
         : safeThickness;
 }
 
-export function toVec3(vector: THREE.Vector3): Vec3 {
-    return { x: vector.x, y: vector.y, z: vector.z };
-}
 
 export function recomputeContactConeForMovedDisk(
     cone: ContactCone,

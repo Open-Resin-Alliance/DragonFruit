@@ -1,5 +1,5 @@
 {
-      "_comment": "Deliberate exceptions for scripts/check-docs-accuracy.mjs. Every entry needs a reason \u2014 an unexplained entry is how a checker stops catching things.",
+      "_comment": "Deliberate exceptions for scripts/check-docs-accuracy.mjs. Every entry needs a reason — an unexplained entry is how a checker stops catching things.",
       "symbols": [
             "registerX",
             "subscribeX",
@@ -21,7 +21,22 @@
             "useHistoryControls",
             "packageManager",
             "island_replay",
-            "pushToast"
+            "pushToast",
+            "javascript_gc_object_count",
+            "dispatchMouseEvent",
+            "performMicrotaskCheckpoint",
+            "timerFired",
+            "WindowEventLoop",
+            "updateRendering",
+            "waitForSyncReply",
+            "operationMapHash",
+            "MessageChannel",
+            "PlatformWebview",
+            "cef_window_handle_t",
+            "wl_surface",
+            "wl_subsurface",
+            "windowless_rendering_enabled",
+            "set_as_windowless"
       ],
       "paths": [
             "src/features/plugins/generatedBuiltinComplexPlugins.ts",
@@ -38,6 +53,8 @@
             "deliberately removed": "kerf_mm is named in organic-cut-surface-redesign.md precisely to record that it is gone.",
             "aspirational": "page-tsx-refactor-handoff.md is a refactor plan; its symbols name extractions not yet made. packageManager is a package.json key npm has not adopted here.",
             "generated at build time": "the paths are produced by scripts/generate-plugin-registry.mjs and are gitignored (**/generated*), so they are absent from a clean checkout.",
-            "proposed, not built": "island_replay is the name ADR-0025 proposes for a capability not yet folded in; pushToast is named in notifications.md precisely to state that no such API exists."
-      }
+            "proposed, not built": "island_replay is the name ADR-0025 proposes for a capability not yet folded in; pushToast is named in notifications.md precisely to state that no such API exists.",
+            "upstream windowing APIs": "PlatformWebview and cef_window_handle_t are tauri and CEF APIs; wl_surface and wl_subsurface are Wayland protocol objects; windowless_rendering_enabled and set_as_windowless belong to the cef crate. ADR-0005 and ADR-0040 cite them to explain why the Linux CEF build embeds through an X11 window id, so they name code we depend on but do not own."
+      },
+      "_comment_webkit_symbols": "The eight WebKit/JavaScriptCore internals above (javascript_gc_object_count through operationMapHash) are cited by docs/dev/performance-debugging.md as they appear in `sample` output and WebKit's own logs. They belong to the platform, not to this codebase, and will never be found here."
 }

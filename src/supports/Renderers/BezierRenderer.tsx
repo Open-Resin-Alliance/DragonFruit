@@ -1,3 +1,4 @@
+import { shouldDeferSupportPrimitiveSelection } from '../interaction/clickHandlers';
 import React, { useMemo, useEffect, useState, useRef } from 'react';
 import * as THREE from 'three';
 import { Vec3 } from '../types';
@@ -164,6 +165,7 @@ export function BezierRenderer({
 
         const altDown = !!(e?.nativeEvent?.altKey || e?.altKey);
         const ctrlDown = !!(e?.nativeEvent?.ctrlKey || e?.ctrlKey);
+        if (shouldDeferSupportPrimitiveSelection(e)) return;
 
         // If Alt is held, this click is intended for placement tools.
         // Stop propagation so it does not fall through to the canvas/model click handlers.

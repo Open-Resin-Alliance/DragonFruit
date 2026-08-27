@@ -1,27 +1,23 @@
 /**
  * Organic Cut — frontend ↔ Rust bridge.
  *
- * Mirrors the proven hole-punch bridge (src/utils/meshPunching.ts): stage the
- * geometry as a binary triangle soup, capture it as a non-mutating source, run a
- * preview/apply, then read raw little-endian f32 positions back. The shape
+ * Shares the staging/read primitives in src/utils/tauriMeshBridge.ts with the
+ * hollow, punch and repair bridges: stage the geometry as a binary triangle
+ * soup, capture it as a non-mutating source, run a preview/apply, then read raw
+ * little-endian f32 positions back. The shape
  * difference is that an organic cut returns N parts (≥2 — a multi-loop cut frees
  * several pieces) rather than one modified mesh: the report carries `partCount` and
  * each part is read back by index via `mesh_organic_cut_read_part`.
  */
 import * as THREE from 'three';
+import {
+  type TauriInvoke,
+  decodeF32,
+  loadTauriCore,
+  stageGeometryToStagedMesh,
+} from '@/utils/tauriMeshBridge';
 import type { TenonPreviewFrame, OrganicCutLoopPoint, OrganicCutOptions, OrganicCutReport, OrganicCutResult } from './types';
 
-type TauriInvoke = <T>(
-  cmd: string,
-  args?: Record<string, unknown> | ArrayBuffer | ArrayBufferView,
-  opts?: { headers?: Record<string, string> },
-) => Promise<T>;
-
-interface TauriCoreModule {
-  invoke: TauriInvoke;
-}
-
-let tauriCorePromise: Promise<TauriCoreModule | null> | null = null;
 let stagedCutSourceKey: string | null = null;
 // The geometry OBJECT last staged. Tracked alongside the tenon so that if a model's
 // geometry is replaced under the SAME id (e.g. a cut then undo restores the
@@ -29,44 +25,10 @@ let stagedCutSourceKey: string | null = null;
 // reusing the stale captured source.
 let stagedCutSourceGeometry: THREE.BufferGeometry | null = null;
 
-export function isTauriRuntime(): boolean {
-  if (typeof window === 'undefined') return false;
-  return '__TAURI_INTERNALS__' in window;
-}
-
-async function loadTauriCore(): Promise<TauriCoreModule | null> {
-  if (!isTauriRuntime()) return null;
-  if (!tauriCorePromise) {
-    tauriCorePromise = import('@tauri-apps/api/core')
-      .then((mod) => ({ invoke: mod.invoke as TauriInvoke }))
-      .catch(() => null);
-  }
-  return tauriCorePromise;
-}
-
 type OrganicCutReadCommand =
   | 'mesh_organic_cut_read_geodesic'
   | 'mesh_organic_cut_read_membrane'
   | 'mesh_organic_cut_read_tenon';
-
-/** Decode raw LE bytes (ArrayBuffer / Uint8Array / number[]) into an f32 array. */
-function decodeF32(bytes: ArrayBuffer | Uint8Array | number[], label: string): Float32Array {
-  let u8: Uint8Array;
-  if (bytes instanceof ArrayBuffer) {
-    u8 = new Uint8Array(bytes);
-  } else if (bytes instanceof Uint8Array) {
-    u8 = bytes;
-  } else if (Array.isArray(bytes)) {
-    u8 = new Uint8Array(bytes);
-  } else {
-    throw new Error(`${label} returned unexpected type`);
-  }
-  // Copy into a fresh, aligned buffer before viewing as f32 (the IPC buffer may
-  // be a non-zero byteOffset view, which Float32Array can't wrap directly).
-  const copy = new Uint8Array(u8.byteLength);
-  copy.set(u8);
-  return new Float32Array(copy.buffer);
-}
 
 async function readPositionsFromCommand(
   invoke: TauriInvoke,
@@ -80,43 +42,6 @@ async function readPositionsFromCommand(
 async function readPartAtIndex(invoke: TauriInvoke, index: number): Promise<Float32Array> {
   const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>('mesh_organic_cut_read_part', { index });
   return decodeF32(bytes, `mesh_organic_cut_read_part[${index}]`);
-}
-
-function expandGeometryToTriangleSoup(geometry: THREE.BufferGeometry): Float32Array {
-  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
-  const positions = posAttr.array as Float32Array;
-  const index = geometry.getIndex();
-
-  if (!index) {
-    if (positions instanceof Float32Array) return positions;
-    return new Float32Array(positions as unknown as ArrayLike<number>);
-  }
-
-  const indexArr = index.array as Uint16Array | Uint32Array;
-  const out = new Float32Array(indexArr.length * 3);
-  for (let i = 0; i < indexArr.length; i += 1) {
-    const vi = indexArr[i] * 3;
-    const oi = i * 3;
-    out[oi] = positions[vi];
-    out[oi + 1] = positions[vi + 1];
-    out[oi + 2] = positions[vi + 2];
-  }
-  return out;
-}
-
-async function stageGeometryToStagedMesh(
-  invoke: TauriInvoke,
-  geometry: THREE.BufferGeometry,
-): Promise<void> {
-  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | null;
-  if (!posAttr) throw new Error('stageGeometryToStagedMesh: geometry has no position attribute');
-
-  const soup = expandGeometryToTriangleSoup(geometry);
-  const bytes = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
-
-  await invoke('stage_mesh_binary_set', bytes, {
-    headers: { 'Content-Type': 'application/octet-stream' },
-  });
 }
 
 /** Read all `count` parts the cut produced (in order, largest first). */

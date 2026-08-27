@@ -1,13 +1,10 @@
+import { isTauriRuntime } from './tauriRuntime';
 type TauriCoreModule = {
   invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 };
 
 let tauriCorePromise: Promise<TauriCoreModule | null> | null = null;
 
-function isTauriRuntime(): boolean {
-  if (typeof window === 'undefined') return false;
-  return '__TAURI_INTERNALS__' in window;
-}
 
 async function loadTauriCore(): Promise<TauriCoreModule | null> {
   if (!isTauriRuntime()) return null;

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { ViewTypeDropdown } from '@/components/controls/ViewTypeDropdown';
@@ -176,6 +177,7 @@ export function TopBar({
   const [profileModalOpenNetworkSettingsToken, setProfileModalOpenNetworkSettingsToken] = useState(0);
   const [profileModalOpenMaterialAntiAliasingToken, setProfileModalOpenMaterialAntiAliasingToken] = useState(0);
   const [showProfileChangeWarning, setShowProfileChangeWarning] = useState(false);
+  useEscapeToClose(showProfileChangeWarning, () => setShowProfileChangeWarning(false));
   const [isDesktopWindow, setIsDesktopWindow] = useState(false);
   const [isDesktopWindowMaximized, setIsDesktopWindowMaximized] = useState(false);
   const [isLightTheme, setIsLightTheme] = useState(() => {

@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { convexHull2d } from '@/supports/Rafts/Crenelated/geometry/convexHull2d';
+import { quantizeToScale } from '@/utils/math';
 
 type GeometryLike = Pick<GeometryWithBounds, 'geometry' | 'center'>;
 
@@ -23,51 +25,15 @@ const footprintCache = new WeakMap<THREE.BufferGeometry, FootprintCacheEntry>();
 const matrixScratch = new THREE.Matrix4();
 const quaternionScratch = new THREE.Quaternion();
 
-function quantize(n: number): number {
-  return Math.round(n * QUANTIZE) / QUANTIZE;
-}
-
 function makeFootprintKey(rotation: THREE.Euler, scale: THREE.Vector3): string {
   return [
-    quantize(rotation.x), quantize(rotation.y), quantize(rotation.z),
-    quantize(scale.x), quantize(scale.y), quantize(scale.z),
+    quantizeToScale(rotation.x, QUANTIZE), quantizeToScale(rotation.y, QUANTIZE), quantizeToScale(rotation.z, QUANTIZE),
+    quantizeToScale(scale.x, QUANTIZE), quantizeToScale(scale.y, QUANTIZE), quantizeToScale(scale.z, QUANTIZE),
   ].join('|');
 }
 
 function cloneHull(points: THREE.Vector2[]): THREE.Vector2[] {
   return points.map((point) => point.clone());
-}
-
-function convexHull(points: THREE.Vector2[]): THREE.Vector2[] {
-  if (points.length <= 1) return cloneHull(points);
-
-  const pts = points
-    .map((p) => new THREE.Vector2(p.x, p.y))
-    .sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
-
-  const cross = (o: THREE.Vector2, a: THREE.Vector2, b: THREE.Vector2) =>
-    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
-
-  const lower: THREE.Vector2[] = [];
-  for (const p of pts) {
-    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
-      lower.pop();
-    }
-    lower.push(p);
-  }
-
-  const upper: THREE.Vector2[] = [];
-  for (let i = pts.length - 1; i >= 0; i--) {
-    const p = pts[i];
-    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
-      upper.pop();
-    }
-    upper.push(p);
-  }
-
-  upper.pop();
-  lower.pop();
-  return lower.concat(upper);
 }
 
 function ensureSampledCenteredPoints(geometryData: GeometryLike): FootprintCacheEntry | null {
@@ -201,7 +167,7 @@ export function computeProjectedFootprintHull(
     if (diagB > values.maxDiagB) { values.maxDiagB = diagB; extremes.maxDiagB = point; }
   }
 
-  const hull = convexHull([
+  const hull = convexHull2d([
     ...binPoints.filter((point): point is THREE.Vector2 => point !== null),
     ...Object.values(extremes).filter((point): point is THREE.Vector2 => point !== null),
   ]);

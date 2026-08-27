@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { createPortal } from 'react-dom';
 import { ExternalLink, Loader2 } from 'lucide-react';
 
@@ -22,20 +23,8 @@ export function UvToolsLaunchingModal({
   filePath,
   onLaunchComplete,
 }: UvToolsLaunchingModalProps) {
-  // Trap focus inside the modal while open (prevent accidental Escape)
-  React.useEffect(() => {
-    if (!isOpen) return;
-
-    const handleKeyDown = (event: CustomEvent) => {
-      if (event.detail.key === 'Escape') {
-        event.stopImmediatePropagation();
-      }
-    };
-
-    // Use capture phase to intercept Escape before anything else
-    window.addEventListener('app-hotkey-keydown', handleKeyDown as EventListener, { capture: true });
-    return () => window.removeEventListener('app-hotkey-keydown', handleKeyDown as EventListener, { capture: true });
-  }, [isOpen]);
+  // Registering without a close handler swallows Escape instead of dismissing.
+  useEscapeToClose(isOpen, undefined);
 
   if (!isOpen || typeof document === 'undefined') return null;
 

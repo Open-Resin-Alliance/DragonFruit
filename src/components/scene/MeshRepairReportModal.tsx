@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { CheckCircle2, AlertTriangle, XCircle, X, Wrench, ClipboardCopy, ChevronDown, ChevronRight } from 'lucide-react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import type { MeshRepairReportEntry } from '@/features/scene/useSceneCollectionManager';
 import type { MeshAnalysisJson } from '@/utils/meshRepair';
 
@@ -55,6 +56,8 @@ function summarizeRepairWins(report: MeshRepairReportEntry['report']): string[] 
 }
 
 export function MeshRepairReportModal({ reports, presentation = 'default', onDismiss }: Props) {
+  useEscapeToClose(reports.length > 0, onDismiss);
+
   const [expandedId, setExpandedId] = React.useState<string | null>(
     reports.length === 1 ? reports[0].id : null,
   );

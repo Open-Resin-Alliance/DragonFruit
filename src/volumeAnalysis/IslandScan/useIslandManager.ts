@@ -21,7 +21,7 @@ interface IslandManagerProps {
 export function useIslandManager({ geom, transform, layerHeightMm }: IslandManagerProps) {
   // Scanning State
   const [scanning, setScanning] = useState<boolean>(false);
-  const [scanProgress, setScanProgress] = useState<{ done: number; total: number } | null>(null);
+  const [scanProgress, setScanProgress] = useState<{ done: number; total: number; phase?: string; phaseNumber?: number; phaseCount?: number } | null>(null);
   const [scanData, setScanData] = useState<ScanResults | null>(null);
   const [scanBBox, setScanBBox] = useState<THREE.Box3 | null>(null);
 
@@ -115,7 +115,7 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
           overlap_neighborhood_px: overlapNeighborhoodPx,
           useSurfaceContiguity,
         },
-        (done, total) => setScanProgress({ done, total })
+        (done, total, phase, phaseNumber, phaseCount) => setScanProgress({ done, total, phase, phaseNumber, phaseCount })
       );
       setScanData(res);
     } finally {
@@ -148,7 +148,7 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
           overlap_neighborhood_px: overlapNeighborhoodPx,
           useSurfaceContiguity,
         },
-        (done, total) => setScanProgress({ done, total })
+        (done, total, phase, phaseNumber, phaseCount) => setScanProgress({ done, total, phase, phaseNumber, phaseCount })
       );
       const endTime = performance.now();
       console.log(`Scanline Scan took ${(endTime - startTime).toFixed(2)}ms`);
@@ -183,7 +183,7 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
           min_overlap_px: minOverlapPx,
           overlap_neighborhood_px: overlapNeighborhoodPx,
         },
-        (done, total) => setScanProgress({ done, total })
+        (done: number, total: number) => setScanProgress({ done, total, phase: 'Slicing' })
       );
       const endTime = performance.now();
       console.log(`Native Island Scan took ${(endTime - startTime).toFixed(2)}ms`);

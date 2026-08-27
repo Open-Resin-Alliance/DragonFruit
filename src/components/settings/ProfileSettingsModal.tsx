@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { AlertTriangle, Box, Check, ChevronLeft, ChevronRight, Copy, Download, Edit3, FlaskConical, Frown, ImagePlus, LayoutGrid, Loader2, Lock, Plus, Printer, RefreshCw, Search, Trash2, Unlock, Upload, Wifi, WifiOff, X } from 'lucide-react';
 import FleetManagement from '@/components/settings/FleetManagement';
 import { NumberInput } from '@/components/ui/NumberInput';
@@ -1730,10 +1731,10 @@ export function ProfileSettingsModal({
     selectedMaterialId,
   ]);
 
-  React.useEffect(() => {
-    if (!isOpen) return;
-
-    const handleTopMostDialogEscape = (): boolean => {
+  // Escape unwinds this modal's own nested dialogs one at a time before it
+  // closes the modal itself; nested dialogs of their own take precedence.
+  useEscapeToClose(isOpen, () => {
+    const closedNestedDialog = ((): boolean => {
       if (deleteConfirmTarget) {
         setDeleteConfirmTarget(null);
         return true;
@@ -1803,40 +1804,11 @@ export function ProfileSettingsModal({
       }
 
       return false;
-    };
+    })();
 
-    const onKeyDown = (event: CustomEvent) => {
-      if (event.detail.key !== 'Escape') return;
-
-      if (handleTopMostDialogEscape()) {
-        event.preventDefault?.();
-        event.stopPropagation?.();
-        return;
-      }
-
-      onClose();
-    };
-
-    window.addEventListener('app-hotkey-keydown', onKeyDown as EventListener);
-    return () => window.removeEventListener('app-hotkey-keydown', onKeyDown as EventListener);
-  }, [
-    deleteConfirmTarget,
-    isCreateMaterialOpen,
-    isEditFleetUnitModalOpen,
-    isEditingPrinter,
-    isMaterialEditorOpen,
-    isNetworkSettingsOpen,
-    isOpen,
-    isRemoteMaterialEditDialogOpen,
-    isSavingRemoteMaterialEdit,
-    onClose,
-    showMaterialPresetPicker,
-    showOfficialLockDialog,
-    showOfficialMaterialLockDialog,
-    showPresetPicker,
-    showPrinterUpdateDiffModal,
-    variantChooserPreset,
-  ]);
+    if (closedNestedDialog) return;
+    onClose();
+  });
 
   React.useEffect(() => {
     if (!selectedPrinter) {

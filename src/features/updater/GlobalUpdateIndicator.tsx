@@ -6,7 +6,7 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import ReactMarkdown from 'react-markdown';
-import { fetchUpdateInfo, downloadAndInstall, getUpdateChannel, type UpdateInfo, type DownloadProgress, type UpdateChannel } from '@/features/updater/updateBridge';
+import { fetchUpdateInfo, downloadAndInstall, getUpdateChannel, updatesAreExternal, type UpdateInfo, type DownloadProgress, type UpdateChannel } from '@/features/updater/updateBridge';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 
 // ---------------------------------------------------------------------------
@@ -46,6 +46,9 @@ export function GlobalUpdateIndicator() {
 
   // ── Silent background check ──────────────────────────────────────────
   useEffect(() => {
+    // Linux installs updates through Flatpak — nothing to check or offer here.
+    if (updatesAreExternal()) return;
+
     let channel: UpdateChannel = 'stable';
 
     const runCheck = () => {

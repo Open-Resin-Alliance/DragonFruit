@@ -4,6 +4,7 @@ import React from 'react';
 import { X } from 'lucide-react';
 import type { HistoryDebugEvent } from '@/history/types';
 import { formatHistoryLabel } from '@/history/formatHistoryLabel';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 
 type HistoryDebugModalProps = {
   isOpen: boolean;
@@ -42,6 +43,8 @@ export function HistoryDebugModal({
   onClearUndoRedoStacks,
   onClearAll,
 }: HistoryDebugModalProps) {
+  useEscapeToClose(isOpen, onClose);
+
   const historyDebugEventsNewestFirst = React.useMemo(
     () => [...historyDebugEvents].reverse(),
     [historyDebugEvents],

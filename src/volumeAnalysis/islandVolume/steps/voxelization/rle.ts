@@ -4,6 +4,9 @@ import { ComponentInfo } from './types';
 // Represents a single row of binary data.
 export type RleRow = Int32Array;
 
+/** See the note on the same constant in `IslandScan/rle.ts`. */
+export const EMPTY_ROW: RleRow = new Int32Array(0);
+
 // RLE Mask: Array of rows
 export type RleMask = {
     rows: RleRow[];
@@ -44,7 +47,7 @@ export function rleEncode(data: Uint8Array, width: number, height: number): RleM
         if (runStart !== -1) {
             rowSpans.push(runStart, width - runStart);
         }
-        rows[y] = new Int32Array(rowSpans);
+        rows[y] = rowSpans.length === 0 ? EMPTY_ROW : new Int32Array(rowSpans);
     }
 
     return { rows, width, height };
@@ -88,7 +91,7 @@ export function rleEncodeLabels(data: Int32Array | Uint8Array, width: number, he
             rowSpans.push(runStart, width - runStart, currentId);
         }
 
-        rows[y] = new Int32Array(rowSpans);
+        rows[y] = rowSpans.length === 0 ? EMPTY_ROW : new Int32Array(rowSpans);
     }
 
     return { rows, width, height };
@@ -131,7 +134,7 @@ export function rleIntersectDilated(a: RleMask, b: RleMask, buffer: number): Rle
     for (let y = 0; y < height; y++) {
         const aRow = a.rows[y];
         if (aRow.length === 0) {
-            resultRows[y] = new Int32Array(0);
+            resultRows[y] = EMPTY_ROW;
             continue;
         }
 
@@ -151,7 +154,7 @@ export function rleIntersectDilated(a: RleMask, b: RleMask, buffer: number): Rle
         }
 
         if (relevantBRows.length === 0) {
-            resultRows[y] = new Int32Array(0);
+            resultRows[y] = EMPTY_ROW;
             continue;
         }
 
@@ -238,7 +241,7 @@ export function rleSubtract(a: RleMask, b: RleMask): RleMask {
         const bRow = b.rows[y];
 
         if (aRow.length === 0) {
-            resultRows[y] = new Int32Array(0);
+            resultRows[y] = EMPTY_ROW;
             continue;
         }
         if (bRow.length === 0) {

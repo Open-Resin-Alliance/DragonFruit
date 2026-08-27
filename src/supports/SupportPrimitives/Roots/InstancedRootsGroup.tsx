@@ -2,6 +2,7 @@ import React, { useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
 import type { Vec3 } from '../../types';
+import { quantizeToScale } from '@/utils/math';
 
 export interface InstancedRoot {
     id: string;
@@ -42,14 +43,12 @@ interface RootBucket {
 
 const ROOT_ROTATION = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
 
-const quantize = (value: number) => Math.round(value * 1000) / 1000;
-
 const toBucketKey = (root: InstancedRoot) => {
     return [
-        quantize(root.bottomRadius),
-        quantize(root.effectiveDiskHeight),
-        quantize(root.topRadius),
-        quantize(root.coneHeight),
+        quantizeToScale(root.bottomRadius, 1000),
+        quantizeToScale(root.effectiveDiskHeight, 1000),
+        quantizeToScale(root.topRadius, 1000),
+        quantizeToScale(root.coneHeight, 1000),
     ].join(':');
 };
 

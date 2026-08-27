@@ -117,6 +117,44 @@ this is the **stranded-stack hazard** (see below).
 
 ## Payload shapes
 
+### Live scene transform batches
+
+`useSceneCollectionManager` normally pushes one scene snapshot whenever
+`updateModelTransforms` runs. Controls that emit multiple live updates during a
+single gesture may pass `{ pushHistory: false }`, capture the original model and
+support transforms before the first update, and call
+`commitModelTransformsHistory` once when the gesture ends.
+
+```ts
+const beforeTransforms = scene.models.map(({ id, transform }) => ({
+  id,
+  transform: {
+    position: transform.position.clone(),
+    rotation: transform.rotation.clone(),
+    scale: transform.scale.clone(),
+  },
+}));
+const supportBefore = captureTransformSupportSnapshot();
+
+scene.updateModelTransforms(liveUpdates, { pushHistory: false });
+
+const supportAfter = captureTransformSupportSnapshot();
+scene.commitModelTransformsHistory(beforeTransforms, 'Move Selected Models', {
+  includeSupportState: true,
+  supportBefore: supportBefore.support,
+  supportAfter: supportAfter.support,
+  kickstandBefore: supportBefore.kickstand,
+  kickstandAfter: supportAfter.kickstand,
+});
+```
+
+Transient updates are intentionally absent from undo history. The gesture-end
+commit records the original and final states as the one reversible action.
+Attached support and kickstand snapshots must cover that same before/after
+gesture so undo restores the complete selection atomically. Capture every model
+that the gesture may move, including linked peers; models omitted from
+`beforeTransforms` cannot be restored by the resulting entry.
+
 Three payload patterns exist:
 
 - **Inline state** — the common case for supports: the payload carries the full

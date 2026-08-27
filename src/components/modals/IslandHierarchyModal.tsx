@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import type { Island } from '@/volumeAnalysis/IslandScan/types';
 import { X, ChevronDown, ChevronRight } from 'lucide-react';
 
@@ -18,16 +19,7 @@ type TreeNode = {
 };
 
 export function IslandHierarchyModal({ islands, isOpen, onClose, layerHeightMm, zOffsetMm }: IslandHierarchyModalProps) {
-  React.useEffect(() => {
-    if (!isOpen) return;
-
-    const onKeyDown = (event: CustomEvent) => {
-      if (event.detail.key === 'Escape') onClose();
-    };
-
-    window.addEventListener('app-hotkey-keydown', onKeyDown as EventListener);
-    return () => window.removeEventListener('app-hotkey-keydown', onKeyDown as EventListener);
-  }, [isOpen, onClose]);
+  useEscapeToClose(isOpen, onClose);
 
   if (!isOpen) return null;
 

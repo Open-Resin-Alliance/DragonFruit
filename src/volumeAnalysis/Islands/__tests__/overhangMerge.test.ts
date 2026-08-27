@@ -1,3 +1,4 @@
+import { footprintFromPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
@@ -39,7 +40,7 @@ function overhangIsland(
     contact: new THREE.Vector3((minX + maxX) / 2, (minY + maxY) / 2, minY),
     baseZ: minY,
     areaMm2,
-    contactVoxels,
+    contactVoxels: footprintFromPoints(contactVoxels),
   };
 }
 

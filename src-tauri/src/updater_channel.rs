@@ -53,11 +53,15 @@ fn cached_update() -> &'static Mutex<Option<tauri_plugin_updater::Update>> {
 // Endpoint URLs per channel
 // ---------------------------------------------------------------------------
 
+// Unused on Linux, where the check is skipped entirely (see `check_updates`).
+#[cfg(not(target_os = "linux"))]
 const STABLE_ENDPOINT: &str =
     "https://open-resin-alliance.github.io/DragonFruit/latest.json";
+#[cfg(not(target_os = "linux"))]
 const DEV_ENDPOINT: &str =
     "https://open-resin-alliance.github.io/DragonFruit/latest-dev.json";
 
+#[cfg(not(target_os = "linux"))]
 fn endpoint_for_channel(channel: &str) -> &'static str {
     match channel {
         "dev" | "prerelease" => DEV_ENDPOINT,
@@ -73,6 +77,27 @@ fn endpoint_for_channel(channel: &str) -> &'static str {
 /// Returns `null` (None) if no update is available.
 #[tauri::command]
 pub async fn check_updates(
+    app_handle: UpdaterAppHandle,
+    channel: Option<String>,
+) -> Result<Option<UpdateCheckResult>, String> {
+    // Linux ships only as a Flatpak bundle, so the updater feed has no
+    // `linux-x86_64` key — and even with one, the plugin cannot install over a
+    // running sandboxed app (`/app` is read-only). Flatpak updates come from
+    // the remote. Skip the check instead of letting it fail with a warning
+    // that reads as a broken updater.
+    #[cfg(target_os = "linux")]
+    {
+        let _ = (app_handle, channel);
+        info!("[updater] Linux build is distributed as a Flatpak — skipping the update check");
+        Ok(None)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    check_updates_impl(app_handle, channel).await
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn check_updates_impl(
     app_handle: UpdaterAppHandle,
     channel: Option<String>,
 ) -> Result<Option<UpdateCheckResult>, String> {

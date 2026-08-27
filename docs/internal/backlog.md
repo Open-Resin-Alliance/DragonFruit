@@ -277,16 +277,6 @@
 - Context: branch fix/history-undo-seam; `docs/dev/history-and-undo-redo.md`
   documents the façade this would enforce.
 
-### [fix] Esc does not close every modal — M · low risk
-- Where: src/components/modals/ and src/hotkeys/ (HotkeyRegistryManager already
-  special-cases Escape: see the comment about "Escape closing the Settings modal").
-- What: Escape closes some modals and not others. Spotted on the history debugger
-  (Cmd+Shift+C on macOS), which stays open. Audit them all and give them one
-  default behaviour instead of wiring it modal by modal.
-- Why: it is the universal convention, and today it depends on whether someone
-  remembered. The decision to make is where the default lives: in a base modal
-  component, or in the hotkey registry.
-
 ### [fix] Show continuous Euler angles in the Transform panel — M · medium risk
 - Where: the gizmo drag applies rotation as quaternion deltas
   (src/components/scene/SceneCanvas/SceneCanvas.tsx, onRotate:
@@ -305,3 +295,25 @@
   export, so the display-side choice must not change the stored orientation.
   Confirm with an exact 180° rotation on each axis, and with a drag crossing 180°
   continuously.
+
+### [cleanup] Dead symbols in SlicingPanel and the backups tabs — S · low risk
+- Where: src/features/slicing/components/SlicingPanel.tsx and
+  src/components/settings/BackupsSettingsTab.tsx. Regenerate with
+  `npx eslint <file>` — don't trust a frozen listing.
+- What: `sliceStatus` is a useState written by seven call sites and never read;
+  `formatDuration`, `fetchStatus`, `activePrinter`, `activeMaterial` and a
+  handful of `set*` setters are unused.
+- Why: `sliceStatus` in particular reads like live status and is not — it
+  invites someone to "fix" a display that no longer exists. Predates the i18n
+  pass (confirmed at HEAD); mechanical once the parked block below is resolved.
+
+### [cleanup] 790 lines of parked expert-AA UI in SlicingPanel — M · medium risk
+- Where: src/features/slicing/components/SlicingPanel.tsx, lines ~2779-3571,
+  opened by `{false && aaQualityMode === 'expert' && <>`.
+- What: the whole expert anti-aliasing panel is switched off by a literal
+  `false`. It holds most of the AA vocabulary (Perturbation Pattern, LUT Curve,
+  Z Blur Radius, Minimum Grey Level, AA on Supports) and keeps several memoized
+  labels alive (`advancedSampleCountLabel`, `advancedBlurWidthLabel`…).
+- Why: decide with the AA owner whether this is parked or abandoned. Left
+  untranslated in the i18n pass on purpose — wrapping it would add ~80 strings
+  nobody can see; if it comes back, it needs that pass plus an AA glossary.

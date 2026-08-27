@@ -45,6 +45,12 @@ export type PreparePanelStackProps = {
   requestDestructiveTransformSupportDeletion: (operationLabel: string) => boolean;
   handleRotationComplete: () => void;
   handleAutoLiftChange: (enabled: boolean) => void;
+  selectionPositionOrigin: React.ComponentProps<typeof TransformControls>['position'];
+  handlePositionSelectedModels: (x: number, y: number, z: number) => void;
+  commitPendingSelectionPositionHistory: () => void;
+  handleCenterSelectedModels: () => void;
+  handleLiftSelectedModels: () => void;
+  handleDropSelectedModels: () => void;
   scheduleCommitPendingTransformHistory: (frameDelay?: number) => void;
   uniformScaling: boolean;
   setUniformScaling: (value: boolean) => void;
@@ -88,6 +94,12 @@ export function PreparePanelStack({
   requestDestructiveTransformSupportDeletion,
   handleRotationComplete,
   handleAutoLiftChange,
+  selectionPositionOrigin,
+  handlePositionSelectedModels,
+  commitPendingSelectionPositionHistory,
+  handleCenterSelectedModels,
+  handleLiftSelectedModels,
+  handleDropSelectedModels,
   scheduleCommitPendingTransformHistory,
   uniformScaling,
   setUniformScaling,
@@ -218,9 +230,16 @@ export function PreparePanelStack({
       {scene.geom && transformMgr.transformMode === 'transform' && (
         <TransformControls
           key="prepare-transform-controls"
-          position={transformMgr.transform.position}
-          onPositionChange={transformMgr.transformHook.setPosition}
-          onCenter={transformMgr.transformHook.centerXY}
+          position={scene.selectedModelIds.length > 1
+            ? selectionPositionOrigin
+            : transformMgr.transform.position}
+          onPositionChange={scene.selectedModelIds.length > 1
+            ? handlePositionSelectedModels
+            : transformMgr.transformHook.setPosition}
+          onPositionCommit={scene.selectedModelIds.length > 1
+            ? commitPendingSelectionPositionHistory
+            : scheduleCommitPendingTransformHistory}
+          onCenter={handleCenterSelectedModels}
           onPlatform={transformMgr.transformHook.setPlatformZ}
           rotation={transformMgr.transform.rotation}
           onRotationChange={(x, y, z) => {
@@ -272,14 +291,8 @@ export function PreparePanelStack({
           onAutoLiftChange={handleAutoLiftChange}
           liftDistance={transformMgr.liftDistance}
           onLiftDistanceChange={transformMgr.setLiftDistance}
-          onLift={() => {
-            const lowestWorldZ = transformMgr.getLowestWorldZ();
-            if (lowestWorldZ !== null) transformMgr.transformHook.snapToLift(lowestWorldZ, transformMgr.liftDistance);
-          }}
-          onDrop={() => {
-            const lowestWorldZ = transformMgr.getLowestWorldZ();
-            if (lowestWorldZ !== null) transformMgr.transformHook.snapToPlatform(lowestWorldZ);
-          }}
+          onLift={handleLiftSelectedModels}
+          onDrop={handleDropSelectedModels}
           onTransformCommit={scheduleCommitPendingTransformHistory}
         />
       )}

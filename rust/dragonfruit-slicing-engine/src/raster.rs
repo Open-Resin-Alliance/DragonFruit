@@ -1845,15 +1845,19 @@ fn build_scanline_segment_index_z_perturbed(
         return None;
     }
 
-    let unique_sample_count = segments_list.len().min(aa_steps);
+    // With Duplicate Terminal Z there are fewer unique Z heights than Y
+    // sub-samples, so each Z sample feeds two consecutive sub-rows. Every
+    // sub-row must still be filled: skipping half of them would halve the
+    // accumulated coverage and turn solid interiors grey.
+    let z_steps = segments_list.len().min(aa_steps).max(1);
     let mut start_counts = vec![0usize; sub_height];
     let mut global_start = sub_height;
     let mut global_end = 0usize;
     let f_steps = aa_steps as f32;
 
-    for sample_idx in 0..unique_sample_count {
+    for sample_idx in 0..aa_steps {
         let phase = (sample_idx as f32 + 0.5) / f_steps;
-        for seg in &segments_list[sample_idx] {
+        for seg in &segments_list[sample_idx * z_steps / aa_steps] {
             let start_py = (seg.y_min - phase).ceil() as i32;
             let end_py = (seg.y_max - phase).ceil() as i32;
             let clamped_start = start_py.clamp(0, height as i32) as usize;
@@ -1891,9 +1895,9 @@ fn build_scanline_segment_index_z_perturbed(
     ];
     let mut write_offsets = row_offsets[..sub_height].to_vec();
 
-    for sample_idx in 0..unique_sample_count {
+    for sample_idx in 0..aa_steps {
         let phase = (sample_idx as f32 + 0.5) / f_steps;
-        for seg in &segments_list[sample_idx] {
+        for seg in &segments_list[sample_idx * z_steps / aa_steps] {
             let start_py = (seg.y_min - phase).ceil() as i32;
             let end_py = (seg.y_max - phase).ceil() as i32;
             let clamped_start = start_py.clamp(0, height as i32) as usize;
@@ -4132,6 +4136,33 @@ mod tests {
             metadata_json: "{}".to_string(),
             x_packing_mode: "none".to_string(),
         }
+    }
+
+    #[test]
+    fn duplicate_terminal_z_keeps_solid_interiors_opaque() {
+        let mut xyz = Vec::new();
+        push_box_triangles(&mut xyz, 0.0, 0.0, -1.0, 2.0, 40.0, 40.0);
+
+        let center = |duplicate_z: Option<bool>| -> u8 {
+            let mut job = job_for_single_layer();
+            job.anti_aliasing_mode = "3DAA".to_string();
+            job.anti_aliasing_level = "16x".to_string();
+            job.zaa_duplicate_z = duplicate_z;
+
+            let width = job.source_width_px as usize;
+            let height = job.source_height_px as usize;
+            let mut triangles = parse_triangles(&xyz);
+            project_triangles_inplace(&mut triangles, &job);
+            let indices: Vec<usize> = (0..triangles.len()).collect();
+
+            let mask = rasterize_layer(&job, &triangles, &indices, 0);
+            mask[(height / 2) * width + width / 2]
+        };
+
+        // Halving the unique Z samples must not halve the accumulated coverage:
+        // the interior stays white, only the edges get grey.
+        assert_eq!(center(Some(false)), 255);
+        assert_eq!(center(Some(true)), 255);
     }
 
     #[test]

@@ -1,3 +1,4 @@
+import { footprintToPoints, footprintX, footprintY, footprintZ } from '@/volumeAnalysis/Islands/voxelFootprint';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import type { CandidatePoint } from './types';
 import type { AutoSupportSettings } from './settings';
@@ -217,7 +218,7 @@ export function generateGridCandidates(
         let spacing = computeRegionSpacing(island, settings, anchorScale);
 
         const voxels = island.contactVoxels;
-        if (!voxels || voxels.length === 0) continue;
+        if (!voxels || voxels.count === 0) continue;
 
         // Footprint bbox + spatial hash for containment / nearest-voxel Z.
         let minX = Infinity;
@@ -226,7 +227,10 @@ export function generateGridCandidates(
         let maxY = -Infinity;
         const cellSize = Math.max(spacing, 1.0);
         const hash = new Map<string, Array<{ x: number; y: number; z?: number }>>();
-        for (const p of voxels) {
+        for (let vi = 0; vi < voxels.count; vi++) {
+            // The bucket keeps point objects, but only for the duration of this
+            // placement run — the footprint itself stays packed.
+            const p = { x: footprintX(voxels, vi), y: footprintY(voxels, vi), z: footprintZ(voxels, vi) ?? undefined };
             if (p.x < minX) minX = p.x;
             if (p.y < minY) minY = p.y;
             if (p.x > maxX) maxX = p.x;
@@ -336,8 +340,9 @@ export function generateGridCandidates(
         // `gridSpacing`, add a support on the ERODED boundary — the contact
         // disc stays fully on the surface.
         const spacingSq = gridSpacing * gridSpacing;
-        const eroded = erodeFootprint(voxels);
-        const boundary = buildBoundaryPoints(eroded.length > 0 ? eroded : voxels, spacing * stride, minZ);
+        const voxelPoints = footprintToPoints(voxels);
+        const eroded = erodeFootprint(voxelPoints);
+        const boundary = buildBoundaryPoints(eroded.length > 0 ? eroded : voxelPoints, spacing * stride, minZ);
         for (const b of boundary) {
             let covered = false;
             for (const p of lattice) {

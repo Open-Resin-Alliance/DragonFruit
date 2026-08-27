@@ -1,3 +1,5 @@
+import { footprintToPoints, footprintX, footprintY, footprintZ } from '@/volumeAnalysis/Islands/voxelFootprint';
+import { cellKey } from '@/volumeAnalysis/Islands/spatialHashGrid2D';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import type { CandidatePoint } from './types';
 import type { AutoSupportSettings } from './settings';
@@ -32,26 +34,26 @@ const BRIDSON_CANDIDATES = 30;
  */
 export function computeRegionFlatnessDeg(region: DetectedIsland): number {
     const voxels = region.contactVoxels;
-    if (!voxels || voxels.length < 4) return 0;
+    if (!voxels || voxels.count < 4) return 0;
 
-    const indexByKey = new Map<string, number>();
-    voxels.forEach((v, i) => {
-        indexByKey.set(`${Math.round(v.x * 4)},${Math.round(v.y * 4)}`, i);
-    });
+    const indexByKey = new Map<number, number>();
+    for (let i = 0; i < voxels.count; i++) {
+        indexByKey.set(cellKey(Math.round(footprintX(voxels, i) * 4), Math.round(footprintY(voxels, i) * 4)), i);
+    }
 
     const angles: number[] = [];
-    for (let i = 0; i < voxels.length; i++) {
-        const v = voxels[i];
-        if (v.z == null) continue;
-        const kx = Math.round(v.x * 4);
-        const ky = Math.round(v.y * 4);
+    for (let i = 0; i < voxels.count; i++) {
+        const vz = footprintZ(voxels, i);
+        if (vz == null) continue;
+        const kx = Math.round(footprintX(voxels, i) * 4);
+        const ky = Math.round(footprintY(voxels, i) * 4);
         let dzMax = 0;
         for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-            const ni = indexByKey.get(`${kx + dx},${ky + dy}`);
+            const ni = indexByKey.get(cellKey(kx + dx, ky + dy));
             if (ni === undefined) continue;
-            const nz = voxels[ni].z;
+            const nz = footprintZ(voxels, ni);
             if (nz == null) continue;
-            const dz = Math.abs(nz - v.z);
+            const dz = Math.abs(nz - vz);
             if (dz > dzMax) dzMax = dz;
         }
         if (dzMax > 0) angles.push((Math.atan2(dzMax, 0.25) * 180) / Math.PI);
@@ -141,7 +143,7 @@ export function generatePoissonCandidates(
         );
 
         const voxels = island.contactVoxels;
-        if (!voxels || voxels.length === 0) continue;
+        if (!voxels || voxels.count === 0) continue;
 
         // Footprint bbox + spatial hash for containment / nearest-voxel Z.
         let minX = Infinity;
@@ -150,7 +152,10 @@ export function generatePoissonCandidates(
         let maxY = -Infinity;
         const cellSize = Math.max(interiorSpacing, 1.0);
         const hash = new Map<string, Array<{ x: number; y: number; z?: number }>>();
-        for (const p of voxels) {
+        for (let vi = 0; vi < voxels.count; vi++) {
+            // The bucket keeps point objects, but only for the duration of this
+            // placement run — the footprint itself stays packed.
+            const p = { x: footprintX(voxels, vi), y: footprintY(voxels, vi), z: footprintZ(voxels, vi) ?? undefined };
             if (p.x < minX) minX = p.x;
             if (p.y < minY) minY = p.y;
             if (p.x > maxX) maxX = p.x;
@@ -226,8 +231,9 @@ export function generatePoissonCandidates(
         // 1. Perimeter ring — guaranteed retained (denser than the interior).
         //    Generated on the ERODED footprint so the contact disc sits fully
         //    on the surface, not half past the region edge (half in air).
-        const eroded = erodeFootprint(voxels);
-        for (const b of buildBoundaryPoints(eroded.length > 0 ? eroded : voxels, perimeterSpacing, minZ)) {
+        const voxelPoints = footprintToPoints(voxels);
+        const eroded = erodeFootprint(voxelPoints);
+        for (const b of buildBoundaryPoints(eroded.length > 0 ? eroded : voxelPoints, perimeterSpacing, minZ)) {
             insert({ x: b.x, y: b.y, z: b.z, kind: 'perimeter' });
         }
 

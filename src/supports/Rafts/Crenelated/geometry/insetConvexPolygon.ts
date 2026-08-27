@@ -1,13 +1,5 @@
 import * as THREE from 'three';
-
-function signedArea(poly: THREE.Vector2[]): number {
-  let area = 0;
-  for (let i = 0; i < poly.length; i++) {
-    const j = (i + 1) % poly.length;
-    area += poly[i].x * poly[j].y - poly[j].x * poly[i].y;
-  }
-  return area * 0.5;
-}
+import { signedArea2d } from './signedArea2d';
 
 /**
  * Compute an inward offset (inset) of a convex polygon by distance d.
@@ -20,7 +12,7 @@ export function insetConvexPolygon(poly: THREE.Vector2[], d: number): THREE.Vect
   // Normalize winding so the "left normal" is consistently inward.
   // Convex hull generators typically return CCW, but imported/derived profiles
   // can occasionally be CW.
-  const isCcw = signedArea(poly) > 0;
+  const isCcw = signedArea2d(poly) > 0;
   const workPoly = isCcw ? poly : [...poly].reverse();
 
   const n = workPoly.length;

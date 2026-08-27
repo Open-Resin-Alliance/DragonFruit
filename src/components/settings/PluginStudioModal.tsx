@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { AlertTriangle, Archive, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, FlaskConical, GitBranch, Layers, Maximize2, Minimize2, Plus, Printer, Search, Square, Trash2, X } from 'lucide-react';
 import JSZip from 'jszip';
 import hljs from 'highlight.js';
@@ -3473,24 +3474,8 @@ export function PluginStudioModal({ isOpen, onClose }: PluginStudioModalProps) {
     onClose();
   }, [onClose]);
 
-  React.useEffect(() => {
-    if (!isOpen) return;
-
-    const onKeyDown = (event: CustomEvent) => {
-      if (event.detail.key !== 'Escape') return;
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation?.();
-      if (showExitConfirm) {
-        setShowExitConfirm(false);
-        return;
-      }
-      setShowExitConfirm(true);
-    };
-
-    window.addEventListener('app-hotkey-keydown', onKeyDown as EventListener, true);
-    return () => window.removeEventListener('app-hotkey-keydown', onKeyDown as EventListener, true);
-  }, [isOpen, showExitConfirm]);
+  // Escape asks to leave the studio, and asks again to dismiss that prompt.
+  useEscapeToClose(isOpen, () => setShowExitConfirm((prev) => !prev));
 
   React.useEffect(() => {
     if (!isOpen) return;

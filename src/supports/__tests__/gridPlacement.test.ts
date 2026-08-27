@@ -1,3 +1,4 @@
+import { footprintFromPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
@@ -31,7 +32,7 @@ function rectRegion(
         baseZ,
         areaMm2,
         overhangAngleDeg: angleDeg,
-        contactVoxels,
+        contactVoxels: footprintFromPoints(contactVoxels),
     };
 }
 
@@ -50,7 +51,7 @@ function ringRegion(id: string, areaMm2: number): DetectedIsland {
         contact: new THREE.Vector3(0, 0, 6.5),
         baseZ: 6.5,
         areaMm2,
-        contactVoxels,
+        contactVoxels: footprintFromPoints(contactVoxels),
     };
 }
 
@@ -154,7 +155,7 @@ test('uses the region surface Z at each grid point (sloped facet)', () => {
         contact: new THREE.Vector3(0, 0, 6.5),
         baseZ: 6.5,
         areaMm2: 400,
-        contactVoxels,
+        contactVoxels: footprintFromPoints(contactVoxels),
     };
 
     const settings = { ...createDefaultAutoSupportSettings(), areaPerSupportMm2: 8, gridAreaThresholdMm2: 25 };

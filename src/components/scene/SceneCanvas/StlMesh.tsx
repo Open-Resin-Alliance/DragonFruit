@@ -22,6 +22,7 @@ import type { TransformMode, ModelTransform } from '@/hooks/useModelTransform';
 import type { SupportMode } from '@/supports/types';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
+import { MARQUEE_CANDIDATE_TINT_FACTOR } from '@/utils/marqueeCandidateTint';
 
 // Scratch raycaster reused for clip-zone fallback raycasts.
 const _clipFallbackRaycaster = new THREE.Raycaster();
@@ -708,8 +709,12 @@ if (uDitherAmount > 0.0) {
       return base.clone().lerp(supportTint, selectionStrength).getStyle();
     }
 
-    if (isHoveredModel || isMarqueeHovered) {
+    if (isHoveredModel) {
       return base.clone().lerp(supportTint, hoverStrength).getStyle();
+    }
+
+    if (isMarqueeHovered) {
+      return base.clone().lerp(supportTint, hoverStrength * MARQUEE_CANDIDATE_TINT_FACTOR).getStyle();
     }
 
     return base.getStyle();

@@ -2,6 +2,7 @@ import { applySupportSelectionClick, selectJointById, selectPrimitiveById } from
 import { isContactDiskHudInteractionActive } from '../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { getSnapshot } from '../state';
 import { isKeyPressedSync } from '@/hotkeys/hotkeyStore';
+import { getSelectedSupportIds } from './supportMultiSelection';
 
 let hoverGuardInitialized = false;
 let orbitInteractionActive = false;
@@ -34,13 +35,17 @@ function initializeHoverGuards() {
     document.addEventListener('visibilitychange', markOrbitInactiveFromPointer);
 }
 
-function isShiftActiveFromEvent(e: any) {
+export function isSupportSelectionShiftActive(e: any) {
     return !!(
         e?.shiftKey
         || e?.nativeEvent?.shiftKey
         || e?.sourceEvent?.shiftKey
         || isKeyPressedSync('shift')
     );
+}
+
+export function shouldDeferSupportPrimitiveSelection(e: any) {
+    return isSupportSelectionShiftActive(e) || getSelectedSupportIds().length > 1;
 }
 
 export function emitSupportModelPointerHover(modelId: string | null) {
@@ -80,7 +85,7 @@ export function emitSupportModelPointerSelect(modelId: string | null) {
  * Enforces interactability check and stops DOM propagation to prevent canvas deselection.
  */
 export function handleSupportClick(e: any, id: string, isInteractable: boolean) {
-    const shiftDown = isShiftActiveFromEvent(e);
+    const shiftDown = isSupportSelectionShiftActive(e);
 
     if (!isInteractable) {
         return;
@@ -115,6 +120,7 @@ export function handleJointClick(
     onSelect?: (id: string) => void
 ) {
     if (!isInteractable) return;
+    if (shouldDeferSupportPrimitiveSelection(e)) return;
     
     // If parent is NOT selected and THIS joint is NOT selected, 
     // let the click bubble to the parent (Trunk/Branch) to select the support first.
@@ -147,6 +153,7 @@ export function handleKnotClick(
     onSelect?: (id: string) => void
  ) {
     if (!isInteractable) return;
+     if (shouldDeferSupportPrimitiveSelection(e)) return;
 
     if (!isParentSelected && !isKnotSelected) {
         return;
@@ -195,6 +202,7 @@ export function handleContactDiskClick(
     onSelect?: (id: string) => void
 ) {
     if (!isInteractable) return;
+    if (shouldDeferSupportPrimitiveSelection(e)) return;
 
     if (!isParentSelected && !isContactDiskSelected) {
         return;

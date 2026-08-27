@@ -7,6 +7,7 @@
 
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { detectPlatform } from '@/hooks/usePlatform';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,6 +33,28 @@ export type UpdateChannel = 'stable' | 'dev';
 
 function isTauriAvailable(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+// ---------------------------------------------------------------------------
+// Platform delivery
+// ---------------------------------------------------------------------------
+
+/** Where the latest DragonFruit release is published for Linux users. */
+export const LINUX_RELEASES_URL =
+  'https://github.com/Open-Resin-Alliance/DragonFruit/releases';
+
+/** Flatpak application id, for the `flatpak update` hint shown on Linux. */
+export const FLATPAK_APP_ID = 'org.openresinalliance.dragonfruit';
+
+/**
+ * True when updates are installed outside the app.
+ *
+ * Linux ships only as a Flatpak bundle: the updater feed has no Linux entry,
+ * and the sandbox cannot write over a running install anyway. Those users
+ * update through Flatpak instead.
+ */
+export function updatesAreExternal(): boolean {
+  return detectPlatform() === 'linux';
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +103,10 @@ export async function fetchUpdateInfo(
   channel?: UpdateChannel,
 ): Promise<UpdateInfo | null> {
   if (!isTauriAvailable()) {
+    return null;
+  }
+  if (updatesAreExternal()) {
+    console.log('[updater] Linux ships as a Flatpak — skipping the update check');
     return null;
   }
   console.log('[updater] fetchUpdateInfo called, channel:', channel ?? 'null (Rust default)');

@@ -19,3 +19,9 @@ React hook. Reactive to modifier changes. Excludes overlapping modifiers.
 
 ### `isKeyPressedSync(key: string): boolean`
 Non-reactive getter. Direct Set lookup. Use in high-frequency requestAnimationFrame loops.
+
+### `useEscapeToClose(open: boolean, onClose?: () => void): void`
+React hook. Registers a dialog as the Escape target while `open`. Only the
+most recently registered dialog reacts, and it consumes the press. Omit
+`onClose` to swallow Escape (non-dismissible dialog). Non-React callers use
+`registerEscapeHandler(handler)`, which returns its unregister function.

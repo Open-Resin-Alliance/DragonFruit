@@ -102,6 +102,7 @@ nav:
           - page.tsx Refactor Handoff: dev/page-tsx-refactor-handoff.md
           - Contributing: dev/contributing.md
           - Backlog and Known Gotchas: dev/backlog.md
+          - Performance Debugging: dev/performance-debugging.md
       - Feature Frameworks:
           - Experiments Framework: dev/experiments-framework.md
           - Plugin Framework: dev/plugins-framework.md
@@ -141,6 +142,8 @@ nav:
           - Auto-Support Roads Not Taken: adr/0038-auto-support-placement-roads-not-taken.md
           - Stream CTB Layer Payloads to Disk: adr/0036-stream-ctb-layer-payloads-to-disk.md
           - Cut the Surface, Not a Volume: adr/0037-cut-the-surface-not-a-volume.md
+          - Island Scan Data Shapes: adr/0039-island-scan-data-shapes.md
+          - Linux CEF Runs on X11: adr/0040-linux-cef-windowing-x11.md
           - Organic Cut Surface Redesign: dev/organic-cut-surface-redesign.md
       - Integration and Operations:
           - RTSP Relay: dev/rtsp-relay.md

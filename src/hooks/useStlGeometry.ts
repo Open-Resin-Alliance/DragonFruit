@@ -1,3 +1,4 @@
+import { isTauriRuntime } from '@/utils/tauriRuntime';
 import { useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
@@ -13,7 +14,6 @@ import {
   applyRepairedPositions,
   classifyFromGeometry,
   isHeavyRepair,
-  isTauriRuntime,
   repairFromGeometry,
   type MeshAnalysisJson,
   type MeshHealthReport,

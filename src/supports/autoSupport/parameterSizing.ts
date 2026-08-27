@@ -1,3 +1,4 @@
+import { clamp, round } from '@/utils/math';
 import type { CandidatePoint } from './types';
 import { getSettings } from '../Settings/state';
 
@@ -182,14 +183,3 @@ export function sizeParameters(
     };
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function clamp(value: number, min: number, max: number): number {
-    return Math.min(max, Math.max(min, value));
-}
-
-function round(value: number, decimals: number): number {
-    return Number(value.toFixed(decimals));
-}

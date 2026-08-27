@@ -1,3 +1,4 @@
+import { clamp } from '@/utils/math';
 import React from 'react';
 import windowLayouts from '@/config/window-layouts.json';
 import {
@@ -151,9 +152,6 @@ type LayoutConfig = {
 
 const WINDOW_LAYOUTS: LayoutConfig = windowLayouts as unknown as LayoutConfig;
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
-}
 
 function overlaps(a: PanelRect, b: PanelRect, gap = PANEL_GAP) {
   return !(
