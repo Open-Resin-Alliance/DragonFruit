@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Bug, ClipboardCopy, Database, Languages, LayoutGrid, RotateCcw, ZoomIn } from 'lucide-react';
+import { Bug, ClipboardCopy, Database, HelpCircle, Languages, LayoutGrid, RotateCcw, ZoomIn } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/ui/LanguageSwitcher';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
@@ -21,6 +21,11 @@ import {
   saveUiScale,
   type UiScaleValue,
 } from '@/components/settings/uiScalePreference';
+import {
+  getSupportPlacementHelpEnabled,
+  setSupportPlacementHelpEnabled,
+  subscribeSupportPlacementHelp,
+} from '@/components/settings/supportPlacementPreferences';
 
 interface GeneralSettingsTabProps {
   floatingLayoutPersistence: boolean;
@@ -52,6 +57,8 @@ export function GeneralSettingsTab({
   const [uiScale, setUiScale] = React.useState<UiScaleValue>(() => getSavedUiScale());
   const [customScaleArmed, setCustomScaleArmed] = React.useState(false);
   const isCustomScale = customScaleArmed || !UI_SCALE_PRESETS.includes(uiScale);
+  const [supportHelpEnabled, setSupportHelpEnabled] = React.useState(() => getSupportPlacementHelpEnabled());
+  React.useEffect(() => subscribeSupportPlacementHelp(() => setSupportHelpEnabled(getSupportPlacementHelpEnabled())), []);
 
   const handleUiScaleChange = (rawValue: string) => {
     // Selecting "Custom" arms the numeric input but saves nothing — the current
@@ -344,6 +351,70 @@ export function GeneralSettingsTab({
                   }}
             >
               {debugPrimitivesPanelVisible ? 'ON' : 'OFF'}
+            </button>
+          </div>
+        </div>
+      </section>
+      <section
+        className="rounded-lg border p-3"
+        style={{
+          background: 'var(--surface-1)',
+          borderColor: 'var(--border-subtle)',
+        }}
+      >
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+            }}
+          >
+            <HelpCircle className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Support Tooltips
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Show placement tooltips next to the cursor while adding supports.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Show support tooltips
+              </div>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Shows &quot;Cannot Place Support&quot; and &quot;Stability Warning&quot; tooltips.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const next = !supportHelpEnabled;
+                setSupportPlacementHelpEnabled(next);
+                setSupportHelpEnabled(next);
+              }}
+              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+              style={
+                supportHelpEnabled
+                  ? {
+                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                      color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
+                    }
+                  : {
+                      borderColor: 'var(--border-subtle)',
+                      background: 'var(--surface-1)',
+                      color: 'var(--text-muted)',
+                    }
+              }
+            >
+              {supportHelpEnabled ? 'ON' : 'OFF'}
             </button>
           </div>
         </div>

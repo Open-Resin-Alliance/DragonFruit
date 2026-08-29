@@ -22,8 +22,6 @@ export interface CandidatePoint {
     /** Density-grid point: must become its own standalone trunk (never merged
      *  into a nearby host) so flat regions get independent supports. */
     gridPoint?: boolean;
-    /** Region is in an anchor band (debug origin coloring + diagnostics). */
-    anchorPoint?: boolean;
 }
 
 /** Why a candidate was rejected. */
@@ -45,8 +43,6 @@ export interface ForestLedgerEntry {
     preset: 'detail' | 'structure' | 'anchor';
     /** The active profile band's shaft Ø at placement (mm). */
     bandShaftMm: number;
-    /** Anchor-band point: the shaft carries the anchor girth multiplier. */
-    anchorGirth: boolean;
 }
 
 /** One fan-out group in the Forest Report: a host trunk + its attachments. */
@@ -93,6 +89,48 @@ export interface ForestReport {
     bareTrunks: Array<{ id: string; z: number; shaftDiameterMm: number; sizingNote: string }>;
     /** Input-side island/overhang scan metrics (set by the orchestrator). */
     scan?: ForestScanMetrics;
+    /** Leaves/branches whose host knot drifted, crossed, or lost its host segment. */
+    orphans?: OrphanInfo[];
+    /** Placement diagnostics: why trunks are where they are, fan/merge refusal counts */
+    diagnostics?: {
+        candidatesBySource: { voxel: number; minima: number; intersection: number; overhang: number };
+        trunksByKind: { gridInfill: number; coverageFill: number; standalone: number };
+        fanRefusals: Partial<Record<string, number>>;
+        mergeRefusals: Partial<Record<string, number>>;
+        /** Why consolidation (chunk fanning) refused candidates — sameZ means
+         *  the surface is too flat for side-leaves at the consolidation
+         *  angle (raft/connector territory). */
+        consolidationRefusals: Partial<Record<string, number>>;
+        /** Candidates whose trunk could not reach the plate and were bridged
+         *  model-to-model instead (cavity stick/twig). Tip position = where
+         *  the bridge starts; each entry is a candidate for elimination by
+         *  better routing. */
+        cavityFallbacks: Array<{ id: string; kind: 'stick' | 'twig'; tip: { x: number; y: number; z: number }; fanRefusal?: string }>;
+    };
+}
+
+/** One orphaned leaf/branch — host knot missing, drifted, or path now crosses a thickened shaft. */
+export interface OrphanInfo {
+    id: string;
+    kind: 'leaf' | 'branch' | 'trunk';
+    reason: 'missingKnot' | 'missingHost' | 'missingSegment' | 'drift' | 'cross' | 'blocked' | 'trunkBlocked';
+    hostId?: string;
+    knotId?: string;
+    detail?: string;
+}
+
+
+
+/** Competitive distribution bake-off result for anchor surfaces. */
+export interface CompetitiveBakeoffAnalytics {
+    /** Anchor regions that went through the bake-off. */
+    anchorRegions: number;
+    /** Anchor regions where grid won. */
+    gridWins: number;
+    /** Anchor regions where Poisson won. */
+    poissonWins: number;
+    /** Mean winner margin (absolute coverage delta) across bake-offs. */
+    avgWinnerMargin: number;
 }
 
 /** Detailed analytics from an auto-place run. */
@@ -107,8 +145,6 @@ export interface AutoPlaceAnalytics {
     rejectionReasons: Partial<Record<RejectReason, number>>;
     /** Area coverage: sum of covered island areas / total island area (0–1). */
     areaCoverage: number;
-    /** Regions generated per distribution (dynamic grid vs Poisson disk). */
-    distribution: { grid: number; poisson: number };
     /** Placement-path breakdown — why trunks ended up where they did. */
     placement?: PlacementDiagnostics;
     /** Debug sizing info from the physics calculations. */
@@ -131,13 +167,9 @@ export type FanLeafRefusal =
 export interface PlacementDiagnostics {
     /** Candidate counts by detector source. */
     candidatesBySource: { voxel: number; minima: number; intersection: number; overhang: number };
-    /** Candidate counts by distribution (dynamic grid / Poisson disk / single). */
-    candidatesByDistribution: { grid: number; poisson: number; single: number };
     /** Placed trunks by origin. */
     trunksByKind: {
-        /** Poisson-disk points (organic regions; dense perimeter + infill). */
-        poissonDisk: number;
-        /** Dynamic-grid points (planar regions, incl. flat anchors). */
+        /** Fixed-density grid points (boundary ring + lattice infill). */
         gridInfill: number;
         /** Coverage-convergence gap-fill points. */
         coverageFill: number;
@@ -148,6 +180,10 @@ export interface PlacementDiagnostics {
     fanRefusals: Partial<Record<FanLeafRefusal, number>>;
     /** Why candidates failed to merge (no host vs host rejected the attachment). */
     mergeRefusals: Partial<Record<'noHost' | 'rejected', number>>;
+    /** Candidates whose trunk could not reach the plate and were bridged
+     *  model-to-model instead (cavity stick/twig). Tip = where the bridge
+     *  starts; each entry is a candidate for elimination by better routing. */
+    cavityFallbacks: Array<{ id: string; kind: 'stick' | 'twig'; tip: { x: number; y: number; z: number }; fanRefusal?: string }>;
 }
 
 /** Physics-based sizing debug data. */
@@ -157,21 +193,9 @@ export interface SizingDebugInfo {
     totalCandidates: number;
     weightPerSupportG: number;
     avgIslandAreaMm2: number;
-    /** Anchor clusters found (per-contact-patch Z bands). */
-    anchorClusterCount: number;
-    /** Regions inside an anchor band. */
-    anchorInBandRegions: number;
-    /** Projected area of in-band regions (mm²). */
-    anchorLayerAreaMm2: number;
-    /** Regions generated with the dynamic grid. */
-    distributionGridRegions: number;
-    /** Regions generated with the Poisson disk. */
-    distributionPoissonRegions: number;
     /** Standalone trunks (neither fanned nor merged) — the over-supply signal. */
     standaloneTrunks: number;
-    /** Trunks from Poisson disks (organic regions, incl. organic anchors). */
-    poissonDiskTrunks: number;
-    /** Trunks from the dynamic grid (planar regions) + coverage fill. */
+    /** Trunks from the fixed-density grid (boundary ring + infill + gap fill). */
     gridInfillTrunks: number;
     shaftDiameterRange: { min: number; max: number; avg: number };
     tipContactRange: { min: number; max: number; avg: number };

@@ -69,12 +69,14 @@ test('grids a large flat region with dynamic spacing (never cut off)', () => {
     const settings = { ...createDefaultAutoSupportSettings(), areaPerSupportMm2: 8, gridAreaThresholdMm2: 25, suctionAreaExponent: 0 };
     const candidates = generateGridCandidates([rectRegion('o0', -10, 10, -10, 10, 400)], settings);
 
-    assert.ok(candidates.length >= 115 && candidates.length <= 127,
-        `flat grid count ${candidates.length} ≈ 11×11 = 121 (densified)`);
+    // Lattice 11×11 = 121 + boundary ring at 0.7× spacing tracing the edge
+    // between lattice columns (~16 extra points).
+    assert.ok(candidates.length >= 125 && candidates.length <= 150,
+        `flat grid count ${candidates.length} ≈ 121 lattice + ring`);
     assert.ok(candidates.every((c) => c.gridPoint === true), 'points are standalone trunks');
     assert.ok(candidates.every((c) => c.source === 'overhang'));
-    assert.equal(candidates.filter((c) => c.id.startsWith('fill-')).length, 0,
-        'rectangle needs no boundary fill (outer ring covers it)');
+    assert.ok(candidates.filter((c) => c.id.startsWith('fill-')).length >= 10,
+        'boundary ring traces the outline denser than the lattice');
 
     // Equal spacing, spanning the full inset span — the far edge is not cut off.
     const xs = [...new Set(candidates.filter((c) => c.id.startsWith('grid-')).map((c) => c.tipPos.x))].sort((a, b) => a - b);
@@ -93,8 +95,8 @@ test('flat boost and slope relax knobs modulate the angle density', () => {
     // densified 11×11.
     const settings = { ...createDefaultAutoSupportSettings(), areaPerSupportMm2: 8, gridAreaThresholdMm2: 25, flatDensityBoost: 1, suctionAreaExponent: 0 };
     const flat = generateGridCandidates([rectRegion('o0', -10, 10, -10, 10, 400, 6.5, 0)], settings);
-    assert.ok(flat.length >= 55 && flat.length <= 70,
-        `flat boost 1 → plain grid (${flat.length} ≈ 64)`);
+    assert.ok(flat.length >= 65 && flat.length <= 90,
+        `flat boost 1 → plain grid + ring (${flat.length} ≈ 76)`);
 
     // Default boost (0.7) densifies the flat grid; slope relax relaxes the
     // steep end.
@@ -113,10 +115,8 @@ test('angle-aware density: flat anchor surfaces grid denser than slopes', () => 
 
     assert.ok(flat.length > slope.length,
         `flat (${flat.length}) denser than 40° slope (${slope.length})`);
-    assert.ok(flat.length >= 115, `flat grids densified (${flat.length})`);
-    assert.ok(slope.length <= 60, `steep slope grids sparser (${slope.length})`);
-    assert.equal(slope.filter((c) => c.id.startsWith('fill-')).length, 0,
-        'rectangle needs no boundary fill at any angle');
+    assert.ok(flat.length >= 125, `flat grids densified (${flat.length})`);
+    assert.ok(slope.length <= 70, `steep slope grids sparser (${slope.length})`);
 });
 
 test('skips regions below the grid area threshold', () => {
@@ -177,17 +177,6 @@ test('falls back to region baseZ when voxels carry no Z', () => {
     assert.ok(candidates.every((c) => Math.abs(c.tipPos.z - 6.5) < 1e-6));
 });
 
-test('anchor regions bypass the grid area threshold', () => {
-    const settings = { ...createDefaultAutoSupportSettings(), gridAreaThresholdMm2: 25, suctionAreaExponent: 0 };
-    const small = rectRegion('o0', -2, 2, -2, 2, 16, 6.5, 0);
-
-    const plain = generateGridCandidates([small], settings);
-    assert.equal(plain.length, 0, 'below threshold → no grid');
-
-    const bypassed = generateGridCandidates([small], settings, new Map([['o0', 0.7]]), new Set(['o0']));
-    assert.ok(bypassed.length > 0, 'anchor bypass → densified grid');
-});
-
 test('grid outer ring is inset by the contact radius', () => {
     const settings = { ...createDefaultAutoSupportSettings(), gridAreaThresholdMm2: 25, suctionAreaExponent: 0 };
     const candidates = generateGridCandidates([rectRegion('o0', -10, 10, -10, 10, 400, 6.5, 0)], settings);
@@ -200,26 +189,8 @@ test('grid outer ring is inset by the contact radius', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Densification (anchor bands + suction scaling + floors) — Part 1
+// Suction scaling + floors
 // ---------------------------------------------------------------------------
-
-test('anchor band scale densifies in-band regions', () => {
-    const settings = {
-        ...createDefaultAutoSupportSettings(),
-        areaPerSupportMm2: 8,
-        gridAreaThresholdMm2: 25,
-        suctionAreaExponent: 0, // isolate the anchor factor
-        anchorSpacingFactor: 0.5, // distinct from flatDensityBoost (0.7)
-    };
-    const region = rectRegion('o0', -10, 10, -10, 10, 400, 6.5, 0);
-
-    const plain = generateGridCandidates([region], settings);
-    const anchored = generateGridCandidates([region], settings, new Map([['o0', 0.7]]));
-
-    assert.ok(plain.length >= 115 && plain.length <= 127, `plain grid ${plain.length} ≈ 121`);
-    assert.ok(anchored.length > plain.length,
-        `anchor band densifies (${anchored.length} > ${plain.length})`);
-});
 
 test('suction scaling densifies large shallow ceilings', () => {
     const settings = {
@@ -237,8 +208,8 @@ test('suction scaling densifies large shallow ceilings', () => {
 
     // The spacing formula itself: 400 mm² strictly denser than 25 mm² at the
     // same angle (density grows with projected area).
-    const smallSpacing = computeRegionSpacing(rectRegion('o1', -2.5, 2.5, -2.5, 2.5, 25, 6.5, 0), settings, 1);
-    const bigSpacing = computeRegionSpacing(region, settings, 1);
+    const smallSpacing = computeRegionSpacing(rectRegion('o1', -2.5, 2.5, -2.5, 2.5, 25, 6.5, 0), settings);
+    const bigSpacing = computeRegionSpacing(region, settings);
     assert.ok(bigSpacing < smallSpacing,
         `400 mm² (${bigSpacing.toFixed(2)} mm) denser than 25 mm² (${smallSpacing.toFixed(2)} mm)`);
 });
@@ -251,7 +222,7 @@ test('spacing never falls below the floor', () => {
         slopeRelaxFactor: 1,
         suctionAreaExponent: 0.4,
     };
-    const spacing = computeRegionSpacing(rectRegion('o0', -10, 10, -10, 10, 400, 6.5, 0), settings, 0.4);
+    const spacing = computeRegionSpacing(rectRegion('o0', -10, 10, -10, 10, 400, 6.5, 0), settings);
     assert.equal(spacing, GRID_SPACING_FLOOR_MM);
 });
 
@@ -268,7 +239,6 @@ test('per-region candidate count is capped (densification never exceeds the cap)
     const candidates = generateGridCandidates(
         [rectRegion('o0', -20, 20, -20, 20, 1600, 6.5, 0)],
         settings,
-        new Map([['o0', 0.4]]),
     );
 
     assert.ok(candidates.length > 0, 'region still produces candidates');

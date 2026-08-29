@@ -59,6 +59,10 @@ import { clearSupportSelection } from '@/supports/interaction/shared/selection/s
 import { isSupportTargetHoverCategory } from '@/supports/interaction/shared/hover/supportHoverResolver';
 import { useSceneHoveredSupportId } from '@/supports/interaction/shared/hover/sceneHoverStore';
 import { SupportLimitationFeedback } from '@/supports/PlacementLogic/SupportLimitations';
+import {
+  getSupportPlacementHelpEnabled,
+  subscribeSupportPlacementHelp,
+} from '@/components/settings/supportPlacementPreferences';
 import { useCurveInteractionState } from '@/supports/Curves/curveInteractionState';
 import { getSettings, subscribeToSettings } from '@/supports/Settings';
 import { DEFAULT_TIP_CONTACT_DIAMETER_MM } from '@/supports/Settings/defaults';
@@ -1034,6 +1038,8 @@ export function SceneCanvas({
   const supportPlacementGuideRafRef = React.useRef<number | null>(null);
   const supportPlacementGuidePendingZRef = React.useRef<number | null>(null);
   const [supportPlacementGuideZ, setSupportPlacementGuideZ] = React.useState<number | null>(null);
+  const [supportHelpEnabled, setSupportHelpEnabled] = React.useState(() => getSupportPlacementHelpEnabled());
+  React.useEffect(() => subscribeSupportPlacementHelp(() => setSupportHelpEnabled(getSupportPlacementHelpEnabled())), []);
 
   const [isModelSelected, setIsModelSelected] = React.useState(true); // Track for gizmo visibility
 
@@ -7517,21 +7523,22 @@ export function SceneCanvas({
         </div>
       )}
 
-      {/* Support Limitation Tooltip Overlay */}
-      <SupportLimitationFeedback
-        error={suppressSupportPlacementPreviewRendering || supportPathfindingDebugState.enabled ? null : (leafPlacementPreview?.error ?? (isBranchPlacementActive ? branchPlacementPreview?.error : null) ?? trunkPlacementPreview?.error ?? null)}
-        warning={
-          suppressSupportPlacementPreviewRendering || supportPathfindingDebugState.enabled
-            ? null
-            : (
-              leafPlacementPreview?.warning ??
-              (isBranchPlacementActive ? branchPlacementPreview?.warning : null) ??
-              trunkPlacementPreview?.warning ??
-              interactionWarning ??
-              null
-            )
-        }
-      />
+      {supportHelpEnabled && (
+        <SupportLimitationFeedback
+          error={suppressSupportPlacementPreviewRendering || supportPathfindingDebugState.enabled ? null : (leafPlacementPreview?.error ?? (isBranchPlacementActive ? branchPlacementPreview?.error : null) ?? trunkPlacementPreview?.error ?? null)}
+          warning={
+            suppressSupportPlacementPreviewRendering || supportPathfindingDebugState.enabled
+              ? null
+              : (
+                leafPlacementPreview?.warning ??
+                (isBranchPlacementActive ? branchPlacementPreview?.warning : null) ??
+                trunkPlacementPreview?.warning ??
+                interactionWarning ??
+                null
+              )
+          }
+        />
+      )}
 
       {/* GPU Picking Debug Overlay - shows what's under cursor */}
       {gpuPickingTest && <PickingDebugOverlay position="top-right" />}

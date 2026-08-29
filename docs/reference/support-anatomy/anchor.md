@@ -9,7 +9,7 @@ An anchor is a minimal grounded support for contacts that sit very close to the 
 - It bypasses the grid system entirely — an anchor does not take a grid node or participate in trunk pairing.
 
 !!! warning "Three unrelated things are called *anchor* in this codebase"
-    This page is about the **support type** (`Anchor`, `src/supports/types.ts`). Separately, the doc comment on the unrelated `Knot` interface reads "Knot (Anchor)" — a legacy alias for a primitive that attaches supports to a shaft. And in auto-support, an **anchor band** (`src/supports/autoSupport/anchorBands.ts`) is the densification band over the lowest contact-patch cluster — the first-printed underside. Three meanings, one word.
+    This page is about the **support type** (`Anchor`, `src/supports/types.ts`). Separately, the doc comment on the unrelated `Knot` interface reads "Knot (Anchor)" — a legacy alias for a primitive that attaches supports to a shaft. Three meanings, one word.
 
 ## Geometry
 

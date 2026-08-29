@@ -68,6 +68,14 @@ pub struct OverhangRegion {
     pub max_z: f32,
     /// Projected-footprint mask at the requested resolution.
     pub footprint: FootprintMask,
+    /// Triangle-accurate perimeter loops (world mm, each loop closed).
+    /// Outer + hole boundaries extracted from region triangle adjacency,
+    /// inset by `PERIMETER_CONTACT_INSET_MM` (0.25 mm) so a support's
+    /// contact disc sits fully on the surface. Empty for degenerate regions.
+    /// Used by the JS Poisson/grid stages instead of the voxel `contactVoxels`
+    /// boundary when available — organic curves are not quantized to 0.25 mm.
+    #[serde(default)]
+    pub perimeter_loops: Vec<Vec<[f32; 3]>>,
 }
 
 /// Weld a world-space triangle soup (9 floats per triangle) and classify
@@ -210,6 +218,7 @@ fn build_region(
     }
 
     let footprint = build_footprint_mask(mesh, &triangle_ids, xy_min, xy_max, px_mm);
+    let perimeter_loops = build_perimeter_loops(mesh, &triangle_ids, 0.25);
 
     // Area-weighted mean normal, normalized.
     let normal_len = (normal_acc[0] * normal_acc[0]
@@ -241,6 +250,7 @@ fn build_region(
         min_z,
         max_z,
         footprint,
+        perimeter_loops,
     }
 }
 
@@ -307,6 +317,230 @@ fn build_footprint_mask(
         data,
         surface_z,
     }
+}
+
+/// Extract triangle-accurate perimeter loops for a region and inset them by
+/// `inset_mm` so a support contact disc sits fully on the surface.
+/// Boundary edges are those with exactly one incident region triangle;
+/// loops are traced via vertex adjacency and offset per-vertex toward the
+/// interior (edge-mid → opposite vertex, averaged at vertices).
+fn build_perimeter_loops(
+    mesh: &IndexedMesh,
+    triangle_ids: &[u32],
+    inset_mm: f32,
+) -> Vec<Vec<[f32; 3]>> {
+    use std::collections::{HashMap, HashSet};
+    if triangle_ids.len() < 1 {
+        return Vec::new();
+    }
+    // Edge → (tri_id, opposite_vertex)
+    let mut edge_map: HashMap<(u32, u32), Vec<(u32, u32)>> = HashMap::new();
+    for &tid in triangle_ids {
+        let tri = mesh.triangles[tid as usize];
+        let (v0, v1, v2) = (tri[0], tri[1], tri[2]);
+        for (a, b, c) in [(v0, v1, v2), (v1, v2, v0), (v2, v0, v1)] {
+            let key = if a < b { (a, b) } else { (b, a) };
+            edge_map.entry(key).or_default().push((tid, c));
+        }
+    }
+    // Boundary edges: exactly one region triangle
+    let mut boundary: Vec<(u32, u32, u32, u32)> = Vec::new(); // a,b,opp,tri
+    let mut edge_opp: HashMap<(u32, u32), (u32, u32)> = HashMap::new(); // key -> (tri,opp)
+    let mut adj: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (key, vec) in edge_map {
+        if vec.len() == 1 {
+            let (tri, opp) = vec[0];
+            let (a, b) = key;
+            boundary.push((a, b, opp, tri));
+            adj.entry(a).or_default().push(b);
+            adj.entry(b).or_default().push(a);
+            edge_opp.insert(key, (tri, opp));
+        }
+    }
+    if boundary.is_empty() {
+        return Vec::new();
+    }
+    // Trace loops via adjacency
+    let mut visited: HashSet<(u32, u32)> = HashSet::new();
+    let mut loops: Vec<Vec<u32>> = Vec::new();
+    for &(a, b, _, _) in &boundary {
+        let key = if a < b { (a, b) } else { (b, a) };
+        if visited.contains(&key) {
+            continue;
+        }
+        let mut loop_vs: Vec<u32> = vec![a, b];
+        visited.insert(key);
+        let mut prev = a;
+        let mut cur = b;
+        loop {
+            if cur == a {
+                break;
+            }
+            let neighbors = match adj.get(&cur) {
+                Some(n) => n,
+                None => break,
+            };
+            let mut next_opt: Option<u32> = None;
+            for &nb in neighbors {
+                if nb == prev {
+                    continue;
+                }
+                let k = if cur < nb { (cur, nb) } else { (nb, cur) };
+                if !visited.contains(&k) {
+                    next_opt = Some(nb);
+                    break;
+                }
+            }
+            if next_opt.is_none() {
+                for &nb in neighbors {
+                    let k = if cur < nb { (cur, nb) } else { (nb, cur) };
+                    if !visited.contains(&k) {
+                        next_opt = Some(nb);
+                        break;
+                    }
+                }
+            }
+            if let Some(next) = next_opt {
+                let k = if cur < next { (cur, next) } else { (next, cur) };
+                visited.insert(k);
+                loop_vs.push(next);
+                prev = cur;
+                cur = next;
+                if cur == a {
+                    break;
+                }
+                if loop_vs.len() > boundary.len() + 2 {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        if loop_vs.len() > 1 && loop_vs[0] == *loop_vs.last().unwrap() {
+            loop_vs.pop();
+        }
+        if loop_vs.len() >= 3 {
+            loops.push(loop_vs);
+        }
+    }
+    if loops.is_empty() {
+        return Vec::new();
+    }
+    // Compute inset loops: per-vertex average of incident edge interior dirs
+    let mut out: Vec<Vec<[f32; 3]>> = Vec::new();
+    for vs in loops {
+        let n = vs.len();
+        // Per-edge interior direction (XY) toward opposite vertex
+        let mut edge_dirs: Vec<(f32, f32)> = Vec::with_capacity(n);
+        for i in 0..n {
+            let a = vs[i];
+            let b = vs[(i + 1) % n];
+            let key = if a < b { (a, b) } else { (b, a) };
+            if let Some((_, opp)) = edge_opp.get(&key) {
+                let pa = mesh.positions[a as usize];
+                let pb = mesh.positions[b as usize];
+                let pc = mesh.positions[*opp as usize];
+                let mid_x = (pa.x + pb.x) * 0.5;
+                let mid_y = (pa.y + pb.y) * 0.5;
+                let dx = pc.x - mid_x;
+                let dy = pc.y - mid_y;
+                let len = (dx * dx + dy * dy).sqrt();
+                if len > 1e-6 {
+                    edge_dirs.push((dx / len, dy / len));
+                } else {
+                    edge_dirs.push((0.0, 0.0));
+                }
+            } else {
+                edge_dirs.push((0.0, 0.0));
+            }
+        }
+        let mut inset_loop: Vec<[f32; 3]> = Vec::with_capacity(n);
+        for i in 0..n {
+            let vid = vs[i];
+            let p = mesh.positions[vid as usize];
+            let dir_prev = edge_dirs[(i + n - 1) % n];
+            let dir_next = edge_dirs[i];
+            let avg_x = dir_prev.0 + dir_next.0;
+            let avg_y = dir_prev.1 + dir_next.1;
+            let len = (avg_x * avg_x + avg_y * avg_y).sqrt();
+            let (off_x, off_y) = if len > 1e-6 {
+                (avg_x / len * inset_mm, avg_y / len * inset_mm)
+            } else if dir_next.0 != 0.0 || dir_next.1 != 0.0 {
+                (dir_next.0 * inset_mm, dir_next.1 * inset_mm)
+            } else if dir_prev.0 != 0.0 || dir_prev.1 != 0.0 {
+                (dir_prev.0 * inset_mm, dir_prev.1 * inset_mm)
+            } else {
+                (0.0, 0.0)
+            };
+            let new_x = p.x + off_x;
+            let new_y = p.y + off_y;
+            // Project Z onto the incident triangle plane so the inset point
+            // stays on the surface (overhangs are shallow, but 45° still shifts Z).
+            let new_z = if inset_mm.abs() > 1e-6 {
+                // Use the next edge's triangle plane (a,b,opp) for this vertex.
+                let a = vs[i];
+                let b = vs[(i + 1) % n];
+                let key = if a < b { (a, b) } else { (b, a) };
+                if let Some((tri, _opp)) = edge_opp.get(&key) {
+                    let tri_verts = mesh.triangles[*tri as usize];
+                    let v_a = mesh.positions[tri_verts[0] as usize];
+                    let v_b = mesh.positions[tri_verts[1] as usize];
+                    let v_c = mesh.positions[tri_verts[2] as usize];
+                    let n = (v_b.sub(v_a)).cross(v_c.sub(v_a));
+                    if n.z.abs() > 1e-6 {
+                        v_a.z - (n.x * (new_x - v_a.x) + n.y * (new_y - v_a.y)) / n.z
+                    } else {
+                        p.z
+                    }
+                } else {
+                    p.z
+                }
+            } else {
+                p.z
+            };
+            inset_loop.push([new_x, new_y, new_z]);
+        }
+        // Validate: inset loop must still have area and not collapse.
+        // For narrow features (<0.5 mm) the inset can invert; fall back to raw.
+        let mut use_raw = false;
+        if inset_mm > 1e-6 {
+            let mut area2: f64 = 0.0;
+            for i in 0..n {
+                let a = inset_loop[i];
+                let b = inset_loop[(i + 1) % n];
+                area2 += (a[0] as f64) * (b[1] as f64) - (b[0] as f64) * (a[1] as f64);
+            }
+            if area2.abs() < 1e-6 {
+                use_raw = true;
+            } else {
+                // Check that inset points remain inside original ring (for outer).
+                // Simple heuristic: inset should not push vertices more than 2× inset
+                // away from original — catches inversion on tight concavities.
+                let mut max_dist2: f32 = 0.0;
+                for i in 0..n {
+                    let dx = inset_loop[i][0] - mesh.positions[vs[i] as usize].x;
+                    let dy = inset_loop[i][1] - mesh.positions[vs[i] as usize].y;
+                    max_dist2 = max_dist2.max(dx * dx + dy * dy);
+                }
+                if max_dist2 > (inset_mm * 3.0) * (inset_mm * 3.0) {
+                    use_raw = true;
+                }
+            }
+        }
+        if use_raw {
+            let raw: Vec<[f32; 3]> = vs
+                .iter()
+                .map(|id| {
+                    let p = mesh.positions[*id as usize];
+                    [p.x, p.y, p.z]
+                })
+                .collect();
+            out.push(raw);
+        } else {
+            out.push(inset_loop);
+        }
+    }
+    out
 }
 
 /// Surface Z of a triangle at a projected XY via barycentric interpolation.

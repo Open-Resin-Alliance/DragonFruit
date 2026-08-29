@@ -1128,6 +1128,31 @@ function buildSupportAndRaftWorldTriangles(
     appendContactConePrimitive(sink, leaf.contactCone as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
   }
 
+  // Anchors carry their own root (they never appear in supportState.roots),
+  // so without this walk they vanish from every slice. Mirror AnchorRenderer:
+  // root frustum + joint sphere + contact cone.
+  for (const anchor of Object.values(supportState.anchors)) {
+    if (!visibleModelIds.has(anchor.modelId)) continue;
+
+    const baseRadius = Math.max(0.05, anchor.rootBaseDiameter * 0.5);
+    const topRadius = Math.max(0.05, anchor.rootTopDiameter * 0.5);
+    const base = new THREE.Vector3(anchor.rootPos.x, anchor.rootPos.y, anchor.rootPos.z);
+    const top = base.clone().add(new THREE.Vector3(0, 0, Math.max(0.01, anchor.rootHeight)));
+    const rootGeom = createFrustumGeometryBetween(base, top, baseRadius, topRadius, tessellation.rootRadialSegments);
+    if (rootGeom) {
+      appendGeometryTriangles(sink, rootGeom);
+      rootGeom.dispose();
+    }
+
+    appendJointSphere(
+      sink,
+      anchor.joint.pos,
+      Math.max(0.001, anchor.joint.diameter - JOINT_BLEND_MM),
+      tessellation.jointRadialSegments,
+    );
+    appendContactConePrimitive(sink, anchor.contactCone, tessellation.contactConeRadialSegments, tipPenetrationMm);
+  }
+
   for (const kickstand of Object.values(kickstandState.kickstands)) {
     const modelId = kickstand.modelId;
     if (!modelId || !visibleModelIds.has(modelId)) continue;

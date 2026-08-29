@@ -199,3 +199,77 @@ test('twig contact disks are successfully appended to the sliced geometry', asyn
   });
 });
 
+test('anchor supports contribute root, joint, and cone triangles to the sliced geometry', async () => {
+  const model = createMockModel('m1', 2, false);
+
+  const mockAnchor = {
+    id: 'anchor-1',
+    modelId: 'm1',
+    rootPos: { x: 0, y: 0, z: 0 },
+    rootBaseDiameter: 2,
+    rootTopDiameter: 1.5,
+    rootHeight: 1,
+    joint: { id: 'anchor-1-joint', pos: { x: 0, y: 0, z: 1.1 }, diameter: 1.5 },
+    segments: [],
+    contactCone: {
+      id: 'anchor-1-cone',
+      pos: { x: 0, y: 0, z: 3 },
+      normal: { x: 0, y: 0, z: -1 },
+      surfaceNormal: { x: 0, y: 0, z: -1 },
+      profile: {
+        type: 'disk' as const,
+        contactDiameterMm: 0.4,
+        bodyDiameterMm: 1.4,
+        lengthMm: 2,
+        penetrationMm: 0.05,
+        diskThicknessMm: 0.1,
+        maxStandoffMm: 0.2,
+        standoffAngleThreshold: Math.PI / 4,
+      },
+    },
+  };
+
+  const emptyState = {
+    roots: {},
+    trunks: {},
+    branches: {},
+    leaves: {},
+    twigs: {},
+    sticks: {},
+    braces: {},
+    anchors: {},
+    knots: {},
+    selectedId: null,
+    hoveredId: null,
+    selectedCategory: null,
+    hoveredCategory: 'none' as const,
+    interactionWarning: null,
+  };
+
+  // Baseline: no anchors.
+  setSnapshot(emptyState);
+  const baseline = await buildSolidSliceMeshForWasm({
+    models: [model],
+    printerProfile: mockPrinterProfile,
+    materialProfile: mockMaterialProfile,
+    filenameBase: 'test_anchor_baseline',
+  });
+
+  // With one anchor.
+  setSnapshot({ ...emptyState, anchors: { 'anchor-1': mockAnchor } });
+  const withAnchor = await buildSolidSliceMeshForWasm({
+    models: [model],
+    printerProfile: mockPrinterProfile,
+    materialProfile: mockMaterialProfile,
+    filenameBase: 'test_anchor_sliced',
+  });
+
+  assert.equal(withAnchor.modelTriangleCount, 2);
+  assert.ok(
+    withAnchor.trianglesXYZ.length > baseline.trianglesXYZ.length,
+    'Anchor root frustum, joint sphere, and contact cone must add slice triangles',
+  );
+
+  setSnapshot(emptyState);
+});
+

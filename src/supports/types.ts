@@ -10,6 +10,7 @@ export type SupportMode = 'prepare' | 'analysis' | 'support' | 'export' | 'print
 export type LimitationCode =
     | 'ANGLE_TOO_STEEP'
     | 'KNOT_ABOVE_TIP'
+    | 'ANCHOR_BELOW_ROOT'
     | 'COLLISION_WITH_MODEL'
     | 'TOO_CLOSE_TO_EXISTING'
     | 'OUT_OF_BOUNDS';

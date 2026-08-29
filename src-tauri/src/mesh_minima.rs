@@ -282,18 +282,68 @@ fn load_and_transform_mesh(
     let mut mesh = dragonfruit_mesh_repair::io::load_mesh_from_path(path)
         .map_err(|e| format!("Failed to load mesh from path {}: {:?}", file_path, e))?;
 
-    // Transform vertices: p_world = matrix * (p_local - center)
+    // Replicate exactly what `processGeometry` + `prepareWorldGeom` do on the
+    // frontend so sideload and fallback produce identical world positions and
+    // thus identical triangleIds. `processGeometry` normalizes: center X/Z and
+    // set bottom (minY) to 0 via `translate(-preCenter.x, -preBBox.min.y,
+    // -preCenter.z)`. `prepareWorldGeom` then does `translate(-center2)` where
+    // `center2` is the bbox center of that normalized geometry, then
+    // `applyMatrix4(matrix)`. The old code did `matrix*(p - center)` where
+    // `center` was already the normalized geometry's center, missing the
+    // processGeometry offset and causing a world-space shift.
+    // Compute the same two-step centering from the raw file bbox.
+    let mut pre_min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+    let mut pre_max = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for p in &mesh.positions {
+        pre_min.x = pre_min.x.min(p.x);
+        pre_min.y = pre_min.y.min(p.y);
+        pre_min.z = pre_min.z.min(p.z);
+        pre_max.x = pre_max.x.max(p.x);
+        pre_max.y = pre_max.y.max(p.y);
+        pre_max.z = pre_max.z.max(p.z);
+    }
+    let pre_center = Vec3::new(
+        (pre_min.x + pre_max.x) * 0.5,
+        (pre_min.y + pre_max.y) * 0.5,
+        (pre_min.z + pre_max.z) * 0.5,
+    );
+    // First normalization (processGeometry): center X/Z, bottom Y to 0.
     for pos in &mut mesh.positions {
-        let centered = Vec3::new(pos.x - center[0], pos.y - center[1], pos.z - center[2]);
-
+        pos.x -= pre_center.x;
+        pos.y -= pre_min.y;
+        pos.z -= pre_center.z;
+    }
+    // Second centering (prepareWorldGeom): fully center the normalized mesh.
+    let mut norm_min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+    let mut norm_max = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for p in &mesh.positions {
+        norm_min.x = norm_min.x.min(p.x);
+        norm_min.y = norm_min.y.min(p.y);
+        norm_min.z = norm_min.z.min(p.z);
+        norm_max.x = norm_max.x.max(p.x);
+        norm_max.y = norm_max.y.max(p.y);
+        norm_max.z = norm_max.z.max(p.z);
+    }
+    let norm_center = Vec3::new(
+        (norm_min.x + norm_max.x) * 0.5,
+        (norm_min.y + norm_max.y) * 0.5,
+        (norm_min.z + norm_max.z) * 0.5,
+    );
+    for pos in &mut mesh.positions {
+        pos.x -= norm_center.x;
+        pos.y -= norm_center.y;
+        pos.z -= norm_center.z;
+    }
+    // Finally apply the scene matrix (position/rotation/scale).
+    for pos in &mut mesh.positions {
         let x =
-            matrix[0] * centered.x + matrix[4] * centered.y + matrix[8] * centered.z + matrix[12];
+            matrix[0] * pos.x + matrix[4] * pos.y + matrix[8] * pos.z + matrix[12];
         let y =
-            matrix[1] * centered.x + matrix[5] * centered.y + matrix[9] * centered.z + matrix[13];
+            matrix[1] * pos.x + matrix[5] * pos.y + matrix[9] * pos.z + matrix[13];
         let z =
-            matrix[2] * centered.x + matrix[6] * centered.y + matrix[10] * centered.z + matrix[14];
+            matrix[2] * pos.x + matrix[6] * pos.y + matrix[10] * pos.z + matrix[14];
         let w =
-            matrix[3] * centered.x + matrix[7] * centered.y + matrix[11] * centered.z + matrix[15];
+            matrix[3] * pos.x + matrix[7] * pos.y + matrix[11] * pos.z + matrix[15];
 
         if w.abs() > 1e-6 {
             pos.x = x / w;
@@ -305,7 +355,7 @@ fn load_and_transform_mesh(
             pos.z = z;
         }
     }
-
+    let _ = center;
     Ok(mesh)
 }
 

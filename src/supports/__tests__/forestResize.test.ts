@@ -68,7 +68,7 @@ test('lone trunk keeps its placed diameter', () => {
     assert.equal(resized.trunks['t1'].segments[0].diameter, 0.8, 'no branches → no thickening');
 });
 
-test('a trunk carrying four branches thickens below the branch knots', () => {
+test('a trunk carrying four branches thickens to the branch diameter below the knots', () => {
     const s = createEmptySnapshot();
     s.roots['r1'] = createRoot('r1', 'm', 0);
     s.trunks['t1'] = createTrunk('t1', 'm', 'r1', 'seg-1', 0, 0, 10, 0.8);
@@ -82,9 +82,10 @@ test('a trunk carrying four branches thickens below the branch knots', () => {
     const resized = computeForestDiameterProfile(s);
     const segments = resized.trunks['t1'].segments;
     assert.ok(segments.length >= 2, `shaft split at the branch knot (${segments.length} segments)`);
-    // Bottom segment (below the 1.0mm branch attachments) carries the load:
-    // 4 attachments × +10% growth → 1.0 × 1.3 = 1.3.
-    assert.equal(segments[0].diameter, 1.3, 'below the branch knots → branch demand with count growth');
+    // Bottom segment (below the 1.0mm branch attachments) matches the
+    // fattest member — no per-attachment growth (a count-based bulge read
+    // as a thick shaft under a thin canopy on uniform chunk trees).
+    assert.equal(segments[0].diameter, 1.0, 'below the branch knots → branch demand');
     assert.equal(segments[segments.length - 1].diameter, 0.8, 'tip section stays at placed diameter');
 
     // The knot is rehosted onto the split segment at t=1 without moving.
@@ -94,7 +95,7 @@ test('a trunk carrying four branches thickens below the branch knots', () => {
     assert.deepEqual(k.pos, { x: 0, y: 0, z: 5.5 }, 'knot position unchanged');
 });
 
-test('a trunk hosting fan leaves thickens with the leaf count', () => {
+test('a trunk hosting fan leaves thickens to the leaf diameter', () => {
     const s = createEmptySnapshot();
     s.roots['r1'] = createRoot('r1', 'm', 0);
     s.trunks['t1'] = createTrunk('t1', 'm', 'r1', 'seg-1', 0, 0, 10, 0.8);
@@ -127,8 +128,8 @@ test('a trunk hosting fan leaves thickens with the leaf count', () => {
 
     const resized = computeForestDiameterProfile(s);
     const trunk = resized.trunks['t1'];
-    assert.ok(trunk.segments.every((seg) => seg.diameter >= 1.3 - 1e-9),
-        `leaf host thickens (${trunk.segments[0].diameter} — 4 leaves × +10% growth)`);
+    assert.ok(trunk.segments.every((seg) => seg.diameter >= 1.0 - 1e-9),
+        `leaf host thickens to the leaf body diameter (${trunk.segments[0].diameter})`);
 });
 
 test('forest resize is deterministic and pure', () => {

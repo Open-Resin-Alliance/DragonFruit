@@ -7,6 +7,7 @@ import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/cont
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { getSettings } from '../../Settings';
+import { applySizingOverridesToSettings } from '../../autoSupport/parameterSizing';
 import { getJointDiameter } from '../../constants';
 import { resolveConeAxisPolicy, normalizeVectorOrFallback } from '../../PlacementLogic/ConeAxisPolicy';
 import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
@@ -250,6 +251,12 @@ export interface BranchBuildInput {
     modelId: string;
     parentKnot: Knot;
     mesh?: THREE.Mesh;
+    /** Auto-support tier overrides — when absent, the global settings band
+     *  is used (manual placement). Auto-placed branches must size from the
+     *  auto-support tier, not the active trunk preset. */
+    shaftDiameterMm?: number;
+    tipContactDiameterMm?: number;
+    rootsDiameterMm?: number;
 }
 
 export interface BranchBuildResult {
@@ -268,7 +275,11 @@ export function buildBranchData(input: BranchBuildInput): BranchBuildResult {
     const { tipPos, tipNormal, modelId, parentKnot, mesh } = input;
 
     const settings = getSettings();
-    const settingsCodeHex = encodeSupportSettingsHex(settings);
+    const settingsCodeHex = encodeSupportSettingsHex(applySizingOverridesToSettings(settings, {
+        shaftDiameterMm: input.shaftDiameterMm,
+        tipContactDiameterMm: input.tipContactDiameterMm,
+        rootsDiameterMm: input.rootsDiameterMm,
+    }));
     const coneAngleMode = settings.tip.coneAngleMode ?? 'normal';
     const adaptiveConeAngleOffsetDeg = settings.tip.adaptiveConeAngleOffsetDeg ?? 30;
 
@@ -281,7 +292,7 @@ export function buildBranchData(input: BranchBuildInput): BranchBuildResult {
     const effectiveConeAxis = coneAxis ?? tipNormal;
     const tipProfile: SupportTipProfile = {
         type: 'disk',
-        contactDiameterMm: settings.tip.contactDiameterMm,
+        contactDiameterMm: input.tipContactDiameterMm ?? settings.tip.contactDiameterMm,
         bodyDiameterMm: settings.tip.bodyDiameterMm,
         lengthMm: settings.tip.lengthMm,
         penetrationMm: settings.tip.penetrationMm,
@@ -290,7 +301,7 @@ export function buildBranchData(input: BranchBuildInput): BranchBuildResult {
         standoffAngleThreshold: Math.PI / 4,
     };
 
-    const shaftDiameter = settings.shaft.diameterMm;
+    const shaftDiameter = input.shaftDiameterMm ?? settings.shaft.diameterMm;
     const jointDiameter = getJointDiameter(shaftDiameter);
     perfMark('branch:cone-search');
     const { cone: authoredCone, socketPos, rerouted } = findBestBranchConePlacement({

@@ -76,7 +76,6 @@ const ledgerEntry = (displayId: string, entityId: string, zHeight: number, areaM
     zHeight,
     preset: 'detail',
     bandShaftMm: 1.0,
-    anchorGirth: false,
 });
 
 test('buildForestReport groups fan-out trees and lists bare trunks with sizing', () => {
@@ -194,3 +193,4 @@ test('forestReportToText renders the copyable plain-text report', () => {
     assert.ok(text.includes('184 islands (voxel 150 · minima 30 · intersection 0 · overhang 4)'));
     assert.ok(text.includes('coverage 100% of 1280mm² (5 uncovered) · 10 rejected'));
 });
+

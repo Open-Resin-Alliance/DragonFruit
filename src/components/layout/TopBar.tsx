@@ -34,7 +34,7 @@ import {
 
 import type { View3DSettings } from '@/components/settings/view3dPreferences';
 import type { SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
-import { sceneFileInputAccept } from '@/features/plugins/pluginFileTypeExtensions';
+import { useSceneFileInputAccept } from '@/features/plugins/pluginFileTypeExtensions';
 
 interface TopBarProps {
   meshColor: string;
@@ -169,6 +169,7 @@ export function TopBar({
   hideWorkflowControls = false,
 }: TopBarProps) {
   const { _ } = useLingui();
+  const sceneFileAccept = useSceneFileInputAccept();
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTabKey>('general');
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
@@ -922,7 +923,7 @@ export function TopBar({
       <input
         id="topbar-scene-input"
         type="file"
-        accept={sceneFileInputAccept()}
+        accept={sceneFileAccept}
         onChange={onImportSceneChange}
         className="hidden"
       />

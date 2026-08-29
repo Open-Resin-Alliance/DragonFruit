@@ -235,7 +235,7 @@
 
 ### [docs] "Anchor" names three unrelated things — M · medium risk
 - Where: src/supports/types.ts (`Anchor` support type, and the `Knot` doc comment
-  reading "Knot (Anchor)"), src/supports/autoSupport/anchorBands.ts ("anchor band").
+  reading "Knot (Anchor)").
 - What: a placeable support type, a legacy alias for the knot primitive, and the
   auto-support densification band over the first-printed surface — one word.
 - Why: costs a code read every time. Cheapest fix is dropping the "(Anchor)" from

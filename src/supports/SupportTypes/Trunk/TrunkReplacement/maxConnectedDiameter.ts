@@ -30,11 +30,6 @@ function leafConeKey(leafId: string) {
     return `leafCone:${leafId}`;
 }
 
-/** Calibration: a trunk's member demand grows +10% per attachment beyond
- *  the first — more fan leaves/branches carried → visibly stronger trunk.
- *  Sub-linear and knob-free; no load model. */
-const ATTACHMENT_GROWTH_PER_MEMBER = 0.1;
-
 /**
  * Computes the maximum "member diameter" across the entire connected support graph
  * reachable from a given trunk.
@@ -512,11 +507,12 @@ export function computeAndApplyTrunkDiameterProfile(
         for (const b of attachedBranches ?? []) memberDemand = Math.max(memberDemand, branchDemandDiameterMm(b));
         for (const l of attachedLeaves ?? []) memberDemand = Math.max(memberDemand, getLeafDiameter(l));
 
-        // More attachments → stronger trunk: the member demand grows
-        // sub-linearly with the attachment count (calibration, no load
-        // model). A lone leaf host keeps its placed diameter; a trunk
-        // carrying several fan leaves visibly thickens.
-        const demand = memberDemand * (1 + ATTACHMENT_GROWTH_PER_MEMBER * (n - 1));
+        // The host matches its fattest member — no per-attachment growth.
+        // The old +10%/member calibration made a uniform-band chunk tree
+        // bulge at the attachment knot (thick lower shaft, thin canopy) —
+        // a diameter step with no load story, especially jarring on light
+        // tiers. A host still thickens when a member is genuinely fatter.
+        const demand = memberDemand;
 
         const prev = demandAtTopBySegId.get(knot.parentShaftId) ?? 0;
         if (demand > prev) demandAtTopBySegId.set(knot.parentShaftId, demand);

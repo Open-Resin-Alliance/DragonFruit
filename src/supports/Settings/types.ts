@@ -143,6 +143,8 @@ export interface SupportSettings {
     autoSupport: AutoSupportSettings;
     devToolsEnabled: boolean;
     devTools: DevToolsSettings;
+    /** Debug: only render contact disk/cone + line vector for shaft (like J×2 pathfinding debug). */
+    debugSimpleSupportRender: boolean;
 }
 
 // --- Default Factory ---
@@ -226,6 +228,7 @@ export function createDefaultSettings(): SupportSettings {
             verticalKnotSpacingMm: 3.0,
             maxBranchesPerTrunk: 3,
         },
+        debugSimpleSupportRender: false,
     };
 }
 

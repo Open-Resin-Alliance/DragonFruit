@@ -12,6 +12,9 @@ import { v4 as uuidv4 } from 'uuid';
 
 export interface StickBuildInput {
     modelId: string;
+    /** Auto-support tier overrides — absent for manual placement. */
+    shaftDiameterMm?: number;
+    tipContactDiameterMm?: number;
     aPos: Vec3;
     aNormal: Vec3;
     bPos: Vec3;

@@ -42,7 +42,11 @@ export interface OverhangRegion {
   minZ: number;
   maxZ: number;
   footprint: FootprintMask;
+  /** Triangle-accurate perimeter loops, inset by 0.25 mm (world mm, each loop closed). */
+  perimeterLoops?: Vec3Loop[];
 }
+
+export type Vec3Loop = Array<[number, number, number]>;
 
 /** Classification once the voxel and minima sets are intersected (Part C). */
 export type IslandClass = 'intersection' | 'voxelOnly' | 'minimaOnly';
@@ -76,6 +80,10 @@ export interface DetectedIsland {
   /** Contact voxel 2D positions (x, y coordinates in world mm) at the base layer.
    *  Overhang regions also carry the surface Z at each voxel. */
   contactVoxels?: VoxelFootprint;
+  /** Triangle-accurate perimeter loops, inset by 0.25 mm (world mm). Present for
+   *  overhang regions when `scan_overhangs` supplied them; used by the Poisson
+   *  anchor ring and grid boundary fill instead of voxel erosion for organic shapes. */
+  perimeterLoops?: Vec3Loop[];
 
   // --- minima-detector extras (undefined for voxel) ---
   /** Source mesh vertex index. */

@@ -10,8 +10,9 @@ export interface TrunkPlacementInput {
     tipNormal: Vec3;
     tipProfile: SupportTipProfile;
     rootsTopZ: number; // Height where the root ends and shaft begins
+    /** Small islands bypass construction joint */
+    isSmallIsland?: boolean;
 }
-
 export interface TrunkPlacementResult {
     basePos: Vec3;
     socketPos: Vec3;

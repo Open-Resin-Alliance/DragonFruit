@@ -364,7 +364,35 @@ const ORIGIN_COLORS: Record<SupportOrigin, string> = {
  * regenerate the supports to get colors. */
 const ORIGIN_NO_ORIGIN_COLOR = '#8e8e93';
 const SCENE_JOINT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
+/** Leaf base knots rendered in the scene batch: KnotRenderer subtracts the
+ *  full JOINT_DIAMETER_OFFSET_MM from the knot diameter while the batch
+ *  subtracts only SCENE_JOINT_DIAMETER_BLEND_MM (×0.75), so batched entries
+ *  pre-compensate to keep the exact KnotRenderer sphere size. */
+const KNOT_BATCH_DIAMETER_PRECOMPENSATION_MM = SCENE_JOINT_DIAMETER_BLEND_MM - JOINT_DIAMETER_OFFSET_MM;
 const EMPTY_SUPPORT_ID_LIST: readonly string[] = Object.freeze([]);
+const EMPTY_KNOT_DRAG_BRANCH_SEGMENTS_BY_ID: Record<string, never> = Object.freeze({});
+
+/** Simple line vector for debugSimpleSupportRender — like J×2 pathfinding debug, but for all shafts. */
+function SimpleShaftLines({ shafts, color }: { shafts: InstancedShaft[]; color: string }) {
+    const line = React.useMemo(() => {
+        if (shafts.length === 0) return null;
+        const positions: number[] = [];
+        for (const s of shafts) {
+            positions.push(s.start.x, s.start.y, s.start.z, s.end.x, s.end.y, s.end.z);
+        }
+        if (positions.length === 0) return null;
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.95, depthWrite: false, depthTest: true });
+        const obj = new THREE.LineSegments(geometry, material);
+        obj.frustumCulled = false;
+        obj.renderOrder = 999;
+        return obj;
+    }, [shafts, color]);
+    React.useEffect(() => () => { line?.geometry.dispose(); (line?.material as THREE.Material)?.dispose(); }, [line]);
+    if (!line || shafts.length === 0) return null;
+    return <primitive object={line} />;
+}
 
 const PLACEMENT_PREVIEW_COLOR = '#00ff00';
 const PLACEMENT_PREVIEW_ERROR_COLOR = '#ff0000';
@@ -373,8 +401,6 @@ const PLACEMENT_PREVIEW_ORANGE_COLOR = '#c7722f';
 const PLACEMENT_PREVIEW_OPACITY = 0.5;
 const PLACEMENT_PREVIEW_ERROR_OPACITY = 0.15;
 const FREEZE_DEPENDENT_PREVIEW_DURING_JOINT_DRAG = true;
-const EMPTY_KNOT_DRAG_BRANCH_SEGMENTS_BY_ID: Record<string, never> = Object.freeze({});
-
 function resolvePlacementPreviewMaterial(preview: SupportData): { color: string; opacity: number } {
     if (preview.error) {
         return {
@@ -387,7 +413,6 @@ function resolvePlacementPreviewMaterial(preview: SupportData): { color: string;
     // surface-steepness gradient is calibrated for trunk-style placements;
     // for leaves the angle has the opposite semantic and always resolves to
     // orange. Treat leaves like trunks/branches and fall through to the
-    // standard green / yellow / red states.
     const isLeafPreview = preview.segments.length === 0 && !!preview.knot && !!preview.contactCone;
 
     let angle = isLeafPreview ? undefined : preview.angle;
@@ -909,6 +934,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const resolvedSelection = useResolvedSelectionState();
     const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
+    const simpleRender = settings.debugSimpleSupportRender;
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     const kickstandState = useKickstandStoreState();
     const activeJointDragPreview = useActiveJointDragPreview();
@@ -3047,6 +3073,36 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return result;
     }, [renderKickstandList, isModelVisible]);
 
+    /** Unselected leaf base knots as batch-ready joints: one instanced draw
+     *  instead of a mounted KnotRenderer per leaf. Read through
+     *  renderKnotsById so knot-drag previews keep moving these balls.
+     *  Diameter is pre-compensated for pushJoints' smaller blend — see
+     *  KNOT_BATCH_DIAMETER_PRECOMPENSATION_MM. */
+    const leafJointsBySupport = useMemo(() => {
+        const result = new Map<string, SupportJointSet>();
+
+        for (const leaf of renderLeafList) {
+            if (!isModelVisible(leaf.modelId, leaf.id)) continue;
+            const knot = renderKnotsById[leaf.parentKnotId];
+            if (!knot?.pos) continue;
+
+            const modelId = leaf.modelId ?? modelIdByKnotId.get(leaf.parentKnotId);
+            result.set(leaf.id, {
+                supportId: leaf.id,
+                modelId,
+                joints: [{
+                    id: knot.id,
+                    pos: knot.pos,
+                    diameter: Math.max(0.001, (knot.diameter ?? 1.2) + KNOT_BATCH_DIAMETER_PRECOMPENSATION_MM),
+                    supportId: leaf.id,
+                    modelId,
+                }],
+            });
+        }
+
+        return result;
+    }, [renderLeafList, isModelVisible, renderKnotsById, modelIdByKnotId]);
+
     const sceneBatchedJointGroups = useMemo(() => {
         const grouped = new Map<string, { modelId: string | null; color: string; joints: InstancedJoint[] }>();
 
@@ -3115,6 +3171,16 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             pushJoints(kickstand.modelId ?? null, color, jointSet.joints);
         }
 
+        for (const leaf of renderLeafList) {
+            if (!isModelVisible(leaf.modelId, leaf.id)) continue;
+            if (selectedLeafIds.has(leaf.id)) continue;
+            const jointSet = leafJointsBySupport.get(leaf.id);
+            if (!jointSet) continue;
+
+            const color = resolveSceneSupportColor(jointSet.modelId, leaf.id);
+            pushJoints(jointSet.modelId ?? null, color, jointSet.joints);
+        }
+
         return Array.from(grouped.values());
     }, [
         disableSelectionAndHover,
@@ -3134,6 +3200,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         twigJointsBySupport,
         stickJointsBySupport,
         kickstandJointsBySupport,
+        leafJointsBySupport,
+        selectedLeafIds,
+        renderLeafList,
         applyDropToVec3Like,
         dimNonSelected,
         resolveSceneSupportColor,
@@ -3663,6 +3732,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const kickstandSet = kickstandJointsBySupport.get(hoveredSupportId);
         if (kickstandSet) return kickstandSet;
 
+        const leafSet = leafJointsBySupport.get(hoveredSupportId);
+        if (leafSet) return leafSet;
+
         return null;
     }, [
         isInteractable,
@@ -3673,6 +3745,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         twigJointsBySupport,
         stickJointsBySupport,
         kickstandJointsBySupport,
+        leafJointsBySupport,
     ]);
 
     const hoveredSupportOverlayJoints = useMemo(() => {
@@ -3826,6 +3899,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 ?? twigJointsBySupport.get(supportId)
                 ?? stickJointsBySupport.get(supportId)
                 ?? kickstandJointsBySupport.get(supportId)
+                ?? leafJointsBySupport.get(supportId)
                 ?? null;
             if (!jointSet) continue;
             overlays.push(...jointSet.joints.map((joint) => ({
@@ -3835,7 +3909,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             })));
         }
         return overlays;
-    }, [additionalMarqueeHoveredSupportIds, trunkJointsBySupport, branchJointsBySupport, twigJointsBySupport, stickJointsBySupport, kickstandJointsBySupport, applyDropToVec3Like]);
+    }, [additionalMarqueeHoveredSupportIds, trunkJointsBySupport, branchJointsBySupport, twigJointsBySupport, stickJointsBySupport, kickstandJointsBySupport, leafJointsBySupport, applyDropToVec3Like]);
 
     const marqueeHoveredOverlayRoots = useMemo(() => {
         if (hidePlateContactPrimitivesEffective) return [] as InstancedRoot[];
@@ -4304,20 +4378,23 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             {/* Render Trunks */}
             {sceneBatchedTrunkShaftGroups.map((group) => (
                 <group key={`scene-trunk-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
-                    <InstancedShaftGroup
-                        shafts={group.shafts}
-                        color={group.color}
-                        transparent={ghostTransparent}
-                        opacity={ghostOpacityClamped}
-                        radialSegments={sceneBatchedShaftRadialSegments}
-                        onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
-                        onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                        onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                    />
+                    {simpleRender ? (
+                        <SimpleShaftLines shafts={group.shafts} color={group.color} />
+                    ) : (
+                        <InstancedShaftGroup
+                            shafts={group.shafts}
+                            color={group.color}
+                            transparent={ghostTransparent}
+                            opacity={ghostOpacityClamped}
+                            radialSegments={sceneBatchedShaftRadialSegments}
+                            onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                            onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                            onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                        />
+                    )}
                 </group>
             ))}
-
-            {sceneBatchedJointGroups.map((group) => (
+            {!simpleRender && sceneBatchedJointGroups.map((group) => (
                 <group key={`scene-joint-batch:${group.modelId ?? 'none'}:${group.color}:${group.joints.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedJointGroup
                         joints={group.joints}
@@ -4332,8 +4409,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     />
                 </group>
             ))}
-
-            {sceneBatchedTrunkRootGroups.map((group) => (
+            {!simpleRender && sceneBatchedTrunkRootGroups.map((group) => (
                 <group key={`scene-trunk-root-batch:${group.modelId ?? 'none'}:${group.color}:${group.roots.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedRootsGroup
                         roots={group.roots}
@@ -4347,7 +4423,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 </group>
             ))}
 
-            {sceneBatchedKickstandRootGroups.map((group) => (
+            {!simpleRender && sceneBatchedKickstandRootGroups.map((group) => (
                 <group key={`scene-kickstand-root-batch:${group.modelId ?? 'none'}:${group.color}:${group.roots.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedRootsGroup
                         roots={group.roots}
@@ -4360,7 +4436,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     />
                 </group>
             ))}
-
             {sceneBatchedContactConeGroups.map((group) => (
                 <group key={`scene-cone-batch:${group.modelId ?? 'none'}:${group.color}:${group.cones.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedContactConeGroup
@@ -4521,7 +4596,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {hoveredSupportOverlayJoints.length > 0 && hoveredSupportJointSet && (
+            {!simpleRender && hoveredSupportOverlayJoints.length > 0 && hoveredSupportJointSet && (
                 <InstancedJointGroup
                     key={`scene-joint-hover-overlay:${hoveredSupportJointSet.supportId}:${hoveredSupportOverlayJoints.length}`}
                     joints={hoveredSupportOverlayJoints}
@@ -4538,7 +4613,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {hoveredSupportOverlayRoots.length > 0 && (
+            {!simpleRender && hoveredSupportOverlayRoots.length > 0 && (
                 <InstancedRootsGroup
                     key={`scene-root-hover-overlay:${hoveredSupportOverlayRoots.map((root) => root.supportId ?? root.id).join(':')}:${hoveredSupportOverlayRoots.length}`}
                     roots={hoveredSupportOverlayRoots}
@@ -4584,7 +4659,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {marqueeHoveredOverlayJoints.length > 0 && (
+            {!simpleRender && marqueeHoveredOverlayJoints.length > 0 && (
                 <InstancedJointGroup
                     key={`scene-marquee-overlay-joints:${marqueeHoveredSupportIds.join(':')}:${marqueeHoveredOverlayJoints.length}`}
                     joints={marqueeHoveredOverlayJoints}
@@ -4601,7 +4676,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {marqueeHoveredOverlayRoots.length > 0 && (
+            {!simpleRender && marqueeHoveredOverlayRoots.length > 0 && (
                 <InstancedRootsGroup
                     key={`scene-marquee-overlay-roots:${marqueeHoveredSupportIds.join(':')}:${marqueeHoveredOverlayRoots.length}`}
                     roots={marqueeHoveredOverlayRoots}
@@ -4622,7 +4697,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 if (!root) return null;
 
                 const effectiveSelected = selectedTrunkIds.has(trunk.id);
-                const renderDetailedTrunk = effectiveSelected;
+                const renderDetailedTrunk = effectiveSelected && !simpleRender;
                 if (!renderDetailedTrunk) return null;
 
                 const isTrunkHovered = hoveredSupportIdForVisual === trunk.id
@@ -4657,16 +4732,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             {/* Render Branches */}
             {sceneBatchedBranchShaftGroups.map((group) => (
                 <group key={`scene-branch-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
-                    <InstancedShaftGroup
-                        shafts={group.shafts}
-                        color={group.color}
-                        transparent={ghostTransparent}
-                        opacity={ghostOpacityClamped}
-                        radialSegments={sceneBatchedShaftRadialSegments}
-                        onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
-                        onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                        onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                    />
+                    {simpleRender ? (
+                        <SimpleShaftLines shafts={group.shafts} color={group.color} />
+                    ) : (
+                        <InstancedShaftGroup
+                            shafts={group.shafts}
+                            color={group.color}
+                            transparent={ghostTransparent}
+                            opacity={ghostOpacityClamped}
+                            radialSegments={sceneBatchedShaftRadialSegments}
+                            onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                            onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                            onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                        />
+                    )}
                 </group>
             ))}
 
@@ -4674,15 +4753,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 if (!isModelVisible(branch.modelId, branch.id)) return null;
                 const knot = renderKnotsById[branch.parentKnotId];
                 if (!knot) return null;
-
                 const effectiveSelected = selectedBranchIds.has(branch.id);
-                const renderDetailedBranch = effectiveSelected;
+                const renderDetailedBranch = effectiveSelected && !simpleRender;
                 if (!renderDetailedBranch) return null;
 
                 const isBranchHovered = hoveredSupportIdForVisual === branch.id
                     || marqueeHoveredSupportIdSet.has(branch.id);
                 const deferBranchInteractionToSceneBatch = !effectiveSelected;
-                const showKnots = !hideUnselectedKnots || effectiveSelected;
+                const showKnots = simpleRender ? false : (!hideUnselectedKnots || effectiveSelected);
 
                 return (
                     <group key={branch.id} userData={{ noClipping: true }}>
@@ -4713,12 +4791,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 if (!knot) return null;
 
                 const effectiveSelected = selectedLeafIds.has(leaf.id);
-                // Unselected leaves still mount the LeafRenderer so their
-                // base knot (the junction ball on the host shaft) renders in
-                // the scene — matching branches. The cone stays scene-batched
-                // via deferContactConesToSceneBatch. The base knot always
-                // renders, selected or not.
-                const showKnots = true;
+                // Only the selected leaf mounts LeafRenderer. Unselected
+                // leaves are fully scene-batched: cones via
+                // deferContactConesToSceneBatch, base knots via
+                // leafJointsBySupport → sceneBatchedJointGroups (the junction
+                // ball stays visible without a per-leaf KnotRenderer).
+                if (!effectiveSelected) return null;
+                const showKnots = !simpleRender;
 
                 return (
                     <group key={leaf.id} userData={{ noClipping: true }}>
@@ -4777,25 +4856,28 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {sceneBatchedTwigShaftGroups.map((group) => (
                 <group key={`scene-twig-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
-                    <InstancedShaftGroup
-                        shafts={group.shafts}
-                        color={group.color}
-                        transparent={ghostTransparent}
-                        opacity={ghostOpacityClamped}
-                        radialSegments={sceneBatchedShaftRadialSegments}
-                        onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
-                        onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                        onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                    />
+                    {simpleRender ? (
+                        <SimpleShaftLines shafts={group.shafts} color={group.color} />
+                    ) : (
+                        <InstancedShaftGroup
+                            shafts={group.shafts}
+                            color={group.color}
+                            transparent={ghostTransparent}
+                            opacity={ghostOpacityClamped}
+                            radialSegments={sceneBatchedShaftRadialSegments}
+                            onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                            onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                            onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                        />
+                    )}
                 </group>
             ))}
-
             {/* Render Sticks */}
             {renderStickList.map(stick => {
                 if (!isModelVisible(stick.modelId, stick.id)) return null;
                 const effectiveSelected = selectedStickIds.has(stick.id);
                 const isStickBatchable = stickShaftsBySupport.has(stick.id);
-                const renderDetailedStick = effectiveSelected || !isStickBatchable;
+                const renderDetailedStick = (effectiveSelected || !isStickBatchable) && !simpleRender;
                 if (!renderDetailedStick) return null;
 
                 const isStickHovered = hoveredSupportIdForVisual === stick.id
@@ -4824,21 +4906,25 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {sceneBatchedStickShaftGroups.map((group) => (
                 <group key={`scene-stick-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
-                    <InstancedShaftGroup
-                        shafts={group.shafts}
-                        color={group.color}
-                        transparent={ghostTransparent}
-                        opacity={ghostOpacityClamped}
-                        radialSegments={sceneBatchedShaftRadialSegments}
-                        onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
-                        onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                        onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                    />
+                    {simpleRender ? (
+                        <SimpleShaftLines shafts={group.shafts} color={group.color} />
+                    ) : (
+                        <InstancedShaftGroup
+                            shafts={group.shafts}
+                            color={group.color}
+                            transparent={ghostTransparent}
+                            opacity={ghostOpacityClamped}
+                            radialSegments={sceneBatchedShaftRadialSegments}
+                            onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                            onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                            onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                        />
+                    )}
                 </group>
             ))}
 
             {/* Render Braces */}
-            {sceneBatchedBraceShaftGroups.map((group) => (
+            {!simpleRender && sceneBatchedBraceShaftGroups.map((group) => (
                 <group key={`scene-brace-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedShaftGroup
                         shafts={group.shafts}
@@ -4853,7 +4939,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 </group>
             ))}
 
-            {renderBraceList.map(brace => {
+            {!simpleRender && renderBraceList.map(brace => {
                 if (!isModelVisible(brace.modelId, brace.id)) return null;
                 const effectiveSelected = selectedBraceIds.has(brace.id);
                 const isBraceBatchable = braceShaftsBySupport.has(brace.id);
@@ -4892,7 +4978,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     </group>
                 );
             })}
-
             {/* Render Kickstands */}
             {renderKickstandList.map((kickstand) => {
                 if (!isModelVisible(kickstand.modelId, kickstand.id)) return null;
@@ -4902,13 +4987,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
                 const effectiveSelected = selectedKickstandIds.has(kickstand.id);
                 const isKickstandBatchable = kickstandShaftsBySupport.has(kickstand.id);
-                const renderDetailedKickstand = effectiveSelected || !isKickstandBatchable;
+                const renderDetailedKickstand = (effectiveSelected || !isKickstandBatchable) && !simpleRender;
                 if (!renderDetailedKickstand) return null;
 
                 const isKickstandHovered = hoveredSupportIdForVisual === kickstand.id
                     || marqueeHoveredSupportIdSet.has(kickstand.id);
                 const deferKickstandInteractionToSceneBatch = !effectiveSelected && isKickstandBatchable;
-                const showKnot = !hideUnselectedKnots || effectiveSelected;
+                const showKnot = simpleRender ? false : (!hideUnselectedKnots || effectiveSelected);
 
                 return (
                     <group key={kickstand.id} userData={{ noClipping: effectiveSelected }}>
@@ -4935,19 +5020,22 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {sceneBatchedKickstandShaftGroups.map((group) => (
                 <group key={`scene-kickstand-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
-                    <InstancedShaftGroup
-                        shafts={group.shafts}
-                        color={group.color}
-                        transparent={ghostTransparent}
-                        opacity={ghostOpacityClamped}
-                        radialSegments={sceneBatchedShaftRadialSegments}
-                        onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
-                        onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                        onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                    />
+                    {simpleRender ? (
+                        <SimpleShaftLines shafts={group.shafts} color={group.color} />
+                    ) : (
+                        <InstancedShaftGroup
+                            shafts={group.shafts}
+                            color={group.color}
+                            transparent={ghostTransparent}
+                            opacity={ghostOpacityClamped}
+                            radialSegments={sceneBatchedShaftRadialSegments}
+                            onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                            onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                            onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                        />
+                    )}
                 </group>
             ))}
-
             {/* Render Anchors */}
             {renderAnchorList.map(anchor => {
                 if (!isModelVisible(anchor.modelId, anchor.id)) return null;

@@ -71,6 +71,7 @@ function mergeWithDefaults(settings: SupportSettings): SupportSettings {
         }),
         devToolsEnabled: settings.devToolsEnabled !== undefined ? settings.devToolsEnabled : defaults.devToolsEnabled,
         devTools: settings.devTools ? { ...defaults.devTools, ...settings.devTools } : defaults.devTools,
+        debugSimpleSupportRender: typeof settings.debugSimpleSupportRender === 'boolean' ? settings.debugSimpleSupportRender : defaults.debugSimpleSupportRender,
     };
 }
 
@@ -244,6 +245,13 @@ export function updateDevToolsEnabled(enabled: boolean): void {
     notify();
 }
 
+export function updateDebugSimpleSupportRender(enabled: boolean): void {
+    currentSettings = {
+        ...currentSettings,
+        debugSimpleSupportRender: enabled,
+    };
+    notify();
+}
 // --- Subscription ---
 
 export function subscribeToSettings(listener: SettingsListener): () => void {

@@ -3813,22 +3813,57 @@ async fn reveal_in_file_manager(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Executable names to look for on PATH. Everywhere but Windows UVTools ships
+/// the same plain binary — `UVtools` inside the macOS bundle, `UVtools` in the
+/// Linux zip — that users sometimes symlink onto PATH in lowercase.
+#[cfg(target_os = "windows")]
+const UVTOOLS_PATH_EXECUTABLES: &[&str] = &["UVTools.exe"];
+#[cfg(not(target_os = "windows"))]
+const UVTOOLS_PATH_EXECUTABLES: &[&str] = &["UVtools", "uvtools"];
+
+/// Expand a leading `~/` against HOME. Candidate paths come from the frontend,
+/// which has no way to resolve the home directory itself.
+fn expand_tilde(path: &str) -> std::path::PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return std::path::PathBuf::from(home).join(rest);
+        }
+    }
+    std::path::PathBuf::from(path)
+}
+
+/// A candidate counts as UVTools when it is an executable file or, on macOS, an
+/// `.app` bundle — which is a directory, so `is_file()` alone rejects it.
+fn is_uvtools_install(path: &std::path::Path) -> bool {
+    if path.is_file() {
+        return true;
+    }
+
+    cfg!(target_os = "macos")
+        && path.is_dir()
+        && path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
+}
+
 #[tauri::command]
 async fn discover_uvtools_path(candidates: Vec<String>) -> Result<Option<String>, String> {
     // Check candidate absolute paths first
     for candidate in &candidates {
-        let p = std::path::Path::new(candidate);
-        if p.exists() && p.is_file() {
-            return Ok(Some(candidate.clone()));
+        let p = expand_tilde(candidate);
+        if is_uvtools_install(&p) {
+            return Ok(Some(p.to_string_lossy().to_string()));
         }
     }
 
-    // Check PATH for UVTools.exe
+    // Then PATH, for installs that are not in a standard location
     if let Ok(path_env) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path_env) {
-            let exe_candidate = dir.join("UVTools.exe");
-            if exe_candidate.exists() && exe_candidate.is_file() {
-                return Ok(Some(exe_candidate.to_string_lossy().to_string()));
+            for name in UVTOOLS_PATH_EXECUTABLES {
+                let exec_candidate = dir.join(name);
+                if exec_candidate.is_file() {
+                    return Ok(Some(exec_candidate.to_string_lossy().to_string()));
+                }
             }
         }
     }
@@ -3864,6 +3899,26 @@ async fn launch_external_process(exe_path: String, file_arg: String) -> Result<(
 
     if exe_path.is_empty() {
         return Err("Executable path is empty".to_string());
+    }
+
+    // A macOS `.app` bundle is a directory: it has to be started through
+    // `open -a`, which hands the file to the already-running instance if there
+    // is one. A bare executable (a CLI on PATH, or the binary inside the
+    // bundle) still spawns directly.
+    #[cfg(target_os = "macos")]
+    if std::path::Path::new(&exe_path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
+    {
+        let mut command = std::process::Command::new("open");
+        command.arg("-a").arg(&exe_path);
+        if !file_arg.is_empty() {
+            command.arg(&file_arg);
+        }
+        command
+            .spawn()
+            .map_err(|e| format!("Failed to launch external process: {e}"))?;
+        return Ok(());
     }
 
     std::process::Command::new(&exe_path)
@@ -4066,6 +4121,14 @@ fn main() {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
     }
+
+    // rustls 0.23 will not pick a crypto provider on its own. tauri-plugin-updater
+    // enables reqwest's `rustls-no-provider`, and reqwest then calls get_default()
+    // without the crate-features fallback, so building the updater's HTTP client
+    // panics with "No provider set" unless one was installed process-wide first.
+    // rustls' own `ring` feature being on (via ureq) is not enough. Err just means
+    // someone else got here first. See issue #615.
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     // Install a panic hook that writes the panic location and message to the
     // DragonFruit log before the default handler runs.  This ensures that even
@@ -5311,5 +5374,59 @@ mod tests {
             next.voxl_path, None,
             "a cleaned manifest advertised a file it had deleted"
         );
+    }
+
+    /// Candidate paths come from the frontend, which cannot resolve `~`; the
+    /// macOS candidate `~/Applications/UVtools.app` depends on this.
+    #[test]
+    fn expand_tilde_resolves_against_home() {
+        let home = std::env::var("HOME").expect("HOME is set on the test hosts");
+
+        assert_eq!(
+            super::expand_tilde("~/Applications/UVtools.app"),
+            std::path::PathBuf::from(&home).join("Applications/UVtools.app"),
+        );
+        assert_eq!(
+            super::expand_tilde("/Applications/UVtools.app"),
+            std::path::PathBuf::from("/Applications/UVtools.app"),
+            "an absolute candidate must be left alone",
+        );
+        assert_eq!(
+            super::expand_tilde("~backup/UVtools"),
+            std::path::PathBuf::from("~backup/UVtools"),
+            "only a leading `~/` is a home reference",
+        );
+    }
+
+    /// UVTools ships on macOS as an `.app` bundle, which is a directory: the
+    /// `is_file()` check that discovery used before rejected every macOS
+    /// install (issue #604).
+    #[test]
+    fn app_bundles_count_as_uvtools_installs_on_macos() {
+        let dir = unique_test_dir("uvtools-discovery");
+
+        let bundle = dir.join("UVtools.app");
+        std::fs::create_dir_all(bundle.join("Contents/MacOS")).expect("failed creating bundle");
+        let binary = bundle.join("Contents/MacOS/UVtools");
+        std::fs::write(&binary, b"").expect("failed writing bundle binary");
+        let plain_dir = dir.join("UVtools");
+        std::fs::create_dir_all(&plain_dir).expect("failed creating plain dir");
+
+        assert!(
+            super::is_uvtools_install(&binary),
+            "a bare executable is an install on every platform",
+        );
+        assert!(!super::is_uvtools_install(&dir.join("missing.app")));
+        assert!(
+            !super::is_uvtools_install(&plain_dir),
+            "a directory without the .app extension is not a bundle",
+        );
+        assert_eq!(
+            super::is_uvtools_install(&bundle),
+            cfg!(target_os = "macos"),
+            "only macOS treats an .app directory as an install",
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

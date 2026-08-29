@@ -2,7 +2,7 @@
   {
     "name": "Siraya Tech",
     "profile": "https://opencollective.com/siraya-tech",
-    "image": null,
+    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/9d2748f9-cbf9-4f1f-a456-14bdf6a03680/siraya-logo-mid.jpg",
     "website": null,
     "role": "BACKER",
     "tier": null,
@@ -16,6 +16,51 @@
     "role": "BACKER",
     "tier": null,
     "totalAmountDonated": 100
+  },
+  {
+    "name": "jacobi",
+    "profile": "https://opencollective.com/guest-29b90773",
+    "image": null,
+    "website": null,
+    "role": "BACKER",
+    "tier": null,
+    "totalAmountDonated": 50
+  },
+  {
+    "name": "foors",
+    "profile": "https://opencollective.com/guest-b4a05279",
+    "image": null,
+    "website": null,
+    "role": "BACKER",
+    "tier": null,
+    "totalAmountDonated": 20
+  },
+  {
+    "name": "Concepts 3D",
+    "profile": "https://opencollective.com/concepts3d",
+    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/e3e2aacc-4bb2-44d3-9504-551de34e9af7/Untitled%20design%20(1).png",
+    "website": "https://concepts3d.ca",
+    "role": "BACKER",
+    "tier": "Contributor",
+    "totalAmountDonated": 15
+  },
+  {
+    "name": "Guest",
+    "profile": "https://opencollective.com/guest-dac84a7c",
+    "image": null,
+    "website": null,
+    "role": "BACKER",
+    "tier": "Contributor",
+    "totalAmountDonated": 15
+  },
+  {
+    "name": "Kryz Slaughter",
+    "profile": "https://opencollective.com/kryz-slaughter",
+    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/5a9cb541-0082-4a40-8e0e-e9e3905b205b/judiciar-2.jpg",
+    "website": null,
+    "role": "BACKER",
+    "tier": "Contributor",
+    "totalAmountDonated": 15
   },
   {
     "name": "Cunabula",

@@ -9,11 +9,10 @@ import type { UseIslandsReturn } from '@/volumeAnalysis/Islands/useIslands';
 import { runAutoPlace, forestReportToText } from '@/supports/autoSupport';
 import { DETAIL_PRESET, STRUCTURE_PRESET, ANCHOR_PRESET } from '@/supports/Settings/presets';
 import type { SizingDebugInfo, AutoSupportSettings, ForestReport } from '@/supports/autoSupport';
-import { getSettings, updateAutoSupportSettings } from '@/supports/Settings/state';
+import { getSettings, updateAutoSupportSettings, subscribeToSettings, updateDebugSimpleSupportRender } from '@/supports/Settings/state';
 import { getSnapshot, setSnapshot } from '@/supports/state';
 import { getKickstandSnapshot, setKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import type { Knot } from '@/supports/types';
-
 /** Set to true while auto-support is busy (scanning or placing).
  *  Page-level overlay reads this to show the "Generating Supports"
  *  full-screen modal, matching the native island-scan modal style. */
@@ -67,12 +66,7 @@ type NumericAutoSupportSettingKey =
   | 'sizeScale'
   | 'flatDensityBoost'
   | 'slopeRelaxFactor'
-  | 'anchorBandHeightMm'
-  | 'anchorSpacingFactor'
   | 'suctionAreaExponent'
-  | 'anchorPerimeterFactor'
-  | 'poissonFlatnessThresholdDeg'
-  | 'poissonSpacingFactor'
   | 'coverageTargetPercent'
   | 'leafFanRadiusMm'
   | 'leafFanMaxAngleDeg';
@@ -85,12 +79,7 @@ const KNOBS: KnobDef[] = [
   { key: 'gridAreaThresholdMm2',  label: 'Grid Threshold',       min: 5,    max: 200,  step: 5,   unit: 'mm²', hint: 'Flat regions at/above this area get a full grid; smaller regions get a single support' },
   { key: 'flatDensityBoost',      label: 'Flat Boost',           min: 0.5,  max: 1,    step: 0.05, unit: '×',   hint: 'Grid spacing on flat ceilings — lower = denser supports on anchor surfaces (0.7 = ~2× the supports)' },
   { key: 'slopeRelaxFactor',      label: 'Slope Relax',          min: 1,    max: 2,    step: 0.1,  unit: '×',   hint: 'Grid spacing on slopes at the self-support angle — higher = sparser' },
-  { key: 'anchorBandHeightMm',    label: 'Anchor Band',          min: 0,    max: 20,   step: 1,   unit: 'mm',  hint: 'Z-band above each contact patch\'s lowest point — the first-printed underside of a fully-supported print gets denser tips/roots. 0 = off' },
-  { key: 'anchorSpacingFactor',   label: 'Anchor Density',       min: 0.4,  max: 1,    step: 0.05, unit: '×',   hint: 'Spacing multiplier inside anchor bands — lower = denser anchoring where the model first touches its supports' },
   { key: 'suctionAreaExponent',   label: 'Suction Scale',        min: 0,    max: 0.4,  step: 0.05, unit: '',   hint: 'How strongly flat density grows with region area — large shallow ceilings carry more peel. 0 = off' },
-  { key: 'anchorPerimeterFactor', label: 'Anchor Perimeter',     min: 0.6,  max: 1,    step: 0.05, unit: '×',   hint: 'Poisson perimeter spacing vs the interior — the boundary of an anchor region engages peel first, so its ring is denser. Lower = tighter ring' },
-  { key: 'poissonFlatnessThresholdDeg', label: 'Organic Threshold', min: 5,  max: 30,   step: 1,   unit: '°',   hint: 'Local surface-angle spread above which a region is organic → Poisson disk in Auto mode. Planar regions stay on the grid. Lower = more regions Poisson' },
-  { key: 'poissonSpacingFactor',  label: 'Disk Spacing',         min: 0.5, max: 1.5,  step: 0.05, unit: '×',   hint: 'Poisson-disk interior spacing vs the shared region spacing — organic regions carry the slope-relax term and read looser than the flat grid; lower tightens the disk independently of the grid' },
   { key: 'sizeScale',             label: 'Support Size',         min: 0.5,  max: 2,    step: 0.05, unit: '×',   hint: 'Master multiplier over the preset sizing bands — thicker or thinner everywhere' },
   { key: 'coverageTargetPercent', label: 'Coverage Target',      min: 75,   max: 100,  step: 5,   unit: '%',   hint: 'How much of each region\'s footprint the grid must cover before gap-filling stops' },
   { key: 'leafFanRadiusMm',       label: 'Fan Reach',            min: 2,    max: 15,   step: 0.5, unit: 'mm',  hint: 'Max horizontal distance a fan-out leaf may span from a trunk shaft' },
@@ -151,6 +140,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
     if (matchesPreset(ANCHOR_PRESET.settings.autoSupport)) return 'heavy';
     return 'medium';
   });
+  const debugSimpleRender = React.useSyncExternalStore(subscribeToSettings, getSettings, getSettings).debugSimpleSupportRender;
 
   const settings = getSettings().autoSupport;
   const [draft, setDraft] = React.useState(settings);
@@ -334,12 +324,21 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
           setTimeout(() => {
             try {
               const list = islandsRef.current.filteredIslands;
+              const cur = islandsRef.current;
+              if (list.length === 0 && cur.voxelIslands.length === 0 && cur.minimaIslands.length === 0) {
+                pendingRef.current = true;
+                autoSupportDrivingScan = true;
+                void cur.onRunScan();
+                return;
+              }
               if (list.length > 0 && getSettings().autoSupport.enabled) {
                 runAutoSupports(list);
               }
             } finally {
-              setAutoSupportBusy(false);
-              setBusy(false);
+              if (!pendingRef.current) {
+                setAutoSupportBusy(false);
+                setBusy(false);
+              }
             }
           }, 0);
         });
@@ -471,6 +470,8 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
                 {(['light', 'medium', 'heavy'] as const).map((key) => (
                   <button key={key} type="button"
                     onClick={() => {
+                      // Density + sizing tier only — the trunk preset
+                      // (manual placement) is deliberately not touched.
                       updateAutoSupportSettings(PRESETS[key]);
                       setActivePreset(key);
                     }}
@@ -505,13 +506,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
                     <div className="flex justify-between"><span>Candidates</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.totalCandidates}</span></div>
                     <div className="flex justify-between"><span>Weight / support</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.weightPerSupportG.toFixed(2)} g</span></div>
                     <div className="flex justify-between"><span>Avg island area</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.avgIslandAreaMm2.toFixed(2)} mm²</span></div>
-                    <div className="flex justify-between"><span>Anchor clusters</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.anchorClusterCount}</span></div>
-                    <div className="flex justify-between"><span>Anchor regions</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.anchorInBandRegions}</span></div>
-                    <div className="flex justify-between"><span>Anchor layer area</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.anchorLayerAreaMm2.toFixed(0)} mm²</span></div>
-                    <div className="flex justify-between"><span>Grid regions</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.distributionGridRegions}</span></div>
-                    <div className="flex justify-between"><span>Poisson regions</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.distributionPoissonRegions}</span></div>
                     <div className="flex justify-between"><span>Standalone trunks</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.standaloneTrunks}</span></div>
-                    <div className="flex justify-between"><span>Poisson trunks</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.poissonDiskTrunks}</span></div>
                     <div className="flex justify-between"><span>Grid infill trunks</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.gridInfillTrunks}</span></div>
                     <div className="flex justify-between" style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 2, marginTop: 2 }}>
                       <span>Shaft Ø range</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.shaftDiameterRange.min.toFixed(2)}–{sizingDebug.shaftDiameterRange.max.toFixed(2)} mm</span>
@@ -553,7 +548,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
         title="Forest Report"
         subtitle="Every placed support with its size and fan-out groups"
         iconTone="neutral"
-        maxWidthClassName="max-w-2xl"
+        maxWidthClassName="max-w-[72rem]"
         onClose={() => setShowForestReport(false)}
         onBackdropClick={() => setShowForestReport(false)}
         actions={
@@ -602,7 +597,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
         <div className="space-y-3">
           {/* ── Toggles row — full width ────────────────────────── */}
           <div className="rounded-md border p-2.5" style={SECTION_CARD}>
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-5 gap-2">
               {([
                 { key: 'enabled' as const, label: 'Enabled', title: 'Generate supports automatically on scan' },
                 { key: 'prioritizeIntersection' as const, label: 'Prioritize Dual', title: 'Islands found by BOTH the slice and mesh scans are placed first (they are the most certain)' },
@@ -617,6 +612,13 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
                     : { borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
                 >{t.label}</button>
               ))}
+              <button type="button" title="Debug: simplified support render — contact disks/cones plus line vectors instead of full shafts"
+                onClick={() => updateDebugSimpleSupportRender(!debugSimpleRender)}
+                className="min-h-[36px] w-full rounded-md border px-2 text-[11px] font-semibold uppercase tracking-wide transition-colors flex items-center justify-center"
+                style={debugSimpleRender
+                  ? { borderColor: 'color-mix(in srgb, var(--accent-secondary), white 10%)', background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 84%)', color: 'color-mix(in srgb, var(--accent-secondary), var(--text-strong) 25%)' }
+                  : { borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+              >Simplified</button>
             </div>
           </div>
 
@@ -654,24 +656,8 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
             )}
             {settingsTab === 'distribution' && (
               <>
-                <div className="grid grid-cols-3 gap-1.5 mb-2.5">
-                  {(['auto', 'grid', 'poisson'] as const).map((mode) => (
-                    <button key={mode} type="button"
-                      onClick={() => setDraft((d) => ({ ...d, distributionMode: mode }))}
-                      className="h-8 rounded-md border text-[11px] font-semibold capitalize transition-colors"
-                      title={mode === 'auto'
-                        ? 'Planar regions use the dynamic grid; organic/curved regions use Poisson disk (flatness threshold). Anchor regions get anchor density in either distribution'
-                        : mode === 'grid'
-                          ? 'All regions use the dynamic grid'
-                          : 'All regions use Poisson disk (perimeter + infill)'}
-                      style={draft.distributionMode === mode
-                        ? { borderColor: 'color-mix(in srgb, var(--accent), white 10%)', background: 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)', color: 'var(--accent)' }
-                        : { borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-                    >{mode}</button>
-                  ))}
-                </div>
                 <div className="space-y-2.5">
-                  {KNOBS.filter(k => ['leafFanRadiusMm', 'leafFanMaxAngleDeg', 'poissonFlatnessThresholdDeg', 'poissonSpacingFactor'].includes(k.key)).map(knob => (
+                  {KNOBS.filter(k => ['leafFanRadiusMm', 'leafFanMaxAngleDeg'].includes(k.key)).map(knob => (
                     <SliderRow key={knob.key} knob={knob} draft={draft} setDraft={setDraft} />
                   ))}
                 </div>
@@ -679,7 +665,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
             )}
             {settingsTab === 'density' && (
               <div className="space-y-2.5">
-                {KNOBS.filter(k => ['areaPerSupportMm2', 'gridAreaThresholdMm2', 'flatDensityBoost', 'slopeRelaxFactor', 'anchorBandHeightMm', 'anchorSpacingFactor', 'suctionAreaExponent', 'anchorPerimeterFactor', 'sizeScale', 'maxAttachmentsPerTrunk'].includes(k.key)).map(knob => (
+                {KNOBS.filter(k => ['areaPerSupportMm2', 'gridAreaThresholdMm2', 'flatDensityBoost', 'slopeRelaxFactor', 'suctionAreaExponent', 'sizeScale', 'maxAttachmentsPerTrunk'].includes(k.key)).map(knob => (
                   <SliderRow key={knob.key} knob={knob} draft={draft} setDraft={setDraft} />
                 ))}
               </div>

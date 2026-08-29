@@ -1,6 +1,6 @@
 [package]
 name = "dragonfruit-desktop"
-version = "0.1.14"
+version = "0.1.15"
 edition = "2021"
 
 [build-dependencies]
@@ -30,6 +30,11 @@ rfd = "0.15"
 rayon = "1.10"
 zip = "2"
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
+# tauri-plugin-updater turns on reqwest's `rustls-no-provider`, which requires the
+# application to install a process-wide CryptoProvider. Declared directly so `ring`
+# is guaranteed on every platform instead of arriving by feature unification from
+# ureq, and so main() can install it explicitly. See issue #615.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 if-addrs = "0.13"
 mdns-sd = "0.11"
 tungstenite = "0.24"

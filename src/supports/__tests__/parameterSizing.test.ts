@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { sizeParameters, presetForArea } from '../autoSupport/parameterSizing';
-import { setSettings, getSettings } from '../Settings/state';
+import { sizeParameters, presetForArea, activeSizingBand } from '../autoSupport/parameterSizing';
+import { setSettings, getSettings, updateAutoSupportSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
 import type { CandidatePoint } from '../autoSupport/types';
+import type { AutoSupportSettings } from '../autoSupport/settings';
 
 function makeCandidate(over: Partial<CandidatePoint> = {}): CandidatePoint {
     return {
@@ -20,20 +21,16 @@ function makeCandidate(over: Partial<CandidatePoint> = {}): CandidatePoint {
     };
 }
 
-/** Apply a profile band (as a profile switch would) and restore after. */
-function withBand<T>(band: { shaft: number; tip?: number; roots?: number }, fn: () => T): T {
-    const prev = getSettings();
-    const defaults = createDefaultSettings();
-    setSettings({
-        ...defaults,
-        shaft: { ...defaults.shaft, diameterMm: band.shaft },
-        tip: { ...defaults.tip, contactDiameterMm: band.tip ?? 0.3 },
-        roots: { ...defaults.roots, diameterMm: band.roots ?? 3.0 },
-    });
+/** Switch the auto-support sizing tier (as the panel quick-select would)
+ *  and restore after. Sizing deliberately ignores the global shaft/tip/roots
+ *  — trunk presets are for manual placement. */
+function withTier<T>(tier: 'detail' | 'structure' | 'anchor', fn: () => T): T {
+    const prev = getSettings().autoSupport;
+    updateAutoSupportSettings({ sizingPreset: tier } as Partial<AutoSupportSettings>);
     try {
         return fn();
     } finally {
-        setSettings(prev);
+        updateAutoSupportSettings({ ...prev });
     }
 }
 
@@ -46,34 +43,44 @@ test('presetForArea maps the empirical bands', () => {
     assert.equal(presetForArea(8), 'anchor');
 });
 
-test('density-grid cell sits FLAT at the active profile band', () => {
-    withBand({ shaft: 1.2, tip: 0.4, roots: 2.0 }, () => {
+test('density-grid cell sits FLAT at the active sizing tier', () => {
+    withTier('anchor', () => {
         const s = sizeParameters(makeCandidate({ islandAreaMm2: 8, zHeight: 10 }));
-        assert.equal(s.shaftDiameterMm, 1.2, 'a cell reads exactly the active band — not the cell area');
-        assert.equal(s.rootsDiameterMm, 2.0);
-        assert.equal(s.tipContactDiameterMm, 0.4, 'flat ceiling gets the full profile contact');
+        assert.equal(s.shaftDiameterMm, 1.4, 'a cell reads exactly the tier band — not the cell area');
+        assert.equal(s.rootsDiameterMm, 2.3);
+        // The 30%-of-shaft floor binds at factory band ratios (0.4 < 1.4/3).
+        assert.ok(Math.abs(s.tipContactDiameterMm! - 0.42) < 1e-9,
+            `flat ceiling contact floored at 30% of shaft (${s.tipContactDiameterMm})`);
     });
 });
 
-test('anchor-band points get the anchor girth multiplier', () => {
-    withBand({ shaft: 1.0, tip: 0.4, roots: 2.0 }, () => {
-        const flat = sizeParameters(makeCandidate({ islandAreaMm2: 8, zHeight: 10 }));
-        assert.equal(flat.shaftDiameterMm, 1.0, 'ordinary cell sits at the band');
-        const anchor = sizeParameters(makeCandidate({ islandAreaMm2: 8, zHeight: 10, anchorPoint: true }));
-        assert.equal(anchor.shaftDiameterMm, 1.25, 'anchor cell carries the girth multiplier');
-        assert.equal(anchor.tipBodyDiameterMm, 1.25, 'tip body follows the thicker shaft');
-    });
-});
-
-test('the band follows the hardcoded profile (light < medium < heavy)', () => {
+test('the band follows the hardcoded tier (detail < structure < anchor)', () => {
     // The regression: the old area-derived curve sized a light 16 mm² cell
-    // THICKER than a heavy 5 mm² cell. The band must come from the profile.
-    const shaftAt = (shaft: number) => withBand({ shaft }, () => (
+    // THICKER than a heavy 5 mm² cell. The band must come from the tier.
+    const shaftAt = (tier: 'detail' | 'structure' | 'anchor') => withTier(tier, () => (
         sizeParameters(makeCandidate({ islandAreaMm2: 8, zHeight: 10 })).shaftDiameterMm!
     ));
-    assert.equal(shaftAt(0.8), 0.8, 'light profile band');
-    assert.equal(shaftAt(1.0), 1.0, 'medium profile band');
-    assert.equal(shaftAt(1.2), 1.2, 'heavy profile band');
+    assert.equal(shaftAt('detail'), 0.8, 'detail tier band');
+    assert.equal(shaftAt('structure'), 1.0, 'structure tier band');
+    assert.equal(shaftAt('anchor'), 1.4, 'anchor tier band');
+});
+
+test('sizing ignores the global shaft/tip bands (trunk presets are manual-only)', () => {
+    // Selecting a thin manual preset must not thin the next auto run.
+    const prev = getSettings();
+    const defaults = createDefaultSettings();
+    setSettings({
+        ...defaults,
+        shaft: { ...defaults.shaft, diameterMm: 0.5 },
+        tip: { ...defaults.tip, contactDiameterMm: 0.1 },
+    });
+    try {
+        const s = sizeParameters(makeCandidate({ islandAreaMm2: 8, zHeight: 10 }));
+        assert.equal(s.shaftDiameterMm, activeSizingBand().shaftDiameterMm,
+            'sizing reads the auto-support tier, not the global preset');
+    } finally {
+        setSettings(prev);
+    }
 });
 
 test('shafts never go below the active band', () => {
@@ -98,15 +105,20 @@ test('taller supports are mildly thicker (capped +25%)', () => {
     assert.ok(high.shaftDiameterMm! <= 1.0 * 1.25 + 1e-9, 'height cap holds');
 });
 
-test('flat ceilings get the full profile contact, steep slopes less', () => {
-    withBand({ shaft: 1.2, tip: 0.4 }, () => {
+test('tip contact never drops below 30% of the shaft', () => {
+    // At factory band ratios the 30% floor binds before the angle factor
+    // differentiates — the floor is the guarantee that matters.
+    withTier('structure', () => {
         const flat = sizeParameters(makeCandidate({ islandAreaMm2: 8, tipNormal: { x: 0, y: 0, z: -1 } }))!;
         const slope = sizeParameters(makeCandidate({
             islandAreaMm2: 8,
             tipNormal: { x: 0, y: -0.5, z: -0.866 }, // 30° from straight-down
         }))!;
-        assert.ok(flat.tipContactDiameterMm! > slope.tipContactDiameterMm!, 'flat > slope');
-        assert.equal(flat.tipContactDiameterMm, 0.4, 'flat never exceeds the profile contact');
+        assert.ok(Math.abs(flat.tipContactDiameterMm! - 0.3) < 1e-9,
+            `flat contact at the floor (${flat.tipContactDiameterMm})`);
+        assert.ok(Math.abs(slope.tipContactDiameterMm! - 0.3) < 1e-9,
+            `slope contact floored identically (${slope.tipContactDiameterMm})`);
+        assert.ok(slope.tipContactDiameterMm! >= 1.0 * 0.3 - 1e-9, 'floor = 30% of shaft');
     });
 });
 

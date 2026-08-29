@@ -1,6 +1,7 @@
 import { clamp, round } from '@/utils/math';
 import type { CandidatePoint } from './types';
 import { getSettings } from '../Settings/state';
+import type { SupportSettings } from '../Settings/types';
 
 // ---------------------------------------------------------------------------
 // Empirical sizing (locked: no physics pretense)
@@ -36,19 +37,79 @@ interface SizingBand {
     rootConeHeightMm: number;
 }
 
-/** The active profile's band — read from the current settings, which carry
- *  the hardcoded profile when one is active (plus any session overrides). */
-function bandFromCurrentSettings(): SizingBand {
-    const s = getSettings();
+/** Hardcoded auto-support bands. Auto supports are sized by THEIR OWN tier
+ *  (autoSupport.sizingPreset, set by the panel's light/medium/heavy
+ *  quick-select) — NEVER by the active trunk preset. Trunk presets are for
+ *  manual placement; selecting Detail in Support Studio must not thin the
+ *  next auto run. Values mirror the factory trunk presets' shaft/tip/roots
+ *  bands so the tiers stay visually consistent with their manual
+ *  counterparts. */
+const SIZING_BANDS: Record<SizingPreset, SizingBand> = {
+    detail: {
+        shaftDiameterMm: 0.8,
+        tipContactDiameterMm: 0.22,
+        tipLengthMm: 2.5,
+        tipPenetrationMm: 0,
+        rootDiameterMm: 2.0,
+        rootDiskHeightMm: 0.5,
+        rootConeHeightMm: 1.0,
+    },
+    structure: {
+        shaftDiameterMm: 1.0,
+        tipContactDiameterMm: 0.28,
+        tipLengthMm: 2.5,
+        tipPenetrationMm: 0,
+        rootDiameterMm: 2.0,
+        rootDiskHeightMm: 0.5,
+        rootConeHeightMm: 1.0,
+    },
+    anchor: {
+        shaftDiameterMm: 1.4,
+        tipContactDiameterMm: 0.4,
+        tipLengthMm: 2.5,
+        tipPenetrationMm: 0,
+        rootDiameterMm: 2.3,
+        rootDiskHeightMm: 0.5,
+        rootConeHeightMm: 1.0,
+    },
+};
+
+/** Merge sizing overrides into a settings snapshot. The settingsCodeHex
+ *  stamped on a placed support must describe the geometry ACTUALLY built
+ *  (tier band after overrides), not the global band — otherwise Support
+ *  Studio loads the wrong parameters for the selected support and any edit
+ *  clobbers the sized geometry. */
+export function applySizingOverridesToSettings(
+    settings: SupportSettings,
+    overrides?: Partial<SizeOverrides>,
+): SupportSettings {
+    if (!overrides) return settings;
     return {
-        shaftDiameterMm: s.shaft.diameterMm,
-        tipContactDiameterMm: s.tip.contactDiameterMm,
-        tipLengthMm: s.tip.lengthMm,
-        tipPenetrationMm: s.tip.penetrationMm ?? 0,
-        rootDiameterMm: s.roots.diameterMm,
-        rootDiskHeightMm: s.roots.diskHeightMm,
-        rootConeHeightMm: s.roots.coneHeightMm,
+        ...settings,
+        shaft: {
+            ...settings.shaft,
+            diameterMm: overrides.shaftDiameterMm ?? settings.shaft.diameterMm,
+        },
+        tip: {
+            ...settings.tip,
+            contactDiameterMm: overrides.tipContactDiameterMm ?? settings.tip.contactDiameterMm,
+            bodyDiameterMm: overrides.tipBodyDiameterMm ?? settings.tip.bodyDiameterMm,
+            lengthMm: overrides.tipLengthMm ?? settings.tip.lengthMm,
+            penetrationMm: overrides.tipPenetrationMm ?? settings.tip.penetrationMm,
+        },
+        roots: {
+            ...settings.roots,
+            diameterMm: overrides.rootsDiameterMm ?? settings.roots.diameterMm,
+            diskHeightMm: overrides.rootsDiskHeightMm ?? settings.roots.diskHeightMm,
+            coneHeightMm: overrides.rootsConeHeightMm ?? settings.roots.coneHeightMm,
+        },
     };
+}
+
+/** The auto-support tier's band. */
+export function activeSizingBand(): SizingBand {
+    const preset = getSettings().autoSupport?.sizingPreset ?? 'structure';
+    return SIZING_BANDS[preset];
 }
 
 /** Area a merged cluster must exceed before the shaft tail engages (mm²).
@@ -140,7 +201,7 @@ export function sizeParameters(
     candidate: CandidatePoint,
     sizeScale = 1,
 ): SizeOverrides {
-    const band = bandFromCurrentSettings();
+    const band = activeSizingBand();
 
     // The area that drives thickness: the candidate's own supported island.
     // No merge-radius cluster summing — dense regions would double-count
@@ -154,11 +215,8 @@ export function sizeParameters(
     // this is a calibration curve, not a load calculation: linear +25% cap at
     // ≥ 70 mm. No force inputs, no strength model.
     const heightFactor = 1 + clamp((zHeight - 20) / 200, 0, 0.25);
-    // Anchor-band points are load-bearing pillars — thicker than the band.
-    const anchorFactor = candidate.anchorPoint ? ANCHOR_SHAFT_MULTIPLIER : 1;
-
     const shaftDiameterMm = round(
-        clamp(shaftDiameterForArea(band.shaftDiameterMm, areaInput) * heightFactor * anchorFactor, 0.001, MAX_SHAFT_DIAMETER_MM)
+        clamp(shaftDiameterForArea(band.shaftDiameterMm, areaInput) * heightFactor, 0.001, MAX_SHAFT_DIAMETER_MM)
         * sizeScale,
     3);
 

@@ -1489,7 +1489,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-desktop"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "base64 0.22.1",
  "bytemuck",
@@ -1510,6 +1510,7 @@ dependencies = [
  "rayon",
  "reqwest 0.12.28",
  "rfd",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",

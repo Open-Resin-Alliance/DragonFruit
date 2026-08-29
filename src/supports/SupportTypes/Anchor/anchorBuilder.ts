@@ -68,8 +68,17 @@ export function buildAnchorData(input: AnchorBuildInput): AnchorBuildResult {
         ? (targetSocketZ - tipPos.z) / dzPerUnit
         : tipProfile.lengthMm; // fallback if cone axis is nearly horizontal
 
-    // Use the stretched length (but never shorter than the default)
-    const effectiveConeLength = Math.max(coneLength, tipProfile.lengthMm);
+    // Use the stretched length (but never shorter than the default) — and never
+    // so long that the socket overshoots BELOW the root joint: on a downward
+    // cone axis extra length sinks the socket, leaving the joint ball stranded
+    // above the cone (or the shaft plunging below the root).
+    let effectiveConeLength = Math.max(coneLength, tipProfile.lengthMm);
+    if (dzPerUnit < -1e-6) {
+        const maxConeLength = (tipPos.z - targetSocketZ) / -dzPerUnit;
+        if (maxConeLength > 0) {
+            effectiveConeLength = Math.min(effectiveConeLength, maxConeLength);
+        }
+    }
 
     const guessedSocketPos: Vec3 = {
         x: tipPos.x + effectiveConeAxis.x * effectiveConeLength,
@@ -143,6 +152,16 @@ export function buildAnchorData(input: AnchorBuildInput): AnchorBuildResult {
 
     const supportData: SupportData = {
         id: anchorId,
+        // Synthetic Roots entity so the generic SupportBuilder preview renders
+        // the root cone exactly like AnchorRenderer does for placed anchors.
+        roots: {
+            id: `${anchorId}:root`,
+            modelId,
+            transform: { pos: rootPos, rot: { x: 0, y: 0, z: 0, w: 1 } },
+            diameter: ANCHOR_ROOT_BASE_DIAMETER_MM,
+            diskHeight: ANCHOR_DISK_HEIGHT_MM,
+            coneHeight: ANCHOR_ROOT_HEIGHT_MM,
+        },
         segments: [],
         contactCone,
     };

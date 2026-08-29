@@ -83,10 +83,14 @@ if (isUniversal && !passThroughArgs.includes("--target")) {
   cmdArgs.push("--target", "universal-apple-darwin");
 }
 
-if (isLinux && process.env.DF_SKIP_LOCAL_FLATPAK !== "1") {
-  if (!hasBundlesArg && !noBundles) {
+if (isLinux) {
+  if (process.env.DF_SKIP_LOCAL_FLATPAK !== "1" && !hasBundlesArg && !noBundles) {
     cmdArgs.push("--bundles", "deb,rpm");
   }
+  // Backend selection is unconditional on Linux and deliberately sits OUTSIDE
+  // the flatpak branch above: the default feature set builds wry/WebKitGTK,
+  // which is not what we ship, so skipping the local Flatpak must not silently
+  // swap the webview underneath the build. See #614.
   cmdArgs.push("--", "--no-default-features", "--features", "custom-protocol,tauri-cef");
 }
 

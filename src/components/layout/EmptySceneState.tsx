@@ -7,7 +7,7 @@ import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import type { RecentOpenedFileEntry } from '@/features/scene/useSceneCollectionManager';
 import { Tooltip } from '@/components/ui/Tooltip';
-import { SCENE_FILE_EXTENSIONS, sceneFileExtensionLabels, sceneFileInputAccept } from '@/features/plugins/pluginFileTypeExtensions';
+import { useSceneFileExtensions, useSceneFileExtensionLabels, useSceneFileInputAccept } from '@/features/plugins/pluginFileTypeExtensions';
 
 const BUILD_CHANNEL = (process.env.NEXT_PUBLIC_BUILD_CHANNEL ?? '').toLowerCase();
 const APP_VERSION = (process.env.NEXT_PUBLIC_APP_VERSION ?? '').toLowerCase();
@@ -131,15 +131,18 @@ function getFileExtension(name: string): string {
 
 const MESH_DROP_EXTENSIONS = ['.stl', '.obj', '.3mf'];
 
-function isSupportedDropName(name: string): boolean {
+function isSupportedDropName(name: string, sceneExtensions: readonly string[]): boolean {
   const ext = getFileExtension(name);
   if (MESH_DROP_EXTENSIONS.includes(ext)) return true;
   // Scene formats come from the plugin registry, so a newly registered plugin
   // is droppable without touching this list.
-  return SCENE_FILE_EXTENSIONS.some((sceneExt) => ext === `.${sceneExt}`);
+  return sceneExtensions.some((sceneExt) => ext === `.${sceneExt}`);
 }
 
-function getDropSupportStateFromDataTransfer(dataTransfer: DataTransfer | null): 'supported' | 'unsupported' | 'unknown' {
+function getDropSupportStateFromDataTransfer(
+  dataTransfer: DataTransfer | null,
+  sceneExtensions: readonly string[],
+): 'supported' | 'unsupported' | 'unknown' {
   if (!dataTransfer) return 'unknown';
 
   const fileNames = new Set<string>();
@@ -201,7 +204,7 @@ function getDropSupportStateFromDataTransfer(dataTransfer: DataTransfer | null):
 
   if (fileNames.size === 0) return 'unknown';
 
-  const hasSupported = Array.from(fileNames).some((name) => isSupportedDropName(name));
+  const hasSupported = Array.from(fileNames).some((name) => isSupportedDropName(name, sceneExtensions));
   return hasSupported ? 'supported' : 'unsupported';
 }
 
@@ -222,6 +225,9 @@ export function EmptySceneState({
   onUseWithoutPrinter,
 }: EmptySceneStateProps) {
   const { _ } = useLingui();
+  const sceneExtensions = useSceneFileExtensions();
+  const sceneExtensionLabels = useSceneFileExtensionLabels();
+  const sceneFileAccept = useSceneFileInputAccept();
   const [taglineDescriptor] = React.useState(() => TAGLINES[Math.floor(Math.random() * TAGLINES.length)]);
   const [copied, setCopied] = React.useState(false);
   const handleCopyBuildInfo = React.useCallback(async () => {
@@ -332,7 +338,7 @@ export function EmptySceneState({
     if (!isLikelyFileDrag(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
-    const supportState = getDropSupportStateFromDataTransfer(e.dataTransfer);
+    const supportState = getDropSupportStateFromDataTransfer(e.dataTransfer, sceneExtensions);
     if (supportState === 'unsupported') {
       setIsDropUnsupported(true);
     } else if (supportState === 'supported') {
@@ -340,13 +346,13 @@ export function EmptySceneState({
     }
     setIsDropActive(true);
     scheduleDropAutoClear();
-  }, [isLikelyFileDrag, scheduleDropAutoClear]);
+  }, [isLikelyFileDrag, scheduleDropAutoClear, sceneExtensions]);
 
   const handleDragOver = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
     if (!isLikelyFileDrag(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
-    const supportState = getDropSupportStateFromDataTransfer(e.dataTransfer);
+    const supportState = getDropSupportStateFromDataTransfer(e.dataTransfer, sceneExtensions);
     if (supportState === 'unsupported') {
       setIsDropUnsupported(true);
       e.dataTransfer.dropEffect = 'none';
@@ -358,7 +364,7 @@ export function EmptySceneState({
     }
     setIsDropActive(true);
     scheduleDropAutoClear();
-  }, [isLikelyFileDrag, scheduleDropAutoClear]);
+  }, [isLikelyFileDrag, scheduleDropAutoClear, sceneExtensions]);
 
   const handleDragLeave = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -374,7 +380,7 @@ export function EmptySceneState({
     const files = Array.from(e.dataTransfer.files ?? []);
     if (files.length === 0) return;
 
-    const hasSupportedFiles = files.some((file) => isSupportedDropName(file.name));
+    const hasSupportedFiles = files.some((file) => isSupportedDropName(file.name, sceneExtensions));
     if (!hasSupportedFiles) {
       setIsDropActive(true);
       setIsDropUnsupported(true);
@@ -391,7 +397,7 @@ export function EmptySceneState({
     clearDropActive();
     if (!onDropMeshFiles) return;
     void onDropMeshFiles(files);
-  }, [clearDropActive, onDropMeshFiles]);
+  }, [clearDropActive, onDropMeshFiles, sceneExtensions]);
 
   const handleReopenRecentFile = React.useCallback(async (entryId: string) => {
     if (!onReopenRecentFile) return;
@@ -741,13 +747,13 @@ export function EmptySceneState({
                         : '1px solid color-mix(in srgb, var(--accent), var(--border-subtle) 56%)',
                     }}
                   >
-                    {['STL', 'OBJ', '3MF', ...sceneFileExtensionLabels()].join(' • ')}
+                    {['STL', 'OBJ', '3MF', ...sceneExtensionLabels].join(' • ')}
                   </span>
                 </div>
                 {isDropUnsupported && (
                   <div className="mt-1 text-[11px]" style={{ color: 'var(--danger)' }}>
                     {_(msg`Unsupported format detected.`)}{' '}
-                    {['STL', 'OBJ', '3MF', ...sceneFileExtensionLabels()].join(', ')}
+                    {['STL', 'OBJ', '3MF', ...sceneExtensionLabels].join(', ')}
                   </div>
                 )}
               </div>
@@ -768,7 +774,7 @@ export function EmptySceneState({
           <input
             id="empty-state-scene-file-input"
             type="file"
-            accept={sceneFileInputAccept()}
+            accept={sceneFileAccept}
             multiple
             onChange={onImportSceneChange}
             className="hidden"

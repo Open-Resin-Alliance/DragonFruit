@@ -6,9 +6,9 @@ import { SupportProxyMeshLayer } from '@/supports/SupportProxyMeshLayer';
 import { RaftProxyMeshLayer } from '@/supports/RaftProxyMeshLayer';
 import RaftRenderer from '@/supports/Rafts/Crenelated/rendering/RaftRenderer';
 import LineRaftRenderer from '@/supports/Rafts/Crenelated/rendering/LineRaftRenderer';
+import { getSettings, subscribeToSettings } from '@/supports/Settings/state';
 import type { SupportData } from '@/supports/rendering';
 import type { BracePreviewData } from '@/supports/SupportTypes/Brace/bracePlacementState';
-
 export type ModelAttachedSupportLayerProps = {
   mode?: SupportMode;
   modelFilterId?: string | null;
@@ -112,10 +112,12 @@ export function ModelAttachedSupportLayer({
   const useUltraLazySupports = mode !== 'support';
   const proxyPointerSelectionEnabled = mode === 'prepare' && !navigationLodActive && !disableSelectionAndHover && !passive;
   const proxyIncludeDetailedPrimitives = supportProxyIncludeDetailedPrimitives;
+  const simpleRender = React.useSyncExternalStore(subscribeToSettings, getSettings, getSettings).debugSimpleSupportRender;
+  const hideRaftPrimitivesEffective = hideRaftPrimitives || simpleRender;
 
   return (
     <>
-      {!hideRaftPrimitives && !interiorView && useUltraLazySupports && (
+      {!hideRaftPrimitivesEffective && !interiorView && useUltraLazySupports && (
         <RaftProxyMeshLayer
           modelFilterId={hideRaftPrimitivesForInactiveModels && activeModelId ? activeModelId : modelFilterId}
           clipLower={clipLower}
@@ -138,7 +140,7 @@ export function ModelAttachedSupportLayer({
         />
       )}
 
-      {!hideRaftPrimitives && !interiorView && !useUltraLazySupports && (
+      {!hideRaftPrimitivesEffective && !interiorView && !useUltraLazySupports && (
         <>
           <RaftRenderer
             clipLower={clipLower}

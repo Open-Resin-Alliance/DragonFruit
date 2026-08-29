@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { sceneFileExtensionLabels } from '@/features/plugins/pluginFileTypeExtensions';
+import { useSceneFileExtensionLabels } from '@/features/plugins/pluginFileTypeExtensions';
 import { msg } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
 import type { MessageDescriptor } from '@lingui/core';
@@ -625,6 +625,7 @@ export default function Home() {
     // SSR: no localStorage → the manifest default (disabled).
     () => false,
   );
+  const sceneFileExtensionLabelsValue = useSceneFileExtensionLabels();
   const sceneAutosaveSettings = React.useSyncExternalStore(
     subscribeToSceneAutosaveSettings,
     getSceneAutosaveSettingsSnapshot,
@@ -10231,8 +10232,8 @@ export default function Home() {
                 </div>
                 <div className="mt-2 text-sm" style={{ color: 'var(--text-muted)' }}>
                   {isPrepareDragUnsupported
-                    ? `Please use: ${['STL', 'OBJ', '3MF', ...sceneFileExtensionLabels()].join(', ')}`
-                    : `Supported: ${['STL', 'OBJ', '3MF', ...sceneFileExtensionLabels()].join(', ')}`}
+                    ? `Please use: ${['STL', 'OBJ', '3MF', ...sceneFileExtensionLabelsValue].join(', ')}`
+                    : `Supported: ${['STL', 'OBJ', '3MF', ...sceneFileExtensionLabelsValue].join(', ')}`}
                 </div>
               </div>
             </div>

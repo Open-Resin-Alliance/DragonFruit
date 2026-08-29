@@ -146,9 +146,10 @@ const DETAIL_PRESET: SupportPreset = {
             stickVsTwigCutoffMm: 5.0,
         },
         autoBracing: createDefaultAutoBracingSettings(),
-        autoSupport: { ...createDefaultAutoSupportSettings(), areaPerSupportMm2: 16 },
+        autoSupport: { ...createDefaultAutoSupportSettings(), areaPerSupportMm2: 16, sizingPreset: 'detail' },
         devToolsEnabled: false,
         devTools: createDefaultSettings().devTools,
+        debugSimpleSupportRender: false,
     },
 };
 
@@ -237,9 +238,10 @@ const ANCHOR_PRESET: SupportPreset = {
             stickVsTwigCutoffMm: 5.0,
         },
         autoBracing: createDefaultAutoBracingSettings(),
-        autoSupport: { ...createDefaultAutoSupportSettings(), areaPerSupportMm2: 5 },
+        autoSupport: { ...createDefaultAutoSupportSettings(), areaPerSupportMm2: 5, sizingPreset: 'anchor' },
         devToolsEnabled: false,
         devTools: createDefaultSettings().devTools,
+        debugSimpleSupportRender: false,
     },
 };
 
@@ -553,8 +555,14 @@ export function setActivePreset(id: string | null): void {
         autoBracing: {
             ...current.autoBracing,
         },
-        // autoSupport applies from the preset — it carries the per-preset
-        // auto-support density (detail 12 / structure 8 / anchor 5 mm²).
+        // Preserve current Auto Supports settings. Trunk presets are sizing/
+        // geometry profiles; auto-support density is owned by the Auto
+        // Support panel (whose light/medium/heavy quick-select writes it via
+        // updateAutoSupportSettings before calling this), never by the
+        // trunk-preset dropdown.
+        autoSupport: {
+            ...current.autoSupport,
+        },
     });
 
     // Keep selected preset + persisted settings in sync across app restarts.

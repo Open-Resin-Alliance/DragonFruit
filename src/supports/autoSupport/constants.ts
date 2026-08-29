@@ -8,6 +8,18 @@
 /** Near-plate tips (< this Z, mm) get a minimal anchor support instead of a trunk. */
 export const ANCHOR_HEIGHT_THRESHOLD_MM = 5.0;
 
+/** Minimum spacing between anchor supports (mm) — denser than this hammers
+ *  the first layer and creates blocked pillars. Larger than the generic
+ *  1.0–1.2 mm floors; anchors are load-bearing but need breathing room. */
+export const ANCHOR_MIN_SPACING_MM = 1.8;
+
+/** Minimum XY extent for an anchor region to be densified (mm). Tiny slivers
+ *  (e.g. 20×1–2 mm rings around a cylinder) hammer the first layer with
+ *  100s of pillars but are not load-bearing feet. Both width and height must
+ *  exceed this, and area must exceed ANCHOR_MIN_AREA_MM2. */
+export const ANCHOR_MIN_XY_MM = 4.0;
+export const ANCHOR_MIN_AREA_MM2 = 12.0;
+
 /** Max span (mm) for a leaf cone attached to a host knot (grid path). */
 export const MAX_AUTO_LEAF_SPAN_MM = 2.5;
 
@@ -25,8 +37,10 @@ export const LEAF_FAN_RADIUS_MM = 5.0;
  *  leaves from sweeping across the grid forest (and puncturing grid shafts). */
 export const GRID_HOST_FAN_RADIUS_MM = 2.5;
 
-/** Leaf fanning: max angle from vertical for a fan leaf (deg). */
-export const LEAF_FAN_MAX_ANGLE_DEG = 60;
+/** Leaf fanning: max angle from vertical for a fan leaf (deg). 45° is
+ *  shallower than it used to be (60°) but prints reliably and lets leaves
+ *  reach overhangs on low-slope surfaces the old gate refused. */
+export const LEAF_FAN_MAX_ANGLE_DEG = 45;
 
 /** Self-support threshold: surfaces flatter than this angle from horizontal
  *  (deg) are flagged as overhang. Density modulation is normalized to it. */

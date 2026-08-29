@@ -238,7 +238,8 @@ test('fanLeafToTrunk refuses when no shaft is in range', () => {
 test('fanLeafToTrunk refuses steep angles', () => {
     const draft = trunkWithShaft('host', 0, 0, 0, 19);
     const fan = fanLeafToTrunk(
-        { x: 4.3, y: 0, z: 13 }, 'm', [sp('host', 0, 0, 12.5)], new Set(), 'fan-test', 5, 2.5, 60, 12, draft, undefined,
+        // 2 mm vertical drop, 4.3 mm lateral → 65° — steeper than the limit.
+        { x: 4.3, y: 0, z: 13 }, 'm', [sp('host', 0, 0, 11)], new Set(), 'fan-test', 5, 2.5, 60, 12, draft, undefined,
     );
 
     assert.equal(fan.ok, false);
