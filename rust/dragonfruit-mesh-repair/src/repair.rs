@@ -93,6 +93,27 @@ pub type ClassificationOutcome = RepairOutcome;
 pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     let t_start = std::time::Instant::now();
 
+    #[cfg(feature = "manifold")]
+    let manifold_precheck = model_section_manifold_status(&mesh, None);
+
+    #[cfg(feature = "manifold")]
+    if manifold_precheck.is_ok() {
+        let mut pre = minimal_analysis(&mesh, 0);
+        pre.is_watertight = true;
+        pre.is_oriented = true;
+        let mut report = MeshHealthReport::new(pre);
+        report.model_is_manifold = Some(true);
+        report.fully_repaired = true;
+        report.steps.push(RepairStepReport {
+            name: "manifold_precheck".into(),
+            changed: 0,
+            notes: Some("valid manifold; skipped detailed analysis and repair".into()),
+            elapsed_ms: t_start.elapsed().as_secs_f64() * 1000.0,
+        });
+        report.total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+        return RepairOutcome { mesh, report };
+    }
+
     let pre = analyze(&mesh);
     let auto_fragmented_solidify = options.solidify_fragmented_components
         && pre.connected_components >= options.solidify_component_threshold
@@ -102,6 +123,15 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     let mut skip_final_orientation = false;
     let mut solidify_rollback_reason: Option<String> = None;
     let mut report = MeshHealthReport::new(pre);
+    #[cfg(feature = "manifold")]
+    if let Err(reason) = manifold_precheck {
+        report.steps.push(RepairStepReport {
+            name: "manifold_precheck".into(),
+            changed: 0,
+            notes: Some(format!("failed: {reason}; running detailed analysis and repair")),
+            elapsed_ms: 0.0,
+        });
+    }
     if options.assume_support_geometry == Some(true) {
         report.likely_support_geometry = true;
     }

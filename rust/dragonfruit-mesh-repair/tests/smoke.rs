@@ -57,6 +57,37 @@ fn watertight_cube_is_clean() {
     );
 }
 
+#[cfg(feature = "manifold")]
+#[test]
+fn manifold_precheck_skips_detailed_repair_for_valid_mesh() {
+    let mesh = unit_cube();
+    let outcome = repair(mesh.clone(), &RepairOptions::default());
+
+    assert_eq!(outcome.mesh.positions, mesh.positions);
+    assert_eq!(outcome.mesh.triangles, mesh.triangles);
+    assert_eq!(outcome.report.model_is_manifold, Some(true));
+    assert!(outcome.report.fully_repaired);
+    assert_eq!(outcome.report.steps.len(), 1);
+    assert_eq!(outcome.report.steps[0].name, "manifold_precheck");
+}
+
+#[cfg(feature = "manifold")]
+#[test]
+fn failed_manifold_precheck_continues_with_detailed_repair() {
+    let mut mesh = unit_cube();
+    mesh.triangles.remove(0);
+    mesh.triangles.remove(0);
+
+    let outcome = repair(mesh, &RepairOptions::default());
+
+    assert_eq!(outcome.report.steps[0].name, "manifold_precheck");
+    assert!(outcome.report.steps[0]
+        .notes
+        .as_deref()
+        .is_some_and(|notes| notes.starts_with("failed:")));
+    assert!(outcome.report.steps.iter().any(|step| step.name == "weld"));
+}
+
 #[test]
 fn duplicated_vertices_are_welded() {
     let mut mesh = unit_cube();
