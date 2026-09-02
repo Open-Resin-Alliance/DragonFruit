@@ -50,7 +50,6 @@ dragonfruit-mesh-repair = { path = "../rust/dragonfruit-mesh-repair", features =
 dragonfruit-organic-cut = { path = "../rust/dragonfruit-organic-cut", features = ["manifold"] }
 dragonfruit-sdf = { path = "../rust/dragonfruit-sdf" }
 dragonfruit-astar = { path = "../rust/dragonfruit-astar" }
-flate2 = "1.1.9"
 bytemuck = "1"
 meshopt = "0.6.2"
 
