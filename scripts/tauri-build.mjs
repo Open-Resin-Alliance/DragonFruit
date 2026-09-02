@@ -97,9 +97,12 @@ if (isLinux) {
 // x86_64 codegen flags (+avx2,+fma) now live in .cargo/config.toml so they apply
 // to every cargo invocation (including each arch of a universal build); no
 // RUSTFLAGS env injection here (env would clobber the config entries).
+// explicitTarget already folds in CARGO_BUILD_TARGET; honouring it here (not
+// just in the Flatpak staging) is what lets a `--target <triple>` build point
+// embedAppex at target/<triple>/release instead of the host arch's directory.
 const targetTriple = isUniversal
   ? "universal-apple-darwin"
-  : (process.env.CARGO_BUILD_TARGET ?? resolveDefaultTargetTriple());
+  : (explicitTarget ?? resolveDefaultTargetTriple());
 console.log(`[tauri-build] ${npxCmd} ${cmdArgs.join(" ")} (target=${targetTriple ?? "unknown"})`);
 
 const tauriEnv = {
