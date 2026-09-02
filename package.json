@@ -3,6 +3,9 @@
   "version": "0.1.15",
   "buildChannel": "beta",
   "private": true,
+  "engines": {
+    "node": ">=22.23.2 <23"
+  },
   "scripts": {
     "bench:support-drag": "node --import tsx scripts/support-drag-perf.ts",
     "bench:voxl-tick": "node --max-old-space-size=8192 --import tsx scripts/bench-voxl-tick.ts",
