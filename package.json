@@ -93,7 +93,6 @@
     "@types/react-dom": "^19.2.2",
     "@types/three": "^0.181.0",
     "babel-plugin-react-compiler": "1.0.0",
-    "baseline-browser-mapping": "^2.9.4",
     "eslint": "^9.39.3",
     "eslint-config-next": "^16.0.7",
     "tailwindcss": "^4.1.16",
