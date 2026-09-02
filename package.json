@@ -11,6 +11,7 @@
     "check:docs": "node scripts/check-docs-accuracy.mjs",
     "check:lint": "node scripts/check-lint-clean.mjs",
     "postversion": "npm run sync:version && npm run sync:contributors && npm run sync:sponsors",
+    "clean": "cargo clean --manifest-path src-tauri/Cargo.toml && cargo clean --manifest-path rust/dragonfruit-voxl-thumbnail/Cargo.toml && rm -rf .next frontend-dist",
     "predev:once": "node scripts/build-thumbnail-providers.mjs",
     "predev": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins",
     "prebuild": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins",
