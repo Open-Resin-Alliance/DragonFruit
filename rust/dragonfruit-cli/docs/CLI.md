@@ -40,7 +40,30 @@ Every command produces JSON output (`--json`) and reports timing metrics.
 
 Binary: `rust/dragonfruit-cli/target/release/dragonfruit-cli`
 
-Build: `cargo build --release` (from `rust/dragonfruit-cli/`)
+Build (from `rust/dragonfruit-cli/`):
+
+```bash
+cargo build --release
+```
+
+**On a fresh clone this fails**, because `dragonfruit-slicing-engine` will not compile until the
+plugin encoder registry exists:
+
+```
+error[E0583]: file not found for module `generated_plugin_encoders`
+```
+
+That module is generated and gitignored, and it pulls the encoder sources in via `#[path]` from
+`plugins/`, which are submodules. So from the repo root, first:
+
+```bash
+git submodule update --init
+npm run generate:plugin-registry
+```
+
+`npm run build` and `npm run build:tauri` already do the generating half through their `prebuild`
+hooks, so a checkout you have been building the app from is fine. A bare clone used only for the
+CLI is not — `npm ci` alone does not generate it.
 
 Every command prints `[command] Xms` timing to stderr.
 
