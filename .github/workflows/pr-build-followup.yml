@@ -102,7 +102,7 @@ jobs:
               "",
               "---",
               "",
-              "> 💡 This check runs automatically on every push to the PR. The macOS DMG is handed off to the nightly workflow when the `nightly-build` label is set."
+              "> 💡 This check runs automatically on every push to the PR. The macOS DMG is handed off to the preview workflow when the `preview-build` label is set."
             ].join("\n");
 
             const comments = await github.paginate(github.rest.issues.listComments, {
@@ -164,8 +164,29 @@ jobs:
               return;
             }
 
-            const hasNightlyLabel = pr.labels.some((label) => label.name === 'nightly-build');
-            core.setOutput('should_dispatch', hasNightlyLabel ? 'true' : 'false');
+            // The label persists across pushes and build-nightly checks out
+            // refs/pull/N/head, which always points at the fork's current tip.
+            // Labelling an external PR once would hand its author code execution
+            // with every secret in scope (Apple certificate, updater signing
+            // key) on every later push. Fork previews are authorised by a
+            // maintainer one command at a time instead.
+            //
+            // head.repo is null once a fork has been deleted, so an unknown head
+            // repo counts as a fork and the check fails closed.
+            const isFork =
+              pr.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`;
+            // preview-build is the current name; nightly-build is still
+            // honoured until the old spelling is retired.
+            const PREVIEW_LABELS = ['preview-build', 'nightly-build'];
+            const hasPreviewLabel = pr.labels.some((label) => PREVIEW_LABELS.includes(label.name));
+
+            if (isFork && hasPreviewLabel) {
+              core.warning(
+                `PR #${pr.number} is from ${pr.head.repo?.full_name ?? 'a deleted fork'}: ` +
+                `the preview label does not auto-dispatch for forks.`);
+            }
+
+            core.setOutput('should_dispatch', (hasPreviewLabel && !isFork) ? 'true' : 'false');
             core.setOutput('number', String(pr.number));
             core.setOutput('head_ref', pr.head.ref);
             core.setOutput('base_ref', pr.base.ref);
@@ -177,11 +198,13 @@ jobs:
           HEAD_BRANCH: ${{ steps.pr.outputs.head_ref }}
           BASE_BRANCH: ${{ steps.pr.outputs.base_ref }}
           RUN_ID: ${{ github.event.workflow_run.id }}
-          PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
+          # No pr_number: this path only fires for PRs whose branch lives in
+          # this repository, so the branch name resolves on its own. The old
+          # input made build-nightly check out refs/pull/N/head, which follows
+          # the fork's tip.
           gh workflow run build-nightly.yml \
             --repo "${{ github.repository }}" \
             --ref "$BASE_BRANCH" \
             -f branch="$HEAD_BRANCH" \
-            -f pr_run_id="$RUN_ID" \
-            -f pr_number="$PR_NUMBER"
+            -f pr_run_id="$RUN_ID"
