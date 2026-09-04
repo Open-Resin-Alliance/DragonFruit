@@ -46,6 +46,8 @@ jobs:
       - name: Checkout
         # No `ref:` on purpose — see note 1 above.
         uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
