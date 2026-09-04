@@ -1,0 +1,6 @@
+pub const TARGET_BUDGET_TRIANGLES: usize = 4_000_000;
+pub const SOFT_CEILING_TRIANGLES: usize = 8_000_000;
+pub const EPSILON_BBOX_SCALE: f64 = 0.00025;
+pub const EPSILON_MIN_CLAMP: f64 = 0.003;
+pub const EPSILON_MAX_CLAMP: f64 = 0.050;
+pub const DECIMATION_ERROR_TIERS: &[f64] = &[0.003, 0.005, 0.008, 0.010, 0.025];

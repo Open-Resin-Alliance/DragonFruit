@@ -14,6 +14,7 @@ import {
 import { snapToGridIndex } from '../PlacementLogic/Grid/gridMath';
 import { JOINT_DIAMETER_OFFSET_MM } from '../constants';
 import { getKickstandSnapshot, setKickstandSnapshot } from '../SupportTypes/Kickstand/kickstandStore';
+import { normalizeAxisAngleRad, axisSeparationDeg, hasQualifiedTwoAxisBracing } from './twoAxisDetection';
 import type { KickstandState } from '../SupportTypes/Kickstand/types';
 import type {
     Brace,
@@ -88,10 +89,6 @@ export interface AutoBraceResult {
     skippedSupportCount: number;
     changed: boolean;
     message: string;
-}
-
-function clamp(value: number, min: number, max: number): number {
-    return Math.min(max, Math.max(min, value));
 }
 
 function sortSupports(a: SupportSample, b: SupportSample): number {
@@ -223,7 +220,7 @@ function resolveAnchorAtZ(support: SupportSample, targetZ: number): AnchorPoint 
 
         const dz = segment.end.z - segment.start.z;
         const t = Math.abs(dz) < EPS ? 0 : (targetZ - segment.start.z) / dz;
-        const clampedT = clamp(t, 0, 1);
+        const clampedT = THREE.MathUtils.clamp(t, 0, 1);
         const pos = calculateKnotPositionOnSegmentFromT(segment.start, segment.end, segment.segment, clampedT);
         const score = Math.abs(pos.z - targetZ);
 
@@ -241,17 +238,6 @@ function resolveAnchorAtZ(support: SupportSample, targetZ: number): AnchorPoint 
         pos: best.pos,
         hostDiameterMm: best.segment.diameterMm,
     };
-}
-
-function normalizeAxisAngleRad(angleRad: number): number {
-    let n = angleRad % Math.PI;
-    if (n < 0) n += Math.PI;
-    return n;
-}
-
-function axisSeparationDeg(aRad: number, bRad: number): number {
-    const diff = Math.abs(aRad - bRad);
-    return (Math.min(diff, Math.PI - diff) * 180) / Math.PI;
 }
 
 type Edge = { a: SupportSample; b: SupportSample; hDist: number; angleRad: number };
@@ -420,7 +406,7 @@ function buildGroupPairs(
     return result;
 }
 
-export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: AutoBracingSettings): BuildSnapshotResult {
+export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: AutoBracingSettings, kickstandBase?: KickstandState): BuildSnapshotResult {
     const settings = normalizeAutoBracingSettings(inputSettings);
     const activeGridSettings = getSettings().grid;
     const maxRun = maxHorizontalRunFromBraceLen(settings.maxBraceLengthMm);
@@ -429,6 +415,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     if (trunkSamples.length < AUTO_BRACING_HARD_RULES.minGroupSize) {
         return {
             snapshot,
+            kickstand: kickstandBase ?? getKickstandSnapshot(),
             generatedBraceCount: 0,
             removedBraceCount: 0,
             skippedSupportCount: trunkSamples.length,
@@ -437,7 +424,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
         };
     }
 
-    let kickstandState = getKickstandSnapshot();
+    let kickstandState = kickstandBase ?? getKickstandSnapshot();
     {
         const nextKickstands: KickstandState['kickstands'] = {};
         const nextRoots: KickstandState['roots'] = {};
@@ -471,17 +458,13 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
                 knots: nextKnots,
                 selectedId,
             };
-
-            setKickstandSnapshot(kickstandState);
         }
     }
 
     const trunkById = new Map(trunkSamples.map((trunk) => [trunk.supportId, trunk]));
-    const seedUnitMm = activeGridSettings.spacingMm > 0
-        ? activeGridSettings.spacingMm
-        : 1;
-    const effectiveSeedSpacingMm = settings.seedSpacingMm * seedUnitMm;
-    const effectiveSeedJitterMm = settings.seedJitterMm * seedUnitMm;
+    // seedSpacingMm / seedJitterMm are already mm — do not scale by grid spacing.
+    const effectiveSeedSpacingMm = settings.seedSpacingMm;
+    const effectiveSeedJitterMm = settings.seedJitterMm;
 
     const trunkGroupIds = partitionSupportsWithVoronoi(
         trunkSamples.map((trunk) => {
@@ -501,22 +484,22 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
         },
     );
 
-    const preliminaryTrunkGroups: SupportSample[][] = [];
-    for (const groupIds of trunkGroupIds) {
-        const groupTrunks = groupIds
-            .map((id) => trunkById.get(id))
-            .filter((trunk): trunk is SupportSample => Boolean(trunk));
-        if (groupTrunks.length > 0) {
-            preliminaryTrunkGroups.push(groupTrunks);
-        }
-    }
-
     // -- PRELIMINARY BRACING SNAPSHOT (To detect trunks needing generative fallback) --
     // Use the same current-run pairing logic that this invocation will apply,
-    // not legacy snapshot braces that are about to be replaced.
+    // not legacy snapshot braces that are about to be replaced. Paired
+    // MODEL-WIDE (per model, distance-limited) — the Voronoi partition can
+    // isolate single trunks at dense auto-grid spacings, and per-cluster
+    // pairing would read them as braceless and spawn kickstands despite
+    // braceable neighbors.
     const existingTrunkEdges: Array<{ a: string; b: string; angleRad: number }> = [];
-    for (const groupTrunks of preliminaryTrunkGroups) {
-        const pairs = buildGroupPairs(groupTrunks, settings.maxBraceLengthMm, activeGridSettings);
+    const trunksByModel = new Map<string, SupportSample[]>();
+    for (const trunk of trunkSamples) {
+        const list = trunksByModel.get(trunk.modelId) ?? [];
+        list.push(trunk);
+        trunksByModel.set(trunk.modelId, list);
+    }
+    for (const modelTrunks of trunksByModel.values()) {
+        const pairs = buildGroupPairs(modelTrunks, settings.maxBraceLengthMm, activeGridSettings);
         for (const pair of pairs) {
             existingTrunkEdges.push({
                 a: pair.a.supportId,
@@ -559,8 +542,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
             roots: nextRoots,
             knots: nextKnots
         };
-        
-        setKickstandSnapshot(kickstandState);
+
         generatedKickstandCount = generatedKickstands.length;
     }
 
@@ -633,7 +615,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     const nextKnots: Record<string, Knot> = {};
     for (const [id, k] of Object.entries(snapshot.knots)) { if (!braceKnotIds.has(id) || preservedKnotIds.has(id)) nextKnots[id] = k; }
 
-    let nextSnapshot: SupportState = { ...snapshot, braces: {}, knots: nextKnots, selectedId: (snapshot.selectedId && snapshot.braces[snapshot.selectedId.replace('braceSegment:', '')]) ? null : snapshot.selectedId };
+    const nextSnapshot: SupportState = { ...snapshot, braces: {}, knots: nextKnots, selectedId: (snapshot.selectedId && snapshot.braces[snapshot.selectedId.replace('braceSegment:', '')]) ? null : snapshot.selectedId };
 
     const braceIds = new Set<string>(Object.keys(nextSnapshot.braces));
     const knotIds = new Set<string>(Object.keys(nextSnapshot.knots));
@@ -643,13 +625,31 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     const generatedBraces: Record<string, Brace> = {};
     const generatedKnots: Record<string, Knot> = {};
 
+    // Trunk-to-trunk brace axes actually placed by the ladder — used by the
+    // post-ladder reconciliation to drop redundant kickstands.
+    const bracedAxesByTrunkId = new Map<string, number[]>();
+
+    // Model-wide pair sets, shared by every group's kickstand-edge selection
+    // and the ladder. The Voronoi partition can isolate single trunks at
+    // dense auto-grid spacings (a seed cell claims one node); per-group
+    // pairing then finds no edges for them and they get kickstands despite
+    // braceable neighbors. Distance limits (maxRun) keep the global pairing
+    // local.
+    const pairsByModel = new Map<string, Edge[]>();
+    const pairDistanceOverrides = new Map<string, PairDistanceOverride>();
+    const pairKey = (aId: string, bId: string) => [aId, bId].sort().join(':');
+    const braceProfile = buildBraceProfile(settings.braceDiameterMm);
+
     for (let groupIndex = 0; groupIndex < groupedSupports.length; groupIndex += 1) {
         const groupMembers = groupedSupports[groupIndex];
         const groupTrunks = groupMembers.filter((s) => s.supportKind === 'trunk');
-        const pairs = buildGroupPairs(groupTrunks, settings.maxBraceLengthMm, activeGridSettings);
-        const pairDistanceOverrides = new Map<string, PairDistanceOverride>();
-        const pairKey = (aId: string, bId: string) => [aId, bId].sort().join(':');
-        const braceProfile = buildBraceProfile(settings.braceDiameterMm);
+        const modelId = groupTrunks[0]?.modelId;
+        let pairs = modelId ? pairsByModel.get(modelId) : undefined;
+        if (!pairs) {
+            const modelTrunks = trunkSamples.filter((s) => s.modelId === modelId);
+            pairs = buildGroupPairs(modelTrunks, settings.maxBraceLengthMm, activeGridSettings);
+            if (modelId) pairsByModel.set(modelId, pairs);
+        }
         const extra = groupMembers.filter((s) => s.supportKind === 'kickstand');
         if (extra.length > 0 && groupTrunks.length > 0) {
             const kickstandCandidateEdges: Edge[] = [];
@@ -847,7 +847,15 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
                 }
             }
         }
-        const maxZ = Math.max(...groupTrunks.map(s => s.topReferenceZ));
+    }
+
+    // ── Ladder ─────────────────────────────────────────────────────
+    // Runs once per model over the model-wide pairs (shared with the
+    // kickstand decisions), so a trunk's braces match what the kickstand
+    // logic saw — no kickstands next to fully braced trunks.
+    for (const [modelId, pairs] of pairsByModel) {
+        const modelTrunks = trunkSamples.filter((s) => s.modelId === modelId && s.supportKind === 'trunk');
+        const maxZ = Math.max(...modelTrunks.map(s => s.topReferenceZ));
 
         const ladder: number[] = [settings.initialDistanceMm];
         let curr = settings.initialDistanceMm + settings.patternIntervalMm;
@@ -911,6 +919,17 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
                 generatedKnots[sId] = { id: sId, parentShaftId: lowAnchor.segmentId, t: lowAnchor.t, pos: lowAnchor.pos, diameter: lowAnchor.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM };
                 generatedKnots[eId] = { id: eId, parentShaftId: highAnchor.segmentId, t: highAnchor.t, pos: highAnchor.pos, diameter: highAnchor.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM };
                 generatedBraces[bId] = { id: bId, modelId: lowAnchor.modelId, startKnotId: sId, endKnotId: eId, profile: braceProfile, debugSection: section };
+
+                // Only trunk↔trunk braces count toward the two-axis stability
+                // contract — braces to kickstands are the kickstand's own bracing.
+                if (lowS.supportKind === 'trunk' && highS.supportKind === 'trunk') {
+                    const angleRad = normalizeAxisAngleRad(Math.atan2(dy, dx));
+                    for (const tid of [lowS.supportId, highS.supportId]) {
+                        const list = bracedAxesByTrunkId.get(tid) ?? [];
+                        list.push(angleRad);
+                        bracedAxesByTrunkId.set(tid, list);
+                    }
+                }
             };
 
             if (isInitial) {
@@ -919,6 +938,59 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
                 applyRepeatingPattern(pairs, pattern, place);
             }
         });
+    }
+
+    // ── Post-ladder reconciliation ──────────────────────────────────
+    // Kickstands are generated from the PRELIMINARY pairing, before the
+    // ladder places real trunk-to-trunk braces. A kickstand whose host trunk
+    // ended up with two qualified trunk-trunk brace axes is redundant — drop
+    // it (and its braces/knots) so the forest braces trunks together instead
+    // of stacking a kickstand next to an already-stable trunk.
+    if (generatedKickstands.length > 0 && bracedAxesByTrunkId.size > 0) {
+        const drops = new Set<string>();
+        for (const build of generatedKickstands) {
+            const hostTrunkId = segmentOwnerTrunkId.get(build.kickstand.hostSegmentId);
+            if (!hostTrunkId) continue;
+            const axes = bracedAxesByTrunkId.get(hostTrunkId) ?? [];
+            if (hasQualifiedTwoAxisBracing(axes, AUTO_BRACING_HARD_RULES.minAxisSeparationDeg)) {
+                drops.add(build.kickstand.id);
+            }
+        }
+
+        if (drops.size > 0) {
+            const droppedSegmentIds = new Set<string>();
+            for (const id of drops) {
+                const ks = kickstandState.kickstands[id];
+                if (!ks) continue;
+                for (const seg of ks.segments) droppedSegmentIds.add(seg.id);
+            }
+
+            const keptKickstands: KickstandState['kickstands'] = {};
+            const keptRoots: KickstandState['roots'] = {};
+            const keptKnots: KickstandState['knots'] = {};
+            for (const [id, ks] of Object.entries(kickstandState.kickstands)) {
+                if (drops.has(id)) continue;
+                keptKickstands[id] = ks;
+                const root = kickstandState.roots[ks.rootId];
+                if (root) keptRoots[root.id] = root;
+                const knot = kickstandState.knots[ks.hostKnotId];
+                if (knot) keptKnots[knot.id] = knot;
+            }
+            kickstandState = { ...kickstandState, kickstands: keptKickstands, roots: keptRoots, knots: keptKnots };
+
+            // Drop braces + knots attached to the removed kickstands.
+            for (const [bId, brace] of Object.entries(generatedBraces)) {
+                const sk = generatedKnots[brace.startKnotId];
+                const ek = generatedKnots[brace.endKnotId];
+                const touchesDropped = (sk && droppedSegmentIds.has(sk.parentShaftId))
+                    || (ek && droppedSegmentIds.has(ek.parentShaftId));
+                if (touchesDropped) {
+                    delete generatedBraces[bId];
+                    if (sk) delete generatedKnots[brace.startKnotId];
+                    if (ek) delete generatedKnots[brace.endKnotId];
+                }
+            }
+        }
     }
 
     nextSnapshot.knots = { ...nextSnapshot.knots, ...generatedKnots };
@@ -930,6 +1002,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
 
     return {
         snapshot: nextSnapshot,
+        kickstand: kickstandState,
         generatedBraceCount,
         removedBraceCount,
         skippedSupportCount: trunkSamples.length - groupedIds.size,
@@ -942,23 +1015,22 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
 
 export function runAutoBracing(): AutoBraceResult {
     const before = structuredClone(getSnapshot());
-    // buildAutoBracedSnapshot mutates the kickstand store (strips/regenerates
-    // auto-generated kickstands), so both sides must be captured for undo/redo.
     const kickstandBefore = structuredClone(getKickstandSnapshot());
-    const built = buildAutoBracedSnapshot(before, getSettings().autoBracing);
+    const built = buildAutoBracedSnapshot(before, getSettings().autoBracing, kickstandBefore);
     if (!built.changed) return built;
 
     setSnapshot(built.snapshot);
+    setKickstandSnapshot(built.kickstand);
     pushSupportHistory({
         type: SUPPORT_AUTO_BRACE_REPLACE,
         payload: {
             before,
             after: built.snapshot,
             kickstandBefore,
-            kickstandAfter: structuredClone(getKickstandSnapshot()),
+            kickstandAfter: structuredClone(built.kickstand),
         },
     });
     return built;
 }
 
-type BuildSnapshotResult = AutoBraceResult & { snapshot: SupportState };
+type BuildSnapshotResult = AutoBraceResult & { snapshot: SupportState; kickstand: KickstandState };

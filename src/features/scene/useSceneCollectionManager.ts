@@ -4,25 +4,25 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { loadMeshGeometry, load3mfGeometryMergedWithSplitData, processGeometry, type GeometryWithBounds, type ProcessGeometryOptions } from '@/hooks/useStlGeometry';
 import type { MeshHealthReport, MeshAnalysisJson } from '@/utils/meshRepair';
 import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
-import { isVoxlBinaryV2, parseVoxlBinaryV2, parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
+import { isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, parseVoxlDocument, readSidecarFileBytes, resolveOriginalRefSidecar, type VoxlDocumentV1, type VoxlMeshRef, type PrecompressedChunk } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
 import { getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
-import type { SelectionHighlightMode } from '@/components/selection';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { createTypedHistory } from '@/history/typedHistory';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import type { DragonfruitImportFormat, SupportMode, SupportState } from '@/supports/types';
-import { GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS } from '@/features/plugins/generatedBuiltinComplexPlugins';
+import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 import { getBuiltinComplexPluginFileTypeHandlers } from '@/features/plugins/builtinComplexPluginFileTypeHandlers';
 import type { PluginFileTypeDefinition } from '@/features/plugins/complexPluginContracts';
 import type { PluginFileTypeHandler } from '@/features/plugins/pluginFileTypeBridge';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
-import { generateUuid } from '@/utils/uuid';
+import { v4 as uuidv4 } from 'uuid';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
 import { getKickstandSnapshot, setKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import type { KickstandState } from '@/supports/SupportTypes/Kickstand/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
+import { getSavedThemeCustomColors } from '@/components/settings/themeCustomizations';
 import {
   DEFAULT_VIEW3D_SETTINGS,
   getSavedView3DSettings,
@@ -43,6 +43,12 @@ import {
   storeModelMeshModifiers,
 } from '@/features/mesh-modifiers/meshModifierStore';
 import { splitClassifiedSupportGeometry } from '@/features/scene/splitClassifiedSupports';
+import {
+  applyModelGrouping,
+  applyModelGroupUngrouping,
+  applyModelUngrouping,
+} from '@/features/scene/modelGroupingHistory';
+import { performModelCut, selectModelsForClipboard } from '@/features/scene/modelCut';
 
 type PersistedMeshAppearance = {
   v: 1;
@@ -55,15 +61,14 @@ type PersistedMeshAppearance = {
   materialRoughness: number;
   wireframeThicknessPx: number;
   xrayOpacity: number;
-  heatmapBlend: number;
-  heatmapContrast: number;
+  heatmapMinAngle: number;
+  heatmapMaxAngle: number;
   heatmapColors: string[];
   meshColor: string;
   selectionColor: string;
   hoverColor: string;
   hoverTintStrength: number;
   selectedTintStrength: number;
-  selectionHighlightMode: SelectionHighlightMode;
 };
 
 const MESH_APPEARANCE_STORAGE_KEY = 'mesh-appearance-settings';
@@ -74,18 +79,33 @@ const DEFAULT_DIRECTIONAL_INTENSITY = 0.8;
 const DEFAULT_MATERIAL_ROUGHNESS = 0.65;
 const DEFAULT_WIREFRAME_THICKNESS_PX = 1.5;
 const DEFAULT_XRAY_OPACITY = 0.25;
-const DEFAULT_HEATMAP_BLEND = 0.85;
-const DEFAULT_HEATMAP_CONTRAST = 1.0;
+const DEFAULT_HEATMAP_MIN_ANGLE = 0;
+const DEFAULT_HEATMAP_MAX_ANGLE = 45;
 export const DEFAULT_HEATMAP_COLORS = ['#E55959', '#E5A559', '#D9D959', '#73D973', '#666666'];
 const DEFAULT_SHADER_TYPE: MeshShaderType = 'soft_clay';
 const DEFAULT_MATCAP_VARIANT: MatcapVariant = 'neutral';
 const DEFAULT_FLAT_USE_VERTEX_COLORS = true;
 const DEFAULT_TOON_STEPS = 5;
-const DEFAULT_SELECTION_COLOR = '#ec2a77';
-const DEFAULT_HOVER_COLOR = '#ec2a77';
-const DEFAULT_HOVER_TINT_STRENGTH = 0.5;
-const DEFAULT_SELECTED_TINT_STRENGTH = 0.75;
-const DEFAULT_SELECTION_HIGHLIGHT_MODE: SelectionHighlightMode = 'tint';
+export const DEFAULT_SELECTION_COLOR = '#ec2a77';
+export const DEFAULT_HOVER_COLOR = '#ec2a77';
+export function getThemedDefaultSelectionColor(): string {
+  try {
+    if (typeof window === 'undefined') return DEFAULT_SELECTION_COLOR;
+    const c = getSavedThemeCustomColors()?.accent;
+    if (typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c)) return c.toLowerCase();
+  } catch {}
+  return DEFAULT_SELECTION_COLOR;
+}
+export function getThemedDefaultHoverColor(): string {
+  try {
+    if (typeof window === 'undefined') return DEFAULT_HOVER_COLOR;
+    const c = getSavedThemeCustomColors()?.accent;
+    if (typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c)) return c.toLowerCase();
+  } catch {}
+  return DEFAULT_HOVER_COLOR;
+}
+export const DEFAULT_HOVER_TINT_STRENGTH = 0.5;
+export const DEFAULT_SELECTED_TINT_STRENGTH = 0.75;
 const RECENT_OPENED_FILES_STORAGE_KEY = 'app-recent-opened-files';
 const RECENT_OPENED_FILES_LIMIT = 10;
 const RECENT_FILES_DB_NAME = 'dragonfruit-recent-files';
@@ -278,21 +298,39 @@ function estimateGeometryBytes(geometry: THREE.BufferGeometry): number {
   return total;
 }
 
-// Deliberately not deduplicated across snapshots/models: many pairs will
-// reference the same unchanged geometry, so this over-counts rather than
-// under-counts. That's the right direction for a safety cap -- it can only
-// make eviction more eager than strictly necessary, never less.
+// Counts each distinct BufferGeometry ONCE, because that is what the process
+// actually holds: cloneLoadedModel is a shallow clone, so every snapshot that
+// didn't change the mesh shares the same geometry object. A move stores two
+// snapshots and allocates no mesh memory at all.
+//
+// Counting per snapshot instead treated that shared mesh as a fresh allocation
+// each time, so the budget was exhausted after a handful of moves and eviction
+// threw away undo entries that cost nothing -- their scene snapshots went with
+// them, and undoing those actions was silently declined and discarded. Only
+// geometry a step genuinely creates (a cut, a hollow) adds to the total now.
 function estimateSceneSnapshotRegistryBytes(): number {
+  const counted = new Set<THREE.BufferGeometry>();
   let total = 0;
+  const add = (model: LoadedModel) => {
+    const geometry = model.geometry.geometry;
+    if (counted.has(geometry)) return;
+    counted.add(geometry);
+    total += estimateGeometryBytes(geometry);
+  };
   for (const pair of sceneSnapshotRegistry.values()) {
-    for (const model of pair.before.models) {
-      total += estimateGeometryBytes(model.geometry.geometry);
-    }
-    for (const model of pair.after.models) {
-      total += estimateGeometryBytes(model.geometry.geometry);
-    }
+    pair.before.models.forEach(add);
+    pair.after.models.forEach(add);
   }
   return total;
+}
+
+/**
+ * The registry's geometry total, for the history debug panel. Same dedup rule as
+ * the eviction budget above, so the panel reports the memory that is actually
+ * held rather than a per-snapshot sum that counts one shared mesh many times.
+ */
+export function getSceneSnapshotRegistryBytes(): number {
+  return estimateSceneSnapshotRegistryBytes();
 }
 
 function storeSceneSnapshotPair(pair: SceneSnapshotPair): string {
@@ -399,17 +437,14 @@ function readMeshAppearanceFromLocalStorage(): PersistedMeshAppearance | null {
       materialRoughness: clampNumber(parsed.materialRoughness, 0, 1, DEFAULT_MATERIAL_ROUGHNESS),
       wireframeThicknessPx: clampNumber(parsed.wireframeThicknessPx, 0.5, 6, DEFAULT_WIREFRAME_THICKNESS_PX),
       xrayOpacity: clampNumber(parsed.xrayOpacity, 0.02, 0.85, DEFAULT_XRAY_OPACITY),
-      heatmapBlend: clampNumber(parsed.heatmapBlend, 0, 1, DEFAULT_HEATMAP_BLEND),
-      heatmapContrast: clampNumber(parsed.heatmapContrast, 0.1, 5, DEFAULT_HEATMAP_CONTRAST),
+      heatmapMinAngle: clampNumber(parsed.heatmapMinAngle, 0, 90, DEFAULT_HEATMAP_MIN_ANGLE),
+      heatmapMaxAngle: clampNumber(parsed.heatmapMaxAngle, 0, 90, DEFAULT_HEATMAP_MAX_ANGLE),
       heatmapColors: Array.isArray(parsed.heatmapColors) && parsed.heatmapColors.length === 5 ? parsed.heatmapColors : DEFAULT_HEATMAP_COLORS,
       meshColor: clampHexColor(parsed.meshColor, DEFAULT_MESH_COLOR),
-      selectionColor: clampHexColor(parsed.selectionColor, DEFAULT_SELECTION_COLOR),
-      hoverColor: clampHexColor(parsed.hoverColor, DEFAULT_HOVER_COLOR),
+      selectionColor: clampHexColor(parsed.selectionColor, getThemedDefaultSelectionColor()),
+      hoverColor: clampHexColor(parsed.hoverColor, getThemedDefaultHoverColor()),
       hoverTintStrength: clampNumber(parsed.hoverTintStrength, 0, 1, DEFAULT_HOVER_TINT_STRENGTH),
       selectedTintStrength: clampNumber(parsed.selectedTintStrength, 0, 1, DEFAULT_SELECTED_TINT_STRENGTH),
-      selectionHighlightMode: parsed.selectionHighlightMode === 'spotlight' || parsed.selectionHighlightMode === 'fresnel' || parsed.selectionHighlightMode === 'none' || parsed.selectionHighlightMode === 'tint' || parsed.selectionHighlightMode === 'mesh_tint'
-        ? parsed.selectionHighlightMode
-        : DEFAULT_SELECTION_HIGHLIGHT_MODE,
     };
   } catch {
     return null;
@@ -589,10 +624,6 @@ function writeRecentOpenedFilesToLocalStorage(entries: RecentOpenedFileEntry[]):
   } catch {
     // ignore
   }
-}
-
-function generateRecentEntryId(): string {
-  return generateUuid();
 }
 
 function decodeBase64ToUint8Array(base64: string): Uint8Array {
@@ -876,6 +907,8 @@ export interface LoadedModel {
   fileUrl: string;
   /** Original on-disk mesh retained when `geometry` is a reduced native preview. */
   sourcePath?: string | null;
+  /** Original mesh sidecar reference when not embedded in ORIG chunk. */
+  originalRef?: VoxlMeshRef;
   fileSizeBytes?: number;
   geometry: GeometryWithBounds;
   transform: ModelTransform;
@@ -889,6 +922,8 @@ export interface LoadedModel {
   meshModifiers?: ModelMeshModifiers;
   ignoreAutoLift?: boolean;
   manualZMoveOverride?: boolean;
+  isSupportGeometry?: boolean;
+  linkGroupId?: string;
 }
 
 type DebugPrimitiveType =
@@ -982,7 +1017,88 @@ type ModelClipboardEntry = {
   polygonCount: number;
   meshModifiers?: ModelMeshModifiers;
   supportClipboard: SupportClipboardPayload | null;
+  isSupportGeometry?: boolean;
+  linkGroupId?: string;
 };
+
+// ---------------------------------------------------------------------------
+// COW chunk-store hooks (Ph0.1 sub-phase C2 / C3)
+// ---------------------------------------------------------------------------
+
+/**
+ * `ExportManager` is loaded lazily here. It is a heavy module that pulls in the
+ * STL exporter, the support stores and the raft geometry generators, and this
+ * file is on the app's critical path — a static import would drag all of it into
+ * the initial scene bundle for work that is, by construction, deferrable.
+ */
+async function exportManager() {
+  const { ExportManager } = await import('@/features/export/logic/ExportManager');
+  return ExportManager;
+}
+
+const scheduleIdleTask = (task: () => void, timeout = 500): void => {
+  if (typeof window !== 'undefined' && typeof (window as unknown as {
+    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void;
+  }).requestIdleCallback === 'function') {
+    (window as unknown as {
+      requestIdleCallback: (cb: () => void, opts?: { timeout: number }) => void;
+    }).requestIdleCallback(task, { timeout });
+    return;
+  }
+  setTimeout(task, 0);
+};
+
+/**
+ * Bakes one model's mesh chunk after a finalized geometry mutation.
+ *
+ * Idle-scheduled so React commits the new geometry to the screen first: the bake
+ * is an encode + SHA + zlib-6 over the whole mesh, and the user is looking at
+ * the result of the operation that produced it.
+ *
+ * Failures are logged, never thrown. The geometry SIGNATURE is the authority, so
+ * a bake that does not land costs the next autosave tick one lazy re-bake — it
+ * can never cause a stale write.
+ */
+function scheduleModelChunkBake(model: LoadedModel | undefined): void {
+  if (!model) return;
+  scheduleIdleTask(() => {
+    void exportManager()
+      .then((manager) => manager.bakeModelGeometryChunk(model))
+      .catch((error) => {
+        console.warn('[SceneCollection] Mesh chunk bake failed; the next autosave will bake lazily.', error);
+      });
+  });
+}
+
+/**
+ * Coalesced sweep over the whole scene: bakes anything not yet in the store and
+ * releases anything that has left it.
+ *
+ * This is deliberately a sweep rather than a hook per entry point. Models arrive
+ * from import, both split paths, paste, undo/redo and autosave recovery, and a
+ * per-path hook set would need every one of those — and every future one — to
+ * remember. The sweep is derived from the model list itself, which is the same
+ * reasoning that made the geometry signature preferable to a dirty flag.
+ */
+let chunkStoreSweepPending = false;
+function scheduleChunkStoreSweep(getModels: () => LoadedModel[]): void {
+  if (chunkStoreSweepPending) return;
+  chunkStoreSweepPending = true;
+  scheduleIdleTask(() => {
+    chunkStoreSweepPending = false;
+    const models = getModels();
+    void exportManager()
+      .then(async (manager) => {
+        manager.retainModelChunks(models.map((m) => m.id));
+        for (const model of models) {
+          await manager.bakeModelGeometryChunk(model);
+        }
+      })
+      .catch((error) => {
+        console.warn('[SceneCollection] Mesh chunk sweep failed; the next autosave will bake lazily.', error);
+      });
+  }, 1_500);
+}
 
 export function useSceneCollectionManager() {
   type ScenePluginImportEntry = {
@@ -1002,7 +1118,7 @@ export function useSceneCollectionManager() {
   const getSceneExtension = useCallback((name: string): string | null => {
     const normalized = name.trim().toLowerCase();
     if (normalized.endsWith('.voxl')) return '.voxl';
-    for (const def of GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS) {
+    for (const def of getBuiltinComplexPluginDefinitions()) {
       for (const ft of def.fileTypes ?? []) {
         if (ft.isSceneFile && normalized.endsWith(ft.fileExtension)) {
           return ft.fileExtension;
@@ -1019,7 +1135,7 @@ export function useSceneCollectionManager() {
 
     const out = new Map<string, ScenePluginImportEntry>();
 
-    for (const definition of GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS) {
+    for (const definition of getBuiltinComplexPluginDefinitions()) {
       for (const fileType of definition.fileTypes ?? []) {
         if (!fileType.isSceneFile) continue;
 
@@ -1051,9 +1167,23 @@ export function useSceneCollectionManager() {
   const modelsRef = useRef<LoadedModel[]>([]);
   const activeModelIdRef = useRef<string | null>(null);
   const selectedModelIdsRef = useRef<string[]>([]);
+  // Whether the most recently loaded .voxl was the chunked 2.2 layout. Read by
+  // the import/export manager right after a load to seed the scene's save-format
+  // so autosave preserves an old file's format without ever downgrading a 2.2
+  // one. Defaults to true (newest) for non-voxl / fresh scenes.
+  const lastLoadedVoxlFormatChunkedRef = useRef<boolean>(true);
   modelsRef.current = models;
   activeModelIdRef.current = activeModelId;
   selectedModelIdsRef.current = selectedModelIds;
+
+  // Keep the COW chunk store in step with the scene (Ph0.1 sub-phase C).
+  // Coalesced and idle-scheduled, so a burst of imports or an Auto-Arrange
+  // sweeps once. See `scheduleChunkStoreSweep` for why this is a sweep rather
+  // than a hook on every model-producing path.
+  useEffect(() => {
+    if (models.length === 0) return;
+    scheduleChunkStoreSweep(() => modelsRef.current);
+  }, [models]);
   const [modelClipboard, setModelClipboard] = useState<ModelClipboardEntry[]>([]);
   const [recentOpenedFiles, setRecentOpenedFiles] = useState<RecentOpenedFileEntry[]>([]);
   const [importProgress, setImportProgress] = useState<ImportProgressState>({
@@ -1345,7 +1475,7 @@ export function useSceneCollectionManager() {
     const heightOffset = geom.center.z - geom.bbox.min.z;
     const initialZ = heightOffset;
 
-    const id = generateId();
+    const id = uuidv4();
     const model: LoadedModel = {
       id,
       name: `[Debug] ${typeLabelMap[type]}`,
@@ -1394,12 +1524,12 @@ export function useSceneCollectionManager() {
   const [toonSteps, setToonSteps] = useState<number>(DEFAULT_TOON_STEPS);
   const [wireframeThicknessPx, setWireframeThicknessPx] = useState<number>(DEFAULT_WIREFRAME_THICKNESS_PX);
   const [xrayOpacity, setXrayOpacity] = useState<number>(DEFAULT_XRAY_OPACITY);
-  const [heatmapBlend, setHeatmapBlend] = useState<number>(DEFAULT_HEATMAP_BLEND);
-  const [heatmapContrast, setHeatmapContrast] = useState<number>(DEFAULT_HEATMAP_CONTRAST);
+  const [heatmapMinAngle, setHeatmapMinAngle] = useState<number>(DEFAULT_HEATMAP_MIN_ANGLE);
+  const [heatmapMaxAngle, setHeatmapMaxAngle] = useState<number>(DEFAULT_HEATMAP_MAX_ANGLE);
   const [heatmapColors, setHeatmapColors] = useState<string[]>(DEFAULT_HEATMAP_COLORS);
   const [preferredMeshColor, setPreferredMeshColor] = useState<string>(DEFAULT_MESH_COLOR);
-  const [selectionColor, setSelectionColor] = useState<string>(DEFAULT_SELECTION_COLOR);
-  const [hoverColor, setHoverColor] = useState<string>(DEFAULT_HOVER_COLOR);
+  const [selectionColor, setSelectionColor] = useState<string>(() => getThemedDefaultSelectionColor());
+  const [hoverColor, setHoverColor] = useState<string>(() => getThemedDefaultHoverColor());
   const [hoverTintStrength, setHoverTintStrength] = useState<number>(DEFAULT_HOVER_TINT_STRENGTH);
   const [selectedTintStrength, setSelectedTintStrength] = useState<number>(DEFAULT_SELECTED_TINT_STRENGTH);
   const [storedView3dSettings, setView3dSettingsState] = useState<View3DSettings>(() => DEFAULT_VIEW3D_SETTINGS);
@@ -1440,20 +1570,48 @@ export function useSceneCollectionManager() {
       setMaterialRoughness(persistedAppearance.materialRoughness);
       setWireframeThicknessPx(persistedAppearance.wireframeThicknessPx);
       setXrayOpacity(persistedAppearance.xrayOpacity);
-      setHeatmapBlend(persistedAppearance.heatmapBlend ?? DEFAULT_HEATMAP_BLEND);
-      setHeatmapContrast(persistedAppearance.heatmapContrast ?? DEFAULT_HEATMAP_CONTRAST);
+      setHeatmapMinAngle(persistedAppearance.heatmapMinAngle ?? DEFAULT_HEATMAP_MIN_ANGLE);
+      setHeatmapMaxAngle(persistedAppearance.heatmapMaxAngle ?? DEFAULT_HEATMAP_MAX_ANGLE);
       setHeatmapColors(persistedAppearance.heatmapColors ?? DEFAULT_HEATMAP_COLORS);
       setPreferredMeshColor(persistedAppearance.meshColor);
-      setSelectionColor(persistedAppearance.selectionColor ?? DEFAULT_SELECTION_COLOR);
-      setHoverColor(persistedAppearance.hoverColor ?? DEFAULT_HOVER_COLOR);
+      setSelectionColor(persistedAppearance.selectionColor ?? getThemedDefaultSelectionColor());
+      setHoverColor(persistedAppearance.hoverColor ?? getThemedDefaultHoverColor());
       setHoverTintStrength(persistedAppearance.hoverTintStrength);
       setSelectedTintStrength(persistedAppearance.selectedTintStrength);
-      setSelectionHighlightMode(persistedAppearance.selectionHighlightMode ?? DEFAULT_SELECTION_HIGHLIGHT_MODE);
     }
 
     setRecentOpenedFiles(readRecentOpenedFilesFromLocalStorage());
     setView3dSettingsState(getSavedView3DSettings());
   }, []);
+
+  useEffect(() => {
+    const prev = readMeshAppearanceFromLocalStorage();
+    if (!prev) {
+      writeMeshAppearanceToLocalStorage({
+        v: 1,
+        shaderType,
+        matcapVariant,
+        flatUseVertexColors,
+        toonSteps,
+        ambientIntensity,
+        directionalIntensity,
+        materialRoughness,
+        wireframeThicknessPx,
+        xrayOpacity,
+        heatmapMinAngle,
+        heatmapMaxAngle,
+        heatmapColors,
+        meshColor: preferredMeshColor,
+        hoverTintStrength,
+        selectedTintStrength,
+        selectionColor,
+        hoverColor,
+      });
+      return;
+    }
+    if (prev.selectionColor === selectionColor && prev.hoverColor === hoverColor) return;
+    writeMeshAppearanceToLocalStorage({ ...prev, selectionColor, hoverColor });
+  }, [selectionColor, hoverColor]);
 
   const setView3dSettings = useCallback((next: View3DSettings) => {
     const normalized = normalizeView3DSettings(next);
@@ -1463,7 +1621,6 @@ export function useSceneCollectionManager() {
 
   // Global application mode
   const [mode, setMode] = useState<SupportMode>('prepare');
-  const [selectionHighlightMode, setSelectionHighlightMode] = useState<SelectionHighlightMode>(DEFAULT_SELECTION_HIGHLIGHT_MODE);
 
   const defaultImportCenterXY = useMemo(() => {
     if (view3dSettings.originMode === 'front_left') {
@@ -1740,9 +1897,6 @@ export function useSceneCollectionManager() {
     });
   }, []);
 
-  // Helper to generate IDs
-  const generateId = () => generateUuid();
-
   const cloneGeometryWithBounds = useCallback((source: GeometryWithBounds, options?: { accelerate?: boolean; shared?: boolean }): GeometryWithBounds => {
     if (options?.shared) {
       const sharedSourceKey = String(source.geometry.userData?.resinVolumeSourceKey ?? source.geometry.uuid);
@@ -1957,7 +2111,7 @@ export function useSceneCollectionManager() {
 
         const matches = next.filter(isMatchingEntry);
 
-        const existingId = matches.length > 0 ? matches[matches.length - 1].id : generateRecentEntryId();
+        const existingId = matches.length > 0 ? matches[matches.length - 1].id : uuidv4();
         const duplicateIds = matches.slice(0, -1).map((entry) => entry.id);
 
         if (matches.length > 0) {
@@ -2204,7 +2358,7 @@ export function useSceneCollectionManager() {
             const initialZ = autoLift ? heightOffset + liftDistance : heightOffset;
 
             const model: LoadedModel = {
-              id: generateId(),
+              id: uuidv4(),
               name: file.name,
               fileUrl: url,
               fileSizeBytes: file.size,
@@ -2246,7 +2400,7 @@ export function useSceneCollectionManager() {
             const initialZ = autoLift ? heightOffset + liftDistance : heightOffset;
 
             const model: LoadedModel = {
-              id: generateId(),
+              id: uuidv4(),
               name: file.name,
               fileUrl: url,
               fileSizeBytes: file.size,
@@ -2383,6 +2537,9 @@ export function useSceneCollectionManager() {
       };
     }
 
+    let supportsChanged = false;
+    let kickstandsChanged = false;
+
     let transformCommit = {
       supportsChanged: false,
       kickstandsChanged: false,
@@ -2394,14 +2551,52 @@ export function useSceneCollectionManager() {
       transformCommit = transformSupportsForModel(id, beforeTransform, transform);
     }
 
-    setModels(prev => prev.map(m =>
-      m.id === id ? { ...m, transform } : m
-    ));
+    supportsChanged = supportsChanged || transformCommit.supportsChanged;
+    kickstandsChanged = kickstandsChanged || transformCommit.kickstandsChanged;
+
+    const updateMap = new Map<string, ModelTransform>();
+    updateMap.set(id, transform);
+
+    if (currentModel.linkGroupId) {
+      const linkGroupId = currentModel.linkGroupId;
+      const deltaPos = transform.position.clone().sub(beforeTransform.position);
+      const deltaRotX = transform.rotation.x - beforeTransform.rotation.x;
+      const deltaRotY = transform.rotation.y - beforeTransform.rotation.y;
+      const deltaRotZ = transform.rotation.z - beforeTransform.rotation.z;
+      const deltaScale = transform.scale.clone().sub(beforeTransform.scale);
+
+      const peerModels = modelsRef.current.filter((m) => m.linkGroupId === linkGroupId && m.id !== id);
+      for (const peer of peerModels) {
+        const peerBefore = peer.transform;
+        const peerNextPos = peerBefore.position.clone().add(deltaPos);
+        const peerNextRot = eulerFromGlobalEuler({
+          x: peerBefore.rotation.x + deltaRotX,
+          y: peerBefore.rotation.y + deltaRotY,
+          z: peerBefore.rotation.z + deltaRotZ,
+        });
+        const peerNextScale = peerBefore.scale.clone().add(deltaScale);
+        const peerNextTransform: ModelTransform = {
+          position: peerNextPos,
+          rotation: peerNextRot,
+          scale: peerNextScale,
+        };
+        updateMap.set(peer.id, peerNextTransform);
+
+        const peerCommit = transformSupportsForModel(peer.id, peerBefore, peerNextTransform);
+        supportsChanged = supportsChanged || peerCommit.supportsChanged;
+        kickstandsChanged = kickstandsChanged || peerCommit.kickstandsChanged;
+      }
+    }
+
+    setModels(prev => prev.map(m => {
+      const nextTransform = updateMap.get(m.id);
+      return nextTransform ? { ...m, transform: nextTransform } : m;
+    }));
 
     return {
       updated: true,
-      supportsChanged: transformCommit.supportsChanged,
-      kickstandsChanged: transformCommit.kickstandsChanged,
+      supportsChanged,
+      kickstandsChanged,
     };
   }, []);
 
@@ -2418,20 +2613,42 @@ export function useSceneCollectionManager() {
     const currentActiveModelId = activeModelIdRef.current;
     const currentSelectedModelIds = selectedModelIdsRef.current;
 
-    const modelExists = currentModels.some((m) => m.id === id);
-    if (!modelExists) return false;
+    const targetModel = currentModels.find((m) => m.id === id);
+    if (!targetModel) return false;
 
-    const beforeModels = currentModels.map((m) => (
-      m.id === id
-        ? { ...m, transform: cloneTransform(beforeTransform) }
-        : m
-    ));
+    const linkGroupId = targetModel.linkGroupId;
+    const deltaPos = afterTransform.position.clone().sub(beforeTransform.position);
+    const deltaRotX = afterTransform.rotation.x - beforeTransform.rotation.x;
+    const deltaRotY = afterTransform.rotation.y - beforeTransform.rotation.y;
+    const deltaRotZ = afterTransform.rotation.z - beforeTransform.rotation.z;
+    const deltaScale = afterTransform.scale.clone().sub(beforeTransform.scale);
 
-    const afterModels = currentModels.map((m) => (
-      m.id === id
-        ? { ...m, transform: cloneTransform(afterTransform) }
-        : m
-    ));
+    const beforeModels = currentModels.map((m) => {
+      if (m.id === id) {
+        return { ...m, transform: cloneTransform(beforeTransform) };
+      }
+      if (linkGroupId && m.linkGroupId === linkGroupId) {
+        const peerBeforePos = m.transform.position.clone().sub(deltaPos);
+        const peerBeforeRot = eulerFromGlobalEuler({
+          x: m.transform.rotation.x - deltaRotX,
+          y: m.transform.rotation.y - deltaRotY,
+          z: m.transform.rotation.z - deltaRotZ,
+        });
+        const peerBeforeScale = m.transform.scale.clone().sub(deltaScale);
+        return {
+          ...m,
+          transform: { position: peerBeforePos, rotation: peerBeforeRot, scale: peerBeforeScale },
+        };
+      }
+      return m;
+    });
+
+    const afterModels = currentModels.map((m) => {
+      if (m.id === id) {
+        return { ...m, transform: cloneTransform(afterTransform) };
+      }
+      return m;
+    });
 
     const includeSupportByOption = supportSnapshotOptions?.includeSupportState === true
       || !!supportSnapshotOptions?.supportBefore
@@ -2457,12 +2674,64 @@ export function useSceneCollectionManager() {
       supportStateOverride: supportSnapshotOptions?.supportAfter,
       kickstandStateOverride: supportSnapshotOptions?.kickstandAfter,
     });
-    const targetModelName = currentModels.find((m) => m.id === id)?.name ?? id;
+    const targetModelName = targetModel.name ?? id;
     pushSceneSnapshotHistory(before, after, description ?? `Transform Model ${targetModelName}`);
     return true;
   }, [pushSceneSnapshotHistory]);
 
-  const updateModelTransforms = useCallback((updates: Array<{ id: string; transform: ModelTransform }>) => {
+  const commitModelTransformsHistory = useCallback((
+    beforeTransforms: Array<{ id: string; transform: ModelTransform }>,
+    description?: string,
+    supportSnapshotOptions?: TransformHistorySupportSnapshotOptions,
+  ) => {
+    const currentModels = modelsRef.current;
+    const currentActiveModelId = activeModelIdRef.current;
+    const currentSelectedModelIds = selectedModelIdsRef.current;
+    const beforeTransformMap = new Map(beforeTransforms.map((entry) => [entry.id, entry.transform]));
+    const changedIds = currentModels
+      .filter((model) => {
+        const beforeTransform = beforeTransformMap.get(model.id);
+        return beforeTransform && !transformsEqual(beforeTransform, model.transform);
+      })
+      .map((model) => model.id);
+    if (changedIds.length === 0) return false;
+
+    const beforeModels = currentModels.map((model) => {
+      const beforeTransform = beforeTransformMap.get(model.id);
+      return beforeTransform
+        ? { ...model, transform: cloneTransform(beforeTransform) }
+        : model;
+    });
+    const includeSupportByOption = supportSnapshotOptions?.includeSupportState === true
+      || !!supportSnapshotOptions?.supportBefore
+      || !!supportSnapshotOptions?.supportAfter
+      || !!supportSnapshotOptions?.kickstandBefore
+      || !!supportSnapshotOptions?.kickstandAfter;
+    const supportStateNow = getSnapshot();
+    const kickstandStateNow = getKickstandSnapshot();
+    const includeSupportByState = changedIds.some((id) => (
+      hasSupportsOrKickstandsForModel(id, supportStateNow, kickstandStateNow)
+    ));
+    const includeSupportHistory = includeSupportByOption || includeSupportByState;
+
+    const before = captureSceneSnapshot(beforeModels, currentActiveModelId, currentSelectedModelIds, {
+      includeSupportState: includeSupportHistory,
+      supportStateOverride: supportSnapshotOptions?.supportBefore,
+      kickstandStateOverride: supportSnapshotOptions?.kickstandBefore,
+    });
+    const after = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, {
+      includeSupportState: includeSupportHistory,
+      supportStateOverride: supportSnapshotOptions?.supportAfter,
+      kickstandStateOverride: supportSnapshotOptions?.kickstandAfter,
+    });
+    pushSceneSnapshotHistory(before, after, description ?? 'Update Model Transforms');
+    return true;
+  }, [pushSceneSnapshotHistory]);
+
+  const updateModelTransforms = useCallback((
+    updates: Array<{ id: string; transform: ModelTransform }>,
+    options?: { pushHistory?: boolean },
+  ) => {
     if (updates.length === 0) {
       return {
         updated: false,
@@ -2475,27 +2744,63 @@ export function useSceneCollectionManager() {
     const currentActiveModelId = activeModelIdRef.current;
     const currentSelectedModelIds = selectedModelIdsRef.current;
 
-    const supportStateBefore = getSnapshot();
-    const kickstandStateBefore = getKickstandSnapshot();
-    const includeSupportHistory = updates.some((entry) => hasSupportsOrKickstandsForModel(entry.id, supportStateBefore, kickstandStateBefore));
+    const updateMap = new Map<string, ModelTransform>();
+    updates.forEach((entry) => updateMap.set(entry.id, entry.transform));
 
-    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, {
-      includeSupportState: includeSupportHistory,
-      supportStateOverride: includeSupportHistory ? supportStateBefore : undefined,
-      kickstandStateOverride: includeSupportHistory ? kickstandStateBefore : undefined,
+    updates.forEach((entry) => {
+      const model = currentModels.find((m) => m.id === entry.id);
+      if (model?.linkGroupId) {
+        const beforeTransform = model.transform;
+        const transform = entry.transform;
+        const deltaPos = transform.position.clone().sub(beforeTransform.position);
+        const deltaRotX = transform.rotation.x - beforeTransform.rotation.x;
+        const deltaRotY = transform.rotation.y - beforeTransform.rotation.y;
+        const deltaRotZ = transform.rotation.z - beforeTransform.rotation.z;
+        const deltaScale = transform.scale.clone().sub(beforeTransform.scale);
+
+        const peers = currentModels.filter((m) => m.linkGroupId === model.linkGroupId && m.id !== entry.id);
+        for (const peer of peers) {
+          if (!updateMap.has(peer.id)) {
+            const peerBefore = peer.transform;
+            const peerNextPos = peerBefore.position.clone().add(deltaPos);
+            const peerNextRot = eulerFromGlobalEuler({
+              x: peerBefore.rotation.x + deltaRotX,
+              y: peerBefore.rotation.y + deltaRotY,
+              z: peerBefore.rotation.z + deltaRotZ,
+            });
+            const peerNextScale = peerBefore.scale.clone().add(deltaScale);
+            updateMap.set(peer.id, {
+              position: peerNextPos,
+              rotation: peerNextRot,
+              scale: peerNextScale,
+            });
+          }
+        }
+      }
     });
 
-    const updateMap = new Map<string, ModelTransform>();
+    const supportStateBefore = getSnapshot();
+    const kickstandStateBefore = getKickstandSnapshot();
+    const allUpdatedIds = Array.from(updateMap.keys());
+    const includeSupportHistory = allUpdatedIds.some((id) => hasSupportsOrKickstandsForModel(id, supportStateBefore, kickstandStateBefore));
+
+    const shouldPushHistory = options?.pushHistory !== false;
+    const before = shouldPushHistory
+      ? captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, {
+          includeSupportState: includeSupportHistory,
+          supportStateOverride: includeSupportHistory ? supportStateBefore : undefined,
+          kickstandStateOverride: includeSupportHistory ? kickstandStateBefore : undefined,
+        })
+      : null;
+
     let supportsChanged = false;
     let kickstandsChanged = false;
     let updated = false;
-    updates.forEach((entry) => {
-      updateMap.set(entry.id, entry.transform);
-
-      const currentModel = currentModels.find((model) => model.id === entry.id);
+    updateMap.forEach((nextTransform, id) => {
+      const currentModel = currentModels.find((model) => model.id === id);
       if (!currentModel) return;
-      if (transformsEqual(currentModel.transform, entry.transform)) return;
-      const commit = transformSupportsForModel(entry.id, currentModel.transform, entry.transform);
+      if (transformsEqual(currentModel.transform, nextTransform)) return;
+      const commit = transformSupportsForModel(id, currentModel.transform, nextTransform);
       supportsChanged = supportsChanged || commit.supportsChanged;
       kickstandsChanged = kickstandsChanged || commit.kickstandsChanged;
       updated = true;
@@ -2514,16 +2819,19 @@ export function useSceneCollectionManager() {
       return nextTransform ? { ...m, transform: nextTransform } : m;
     });
 
+    if (!shouldPushHistory) modelsRef.current = nextModels;
     setModels(nextModels);
 
-    const supportStateAfter = includeSupportHistory ? getSnapshot() : undefined;
-    const kickstandStateAfter = includeSupportHistory ? getKickstandSnapshot() : undefined;
-    const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds, {
-      includeSupportState: includeSupportHistory,
-      supportStateOverride: supportStateAfter,
-      kickstandStateOverride: kickstandStateAfter,
-    });
-    pushSceneSnapshotHistory(before, after, updates.length === 1 ? 'Update Model Transform' : 'Update Model Transforms');
+    if (shouldPushHistory && before) {
+      const supportStateAfter = includeSupportHistory ? getSnapshot() : undefined;
+      const kickstandStateAfter = includeSupportHistory ? getKickstandSnapshot() : undefined;
+      const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds, {
+        includeSupportState: includeSupportHistory,
+        supportStateOverride: supportStateAfter,
+        kickstandStateOverride: kickstandStateAfter,
+      });
+      pushSceneSnapshotHistory(before, after, updates.length === 1 ? 'Update Model Transform' : 'Update Model Transforms');
+    }
 
     return {
       updated,
@@ -2630,7 +2938,13 @@ export function useSceneCollectionManager() {
 
     const nextModels = currentModels.map((m) => (
       m.id === id
-        ? { ...m, geometry: nextGeometry, polygonCount }
+        ? {
+            ...m,
+            geometry: nextGeometry,
+            polygonCount,
+            isSupportGeometry: target.isSupportGeometry,
+            linkGroupId: target.linkGroupId,
+          }
         : m
     ));
     setModels(nextModels);
@@ -2638,10 +2952,248 @@ export function useSceneCollectionManager() {
     const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds, {
       includeSupportState: includeSupportHistory,
     });
-    pushSceneSnapshotHistory(before, after, historyDescription);
+    // COW chunk-store bake (Ph0.1 sub-phase C3). This is the VERIFIED sole
+    // finalization point for hollow, hole-punch, mirror and repair, so baking
+    // here moves the encode+SHA+zlib-6 onto the operation the user is already
+    // waiting for and off the next autosave tick.
+    //
+    // Fire-and-forget on purpose: the geometry SIGNATURE is the authority, so if
+    // this bake never lands the next tick simply bakes lazily instead. It can
+    // cost a slow tick; it can never write stale geometry.
+    void scheduleModelChunkBake(nextModels.find((m) => m.id === id));
 
     return true;
   }, [pushSceneSnapshotHistory, deferAccelerateGeometry]);
+
+  /**
+   * Commits a brand-new model built from an arbitrary BufferGeometry, inheriting
+   * transform/color/visibility from a base model. Used by the Organic Cut tool
+   * to add the second split part (part B) as an independent model. Returns the
+   * new model id, or null on failure.
+   */
+  const addModelFromGeometry = useCallback((
+    bufferGeometry: THREE.BufferGeometry,
+    baseModelId: string,
+    name: string,
+    historyDescription: string,
+  ): string | null => {
+    const currentModels = modelsRef.current;
+    const base = currentModels.find((m) => m.id === baseModelId);
+    if (!base) return null;
+
+    if (!bufferGeometry.boundingBox) bufferGeometry.computeBoundingBox();
+    const bbox = bufferGeometry.boundingBox ? bufferGeometry.boundingBox.clone() : new THREE.Box3();
+    const center = bbox.getCenter(new THREE.Vector3());
+    const size = bbox.getSize(new THREE.Vector3());
+
+    accelerateGeometry(bufferGeometry);
+
+    const geometry: GeometryWithBounds = {
+      geometry: bufferGeometry,
+      bbox,
+      center,
+      size,
+      flatteningPlanes: [],
+    };
+
+    const polygonCount = (() => {
+      const idx = bufferGeometry.getIndex();
+      if (idx) return Math.floor(idx.count / 3);
+      const pos = bufferGeometry.getAttribute('position');
+      return pos ? Math.floor(pos.count / 3) : 0;
+    })();
+
+    const id = uuidv4();
+    const newModel: LoadedModel = {
+      id,
+      name,
+      groupId: base.groupId,
+      groupName: base.groupName,
+      fileUrl: '',
+      fileSizeBytes: base.fileSizeBytes,
+      geometry,
+      transform: {
+        position: base.transform.position.clone(),
+        rotation: base.transform.rotation.clone(),
+        scale: base.transform.scale.clone(),
+      },
+      visible: true,
+      color: base.color,
+      polygonCount,
+      meshModifiers: base.meshModifiers ? clonePlainObject(base.meshModifiers) : undefined,
+    };
+
+    const before = captureSceneSnapshot(currentModels, activeModelIdRef.current, selectedModelIdsRef.current, { includeSupportState: false });
+    const nextModels = [...currentModels, newModel];
+    setModels(nextModels);
+
+    // Defer post-processing (flattening planes) like replaceModelGeometry does.
+    const scheduleIdle = (cb: () => void) => {
+      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
+        (window as any).requestIdleCallback(cb, { timeout: 250 });
+      } else {
+        setTimeout(cb, 16);
+      }
+    };
+    scheduleIdle(() => {
+      const planes = computeFlatteningPlanes(bufferGeometry);
+      setModels((prev) => prev.map((m) => (
+        m.id === id ? { ...m, geometry: { ...m.geometry, flatteningPlanes: planes } } : m
+      )));
+    });
+
+    const after = captureSceneSnapshot(nextModels, activeModelIdRef.current, selectedModelIdsRef.current, { includeSupportState: false });
+    pushSceneSnapshotHistory(before, after, historyDescription);
+
+    return id;
+  }, [pushSceneSnapshotHistory]);
+
+  /**
+   * Atomically splits one model into two: replaces the source model's geometry
+   * with `partAGeometry`, and appends `partBGeometry` as a new sibling model.
+   *
+   * This MUST be a single state update + single history entry. Doing it as two
+   * separate calls (replaceModelGeometry + addModelFromGeometry) races on the
+   * stale `modelsRef`/history snapshots and loses one of the pieces. Used by the
+   * Organic Cut tool. Returns the new (part B) model id, or null on failure.
+   */
+  const splitModelIntoParts = useCallback((
+    sourceId: string,
+    partGeometries: THREE.BufferGeometry[],
+    historyDescription: string,
+  ): string[] | null => {
+    const currentModels = modelsRef.current;
+    const source = currentModels.find((m) => m.id === sourceId);
+    if (!source || partGeometries.length === 0) return null;
+
+    // KEEP EVERY PART EXACTLY WHERE IT WAS CUT (nothing moves in 3D space).
+    //
+    // The render layer (StlMesh) draws each model's mesh at `-geometryBboxCenter`
+    // inside the model's transform group, so a vertex renders at
+    //     world = R · S · (vertex - partCenter) + partPosition
+    // (R = rotation, S = scale). For the original model it was
+    //     world = R · S · (vertex - sourceCenter) + sourcePosition.
+    // Since the cut parts share the SAME vertices as the source (same space), to
+    // keep every vertex at its original world spot we must satisfy
+    //     R·S·(v - partCenter) + partPosition = R·S·(v - sourceCenter) + sourcePos
+    // ⇒ partPosition = sourcePosition + R·S·(partCenter - sourceCenter).
+    //
+    // So we DON'T move the geometry (translating vertices would shift them by
+    // R·S·delta under any rotation — the bug that made parts jump). Instead we
+    // leave each part's bbox where it is and COMPENSATE its transform.position by
+    // the rotated+scaled center delta. Vertices stay put; the part lands exactly
+    // where it was cut, for any source rotation/scale.
+    const sourceGeom = source.geometry.geometry;
+    if (!sourceGeom.boundingBox) sourceGeom.computeBoundingBox();
+    const sourceCenter = sourceGeom.boundingBox
+      ? sourceGeom.boundingBox.getCenter(new THREE.Vector3())
+      : source.geometry.center.clone();
+
+    const srcQuat = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(source.transform.rotation.x, source.transform.rotation.y, source.transform.rotation.z),
+    );
+    const srcScale = source.transform.scale;
+
+    // Position that keeps `partCenter` at the same world spot the source frame put
+    // it: sourcePosition + R·S·(partCenter - sourceCenter).
+    const positionForPart = (partCenter: THREE.Vector3): THREE.Vector3 => {
+      const d = partCenter.clone().sub(sourceCenter);
+      d.multiply(srcScale); // component-wise scale
+      d.applyQuaternion(srcQuat); // then rotate
+      return source.transform.position.clone().add(d);
+    };
+
+    const buildBounds = (g: THREE.BufferGeometry): GeometryWithBounds => {
+      if (!g.boundingBox) g.computeBoundingBox();
+      const bbox = g.boundingBox ? g.boundingBox.clone() : new THREE.Box3();
+      const center = bbox.getCenter(new THREE.Vector3());
+      const size = bbox.getSize(new THREE.Vector3());
+      accelerateGeometry(g);
+      return { geometry: g, bbox, center, size, flatteningPlanes: [] };
+    };
+
+    const polyCount = (g: THREE.BufferGeometry): number => {
+      const idx = g.getIndex();
+      if (idx) return Math.floor(idx.count / 3);
+      const pos = g.getAttribute('position');
+      return pos ? Math.floor(pos.count / 3) : 0;
+    };
+
+    // The source becomes the FIRST part; every other part is appended as a new
+    // model. (A multi-loop cut can free several pieces, so there may be >2 parts.)
+    const built = partGeometries.map(buildBounds);
+    const extraIds = built.slice(1).map(() => uuidv4());
+
+    const before = captureSceneSnapshot(currentModels, activeModelIdRef.current, selectedModelIdsRef.current, { includeSupportState: false });
+
+    const part0 = built[0];
+    const part0Position = positionForPart(part0.center);
+
+    const extraModels: LoadedModel[] = built.slice(1).map((pg, i) => ({
+      id: extraIds[i],
+      // Number the pieces when there are several ("Cut 2", "Cut 3"); keep the plain
+      // "Cut" name for the usual two-part split.
+      name: built.length > 2 ? `${source.name} Cut ${i + 2}` : `${source.name} Cut`,
+      groupId: source.groupId,
+      groupName: source.groupName,
+      fileUrl: '',
+      fileSizeBytes: source.fileSizeBytes,
+      geometry: pg,
+      transform: {
+        position: positionForPart(pg.center),
+        rotation: source.transform.rotation.clone(),
+        scale: source.transform.scale.clone(),
+      },
+      visible: true,
+      color: source.color,
+      polygonCount: polyCount(pg.geometry),
+      meshModifiers: source.meshModifiers ? clonePlainObject(source.meshModifiers) : undefined,
+    }));
+
+    // ONE atomic update: source becomes part 0 (geometry swapped + position
+    // compensated so it doesn't shift), the rest are appended.
+    const nextModels = [
+      ...currentModels.map((m) => (
+        m.id === sourceId
+          ? {
+              ...m,
+              geometry: part0,
+              polygonCount: polyCount(part0.geometry),
+              transform: {
+                position: part0Position,
+                rotation: m.transform.rotation.clone(),
+                scale: m.transform.scale.clone(),
+              },
+            }
+          : m
+      )),
+      ...extraModels,
+    ];
+    setModels(nextModels);
+
+    // Defer flattening-plane computation for every new geometry.
+    const scheduleIdle = (cb: () => void) => {
+      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
+        (window as any).requestIdleCallback(cb, { timeout: 250 });
+      } else {
+        setTimeout(cb, 16);
+      }
+    };
+    scheduleIdle(() => {
+      const planes = built.map((b) => computeFlatteningPlanes(b.geometry));
+      setModels((prev) => prev.map((m) => {
+        if (m.id === sourceId) return { ...m, geometry: { ...m.geometry, flatteningPlanes: planes[0] } };
+        const ei = extraIds.indexOf(m.id);
+        if (ei >= 0) return { ...m, geometry: { ...m.geometry, flatteningPlanes: planes[ei + 1] } };
+        return m;
+      }));
+    });
+
+    const after = captureSceneSnapshot(nextModels, activeModelIdRef.current, selectedModelIdsRef.current, { includeSupportState: false });
+    pushSceneSnapshotHistory(before, after, historyDescription);
+
+    return extraIds;
+  }, [pushSceneSnapshotHistory]);
 
   const finalizeModelGeometryPostProcessing = useCallback((id: string) => {
     const target = modelsRef.current.find((m) => m.id === id);
@@ -2709,65 +3261,67 @@ export function useSceneCollectionManager() {
   }, []);
 
   const groupModels = useCallback((modelIds: string[], groupName?: string) => {
-    const ids = Array.from(new Set(modelIds));
-    if (ids.length === 0) return null;
-
-    let resolvedGroupId: string | null = null;
-    let resolvedGroupName: string | null = null;
-
-    setModels((prev) => {
-      const selected = prev.filter((model) => ids.includes(model.id));
-      if (selected.length === 0) return prev;
-
-      const commonGroupId = selected.every((model) => model.groupId && model.groupId === selected[0].groupId)
-        ? (selected[0].groupId ?? null)
-        : null;
-
-      resolvedGroupId = commonGroupId ?? `group-${generateId()}`;
-      const rawName = groupName?.trim();
-      resolvedGroupName = rawName && rawName.length > 0
-        ? rawName
-        : (selected.find((model) => model.groupName?.trim())?.groupName ?? selected[0].name);
-
-      return prev.map((model) => {
-        if (!ids.includes(model.id)) return model;
-        return {
-          ...model,
-          groupId: resolvedGroupId ?? undefined,
-          groupName: resolvedGroupName ?? undefined,
-        };
-      });
+    const currentModels = modelsRef.current;
+    const currentActiveModelId = activeModelIdRef.current;
+    const currentSelectedModelIds = selectedModelIdsRef.current;
+    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds);
+    const transition = applyModelGrouping({
+      models: currentModels,
+      modelIds,
+      groupId: `group-${uuidv4()}`,
+      groupName,
+      activeModelId: currentActiveModelId,
+      selectedModelIds: currentSelectedModelIds,
     });
 
-    if (resolvedGroupId) {
-      setSelectedModelIds((prev) => {
-        const next = Array.from(new Set([...prev, ...ids]));
-        return next;
-      });
-      setActiveModelId((prev) => prev ?? ids[0] ?? null);
-    }
+    if (!transition.changed) return transition.groupId ?? null;
 
-    return resolvedGroupId;
-  }, []);
+    setModels(transition.models);
+    setActiveModelId(transition.activeModelId);
+    setSelectedModelIds(transition.selectedModelIds);
+
+    const after = captureSceneSnapshot(transition.models, transition.activeModelId, transition.selectedModelIds);
+    pushSceneSnapshotHistory(before, after, transition.description);
+    return transition.groupId ?? null;
+  }, [pushSceneSnapshotHistory]);
 
   const ungroupModels = useCallback((modelIds: string[]) => {
-    const ids = new Set(modelIds);
-    if (ids.size === 0) return;
+    const currentModels = modelsRef.current;
+    const currentActiveModelId = activeModelIdRef.current;
+    const currentSelectedModelIds = selectedModelIdsRef.current;
+    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds);
+    const transition = applyModelUngrouping({
+      models: currentModels,
+      modelIds,
+      activeModelId: currentActiveModelId,
+      selectedModelIds: currentSelectedModelIds,
+    });
 
-    setModels((prev) => prev.map((model) => (
-      ids.has(model.id)
-        ? { ...model, groupId: undefined, groupName: undefined }
-        : model
-    )));
-  }, []);
+    if (!transition.changed) return;
+
+    setModels(transition.models);
+    const after = captureSceneSnapshot(transition.models, transition.activeModelId, transition.selectedModelIds);
+    pushSceneSnapshotHistory(before, after, transition.description);
+  }, [pushSceneSnapshotHistory]);
 
   const ungroupGroup = useCallback((groupId: string) => {
-    setModels((prev) => prev.map((model) => (
-      model.groupId === groupId
-        ? { ...model, groupId: undefined, groupName: undefined }
-        : model
-    )));
-  }, []);
+    const currentModels = modelsRef.current;
+    const currentActiveModelId = activeModelIdRef.current;
+    const currentSelectedModelIds = selectedModelIdsRef.current;
+    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds);
+    const transition = applyModelGroupUngrouping({
+      models: currentModels,
+      groupId,
+      activeModelId: currentActiveModelId,
+      selectedModelIds: currentSelectedModelIds,
+    });
+
+    if (!transition.changed) return;
+
+    setModels(transition.models);
+    const after = captureSceneSnapshot(transition.models, transition.activeModelId, transition.selectedModelIds);
+    pushSceneSnapshotHistory(before, after, transition.description);
+  }, [pushSceneSnapshotHistory]);
 
   /** Splits a multi-body 3MF model into independent models using the
    *  pre-processed `splitBodies` geometries. Instant — no reprocessing. */
@@ -2776,7 +3330,7 @@ export function useSceneCollectionManager() {
     if (!source?.splitBodies || source.splitBodies.length < 2) return;
 
     const newModels: LoadedModel[] = source.splitBodies.map((bodyGeom, i) => ({
-      id: generateId(),
+      id: uuidv4(),
       name: `${source.name.replace(/\.3mf$/i, '')} (${i + 1})`,
       fileUrl: source.fileUrl,
       fileSizeBytes: source.fileSizeBytes,
@@ -2899,7 +3453,7 @@ export function useSceneCollectionManager() {
 
     const baseName = source.name.replace(/\.(stl|obj|3mf)$/i, '');
     const modelModel: LoadedModel = {
-      id: generateId(),
+      id: uuidv4(),
       name: `${baseName} (Model)`,
       fileUrl: source.fileUrl,
       fileSizeBytes: source.fileSizeBytes ? Math.round(source.fileSizeBytes * (modelTriCount / totalTris)) : undefined,
@@ -2918,10 +3472,11 @@ export function useSceneCollectionManager() {
       polygonCount: modelTriCount,
       ignoreAutoLift: source.ignoreAutoLift,
       manualZMoveOverride: source.manualZMoveOverride,
+      isSupportGeometry: false,
     };
 
     const supportModel: LoadedModel = {
-      id: generateId(),
+      id: uuidv4(),
       name: `${baseName} (Supports)`,
       fileUrl: source.fileUrl,
       fileSizeBytes: source.fileSizeBytes ? Math.round(source.fileSizeBytes * (supportTriCount / totalTris)) : undefined,
@@ -2938,6 +3493,7 @@ export function useSceneCollectionManager() {
       polygonCount: supportTriCount,
       ignoreAutoLift: source.ignoreAutoLift,
       manualZMoveOverride: source.manualZMoveOverride,
+      isSupportGeometry: true,
     };
 
     const nextModels = [
@@ -2957,10 +3513,269 @@ export function useSceneCollectionManager() {
       { includeSupportState: true },
     );
     pushSceneSnapshotHistory(before, after, `Split Supports from ${source.name}`);
+    } catch (e) {
+      console.error(e);
+      emitSceneImportReport('Failed to split supports', 'error');
     } finally {
       setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
     }
-  }, [pushSceneSnapshotHistory, setImportProgress, waitForUiYield]);
+  }, [pushSceneSnapshotHistory, setImportProgress, waitForUiYield, emitSceneImportReport]);
+
+  /** Re-combines split model and support geometries back into a single model,
+   *  transforming the supports to align with any model movement/rotation. */
+  const mergeSupports = useCallback(async () => {
+    setImportProgress({
+      active: true,
+      type: 'mesh',
+      label: 'Merging Supports…',
+      detail: 'Recombining model and support geometry…',
+      progress: null,
+    });
+    await waitForUiYield();
+
+    try {
+      const selectedIds = selectedModelIdsRef.current;
+      if (selectedIds.length !== 2) return;
+
+      const selectedModels = modelsRef.current.filter((m) => selectedIds.includes(m.id));
+      if (selectedModels.length !== 2) return;
+
+      const modelModel = selectedModels.find((m) => !m.isSupportGeometry)
+        || selectedModels.find((m) => m.id === activeModelIdRef.current)
+        || selectedModels[0];
+      const supportModel = selectedModels.find((m) => m.id !== modelModel.id)!;
+
+      // Model and Support might have different transformations.
+      // Compute matrix to transform support vertices into model local space.
+      const modelMatrix = new THREE.Matrix4().compose(
+        modelModel.transform.position,
+        new THREE.Quaternion().setFromEuler(modelModel.transform.rotation),
+        modelModel.transform.scale,
+      );
+      const supportMatrix = new THREE.Matrix4().compose(
+        supportModel.transform.position,
+        new THREE.Quaternion().setFromEuler(supportModel.transform.rotation),
+        supportModel.transform.scale,
+      );
+      const supportToModelMatrix = new THREE.Matrix4().copy(modelMatrix).invert().multiply(supportMatrix);
+
+      const modelGeom = modelModel.geometry.geometry;
+      const supportGeom = supportModel.geometry.geometry;
+
+      const modelPositions = modelGeom.getAttribute('position').array;
+      const supportPositions = supportGeom.getAttribute('position').array;
+
+      const modelCenter = modelModel.geometry.center;
+      const supportCenter = supportModel.geometry.center;
+
+      const tempV = new THREE.Vector3();
+      const mappedSupportPositions = new Float32Array(supportPositions.length);
+      for (let i = 0; i < supportPositions.length; i += 3) {
+        tempV.set(
+          supportPositions[i] - supportCenter.x,
+          supportPositions[i + 1] - supportCenter.y,
+          supportPositions[i + 2] - supportCenter.z,
+        );
+        tempV.applyMatrix4(supportToModelMatrix);
+        mappedSupportPositions[i] = tempV.x + modelCenter.x;
+        mappedSupportPositions[i + 1] = tempV.y + modelCenter.y;
+        mappedSupportPositions[i + 2] = tempV.z + modelCenter.z;
+      }
+
+      const combinedPositions = new Float32Array(modelPositions.length + mappedSupportPositions.length);
+      combinedPositions.set(modelPositions, 0);
+      combinedPositions.set(mappedSupportPositions, modelPositions.length);
+
+      const modelTriangleCount = modelPositions.length / 9;
+      const supportTriangleCount = mappedSupportPositions.length / 9;
+
+      const mergedGeometryObj = new THREE.BufferGeometry();
+      mergedGeometryObj.setAttribute('position', new THREE.BufferAttribute(combinedPositions, 3));
+      mergedGeometryObj.computeVertexNormals();
+      mergedGeometryObj.computeBoundingBox();
+
+      const bbox = mergedGeometryObj.boundingBox?.clone() ?? new THREE.Box3();
+      const center = bbox.getCenter(new THREE.Vector3());
+      const size = bbox.getSize(new THREE.Vector3());
+
+      const mergedGeometry: GeometryWithBounds = {
+        geometry: mergedGeometryObj,
+        bbox,
+        center,
+        size,
+        flatteningPlanes: modelModel.geometry.flatteningPlanes || [],
+        edgeGeometry: modelModel.geometry.edgeGeometry,
+      };
+
+      const supportGeo = new THREE.BufferGeometry();
+      supportGeo.setAttribute('position', new THREE.BufferAttribute(mappedSupportPositions, 3));
+      supportGeo.computeVertexNormals();
+
+      const modelGeo = new THREE.BufferGeometry();
+      modelGeo.setAttribute('position', new THREE.BufferAttribute(modelPositions, 3));
+
+      // Set the nativeRepairReport properties to preserve support triangle designation
+      mergedGeometry.meshDefects = {
+        hasDefects: false,
+        repairedFloats: 0,
+        totalVertices: combinedPositions.length / 3,
+        supportSectionGeometry: supportGeo,
+        modelSectionGeometry: modelGeo,
+        nativeRepairReport: {
+          version: 1,
+          source_path: null,
+          pre: {
+            triangle_count: modelTriangleCount + supportTriangleCount,
+            vertex_count: (modelTriangleCount + supportTriangleCount) * 3,
+            non_manifold_edges: 0,
+            non_manifold_vertices: 0,
+            boundary_edges: 0,
+            boundary_loops: 0,
+            inconsistent_edges: 0,
+            degenerate_triangles: 0,
+            duplicate_triangles: 0,
+            component_count: 0,
+            self_intersections: 0,
+            signed_volume: 0,
+            is_watertight: false,
+            timings_ms: { topology_ms: 0, self_intersections_ms: 0, components_ms: 0, total_ms: 0 },
+          },
+          post: {
+            triangle_count: modelTriangleCount + supportTriangleCount,
+            vertex_count: (modelTriangleCount + supportTriangleCount) * 3,
+            non_manifold_edges: 0,
+            non_manifold_vertices: 0,
+            boundary_edges: 0,
+            boundary_loops: 0,
+            inconsistent_edges: 0,
+            degenerate_triangles: 0,
+            duplicate_triangles: 0,
+            component_count: 0,
+            self_intersections: 0,
+            signed_volume: 0,
+            is_watertight: false,
+            timings_ms: { topology_ms: 0, self_intersections_ms: 0, components_ms: 0, total_ms: 0 },
+          },
+          steps: [],
+          likely_support_geometry: false,
+          model_triangle_count: modelTriangleCount,
+          residual_issues: [],
+          fully_repaired: true,
+          total_ms: 0,
+        },
+      };
+
+      const before = captureSceneSnapshot(
+        modelsRef.current,
+        activeModelIdRef.current,
+        selectedModelIdsRef.current,
+        { includeSupportState: true },
+      );
+
+      const baseName = modelModel.name.replace(/ \(Model\)$/i, '');
+      const mergedModel: LoadedModel = {
+        id: uuidv4(),
+        name: baseName,
+        fileUrl: modelModel.fileUrl,
+        fileSizeBytes: (modelModel.fileSizeBytes || 0) + (supportModel.fileSizeBytes || 0),
+        sourcePath: null,
+        geometry: mergedGeometry,
+        transform: {
+          position: (() => {
+            const rotation = new THREE.Quaternion().setFromEuler(modelModel.transform.rotation);
+            const positionOffset = center.clone().sub(modelCenter);
+            positionOffset.multiply(modelModel.transform.scale).applyQuaternion(rotation);
+            return modelModel.transform.position.clone().add(positionOffset);
+          })(),
+          rotation: modelModel.transform.rotation.clone(),
+          scale: modelModel.transform.scale.clone(),
+        },
+        visible: modelModel.visible,
+        color: modelModel.color,
+        polygonCount: modelTriangleCount + supportTriangleCount,
+        ignoreAutoLift: modelModel.ignoreAutoLift,
+        manualZMoveOverride: modelModel.manualZMoveOverride,
+        isSupportGeometry: undefined,
+      };
+
+      const nextModels = [
+        ...modelsRef.current.filter((m) => m.id !== modelModel.id && m.id !== supportModel.id),
+        mergedModel,
+      ];
+
+      setModels(nextModels);
+      setActiveModelId(mergedModel.id);
+      setSelectedModelIds([mergedModel.id]);
+
+      const after = captureSceneSnapshot(
+        nextModels,
+        mergedModel.id,
+        [mergedModel.id],
+        { includeSupportState: true },
+      );
+      pushSceneSnapshotHistory(before, after, `Merge Supports for ${mergedModel.name}`);
+    } catch (e) {
+      console.error(e);
+      emitSceneImportReport('Failed to merge supports', 'error');
+    } finally {
+      setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
+    }
+  }, [pushSceneSnapshotHistory, setImportProgress, waitForUiYield, emitSceneImportReport]);
+
+  const scanModelForSupportsInPlace = useCallback(async (modelId: string): Promise<boolean> => {
+    const model = modelsRef.current.find(m => m.id === modelId);
+    if (!model) return false;
+    
+    setImportProgress({
+      active: true,
+      type: 'mesh',
+      label: 'Scanning for Supports…',
+      detail: `Classifying ${model.name}`,
+      progress: null,
+    });
+    await waitForUiYield();
+
+    try {
+      const processed = await processGeometry(model.geometry.geometry, {
+        center: false,
+        nativeProcessingMode: 'classify-only',
+        assumeSupportGeometry: undefined,
+        _nativeModelTriangleCount: model.geometry.meshDefects?.nativeRepairReport?.model_triangle_count ?? undefined,
+      });
+      const posAttr = processed.geometry.getAttribute('position') as THREE.BufferAttribute | null;
+      const polygonCount = posAttr ? Math.floor(posAttr.count / 3) : model.polygonCount;
+      const repairReport = processed.meshDefects?.nativeRepairReport ?? null;
+
+      setModels(prev => prev.map(m =>
+        m.id === modelId ? { ...m, geometry: processed, polygonCount, isSupportGeometry: undefined } : m
+      ));
+
+      if (repairReport) {
+        const reportEntry: MeshRepairReportEntry = {
+          id: modelId,
+          modelName: model.name,
+          report: repairReport,
+        };
+        setPendingMeshRepairReports([]);
+        clearSceneImportReport();
+        setMeshRepairReportPresentation('optimistic');
+        setMeshRepairReports([reportEntry]);
+      } else {
+        setPendingMeshRepairReports([]);
+        emitSceneImportReport(`Scanned ${model.name}.`, 'success');
+      }
+
+      return true;
+    } catch (err) {
+      console.error('[scanModelForSupportsInPlace] Scan failed:', err);
+      setPendingMeshRepairReports([]);
+      const message = err instanceof Error ? err.message : String(err);
+      emitSceneImportReport(`Scan failed: ${message}`, 'error', { durationMs: 6_000 });
+      return false;
+    } finally {
+      setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
+    }
+  }, [clearSceneImportReport, emitSceneImportReport, setImportProgress, waitForUiYield]);
 
   const renameGroup = useCallback((groupId: string, nextName: string) => {
     const trimmed = nextName.trim();
@@ -2992,6 +3807,18 @@ export function useSceneCollectionManager() {
 
     const existing = modelsRef.current.filter((m) => ids.has(m.id));
     if (existing.length === 0) return;
+
+    // Release the deleted models' compressed mesh chunks (Ph0.1 sub-phase C2).
+    // The encode cache this replaced had exactly one `.get` and one `.set` and
+    // no eviction anywhere: a deleted 4M-tri model kept ~191 MiB of raw STL
+    // resident for the remainder of the session, and repeated import → delete
+    // cycles grew the heap without bound. Refcounted, so instances that still
+    // share the blob keep it alive.
+    void exportManager()
+      .then((manager) => manager.releaseModelChunks(ids))
+      .catch((error) => {
+        console.warn('[SceneCollection] Failed releasing mesh chunks for deleted models.', error);
+      });
 
     const supportStateBeforeDelete = getSnapshot();
     const kickstandSnapshotBefore = getKickstandSnapshot();
@@ -3059,7 +3886,25 @@ export function useSceneCollectionManager() {
       tryRevokeObjectUrl(model.fileUrl);
     });
 
-    const nextModels = currentModels.filter((m) => !ids.has(m.id));
+    const nextModelsWithoutDeleted = currentModels.filter((m) => !ids.has(m.id));
+
+    // Dissolve link groups if remaining peer count < 2
+    const deletedLinkGroupIds = new Set(existing.map((m) => m.linkGroupId).filter(Boolean) as string[]);
+    let nextModels = nextModelsWithoutDeleted;
+    if (deletedLinkGroupIds.size > 0) {
+      deletedLinkGroupIds.forEach((gId) => {
+        const remaining = nextModels.filter((m) => m.linkGroupId === gId);
+        if (remaining.length < 2) {
+          nextModels = nextModels.map((m) => {
+            if (m.linkGroupId === gId) {
+              return { ...m, linkGroupId: undefined };
+            }
+            return m;
+          });
+        }
+      });
+    }
+
     const nextActiveModelId = currentActiveModelId && ids.has(currentActiveModelId) ? null : currentActiveModelId;
     const nextSelectedModelIds = currentSelectedModelIds.filter((sid) => !ids.has(sid));
 
@@ -3183,6 +4028,8 @@ export function useSceneCollectionManager() {
         polygonCount: source.polygonCount,
         meshModifiers: undefined,
         supportClipboard,
+        isSupportGeometry: source.isSupportGeometry,
+        linkGroupId: source.linkGroupId,
       },
     ]);
 
@@ -3190,10 +4037,10 @@ export function useSceneCollectionManager() {
   }, [models]);
 
   const copySelectedModels = useCallback((ids?: string[]) => {
-    const idSet = new Set((ids && ids.length > 0) ? ids : selectedModelIds);
-    if (idSet.size === 0) return false;
+    const targetIds = (ids && ids.length > 0) ? ids : selectedModelIds;
+    if (targetIds.length === 0) return false;
 
-    const selected = models.filter((m) => idSet.has(m.id));
+    const selected = selectModelsForClipboard(models, targetIds);
     if (selected.length === 0) return false;
 
     setModelClipboard(selected.map((source) => {
@@ -3212,18 +4059,21 @@ export function useSceneCollectionManager() {
         polygonCount: source.polygonCount,
         meshModifiers: undefined,
         supportClipboard,
+        isSupportGeometry: source.isSupportGeometry,
+        linkGroupId: source.linkGroupId,
       };
     }));
 
     return true;
   }, [models, selectedModelIds]);
 
+  const cutSelectedModels = useCallback((ids: string[]) => {
+    return performModelCut(ids, copySelectedModels, deleteModels);
+  }, [copySelectedModels, deleteModels]);
+
   const cutModel = useCallback((id: string) => {
-    const copied = copyModel(id);
-    if (!copied) return false;
-    deleteModel(id);
-    return true;
-  }, [copyModel, deleteModel]);
+    return cutSelectedModels([id]);
+  }, [cutSelectedModels]);
 
   const pasteModel = useCallback(() => {
     if (modelClipboard.length === 0) return null;
@@ -3238,7 +4088,7 @@ export function useSceneCollectionManager() {
 
     const pastedGeometry = cloneGeometryWithBounds(first.geometry, { shared: true });
 
-    const id = generateId();
+    const id = uuidv4();
     const pastedModel: LoadedModel = {
       id,
       name: `${first.name} Copy`,
@@ -3254,6 +4104,8 @@ export function useSceneCollectionManager() {
       color: first.color,
       polygonCount: first.polygonCount,
       meshModifiers: undefined,
+      isSupportGeometry: first.isSupportGeometry,
+      linkGroupId: first.linkGroupId,
     };
 
     const nextModels = [...models, pastedModel];
@@ -3287,7 +4139,7 @@ export function useSceneCollectionManager() {
     });
 
     return id;
-  }, [activeModelId, cloneGeometryWithBounds, generateId, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds]);
+  }, [activeModelId, cloneGeometryWithBounds, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds]);
 
   const pasteCopiedModelsAutoArrange = useCallback((spacingMm = 5) => {
     if (modelClipboard.length === 0) return [] as string[];
@@ -3370,12 +4222,13 @@ export function useSceneCollectionManager() {
           r: root.diameter / 2,
         }));
 
-        const chamferInset = raftSettings.bottomMode === 'line'
-          ? Math.max(0, raftSettings.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettings.chamferAngle))))
-          : 0;
+        const thickness = raftSettings.bottomMode === 'line' ? raftSettings.lineHeightMm : raftSettings.thickness;
+        const chamferInset = Math.max(0, thickness) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettings.chamferAngle))));
+        const wallInset = raftSettings.wallEnabled ? Math.max(0, raftSettings.wallThickness) : 0;
+        const dynamicMargin = 0.2 + Math.max(chamferInset, wallInset);
 
         const baseProfile = computeFootprint(circles, {
-          marginMm: 0.2 + chamferInset,
+          marginMm: dynamicMargin,
           samplesPerCircle: 24,
         });
 
@@ -3624,7 +4477,7 @@ export function useSceneCollectionManager() {
 
     const createdIds: string[] = [];
     const pastedModels: LoadedModel[] = entries.map((entry, index) => {
-      const id = generateId();
+      const id = uuidv4();
       createdIds.push(id);
 
       const geometry = cloneGeometryWithBounds(entry.geometry, { shared: true });
@@ -3646,6 +4499,8 @@ export function useSceneCollectionManager() {
         color: entry.color,
         polygonCount: entry.polygonCount,
         meshModifiers: undefined,
+        isSupportGeometry: entry.isSupportGeometry,
+        linkGroupId: entry.linkGroupId,
       };
     });
 
@@ -3687,7 +4542,7 @@ export function useSceneCollectionManager() {
     }
 
     return createdIds;
-  }, [activeModelId, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, generateId, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+  }, [activeModelId, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
 
   const duplicateModelWithTransforms = useCallback((sourceId: string, transforms: ModelTransform[], sourceTransform?: ModelTransform | null) => {
     if (transforms.length === 0) return [] as string[];
@@ -3698,12 +4553,12 @@ export function useSceneCollectionManager() {
 
     const before = captureSceneSnapshot(models, activeModelId, selectedModelIds, { includeSupportState: true });
 
-    const resolvedGroupId = source.groupId ?? `group-${generateId()}`;
+    const resolvedGroupId = source.groupId ?? `group-${uuidv4()}`;
     const resolvedGroupName = source.groupName ?? source.name;
 
     const createdIds: string[] = [];
     const newModels: LoadedModel[] = transforms.map((nextTransform, index) => {
-      const id = generateId();
+      const id = uuidv4();
       createdIds.push(id);
 
       const geometry = cloneGeometryWithBounds(source.geometry, { shared: true });
@@ -3726,6 +4581,8 @@ export function useSceneCollectionManager() {
         color: source.color,
         polygonCount: source.polygonCount,
         meshModifiers: undefined,
+        isSupportGeometry: source.isSupportGeometry,
+        linkGroupId: source.linkGroupId,
       };
     });
 
@@ -3790,7 +4647,7 @@ export function useSceneCollectionManager() {
     }
 
     return createdIds;
-  }, [activeModelId, cloneGeometryWithBounds, generateId, models, pushSceneSnapshotHistory, selectedModelIds]);
+  }, [activeModelId, cloneGeometryWithBounds, models, pushSceneSnapshotHistory, selectedModelIds]);
 
   // LYS Import (1-step) — dispatched via plugin registry
 
@@ -3982,7 +4839,7 @@ export function useSceneCollectionManager() {
           : `${sanitizeImportedModelDisplayName(file.name)} (${i + 1})`;
 
         const model: LoadedModel = {
-          id: importedModelId || generateId(),
+          id: importedModelId || uuidv4(),
           name: modelName,
           fileUrl: '',
           fileSizeBytes: file.size,
@@ -4074,7 +4931,7 @@ export function useSceneCollectionManager() {
         });
       }
     }
-  }, [emitSceneImportReport, findFreeSpotCentersForModels, generateId, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
+  }, [emitSceneImportReport, findFreeSpotCentersForModels, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
 
   const handleImportVoxlFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     if (!options?.suppressRecentTracking) {
@@ -4106,11 +4963,18 @@ export function useSceneCollectionManager() {
 
       let document: VoxlDocumentV1;
       let resolvedMeshBytes: Map<string, Uint8Array>;
+      let resolvedOriginalMeshBytes: Map<string, Uint8Array> | undefined;
+      let originalMeshChunks: Map<string, PrecompressedChunk> | undefined;
 
       if (isV2) {
         const r = parseVoxlBinaryV2(new Uint8Array(await file.arrayBuffer()));
         document = r.document;
         resolvedMeshBytes = r.meshBytes;
+        resolvedOriginalMeshBytes = r.originalMeshBytes;
+        originalMeshChunks = r.originalMeshChunks;
+        // sourceVersion is 2.2 only when the file actually carries modifier
+        // chunks; anything lower is treated as inline for format preservation.
+        lastLoadedVoxlFormatChunkedRef.current = r.sourceVersion >= 2.2;
       } else {
         document = parseVoxlDocument(await file.text());
         resolvedMeshBytes = new Map();
@@ -4166,7 +5030,6 @@ export function useSceneCollectionManager() {
           meshDataBytes = decodeVoxlEmbeddedMeshBytes(meshRef);
         }
 
-        let url = '';
         try {
           const bytes = meshDataBytes;
 
@@ -4198,14 +5061,11 @@ export function useSceneCollectionManager() {
             }
 
             const embeddedName = meshRef.fileName?.trim() || `${model.name || 'model'}.stl`;
-            const mimeType = meshRef.mimeType?.trim() || 'model/stl';
-            // Create a clean copy with explicit ArrayBuffer for Blob compatibility
-            const blobData = new Uint8Array(bytes);
-            const blob = new Blob([blobData], { type: mimeType });
-            url = URL.createObjectURL(blob);
 
-            geometry = await loadMeshGeometry(url, embeddedName, {
-            nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
+            geometry = await loadMeshGeometry(bytes, embeddedName, {
+              nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
+              assumeSupportGeometry: model.isSupportGeometry,
+              skipClassification: model.isSupportGeometry,
             onNativeProcessingStage: (stage) => {
               if (stage === 'repairing') {
                 setImportProgress({
@@ -4246,10 +5106,56 @@ export function useSceneCollectionManager() {
 
           let resolvedId = model.id;
           if (!resolvedId || existingIds.has(resolvedId)) {
-            resolvedId = generateId();
+            resolvedId = uuidv4();
           }
           existingIds.add(resolvedId);
           idMap.set(model.id, resolvedId);
+
+          const origMeshBytes = resolvedOriginalMeshBytes?.get(model.id);
+          const origMeshChunk = originalMeshChunks?.get(model.id);
+
+          if (origMeshChunk) {
+            void meshChunkStore.bake({
+              modelId: resolvedId,
+              slot: 'original',
+              signature: `original:${resolvedId}`,
+              precompressed: origMeshChunk,
+              encode: () => origMeshBytes || new Uint8Array(0),
+            });
+          } else if (origMeshBytes) {
+            void meshChunkStore.bake({
+              modelId: resolvedId,
+              slot: 'original',
+              signature: `original:${resolvedId}`,
+              encode: () => origMeshBytes,
+            });
+          } else {
+            const voxlFilePath = (file as File & { path?: string; filePath?: string }).path
+              || (file as File & { filePath?: string }).filePath
+              || options?.sourcePath;
+            const origRefToResolve = model.originalRef ?? (
+              typeof model.sourcePath === 'string' && model.sourcePath.trim().length > 0
+                ? { mode: 'external-file' as const, fileName: model.sourcePath }
+                : undefined
+            );
+            const sidecarPath = resolveOriginalRefSidecar(origRefToResolve, voxlFilePath || undefined);
+
+            if (sidecarPath) {
+              try {
+                const sidecarBytes = await readSidecarFileBytes(sidecarPath);
+                if (sidecarBytes) {
+                  void meshChunkStore.bake({
+                    modelId: resolvedId,
+                    slot: 'original',
+                    signature: `original:${resolvedId}`,
+                    encode: () => sidecarBytes,
+                  });
+                }
+              } catch (err) {
+                console.warn(`[SceneCollection] Unreadable sidecar file at "${sidecarPath}", falling back to preview:`, err);
+              }
+            }
+          }
 
           const polygonCount = geometry.geometry.getAttribute('position').count / 3;
           const color = clampHexColor(model.color, DEFAULT_MESH_COLOR);
@@ -4258,6 +5164,8 @@ export function useSceneCollectionManager() {
             id: resolvedId,
             name: sanitizeImportedModelDisplayName(model.name),
             fileUrl: '',
+            sourcePath: model.sourcePath ?? undefined,
+            originalRef: model.originalRef,
             fileSizeBytes: model.fileSizeBytes,
             geometry,
             transform: {
@@ -4271,6 +5179,8 @@ export function useSceneCollectionManager() {
             meshModifiers: undefined,
             ignoreAutoLift: true,
             manualZMoveOverride: true,
+            isSupportGeometry: model.isSupportGeometry,
+            linkGroupId: model.linkGroupId,
           });
 
           // Store meshModifiers externally so model objects stay lightweight
@@ -4280,10 +5190,6 @@ export function useSceneCollectionManager() {
         } catch (error) {
           console.error(`[SceneCollection] Failed importing embedded VOXL mesh for model "${model.name}"`, error);
           skippedModels += 1;
-        } finally {
-          if (url) {
-            URL.revokeObjectURL(url);
-          }
         }
       }
 
@@ -4401,7 +5307,7 @@ export function useSceneCollectionManager() {
         });
       }
     }
-  }, [cloneGeometryWithBounds, emitSceneImportReport, findFreeSpotCentersForModels, generateId, isModelFootprintInsidePlate, requestSceneImportPlacementChoice, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
+  }, [cloneGeometryWithBounds, emitSceneImportReport, findFreeSpotCentersForModels, isModelFootprintInsidePlate, requestSceneImportPlacementChoice, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
 
   const importSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     const extension = getSceneExtension(file.name);
@@ -4533,6 +5439,16 @@ export function useSceneCollectionManager() {
     return true;
   }, [importSceneFile, loadFiles, recentOpenedFiles]);
 
+  // Clears the recent-files list: localStorage entries + cached blobs in IndexedDB.
+  const clearRecentOpenedFiles = useCallback(() => {
+    const ids = recentOpenedFiles.map((entry) => entry.id);
+    setRecentOpenedFiles([]);
+    writeRecentOpenedFilesToLocalStorage([]);
+    if (ids.length > 0) {
+      void deleteRecentOpenedFileBlobs(ids);
+    }
+  }, [recentOpenedFiles]);
+
   // Legacy support JSON loader wrapper
   const handleLoadSupportJson = async () => {
     try {
@@ -4540,9 +5456,9 @@ export function useSceneCollectionManager() {
       const data = await res.json();
       applyImportDefaultsToRaftState();
       loadFromImportFormat(data);
-      console.log('Loaded LYS data:', data);
+      console.log('Loaded support JSON:', data);
     } catch (e) {
-      console.error('Failed to load LYS data:', e);
+      console.error('Failed to load support JSON:', e);
     }
   };
 
@@ -4562,7 +5478,7 @@ export function useSceneCollectionManager() {
       emitSceneImportReport('Imported support data.', 'success');
 
     } catch (err) {
-      console.error('[SceneCollection] Failed to import LYS file:', err);
+      console.error('[SceneCollection] Failed to import support JSON:', err);
       emitSceneImportReport('Support import failed.', 'error');
     }
   }, [emitSceneImportReport]);
@@ -4627,23 +5543,111 @@ export function useSceneCollectionManager() {
       materialRoughness: prev?.materialRoughness ?? materialRoughness,
       wireframeThicknessPx: prev?.wireframeThicknessPx ?? wireframeThicknessPx,
       xrayOpacity: prev?.xrayOpacity ?? xrayOpacity,
-      heatmapBlend: prev?.heatmapBlend ?? heatmapBlend,
-      heatmapContrast: prev?.heatmapContrast ?? heatmapContrast,
+      heatmapMinAngle: prev?.heatmapMinAngle ?? heatmapMinAngle,
+      heatmapMaxAngle: prev?.heatmapMaxAngle ?? heatmapMaxAngle,
       heatmapColors: prev?.heatmapColors ?? heatmapColors,
       meshColor: normalizedColor,
       selectionColor: prev?.selectionColor ?? selectionColor,
       hoverColor: prev?.hoverColor ?? hoverColor,
       hoverTintStrength: prev?.hoverTintStrength ?? hoverTintStrength,
       selectedTintStrength: prev?.selectedTintStrength ?? selectedTintStrength,
-      selectionHighlightMode: prev?.selectionHighlightMode ?? selectionHighlightMode,
     });
-  }, [activeModelId, ambientIntensity, directionalIntensity, flatUseVertexColors, heatmapBlend, heatmapColors, heatmapContrast, hoverColor, hoverTintStrength, materialRoughness, matcapVariant, selectedTintStrength, selectionColor, selectionHighlightMode, shaderType, toonSteps, wireframeThicknessPx, xrayOpacity]);
+  }, [activeModelId, ambientIntensity, directionalIntensity, flatUseVertexColors, heatmapMinAngle, heatmapColors, heatmapMaxAngle, hoverColor, hoverTintStrength, materialRoughness, matcapVariant, selectedTintStrength, selectionColor, shaderType, toonSteps, wireframeThicknessPx, xrayOpacity]);
 
   const setMeshVisible = useCallback((visible: boolean) => {
     if (activeModelId) {
       setModelVisibility(activeModelId, visible);
     }
   }, [activeModelId, setModelVisibility]);
+
+  const toggleSupportDesignation = useCallback((modelIds: string[], isSupport: boolean) => {
+    if (modelIds.length === 0) return;
+    const targetIds = new Set(modelIds);
+    const affectedModels = models.filter((m) => targetIds.has(m.id));
+    if (affectedModels.length === 0) return;
+    const needsChange = affectedModels.some((m) => Boolean(m.isSupportGeometry) !== isSupport);
+    if (!needsChange) return;
+
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    const nextModels = models.map((m) => {
+      if (targetIds.has(m.id)) {
+        return { ...m, isSupportGeometry: isSupport };
+      }
+      return m;
+    });
+
+    setModels(nextModels);
+    const after = captureSceneSnapshot(nextModels, activeModelId, selectedModelIds);
+    pushSceneSnapshotHistory(
+      before,
+      after,
+      isSupport ? 'Mark as Support Geometry' : 'Mark as Model Geometry',
+    );
+  }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
+
+  const linkModels = useCallback((idsInput: string[]) => {
+    const ids = new Set(idsInput);
+    if (ids.size < 2) return;
+
+    const currentModels = modelsRef.current;
+    const targetModels = currentModels.filter((m) => ids.has(m.id));
+    if (targetModels.length < 2) return;
+
+    const currentActiveModelId = activeModelIdRef.current;
+    const currentSelectedModelIds = selectedModelIdsRef.current;
+
+    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds);
+    const linkGroupId = `link-${uuidv4()}`;
+
+    const nextModels = currentModels.map((m) => {
+      if (ids.has(m.id)) {
+        return { ...m, linkGroupId };
+      }
+      return m;
+    });
+
+    setModels(nextModels);
+    const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds);
+    pushSceneSnapshotHistory(before, after, `Link ${targetModels.length} Models`);
+  }, [pushSceneSnapshotHistory]);
+
+  const unlinkModels = useCallback((idsInput: string[]) => {
+    const ids = new Set(idsInput);
+    if (ids.size === 0) return;
+
+    const currentModels = modelsRef.current;
+    const targetModels = currentModels.filter((m) => ids.has(m.id) && m.linkGroupId);
+    if (targetModels.length === 0) return;
+
+    const currentActiveModelId = activeModelIdRef.current;
+    const currentSelectedModelIds = selectedModelIdsRef.current;
+
+    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds);
+    const affectedGroupIds = new Set(targetModels.map((m) => m.linkGroupId!));
+
+    let nextModels = currentModels.map((m) => {
+      if (ids.has(m.id)) {
+        return { ...m, linkGroupId: undefined };
+      }
+      return m;
+    });
+
+    affectedGroupIds.forEach((gId) => {
+      const remaining = nextModels.filter((m) => m.linkGroupId === gId);
+      if (remaining.length < 2) {
+        nextModels = nextModels.map((m) => {
+          if (m.linkGroupId === gId) {
+            return { ...m, linkGroupId: undefined };
+          }
+          return m;
+        });
+      }
+    });
+
+    setModels(nextModels);
+    const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds);
+    pushSceneSnapshotHistory(before, after, `Unlink ${targetModels.length} Models`);
+  }, [pushSceneSnapshotHistory]);
 
   /**
    * Re-runs the full native repair pipeline on an already-loaded model's
@@ -4657,6 +5661,7 @@ export function useSceneCollectionManager() {
       const processed = await processGeometry(model.geometry.geometry, {
         center: false,
         nativeProcessingMode: 'repair',
+        assumeSupportGeometry: model.isSupportGeometry,
       });
       const posAttr = processed.geometry.getAttribute('position') as THREE.BufferAttribute | null;
       const polygonCount = posAttr ? Math.floor(posAttr.count / 3) : model.polygonCount;
@@ -4809,6 +5814,7 @@ export function useSceneCollectionManager() {
     setActiveModelId,
     selectedModelIds,
     setSelectedModelIds,
+    lastLoadedVoxlFormatChunkedRef,
     selectModel,
     clearModelSelection,
     activeModel,
@@ -4838,6 +5844,7 @@ export function useSceneCollectionManager() {
     repairModelInPlace,
     recentOpenedFiles,
     reopenRecentOpenedFile,
+    clearRecentOpenedFiles,
     view3dSettings,
     setView3dSettings,
 
@@ -4846,12 +5853,18 @@ export function useSceneCollectionManager() {
     onFileChange,
     updateModelTransform,
     commitModelTransformHistory,
+    commitModelTransformsHistory,
     updateModelTransforms,
     setModelTransformRaw,
     replaceModelGeometry,
+    addModelFromGeometry,
+    splitModelIntoParts,
     finalizeModelGeometryPostProcessing,
     setModelManualZMoveOverride,
     setModelVisibility,
+    toggleSupportDesignation,
+    linkModels,
+    unlinkModels,
     setModelMeshModifiers,
     getModelMeshModifiers: useCallback((id: string) => getStoredMeshModifiers(id), []),
     renameModel,
@@ -4860,6 +5873,7 @@ export function useSceneCollectionManager() {
     ungroupGroup,
     splitImportGroup,
     splitSupports,
+    mergeSupports,
     renameGroup,
     selectGroup,
     deleteModels,
@@ -4867,6 +5881,7 @@ export function useSceneCollectionManager() {
     deleteSupportsForModels,
     copyModel,
     copySelectedModels,
+    cutSelectedModels,
     cutModel,
     pasteModel,
     pasteCopiedModelsAutoArrange,
@@ -4886,10 +5901,10 @@ export function useSceneCollectionManager() {
     setWireframeThicknessPx,
     xrayOpacity,
     setXrayOpacity,
-    heatmapBlend,
-    setHeatmapBlend,
-    heatmapContrast,
-    setHeatmapContrast,
+    heatmapMinAngle,
+    setHeatmapMinAngle,
+    heatmapMaxAngle,
+    setHeatmapMaxAngle,
     shaderType,
     setShaderType,
     matcapVariant,
@@ -4908,10 +5923,9 @@ export function useSceneCollectionManager() {
     setSelectedTintStrength,
     mode,
     setMode,
-    selectionHighlightMode,
-    setSelectionHighlightMode,
     heatmapColors,
     setHeatmapColors,
+    scanModelForSupportsInPlace,
     onHeatmapColorChange: useCallback((index: number, color: string) => {
       setHeatmapColors(prev => {
         const next = [...prev];

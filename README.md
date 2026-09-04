@@ -84,7 +84,7 @@ For release-style builds and bundles:
      It builds via `tauri-build.mjs --universal`, which sets
      `CMAKE_OSX_ARCHITECTURES="arm64;x86_64"` so manifold's C++ links fat, embeds
      the universal QuickLook extension, code-signs, and verifies the bundle is fat
-     - signed. See [ADR 0005](../Dragonfruit-kb/ADR/0005-macos-universal-distribution.md).
+     - signed. See [ADR-0005](docs/adr/0005-macos-universal-distribution.md).
    - `npm run tauri:bundle:macos` / `npm run tauri:bundle:macos:arm64` — single-arch
      shortcuts for fast local dev only (these do **not** embed the QuickLook
      extension and are not suitable for release).

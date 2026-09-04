@@ -1,0 +1,23 @@
+[package]
+name = "tauri-plugin-macos-fps"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Tauri v2 plugin that unlocks >60fps on macOS by disabling WKWebView's frame rate cap"
+repository = "https://github.com/userFRM/tauri-plugin-macos-fps"
+keywords = ["tauri", "macos", "fps", "120hz", "webkit"]
+categories = ["gui"]
+
+[dependencies]
+tauri = { version = "2", default-features = false, features = ["wry"] }
+serde = { version = "1", features = ["derive"] }
+log = "0.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "NSArray",
+  "NSString",
+  "NSObject",
+] }

@@ -39,6 +39,12 @@ function deadzoneAxis(value: number, deadzone: number) {
 export const NAMED_3D_MOUSE = /spacemouse|3dconnexion|space navigator|spacepilot/i;
 const KNOWN_NON_3D_MOUSE = /xbox|wireless controller|dualshock|dualsense|joy-?con|switch pro|stadia|hotas|joystick|throttle|flight|rudder|pedal/i;
 
+// Compile-time gate for this module's diagnostic device-detection logging. Flip
+// to `true` while debugging 3D-mouse detection; kept `false` so normal builds
+// stay quiet. (The one "navlib bridge active" line lives in nativeSpaceMouseBridge
+// and is intentionally always logged.)
+const DEBUG_LOG = false;
+
 // Module-level: survives component remounts (e.g. cameraInteractionCycleEnabled toggling).
 const seenDeviceIds = new Set<string>();
 
@@ -335,9 +341,9 @@ export function SpaceMouseController({
       if (!seenDeviceIds.has(candidate.id)) {
         seenDeviceIds.add(candidate.id);
         if (NAMED_3D_MOUSE.test(candidate.id)) {
-          console.info(`[3DMouse] Named device detected: "${candidate.id}" (${candidate.axes.length} axes)`);
+          if (DEBUG_LOG) console.info(`[3DMouse] Named device detected: "${candidate.id}" (${candidate.axes.length} axes)`);
         } else {
-          console.warn(`[3DMouse] Fallback device detected: "${candidate.id}" (${candidate.axes.length} axes). Block it in Settings → 3D Mouse if it is not a 3D mouse.`);
+          if (DEBUG_LOG) console.warn(`[3DMouse] Fallback device detected: "${candidate.id}" (${candidate.axes.length} axes). Block it in Settings → 3D Mouse if it is not a 3D mouse.`);
           if (!settings.blockedDeviceIds.includes(candidate.id)) {
             onNewDeviceDetected?.(candidate.id);
           }

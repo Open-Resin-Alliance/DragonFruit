@@ -84,8 +84,8 @@ function BuiltinPreviewMesh({
   toonSteps,
   materialRoughness,
   xrayOpacity,
-  heatmapBlend,
-  heatmapContrast,
+  heatmapMinAngle,
+  heatmapMaxAngle,
   heatmapColors,
   hoverTintColor,
   selectedTintColor,
@@ -105,8 +105,8 @@ function BuiltinPreviewMesh({
   toonSteps: number;
   materialRoughness: number;
   xrayOpacity: number;
-  heatmapBlend: number;
-  heatmapContrast: number;
+  heatmapMinAngle: number;
+  heatmapMaxAngle: number;
   heatmapColors?: string[];
   hoverTintColor?: string;
   selectedTintColor?: string;
@@ -173,8 +173,8 @@ function BuiltinPreviewMesh({
             materialRoughness={materialRoughness}
             clippingPlanes={[]}
             xrayOpacity={xrayOpacity}
-            heatmapBlend={heatmapBlend}
-            heatmapContrast={heatmapContrast}
+            heatmapMinAngle={heatmapMinAngle}
+            heatmapMaxAngle={heatmapMaxAngle}
             heatmapColors={heatmapColors}
             hoverTintStrength={hoverTintStrength}
             selectedTintStrength={selectedTintStrength}
@@ -214,8 +214,8 @@ function BuiltinPreviewMesh({
           materialRoughness={materialRoughness}
           clippingPlanes={[]}
           xrayOpacity={xrayOpacity}
-          heatmapBlend={heatmapBlend}
-          heatmapContrast={heatmapContrast}
+          heatmapMinAngle={heatmapMinAngle}
+          heatmapMaxAngle={heatmapMaxAngle}
           heatmapColors={heatmapColors}
           hoverTintStrength={hoverTintStrength}
           selectedTintStrength={selectedTintStrength}
@@ -235,8 +235,8 @@ function StlPreviewMesh({
   toonSteps,
   materialRoughness,
   xrayOpacity,
-  heatmapBlend,
-  heatmapContrast,
+  heatmapMinAngle,
+  heatmapMaxAngle,
   heatmapColors,
   hoverTintColor,
   selectedTintColor,
@@ -256,8 +256,8 @@ function StlPreviewMesh({
   toonSteps: number;
   materialRoughness: number;
   xrayOpacity: number;
-  heatmapBlend: number;
-  heatmapContrast: number;
+  heatmapMinAngle: number;
+  heatmapMaxAngle: number;
   heatmapColors?: string[];
   hoverTintColor?: string;
   selectedTintColor?: string;
@@ -314,8 +314,8 @@ function StlPreviewMesh({
             materialRoughness={materialRoughness}
             clippingPlanes={[]}
             xrayOpacity={xrayOpacity}
-            heatmapBlend={heatmapBlend}
-            heatmapContrast={heatmapContrast}
+            heatmapMinAngle={heatmapMinAngle}
+            heatmapMaxAngle={heatmapMaxAngle}
             heatmapColors={heatmapColors}
             hoverTintStrength={hoverTintStrength}
             selectedTintStrength={selectedTintStrength}
@@ -355,8 +355,8 @@ function StlPreviewMesh({
           materialRoughness={materialRoughness}
           clippingPlanes={[]}
           xrayOpacity={xrayOpacity}
-          heatmapBlend={heatmapBlend}
-          heatmapContrast={heatmapContrast}
+          heatmapMinAngle={heatmapMinAngle}
+          heatmapMaxAngle={heatmapMaxAngle}
           heatmapColors={heatmapColors}
           hoverTintStrength={hoverTintStrength}
           selectedTintStrength={selectedTintStrength}
@@ -378,8 +378,8 @@ function PreviewContent({
   ambientIntensity,
   directionalIntensity,
   xrayOpacity,
-  heatmapBlend,
-  heatmapContrast,
+  heatmapMinAngle,
+  heatmapMaxAngle,
   heatmapColors,
   hoverTintColor,
   selectedTintColor,
@@ -401,8 +401,8 @@ function PreviewContent({
   ambientIntensity: number;
   directionalIntensity: number;
   xrayOpacity: number;
-  heatmapBlend: number;
-  heatmapContrast: number;
+  heatmapMinAngle: number;
+  heatmapMaxAngle: number;
   heatmapColors?: string[];
   hoverTintColor?: string;
   selectedTintColor?: string;
@@ -440,8 +440,8 @@ function PreviewContent({
             toonSteps={toonSteps}
             materialRoughness={materialRoughness}
             xrayOpacity={xrayOpacity}
-            heatmapBlend={heatmapBlend}
-            heatmapContrast={heatmapContrast}
+            heatmapMinAngle={heatmapMinAngle}
+            heatmapMaxAngle={heatmapMaxAngle}
             heatmapColors={heatmapColors}
             hoverTintColor={hoverTintColor}
             selectedTintColor={selectedTintColor}
@@ -463,8 +463,8 @@ function PreviewContent({
             toonSteps={toonSteps}
             materialRoughness={materialRoughness}
             xrayOpacity={xrayOpacity}
-            heatmapBlend={heatmapBlend}
-            heatmapContrast={heatmapContrast}
+            heatmapMinAngle={heatmapMinAngle}
+            heatmapMaxAngle={heatmapMaxAngle}
             heatmapColors={heatmapColors}
             hoverTintColor={hoverTintColor}
             selectedTintColor={selectedTintColor}
@@ -493,8 +493,8 @@ export function MeshShaderPreviewCanvas({
   ambientIntensity,
   directionalIntensity,
   xrayOpacity,
-  heatmapBlend,
-  heatmapContrast,
+  heatmapMinAngle,
+  heatmapMaxAngle,
   heatmapColors,
   hoverTintColor,
   selectedTintColor,
@@ -517,8 +517,8 @@ export function MeshShaderPreviewCanvas({
   ambientIntensity: number;
   directionalIntensity: number;
   xrayOpacity: number;
-  heatmapBlend: number;
-  heatmapContrast: number;
+  heatmapMinAngle: number;
+  heatmapMaxAngle: number;
   heatmapColors?: string[];
   hoverTintColor?: string;
   selectedTintColor?: string;
@@ -566,8 +566,8 @@ export function MeshShaderPreviewCanvas({
           ambientIntensity={ambientIntensity}
           directionalIntensity={directionalIntensity}
           xrayOpacity={xrayOpacity}
-          heatmapBlend={heatmapBlend}
-          heatmapContrast={heatmapContrast}
+          heatmapMinAngle={heatmapMinAngle}
+          heatmapMaxAngle={heatmapMaxAngle}
           heatmapColors={heatmapColors}
           hoverTintColor={hoverTintColor}
           selectedTintColor={selectedTintColor}

@@ -224,3 +224,51 @@ describe('evaluateNativeRepairQualityGate', () => {
     assert.match(decision.reason ?? '', /boundary edges increased too aggressively/i);
   });
 });
+
+describe('processGeometry classification bypass', () => {
+  it('skips native processing entirely when skipClassification is true', async () => {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0], 3));
+    let classifyCalled = false;
+    let repairCalled = false;
+    await processGeometry(geom, {
+      skipClassification: true,
+      _isTauriRuntime: () => true,
+      _classifyFromGeometry: async () => { classifyCalled = true; return null; },
+      _repairFromGeometry: async () => { repairCalled = true; return null; }
+    });
+    assert.equal(classifyCalled, false, 'should not run classification');
+    assert.equal(repairCalled, false, 'should not run repair');
+  });
+
+  it('calls only classification when skipClassification is false and nativeProcessingMode is classify-only', async () => {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0], 3));
+    let classifyCalled = false;
+    let repairCalled = false;
+    await processGeometry(geom, {
+      skipClassification: false,
+      nativeProcessingMode: 'classify-only',
+      _isTauriRuntime: () => true,
+      _classifyFromGeometry: async () => { classifyCalled = true; return null; },
+      _repairFromGeometry: async () => { repairCalled = true; return null; }
+    });
+    assert.equal(classifyCalled, true, 'should run classification');
+    assert.equal(repairCalled, false, 'should not run repair');
+  });
+
+  it('runs classification when nativeProcessingMode is none but skipClassification is not true', async () => {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0], 3));
+    let classifyCalled = false;
+    let repairCalled = false;
+    await processGeometry(geom, {
+      nativeProcessingMode: 'none',
+      _isTauriRuntime: () => true,
+      _classifyFromGeometry: async () => { classifyCalled = true; return null; },
+      _repairFromGeometry: async () => { repairCalled = true; return null; }
+    });
+    assert.equal(classifyCalled, true, 'should run classification');
+    assert.equal(repairCalled, false, 'should not run repair');
+  });
+});

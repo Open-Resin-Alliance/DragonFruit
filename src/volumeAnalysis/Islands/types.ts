@@ -1,3 +1,4 @@
+import type { VoxelFootprint } from './voxelFootprint';
 import type * as THREE from 'three';
 
 /**
@@ -10,7 +11,42 @@ import type * as THREE from 'three';
  */
 
 /** Which detector produced an island. */
-export type IslandSource = 'voxel' | 'minima';
+export type IslandSource = 'voxel' | 'minima' | 'overhang';
+
+/**
+ * Wire shape of the `scan_overhangs` Tauri command (mesh-normal overhang
+ * classification — catches shallow slopes the slice-growth detector cannot).
+ */
+export interface FootprintMask {
+  width: number;
+  height: number;
+  /** World XY of the mask's top-left pixel center (mm). */
+  originX: number;
+  originY: number;
+  pxMm: number;
+  /** Row-major pixels (1 = inside the projected region). */
+  data: number[];
+  /** Row-major surface Z (mm) on the region's own triangles (parallel to data). */
+  surfaceZ: number[];
+}
+
+export interface OverhangRegion {
+  triangleIds: number[];
+  areaMm2: number;
+  projectedAreaMm2: number;
+  angleDeg: number;
+  /** Area-weighted mean face normal (world space, points away from the model). */
+  normal: [number, number, number];
+  xyMin: [number, number];
+  xyMax: [number, number];
+  minZ: number;
+  maxZ: number;
+  footprint: FootprintMask;
+  /** Triangle-accurate perimeter loops, inset by 0.25 mm (world mm, each loop closed). */
+  perimeterLoops?: Vec3Loop[];
+}
+
+export type Vec3Loop = Array<[number, number, number]>;
 
 /** Classification once the voxel and minima sets are intersected (Part C). */
 export type IslandClass = 'intersection' | 'voxelOnly' | 'minimaOnly';
@@ -28,12 +64,26 @@ export interface DetectedIsland {
   baseZ: number;
 
   // --- voxel-detector extras (undefined for minima) ---
-  /** Max cross-sectional contact area across the island's layers (mm^2). */
+  /** Contact footprint area at the island's base layer (mm^2). */
   areaMm2?: number;
+  // --- overhang-detector extras (undefined for others) ---
+  /** Mean surface angle from horizontal (degrees) — set by the overhang detector. */
+  overhangAngleDeg?: number;
+  /** Model-triangle indices of the overhang region (for surface highlighting). */
+  triangleIds?: number[];
+  /** Region mean surface normal (world space, away from the model) — lets the
+   *  placement pipeline skip whole-mesh raycasts that hit the wrong face on
+   *  sloped geometry. */
+  surfaceNormal?: { x: number; y: number; z: number };
   /** Inclusive [firstLayer, lastLayer] of the unsupported contact region. */
   layerSpan?: readonly [number, number];
-  /** Contact voxel 2D positions (x, y coordinates in world mm) at the base layer. */
-  contactVoxels?: { x: number; y: number }[];
+  /** Contact voxel 2D positions (x, y coordinates in world mm) at the base layer.
+   *  Overhang regions also carry the surface Z at each voxel. */
+  contactVoxels?: VoxelFootprint;
+  /** Triangle-accurate perimeter loops, inset by 0.25 mm (world mm). Present for
+   *  overhang regions when `scan_overhangs` supplied them; used by the Poisson
+   *  anchor ring and grid boundary fill instead of voxel erosion for organic shapes. */
+  perimeterLoops?: Vec3Loop[];
 
   // --- minima-detector extras (undefined for voxel) ---
   /** Source mesh vertex index. */

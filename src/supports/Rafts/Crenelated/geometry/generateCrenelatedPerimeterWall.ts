@@ -26,7 +26,6 @@ function resampleUniform(points: THREE.Vector2[], step: number): THREE.Vector2[]
 
   let acc = 0;
   let segIdx = 0;
-  let segT = 0; // 0..1 within current segment
   samples.push(points[0].clone());
   for (let s = 1; s < targetCount; s++) {
     const dist = (s * total) / targetCount;

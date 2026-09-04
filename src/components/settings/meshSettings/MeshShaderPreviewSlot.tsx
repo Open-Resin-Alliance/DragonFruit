@@ -15,8 +15,8 @@ export function MeshShaderPreviewSlot({
   ambientIntensity,
   directionalIntensity,
   xrayOpacity,
-  heatmapBlend,
-  heatmapContrast,
+  heatmapMinAngle,
+  heatmapMaxAngle,
   heatmapColors,
   hoverTintStrength,
   selectedTintStrength,
@@ -31,8 +31,8 @@ export function MeshShaderPreviewSlot({
   ambientIntensity: number;
   directionalIntensity: number;
   xrayOpacity: number;
-  heatmapBlend: number;
-  heatmapContrast: number;
+  heatmapMinAngle: number;
+  heatmapMaxAngle: number;
   heatmapColors?: string[];
   hoverTintStrength: number;
   selectedTintStrength: number;
@@ -50,8 +50,8 @@ export function MeshShaderPreviewSlot({
         ambientIntensity={ambientIntensity}
         directionalIntensity={directionalIntensity}
         xrayOpacity={xrayOpacity}
-        heatmapBlend={heatmapBlend}
-        heatmapContrast={heatmapContrast}
+        heatmapMinAngle={heatmapMinAngle}
+        heatmapMaxAngle={heatmapMaxAngle}
         heatmapColors={heatmapColors}
         hoverTintStrength={hoverTintStrength}
         selectedTintStrength={selectedTintStrength}

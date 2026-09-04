@@ -375,6 +375,14 @@ fn pipeline_deterministic() {
 
     assert_eq!(r1.islands.len(), r2.islands.len(), "island count differs");
 
+    // The full island ID set must be identical across runs — tracker parent
+    // choice (overlap ties) must not affect which islands exist.
+    let mut ids1: Vec<u32> = r1.islands.iter().map(|i| i.id.0).collect();
+    let mut ids2: Vec<u32> = r2.islands.iter().map(|i| i.id.0).collect();
+    ids1.sort();
+    ids2.sort();
+    assert_eq!(ids1, ids2, "island id set differs between runs");
+
     // Compare island content as sorted tuples (ignoring ID assignment order)
     // Round area to 0.01mm² to avoid float precision noise
     let mut areas1: Vec<(u32, u32, i64)> = r1.islands.iter()
@@ -386,6 +394,17 @@ fn pipeline_deterministic() {
     areas1.sort();
     areas2.sort();
     assert_eq!(areas1, areas2, "island content differs between runs");
+
+    // Parent-child topology must also match exactly across runs.
+    let mut topo1: Vec<(u32, Vec<u32>)> = r1.islands.iter()
+        .map(|i| (i.id.0, i.parent_id.map(|p| p.0).into_iter().collect()))
+        .collect();
+    let mut topo2: Vec<(u32, Vec<u32>)> = r2.islands.iter()
+        .map(|i| (i.id.0, i.parent_id.map(|p| p.0).into_iter().collect()))
+        .collect();
+    topo1.sort();
+    topo2.sort();
+    assert_eq!(topo1, topo2, "parent topology differs between runs");
 
     // Per-layer label masks: total labeled pixel count must match
     for (l, (lab1, lab2)) in r1.island_labels_per_layer.iter()

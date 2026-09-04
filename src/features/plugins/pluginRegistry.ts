@@ -344,6 +344,15 @@ function sanitizeBitDepth(input: unknown): PrinterPreset['bitDepth'] {
   };
 }
 
+function sanitizeModelVariants(input: unknown): string[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const ids = input
+    .slice(0, 32)
+    .map((value) => boundedString(value, 120))
+    .filter((value): value is string => value.length > 0);
+  return ids.length > 0 ? ids : undefined;
+}
+
 function resolveBuildDimensionMm(
   explicitValue: unknown,
   resolutionPx: number,
@@ -354,6 +363,21 @@ function resolveBuildDimensionMm(
   if (explicit != null) return explicit;
   if (pixelSizeUm != null) return (resolutionPx * pixelSizeUm) / 1000;
   return fallbackMm;
+}
+
+function sanitizeSafetyMarginMm(input: unknown): PrinterPreset['safetyMarginMm'] {
+  if (!input || typeof input !== 'object') return undefined;
+  const src = input as Record<string, unknown>;
+  const clampEdge = (v: unknown) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  };
+  return {
+    front: clampEdge(src.front),
+    back: clampEdge(src.back),
+    left: clampEdge(src.left),
+    right: clampEdge(src.right),
+  };
 }
 
 function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
@@ -391,12 +415,17 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
     platformBadge: sanitizePlatformBadge((value as any).platformBadge),
     pixelSize,
     bitDepth: sanitizeBitDepth((value as any).bitDepth),
+    modelVariants: sanitizeModelVariants((value as any).modelVariants),
+    modelVariantDetectPath: boundedString((value as any).modelVariantDetectPath, 240) || undefined,
+    libraryDisplayName: boundedString((value as any).libraryDisplayName, 120) || undefined,
+    isModelVariant: typeof value.isModelVariant === 'boolean' ? value.isModelVariant : undefined,
     buildDimensionMode,
     buildVolumeMm: {
       width: resolveBuildDimensionMm((value as any).buildVolumeMm?.width, resolutionX, pixelSize?.x, 143),
       depth: resolveBuildDimensionMm((value as any).buildVolumeMm?.depth, resolutionY, pixelSize?.y, 89),
       height: sanitizeNumber((value as any).buildVolumeMm?.height, 175, 1, 10000),
     },
+    safetyMarginMm: sanitizeSafetyMarginMm((value as any).safetyMarginMm),
     display: {
       resolutionX,
       resolutionY,
@@ -518,6 +547,9 @@ function sanitizeMaterialTemplate(input: unknown): Omit<MaterialProfile, 'id' | 
         zaaDuplicateZ: true,
         blurGraySourceMode: 'lut',
         zBlendResinType: 'opaque',
+        tipOffsetMode: 'disabled',
+        tipOffsetMm: 0.05,
+        tipOffsetDisplayInUi: false,
         selectedLutCurveId: 'default',
         aaOnSupports: false,
         ditherEnabled: false,

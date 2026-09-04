@@ -60,7 +60,7 @@ function normalizeScope(input: unknown): CameraScopeMode {
 }
 
 function normalizeSelectionHighlightMode(input: unknown): SelectionHighlightMode {
-  if (input === 'spotlight' || input === 'fresnel' || input === 'none') return input;
+  if (input === 'spotlight' || input === 'none') return input;
   return 'tint';
 }
 

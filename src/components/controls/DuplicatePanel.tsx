@@ -2,6 +2,7 @@ import React from 'react';
 import { CopyPlus, Loader2 } from 'lucide-react';
 import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
+import { MiniStepperField } from '@/components/ui/miniStepperField';
 import type { ArrangePrecisionMode } from '@/components/controls/ArrangePanel';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
@@ -291,28 +292,21 @@ export function DuplicatePanel({
               ] as const).map(([axis, countValue, onCountChange, gapValue, onGapChange]) => (
                 <div key={axis} className="grid grid-cols-[24px_minmax(0,1fr)_minmax(0,1fr)] gap-1 items-center mb-1 last:mb-0 min-w-0">
                   <span className="text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>{axis}:</span>
-                  <ScrollableNumberField
+                  <MiniStepperField
                     value={countValue}
                     onChange={(next) => setClampedArrayCount(onCountChange, next)}
                     min={1}
                     max={32}
-                    step={1}
                     disabled={panelDisabled}
                     ariaLabel={`${axis} array count`}
-                    decreaseTitle={`Decrease ${axis} count`}
-                    increaseTitle={`Increase ${axis} count`}
                   />
-                  <ScrollableNumberField
+                  <MiniStepperField
                     value={gapValue}
                     onChange={(next) => setClampedArrayGap(onGapChange, next)}
                     min={-120}
                     max={120}
-                    step={1}
-                    unit="mm"
                     disabled={panelDisabled}
                     ariaLabel={`${axis} array gap`}
-                    decreaseTitle={`Decrease ${axis} gap`}
-                    increaseTitle={`Increase ${axis} gap`}
                   />
                 </div>
               ))}

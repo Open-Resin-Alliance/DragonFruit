@@ -51,7 +51,12 @@ export const DEBUG_SECTION_COLORS: Record<string, string> = {
 export const AUTO_BRACING_HARD_RULES = {
     braceAngleDeg: 45,
     minGroupSize: 3,
-    minAxisSeparationDeg: 50,
+    // A second axis must be separated by at least the ladder's own brace
+    // angle: the 45° X-pattern diagonals qualify as a second axis, so a
+    // braced trunk reads as 2-axis and does NOT get a kickstand. (Was 50° —
+    // stricter than the braces the ladder actually places, so dense forests
+    // of X-braced trunks still spawned kickstands.)
+    minAxisSeparationDeg: 45,
     targetAxisSeparationDeg: 90,
     kickstandMeshClearanceMm: 0.5,
 };

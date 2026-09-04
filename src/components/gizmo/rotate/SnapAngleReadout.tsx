@@ -1,17 +1,12 @@
 import { useEffect, useState } from 'react';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
+import { formatSweepDegrees } from './rotationDialModel';
 
 const AXIS_COLORS: Record<string, string> = {
   x: '#ff3120',
   y: '#00ff00',
   z: '#1596ff',
 };
-
-function wrapRotationDegrees(degrees: number): number {
-  if (!Number.isFinite(degrees)) return 0;
-  const wrapped = ((((degrees + 180) % 360) + 360) % 360) - 180;
-  return Object.is(wrapped, -0) ? 0 : wrapped;
-}
 
 export function SnapAngleReadout() {
   const [snap, setSnap] = useState<{ active: boolean; angle?: number; axis?: string }>({ active: false });
@@ -26,7 +21,7 @@ export function SnapAngleReadout() {
 
   if (!snap.active || snap.angle === undefined) return null;
 
-  const degrees = Math.round(wrapRotationDegrees((snap.angle * 180) / Math.PI));
+  const degrees = formatSweepDegrees(snap.angle);
   const color = AXIS_COLORS[snap.axis ?? 'x'] ?? '#ffffff';
 
   return (

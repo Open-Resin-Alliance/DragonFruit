@@ -213,10 +213,8 @@ export function useMirrorManager({
     const idxAttr = source.getIndex();
     const rawIdx = idxAttr?.array;
     let indices: Uint16Array | Uint32Array | null = null;
-    let indexType: 'uint16' | 'uint32' | null = null;
     if (rawIdx) {
       indices = rawIdx.slice() as Uint16Array | Uint32Array;
-      indexType = rawIdx instanceof Uint16Array ? 'uint16' : 'uint32';
     }
     const posItemSize = posAttr.itemSize;
     const normItemSize = normAttr?.itemSize ?? 3;

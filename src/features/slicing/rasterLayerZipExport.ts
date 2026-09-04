@@ -1,7 +1,8 @@
 import JSZip from 'jszip';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
+import { type MaterialProfile, type PrinterProfile, getActiveMaterialProfile, getActivePrinterProfile } from '@/features/profiles/profileStore';
+import { calculateTipOffset } from '@/supports/rendering/calculateTipOffset';
 import {
   getSavedSlicingPerformanceSettings,
   type PngCompressionStrategy,
@@ -18,7 +19,7 @@ import { generateChamferedBeam } from '@/supports/Rafts/Crenelated/geometry/gene
 import { buildLineRaftEdgePairs } from '@/supports/Rafts/Crenelated/geometry/buildLineRaftEdgePairs';
 import type { ContactDisk } from '@/supports/types';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
-import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
+import { calculateDiskThickness, getDiskCenter, getDiskRotation } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
 import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints } from '@/supports/SupportPrimitives/Knot/knotUtils';
 import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
@@ -786,12 +787,18 @@ function appendContactConePrimitive(
     normal: { x: number; y: number; z: number };
     surfaceNormal?: { x: number; y: number; z: number };
     diskLengthOverride?: number;
-    profile: { contactDiameterMm: number; bodyDiameterMm: number; type?: string; diskThicknessMm?: number; maxStandoffMm?: number; standoffAngleThreshold?: number };
+    profile: { contactDiameterMm: number; bodyDiameterMm: number; type?: string; diskThicknessMm?: number; maxStandoffMm?: number; standoffAngleThreshold?: number; penetrationMm?: number };
   },
   radialSegments = 12,
+  penetrationMm = 0,
 ): void {
   const socket = getFinalSocketPosition(cone as any);
-  const start = new THREE.Vector3(cone.pos.x, cone.pos.y, cone.pos.z);
+  const effectiveNormal = cone.surfaceNormal ?? cone.normal;
+  const start = new THREE.Vector3(
+    cone.pos.x - effectiveNormal.x * penetrationMm,
+    cone.pos.y - effectiveNormal.y * penetrationMm,
+    cone.pos.z - effectiveNormal.z * penetrationMm,
+  );
   const end = new THREE.Vector3(socket.x, socket.y, socket.z);
   const g = createFrustumGeometryBetween(
     start,
@@ -804,6 +811,43 @@ function appendContactConePrimitive(
   appendGeometryTriangles(sink, g);
   g.dispose();
 }
+
+function appendContactDiskPrimitive(
+  sink: TriangleSink,
+  disk: ContactDisk,
+  radialSegments: number,
+  penetrationMm = 0.05,
+): void {
+  const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
+  const radius = Math.max(0.01, disk.contactDiameterMm * 0.5);
+
+  const center = getDiskCenter(disk.pos, disk.surfaceNormal, thickness);
+  const rotation = getDiskRotation(disk.surfaceNormal);
+
+  const cylinderHeight = thickness + penetrationMm;
+  const cylinderGeom = new THREE.CylinderGeometry(radius, radius, cylinderHeight, Math.max(4, Math.floor(radialSegments)));
+
+  const groupMatrix = new THREE.Matrix4().compose(
+    new THREE.Vector3(center.x, center.y, center.z),
+    rotation,
+    new THREE.Vector3(1, 1, 1),
+  );
+
+  const cylinderMatrix = groupMatrix.clone().multiply(new THREE.Matrix4().makeTranslation(0, -penetrationMm / 2, 0));
+  cylinderGeom.applyMatrix4(cylinderMatrix);
+  appendGeometryTriangles(sink, cylinderGeom);
+  cylinderGeom.dispose();
+
+  const sphereSegments = Math.max(4, Math.floor(radialSegments));
+  const heightSegments = Math.max(3, Math.floor(sphereSegments * 0.75));
+  const sphereGeom = new THREE.SphereGeometry(radius, sphereSegments, heightSegments);
+
+  const sphereMatrix = groupMatrix.clone().multiply(new THREE.Matrix4().makeTranslation(0, thickness / 2, 0));
+  sphereGeom.applyMatrix4(sphereMatrix);
+  appendGeometryTriangles(sink, sphereGeom);
+  sphereGeom.dispose();
+}
+
 
 function buildSupportAndRaftWorldTriangles(
   visibleModelIds: Set<string>,
@@ -828,6 +872,16 @@ function buildSupportAndRaftWorldTriangles(
   const JOINT_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
   const visibleRootIds = new Set<string>();
   const rootModelKeyById = new Map<string, string>();
+  
+  const material = getActiveMaterialProfile();
+  const printer = getActivePrinterProfile();
+  const tipPenetrationMm = (material && printer) 
+    ? (() => {
+        const pxX = printer.pixelSize?.x ? printer.pixelSize.x / 1000 : (printer.buildVolumeMm?.width ?? 143) / (printer.display?.resolutionX ?? 2560);
+        const pxY = printer.pixelSize?.y ? printer.pixelSize.y / 1000 : (printer.buildVolumeMm?.depth ?? 89) / (printer.display?.resolutionY ?? 1620);
+        return calculateTipOffset(material.antiAliasingSettings, material.layerHeightMm, pxX, pxY);
+      })()
+    : 0;
 
   for (const trunk of Object.values(supportState.trunks)) {
     if (!visibleModelIds.has(trunk.modelId)) continue;
@@ -866,8 +920,8 @@ function buildSupportAndRaftWorldTriangles(
 
     // Mirror proxy hasSolidBottom logic: collapse disk height and shift root up so it
     // sits flush on top of the solid raft rather than extending through it.
-    const effectiveDiskHeight = hasSolidBottom ? 0.05 : Math.max(0.01, root.diskHeight);
-    const verticalOffset = hasSolidBottom ? Math.max(raftThickness - effectiveDiskHeight, 0) : 0;
+    const effectiveDiskHeight = Math.max(0.01, root.diskHeight);
+    const verticalOffset = 0;
     const base = new THREE.Vector3(
       root.transform.pos.x,
       root.transform.pos.y,
@@ -930,7 +984,7 @@ function buildSupportAndRaftWorldTriangles(
     }
 
     if (trunk.contactCone) {
-      appendContactConePrimitive(sink, trunk.contactCone as any, tessellation.contactConeRadialSegments);
+      appendContactConePrimitive(sink, trunk.contactCone as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
     }
   }
 
@@ -974,7 +1028,7 @@ function buildSupportAndRaftWorldTriangles(
     }
 
     if (branch.contactCone) {
-      appendContactConePrimitive(sink, branch.contactCone as any, tessellation.contactConeRadialSegments);
+      appendContactConePrimitive(sink, branch.contactCone as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
     }
   }
 
@@ -1008,6 +1062,8 @@ function buildSupportAndRaftWorldTriangles(
         );
       }
     }
+    appendContactDiskPrimitive(sink, twig.contactDiskA, tessellation.contactConeRadialSegments, tipPenetrationMm);
+    appendContactDiskPrimitive(sink, twig.contactDiskB, tessellation.contactConeRadialSegments, tipPenetrationMm);
   }
 
   for (const stick of Object.values(supportState.sticks)) {
@@ -1041,8 +1097,8 @@ function buildSupportAndRaftWorldTriangles(
       }
     }
 
-    appendContactConePrimitive(sink, stick.contactConeA as any, tessellation.contactConeRadialSegments);
-    appendContactConePrimitive(sink, stick.contactConeB as any, tessellation.contactConeRadialSegments);
+    appendContactConePrimitive(sink, stick.contactConeA as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
+    appendContactConePrimitive(sink, stick.contactConeB as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
   }
 
   for (const brace of Object.values(supportState.braces)) {
@@ -1069,7 +1125,32 @@ function buildSupportAndRaftWorldTriangles(
   for (const leaf of Object.values(supportState.leaves)) {
     const modelId = leaf.modelId;
     if (!modelId || !visibleModelIds.has(modelId)) continue;
-    appendContactConePrimitive(sink, leaf.contactCone as any, tessellation.contactConeRadialSegments);
+    appendContactConePrimitive(sink, leaf.contactCone as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
+  }
+
+  // Anchors carry their own root (they never appear in supportState.roots),
+  // so without this walk they vanish from every slice. Mirror AnchorRenderer:
+  // root frustum + joint sphere + contact cone.
+  for (const anchor of Object.values(supportState.anchors)) {
+    if (!visibleModelIds.has(anchor.modelId)) continue;
+
+    const baseRadius = Math.max(0.05, anchor.rootBaseDiameter * 0.5);
+    const topRadius = Math.max(0.05, anchor.rootTopDiameter * 0.5);
+    const base = new THREE.Vector3(anchor.rootPos.x, anchor.rootPos.y, anchor.rootPos.z);
+    const top = base.clone().add(new THREE.Vector3(0, 0, Math.max(0.01, anchor.rootHeight)));
+    const rootGeom = createFrustumGeometryBetween(base, top, baseRadius, topRadius, tessellation.rootRadialSegments);
+    if (rootGeom) {
+      appendGeometryTriangles(sink, rootGeom);
+      rootGeom.dispose();
+    }
+
+    appendJointSphere(
+      sink,
+      anchor.joint.pos,
+      Math.max(0.001, anchor.joint.diameter - JOINT_BLEND_MM),
+      tessellation.jointRadialSegments,
+    );
+    appendContactConePrimitive(sink, anchor.contactCone, tessellation.contactConeRadialSegments, tipPenetrationMm);
   }
 
   for (const kickstand of Object.values(kickstandState.kickstands)) {
@@ -1143,11 +1224,13 @@ function buildSupportAndRaftWorldTriangles(
     for (const circles of rootsByModel.values()) {
       if (circles.length === 0) continue;
       const clampedChamfer = Math.min(90, Math.max(45, raft.chamferAngle));
-      const chamferInset = raft.bottomMode === 'line'
-        ? Math.max(0, raft.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - clampedChamfer))
-        : 0;
+      const thickness = raft.bottomMode === 'line' ? raft.lineHeightMm : raft.thickness;
+      const chamferInset = Math.max(0, thickness) * Math.tan((Math.PI / 180) * (90 - clampedChamfer));
+      const wallInset = raft.wallEnabled ? Math.max(0, raft.wallThickness) : 0;
+      const dynamicMargin = 0.2 + Math.max(chamferInset, wallInset);
+
       const profile = computeFootprint(circles as any, {
-        marginMm: 0.2 + chamferInset,
+        marginMm: dynamicMargin,
         samplesPerCircle: 24,
       });
       if (!profile || profile.length < 3) continue;
@@ -1628,12 +1711,19 @@ function appendModelTrianglesInRange(
 }
 
 /** Returns the number of triangles in a model that belong to the actual
- *  model body (excluding imported support geometry).  When the repair
- *  report has identified a clear model/support split this is the split
- *  point; when the mesh is flagged as entirely support-dominant the count
- *  is zero. */
-function effectiveModelTriangleCount(model: LoadedModel): number {
+ *  model body (excluding imported support geometry). When explicit
+ *  isSupportGeometry flag is set, it overrides repair report bounds.
+ *  When the repair report has identified a clear model/support split this
+ *  is the split point; when the mesh is flagged as entirely support-dominant
+ *  the count is zero. */
+export function effectiveModelTriangleCount(model: LoadedModel): number {
+  if (model.isSupportGeometry === true) {
+    return 0;
+  }
   const totalTriCount = getModelTriangleCount(model);
+  if (model.isSupportGeometry === false) {
+    return totalTriCount;
+  }
   const report = model.geometry.meshDefects?.nativeRepairReport;
   const modelTriCount = report?.model_triangle_count;
   if (modelTriCount != null && modelTriCount > 0) {
@@ -1645,7 +1735,7 @@ function effectiveModelTriangleCount(model: LoadedModel): number {
 
 /** Returns the total triangle count for a model's geometry
  *  (used for both counting and iteration bounds). */
-function getModelTriangleCount(model: LoadedModel): number {
+export function getModelTriangleCount(model: LoadedModel): number {
   const geometry = model.geometry.geometry;
   const position = geometry.getAttribute('position');
   if (!position) return 0;

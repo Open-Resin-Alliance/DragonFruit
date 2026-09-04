@@ -18,6 +18,7 @@ A branch is a support that grows from another support instead of starting from R
 
 - Branches are created from the model outward, then snap their base to a support shaft.
 - Once attached, they inherit motion from their parent support.
+- Branches chain recursively: a branch may host another branch, so branch-on-branch trees are valid.
 - Their angle and length can be edited like a trunk.
 
 ## Constraints

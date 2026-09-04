@@ -1,19 +1,16 @@
-# Hotkey System Specification
+# Hotkey System Reference
 
 Centralized Zustand state store controls all key bindings.
 
 ## Architecture
 
-- **Store**: `DragonFruit/src/hotkeys/hotkeyStore.ts`
-- **Config**: `DragonFruit/src/hotkeys/hotkeyConfig.ts`
-- **Listener Manager**: `DragonFruit/src/hotkeys/HotkeyRegistryManager.tsx`
+- **Store**: `src/hotkeys/hotkeyStore.ts`
+- **Config**: `src/hotkeys/hotkeyConfig.ts`
+- **Listener Manager**: `src/hotkeys/HotkeyRegistryManager.tsx`
 
-## Developer Rules
-
-1. **No direct listeners**: Never use `window.addEventListener('keydown' | 'keyup')` or `element.onkeydown`.
-2. **Hook usage**: React components read key state via `useActionActive(category, action)`.
-3. **Sync lookup**: Performance-critical loops (e.g. Three.js render frame) read key state via `isKeyPressedSync(key)`.
-4. **Modifying bindings**: Update `DEFAULT_KEYBINDINGS` in `hotkeyConfig.ts`.
+Rules for working with the system — listener hygiene, press-edge toggles,
+specificity suppression, the delete registry, and the raw keydown/keyup event
+contract — live in the [Hotkey System Developer Guide](../dev/hotkeys.md).
 
 ## API Reference
 
@@ -22,3 +19,9 @@ React hook. Reactive to modifier changes. Excludes overlapping modifiers.
 
 ### `isKeyPressedSync(key: string): boolean`
 Non-reactive getter. Direct Set lookup. Use in high-frequency requestAnimationFrame loops.
+
+### `useEscapeToClose(open: boolean, onClose?: () => void): void`
+React hook. Registers a dialog as the Escape target while `open`. Only the
+most recently registered dialog reacts, and it consumes the press. Omit
+`onClose` to swallow Escape (non-dismissible dialog). Non-React callers use
+`registerEscapeHandler(handler)`, which returns its unregister function.

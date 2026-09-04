@@ -21,7 +21,7 @@ type SliceJobLimit = {
 };
 
 export const SLICE_JOB_LIMITS = {
-  blurBrushRadiusPx: { min: 1, snap: 'round', fallback: 1 },
+  blurBrushRadiusPx: { min: 0, max: 64, snap: 'round', fallback: 1 },
   blurBrushSigmaX: { min: 0.05, max: 16, fallback: 0.5 },
   blurBrushSigmaY: { min: 0.05, max: 16, fallback: 0.5 },
   zBlurRadiusLayers: { min: 0, max: 8, snap: 'round', fallback: 0 },

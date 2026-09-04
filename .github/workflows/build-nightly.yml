@@ -12,10 +12,6 @@ on:
         description: Workflow run ID of the PR check to download macOS artifacts from
         required: false
         type: string
-      pr_number:
-        description: PR number (for fork PR checkout)
-        required: false
-        type: string
       release_name:
         description: 'Override release name (e.g. "Feature: Test"). Inferred from branch if empty.'
         required: false
@@ -29,25 +25,41 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: nightly-${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.ref_name }}
-  cancel-in-progress: true
+  # Comment activations serialise per PR and never cancel each other: they are
+  # cheap, and one PR's /preview must not kill another's. Build dispatches keep
+  # the old behaviour, where a newer build supersedes an in-flight one for the
+  # same branch.
+  group: >-
+    ${{ github.event_name == 'issue_comment'
+        && format('preview-pr-{0}', github.event.issue.number)
+        || format('nightly-{0}', github.event_name == 'workflow_dispatch' && inputs.branch || github.ref_name) }}
+  cancel-in-progress: ${{ github.event_name != 'issue_comment' }}
 
 env:
+  # "nightly" is being retired in favour of "preview" (see docs/dev/releases.md).
+  # Both spellings are accepted while the old one is phased out; the new label is
+  # the one this workflow applies.
+  PREVIEW_LABEL: preview-build
   NIGHTLY_LABEL: nightly-build
 
 jobs:
-  # ── Comment handler: /nightly or @github-actions build nightly ──────────
+  # ── Comment handler: /preview (or the deprecated /nightly) ──────────────
   activate-nightly:
     if: >
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
-      (startsWith(github.event.comment.body, '/nightly') ||
-       startsWith(github.event.comment.body, '@github-actions build nightly'))
+      (startsWith(github.event.comment.body, '/preview') ||
+       startsWith(github.event.comment.body, '/nightly') ||
+       startsWith(github.event.comment.body, '@github-actions build preview') ||
+       startsWith(github.event.comment.body, '@github-actions build nightly') ||
+       startsWith(github.event.comment.body, '/create-preview-external'))
     runs-on: ubuntu-latest
     permissions:
       actions: write
       pull-requests: write
-      contents: read
+      # Creates refs/heads/preview/pr-N when importing an external PR. This job
+      # only calls the API — it never checks out or runs the PR's code.
+      contents: write
     steps:
       - name: Check commenter has write access
         id: check_access
@@ -103,7 +115,7 @@ jobs:
         run: |
           gh issue comment "$PR" \
             --repo "${{ github.repository }}" \
-            --body $'### ❌ Access Denied\n\nSorry, only **collaborators with write access** can trigger nightly builds.\n\nIf you believe this is a mistake, please contact a maintainer.'
+            --body $'### ❌ Access Denied\n\nSorry, only **collaborators with write access** can trigger preview builds.\n\nIf you believe this is a mistake, please contact a maintainer.'
 
       - name: Fetch PR branch info
         id: pr_info
@@ -118,70 +130,273 @@ jobs:
               repo: context.repo.repo,
               pull_number: parseInt(process.env.PR),
             });
+
+            // head.repo is null once a fork has been deleted, so an unknown
+            // head repo counts as external and the routing fails closed.
+            const isExternal =
+              pr.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`;
+
             core.setOutput('head_ref', pr.head.ref);
             core.setOutput('base_ref', pr.base.ref);
-            if (pr.head.repo?.fork) {
-              core.info(`PR is from a fork (${pr.head.repo.full_name}) — will dispatch on base ref.`);
+            core.setOutput('head_sha', pr.head.sha);
+            core.setOutput('is_external', isExternal ? 'true' : 'false');
+            core.info(
+              `PR #${pr.number}: head ${pr.head.sha} from ` +
+              `${pr.head.repo?.full_name ?? 'a deleted fork'} (external: ${isExternal})`);
+
+      - name: Decide what this comment asks for
+        id: route
+        if: steps.check_access.outputs.result == 'granted'
+        uses: actions/github-script@v9
+        env:
+          IS_EXTERNAL: ${{ steps.pr_info.outputs.is_external }}
+        with:
+          result-encoding: string
+          script: |
+            const wantsExternal =
+              context.payload.comment.body.startsWith('/create-preview-external');
+            const isExternal = process.env.IS_EXTERNAL === 'true';
+
+            if (wantsExternal && !isExternal) return 'reject-internal';
+            if (!wantsExternal && isExternal) return 'reject-external';
+            return isExternal ? 'external' : 'internal';
+
+      - name: Explain that an external PR needs the explicit command
+        if: steps.route.outputs.result == 'reject-external'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: [
+                '### ⚠️ This pull request comes from a fork',
+                '',
+                'A preview build compiles the branch with the release signing',
+                'secrets in scope, so `/preview` does not build external pull',
+                'requests.',
+                '',
+                'After reading the diff, a maintainer can import this exact',
+                'commit and build it with `/create-preview-external`.',
+                '',
+                'That imports **one commit**. Later pushes need the command',
+                'again, so every external build is one a maintainer chose.',
+              ].join('\n'),
+            });
+
+      - name: Explain that this PR is not external
+        if: steps.route.outputs.result == 'reject-internal'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: [
+                '### ℹ️ This pull request is not external',
+                '',
+                'Its branch already lives in this repository, so there is',
+                'nothing to import — use `/preview` instead.',
+              ].join('\n'),
+            });
+
+      - name: Import the external head into a preview branch
+        id: import
+        if: steps.route.outputs.result == 'external'
+        uses: actions/github-script@v9
+        env:
+          PR: ${{ github.event.issue.number }}
+          HEAD_SHA: ${{ steps.pr_info.outputs.head_sha }}
+        with:
+          script: |
+            // The fork's objects already live in this repository through
+            // refs/pull/N/head, so importing is only a ref pointing at the
+            // reviewed commit — nothing is pushed and no fork code runs here.
+            //
+            // Pinning the SHA is the point: refs/pull/N/head keeps following
+            // the fork's tip, so building that would build whatever landed
+            // after the maintainer read the diff.
+            const branch = `preview/pr-${process.env.PR}`;
+            const sha = process.env.HEAD_SHA;
+            const { owner, repo } = context.repo;
+
+            try {
+              await github.rest.git.updateRef({
+                owner, repo, ref: `heads/${branch}`, sha, force: true,
+              });
+              core.info(`Moved ${branch} to ${sha}`);
+            } catch (e) {
+              if (e.status !== 422 && e.status !== 404) throw e;
+              await github.rest.git.createRef({
+                owner, repo, ref: `refs/heads/${branch}`, sha,
+              });
+              core.info(`Created ${branch} at ${sha}`);
             }
+
+            core.setOutput('branch', branch);
 
       - name: Extract custom release name from comment
         id: extract_name
-        if: steps.check_access.outputs.result == 'granted'
+        if: steps.route.outputs.result == 'internal' || steps.route.outputs.result == 'external'
         uses: actions/github-script@v9
         with:
           result-encoding: string
           script: |
             const body = context.payload.comment.body;
-            // Everything after "/nightly " (with trailing space) is the custom name
-            const prefix = '/nightly';
-            if (body.startsWith(prefix)) {
+            // Everything after the command (with trailing space) is the custom
+            // name. Several spellings are accepted, and the prefix that actually
+            // matched is the one stripped — slicing a hard-coded '/nightly' off
+            // a '/preview' comment silently drops the name.
+            for (const prefix of ['/create-preview-external', '/preview', '/nightly']) {
+              if (!body.startsWith(prefix)) continue;
               const rest = body.slice(prefix.length).trim();
               if (rest) {
                 core.info(`Custom release name detected: "${rest}"`);
                 return rest;
               }
+              break;
             }
             core.info('No custom release name in comment.');
             return '';
 
-      - name: Add nightly-build label
-        if: steps.check_access.outputs.result == 'granted'
+      - name: Add preview-build label
+        # Internal PRs only. The label means "rebuild on every push", which is
+        # exactly what an external PR must not get.
+        if: steps.route.outputs.result == 'internal'
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.issue.number }}
         run: |
-          gh issue edit "$PR" --add-label "${{ env.NIGHTLY_LABEL }}" --repo "${{ github.repository }}"
+          gh issue edit "$PR" --add-label "${{ env.PREVIEW_LABEL }}" --repo "${{ github.repository }}"
 
-      - name: Trigger immediate nightly build
-        if: steps.check_access.outputs.result == 'granted'
+          # Drop the old label as the new one goes on, so a PR never carries
+          # both and "remove the label to stop rebuilding" stays unambiguous.
+          # Removing a label the PR does not have is a no-op; do not let it fail
+          # the run either way.
+          gh issue edit "$PR" --remove-label "${{ env.NIGHTLY_LABEL }}" --repo "${{ github.repository }}" || true
+
+      - name: Trigger immediate preview build
+        if: steps.route.outputs.result == 'internal' || steps.route.outputs.result == 'external'
         env:
           GH_TOKEN: ${{ github.token }}
-          HEAD_BRANCH: ${{ steps.pr_info.outputs.head_ref }}
           BASE_BRANCH: ${{ steps.pr_info.outputs.base_ref }}
+          BUILD_BRANCH: >-
+            ${{ steps.route.outputs.result == 'external'
+                && steps.import.outputs.branch
+                || steps.pr_info.outputs.head_ref }}
           RELEASE_NAME: ${{ steps.extract_name.outputs.result }}
         run: |
-          CMD="gh workflow run build-nightly.yml \
-            --repo \"${{ github.repository }}\" \
-            --ref \"$BASE_BRANCH\" \
-            -f branch=\"$HEAD_BRANCH\" \
-            -f pr_number=\"${{ github.event.issue.number }}\""
+          # An array rather than eval: the release name comes out of a comment
+          # body and would otherwise be handed back to the shell to re-parse.
+          args=(--repo "${{ github.repository }}" --ref "$BASE_BRANCH" -f branch="$BUILD_BRANCH")
 
           if [[ -n "$RELEASE_NAME" ]]; then
-            CMD="$CMD -f release_name=\"$RELEASE_NAME\""
+            args+=(-f release_name="$RELEASE_NAME")
           fi
 
-          eval "$CMD"
+          gh workflow run build-nightly.yml "${args[@]}"
 
       - name: Acknowledge activation
-        if: steps.check_access.outputs.result == 'granted'
+        if: steps.route.outputs.result == 'internal' || steps.route.outputs.result == 'external'
+        uses: actions/github-script@v9
         env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.issue.number }}
-          BRANCH: ${{ steps.pr_info.outputs.head_ref }}
-        run: |
-          gh issue comment "$PR" \
-            --repo "${{ github.repository }}" \
-            --body $'### 🚀 Nightly Build Triggered\n\nA nightly build has been dispatched for branch **`'"${BRANCH}"$'**\n\n| What | How |\n|------|-----|\n| **This build** | Check the [Actions tab]('"${{ github.server_url }}/${{ github.repository }}/actions/workflows/build-nightly.yml"$') for progress |\n| **Future commits** | Each new push will rebuild after macOS check passes |\n| **Deactivate** | Remove the `nightly-build` label to stop auto-builds |\n\n> The pre-release tag will be updated in-place so the download link stays the same.'
+          MODE: ${{ steps.route.outputs.result }}
+          HEAD_SHA: ${{ steps.pr_info.outputs.head_sha }}
+          BUILD_BRANCH: >-
+            ${{ steps.route.outputs.result == 'external'
+                && steps.import.outputs.branch
+                || steps.pr_info.outputs.head_ref }}
+        with:
+          script: |
+            const external = process.env.MODE === 'external';
+            const branch = process.env.BUILD_BRANCH;
+            const actions =
+              `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/` +
+              `${context.repo.repo}/actions/workflows/build-nightly.yml`;
+
+            const rows = external
+              ? [
+                  `| **Imported commit** | \`${process.env.HEAD_SHA}\` → \`${branch}\` |`,
+                  `| **This build** | [Actions tab](${actions}) |`,
+                  '| **Future commits** | Not built. Run `/create-preview-external` again to import a newer commit. |',
+                ]
+              : [
+                  `| **This build** | [Actions tab](${actions}) |`,
+                  '| **Future commits** | Each new push rebuilds once the macOS check passes |',
+                  '| **Deactivate** | Remove the `preview-build` label to stop auto-builds |',
+                ];
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: [
+                external
+                  ? '### 🚀 External preview build triggered'
+                  : '### 🚀 Preview build triggered',
+                '',
+                `A branch-preview build has been dispatched for **\`${branch}\`**.`,
+                '',
+                '| What | How |',
+                '|------|-----|',
+                ...rows,
+                '',
+                '> The pre-release tag is updated in place, so the download link stays the same.',
+              ].join('\n'),
+            });
+
+      - name: Sweep preview branches whose PR has closed
+        # Hangs off every preview activation rather than a schedule: cron only
+        # fires from the default branch, and nothing lands on main here for
+        # months at a time. Reacting to the close itself would mean a
+        # pull_request_target handler, which runs with write access on an event
+        # an external contributor times and stays safe only while nobody adds a
+        # checkout to it. Preview branches only ever appear when this job runs,
+        # so sweeping them when it runs keeps the set bounded.
+        if: steps.check_access.outputs.result == 'granted'
+        continue-on-error: true
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const PREFIX = 'preview/pr-';
+
+            const refs = await github.paginate(github.rest.git.listMatchingRefs, {
+              owner,
+              repo,
+              ref: `heads/${PREFIX}`,
+              per_page: 100,
+            });
+
+            for (const { ref } of refs) {
+              const branch = ref.replace('refs/heads/', '');
+              const number = Number(branch.slice(PREFIX.length));
+
+              if (!Number.isInteger(number) || number <= 0) {
+                core.warning(`Skipping ${branch}: no PR number in the name.`);
+                continue;
+              }
+
+              let pr;
+              try {
+                ({ data: pr } = await github.rest.pulls.get({
+                  owner,
+                  repo,
+                  pull_number: number,
+                }));
+              } catch (e) {
+                if (e.status !== 404) throw e;
+                core.warning(`Skipping ${branch}: PR #${number} does not exist.`);
+                continue;
+              }
+
+              if (pr.state === 'open') continue;
+
+              await github.rest.git.deleteRef({ owner, repo, ref: `heads/${branch}` });
+              core.info(`Deleted ${branch}: PR #${number} is ${pr.state}.`);
+            }
 
   # ── Derive metadata (branch, tag, names) ────────────────────────────────
   derive:
@@ -195,36 +410,21 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       commit_hash: ${{ steps.meta.outputs.commit_hash }}
       commit_sha: ${{ steps.meta.outputs.commit_sha }}
-      checkout_ref: ${{ steps.checkout_ref.outputs.ref }}
     steps:
       - name: Determine branch
         id: branch
         run: |
           echo "branch=${{ inputs.branch }}" >> "$GITHUB_OUTPUT"
 
-      - name: Determine checkout ref
-        id: checkout_ref
-        uses: actions/github-script@v9
-        env:
-          PR_NUMBER: ${{ inputs.pr_number }}
-          BRANCH: ${{ steps.branch.outputs.branch }}
-        with:
-          script: |
-            const prNumber = process.env.PR_NUMBER;
-            const branch = process.env.BRANCH;
-            if (prNumber) {
-              const ref = `refs/pull/${prNumber}/head`;
-              core.info(`PR #${prNumber} provided — using checkout ref ${ref}`);
-              core.setOutput('ref', ref);
-            } else {
-              core.info(`No PR number — using branch ref: ${branch}`);
-              core.setOutput('ref', branch);
-            }
-
+      # There is deliberately no refs/pull/N/head path here any more. That ref
+      # follows the fork's tip, so a build dispatched against it compiled
+      # whatever the author pushed last — with the signing secrets in scope.
+      # External PRs are imported to a preview/pr-N branch at a reviewed SHA
+      # before they get anywhere near this workflow.
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ steps.checkout_ref.outputs.ref }}
+          ref: ${{ steps.branch.outputs.branch }}
           submodules: recursive
           fetch-depth: 0
 
@@ -255,6 +455,7 @@ jobs:
               docs/*) human_name="Docs: ${branch_name#docs/}" ;;
               perf/*) human_name="Perf: ${branch_name#perf/}" ;;
               ci/*)   human_name="CI: ${branch_name#ci/}" ;;
+              preview/pr-*) human_name="Preview: PR ${branch_name#preview/pr-}" ;;
               *)      human_name="Nightly: ${branch_name}" ;;
             esac
 
@@ -344,7 +545,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.derive.outputs.checkout_ref }}
+          ref: ${{ needs.derive.outputs.branch }}
           submodules: recursive
 
       - name: Install Linux system dependencies
@@ -356,7 +557,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.1"
+          node-version: "22.23.2"
           cache: npm
 
       - name: Install Rust stable
@@ -468,19 +669,23 @@ jobs:
       - fetch-macos-artifacts
     runs-on: macos-latest
     permissions:
-      actions: write
+      # Deliberately no actions: write. This job compiles whatever ref it is
+      # handed (npm ci, build.rs) with the Apple certificate and the updater
+      # signing key in scope. With actions: write it could dispatch docs-pages
+      # and have a poisoned latest.json published to Pages. It makes no calls
+      # to the Actions API.
       contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.derive.outputs.checkout_ref }}
+          ref: ${{ needs.derive.outputs.branch }}
           submodules: recursive
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.1"
+          node-version: "22.23.2"
           cache: npm
 
       - name: Install Rust stable

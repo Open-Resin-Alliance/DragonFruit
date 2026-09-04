@@ -60,7 +60,7 @@ export class TerritoryTracker {
         width: number,
         height: number,
         layerIndex: number,
-        prevLabelMap: RleLabels | null | any
+        prevLabelMap: RleLabels | null
     ): TerritoryLayerResult {
         const { rows } = islandLabels;
         const newRows: Int32Array[] = new Array(height);
@@ -105,7 +105,6 @@ export class TerritoryTracker {
                     let tempIdx = prevRowIdx;
                     while (tempIdx < prevRow.length) {
                         const pStart = prevRow[tempIdx];
-                        const pLen = prevRow[tempIdx + 1];
                         const pId = prevRow[tempIdx + 2];
                         if (pStart >= end) break;
 

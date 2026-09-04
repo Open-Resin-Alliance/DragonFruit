@@ -1,4 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import type { MessageDescriptor } from '@lingui/core';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, ChevronDown, CircleHelp, Cpu, Download, Edit3, ExternalLink, Layers3, Loader2, Play, Printer, Timer, X } from 'lucide-react';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
@@ -105,6 +110,60 @@ type RemoteMaterialProfile = {
   locked?: boolean;
 };
 
+type Translate = (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string;
+
+// Interpolated messages live in module-level formatters: React Compiler renames
+// locals before the Lingui macro computes the id, so interpolating inside a
+// component leaves the placeholder raw in production builds.
+function formatZaaSamplesLabel(translate: Translate, steps: number): string {
+  return translate(msg`${steps}x ZAA Samples`);
+}
+
+function formatCoverageSamplesLabel(translate: Translate, steps: number): string {
+  return translate(msg`${steps}x Coverage`);
+}
+
+function formatXyAndZBlurLabel(translate: Translate, pixels: number, layers: number): string {
+  return translate(msg`${pixels}px XY · ${layers}L Z`);
+}
+
+function formatEdgeBlurLabel(translate: Translate, pixels: number): string {
+  return translate(msg`${pixels}px Edge Blur`);
+}
+
+function formatLutCurveSummaryLabel(translate: Translate, curveName: string): string {
+  return translate(msg`LUT: ${curveName}`);
+}
+
+function formatRemoteMaterialLabel(translate: Translate, materialName: string, sourceName: string): string {
+  return translate(msg`${materialName} (${sourceName})`);
+}
+
+function formatRemoteMaterialIdLabel(translate: Translate, materialId: string): string {
+  return translate(msg`${materialId} (Remote ID)`);
+}
+
+function formatLayerPreviewAlt(translate: Translate, layer: number): string {
+  return translate(msg`Layer ${layer} preview`);
+}
+
+// Phases reported by the native slicer arrive already worded from the backend, so
+// only the ones this panel sets itself carry a catalog entry; the rest pass through.
+const SLICING_PHASE_LABELS: Record<string, MessageDescriptor> = {
+  Idle: msg`Idle`,
+  Preparing: msg`Preparing`,
+  Encoding: msg`Encoding`,
+  Ready: msg`Ready`,
+  Opening: msg`Opening`,
+  Cancelled: msg`Cancelled`,
+  Cancelling: msg`Cancelling`,
+};
+
+function formatSlicingPhaseLabel(translate: Translate, phase: string): string {
+  const descriptor = SLICING_PHASE_LABELS[phase];
+  return descriptor ? translate(descriptor) : phase;
+}
+
 function normalizeExportBaseName(rawName: string | null | undefined): string {
   const trimmed = (rawName ?? '').trim();
   if (!trimmed) return 'MyPrint';
@@ -144,10 +203,12 @@ function formatDuration(ms: number | null): string {
     .padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 }
 
-function formatLayerRate(layersPerSecond: number | null): string {
+function formatLayerRate(translate: Translate, layersPerSecond: number | null): string {
   if (layersPerSecond == null || !Number.isFinite(layersPerSecond)) return '—';
-  if (layersPerSecond >= 100) return `${Math.round(layersPerSecond)} layers/s`;
-  return `${layersPerSecond.toFixed(1)} layers/s`;
+  const rate = layersPerSecond >= 100
+    ? String(Math.round(layersPerSecond))
+    : layersPerSecond.toFixed(1);
+  return translate(msg`${rate} layers/s`);
 }
 
 function formatProgressLayerLabel(done: number, total: number): string {
@@ -713,13 +774,13 @@ function resolveInitialAaAutoPreset(): AaAutoUiPreset {
 
 const AUTO_AA_PRESET_OPTIONS: ReadonlyArray<{
   preset: AaAutoUiPreset;
-  label: string;
-  desc: string;
+  label: MessageDescriptor;
+  desc: MessageDescriptor;
 }> = [
-  { preset: 'raw', label: 'Disabled', desc: 'Raw masks only.' },
-  { preset: 'sharp', label: 'Sharp', desc: 'Crisp text and details.' },
-  { preset: 'balanced', label: 'Balanced', desc: 'Printer-aware smoothing.' },
-  { preset: 'smooth', label: 'Smooth', desc: 'Soft organic curves.' },
+  { preset: 'raw', label: msg`Disabled`, desc: msg`Raw masks only.` },
+  { preset: 'sharp', label: msg`Sharp`, desc: msg`Crisp text and details.` },
+  { preset: 'balanced', label: msg`Balanced`, desc: msg`Printer-aware smoothing.` },
+  { preset: 'smooth', label: msg`Smooth`, desc: msg`Soft organic curves.` },
 ];
 
 // AaAutoPreset is imported from autoAaPhysics.ts
@@ -760,6 +821,7 @@ export function SlicingPanel({
   const sliceIntentMenuRef = useRef<HTMLDivElement | null>(null);
   const sliceIntentAnchorRef = useRef<HTMLDivElement | null>(null);
   const [isSlicingZip, setIsSlicingZip] = useState(false);
+  const { _ } = useLingui();
   const [sliceStatus, setSliceStatus] = useState('Idle');
   const [currentPhase, setCurrentPhase] = useState('Idle');
   const [progressDone, setProgressDone] = useState(0);
@@ -851,6 +913,12 @@ export function SlicingPanel({
   const [sessionAaOverrideDraft, setSessionAaOverrideDraft] = useState<MaterialDraft | null>(null);
   const [editingSessionAaOverrideDraft, setEditingSessionAaOverrideDraft] = useState<MaterialDraft | null>(null);
   const [isSessionAaOverrideOpen, setIsSessionAaOverrideOpen] = useState(false);
+
+  // Escape closes both anti-aliasing editors; the slicing progress modal is
+  // blocking, so it swallows the key instead of letting it through.
+  useEscapeToClose(isMaterialAaEditorOpen, () => setIsMaterialAaEditorOpen(false));
+  useEscapeToClose(isSessionAaOverrideOpen, () => setIsSessionAaOverrideOpen(false));
+  useEscapeToClose(showSlicingModal, undefined);
   const [zBlendResinType, setZBlendResinType] = useState<'opaque' | 'clear' | 'custom'>(resolveInitialZBlendResinType);
   const [savedCurves, setSavedCurves] = useState<SavedCurve[]>(() => resolveInitialSavedCurves());
   const [selectedCurveId, setSelectedCurveId] = useState<string>(() => resolveInitialSelectedCurveId(resolveInitialSavedCurves()));
@@ -988,14 +1056,14 @@ export function SlicingPanel({
     });
   }, [aaMode, aaQualityMode, autoDetectedResinType, blurGraySourceMode]);
 
-  const autoLutCurveLabel = autoDetectedResinType === 'clear' ? 'Clear' : 'Opaque';
+  const autoLutCurveLabel = autoDetectedResinType === 'clear' ? _(msg`Clear`) : _(msg`Opaque`);
 
   const sessionAaOverrideEnabled = sessionAaOverrideDraft?.antiAliasingSettings?.enableOverride === true;
   const materialProfileAaOverrideEnabled = activeMaterialProfile?.antiAliasingSettings?.enableOverride === true;
   const aaOverrideNoticeLabel = sessionAaOverrideEnabled
-    ? 'Session Override active'
+    ? _(msg`Session Override active`)
     : materialProfileAaOverrideEnabled
-      ? 'Using Material Settings'
+      ? _(msg`Using Material Settings`)
       : null;
   const handleOpenMaterialAaEditor = useCallback(() => {
     if (!activeMaterialProfile) return;
@@ -1150,10 +1218,10 @@ export function SlicingPanel({
   const encodeUnitTotal = Math.max(1, progressTotal - slicingLayerTotal);
   const encodeUnitDone = Math.max(0, Math.min(encodeUnitTotal, progressDone - slicingLayerTotal));
   const progressCounterLabel = phaseKind === 'slicing'
-    ? 'Sliced Layers'
+    ? _(msg`Sliced Layers`)
     : phaseKind === 'encoding'
-      ? 'Encoded Layers'
-      : 'Pipeline Units';
+      ? _(msg`Encoded Layers`)
+      : _(msg`Pipeline Units`);
   const progressCounterValue = phaseKind === 'slicing'
     ? formatProgressLayerLabel(slicingLayerDone, slicingLayerTotal)
     : phaseKind === 'encoding'
@@ -1180,7 +1248,9 @@ export function SlicingPanel({
       const report = m.geometry.meshDefects?.nativeRepairReport;
       if (!report) return true; // No analysis report at all
       const hasSplit = report.model_triangle_count != null && report.model_triangle_count > 0;
-      const isSupportGeometry = report.likely_support_geometry === true;
+      const isSupportGeometry = m.isSupportGeometry !== undefined
+        ? m.isSupportGeometry
+        : report.likely_support_geometry === true;
       return !hasSplit && !isSupportGeometry;
     });
 
@@ -1491,27 +1561,27 @@ export function SlicingPanel({
     ? 'Controls the final in-plane XY blur radius that softens perturbation output after sampling. Higher values smooth edges more, but can soften tiny features.'
     : 'Controls XY blur radius in pixels. Higher values create smoother transitions but can soften fine details.';
   const autoAaSummarySampleLabel = effectiveAutoAaConfig.aaMode === 'Off'
-    ? 'No AA'
+    ? _(msg`No AA`)
     : effectiveAutoAaConfig.antiAliasingMode === 'Blur'
-      ? 'Binary Base'
+      ? _(msg`Binary Base`)
     : effectiveAutoAaConfig.aaMode === '3DAA'
-      ? `${effectiveAutoAaConfig.aaSteps}x ZAA Samples`
-      : `${effectiveAutoAaConfig.aaSteps}x Coverage`;
+      ? formatZaaSamplesLabel(_, effectiveAutoAaConfig.aaSteps)
+      : formatCoverageSamplesLabel(_, effectiveAutoAaConfig.aaSteps);
   const autoAaSummaryBlurLabel = effectiveAutoAaConfig.aaMode === 'Off'
-    ? 'No Edge Blur'
+    ? _(msg`No Edge Blur`)
     : effectiveAutoAaConfig.antiAliasingMode === 'Coverage'
-      ? 'No Edge Blur'
+      ? _(msg`No Edge Blur`)
       : effectiveAutoAaConfig.aaMode === '3DAA'
-        ? `${effectiveAutoAaConfig.blurBrushRadiusPx}px XY · ${effectiveAutoAaConfig.zBlurRadiusLayers}L Z`
-        : `${effectiveAutoAaConfig.blurBrushRadiusPx}px Edge Blur`;
+        ? formatXyAndZBlurLabel(_, effectiveAutoAaConfig.blurBrushRadiusPx, effectiveAutoAaConfig.zBlurRadiusLayers)
+        : formatEdgeBlurLabel(_, effectiveAutoAaConfig.blurBrushRadiusPx);
   const autoAaSummaryKernelLabel = effectiveAutoAaConfig.aaMode === '3DAA'
     ? '3DAA'
     : effectiveAutoAaConfig.antiAliasingMode === 'Coverage'
-      ? 'Coverage'
-      : '2D Blur';
+      ? _(msg`Coverage`)
+      : _(msg`2D Blur`);
   const autoAaSummaryGrayLabel = effectiveAutoAaConfig.aaMode === 'Off'
-    ? 'No Gray Map'
-    : `LUT: ${autoLutCurveLabel}`;
+    ? _(msg`No Gray Map`)
+    : formatLutCurveSummaryLabel(_, autoLutCurveLabel);
   const effectiveBlurGraySourceMode = materialAaOverrideEnabled
     ? profileAntiAliasingSettings.blurGraySourceMode
     : 'lut';
@@ -1828,15 +1898,17 @@ export function SlicingPanel({
     }
 
     if (isRemoteMaterialSyncConnected && selectedRemoteMaterialId) {
-      if (isLoadingRemoteMaterial) return 'Loading remote material…';
-      if (selectedRemoteMaterialName) return `${selectedRemoteMaterialName} (${networkUiAdapter?.displayName ?? 'Remote'})`;
+      if (isLoadingRemoteMaterial) return _(msg`Loading remote material…`);
+      const remoteSourceName = networkUiAdapter?.displayName ?? _(msg`Remote`);
+      if (selectedRemoteMaterialName) return formatRemoteMaterialLabel(_, selectedRemoteMaterialName, remoteSourceName);
       const fromConnection = activePrinterProfile?.networkConnection?.selectedMaterialName?.trim();
-      if (fromConnection) return `${fromConnection} (${networkUiAdapter?.displayName ?? 'Remote'})`;
-      return `${selectedRemoteMaterialId} (Remote ID)`;
+      if (fromConnection) return formatRemoteMaterialLabel(_, fromConnection, remoteSourceName);
+      return formatRemoteMaterialIdLabel(_, selectedRemoteMaterialId);
     }
 
-    return resolveCompositeMaterialLabel(effectiveMaterialProfile) ?? effectiveMaterialProfile?.name ?? 'No material selected';
+    return resolveCompositeMaterialLabel(effectiveMaterialProfile) ?? effectiveMaterialProfile?.name ?? _(msg`No material selected`);
   }, [
+    _,
     activePrinterProfile?.networkConnection?.selectedMaterialName,
     effectiveMaterialProfile,
     isLoadingRemoteMaterial,
@@ -1968,18 +2040,18 @@ export function SlicingPanel({
 
   const handleSliceZipExport = async () => {
     if (!activePrinterProfile) {
-      alert('Select a printer profile first.');
+      alert(_(msg`Select a printer profile first.`));
       return;
     }
 
     if (!materialProfileForSlicing) {
-      alert('Select a material profile first.');
+      alert(_(msg`Select a material profile first.`));
       return;
     }
 
     const visibleModels = models.filter((model) => model.visible);
     if (visibleModels.length === 0) {
-      alert('No visible models available for slicing.');
+      alert(_(msg`No visible models available for slicing.`));
       return;
     }
 
@@ -2393,7 +2465,7 @@ export function SlicingPanel({
               <IconButton
                 onClick={() => setIsExpanded((prev) => !prev)}
                 className="!p-0.5"
-                title={isExpanded ? 'Collapse card' : 'Expand card'}
+                title={isExpanded ? _(msg`Collapse card`) : _(msg`Expand card`)}
               >
                 <svg
                   className="w-3 h-3 transform transition-transform"
@@ -2409,14 +2481,13 @@ export function SlicingPanel({
                   )}
                 </svg>
               </IconButton>
-              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Slicing</h3>
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Slicing</Trans></h3>
             </>
           )}
-          hideDivider={!isExpanded}
         />
         {isExpanded && (
           <div className="px-3 pb-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-            No meshes loaded yet. Import a model first, then return to Slicing.
+            <Trans>No meshes loaded yet. Import a model first, then return to Slicing.</Trans>
           </div>
         )}
       </Card>
@@ -2431,7 +2502,7 @@ export function SlicingPanel({
             <IconButton
               onClick={() => setIsExpanded((prev) => !prev)}
               className="!p-0.5"
-              title={isExpanded ? 'Collapse card' : 'Expand card'}
+              title={isExpanded ? _(msg`Collapse card`) : _(msg`Expand card`)}
             >
               <svg
                 className="w-3 h-3 transform transition-transform"
@@ -2447,10 +2518,9 @@ export function SlicingPanel({
                 )}
               </svg>
             </IconButton>
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Slicing</h3>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Slicing</Trans></h3>
           </>
         )}
-        hideDivider={!isExpanded}
       />
 
       {isExpanded && (
@@ -2462,12 +2532,12 @@ export function SlicingPanel({
                 className="col-span-2 relative rounded border px-1.5 py-1 pr-7 text-left transition-colors hover:bg-[color-mix(in_srgb,var(--surface-1),white_4%)]"
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
                 onClick={() => openProfileSettingsModal('printer')}
-                aria-label="Edit printer profile"
-                title="Open printer profiles"
+                aria-label={_(msg`Edit printer profile`)}
+                title={_(msg`Open printer profiles`)}
               >
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Printer</div>
-                <div className="text-sm font-semibold break-words" style={{ color: 'var(--text-strong)' }} title={activePrinterProfile?.name ?? 'No printer selected'}>
-                  {activePrinterProfile?.name ?? 'No printer selected'}
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>Printer</Trans></div>
+                <div className="text-sm font-semibold break-words" style={{ color: 'var(--text-strong)' }} title={activePrinterProfile?.name ?? _(msg`No printer selected`)}>
+                  {activePrinterProfile?.name ?? _(msg`No printer selected`)}
                 </div>
                 <Edit3
                   className="pointer-events-none absolute right-1.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
@@ -2480,10 +2550,10 @@ export function SlicingPanel({
                 className="col-span-2 relative rounded border px-1.5 py-1 pr-7 text-left transition-colors hover:bg-[color-mix(in_srgb,var(--surface-1),white_4%)]"
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
                 onClick={() => openProfileSettingsModal('material')}
-                aria-label="Edit material profile"
-                title="Open material profiles"
+                aria-label={_(msg`Edit material profile`)}
+                title={_(msg`Open material profiles`)}
               >
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Material</div>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>Material</Trans></div>
                 <div className="text-sm font-semibold break-words" style={{ color: 'var(--text-strong)' }} title={resolvedMaterialLabel}>
                   {resolvedMaterialLabel}
                 </div>
@@ -2494,31 +2564,31 @@ export function SlicingPanel({
                 />
               </button>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Layers</div>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>Layers</Trans></div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedLayerCount > 0 ? estimatedLayerCount : '—'}</div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Layer Height</div>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>Layer Height</Trans></div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                   {effectiveLayerHeightMm != null ? `${effectiveLayerHeightMm.toFixed(3)} mm` : '—'}
                 </div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Est. Volume</div>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>Est. Volume</Trans></div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedVolumeLabel}</div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Est. Print Time</div>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>Est. Print Time</Trans></div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedPrintTimeLabel}</div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Output</div>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>Output</Trans></div>
                 <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
                   {selectedFormat?.displayName ?? selectedFormat?.outputFormat ?? '—'}
                 </div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Engine</div>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>Engine</Trans></div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                   {slicerEngineVersion ? `v${slicerEngineVersion}` : 'Slicer V3'}
                 </div>
@@ -2529,10 +2599,10 @@ export function SlicingPanel({
               <div className="mt-2 rounded-md border p-2 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <div className="space-y-0.5 text-center">
                   <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>
-                    Offline Layer Height
+                    <Trans>Offline Layer Height</Trans>
                   </div>
                   <div className="text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    Remote material unavailable.
+                    <Trans>Remote material unavailable.</Trans>
                   </div>
                 </div>
 
@@ -2543,15 +2613,15 @@ export function SlicingPanel({
                   max={REMOTE_OFFLINE_LAYER_HEIGHT_MAX_MM * MICRONS_PER_MM}
                   step={REMOTE_OFFLINE_LAYER_HEIGHT_STEP_MM * MICRONS_PER_MM}
                   unit="µm"
-                  ariaLabel="Offline layer height override in micrometers"
-                  decreaseTitle="Decrease offline layer height"
-                  increaseTitle="Increase offline layer height"
+                  ariaLabel={_(msg`Offline layer height override in micrometers`)}
+                  decreaseTitle={_(msg`Decrease offline layer height`)}
+                  increaseTitle={_(msg`Increase offline layer height`)}
                   commitOnBlur
                 />
 
                 <div className="text-[11px] leading-snug text-center" style={{ color: 'var(--text-muted)' }}>
-                  Network unavailable. <br />
-                  Select a matching material during import instead.
+                  <Trans>Network unavailable.</Trans> <br />
+                  <Trans>Select a matching material during import instead.</Trans>
                 </div>
               </div>
             )}
@@ -2562,13 +2632,13 @@ export function SlicingPanel({
               {antiAliasingAvailable ? (
                 <>
                   <SettingLabelWithHelp
-                    label="Anti-Aliasing"
-                    help="Auto derives slice settings from your printer resolution and material layer height. Expert lets you jump to material AA settings or apply a temporary session override."
+                    label={_(msg`Anti-Aliasing`)}
+                    help={_(msg`Auto derives slice settings from your printer resolution and material layer height. Expert lets you jump to material AA settings or apply a temporary session override.`)}
                   />
                   <div className="grid grid-cols-2 gap-1.5">
                     {(['auto', 'expert'] as const).map((qmode) => {
                       const qActive = aaQualityMode === qmode;
-                      const label = qmode === 'auto' ? 'Auto' : 'Expert';
+                      const label = qmode === 'auto' ? _(msg`Auto`) : _(msg`Expert`);
                       const disabled = qmode === 'auto' && materialAaOverrideEnabled;
                       return (
                         <button
@@ -2644,9 +2714,9 @@ export function SlicingPanel({
                                   }}
                               onClick={() => setAaAutoPreset(preset)}
                             >
-                              <div className="text-[11px] font-semibold leading-tight">{label}</div>
-                              <div className="mt-0.5 text-[9px] leading-tight" style={{ color: pActive ? 'color-mix(in srgb, var(--accent-secondary-action-color), var(--text-muted) 38%)' : 'var(--text-muted)' }}>
-                                {desc}
+                              <div className="text-xs font-semibold leading-tight">{_(label)}</div>
+                              <div className="mt-0.5 text-[10px] leading-tight" style={{ color: pActive ? 'color-mix(in srgb, var(--accent-secondary-action-color), var(--text-muted) 38%)' : 'var(--text-muted)' }}>
+                                {_(desc)}
                               </div>
                             </button>
                           );
@@ -2662,7 +2732,7 @@ export function SlicingPanel({
                           }}
                         >
                           <Loader2 className="h-3 w-3 animate-spin" />
-                          <span>Calculating AA profile…</span>
+                          <span><Trans>Calculating AA profile…</Trans></span>
                         </div>
                       )}
                       <div className="h-1.5" />
@@ -2674,10 +2744,10 @@ export function SlicingPanel({
                         }}
                       >
                         {([
-                          ['Mode', autoAaSummaryKernelLabel],
-                          ['Samples', autoAaSummarySampleLabel],
-                          ['Blur', autoAaSummaryBlurLabel],
-                          ['Grey', autoAaSummaryGrayLabel],
+                          [_(msg`Mode`), autoAaSummaryKernelLabel],
+                          [_(msg`Samples`), autoAaSummarySampleLabel],
+                          [_(msg`Blur`), autoAaSummaryBlurLabel],
+                          [_(msg`Grey`), autoAaSummaryGrayLabel],
                         ] as const).map(([label, value], index) => (
                           <div
                             key={label}
@@ -2689,8 +2759,8 @@ export function SlicingPanel({
                             }}
                             title={value}
                           >
-                            <div className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{label}</div>
-                            <div className="truncate text-[11px] font-semibold">{value}</div>
+                            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{label}</div>
+                            <div className="truncate text-xs font-semibold">{value}</div>
                           </div>
                         ))}
                       </div>
@@ -2720,9 +2790,9 @@ export function SlicingPanel({
                           onClick={handleOpenMaterialAaEditor}
                         >
                           <div className="flex items-center justify-between gap-2">
-                            <span className="text-[11px] font-semibold leading-tight">Material Profile Settings</span>
+                            <span className="text-[11px] font-semibold leading-tight"><Trans>Material Profile Settings</Trans></span>
                             <span className="text-[9px] font-semibold uppercase tracking-wide" style={{ color: sessionAaOverrideEnabled ? 'var(--text-muted)' : materialProfileAaOverrideEnabled ? 'color-mix(in srgb, var(--accent-secondary-action-color), var(--text-muted) 38%)' : 'var(--text-muted)' }}>
-                              {sessionAaOverrideEnabled ? 'Bypassed' : materialProfileAaOverrideEnabled ? 'Override On' : 'Edit'}
+                              {sessionAaOverrideEnabled ? <Trans>Bypassed</Trans> : materialProfileAaOverrideEnabled ? <Trans>Override On</Trans> : <Trans>Edit</Trans>}
                             </span>
                           </div>
                         </button>
@@ -2738,9 +2808,9 @@ export function SlicingPanel({
                           onClick={handleOpenSessionAaOverride}
                         >
                           <div className="flex items-center justify-between gap-2">
-                            <span className="text-[11px] font-semibold leading-tight">Session Overrides</span>
+                            <span className="text-[11px] font-semibold leading-tight"><Trans>Session Overrides</Trans></span>
                             <span className="text-[9px] font-semibold uppercase tracking-wide" style={{ color: sessionAaOverrideEnabled ? 'color-mix(in srgb, var(--accent-secondary-action-color), var(--text-muted) 38%)' : 'var(--text-muted)' }}>
-                              {sessionAaOverrideEnabled ? 'Active' : 'Temporary'}
+                              {sessionAaOverrideEnabled ? <Trans>Active</Trans> : <Trans>Temporary</Trans>}
                             </span>
                           </div>
                         </button>
@@ -2760,7 +2830,7 @@ export function SlicingPanel({
                               setSessionAaOverrideDraft(null);
                             }}
                           >
-                            Clear Session Override
+                            <Trans>Clear Session Override</Trans>
                           </button>
                         )}
                       </div>
@@ -3568,7 +3638,7 @@ export function SlicingPanel({
                     color: 'color-mix(in srgb, var(--danger), var(--text-muted) 38%)',
                   }}
                 >
-                  The selected Machine does not support AA at this time.
+                  <Trans>The selected Machine does not support AA at this time.</Trans>
                 </div>
               )}
             </div>
@@ -3580,11 +3650,11 @@ export function SlicingPanel({
             const isDisabled = isSlicingZip || isAutoAaPending || !activePrinterProfile || !materialProfileForSlicing || models.length === 0;
             type IconType = React.FC<{ className?: string }>;
             const intentOptions: { key: SliceIntent; label: string; Icon: IconType; enabled: boolean; menuOnly?: boolean }[] = [
-              { key: 'file',    label: 'Slice to File',      Icon: Download as IconType, enabled: true },
-              { key: 'upload',  label: 'Slice & Upload',     Icon: Printer  as IconType, enabled: canUpload },
-              { key: 'print',   label: 'Slice & Print',      Icon: Play     as IconType, enabled: canPrint },
-              { key: 'uvtools', label: 'Send to UVTools',    Icon: ExternalLink as IconType, enabled: canUvTools },
-              { key: 'preview', label: 'Just Slice',         Icon: Cpu      as IconType, enabled: true, menuOnly: true },
+              { key: 'file',    label: _(msg`Slice to File`),   Icon: Download as IconType, enabled: true },
+              { key: 'upload',  label: _(msg`Slice & Upload`),  Icon: Printer  as IconType, enabled: canUpload },
+              { key: 'print',   label: _(msg`Slice & Print`),   Icon: Play     as IconType, enabled: canPrint },
+              { key: 'uvtools', label: _(msg`Send to UVTools`), Icon: ExternalLink as IconType, enabled: canUvTools },
+              { key: 'preview', label: _(msg`Just Slice`),      Icon: Cpu      as IconType, enabled: true, menuOnly: true },
             ];
             const current = intentOptions.find((o) => o.key === effectiveSliceIntent) ?? intentOptions[0]!;
             const CurrentIcon = current.Icon;
@@ -3599,7 +3669,7 @@ export function SlicingPanel({
                     className={`ui-button ui-button-primary flex-1 !h-9 text-sm inline-flex items-center justify-center gap-1.5 ${hasMenuOptions && !isShiftHeld ? 'rounded-r-none' : ''} ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
                   >
                     <CurrentIcon className="w-4 h-4 shrink-0" />
-                    {isSlicingZip ? 'Slicing…' : isAutoAaPending ? 'Profiling AA…' : current.label}
+                    {isSlicingZip ? _(msg`Slicing…`) : isAutoAaPending ? _(msg`Profiling AA…`) : current.label}
                   </button>
                   {hasMenuOptions && !isShiftHeld && (
                     <button
@@ -3610,7 +3680,7 @@ export function SlicingPanel({
                         setSliceIntentMenuOpen((v) => !v);
                       }}
                       disabled={isDisabled}
-                      aria-label="Choose slice action"
+                      aria-label={_(msg`Choose slice action`)}
                       className="ui-button ui-button-primary !h-9 w-10 shrink-0 inline-flex items-center justify-center rounded-l-none border-l border-black/15"
                     >
                       <ChevronDown
@@ -3677,12 +3747,12 @@ export function SlicingPanel({
             }}
             role="dialog"
             aria-modal="true"
-            aria-label="Material anti-aliasing settings"
+            aria-label={_(msg`Material anti-aliasing settings`)}
           >
             <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
               <div className="min-w-0">
                 <h2 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Material Anti-Aliasing Settings
+                  <Trans>Material Anti-Aliasing Settings</Trans>
                 </h2>
                 <p className="ui-meta truncate">
                   {activeMaterialProfile.name} · {activeMaterialProfile.brand}
@@ -3693,7 +3763,7 @@ export function SlicingPanel({
                 onClick={() => setIsMaterialAaEditorOpen(false)}
                 className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-                aria-label="Close material anti-aliasing settings"
+                aria-label={_(msg`Close material anti-aliasing settings`)}
               >
                 <X className="w-4 h-4" />
               </button>
@@ -3728,7 +3798,7 @@ export function SlicingPanel({
                   color: 'var(--accent-secondary-action-color)',
                 }}
               >
-                Save Material
+                <Trans>Save Material</Trans>
               </button>
             </div>
           </div>
@@ -3747,15 +3817,15 @@ export function SlicingPanel({
             }}
             role="dialog"
             aria-modal="true"
-            aria-label="Session anti-aliasing override"
+            aria-label={_(msg`Session anti-aliasing override`)}
           >
             <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
               <div className="min-w-0">
                 <h2 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Session Anti-Aliasing Override
+                  <Trans>Session Anti-Aliasing Override</Trans>
                 </h2>
                 <p className="ui-meta truncate">
-                  {activeMaterialProfile ? `${activeMaterialProfile.name} · ${activeMaterialProfile.brand}` : 'Current material'}
+                  {activeMaterialProfile ? `${activeMaterialProfile.name} · ${activeMaterialProfile.brand}` : _(msg`Current material`)}
                 </p>
               </div>
               <button
@@ -3763,7 +3833,7 @@ export function SlicingPanel({
                 onClick={() => setIsSessionAaOverrideOpen(false)}
                 className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-                aria-label="Close session anti-aliasing override"
+                aria-label={_(msg`Close session anti-aliasing override`)}
               >
                 <X className="w-4 h-4" />
               </button>
@@ -3795,7 +3865,7 @@ export function SlicingPanel({
                 className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
                 style={{ color: 'var(--text-muted)' }}
               >
-                Clear Override
+                <Trans>Clear Override</Trans>
               </button>
               <div className="flex items-center gap-2">
                 <button
@@ -3821,7 +3891,7 @@ export function SlicingPanel({
                     color: 'var(--accent-secondary-action-color)',
                   }}
                 >
-                  Apply for Session
+                  <Trans>Apply for Session</Trans>
                 </button>
               </div>
             </div>
@@ -3841,7 +3911,7 @@ export function SlicingPanel({
             }}
             role="dialog"
             aria-modal="true"
-            aria-label="Slicing progress"
+            aria-label={_(msg`Slicing progress`)}
           >
             <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
               <div className="flex items-center gap-2.5 min-w-0">
@@ -3857,10 +3927,10 @@ export function SlicingPanel({
                 </span>
                 <div className="min-w-0">
                   <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                    Background Pipeline
+                    <Trans>Background Pipeline</Trans>
                   </div>
                   <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    Slicing Plate
+                    <Trans>Slicing Plate</Trans>
                   </h2>
                 </div>
               </div>
@@ -3885,20 +3955,20 @@ export function SlicingPanel({
                 }}
               >
                 {slicingModalStage === 'running'
-                  ? 'Running'
+                  ? <Trans>Running</Trans>
                   : slicingModalStage === 'finished'
-                    ? 'Ready'
+                    ? <Trans>Ready</Trans>
                     : slicingModalStage === 'cancelled'
-                      ? 'Cancelled'
-                    : 'Failed'}
+                      ? <Trans>Cancelled</Trans>
+                    : <Trans>Failed</Trans>}
               </div>
             </div>
 
             <div className="p-4 space-y-3">
               <div className="grid grid-cols-2 gap-2.5">
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Pipeline Stage</div>
-                  <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={currentPhase}>{currentPhase}</div>
+                  <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}><Trans>Pipeline Stage</Trans></div>
+                  <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={formatSlicingPhaseLabel(_, currentPhase)}>{formatSlicingPhaseLabel(_, currentPhase)}</div>
                 </div>
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                   <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>{progressCounterLabel}</div>
@@ -3907,13 +3977,13 @@ export function SlicingPanel({
                   </div>
                 </div>
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Progress</div>
+                  <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}><Trans>Progress</Trans></div>
                   <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{progressPercentLabel}%</div>
                 </div>
                 {slicingModalStage === 'running' && liveLayersPerSec != null && (
                   <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                    <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Speed</div>
-                    <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{formatLayerRate(liveLayersPerSec)}</div>
+                    <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}><Trans>Speed</Trans></div>
+                    <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{formatLayerRate(_, liveLayersPerSec)}</div>
                   </div>
                 )}
               </div>
@@ -3921,7 +3991,7 @@ export function SlicingPanel({
               {slicingModalStage === 'finished' && previewTotalLayers > 0 && (
                 <div className="rounded-lg border p-2.5 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                   <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Plate preview · Layer {previewSelectedLayer}/{previewTotalLayers}
+                    <Trans>Plate preview · Layer {previewSelectedLayer}/{previewTotalLayers}</Trans>
                   </div>
                   <input
                     type="range"
@@ -3935,12 +4005,12 @@ export function SlicingPanel({
                   {selectedLayerPreviewUrl ? (
                     <img
                       src={selectedLayerPreviewUrl}
-                      alt={`Layer ${previewSelectedLayer} preview`}
+                      alt={formatLayerPreviewAlt(_, previewSelectedLayer)}
                       className="w-full h-36 rounded object-contain"
                     />
                   ) : (
                     <div className="h-36 rounded border border-dashed flex items-center justify-center text-xs" style={{ color: 'var(--text-muted)', borderColor: 'var(--border-subtle)' }}>
-                      Preview for this layer is not available.
+                      <Trans>Preview for this layer is not available.</Trans>
                     </div>
                   )}
                 </div>
@@ -3956,7 +4026,7 @@ export function SlicingPanel({
               <div className="pt-1 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
                   <Timer className="h-3.5 w-3.5" />
-                  <span>Elapsed {slicingElapsedLabel}</span>
+                  <span><Trans>Elapsed {slicingElapsedLabel}</Trans></span>
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -3967,7 +4037,7 @@ export function SlicingPanel({
                       disabled={!canCancelSlicing}
                       onClick={handleCancelSlicing}
                     >
-                      {canCancelSlicing ? 'Cancel Slicing' : 'Finishing…'}
+                      {canCancelSlicing ? <Trans>Cancel Slicing</Trans> : <Trans>Finishing…</Trans>}
                     </Button>
                   )}
                   {slicingModalStage !== 'running' && (
@@ -3976,7 +4046,7 @@ export function SlicingPanel({
                       className="!h-9 text-xs"
                       onClick={handleCloseSlicingModal}
                     >
-                      Close Plate
+                      <Trans>Close Plate</Trans>
                     </Button>
                   )}
                 </div>

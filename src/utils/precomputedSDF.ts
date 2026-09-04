@@ -9,7 +9,7 @@
 
 import { PrecomputedSDFGrid } from '../supports/PlacementLogic/Pathfinding/PrecomputedSDFGrid';
 import type { ClearanceHeightmap } from '../supports/PlacementLogic/Pathfinding/ClearanceHeightmap';
-import { isTauriRuntime } from './meshRepair';
+import { isTauriRuntime } from './tauriRuntime';
 
 type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -68,7 +68,6 @@ export async function computePrecomputedSDF(
     // Copy response bytes into a standalone ArrayBuffer for parsing.
     const buf: ArrayBuffer = new ArrayBuffer(bytes.byteLength);
     new Uint8Array(buf).set(bytes);
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
     const grid = PrecomputedSDFGrid.fromBytes(buf as ArrayBuffer);
 
     if (!grid) {

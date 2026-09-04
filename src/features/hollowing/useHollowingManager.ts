@@ -45,7 +45,6 @@ import type {
 type SceneManager = ReturnType<typeof useSceneCollectionManager>;
 type TransformManager = ReturnType<typeof useTransformManager>;
 
-const HOLLOW_PREVIEW_DEBOUNCE_MS = 90;
 const HOLLOW_PREVIEW_THICKNESS_QUANTUM_MM = 0.2;
 
 function areSortedNumberArraysEqual(a: readonly number[], b: readonly number[]): boolean {
@@ -57,14 +56,6 @@ function areSortedNumberArraysEqual(a: readonly number[], b: readonly number[]):
     }
   }
   return true;
-}
-
-function isKeyboardTargetEditable(target: EventTarget | null): boolean {
-  if (!target || !(target instanceof HTMLElement)) return false;
-  const tag = target.tagName.toLowerCase();
-  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
-  if (target.isContentEditable) return true;
-  return Boolean(target.closest('[contenteditable="true"]'));
 }
 
 function quantizePreviewShellThicknessMm(valueMm: number): number {

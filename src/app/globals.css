@@ -49,38 +49,21 @@
   --space-5: 20px;
   --space-6: 24px;
 
-  --font-size-xs: 15px;
-  --font-size-sm: 16px;
-  --font-size-md: 17px;
-  --font-size-lg: 21px;
-  --font-size-xl: 28px;
+  --font-size-xs: 12px;
+  --font-size-sm: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 17px;
+  --font-size-xl: 22px;
 
   --line-height-tight: 1.2;
   --line-height-normal: 1.45;
 
-  --topbar-height: 56px;
-  --floating-panel-width: 25rem;
+  --topbar-height: 52px;
 
-  /* Viewport-driven floating window density (browser window size, not monitor size) */
-  --ui-window-scale: 1;
-}
-
-@media (max-width: 1600px), (max-height: 900px) {
-  :root {
-    --ui-window-scale: 0.95;
-  }
-}
-
-@media (max-width: 1366px), (max-height: 820px) {
-  :root {
-    --ui-window-scale: 0.9;
-  }
-}
-
-@media (max-width: 1100px), (max-height: 700px) {
-  :root {
-    --ui-window-scale: 0.82;
-  }
+  /* The base UI density is fixed and DPI-aware (CSS px are physical-size
+     constant in the webview). A screen-size factor + user UI scale are applied
+     via native webview zoom (see useUiScale) so the UI is slightly more compact
+     on smaller monitors instead of crowded. */
 }
 
 :root[data-theme='dark'] {
@@ -176,6 +159,20 @@ body {
   position: relative;
   isolation: isolate;
   height: var(--topbar-height);
+  background: transparent;
+  padding: 3px 4px 9px 4px;
+  gap: var(--space-3);
+}
+
+/* Pseudo-element carries the frosted glass surface + bottom-edge fade-off.
+   A mask on a real element clips its children (including modals); putting it
+   on ::before keeps the visual effect without breaking any child rendering. */
+.ui-topbar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
   background:
     linear-gradient(
       90deg,
@@ -183,27 +180,81 @@ body {
       color-mix(in srgb, var(--topbar-accent), transparent 97%) 45%,
       color-mix(in srgb, var(--topbar-accent), transparent 94%) 100%
     ),
-    var(--surface-0);
-  border-bottom: 1px solid var(--border-strong);
-  padding: 0 var(--space-4);
-  gap: var(--space-3);
-}
-
-.ui-topbar::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: -1;
-  backdrop-filter: blur(9px) saturate(110%);
-  -webkit-backdrop-filter: blur(9px) saturate(110%);
+    linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--surface-0), transparent 6%) 0%,
+      color-mix(in srgb, var(--surface-0), transparent 10%) 50%,
+      color-mix(in srgb, var(--surface-0), transparent 24%) 100%
+    );
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
   mask-image: linear-gradient(
     to bottom,
     rgba(0, 0, 0, 1) 0%,
-    rgba(0, 0, 0, 0.9) 48%,
-    rgba(0, 0, 0, 0.55) 76%,
-    rgba(0, 0, 0, 0) 100%
+    rgba(0, 0, 0, 1) 86%,
+    rgba(0, 0, 0, 0.52) 92%,
+    rgba(0, 0, 0, 0.12) 97%,
+    transparent 100%
   );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 1) 0%,
+    rgba(0, 0, 0, 1) 86%,
+    rgba(0, 0, 0, 0.52) 92%,
+    rgba(0, 0, 0, 0.12) 97%,
+    transparent 100%
+  );
+}
+
+/* Backdrop blur layer behind the topbar (z-30) so the Transform Toolbar
+   (z-40) and modals (z-50+) float crisp above the frosted glass. */
+.ui-topbar-blur {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--topbar-height);
+  z-index: 30;
+  pointer-events: none;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  mask-image: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 1) 0%,
+    rgba(0, 0, 0, 1) 60%,
+    rgba(0, 0, 0, 0.82) 75%,
+    rgba(0, 0, 0, 0.44) 88%,
+    rgba(0, 0, 0, 0.14) 96%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 1) 0%,
+    rgba(0, 0, 0, 1) 60%,
+    rgba(0, 0, 0, 0.82) 75%,
+    rgba(0, 0, 0, 0.44) 88%,
+    rgba(0, 0, 0, 0.14) 96%,
+    transparent 100%
+  );
+}
+
+/* During first-run onboarding the top bar goes fully transparent so the
+   wizard backdrop shows through. Both surface layers fade out together. */
+.ui-topbar::before,
+.ui-topbar-blur {
+  transition: opacity 150ms ease;
+}
+
+.ui-topbar-transparent::before {
+  opacity: 0;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.ui-topbar-blur-transparent {
+  opacity: 0;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .ui-topbar-mode-idle {
@@ -268,22 +319,22 @@ body {
 .ui-input,
 .ui-select {
   border: 1px solid var(--border-subtle);
-  background: var(--surface-1);
+  background: var(--surface-0);
   color: var(--text-strong);
   border-radius: var(--radius-sm);
-  padding: 7px 11px;
+  padding: 6px 10px;
   font-size: var(--font-size-sm);
   line-height: 1.3;
 }
 
 .ui-select {
-  height: 36px;
-  min-height: 36px;
+  height: 32px;
+  min-height: 32px;
   padding-top: 0;
   padding-bottom: 0;
-  padding-left: 11px;
+  padding-left: 10px;
   padding-right: 28px;
-  line-height: 34px;
+  line-height: 1;
   vertical-align: middle;
 }
 
@@ -299,8 +350,8 @@ body {
   justify-content: center;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  padding: 8px 13px;
-  font-size: var(--font-size-sm);
+  padding: 5px 11px 7px 11px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   line-height: 1;
   transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
@@ -355,38 +406,38 @@ body {
 .ui-panel {
   background: var(--surface-0);
   border: 1px solid var(--border-subtle);
-  font-size: calc(var(--font-size-sm) * var(--ui-window-scale));
+  font-size: var(--font-size-sm);
   line-height: var(--line-height-normal);
 }
 
 .ui-panel h3 {
-  font-size: calc(var(--font-size-md) * var(--ui-window-scale));
+  font-size: var(--font-size-md) !important;
   line-height: var(--line-height-tight);
 }
 
 .ui-panel .ui-input,
 .ui-panel .ui-select,
 .ui-panel .ui-button {
-  font-size: calc(var(--font-size-sm) * var(--ui-window-scale));
+  font-size: var(--font-size-md);
 }
 
 .ui-panel .ui-input,
 .ui-panel .ui-select {
-  padding: calc(7px * var(--ui-window-scale)) calc(11px * var(--ui-window-scale));
+  padding: 6px 10px;
 }
 
 .ui-panel .ui-select {
-  height: calc(36px * var(--ui-window-scale));
-  min-height: calc(36px * var(--ui-window-scale));
+  height: 32px;
+  min-height: 32px;
   padding-top: 0;
   padding-bottom: 0;
-  padding-left: calc(11px * var(--ui-window-scale));
-  padding-right: calc(28px * var(--ui-window-scale));
-  line-height: calc((36px * var(--ui-window-scale)) - 2px);
+  padding-left: 10px;
+  padding-right: 28px;
+  line-height: 1;
 }
 
 .ui-panel .ui-button {
-  padding: calc(8px * var(--ui-window-scale)) calc(13px * var(--ui-window-scale));
+  padding: 5px 11px 7px 11px;
 }
 
 button:not(:disabled),
@@ -407,12 +458,12 @@ button:disabled,
 
 .ui-label {
   color: var(--indicator);
-  font-size: 13px;
+  font-size: var(--font-size-sm);
 }
 
 .ui-meta {
   color: var(--indicator);
-  font-size: 13px;
+  font-size: var(--font-size-sm);
 }
 
 .ui-checkbox {
@@ -645,9 +696,175 @@ input[type="number"].no-spinners {
   transform-origin: center;
 }
 
+@keyframes onboardingBackdropIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes onboardingPanelIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes onboardingStepInForward {
+  from {
+    opacity: 0;
+    transform: translateX(32px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes onboardingStepInBackward {
+  from {
+    opacity: 0;
+    transform: translateX(-32px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Near-instant content fade used while the modal itself resizes. */
+@keyframes onboardingFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.ui-onboarding-backdrop {
+  animation: onboardingBackdropIn 180ms ease-out;
+}
+
+.ui-onboarding-panel {
+  animation: onboardingPanelIn 240ms ease-out;
+  transform-origin: center;
+}
+
+/* Replays on every step change (the step container is keyed by step and
+   animated directionally: forward slides in from the right, back from the left). */
+.ui-onboarding-step-forward {
+  animation: onboardingStepInForward 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ui-onboarding-step-backward {
+  animation: onboardingStepInBackward 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Applied to the printer step content, which fades in while the modal inflates. */
+.ui-onboarding-fade {
+  animation: onboardingFadeIn 140ms ease-out;
+}
+
+/* First-run finalization: a springy success check that pops in, then the
+   title/copy/action fade up in sequence while the modal settles back down. */
+@keyframes onboardingSuccessCircleIn {
+  0% {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  55% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes onboardingSuccessContentIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ui-onboarding-success-circle {
+  animation: onboardingSuccessCircleIn 460ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.ui-onboarding-success-title {
+  animation: onboardingSuccessContentIn 420ms 140ms ease-out both;
+}
+
+.ui-onboarding-success-subtitle {
+  animation: onboardingSuccessContentIn 420ms 240ms ease-out both;
+}
+
+.ui-onboarding-success-action {
+  animation: onboardingSuccessContentIn 420ms 340ms ease-out both;
+}
+
+/* Exit: the whole overlay dissolves like a cloud blown away from the center
+   outward, revealing the empty scene beneath. The mask's transparent core
+   grows until the overlay is fully gone, then the wizard unmounts. */
+@property --onboarding-reveal {
+  syntax: '<percentage>';
+  inherits: false;
+  initial-value: 0%;
+}
+
+@keyframes onboardingRevealOut {
+  from {
+    --onboarding-reveal: 0%;
+  }
+  to {
+    --onboarding-reveal: 135%;
+  }
+}
+
+.ui-onboarding-reveal {
+  animation: onboardingRevealOut 750ms ease-out forwards;
+  mask-image: radial-gradient(
+    circle at center,
+    transparent 0%,
+    transparent var(--onboarding-reveal),
+    black var(--onboarding-reveal),
+    black 100%
+  );
+  -webkit-mask-image: radial-gradient(
+    circle at center,
+    transparent 0%,
+    transparent var(--onboarding-reveal),
+    black var(--onboarding-reveal),
+    black 100%
+  );
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ui-modal-backdrop-enter,
-  .ui-modal-panel-enter {
+  .ui-modal-panel-enter,
+  .ui-onboarding-backdrop,
+  .ui-onboarding-panel,
+  .ui-onboarding-step-forward,
+  .ui-onboarding-step-backward,
+  .ui-onboarding-fade,
+  .ui-onboarding-success-circle,
+  .ui-onboarding-success-title,
+  .ui-onboarding-success-subtitle,
+  .ui-onboarding-success-action,
+  .ui-onboarding-reveal {
     animation: none !important;
   }
 }

@@ -1,3 +1,5 @@
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import { AlertTriangle, CheckCircle2, RefreshCw, Redo2, Undo2 } from 'lucide-react';
 import { Toast, ToastViewport } from '@/components/atoms';
 import type { SceneImportReport } from '@/features/scene/useSceneCollectionManager';
@@ -7,7 +9,7 @@ type IdText = { id: number; text: string };
 export type NotificationStackProps = {
   isSaveToastVisible: boolean;
   isSaveToastAnimatedVisible: boolean;
-  saveToastLabel: 'Saving…' | 'Autosaving…';
+  saveToastMode: 'saving' | 'autosaving';
 
   historyActionToast: { id: number; text: string; direction: 'undo' | 'redo' } | null;
   isHistoryActionToastVisible: boolean;
@@ -30,7 +32,7 @@ export type NotificationStackProps = {
 export function NotificationStack({
   isSaveToastVisible,
   isSaveToastAnimatedVisible,
-  saveToastLabel,
+  saveToastMode,
   historyActionToast,
   isHistoryActionToastVisible,
   printingMonitorErrorToast,
@@ -43,13 +45,14 @@ export function NotificationStack({
   exportErrorToast,
   isExportErrorToastVisible,
 }: NotificationStackProps) {
+  const { _ } = useLingui();
   return (
     <>
       {isSaveToastVisible && (
         <ToastViewport zIndex={126} offset="1.25rem">
           <Toast tone="info" animated visible={isSaveToastAnimatedVisible} className="flex items-center gap-2">
             <RefreshCw className="h-4 w-4 animate-spin" />
-            {saveToastLabel}
+            {saveToastMode === 'saving' ? _(msg`Saving…`) : _(msg`Autosaving…`)}
           </Toast>
         </ToastViewport>
       )}

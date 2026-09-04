@@ -1,4 +1,4 @@
-import { rleLabelComponents, type RleLabels, type RleMask } from '@/volumeAnalysis/IslandScan/rle';
+import { EMPTY_ROW, rleLabelComponents, type RleLabels, type RleMask } from '@/volumeAnalysis/IslandScan/rle';
 import type { ScanResults } from '@/volumeAnalysis/IslandScan/ScanOrchestrator';
 import type {
   BuildVolumeHierarchyOptions,
@@ -112,8 +112,8 @@ export function buildVolumeHierarchy(
     const continueNodeIds: number[] = [];
     const mergeNodeIds: number[] = [];
 
-    let incoming: Map<number, Set<number>> = new Map();
-    let outgoing: Map<number, Set<number>> = new Map();
+    const incoming: Map<number, Set<number>> = new Map();
+    const outgoing: Map<number, Set<number>> = new Map();
 
     if (prevLabels) {
       const overlap = computeOverlapCounts(prevLabels, currLabels, overlapNeighborhoodPx);
@@ -266,7 +266,7 @@ export function buildVolumeHierarchy(
     for (let y = 0; y < currLabels.height; y++) {
       const row = currLabels.rows[y];
       if (row.length === 0) {
-        nodeLabelRows[y] = new Int32Array(0);
+        nodeLabelRows[y] = EMPTY_ROW;
         continue;
       }
       const out: number[] = [];

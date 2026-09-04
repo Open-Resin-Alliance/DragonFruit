@@ -96,8 +96,7 @@ The RLE representation makes algorithm complexity proportional to **object perim
 
 All operations work directly on sorted run lists, never decoding to dense grids:
 
-- **`rle_encode` / `rle_decode`** — Binary grid ↔ RLE conversion
-- **`rle_encode_labels` / `rle_decode_labels`** — Labeled grid ↔ RLE conversion
+- **`rle_encode`** — Binary grid → RLE conversion
 - **`rle_intersect_dilated(A, B, buffer)`** — Computes `A AND Dilate(B, buffer)`.
 - **`rle_subtract(A, B)`** — Computes `A AND NOT B`. Two-pointer sweep.
 - **`rle_label_components(mask, connectivity)`** — Two-pass connected component labeling on RLE data using union-find. Supports 4 and 8 connectivity.

@@ -25,6 +25,7 @@ export const ISLAND_LAYER_COLORS = {
   voxel: '#87cefa', // pale blue
   minima: '#00ff00', // green
   intersection: '#ff0000', // red
+  overhang: '#ffa500', // orange
 } as const;
 
 export interface PuckOptions {
@@ -44,6 +45,7 @@ export interface PuckResult {
 
 const VOXEL_ID_OFFSET = 0;
 const MINIMA_ID_OFFSET = 1_000_000;
+const OVERHANG_ID_OFFSET = 2_000_000;
 
 /**
  * Stable numeric marker id (the legacy `IslandOverlay`/`CameraFocusController`
@@ -54,7 +56,11 @@ const MINIMA_ID_OFFSET = 1_000_000;
 export function markerIdFor(island: DetectedIsland): number {
   const digits = island.id.replace(/^\D+/, '');
   const n = digits.length ? parseInt(digits, 10) : 0;
-  return (island.source === 'minima' ? MINIMA_ID_OFFSET : VOXEL_ID_OFFSET) + n;
+  const offset =
+    island.source === 'minima' ? MINIMA_ID_OFFSET :
+    island.source === 'overhang' ? OVERHANG_ID_OFFSET :
+    VOXEL_ID_OFFSET;
+  return offset + n;
 }
 
 export function buildIslandPucks(

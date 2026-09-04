@@ -139,7 +139,6 @@ export function DebugPrimitivesPanel({ onAdd, onClear }: DebugPrimitivesPanelPro
             <Trash2 className="w-3.5 h-3.5" />
           </IconButton>
         )}
-        hideDivider={!expanded}
       />
 
       {expanded && (

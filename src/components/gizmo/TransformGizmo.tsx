@@ -85,12 +85,12 @@ function computeViewCullState(
     move[axis] = quantizeOpacity(1 - smoothstep(0.82, 0.97, alignment));
     scale[axis] = quantizeOpacity(1 - smoothstep(0.78, 0.95, alignment));
 
-    // Rotation rings use axis-specific fade tuning:
-    // - X/Y should get out of the way sooner (helps top-down and near-top-down usability)
-    // - Z can stay visible a bit longer to avoid feeling like it disappears too eagerly.
-    const rotateFadeStart = axis === 'z' ? 0.03 : 0.03;
-    const rotateFadeEnd = axis === 'z' ? 0.14 : 0.55;
-    rotate[axis] = quantizeOpacity(smoothstep(rotateFadeStart, rotateFadeEnd, alignment));
+    // Rotation rings fade only when they're nearly edge-on (a thin line that's
+    // hard to grab). X/Y used to fade much earlier — a deliberate top-down
+    // declutter for the world-aligned gizmo — but that made rings vanish at
+    // moderate angles for any gizmo whose rings aren't world-aligned (e.g. the
+    // Cut tool's tenon), so all axes share the same forgiving curve now.
+    rotate[axis] = quantizeOpacity(smoothstep(0.03, 0.14, alignment));
   }
 
   return { move, scale, rotate };
@@ -163,6 +163,7 @@ export function TransformGizmo({
   constrainToSurface = DEFAULT_GIZMO_CONFIG.constrainToSurface,
   constrainToPlane = DEFAULT_GIZMO_CONFIG.constrainToPlane,
   axisLock = DEFAULT_GIZMO_CONFIG.axisLock,
+  rotateAxes,
   handleScale = 1.0,
   moveHandleBidirectional = false,
   moveHandleLengthScale = 1.0,
@@ -183,6 +184,7 @@ export function TransformGizmo({
   disableRingBillboard,
   disableViewCull,
   axisVisualFlip,
+  axisFrameCarriesRotation,
   uniformScaling = true,
 }: TransformGizmoProps) {
   const { isDragging: isGlobalDragging } = usePicking();
@@ -399,9 +401,9 @@ export function TransformGizmo({
     }
   };
 
-  const handleRotate = (axis: GizmoAxis, angle: number) => {
+  const handleRotate = (axis: GizmoAxis, angle: number): number | void => {
     if (onRotate) {
-      onRotate(axis, angle);
+      return onRotate(axis, angle);
     }
   };
 
@@ -425,6 +427,7 @@ export function TransformGizmo({
   };
 
   const isAxisAllowed = (axis: GizmoAxis) => !axisLock || axisLock === axis;
+  const isRingAllowed = (axis: GizmoAxis) => !rotateAxes || rotateAxes.includes(axis);
   const suppressHover = isGlobalDragging;
   const dragOpacityScale = isGlobalDragging ? 0.6 : 1;
 
@@ -600,11 +603,11 @@ export function TransformGizmo({
 
       {enableRotate && (
         <>
-          {shouldRenderPart('ring-x') && (
+          {isRingAllowed('x') && shouldRenderPart('ring-x') && (
             <GizmoRotation
               axis="x"
-              worldAxisDir={worldAxisDirs.x}
               axisVisualFlip={axisVisualFlip?.x ?? 1}
+              frameCarriesRotation={axisFrameCarriesRotation?.x ?? false}
               isHovered={!suppressHover && hoveredPart === 'ring-x'}
               isActive={activePart === 'ring-x'}
               isDimmed={isDimmed('ring-x')}
@@ -623,11 +626,11 @@ export function TransformGizmo({
               onPointerLeave={handlePointerLeave}
             />
           )}
-          {shouldRenderPart('ring-y') && (
+          {isRingAllowed('y') && shouldRenderPart('ring-y') && (
             <GizmoRotation
               axis="y"
-              worldAxisDir={worldAxisDirs.y}
               axisVisualFlip={axisVisualFlip?.y ?? 1}
+              frameCarriesRotation={axisFrameCarriesRotation?.y ?? false}
               isHovered={!suppressHover && hoveredPart === 'ring-y'}
               isActive={activePart === 'ring-y'}
               isDimmed={isDimmed('ring-y')}
@@ -646,11 +649,11 @@ export function TransformGizmo({
               onPointerLeave={handlePointerLeave}
             />
           )}
-          {shouldRenderPart('ring-z') && (
+          {isRingAllowed('z') && shouldRenderPart('ring-z') && (
             <GizmoRotation
               axis="z"
-              worldAxisDir={worldAxisDirs.z}
               axisVisualFlip={axisVisualFlip?.z ?? 1}
+              frameCarriesRotation={axisFrameCarriesRotation?.z ?? false}
               isHovered={!suppressHover && hoveredPart === 'ring-z'}
               isActive={activePart === 'ring-z'}
               isDimmed={isDimmed('ring-z')}
@@ -686,6 +689,7 @@ export function TransformGizmo({
               interactionsEnabled={partIsInteractable('scale-x')}
               isUniform={uniformScaling}
               gizmoPosition={posVec}
+              worldAxisDir={worldAxisDirs.x}
               onDragStart={(isUniform: boolean) => handleDragStart('scale-x', isUniform)}
               onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('x', factor, isUniform)}
               onDragEnd={handleDragEnd}
@@ -705,6 +709,7 @@ export function TransformGizmo({
               interactionsEnabled={partIsInteractable('scale-y')}
               isUniform={uniformScaling}
               gizmoPosition={posVec}
+              worldAxisDir={worldAxisDirs.y}
               onDragStart={(isUniform: boolean) => handleDragStart('scale-y', isUniform)}
               onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('y', factor, isUniform)}
               onDragEnd={handleDragEnd}
@@ -724,6 +729,7 @@ export function TransformGizmo({
               interactionsEnabled={partIsInteractable('scale-z')}
               isUniform={uniformScaling}
               gizmoPosition={posVec}
+              worldAxisDir={worldAxisDirs.z}
               onDragStart={(isUniform: boolean) => handleDragStart('scale-z', isUniform)}
               onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('z', factor, isUniform)}
               onDragEnd={handleDragEnd}

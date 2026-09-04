@@ -88,6 +88,7 @@
  *   c) Pixel pitch + layer height already encode the print's voxel anisotropy,
  *      which is the correct first-order design target for parameter selection.
  */
+import { clamp } from '@/utils/math';
 
 // ── Physical constants ────────────────────────────────────────────────────────
 
@@ -191,9 +192,6 @@ export type PhysicalAaConfig = {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
 
 
 // ── Public API ────────────────────────────────────────────────────────────────

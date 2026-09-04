@@ -19,8 +19,22 @@ Update docs when changing:
 - support placement/replacement behaviors
 - export/runtime API contracts
 
-## Recommended validation
+## Validation
 
-- Verify links and page paths remain valid for MkDocs nav.
-- Build docs site locally before merging major documentation changes.
-- Ensure new pages appear in `mkdocs.yml` navigation.
+Run `npm run check:docs`. It is the same check CI runs, and it covers:
+
+- every repo path a document cites exists
+- every code symbol a document cites exists in the codebase
+- no page pins a line number — they drift within a week; name the symbol instead
+- relative links between pages resolve
+- the MkDocs nav lists every published page, and every nav entry has a file
+
+Symbol verification needs the plugin submodules (`git submodule update --init`);
+without them the check says so and skips that part rather than reporting false
+failures.
+
+Deliberate exceptions go in `scripts/docs-accuracy-allowlist.json`, each with a
+reason. An unexplained entry is how a checker quietly stops catching things.
+
+Building the site locally (`mkdocs build --strict`) is still worth doing before
+merging a large documentation change.

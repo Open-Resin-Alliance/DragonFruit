@@ -1,7 +1,7 @@
 import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
-import { Hand, Move3D, Paintbrush2, LayoutGrid, ArrowDownToLine, FlipHorizontal2, Droplets } from 'lucide-react';
+import { Hand, Move3D, Paintbrush2, LayoutGrid, ArrowDownToLine, FlipHorizontal2, Droplets, Scissors } from 'lucide-react';
 import type { TransformMode } from '@/hooks/useModelTransform';
 import { usePlatformModifier } from '@/hooks/usePlatformModifier';
 import { warmTransformGizmoGeometryCache } from '@/components/gizmo/gizmoGeometryCache';
@@ -31,6 +31,7 @@ export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformT
     { mode: 'placeOnFace', label: _(msg({ message: 'On-Face', comment: 'Toolbar button label. Short for "lay the model flat on a selected face"; keep it terse so the toolbar pill stays narrow.' })), icon: <ArrowDownToLine className="w-4 h-4" />, hint: _(msg`Orient flat against plate`) },
     { mode: 'mirror', label: _(msg`Mirror`), icon: <FlipHorizontal2 className="w-4 h-4" />, hint: _(msg`Mirror across X, Y, or Z`) },
     { mode: 'hollowing', label: _(msg`Hollow`), icon: <Droplets className="w-4 h-4" />, hint: _(msg`Create cavity or open-face shell`) },
+    { mode: 'organicCut', label: _(msg`Cut`), icon: <Scissors className="w-4 h-4" />, hint: _(msg`Split the model along a drawn seam`) },
     { mode: 'smoothing', label: _(msg`Smooth`), icon: <Paintbrush2 className="w-4 h-4" />, hint: _(msg`Sculpt and smooth surface`) },
     { mode: 'arrange', label: _(msg`Arrange`), icon: <LayoutGrid className="w-4 h-4" />, hint: _(msg`Auto-arrange models on plate`) },
   ];
@@ -75,7 +76,8 @@ export function TransformToolbar({ mode, onModeChange, onModeHover }: TransformT
 
   return (
     <div
-      className="fixed top-16 left-1/2 z-30 -translate-x-1/2 flex items-center pointer-events-auto"
+      className="fixed left-1/2 z-40 -translate-x-1/2 flex items-center pointer-events-auto"
+      style={{ top: 'calc(var(--topbar-height) + 4px)' }}
     >
     <div
       className="rounded-full"

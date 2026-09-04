@@ -144,6 +144,8 @@ pub enum IslandStatus {
 pub struct Centroid {
     pub x: f64,
     pub y: f64,
+    /// Z in **layer-index units**, not mm (matches `centroid_sum_z`).
+    /// Multiply by `layer_height_mm` (and add `bbox_min_z`) for world Z.
     pub z: f64,
 }
 
@@ -168,10 +170,17 @@ pub struct Island {
     pub is_merged_placeholder: bool,
     pub centroid_sum_x: f64,
     pub centroid_sum_y: f64,
+    /// Accumulated Z in **layer-index units** (Σ size × layer_index), NOT mm.
+    /// Convert to world Z via `bbox_min_z + layer_index * layer_height_mm`
+    /// (the consumer derives world Z from `first_layer`).
     pub centroid_sum_z: f64,
     pub centroid_count: u64,
     pub centroid: Option<Centroid>,
     pub last_layer_centroid: Option<Centroid>,
+    /// Last-layer centroid in **pixel coordinates** (x, y) with Z as a
+    /// **layer index** — the island's final layer center, not a world-space
+    /// "center voxel". World conversion must use `first_layer`:
+    /// `bbox_min_z + first_layer * layer_height_mm` for the contact base.
     pub seed_voxel: Option<Centroid>,
 }
 
@@ -259,6 +268,10 @@ impl Island {
     }
 
     /// Compute final global centroid from accumulators.
+    ///
+    /// Note: `centroid.z` is in layer-index units (as accumulated by
+    /// `centroid_sum_z`); convert to world Z with `first_layer` /
+    /// `layer_height_mm` as documented on `seed_voxel`.
     pub fn compute_centroid(&mut self) {
         if self.centroid_count > 0 {
             self.centroid = Some(Centroid {

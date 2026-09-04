@@ -80,7 +80,6 @@ export function IslandVoxelControls({
             {enabled ? 'ON' : 'OFF'}
           </button>
         )}
-        hideDivider={!expanded}
       />
 
       {(islandCount > 0 || expanded) && (

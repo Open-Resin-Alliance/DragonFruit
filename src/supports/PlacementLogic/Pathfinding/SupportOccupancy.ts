@@ -7,6 +7,7 @@
  */
 
 import { Vec3 } from '../../types';
+import { quantizeToCell } from '@/utils/math';
 
 // ---------- Types ----------
 
@@ -16,10 +17,6 @@ export interface OccupancyOptions {
 }
 
 // ---------- Helpers ----------
-
-function quantize(v: number, cellSize: number): number {
-    return Math.round(v / cellSize);
-}
 
 function cellKey(qx: number, qy: number, qz: number): number {
     const ux = (qx + 0x4000) | 0;
@@ -67,12 +64,12 @@ export class SupportOccupancy {
         const minZ = Math.min(az, bz) - r;
         const maxZ = Math.max(az, bz) + r;
 
-        const qMinX = quantize(minX, cs) - 1;
-        const qMaxX = quantize(maxX, cs) + 1;
-        const qMinY = quantize(minY, cs) - 1;
-        const qMaxY = quantize(maxY, cs) + 1;
-        const qMinZ = quantize(minZ, cs) - 1;
-        const qMaxZ = quantize(maxZ, cs) + 1;
+        const qMinX = quantizeToCell(minX, cs) - 1;
+        const qMaxX = quantizeToCell(maxX, cs) + 1;
+        const qMinY = quantizeToCell(minY, cs) - 1;
+        const qMaxY = quantizeToCell(maxY, cs) + 1;
+        const qMinZ = quantizeToCell(minZ, cs) - 1;
+        const qMaxZ = quantizeToCell(maxZ, cs) + 1;
 
         // Segment vector
         const dx = bx - ax;
@@ -129,7 +126,7 @@ export class SupportOccupancy {
      */
     isOccupied(wx: number, wy: number, wz: number, ignoreSupportId?: string): boolean {
         const cs = this.cellSize;
-        const key = cellKey(quantize(wx, cs), quantize(wy, cs), quantize(wz, cs));
+        const key = cellKey(quantizeToCell(wx, cs), quantizeToCell(wy, cs), quantizeToCell(wz, cs));
         const owner = this.cells.get(key);
         if (owner === undefined) return false;
         if (ignoreSupportId && owner === ignoreSupportId) return false;

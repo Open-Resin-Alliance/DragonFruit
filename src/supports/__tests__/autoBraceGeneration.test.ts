@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { buildAutoBracedSnapshot } from '../autoBracing/autoBrace';
 import { createDefaultAutoBracingSettings } from '../autoBracing/settings';
+import { resetKickstandStore } from '../SupportTypes/Kickstand/kickstandStore';
 import type { Roots, SupportState, Trunk } from '../types';
 
 function createRoot(id: string, modelId: string, x: number, y = 0): Roots {
@@ -226,7 +227,10 @@ test('buildAutoBracedSnapshot respects maxBraceLengthMm during grouping', () => 
     snapshot.trunks[trunk2.id] = trunk2;
     snapshot.trunks[trunk3.id] = trunk3;
 
-    const settings = { ...createDefaultAutoBracingSettings(), maxBraceLengthMm: 6 };
+    // seedSpacingMm is in mm (no grid scaling). 25mm puts Voronoi seed targets
+    // exactly on trunk-1 (x=0) and trunk-3 (x=25), so trunk-1/trunk-2 (5mm gap)
+    // share a cluster and trunk-3 is isolated by the 6mm max distance.
+    const settings = { ...createDefaultAutoBracingSettings(), maxBraceLengthMm: 6, seedSpacingMm: 25, seedJitterMm: 0 };
     const result = buildAutoBracedSnapshot(snapshot, settings);
 
     // trunk-1 and trunk-2 should have a brace. trunk-3 should have NONE.
@@ -242,3 +246,28 @@ test('buildAutoBracedSnapshot respects maxBraceLengthMm during grouping', () => 
     assert.equal(hasBrace1_2, true, 'Trunk 1 and 2 should be braced (5mm gap < 6mm limit)');
     assert.equal(hasBrace3, false, 'Trunk 3 should not be braced as it is too far from the group');
 });
+
+test('dense grid forests brace trunks together instead of spawning kickstands', () => {
+    // A 10×10 tall trunk grid at 2.24 mm spacing (the auto-grid shape).
+    // Voronoi cells can isolate single trunks; bracing must pair model-wide
+    // so every trunk finds a second brace axis — zero kickstands, braces on.
+    resetKickstandStore();
+    const snapshot = createEmptySnapshot();
+    const spacing = 2.24;
+    for (let r = 0; r < 10; r++) {
+        for (let c = 0; c < 10; c++) {
+            const id = `t${r}-${c}`;
+            const x = c * spacing;
+            const y = r * spacing;
+            snapshot.roots[`r${id}`] = createRoot(`r${id}`, 'grid-model', x, y);
+            snapshot.trunks[id] = createTrunk(id, 'grid-model', `r${id}`, `seg-${id}`, x, y, 30);
+        }
+    }
+
+    const result = buildAutoBracedSnapshot(snapshot, createDefaultAutoBracingSettings());
+
+    assert.ok(result.generatedBraceCount > 0, 'the grid gets braced');
+    assert.equal(Object.keys(result.kickstand.kickstands).length, 0,
+        'every grid trunk finds two brace axes — no kickstands needed');
+});
+

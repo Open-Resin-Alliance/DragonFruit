@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { AlertTriangle, Check, Download, Edit3, Pencil, Plus, Trash2, Upload, X, RotateCcw, TrendingUp } from 'lucide-react';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
@@ -843,6 +844,8 @@ export function LutCurveEditorModal({
     setShowDiscardConfirm(false);
   }, []);
 
+  useEscapeToClose(isOpen, requestClose);
+
   const handleConfirmDelete = useCallback(() => {
     if (!editingCurve || !onDelete) return;
     setShowDeleteConfirm(false);
@@ -1556,9 +1559,9 @@ export function LutCurveEditorModal({
               onClick={handleConfirmCreate}
               className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
               style={{
-                borderColor: 'var(--accent-secondary-action-border)',
-                background: 'var(--accent-secondary-action-bg-92)',
-                color: 'var(--accent-secondary-action-color)',
+                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                color: 'var(--accent)',
               }}
             >
               <Check className="h-3.5 w-3.5" />
@@ -1704,9 +1707,9 @@ export function LutCurveEditorModal({
               disabled={draftRenameName.trim().length === 0}
               className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
               style={{
-                borderColor: 'var(--accent-secondary-action-border)',
-                background: 'var(--accent-secondary-action-bg-92)',
-                color: 'var(--accent-secondary-action-color)',
+                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                color: 'var(--accent)',
               }}
             >
               <Check className="h-3.5 w-3.5" />

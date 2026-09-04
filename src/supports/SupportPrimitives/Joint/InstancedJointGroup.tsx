@@ -23,6 +23,7 @@ interface InstancedJointGroupProps {
     heightSegments?: number;
     outOfBoundsMaterial?: THREE.ShaderMaterial | null;
     onJointClick?: (joint: InstancedJoint, event: ThreeEvent<MouseEvent>) => void;
+    onJointPointerDown?: (joint: InstancedJoint, event: ThreeEvent<PointerEvent>) => void;
     onJointPointerMove?: (joint: InstancedJoint, event: ThreeEvent<PointerEvent>) => void;
     onJointPointerOut?: (joint: InstancedJoint | null, event: ThreeEvent<PointerEvent>) => void;
 }
@@ -39,6 +40,7 @@ export function InstancedJointGroup({
     heightSegments = 10,
     outOfBoundsMaterial = null,
     onJointClick,
+    onJointPointerDown,
     onJointPointerMove,
     onJointPointerOut,
 }: InstancedJointGroupProps) {
@@ -94,6 +96,14 @@ export function InstancedJointGroup({
         onJointClick(joint, event);
     };
 
+    const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
+        if (!onJointPointerDown) return;
+        event.stopPropagation();
+        const joint = resolveJoint(event.instanceId);
+        if (!joint) return;
+        onJointPointerDown(joint, event);
+    };
+
     const handlePointerMove = (event: ThreeEvent<PointerEvent>) => {
         if (!onJointPointerMove) return;
         event.stopPropagation();
@@ -118,6 +128,7 @@ export function InstancedJointGroup({
                 frustumCulled={false}
                 renderOrder={100000}
                 onClick={onJointClick ? handleClick : undefined}
+                onPointerDown={onJointPointerDown ? handlePointerDown : undefined}
                 onPointerMove={onJointPointerMove ? handlePointerMove : undefined}
                 onPointerOut={onJointPointerOut ? handlePointerOut : undefined}
             >

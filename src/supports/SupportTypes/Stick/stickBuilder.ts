@@ -1,3 +1,4 @@
+import { toVec3 } from '@/supports/Curves/BezierUtils';
 import * as THREE from 'three';
 import { Joint, Segment, Stick, Vec3, LimitationCode } from '../../types';
 import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
@@ -7,16 +8,13 @@ import { getSettings } from '../../Settings';
 import { getJointDiameter } from '../../constants';
 import { isShaftBlocked, isCollisionFrustumBlocked } from '../../PlacementLogic/CollisionAvoidance';
 import { clampConeAxisDeviationFromSurfaceNormal } from '../../PlacementLogic/ConeAxisPolicy';
-
-function uuid() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-        const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-    });
-}
+import { v4 as uuidv4 } from 'uuid';
 
 export interface StickBuildInput {
     modelId: string;
+    /** Auto-support tier overrides — absent for manual placement. */
+    shaftDiameterMm?: number;
+    tipContactDiameterMm?: number;
     aPos: Vec3;
     aNormal: Vec3;
     bPos: Vec3;
@@ -31,9 +29,6 @@ export interface StickBuildResult {
 
 const GEOMETRY_EPSILON = 0.000001;
 
-function toVec3(vector: THREE.Vector3): Vec3 {
-    return { x: vector.x, y: vector.y, z: vector.z };
-}
 
 export function buildStick(input: StickBuildInput): StickBuildResult {
     const { modelId, aPos, aNormal, bPos, bNormal, mesh } = input;
@@ -128,26 +123,26 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
     const socketB = getSocketPosition(toVec3(coneStartB), toVec3(coneAxisB), tipProfile);
 
     const socketJointA: Joint = {
-        id: uuid(),
+        id: uuidv4(),
         pos: socketA,
         diameter: jointDiameter,
     };
 
     const socketJointB: Joint = {
-        id: uuid(),
+        id: uuidv4(),
         pos: socketB,
         diameter: jointDiameter,
     };
 
     const segment: Segment = {
-        id: uuid(),
+        id: uuidv4(),
         diameter: shaftDiameter,
         bottomJoint: socketJointA,
         topJoint: socketJointB,
     };
 
     const contactConeA: ContactCone = {
-        id: uuid(),
+        id: uuidv4(),
         pos: aPos,
         normal: toVec3(coneAxisA),
         surfaceNormal: toVec3(surfaceNormalA),
@@ -157,7 +152,7 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
     };
 
     const contactConeB: ContactCone = {
-        id: uuid(),
+        id: uuidv4(),
         pos: bPos,
         normal: toVec3(coneAxisB),
         surfaceNormal: toVec3(surfaceNormalB),
@@ -171,7 +166,7 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
     const b = new THREE.Vector3(bPos.x, bPos.y, bPos.z);
     const swap = a.z > b.z || (a.z === b.z && (a.y > b.y || (a.y === b.y && a.x > b.x)));
 
-    const stickId = uuid();
+    const stickId = uuidv4();
     const stick: Stick = {
         id: stickId,
         modelId,

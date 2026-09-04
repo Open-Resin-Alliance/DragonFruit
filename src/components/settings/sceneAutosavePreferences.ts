@@ -1,5 +1,7 @@
 'use client';
 
+import { clamp } from '@/utils/math';
+
 export type SceneAutosaveSettings = {
   enabled: boolean;
   recoveryPromptEnabled: boolean;
@@ -20,9 +22,6 @@ export const DEFAULT_SCENE_AUTOSAVE_SETTINGS: SceneAutosaveSettings = {
 let cachedRawSettingsValue: string | null | undefined;
 let cachedSettingsSnapshot: SceneAutosaveSettings = DEFAULT_SCENE_AUTOSAVE_SETTINGS;
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
 
 function normalizeSceneAutosaveSettings(
   value: Partial<SceneAutosaveSettings> | null | undefined,

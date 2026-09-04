@@ -1,3 +1,4 @@
+import { footprintFromPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
@@ -12,18 +13,18 @@ function mockVoxelIsland(id: string, areaMm2: number, contactVoxels?: { x: numbe
     baseZ: 1,
     areaMm2,
     class: 'voxelOnly',
-    contactVoxels,
+    contactVoxels: contactVoxels ? footprintFromPoints(contactVoxels) : undefined,
   };
 }
 
 test('generateContourMarkers: returns empty for empty voxels', () => {
-  const markers = generateContourMarkers([], 0.05, 1, 1.0, 3);
+  const markers = generateContourMarkers(footprintFromPoints([]), 0.05, 1, 1.0, 3);
   assert.equal(markers.length, 0);
 });
 
 test('generateContourMarkers: returns 1 marker for a single voxel', () => {
   const voxels = [{ x: 0, y: 0 }];
-  const markers = generateContourMarkers(voxels, 0.05, 1, 1.0, 3);
+  const markers = generateContourMarkers(footprintFromPoints(voxels), 0.05, 1, 1.0, 3);
   assert.equal(markers.length, 1);
   assert.equal(markers[0].centerX, 0);
   assert.equal(markers[0].centerY, 0);
@@ -36,7 +37,7 @@ test('generateContourMarkers: covers multiple close voxels with 1 marker', () =>
     { x: 0.02, y: 0.02 },
     { x: -0.02, y: -0.02 },
   ];
-  const markers = generateContourMarkers(voxels, 0.05, 1, 1.0, 3);
+  const markers = generateContourMarkers(footprintFromPoints(voxels), 0.05, 1, 1.0, 3);
   assert.equal(markers.length, 1);
 });
 
@@ -45,7 +46,7 @@ test('generateContourMarkers: covers distant voxels with multiple markers', () =
     { x: 0, y: 0 },
     { x: 10, y: 10 },
   ];
-  const markers = generateContourMarkers(voxels, 0.05, 1, 1.0, 3);
+  const markers = generateContourMarkers(footprintFromPoints(voxels), 0.05, 1, 1.0, 3);
   assert.equal(markers.length, 2);
 });
 
@@ -59,7 +60,7 @@ test('generateContourMarkers: uses large radius for interior core and small radi
     }
   }
 
-  const markers = generateContourMarkers(voxels, px, 1, 1.0, 3);
+  const markers = generateContourMarkers(footprintFromPoints(voxels), px, 1, 1.0, 3);
   // There should be a mix of R_large and R_small markers
   assert.ok(markers.length > 0);
   const hasLarge = markers.some(m => m.radius === px * 3.5);
@@ -137,7 +138,7 @@ test('consolidateVoxelIslands: dilates and bridges adjacent footprints if at lea
   assert.equal(consolidated.length, 1);
   const island = consolidated[0];
   assert.ok(island.contactVoxels);
-  assert.ok(island.contactVoxels.length > 2);
-  assert.equal(island.areaMm2, island.contactVoxels.length * 0.05 * 0.05);
+  assert.ok(island.contactVoxels.count > 2);
+  assert.equal(island.areaMm2, island.contactVoxels.count * 0.05 * 0.05);
 });
 

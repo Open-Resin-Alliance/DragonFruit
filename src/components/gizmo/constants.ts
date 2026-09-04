@@ -3,7 +3,7 @@
  * Colors and sizes matching world axes style
  */
 
-import type { GizmoColors, GizmoSizes } from './types';
+import type { GizmoAxis, GizmoColors, GizmoSizes } from './types';
 
 export const GIZMO_COLORS: GizmoColors = {
   // Axis gradients (matches world axes)
@@ -41,6 +41,21 @@ export const GIZMO_COLORS: GizmoColors = {
   yzPlane: '#44ffff',    // Cyan (semi-transparent)
   hover: '#ffaa00',      // Orange (highlight on hover)
   active: '#ffffff',     // White (during drag)
+};
+
+/**
+ * Colours for the protractor dial, per axis.
+ *
+ * Deliberately NOT the ring colours. A ring is a thick, filled arc, so pure red
+ * and pure blue read fine on it; the dial is hairlines on the same dark viewport,
+ * and those two are the darkest hues in the palette — X came out muddy and Z was
+ * hard to follow at all. These are the same hues lifted into the range the
+ * handles already use, so the dial still says which axis it belongs to.
+ */
+export const GIZMO_DIAL_COLORS: Record<GizmoAxis, string> = {
+  x: '#ffb32e',  // orange-yellow, where pure red goes muddy
+  y: '#00ff00',  // green already carries; left as the ring's
+  z: '#00aaff',  // the light blue the Z handle is drawn in
 };
 
 export const GIZMO_SIZES: GizmoSizes = {

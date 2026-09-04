@@ -386,6 +386,14 @@ export function computeAndApplyTrunkDiameterProfile(
         else branchesByParentKnotId.set(b.parentKnotId, [b]);
     }
 
+    const leavesByParentKnotId = new Map<string, Leaf[]>();
+    for (const l of Object.values(snapshot.leaves)) {
+        if (!l?.parentKnotId) continue;
+        const list = leavesByParentKnotId.get(l.parentKnotId);
+        if (list) list.push(l);
+        else leavesByParentKnotId.set(l.parentKnotId, [l]);
+    }
+
     const epsT = 1e-6;
     const isNearlyZero = (t: number) => t <= epsT;
     const isNearlyOne = (t: number) => t >= 1 - epsT;
@@ -434,7 +442,9 @@ export function computeAndApplyTrunkDiameterProfile(
         const splitPoint = knot.pos;
         const segIdToSplit = seg.id;
 
-        const trunkAfterSplit = splitShaft(nextTrunk, segIdToSplit, splitPoint, splitT, root);
+        // This caller performs its own knot rehosting below, so it does not pass
+        // knots into splitShaft and only consumes the trunk.
+        const { trunk: trunkAfterSplit } = splitShaft(nextTrunk, segIdToSplit, splitPoint, splitT, root);
         const bottomSegIndex = trunkAfterSplit.segments.findIndex((s) => s.id === segIdToSplit);
         if (bottomSegIndex === -1) {
             nextTrunk = trunkAfterSplit;
@@ -482,17 +492,29 @@ export function computeAndApplyTrunkDiameterProfile(
         nextTrunk = trunkAfterSplit;
     }
 
-    // Demand at the top of each segment from any branch-attached knot anchored to that segment.
+    // Demand at the top of each segment from any branch/leaf-attached knot
+    // anchored to that segment. Auto merge/fan knots carry no `t` — the
+    // demand applies to the knot's own segment regardless (the stepwise
+    // running max thickens that segment and everything below it).
     const trunkSegIds = new Set(nextTrunk.segments.map((s) => s.id));
     const demandAtTopBySegId = new Map<string, number>();
     for (const knot of nextKnotById.values()) {
         if (!trunkSegIds.has(knot.parentShaftId)) continue;
-        const attached = branchesByParentKnotId.get(knot.id);
-        if (!attached || attached.length === 0) continue;
-        if (typeof knot.t !== 'number' || knot.t < 1 - epsT) continue;
+        const attachedBranches = branchesByParentKnotId.get(knot.id);
+        const attachedLeaves = leavesByParentKnotId.get(knot.id);
+        const n = (attachedBranches?.length ?? 0) + (attachedLeaves?.length ?? 0);
+        if (n === 0) continue;
 
-        let demand = 0;
-        for (const b of attached) demand = Math.max(demand, branchDemandDiameterMm(b));
+        let memberDemand = 0;
+        for (const b of attachedBranches ?? []) memberDemand = Math.max(memberDemand, branchDemandDiameterMm(b));
+        for (const l of attachedLeaves ?? []) memberDemand = Math.max(memberDemand, getLeafDiameter(l));
+
+        // The host matches its fattest member — no per-attachment growth.
+        // The old +10%/member calibration made a uniform-band chunk tree
+        // bulge at the attachment knot (thick lower shaft, thin canopy) —
+        // a diameter step with no load story, especially jarring on light
+        // tiers. A host still thickens when a member is genuinely fatter.
+        const demand = memberDemand;
 
         const prev = demandAtTopBySegId.get(knot.parentShaftId) ?? 0;
         if (demand > prev) demandAtTopBySegId.set(knot.parentShaftId, demand);
@@ -568,4 +590,35 @@ export function computeAndApplyTrunkDiameterProfile(
         },
         knotUpdates,
     };
+}
+
+/**
+ * Forest-wide diameter resize (auto-support plan step 5).
+ *
+ * Re-derives every trunk's stepwise diameter profile from its final
+ * attachment tree, so a trunk carrying four branches gets thicker where it
+ * carries them while a lone trunk stays at its placed (empirical) diameter.
+ *
+ * Pure: returns an updated snapshot (trunks + rehosted knots). Trunks are
+ * processed sequentially so a later trunk sees the earlier rehosts; the
+ * per-trunk profile only touches that trunk's own segments/knots, so order
+ * does not change the result.
+ */
+export function computeForestDiameterProfile(snapshot: SupportState): SupportState {
+    let working = snapshot;
+    for (const trunkId of Object.keys(snapshot.trunks)) {
+        const applied = computeAndApplyTrunkDiameterProfile(working, trunkId);
+        if (!applied) continue;
+
+        let nextKnots = working.knots;
+        for (const u of applied.knotUpdates) {
+            nextKnots = { ...nextKnots, [u.after.id]: u.after };
+        }
+        working = {
+            ...working,
+            trunks: { ...working.trunks, [applied.trunk.id]: applied.trunk },
+            knots: nextKnots,
+        };
+    }
+    return working;
 }

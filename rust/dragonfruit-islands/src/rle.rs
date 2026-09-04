@@ -48,84 +48,6 @@ pub fn rle_encode(data: &[u8], width: i32, height: i32) -> RleMask {
     }
 }
 
-/// Decode an `RleMask` back to a dense binary grid (`0` / `1`).
-pub fn rle_decode(mask: &RleMask) -> Vec<u8> {
-    let w = mask.width as usize;
-    let mut data = vec![0u8; w * mask.height as usize];
-
-    for (y, row) in mask.rows.iter().enumerate() {
-        let row_off = y * w;
-        for run in row {
-            for j in 0..run.length {
-                data[row_off + (run.start + j) as usize] = 1;
-            }
-        }
-    }
-    data
-}
-
-/// Encode a dense label grid (i32, 0 = background) into `RleLabels`.
-pub fn rle_encode_labels(data: &[i32], width: i32, height: i32) -> RleLabels {
-    let w = width as usize;
-    let mut rows = Vec::with_capacity(height as usize);
-
-    for y in 0..height as usize {
-        let mut spans = Vec::new();
-        let row_off = y * w;
-        let mut run_start: i32 = -1;
-        let mut current_id: i32 = 0;
-
-        for x in 0..w {
-            let id = data[row_off + x];
-            if id != current_id {
-                if current_id != 0 && run_start >= 0 {
-                    spans.push(RleLabelRun {
-                        start: run_start,
-                        length: x as i32 - run_start,
-                        id: current_id,
-                    });
-                }
-                if id != 0 {
-                    run_start = x as i32;
-                } else {
-                    run_start = -1;
-                }
-                current_id = id;
-            }
-        }
-        if current_id != 0 && run_start >= 0 {
-            spans.push(RleLabelRun {
-                start: run_start,
-                length: width - run_start,
-                id: current_id,
-            });
-        }
-        rows.push(spans);
-    }
-
-    RleLabels {
-        rows,
-        width,
-        height,
-    }
-}
-
-/// Decode `RleLabels` to a dense i32 grid.
-pub fn rle_decode_labels(labels: &RleLabels) -> Vec<i32> {
-    let w = labels.width as usize;
-    let mut data = vec![0i32; w * labels.height as usize];
-
-    for (y, row) in labels.rows.iter().enumerate() {
-        let row_off = y * w;
-        for run in row {
-            for j in 0..run.length {
-                data[row_off + (run.start + j) as usize] = run.id;
-            }
-        }
-    }
-    data
-}
-
 // ---------------------------------------------------------------------------
 // Intersect Dilated: Result = A AND Dilate(B, buffer)
 // ---------------------------------------------------------------------------
@@ -471,6 +393,78 @@ mod tests {
     use crate::model::*;
     use crate::rle::*;
 
+    // Test-local decode helpers (the crate no longer exports decode functions;
+    // they were only used to round-trip in tests).
+    fn decode(mask: &RleMask) -> Vec<u8> {
+        let w = mask.width as usize;
+        let mut data = vec![0u8; w * mask.height as usize];
+        for (y, row) in mask.rows.iter().enumerate() {
+            let row_off = y * w;
+            for run in row {
+                for j in 0..run.length {
+                    data[row_off + (run.start + j) as usize] = 1;
+                }
+            }
+        }
+        data
+    }
+
+    fn encode_labels(data: &[i32], width: i32, height: i32) -> RleLabels {
+        let w = width as usize;
+        let mut rows = Vec::with_capacity(height as usize);
+        for y in 0..height as usize {
+            let mut spans = Vec::new();
+            let row_off = y * w;
+            let mut run_start: i32 = -1;
+            let mut current_id: i32 = 0;
+            for x in 0..w {
+                let id = data[row_off + x];
+                if id != current_id {
+                    if current_id != 0 && run_start >= 0 {
+                        spans.push(RleLabelRun {
+                            start: run_start,
+                            length: x as i32 - run_start,
+                            id: current_id,
+                        });
+                    }
+                    if id != 0 {
+                        run_start = x as i32;
+                    } else {
+                        run_start = -1;
+                    }
+                    current_id = id;
+                }
+            }
+            if current_id != 0 && run_start >= 0 {
+                spans.push(RleLabelRun {
+                    start: run_start,
+                    length: width - run_start,
+                    id: current_id,
+                });
+            }
+            rows.push(spans);
+        }
+        RleLabels {
+            rows,
+            width,
+            height,
+        }
+    }
+
+    fn decode_labels(labels: &RleLabels) -> Vec<i32> {
+        let w = labels.width as usize;
+        let mut data = vec![0i32; w * labels.height as usize];
+        for (y, row) in labels.rows.iter().enumerate() {
+            let row_off = y * w;
+            for run in row {
+                for j in 0..run.length {
+                    data[row_off + (run.start + j) as usize] = run.id;
+                }
+            }
+        }
+        data
+    }
+
     #[test]
     fn encode_decode_roundtrip() {
         let w = 8;
@@ -488,7 +482,7 @@ mod tests {
         assert_eq!(mask.rows[2].len(), 0); // empty
         assert_eq!(mask.rows[3].len(), 1); // one full-width run
 
-        let decoded = rle_decode(&mask);
+        let decoded = decode(&mask);
         assert_eq!(decoded, data);
     }
 
@@ -497,8 +491,8 @@ mod tests {
         let w = 6;
         let h = 2;
         let data: Vec<i32> = vec![0, 1, 1, 0, 2, 2, 3, 3, 3, 0, 0, 2];
-        let labels = rle_encode_labels(&data, w, h);
-        let decoded = rle_decode_labels(&labels);
+        let labels = encode_labels(&data, w, h);
+        let decoded = decode_labels(&labels);
         assert_eq!(decoded, data);
     }
 

@@ -90,12 +90,27 @@ export interface GizmoConfig {
   constrainToSurface?: boolean;
   constrainToPlane?: boolean;
   axisLock?: GizmoAxis | null;
+  /**
+   * Which rotation rings to draw. Omitted (the default) draws all three. Give a
+   * subset for a gizmo whose object has fewer than three meaningful rotations —
+   * the organic cut's tenon, for instance, takes a roll and a lean and nothing
+   * else, and the third ring only invited a rotation with no meaning.
+   */
+  rotateAxes?: GizmoAxis[];
 
   // Per-axis visual animation flip for rotation rings.
   // Set a component to -1 to invert the ring handle animation direction
   // (e.g. when the gizmo local frame has an inverted axis convention such
   // as displayY = -cutterY in HolePunchGizmo).
   axisVisualFlip?: { x?: number; y?: number; z?: number };
+
+  /**
+   * Rings whose rotation the caller applies to the GIZMO's own frame as well as to
+   * the object — the tenon's roll ring, whose orientation is built from the roll it
+   * sets. Those rings already carry the movement on screen, so their handle must not
+   * advance inside them on top of it, or it travels twice as far as the pointer.
+   */
+  axisFrameCarriesRotation?: { x?: boolean; y?: boolean; z?: boolean };
 
   // Scale behavior
   uniformScaling?: boolean;
@@ -111,7 +126,12 @@ export interface GizmoConfig {
   onMoveEnd?: () => void;
   
   onRotateStart?: (axis: GizmoAxis) => boolean | void;
-  onRotate?: (axis: GizmoAxis, angle: number) => void;
+  /**
+   * Turn the object by `angle` about `axis`. Return how much of it the object
+   * actually took when the rotation has a hard end; return nothing and the ring's
+   * handle assumes all of it went through.
+   */
+  onRotate?: (axis: GizmoAxis, angle: number) => number | void;
   onRotateEnd?: () => void;
   
   onScaleStart?: (axis: GizmoAxis, isUniform: boolean) => boolean | void;

@@ -10,6 +10,7 @@ export type SupportMode = 'prepare' | 'analysis' | 'support' | 'export' | 'print
 export type LimitationCode =
     | 'ANGLE_TOO_STEEP'
     | 'KNOT_ABOVE_TIP'
+    | 'ANCHOR_BELOW_ROOT'
     | 'COLLISION_WITH_MODEL'
     | 'TOO_CLOSE_TO_EXISTING'
     | 'OUT_OF_BOUNDS';
@@ -122,6 +123,13 @@ export interface BezierSegment extends BaseSegment {
 
 export type Segment = StraightSegment | BezierSegment;
 
+/** Where an auto-placed support came from — debug origin coloring.
+ *  'anchor' = Poisson-disk trunks on anchor-band regions (first-printed layer).
+ *  'overhang' = grid infill / organic Poisson / coverage fill / fanned overhang leaves.
+ *  'island' = voxel/minima island trunks and their merge leaves/branches.
+ *  'standalone' = sub-threshold overhang candidates that neither fanned nor merged. */
+export type SupportOrigin = 'anchor' | 'overhang' | 'island' | 'standalone';
+
 /**
  * Trunk: A vertical column extending from Roots.
  */
@@ -130,6 +138,8 @@ export interface Trunk extends SupportEntity {
     baseDiameterMm?: number; // Baseline shaft diameter captured at creation/promotion
     segments: Segment[];
     contactCone?: ContactCone; // Terminal piece at model interface
+    /** Auto-support origin (debug origin coloring). */
+    origin?: SupportOrigin;
 }
 
 /**
@@ -139,6 +149,8 @@ export interface Branch extends SupportEntity {
     parentKnotId: string; // Link to the Knot on the parent
     segments: Segment[];
     contactCone?: ContactCone; // Terminal piece at model interface
+    /** Auto-support origin (debug origin coloring). */
+    origin?: SupportOrigin;
 }
 
 /**
@@ -149,6 +161,8 @@ export interface Branch extends SupportEntity {
 export interface Leaf extends SupportEntity {
     parentKnotId: string;
     contactCone: ContactCone;
+    /** Auto-support origin (debug origin coloring). */
+    origin?: SupportOrigin;
 }
 
 export interface ContactDisk {
@@ -195,6 +209,8 @@ export interface Anchor extends SupportEntity {
     rootBaseDiameter: number;
     rootTopDiameter: number;
     rootHeight: number;
+    /** Auto-support origin (debug origin coloring). */
+    origin?: SupportOrigin;
     joint: Joint;
     segments: Segment[];
     contactCone: ContactCone;

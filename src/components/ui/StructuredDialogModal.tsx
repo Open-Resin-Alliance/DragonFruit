@@ -1,7 +1,9 @@
 'use client';
 
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 
 type DialogIconTone = 'warning' | 'danger' | 'accent' | 'neutral';
 
@@ -67,6 +69,11 @@ export function StructuredDialogModal({
   children,
   actions,
 }: StructuredDialogModalProps) {
+  // Escape closes the dialog by default; a dialog whose close button is
+  // disabled (or that has no close affordance) swallows the key instead.
+  const escapeClose = closeDisabled ? undefined : (onClose ?? onBackdropClick);
+  useEscapeToClose(open, escapeClose);
+
   if (!open) return null;
 
   const handleBackdropMouseDown: React.MouseEventHandler<HTMLDivElement> = (event) => {
@@ -80,7 +87,7 @@ export function StructuredDialogModal({
     onClose?.();
   };
 
-  return (
+  return createPortal(
     <div
       className={`fixed inset-0 ${zIndexClassName} flex items-center justify-center bg-black/55 backdrop-blur-sm px-3`}
       onMouseDown={handleBackdropMouseDown}
@@ -142,6 +149,7 @@ export function StructuredDialogModal({
           {actions ? <div className={actionsClassName}>{actions}</div> : null}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

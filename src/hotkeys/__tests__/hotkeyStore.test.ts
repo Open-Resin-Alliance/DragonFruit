@@ -255,12 +255,12 @@ test('Pointer/mouse events interception in placement modes on canvas', () => {
     dispatchWindowEvent('pointerdown', pointerEvent);
     assert.equal(pointerEvent.stopPropagationCalled, false, 'Should not swallow canvas pointerdown in LEAF_PLACEMENT');
 
-    let mouseEvent = { target: canvasTarget, stopPropagationCalled: false, stopPropagation() { this.stopPropagationCalled = true; } };
+    const mouseEvent = { target: canvasTarget, stopPropagationCalled: false, stopPropagation() { this.stopPropagationCalled = true; } };
     dispatchWindowEvent('mousedown', mouseEvent);
     assert.equal(mouseEvent.stopPropagationCalled, false, 'Should not swallow canvas mousedown in LEAF_PLACEMENT');
 
     // Button click should NOT be swallowed
-    let buttonPointerEvent = { target: buttonTarget, stopPropagationCalled: false, stopPropagation() { this.stopPropagationCalled = true; } };
+    const buttonPointerEvent = { target: buttonTarget, stopPropagationCalled: false, stopPropagation() { this.stopPropagationCalled = true; } };
     dispatchWindowEvent('pointerdown', buttonPointerEvent);
     assert.equal(buttonPointerEvent.stopPropagationCalled, false, 'Should not swallow button pointerdown in LEAF_PLACEMENT');
 
@@ -303,7 +303,7 @@ test('Newly migrated configurations: GLOBAL, DEBUG, MESH, NAVIGATION, PRESETS, H
     assert.equal(isActionActiveSync('GLOBAL', 'SAVE'), true);
     hotkeyStore.getState().clearKeys();
 
-    // 2. DEBUG hotkeys (Ctrl+Shift+D/C/X/A/N/M/K)
+    // 2. DEBUG hotkeys (Ctrl+Shift+D/C/X/A/N/M/K/O)
     hotkeyStore.getState().pressKey('Control');
     hotkeyStore.getState().pressKey('Shift');
     hotkeyStore.getState().pressKey('d');
@@ -332,6 +332,11 @@ test('Newly migrated configurations: GLOBAL, DEBUG, MESH, NAVIGATION, PRESETS, H
 
     hotkeyStore.getState().pressKey('k');
     assert.equal(isActionActiveSync('DEBUG', 'TOGGLE_CAPS'), true);
+    hotkeyStore.getState().releaseKey('k');
+
+    hotkeyStore.getState().pressKey('o');
+    assert.equal(isActionActiveSync('DEBUG', 'RE_RUN_ONBOARDING'), true);
+    hotkeyStore.getState().releaseKey('o');
     hotkeyStore.getState().clearKeys();
 
     // 3. MESH.INVERT_NORMALS (Alt+N)

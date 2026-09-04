@@ -6,14 +6,14 @@ import type { SlicingPerformanceSettings } from '@/components/settings/performan
 import { cleanupAllPrintTempArtifacts, cleanupStalePrintTempArtifacts } from '@/features/slicing/tauri/nativeSlicerBridge';
 
 const SLICING_ENGINE_CRATE = 'dragonfruit-slicing-engine';
-const SLICING_ENGINE_VERSION = '3.1.0';
+const SLICING_ENGINE_VERSION_FALLBACK = '3.2.1';
+
 
 export type SlicingThumbnailRenderSettings = {
   includeGradient: boolean;
   includeBuildPlate: boolean;
   includeGrid: boolean;
 };
-
 interface PerformanceSettingsTabProps {
   settings: SlicingPerformanceSettings;
   onChange: (settings: SlicingPerformanceSettings) => void;
@@ -40,6 +40,18 @@ export function PerformanceSettingsTab({
     });
   }, [onThumbnailSettingsChange, thumbnailSettings]);
 
+  const [engineVersion, setEngineVersion] = React.useState(SLICING_ENGINE_VERSION_FALLBACK);
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const v = await invoke<string>('get_slicer_engine_version');
+        if (!cancelled && typeof v === 'string' && v.trim()) setEngineVersion(v.trim());
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, []);
   const pngCompressionMode: 'auto' | 'on' | 'off' = settings.pngCompressionStrategy === 'auto'
     ? 'auto'
     : settings.pngCompressionStrategy === 'fastest'
@@ -67,7 +79,7 @@ export function PerformanceSettingsTab({
             <Cpu className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
               Slicing Engine
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
@@ -77,14 +89,14 @@ export function PerformanceSettingsTab({
         </div>
 
         <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
             <div>
               <div style={{ color: 'var(--text-muted)' }}>Crate</div>
               <div className="font-semibold" style={{ color: 'var(--text-strong)' }}>{SLICING_ENGINE_CRATE}</div>
             </div>
             <div>
               <div style={{ color: 'var(--text-muted)' }}>Version</div>
-              <div className="font-semibold" style={{ color: 'var(--text-strong)' }}>{SLICING_ENGINE_VERSION}</div>
+              <div className="font-semibold" style={{ color: 'var(--text-strong)' }}>{engineVersion}</div>
             </div>
           </div>
         </div>
@@ -108,7 +120,7 @@ export function PerformanceSettingsTab({
             <ImageIcon className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
               Thumbnail Rendering
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
@@ -123,7 +135,7 @@ export function PerformanceSettingsTab({
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Background gradient
               </div>
-              <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
                 Scene mood overlay in thumbnail
               </div>
             </div>
@@ -153,7 +165,7 @@ export function PerformanceSettingsTab({
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Build plate
               </div>
-              <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
                 Render build plate in thumbnail
               </div>
             </div>
@@ -183,7 +195,7 @@ export function PerformanceSettingsTab({
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Grid
               </div>
-              <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
                 Render build grid in thumbnail
               </div>
             </div>
@@ -229,7 +241,7 @@ export function PerformanceSettingsTab({
               <Zap className="h-4 w-4" style={{ color: 'var(--accent)' }} />
             </span>
             <div className="flex-1">
-              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 PNG Compression
               </h3>
               <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
@@ -244,7 +256,7 @@ export function PerformanceSettingsTab({
                 <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                   Compression
                 </div>
-                <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
                   Auto adapts by AA level, Off is fastest, On favors smaller PNG files
                 </div>
               </div>
@@ -308,7 +320,7 @@ export function PerformanceSettingsTab({
             <Trash2 className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
               Temp File Cleanup
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
@@ -338,7 +350,7 @@ export function PerformanceSettingsTab({
             <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
               Clean Stale Files
             </div>
-            <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+            <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
               Remove temp files older than 1 hour
             </div>
           </button>
@@ -364,7 +376,7 @@ export function PerformanceSettingsTab({
             <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
               Clean All Files
             </div>
-            <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+            <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
               Emergency cleanup: delete all temp slices
             </div>
           </button>

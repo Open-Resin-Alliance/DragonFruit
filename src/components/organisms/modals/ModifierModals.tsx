@@ -1,18 +1,21 @@
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Trash2 } from 'lucide-react';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { DestructiveTransformModal } from '@/components/modals/DestructiveTransformModal';
 import { type HollowingPanelState } from '@/features/hollowing';
 
 type PendingModifierResetAction = 'hollowing' | 'hole_punch' | 'clear_hollowing';
 
 export type ModifierModalsProps = {
-  handleApplyHolePunch: () => void;
+  handleApplyAllHolePunches: () => void;
+  handleGoToHollowTool: () => void;
   handleCancelDestructiveTransform: () => void;
   handleConfirmBlockerReset: () => void;
   handleConfirmDestructiveTransform: () => void;
   handleConfirmModifierReset: () => void;
   modifierApplyOverlayContent: { title: string; detailLines: string[]; };
   modifierApplyOverlayElapsedLabel: string;
+  modifierApplyProcessingLabel: string;
   pendingBlockerResetState: HollowingPanelState | null;
   pendingDestructiveTransform: { modelId: string; modelName: string; supportCount: number; operationLabel: string; } | null;
   pendingModifierResetAction: PendingModifierResetAction | null;
@@ -26,13 +29,15 @@ export type ModifierModalsProps = {
 
 /** Editor modal organism: StructuredDialog_unappliedHolePunch, StructuredDialog_modifierReset, StructuredDialog_blockerReset, DestructiveTransformModal, modifierApplyBlockingOverlay. */
 export function ModifierModals({
-  handleApplyHolePunch,
+  handleApplyAllHolePunches,
+  handleGoToHollowTool,
   handleCancelDestructiveTransform,
   handleConfirmBlockerReset,
   handleConfirmDestructiveTransform,
   handleConfirmModifierReset,
   modifierApplyOverlayContent,
   modifierApplyOverlayElapsedLabel,
+  modifierApplyProcessingLabel,
   pendingBlockerResetState,
   pendingDestructiveTransform,
   pendingModifierResetAction,
@@ -43,6 +48,9 @@ export function ModifierModals({
   showUnappliedHolePunchModal,
   unappliedHolePunchResolveRef,
 }: ModifierModalsProps) {
+  // A blocking progress overlay: swallow Escape rather than let it through.
+  useEscapeToClose(showModifierApplyBlockingOverlay, undefined);
+
   return (
     <>
       <StructuredDialogModal
@@ -73,15 +81,34 @@ export function ModifierModals({
             </button>
             <button
               type="button"
-              className="ui-button ui-button-accent !h-9 px-3 text-xs"
+              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+              style={{
+                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                color: 'var(--accent)',
+              }}
               onClick={() => {
-                setShowUnappliedHolePunchModal(false);
                 unappliedHolePunchResolveRef.current = null;
-                // Defer so the modal closes before apply starts.
-                setTimeout(() => { handleApplyHolePunch(); }, 0);
+                handleGoToHollowTool();
               }}
             >
-              Apply Now
+              Go to Hollow Tool
+            </button>
+            <button
+              type="button"
+              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+              style={{
+                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                color: 'var(--accent)',
+              }}
+              onClick={() => {
+                unappliedHolePunchResolveRef.current = null;
+                // Defer so the modal closes before apply starts.
+                setTimeout(() => { handleApplyAllHolePunches(); }, 0);
+              }}
+            >
+              Apply to All
             </button>
           </>
         )}
@@ -93,7 +120,9 @@ export function ModifierModals({
             will not appear in the output.
           </p>
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            <strong>Do you want to apply them now?</strong>
+            <strong>Apply to All</strong> bakes the holes into every visible model
+            when applicable. Or open the <strong>Hollow</strong> tool to review and
+            apply holes individually.
           </p>
         </div>
       </StructuredDialogModal>
@@ -118,14 +147,15 @@ export function ModifierModals({
             </button>
             <button
               type="button"
-              className="ui-button !h-9 px-3 text-xs"
+              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
               style={{
-                borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 36%)',
-                background: 'color-mix(in srgb, var(--danger), transparent 86%)',
+                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
+                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
                 color: 'var(--danger)',
               }}
               onClick={handleConfirmModifierReset}
             >
+              <Trash2 className="w-3.5 h-3.5" />
               {pendingModifierResetAction === 'hollowing' ? 'Remove Hollowing' : 'Remove All Holes'}
             </button>
           </>
@@ -165,14 +195,15 @@ export function ModifierModals({
             </button>
             <button
               type="button"
-              className="ui-button !h-9 px-3 text-xs"
+              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
               style={{
-                borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 36%)',
-                background: 'color-mix(in srgb, var(--danger), transparent 86%)',
+                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
+                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
                 color: 'var(--danger)',
               }}
               onClick={handleConfirmBlockerReset}
             >
+              <Trash2 className="w-3.5 h-3.5" />
               Reset Blockers
             </button>
           </>
@@ -222,7 +253,7 @@ export function ModifierModals({
               Elapsed: {modifierApplyOverlayElapsedLabel}
             </div>
             <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Processing 1 model
+              {modifierApplyProcessingLabel}
             </div>
 
             <div

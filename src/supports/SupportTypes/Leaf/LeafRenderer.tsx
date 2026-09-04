@@ -79,6 +79,15 @@ export const LeafRenderer = React.memo(function LeafRenderer({
     const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
     const [, setDragTick] = React.useState(0);
 
+    React.useEffect(() => {
+        return () => {
+            dragSessionRef.current?.stop();
+            dragSessionRef.current = null;
+            liveDragConeRef.current = null;
+            beforeHistoryRef.current = null;
+        };
+    }, []);
+
     const { pickRef, visuals } = useHighlight({
         id: leaf.id,
         category: 'support',

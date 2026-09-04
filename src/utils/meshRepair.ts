@@ -17,6 +17,11 @@
  * the WASM Manifold repair path.
  */
 import * as THREE from 'three';
+import {
+  expandGeometryToTriangleSoup,
+  loadTauriCore,
+  readPositionsFromCommand,
+} from './tauriMeshBridge';
 
 export interface MeshAnalysisJson {
   triangle_count: number;
@@ -79,6 +84,7 @@ export interface MeshRepairOptions {
   solidifyFragmentedComponents?: boolean;
   solidifyComponentThreshold?: number;
   solidifySelfIntersectionThreshold?: number;
+  assumeSupportGeometry?: boolean;
 }
 
 export interface MeshRepairResult {
@@ -134,14 +140,6 @@ interface RawMeshHealthReport extends UnknownRecord {
   fully_repaired?: unknown;
   total_ms?: unknown;
 }
-
-type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown> | ArrayBuffer | ArrayBufferView, opts?: { headers?: Record<string, string> }) => Promise<T>;
-
-interface TauriCoreModule {
-  invoke: TauriInvoke;
-}
-
-let tauriCorePromise: Promise<TauriCoreModule | null> | null = null;
 
 function asRecord(value: unknown): UnknownRecord {
   return value != null && typeof value === 'object' ? value as UnknownRecord : {};
@@ -225,44 +223,6 @@ function normalizeMeshHealthReport(input: unknown): MeshHealthReport {
   };
 }
 
-export function isTauriRuntime(): boolean {
-  if (typeof window === 'undefined') return false;
-  return '__TAURI_INTERNALS__' in window;
-}
-
-async function loadTauriCore(): Promise<TauriCoreModule | null> {
-  if (!isTauriRuntime()) return null;
-  if (!tauriCorePromise) {
-    tauriCorePromise = import('@tauri-apps/api/core')
-      .then((mod) => ({ invoke: mod.invoke as TauriInvoke }))
-      .catch(() => null);
-  }
-  return tauriCorePromise;
-}
-
-/**
- * Reads the repaired positions from the Rust staging buffer. Tauri v2 returns
- * raw `Response` body as an ArrayBuffer automatically when the command uses
- * `tauri::ipc::Response::new(bytes)`.
- */
-async function readStagedPositions(invoke: TauriInvoke): Promise<Float32Array> {
-  const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>('mesh_repair_read_positions');
-  let u8: Uint8Array;
-  if (bytes instanceof ArrayBuffer) {
-    u8 = new Uint8Array(bytes);
-  } else if (bytes instanceof Uint8Array) {
-    u8 = bytes;
-  } else if (Array.isArray(bytes)) {
-    u8 = new Uint8Array(bytes);
-  } else {
-    throw new Error('mesh_repair_read_positions returned unexpected type');
-  }
-  // Copy into an aligned ArrayBuffer so the resulting Float32Array is self-contained.
-  const copy = new Uint8Array(u8.byteLength);
-  copy.set(u8);
-  return new Float32Array(copy.buffer);
-}
-
 /**
  * Runs the native mesh-repair engine on a file the Rust side can read
  * directly (STL/OBJ/3MF). Returns null if the current runtime isn't Tauri.
@@ -273,13 +233,17 @@ export async function repairFromPath(
 ): Promise<MeshRepairResult | null> {
   const core = await loadTauriCore();
   if (!core) return null;
-  const optionsJson = JSON.stringify(options);
+  const optionsPayload = {
+    ...options,
+    assume_support_geometry: options.assumeSupportGeometry,
+  };
+  const optionsJson = JSON.stringify(optionsPayload);
   const reportJson = await core.invoke<string>('mesh_repair_from_path', {
     filePath,
     optionsJson,
   });
   const report = normalizeMeshHealthReport(JSON.parse(reportJson));
-  const positions = await readStagedPositions(core.invoke);
+  const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
   return { report, positions };
 }
 
@@ -340,12 +304,16 @@ export async function repairFromGeometry(
     headers: { 'Content-Type': 'application/octet-stream' },
   });
 
-  const optionsJson = JSON.stringify(options);
+  const optionsPayload = {
+    ...options,
+    assume_support_geometry: options.assumeSupportGeometry,
+  };
+  const optionsJson = JSON.stringify(optionsPayload);
   const reportJson = await core.invoke<string>('mesh_repair_staged', {
     optionsJson,
   });
   const report = normalizeMeshHealthReport(JSON.parse(reportJson));
-  const positions = await readStagedPositions(core.invoke);
+  const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
   return { report, positions };
 }
 
@@ -356,6 +324,7 @@ export async function repairFromGeometry(
  */
 export async function classifyFromGeometry(
   geometry: THREE.BufferGeometry,
+  options: MeshRepairOptions = {},
 ): Promise<MeshRepairResult | null> {
   const core = await loadTauriCore();
   if (!core) return null;
@@ -370,9 +339,16 @@ export async function classifyFromGeometry(
     headers: { 'Content-Type': 'application/octet-stream' },
   });
 
-  const reportJson = await core.invoke<string>('mesh_classify_staged');
+  const optionsPayload = {
+    ...options,
+    assume_support_geometry: options.assumeSupportGeometry,
+  };
+  const optionsJson = JSON.stringify(optionsPayload);
+  const reportJson = await core.invoke<string>('mesh_classify_staged', {
+    optionsJson,
+  });
   const report = normalizeMeshHealthReport(JSON.parse(reportJson));
-  const positions = await readStagedPositions(core.invoke);
+  const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
   return { report, positions };
 }
 
@@ -397,27 +373,3 @@ export function applyRepairedPositions(
   geometry.computeBoundingSphere();
 }
 
-function expandGeometryToTriangleSoup(geometry: THREE.BufferGeometry): Float32Array {
-  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
-  const positions = posAttr.array as Float32Array;
-  const index = geometry.getIndex();
-
-  if (!index) {
-    // Already triangle soup, but caller may pass non-Float32Array — coerce.
-    if (positions instanceof Float32Array) {
-      return positions;
-    }
-    return new Float32Array(positions as unknown as ArrayLike<number>);
-  }
-
-  const indexArr = index.array as Uint16Array | Uint32Array;
-  const out = new Float32Array(indexArr.length * 3);
-  for (let i = 0; i < indexArr.length; i++) {
-    const vi = indexArr[i] * 3;
-    const oi = i * 3;
-    out[oi] = positions[vi];
-    out[oi + 1] = positions[vi + 1];
-    out[oi + 2] = positions[vi + 2];
-  }
-  return out;
-}

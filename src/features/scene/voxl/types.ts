@@ -40,6 +40,27 @@ export type VoxlMeshRef = {
   chunkIndex?: number;
 };
 
+/**
+ * Native-preview linkage persisted with a model entry (STL-import
+ * decimation remediation Phase 1). The embedded mesh payload of a >6M
+ * import is the reduced preview; these fields let a reload re-link the
+ * ORIGINAL on-disk source so output paths (slicing, mesh export) can stage
+ * full resolution again. Additive + optional: files without them (and
+ * older readers, which ignore unknown JSON fields) are unaffected.
+ */
+export type VoxlNativePreviewRef = {
+  originalTriangleCount: number;
+  previewTriangleCount: number;
+  /** Import-time pre-centering bbox center (raw-file frame) — the frame
+   *  datum for `w = M · (v_raw − cPre)` reprojection. */
+  cPre?: [number, number, number];
+  /** Import-time staleness fingerprint of the source file. */
+  sourceFingerprint?: {
+    sizeBytes: number;
+    mtimeMs: number;
+  };
+};
+
 export type VoxlModelEntry = {
   id: string;
   name: string;
@@ -47,9 +68,24 @@ export type VoxlModelEntry = {
   color: string;
   polygonCount: number;
   fileSizeBytes?: number;
+  /** Absolute on-disk path of the original import (native-preview models). */
+  sourcePath?: string;
+  nativePreview?: VoxlNativePreviewRef;
+  /** Reference to original full-resolution sidecar mesh file when not embedded directly in ORIG chunk. */
+  originalRef?: VoxlMeshRef;
+  /**
+   * Set when the writer had to fall back to this model's last committed mesh
+   * chunk because a geometry bake was still in flight when the tick's bounded
+   * wait expired (Ph0.1 sub-phase D2). The bytes are one operation behind, and
+   * recovery says so instead of presenting them as current. Omitted — never
+   * written as `false` — so an ordinary scene's bytes are unchanged.
+   */
+  geometryStale?: boolean;
   transform: VoxlModelTransform;
   mesh: VoxlMeshRef;
   meshModifiers?: ModelMeshModifiers;
+  isSupportGeometry?: boolean;
+  linkGroupId?: string;
 };
 
 export type VoxlMeta = {
@@ -91,6 +127,7 @@ export type VoxlCompressedDocumentEnvelopeV1 = {
 
 export type SerializeVoxlOptions = {
   compression?: 'none' | 'auto' | 'rle-u8' | 'zlib';
+  embedOriginalMesh?: boolean;
 };
 
 export type VoxlModelRuntimeLike = {
@@ -100,6 +137,11 @@ export type VoxlModelRuntimeLike = {
   color: string;
   polygonCount: number;
   fileSizeBytes?: number;
+  sourcePath?: string;
+  nativePreview?: VoxlNativePreviewRef;
+  originalRef?: VoxlMeshRef;
+  /** See `VoxlModelEntry.geometryStale` (Ph0.1 sub-phase D2). */
+  geometryStale?: boolean;
   transform: {
     position: { x: number; y: number; z: number };
     rotation: { x: number; y: number; z: number };
@@ -107,6 +149,8 @@ export type VoxlModelRuntimeLike = {
   };
   mesh?: VoxlMeshRef;
   meshModifiers?: ModelMeshModifiers;
+  isSupportGeometry?: boolean;
+  linkGroupId?: string;
 };
 
 export type BuildVoxlDocumentInput = {
@@ -117,6 +161,12 @@ export type BuildVoxlDocumentInput = {
   meta?: Partial<Pick<VoxlMeta, 'generator' | 'generatorVersion'>>;
   extensions?: Record<string, unknown>;
 };
+
+export interface PrecompressedChunk {
+  data: Uint8Array;
+  compression: number;
+  uncompressedSize: number;
+}
 
 /**
  * Unified result from parsing any VOXL file (V1 JSON or V2 binary).
@@ -129,6 +179,10 @@ export type ParsedVoxlResult = {
   document: VoxlDocumentV1;
   /** Pre-decoded mesh bytes keyed by model ID (populated for V2 files). */
   meshBytes: Map<string, Uint8Array>;
+  /** Pre-decoded original full-res mesh bytes keyed by model ID (if ORIG chunk present). */
+  originalMeshBytes?: Map<string, Uint8Array>;
+  /** Pre-compressed original mesh chunks for lazy decompression. */
+  originalMeshChunks?: Map<string, PrecompressedChunk>;
   /** The VOXL format version that was read (e.g. 1, 2.1). */
   sourceVersion: number;
 };

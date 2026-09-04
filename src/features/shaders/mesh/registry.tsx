@@ -22,8 +22,8 @@ export function MeshShaderMaterial({
   materialRoughness,
   clippingPlanes,
   xrayOpacity,
-  heatmapBlend,
-  heatmapContrast,
+  heatmapMinAngle,
+  heatmapMaxAngle,
   heatmapColors,
   matcapVariant,
   flatUseVertexColors,
@@ -41,8 +41,8 @@ export function MeshShaderMaterial({
   materialRoughness?: number;
   clippingPlanes: THREE.Plane[];
   xrayOpacity?: number;
-  heatmapBlend?: number;
-  heatmapContrast?: number;
+  heatmapMinAngle?: number;
+  heatmapMaxAngle?: number;
   heatmapColors?: string[];
   matcapVariant?: MatcapVariant;
   flatUseVertexColors?: boolean;
@@ -143,8 +143,8 @@ export function MeshShaderMaterial({
           meshColor={meshColor}
           materialRoughness={materialRoughness}
           clippingPlanes={clippingPlanes}
-          heatmapBlend={heatmapBlend}
-          heatmapContrast={heatmapContrast}
+          heatmapMinAngle={heatmapMinAngle}
+          heatmapMaxAngle={heatmapMaxAngle}
           heatmapColors={heatmapColors}
         />
       );

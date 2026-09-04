@@ -32,6 +32,10 @@ extra_javascript:
   - javascripts/homepage-release-feed.js
   - javascripts/mathjax.js
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+# Internal docs are versioned but never published. See docs/internal/README.md.
+exclude_docs: |
+  internal/
+
 plugins:
   - search
   - meta
@@ -47,17 +51,18 @@ markdown_extensions:
   - toc:
       permalink: true
 nav:
+  - Home: index.md
   - Getting Started:
       - Installation: getting-started/installation.md
-      - Building from Source: getting-started/building-from-source.md
       - Quick Start: getting-started/quick-start.md
       - Interface Tour: getting-started/interface-tour.md
+      - Building from Source: getting-started/building-from-source.md
   - Workflows:
       - Model Preparation: workflows/model-preparation.md
-      - Hollowing and Hole Punch: workflows/hollowing.md
       - Transform and Positioning: workflows/transform-and-positioning.md
       - Place On-Face and Mirror: workflows/place-on-face-and-mirror.md
       - Mesh Smoothing: workflows/mesh-smoothing.md
+      - Hollowing and Hole Punch: workflows/hollowing.md
       - Arrange Models: workflows/arrange-models.md
       - Duplicate Models: workflows/duplicate-models.md
       - Support Placement: workflows/support-placement.md
@@ -67,29 +72,80 @@ nav:
   - Features:
       - Island Analysis and Voxels: features/island-analysis.md
   - Reference:
-      - Anatomy of Supports: reference/support-anatomy/index.md
+      - Anatomy of Supports:
+          - Overview: reference/support-anatomy/index.md
+          - Roots: reference/support-anatomy/roots.md
+          - Anchor: reference/support-anatomy/anchor.md
+          - Trunk: reference/support-anatomy/trunk.md
+          - Branch: reference/support-anatomy/branch.md
+          - Leaf: reference/support-anatomy/leaf.md
+          - Twig: reference/support-anatomy/twig.md
+          - Stick: reference/support-anatomy/stick.md
+          - Brace: reference/support-anatomy/brace.md
+          - Knot: reference/support-anatomy/knot.md
+          - Joint: reference/support-anatomy/joint.md
+          - Shaft: reference/support-anatomy/shaft.md
+          - Contact Cone: reference/support-anatomy/contact-cone.md
+          - Contact Disk: reference/support-anatomy/contact-disk.md
+          - Kickstand: reference/support-anatomy/kickstand.md
+          - Contact Tip Research: reference/support-anatomy/contact-tip-research.md
       - Hotkeys: reference/hotkeys.md
+      - Support Placement Modifiers: reference/support-placement-modifiers.md
       - Support Types: reference/support-types.md
       - File Formats: reference/file-formats.md
   - Troubleshooting:
       - Common Issues: troubleshooting/common-issues.md
   - Developer Guide:
-      - Overview: dev/index.md
-      - Architecture: dev/architecture-overview.md
-      - Architecture and Handoff: dev/architecture-and-handoff.md
-      - Plugin Framework: dev/plugins-framework.md
-      - Complex Plugin Contributing: dev/plugins-complex-contributing.md
-      - Support System: dev/support-system.md
-      - Support Pathfinding V3: dev/support-pathfinding-v3.md
-      - Branch Supports: dev/branch-supports.md
-      - Grid and Branching: dev/grid-and-branching.md
-      - Raft Geometry: dev/raft-geometry.md
-      - Scan Positioning: dev/scan-positioning.md
-      - Native Twin Optimization Plan: dev/native-twin-optimization-plan.md
-      - Data Storage: dev/data-storage.md
-      - Formats: dev/formats.md
-      - VOXL Format Spec: dev/voxl-format-spec.md
-      - LYS Mesh Extraction Spec: dev/lys-mesh-extraction-spec.md
-      - RTSP Relay: dev/rtsp-relay.md
-      - Release Process: dev/releases.md
-      - Contributing: dev/contributing.md
+      - Architecture and Conventions:
+          - Overview: dev/index.md
+          - Architecture: dev/architecture-overview.md
+          - page.tsx Refactor Handoff: dev/page-tsx-refactor-handoff.md
+          - Contributing: dev/contributing.md
+          - Backlog and Known Gotchas: dev/backlog.md
+          - Performance Debugging: dev/performance-debugging.md
+      - Feature Frameworks:
+          - Experiments Framework: dev/experiments-framework.md
+          - Plugin Framework: dev/plugins-framework.md
+          - Complex Plugin Contributing: dev/plugins-complex-contributing.md
+      - Core Systems and Contracts:
+          - History and Undo/Redo: dev/history-and-undo-redo.md
+          - Registration Seams: dev/registration-seams.md
+          - State and Stores: dev/state-and-stores.md
+          - Config Schemas: dev/config-schemas.md
+          - Tauri IPC and Native Bridge: dev/tauri-ipc-bridge.md
+          - Hotkeys: dev/hotkeys.md
+          - Notifications and Toasts: dev/notifications.md
+          - System Notifications: dev/system-notifications.md
+          - Support System: dev/support-system.md
+          - Auto-Supports: dev/auto-supports.md
+          - Auto-Orientation (Pre-Plan): dev/auto-orientation.md
+          - Adding a New Support Type: dev/support-type-extension.md
+          - Support Pathfinding V3: dev/support-pathfinding-v3.md
+          - Grid and Branching: dev/grid-and-branching.md
+          - Raft Geometry: dev/raft-geometry.md
+          - Scan Positioning: dev/scan-positioning.md
+      - Data and Formats:
+          - Data Storage: dev/data-storage.md
+          - Formats: dev/formats.md
+          - VOXL Format Spec: dev/voxl-format-spec.md
+          - LYS Mesh Extraction Spec: dev/lys-mesh-extraction-spec.md
+      - Decision Records:
+          - Universal macOS Distribution: adr/0005-macos-universal-distribution.md
+          - CLI Binary Consolidation: adr/0025-cli-binary-consolidation.md
+          - DFST Decimation Protocol: adr/0027-dfst-decimation-protocol.md
+          - Voxel Hollowing Architecture: adr/0029-voxel-hollowing-architecture.md
+          - Plugin Format Architecture: adr/0031-plugin-format-architecture.md
+          - Organic Cut Tenon Registration: adr/0026-organic-cut-tenon-registration.md
+          - Potential-Gradient Pathfinding: adr/0028-potential-gradient-pathfinding.md
+          - Camera FOV and Projection Switching: adr/0032-camera-fov-projection-switching.md
+          - VOXL Binary Container Format: adr/0034-voxl-binary-container-format.md
+          - Client-Side Persistence: adr/0035-client-side-persistence-architecture.md
+          - Auto-Support Roads Not Taken: adr/0038-auto-support-placement-roads-not-taken.md
+          - Stream CTB Layer Payloads to Disk: adr/0036-stream-ctb-layer-payloads-to-disk.md
+          - Cut the Surface, Not a Volume: adr/0037-cut-the-surface-not-a-volume.md
+          - Island Scan Data Shapes: adr/0039-island-scan-data-shapes.md
+          - Linux CEF Runs on X11: adr/0040-linux-cef-windowing-x11.md
+          - Organic Cut Surface Redesign: dev/organic-cut-surface-redesign.md
+      - Integration and Operations:
+          - RTSP Relay: dev/rtsp-relay.md
+          - Release Process: dev/releases.md

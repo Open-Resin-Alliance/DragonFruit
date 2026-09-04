@@ -12,7 +12,7 @@ import { getSettings, getAutoBracingSettings } from '../../Settings/state';
 import { useKickstandStoreState } from '../Kickstand/kickstandStore';
 import { bracePlacementStore, useBracePlacementState } from './bracePlacementState';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
-import { generateUuid } from '@/utils/uuid';
+import { v4 as uuidv4 } from 'uuid';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
 import {
@@ -889,9 +889,9 @@ export function BracePlacementController() {
                 const startDiam = Math.min(start.hostDiameterMm ?? fallback, braceDia);
                 const endDiam = Math.min(endSnap.hostDiameterMm ?? fallback, braceDia);
 
-                const braceId = generateUuid();
-                const startKnotId = generateUuid();
-                const endKnotId = generateUuid();
+                const braceId = uuidv4();
+                const startKnotId = uuidv4();
+                const endKnotId = uuidv4();
 
                 const startKnot: Knot = {
                     id: startKnotId,
@@ -963,9 +963,9 @@ export function BracePlacementController() {
             const startDiam = Math.min(start.hostDiameterMm ?? fallback, braceDia);
             const endDiam = Math.min(endSnap.hostDiameterMm ?? fallback, braceDia);
 
-            const braceId = generateUuid();
-            const startKnotId = generateUuid();
-            const endKnotId = generateUuid();
+            const braceId = uuidv4();
+            const startKnotId = uuidv4();
+            const endKnotId = uuidv4();
 
             const startKnot: Knot = {
                 id: startKnotId,
@@ -1072,9 +1072,9 @@ export function BracePlacementController() {
                 const startDiam = Math.min(start.hostDiameterMm ?? fallback, braceDia);
                 const endDiam = Math.min(endSnap.hostDiameterMm ?? fallback, braceDia);
 
-                const braceId = generateUuid();
-                const startKnotId = generateUuid();
-                const endKnotId = generateUuid();
+                const braceId = uuidv4();
+                const startKnotId = uuidv4();
+                const endKnotId = uuidv4();
 
                 const startKnot: Knot = {
                     id: startKnotId,
@@ -1140,9 +1140,9 @@ export function BracePlacementController() {
             const startDiam = start.hostDiameterMm ?? fallback;
             const endDiam = endSnap.hostDiameterMm ?? fallback;
 
-            const braceId = generateUuid();
-            const startKnotId = generateUuid();
-            const endKnotId = generateUuid();
+            const braceId = uuidv4();
+            const startKnotId = uuidv4();
+            const endKnotId = uuidv4();
 
             const startKnot: Knot = {
                 id: startKnotId,

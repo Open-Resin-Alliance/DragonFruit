@@ -3,7 +3,6 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 const JSMPEG_CDN_URL = 'https://cdn.jsdelivr.net/gh/phoboslab/jsmpeg@b5799bf/jsmpeg.min.js';
 
 declare global {
-  // eslint-disable-next-line no-var
   var __dragonfruitJsmpegBundlePromise: Promise<string> | undefined;
 }
 

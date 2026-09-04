@@ -27,7 +27,6 @@ interface HollowingPanelProps {
   isPreviewing?: boolean;
   isApplyingBlockers?: boolean;
   canApply?: boolean;
-  canReset?: boolean;
   canEdit?: boolean;
   isEditMode?: boolean;
   isHollowingApplied?: boolean;
@@ -47,7 +46,6 @@ export function HollowingPanel({
   isPreviewing = false,
   isApplyingBlockers = false,
   canApply = true,
-  canReset = true,
   canEdit = true,
   isEditMode = false,
   isHollowingApplied = false,
@@ -62,11 +60,6 @@ export function HollowingPanel({
   const setState = React.useCallback((patch: Partial<HollowingPanelState>) => {
     onStateChange({ ...state, ...patch });
   }, [onStateChange, state]);
-
-  const clampInt = React.useCallback((value: number, min: number, max: number) => {
-    const safe = Number.isFinite(value) ? value : min;
-    return Math.min(max, Math.max(min, Math.round(safe)));
-  }, []);
 
   const clampFloat = React.useCallback((value: number, min: number, max: number, decimals = 1) => {
     const safe = Number.isFinite(value) ? value : min;

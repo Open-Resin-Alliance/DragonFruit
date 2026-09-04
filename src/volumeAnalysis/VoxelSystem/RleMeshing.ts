@@ -2,10 +2,6 @@
 import * as THREE from 'three';
 import type { RleLabels } from '@/volumeAnalysis/IslandScan/ScanOrchestrator';
 
-// Safe limit for indices per mesh.
-const MAX_INDICES = 20_000_000;
-// const MAX_INDICES = 20_000_000; // Removed as part of optimization
-
 /**
  * Generates a greedy mesh directly from RLE data.
  * This skips the expensive Voxel -> Map -> Mesh pipeline.
@@ -30,12 +26,12 @@ export function generateMeshFromRLE(
     const CHUNK_SIZE = 600_000; // Vertices per chunk. 600k * 3 floats = 7.2MB. Safe for Browser.
     // 400k vertices ~ 100k quads.
 
-    let positionBuffer = new Float32Array(CHUNK_SIZE * 3);
-    let indexBuffer = new Uint32Array(CHUNK_SIZE * 1.5); // 6 indices per 4 verts = 1.5x
+    const positionBuffer = new Float32Array(CHUNK_SIZE * 3);
+    const indexBuffer = new Uint32Array(CHUNK_SIZE * 1.5); // 6 indices per 4 verts = 1.5x
     let vertexCount = 0;
     let indexCount = 0;
 
-    const { px_mm, width, height, originX, originZ } = grid;
+    const { px_mm, originX, originZ } = grid;
     const halfSize = px_mm / 2;
     const halfHeight = layerHeightMm / 2;
 
@@ -47,10 +43,8 @@ export function generateMeshFromRLE(
     // const worldY = -(originZ + row * px_mm - px_mm * VOXEL_OFFSET_Y);
     // const layerZ = zOffset + layer * layerHeightMm + layerHeightMm * VOXEL_OFFSET_Z;
     // We assume offsets are 0.0 or handled elsewhere for simplicity if passed in grid?
-    // The original code had VOXEL_OFFSET_X/Y/Z imported.
-    const VOXEL_OFFSET_X = 0; // Assuming 0 for now or passed in?
-    const VOXEL_OFFSET_Y = 0;
-    const VOXEL_OFFSET_Z = 0;
+    // The original code had VOXEL_OFFSET_X/Y/Z imported; all three are zero
+    // here, so the offset terms above drop out of the formulas.
 
     const commitGeometry = () => {
         if (vertexCount === 0) return;

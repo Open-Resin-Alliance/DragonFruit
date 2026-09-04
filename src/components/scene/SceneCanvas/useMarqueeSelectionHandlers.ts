@@ -23,11 +23,7 @@ type UseMarqueeSelectionHandlersParams = {
   isPostGizmoInteractionGuardActive: boolean;
   hoveredModelId: string | null;
   supportHoveredCategory: string | null | undefined;
-  onActiveModelChange?: (id: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => void;
-  activeModelId: string | null;
   selectedModelIds?: string[];
-  isOrbitInteracting: boolean;
-  spaceMouseNavigationActive: boolean;
   onMarqueeSelectionChange?: (ids: string[]) => void;
   resolveMarqueeSelectedIds: (selection: MarqueeSelection) => string[];
   resolveMarqueeSelectedSupportIds: (selection: MarqueeSelection) => string[];
@@ -46,11 +42,7 @@ export function useMarqueeSelectionHandlers({
   isPostGizmoInteractionGuardActive,
   hoveredModelId,
   supportHoveredCategory,
-  onActiveModelChange,
-  activeModelId,
   selectedModelIds,
-  isOrbitInteracting,
-  spaceMouseNavigationActive,
   onMarqueeSelectionChange,
   resolveMarqueeSelectedIds,
   resolveMarqueeSelectedSupportIds,
@@ -93,34 +85,20 @@ export function useMarqueeSelectionHandlers({
       && (hoveredModelId || supportHoveredCategory !== 'none')
     ) return;
 
-    if (mode === 'prepare' && prepareMarqueePublishesModelSelectionEvents && onActiveModelChange) {
-      const hasSelection = !!activeModelId || !!selectedModelIds?.length;
-      if (hasSelection && !window.__modelClickedThisFrame && !isOrbitInteracting && !spaceMouseNavigationActive) {
-        onActiveModelChange(null);
-        window.dispatchEvent(new CustomEvent('model-deselected'));
-      }
-    }
-
     const clamped = clampPointToContainer(e.clientX, e.clientY);
     if (!clamped) return;
 
     marqueePointerIdRef.current = e.pointerId;
     marqueePointerStartRef.current = { x: clamped.x, y: clamped.y };
   }, [
-    activeModelId,
     clampPointToContainer,
     hoveredModelId,
     isGizmoDragging,
-    isOrbitInteracting,
     isPostGizmoInteractionGuardActive,
     mode,
     allowPrepareMarqueeFromHover,
-    onActiveModelChange,
-    prepareMarqueePublishesModelSelectionEvents,
     prepareMarqueeRequiresShift,
     prepareMarqueeEnabled,
-    selectedModelIds,
-    spaceMouseNavigationActive,
     supportHoveredCategory,
   ]);
 
@@ -227,19 +205,25 @@ export function useMarqueeSelectionHandlers({
     }
 
     suppressNextCanvasClickRef.current = true;
+    // The click that follows the drag is swallowed by whoever sees it first.
+    // If none does — the pointer up was stopped short — nothing would ever
+    // lower the flag, and it would eat the next honest click instead.
+    window.requestAnimationFrame(() => {
+      suppressNextCanvasClickRef.current = false;
+    });
 
     if (mode === 'prepare') {
       if (!onMarqueeSelectionChange) return;
 
       const selectedIds = resolveMarqueeSelectedIds(currentSelection);
-      onMarqueeSelectionChange(selectedIds);
+      // A marquee only ever adds, as CAD applications do: catching nothing
+      // leaves the selection alone rather than clearing it.
+      if (selectedIds.length === 0) return;
+
+      onMarqueeSelectionChange(Array.from(new Set([...(selectedModelIds ?? []), ...selectedIds])));
 
       if (prepareMarqueePublishesModelSelectionEvents) {
-        if (selectedIds.length > 0) {
-          window.dispatchEvent(new CustomEvent('model-clicked', { detail: { modelId: selectedIds[0] } }));
-        } else {
-          window.dispatchEvent(new CustomEvent('model-deselected'));
-        }
+        window.dispatchEvent(new CustomEvent('model-clicked', { detail: { modelId: selectedIds[0] } }));
 
         window.__modelClickGuardUntil = performance.now() + 48;
         window.__modelClickedThisFrame = true;
@@ -262,6 +246,7 @@ export function useMarqueeSelectionHandlers({
     prepareMarqueePublishesModelSelectionEvents,
     resolveMarqueeSelectedIds,
     resolveMarqueeSelectedSupportIds,
+    selectedModelIds,
     suppressNextCanvasClickRef,
   ]);
 

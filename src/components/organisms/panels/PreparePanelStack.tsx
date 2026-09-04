@@ -7,6 +7,7 @@ import { DuplicatePanel } from '@/components/controls/DuplicatePanel';
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
 import { HollowingPanel } from '@/features/hollowing';
 import { HolePunchPanel } from '@/features/hole-punching/HolePunchPanel';
+import { OrganicCutPanel, type OrganicCutSession } from '@/features/organicCut';
 import type { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
 import type { useTransformManager } from '@/features/transform/useTransformManager';
 import type { useHollowingManager } from '@/features/hollowing/useHollowingManager';
@@ -19,6 +20,7 @@ export type PreparePanelStackProps = {
   hollowing: ReturnType<typeof useHollowingManager>;
   holePunch: ReturnType<typeof useHolePunchManager>;
   arrange: ReturnType<typeof useArrangeManager>;
+  organicCut: OrganicCutSession;
 
   outsidePlateModelIds: React.ComponentProps<typeof ModelManagerPanel>['outsidePlateModelIds'];
   handleModelSelection: React.ComponentProps<typeof ModelManagerPanel>['onSelect'];
@@ -43,9 +45,17 @@ export type PreparePanelStackProps = {
   requestDestructiveTransformSupportDeletion: (operationLabel: string) => boolean;
   handleRotationComplete: () => void;
   handleAutoLiftChange: (enabled: boolean) => void;
+  selectionPositionOrigin: React.ComponentProps<typeof TransformControls>['position'];
+  handlePositionSelectedModels: (x: number, y: number, z: number) => void;
+  commitPendingSelectionPositionHistory: () => void;
+  handleCenterSelectedModels: () => void;
+  handleLiftSelectedModels: () => void;
+  handleDropSelectedModels: () => void;
   scheduleCommitPendingTransformHistory: (frameDelay?: number) => void;
   uniformScaling: boolean;
   setUniformScaling: (value: boolean) => void;
+  localTransformSpace: boolean;
+  setLocalTransformSpace: (value: boolean) => void;
 
   isApplyingHolePunch: boolean;
   interiorView: boolean;
@@ -62,6 +72,7 @@ export function PreparePanelStack({
   hollowing,
   holePunch,
   arrange,
+  organicCut,
   outsidePlateModelIds,
   handleModelSelection,
   handleModelRangeSelection,
@@ -83,9 +94,17 @@ export function PreparePanelStack({
   requestDestructiveTransformSupportDeletion,
   handleRotationComplete,
   handleAutoLiftChange,
+  selectionPositionOrigin,
+  handlePositionSelectedModels,
+  commitPendingSelectionPositionHistory,
+  handleCenterSelectedModels,
+  handleLiftSelectedModels,
+  handleDropSelectedModels,
   scheduleCommitPendingTransformHistory,
   uniformScaling,
   setUniformScaling,
+  localTransformSpace,
+  setLocalTransformSpace,
   isApplyingHolePunch,
   interiorView,
   hasCavityGeometry,
@@ -108,7 +127,6 @@ export function PreparePanelStack({
     isApplyingBlockersHollowing,
     isHollowingDirty,
     isHollowingApplied,
-    canResetHollowing,
     hollowingEditMode,
     isShellFaceSelectionPending,
   } = hollowing;
@@ -211,9 +229,16 @@ export function PreparePanelStack({
       {scene.geom && transformMgr.transformMode === 'transform' && (
         <TransformControls
           key="prepare-transform-controls"
-          position={transformMgr.transform.position}
-          onPositionChange={transformMgr.transformHook.setPosition}
-          onCenter={transformMgr.transformHook.centerXY}
+          position={scene.selectedModelIds.length > 1
+            ? selectionPositionOrigin
+            : transformMgr.transform.position}
+          onPositionChange={scene.selectedModelIds.length > 1
+            ? handlePositionSelectedModels
+            : transformMgr.transformHook.setPosition}
+          onPositionCommit={scene.selectedModelIds.length > 1
+            ? commitPendingSelectionPositionHistory
+            : scheduleCommitPendingTransformHistory}
+          onCenter={handleCenterSelectedModels}
           onPlatform={transformMgr.transformHook.setPlatformZ}
           rotation={transformMgr.transform.rotation}
           onRotationChange={(x, y, z) => {
@@ -258,19 +283,15 @@ export function PreparePanelStack({
           onResetScale={transformMgr.transformHook.resetScale}
           uniformScaling={uniformScaling}
           onUniformScalingChange={setUniformScaling}
+          localSpace={localTransformSpace}
+          onLocalSpaceChange={setLocalTransformSpace}
           modelBBox={scene.geom.bbox}
           autoLift={transformMgr.autoLift}
           onAutoLiftChange={handleAutoLiftChange}
           liftDistance={transformMgr.liftDistance}
           onLiftDistanceChange={transformMgr.setLiftDistance}
-          onLift={() => {
-            const lowestWorldZ = transformMgr.getLowestWorldZ();
-            if (lowestWorldZ !== null) transformMgr.transformHook.snapToLift(lowestWorldZ, transformMgr.liftDistance);
-          }}
-          onDrop={() => {
-            const lowestWorldZ = transformMgr.getLowestWorldZ();
-            if (lowestWorldZ !== null) transformMgr.transformHook.snapToPlatform(lowestWorldZ);
-          }}
+          onLift={handleLiftSelectedModels}
+          onDrop={handleDropSelectedModels}
           onTransformCommit={scheduleCommitPendingTransformHistory}
         />
       )}
@@ -295,7 +316,6 @@ export function PreparePanelStack({
             isPreviewing={isPreviewingHollowing}
             isApplyingBlockers={isApplyingBlockersHollowing || isPreviewingHollowing}
             canApply={!isShellFaceSelectionPending && (isHollowingDirty || !isHollowingApplied)}
-            canReset={canResetHollowing}
             canEdit={!isShellFaceSelectionPending && Boolean(scene.activeModel)}
             isEditMode={hollowingEditMode}
             isHollowingApplied={isHollowingApplied}
@@ -317,6 +337,31 @@ export function PreparePanelStack({
             interiorViewAvailable={hasCavityGeometry}
           />
         </>
+      )}
+
+      {scene.geom && transformMgr.transformMode === 'organicCut' && (
+        <OrganicCutPanel
+          key="prepare-organic-cut-panel"
+          state={organicCut.panelState}
+          onStateChange={organicCut.setPanelState}
+          onClearLoop={organicCut.clearLoop}
+          onSnapToEdges={organicCut.snapActiveLoopToEdges}
+          canSnapToEdges={organicCut.canSnapToEdges}
+          loopCount={organicCut.loopCount}
+          activeLoopIndex={organicCut.activeLoopIndex}
+          loopSummaries={organicCut.loopSummaries}
+          onSelectLoop={organicCut.selectLoop}
+          onAddLoop={organicCut.addLoop}
+          canAddLoop={organicCut.canAddLoop}
+          onRemoveLoop={organicCut.removeLoop}
+          canRemoveLoop={organicCut.canRemoveLoop}
+          onApply={organicCut.apply}
+          isApplying={organicCut.isApplying}
+          canApply={organicCut.canApply}
+          tenonFits={organicCut.tenonFits}
+          cutError={organicCut.cutError}
+          tenonDetail={organicCut.tenonDetail}
+        />
       )}
 
       {scene.models.length > 0 && transformMgr.transformMode === 'arrange' && (

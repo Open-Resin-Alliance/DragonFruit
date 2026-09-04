@@ -4,7 +4,8 @@
     "profileVersion": 4,
     "manufacturer": "Concepts3D",
     "family": "Athena II",
-    "name": "Athena II 16K",
+    "name": "Athena II 16K · 8-bit",
+    "libraryDisplayName": "Athena II 16K",
     "platformBadge": {
       "text": "NanoDLP",
       "color": "#00AEEF"
@@ -16,7 +17,7 @@
     },
     "bitDepth": {
       "bits": 8,
-      "description": "8-bit color depth for enhanced grayscale precision"
+      "description": "8-bit screen on newer Athena II 16K units"
     },
     "display": {
       "resolutionX": 15120,
@@ -40,7 +41,12 @@
     },
     "hasCamera": true,
     "networkSupport": "nanodlp",
-    "networkFilter": "Athena2 16K"
+    "networkFilter": "Athena2 16K",
+    "modelVariants": [
+      "concepts3d-athena2-16k8b-nanodlp",
+      "concepts3d-athena2-16k3b-nanodlp"
+    ],
+    "modelVariantDetectPath": "/athena-iot/dragonfruit/printer_data"
   },
   {
     "presetId": "concepts3d-athena2-16k3b-nanodlp",
@@ -48,6 +54,7 @@
     "manufacturer": "Concepts3D",
     "family": "Athena II",
     "name": "Athena II 16K · 3-bit",
+    "isModelVariant": true,
     "platformBadge": {
       "text": "NanoDLP",
       "color": "#00AEEF"
@@ -59,7 +66,7 @@
     },
     "bitDepth": {
       "bits": 3,
-      "description": "3-bit color depth, suboptimal for grayscale"
+      "description": "3-bit screen on early Athena II 16K units"
     },
     "display": {
       "resolutionX": 15136,
@@ -126,7 +133,8 @@
     },
     "hasCamera": true,
     "networkSupport": "nanodlp",
-    "networkFilter": "Athena2 12K"
+    "networkFilter": "Athena2 12K",
+    "modelVariantDetectPath": "/athena-iot/dragonfruit/printer_data"
   },
   {
     "presetId": "concepts3d-athena1-12k-nanodlp",

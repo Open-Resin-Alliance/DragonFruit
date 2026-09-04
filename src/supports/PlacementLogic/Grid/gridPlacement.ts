@@ -1,4 +1,4 @@
-import type { Knot, Roots, SupportState, Trunk, Vec3 } from '../../types';
+import type { Knot, Roots, Trunk, Vec3 } from '../../types';
 import type { TrunkBuildResult } from '../../SupportTypes/Trunk/trunkBuilder';
 import type { SnappedTrunkRouteResult } from '../../SupportTypes/Trunk/trunkRouteTypes';
 import { buildBranchData } from '../../SupportTypes/Branch/branchBuilder';
@@ -14,16 +14,24 @@ import { gridNodeKeyFromXY, gridSnappedXYFromKey } from './gridMath';
 import type { DecideGridPlacementArgs, GridPlacementDecision } from './types';
 import { getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { calculateKnotPositionOnSegmentFromT } from '../../SupportPrimitives/Knot/knotUtils';
-import { isShaftBlocked, isCollisionSegmentBlocked } from '../CollisionAvoidance';
+import { isShaftBlocked } from '../CollisionAvoidance';
 import * as THREE from 'three';
-import { generateUuid } from '../../../utils/uuid';
+import { v4 as uuidv4 } from 'uuid';
 import { buildAnchorData } from '../../SupportTypes/Anchor/anchorBuilder';
 import { buildLeafData } from '../../SupportTypes/Leaf/leafBuilder';
 import { perfMark, perfMeasureWithSpike } from '../Pathfinding/pathfindingPerf';
+import {
+    ANCHOR_HEIGHT_THRESHOLD_MM,
+    MAX_AUTO_LEAF_SPAN_MM,
+} from '../../autoSupport/constants';
 
-const MIN_TRUNK_CLEARANCE_MM = 0.05;
-const ANCHOR_HEIGHT_THRESHOLD_MM = 5.0;
-const MAX_AUTO_LEAF_SPAN_MM = 2.5;
+/**
+ * Matches `validateAndCullOrphans`' post-thickening trunk check
+ * (segment diameter/2 + 0.15). A trunk that passes the placement gate must
+ * not die in the cull — a thinner gate here placed straight pillars that the
+ * cull then removed, stripping whole regions of supports (Puck jaw/mouth).
+ */
+const MIN_TRUNK_CLEARANCE_MM = 0.15;
 
 function withResolvedSnappedRoute(
     candidate: TrunkBuildResult,
@@ -356,7 +364,7 @@ function selectHighestValidAttachment(args: {
             if (!satisfiesMinAngleFromHorizontal(tipPos, pos, minAngleDeg)) continue;
 
             const knot: Knot = {
-                id: generateUuid(),
+                id: uuidv4(),
                 parentShaftId: segment.id,
                 t,
                 pos,
@@ -453,7 +461,13 @@ function trunkCollidesWithMesh(
 ): boolean {
     const trunk = candidate.trunk;
     const root = candidate.root;
-    const collisionRadius = settings.shaft.diameterMm / 2 + MIN_TRUNK_CLEARANCE_MM;
+    // Gate at the trunk's own (tier-sized) shaft, not the global setting —
+    // auto-sized tiers build fatter shafts than settings.shaft.
+    let maxSegDiameter = settings.shaft.diameterMm;
+    for (const seg of trunk.segments) {
+        maxSegDiameter = Math.max(maxSegDiameter, seg.diameter ?? 0);
+    }
+    const collisionRadius = maxSegDiameter / 2 + MIN_TRUNK_CLEARANCE_MM;
 
     for (let segIndex = 0; segIndex < trunk.segments.length; segIndex++) {
         const endpoints = getTrunkSegmentEndpointsWithSettings(trunk, root, segIndex, settings);
@@ -485,6 +499,24 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
     // Near-plate contacts get a minimal anchor support instead of trunk/branch
     if (tipPos.z < ANCHOR_HEIGHT_THRESHOLD_MM) {
         const { anchor, supportData } = buildAnchorData({ tipPos, tipNormal, modelId, mesh });
+        // The cone body spans contact disk → socket and must never dip below
+        // the root joint: a tip lower than the root (or an over-long cone on a
+        // downward axis) would push the shaft below the root, into -Z.
+        const jointZ = anchor.joint.pos.z;
+        const lowestShaftZ = Math.min(
+            anchor.contactCone.pos.z,
+            getFinalSocketPosition(anchor.contactCone).z,
+        );
+        if (lowestShaftZ < jointZ - 1e-3) {
+            // Ghost-preview the invalid anchor (red, with the reason as
+            // `error`) so the hover tooltip explains the rejection.
+            return {
+                kind: 'reject',
+                nodeKey: '',
+                reason: 'ANCHOR_BELOW_ROOT',
+                supportData: { ...supportData, error: 'ANCHOR_BELOW_ROOT' },
+            };
+        }
         return { kind: 'place_anchor', anchor, supportData };
     }
 

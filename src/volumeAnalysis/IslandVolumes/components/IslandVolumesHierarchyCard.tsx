@@ -835,20 +835,7 @@ export function IslandVolumesHierarchyCard({ islands, layerHeightMm }: Props) {
     }
 
     return { nodes, leaves, systems, boundedSystems, boundedCaps: boundedCapsLayers };
-  }, [layerHeightMm, mergeProminence.significantKeys, result, significantMergeEdges]);
-
-  const applyCurrentVoxelView = React.useCallback((scanData: ScanResults) => {
-    if (!result || !remappedLabelSets) return;
-    if (voxelView === 'nodes') {
-      applyNodeLabelsToVoxels(scanData, remappedLabelSets.nodes);
-    } else if (voxelView === 'leaves') {
-      applyNodeLabelsToVoxels(scanData, remappedLabelSets.leaves);
-    } else if (voxelView === 'systems') {
-      applyNodeLabelsToVoxels(scanData, remappedLabelSets.systems);
-    } else {
-      applyNodeLabelsToVoxels(scanData, voxelView === 'boundedCaps' ? remappedLabelSets.boundedCaps : remappedLabelSets.boundedSystems);
-    }
-  }, [applyNodeLabelsToVoxels, remappedLabelSets, result, voxelView]);
+  }, [layerHeightMm, mergeProminence, result, significantMergeEdges]);
 
   const eventLog = React.useMemo(() => {
     if (!result) return [] as Array<{ layerIndex: number; birth: number; merge: number; split: number; death: number }>;

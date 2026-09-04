@@ -36,7 +36,7 @@ function buildGeometryWithBounds(
     ? computeFlatteningPlanes(geometry)
     : [];
   let edgeGeometry: THREE.EdgesGeometry | undefined;
-  if (triangleCount < 2_000_000) {
+  if (triangleCount < 4_000_000) {
     try {
       edgeGeometry = new THREE.EdgesGeometry(geometry, 30);
     } catch {

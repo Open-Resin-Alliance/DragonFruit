@@ -5,8 +5,9 @@
  * Browser-mode calls return null gracefully.
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { detectPlatform } from '@/hooks/usePlatform';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,6 +33,28 @@ export type UpdateChannel = 'stable' | 'dev';
 
 function isTauriAvailable(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+// ---------------------------------------------------------------------------
+// Platform delivery
+// ---------------------------------------------------------------------------
+
+/** Where the latest DragonFruit release is published for Linux users. */
+export const LINUX_RELEASES_URL =
+  'https://github.com/Open-Resin-Alliance/DragonFruit/releases';
+
+/** Flatpak application id, for the `flatpak update` hint shown on Linux. */
+export const FLATPAK_APP_ID = 'org.openresinalliance.dragonfruit';
+
+/**
+ * True when updates are installed outside the app.
+ *
+ * Linux ships only as a Flatpak bundle: the updater feed has no Linux entry,
+ * and the sandbox cannot write over a running install anyway. Those users
+ * update through Flatpak instead.
+ */
+export function updatesAreExternal(): boolean {
+  return detectPlatform() === 'linux';
 }
 
 // ---------------------------------------------------------------------------
@@ -78,11 +101,16 @@ export async function setUpdateChannel(channel: UpdateChannel): Promise<void> {
  */
 export async function fetchUpdateInfo(
   channel?: UpdateChannel,
+  allowSameVersion = false,
 ): Promise<UpdateInfo | null> {
   if (!isTauriAvailable()) {
     return null;
   }
-  console.log('[updater] fetchUpdateInfo called, channel:', channel ?? 'null (Rust default)');
+  if (updatesAreExternal()) {
+    console.log('[updater] Linux ships as a Flatpak — skipping the update check');
+    return null;
+  }
+  console.log('[updater] fetchUpdateInfo called, channel:', channel ?? 'null (Rust default)', 'allowSameVersion:', allowSameVersion);
   try {
     const result = await invoke<{
       updateAvailable: boolean;
@@ -90,8 +118,7 @@ export async function fetchUpdateInfo(
       currentVersion: string;
       body: string | null;
       date: string | null;
-    } | null>('check_updates', { channel: channel ?? null });
-
+    } | null>('check_updates', { channel: channel ?? null, allow_same_version: allowSameVersion, allowSameVersion: allowSameVersion } as unknown as Record<string, unknown>);
     console.log('[updater] check_updates result:', result);
 
     if (!result?.updateAvailable) return null;
@@ -112,18 +139,46 @@ export async function fetchUpdateInfo(
 // Download + install (via Rust — uses cached Update)
 // ---------------------------------------------------------------------------
 
+/** Progress payload pushed by the Rust `perform_update` channel. */
+type PerformUpdateProgress = {
+  downloadedBytes: number;
+  totalBytes: number | null;
+  phase: string;
+};
+
 /**
  * Download and install the previously cached update.
  * The Rust side handles signature verification, installer launch, and exit.
+ *
+ * Throws with the real backend message on failure — the caller shows it.
  */
 export async function downloadAndInstall(
-  _onProgress?: (progress: DownloadProgress) => void,
-): Promise<boolean> {
+  onProgress?: (progress: DownloadProgress) => void,
+): Promise<void> {
+  if (!isTauriAvailable()) {
+    throw new Error('Updates are only available in the desktop app.');
+  }
+
+  // `perform_update` takes a Channel. Invoking without it fails argument
+  // deserialization before the command body runs at all, so the channel is
+  // what makes the call reach Rust — not just what reports progress.
+  const onChunk = new Channel<PerformUpdateProgress>();
+  onChunk.onmessage = ({ downloadedBytes, totalBytes, phase }) => {
+    console.log(`[updater] ${phase}: ${downloadedBytes}/${totalBytes ?? '?'} bytes`);
+    onProgress?.({ contentLength: totalBytes ?? 0, downloaded: downloadedBytes });
+  };
+
   try {
-    await invoke('perform_update');
+    await invoke('perform_update', { onChunk });
+  } catch (err) {
+    console.error('[updater] perform_update failed:', err);
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+
+  try {
     await relaunch();
-    return true;
-  } catch {
-    return false;
+  } catch (err) {
+    console.error('[updater] relaunch after install failed:', err);
+    throw err instanceof Error ? err : new Error(String(err));
   }
 }

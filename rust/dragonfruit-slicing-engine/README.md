@@ -1,6 +1,6 @@
 # dragonfruit-slicing-engine
 
-Native Rust slicing backend for DragonFruit Desktop (Tauri), currently at **v3.2.1**.
+Native Rust slicing backend for DragonFruit Desktop (Tauri), currently at **v3.2.3**.
 
 This crate is the production slicing engine that converts triangle geometry into printer-ready layer containers. Format output is dispatched through a plugin-driven encoder registry (currently `.nanodlp`, `.ctb`, `.goo`, and others).
 

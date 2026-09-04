@@ -1,5 +1,4 @@
 import { i18n } from "@lingui/core";
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 import { messages as enMessages } from "./locales/en.js";
 
 export const SUPPORTED_LOCALES = ["en", "es", "de", "fr", "sk", "cs"] as const;

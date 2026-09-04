@@ -16,8 +16,8 @@ export type MeshSmoothingBrushState = {
 };
 
 const MAX_STROKE_PREVIEW_POINTS = 8192;
-let strokePreviewPositions = new Float32Array(MAX_STROKE_PREVIEW_POINTS * 3);
-let strokePreviewNormals = new Float32Array(MAX_STROKE_PREVIEW_POINTS * 3);
+const strokePreviewPositions = new Float32Array(MAX_STROKE_PREVIEW_POINTS * 3);
+const strokePreviewNormals = new Float32Array(MAX_STROKE_PREVIEW_POINTS * 3);
 let strokePreviewCount = 0;
 let strokePreviewVersion = 0;
 

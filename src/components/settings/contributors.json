@@ -1,0 +1,104 @@
+[
+  {
+    "name": "Ty Mansfield",
+    "affiliation": "Tableflipfoundry",
+    "role": "Founding Member",
+    "tone": "founder"
+  },
+  {
+    "name": "Paul Skapczyk",
+    "affiliation": "PaulGD03",
+    "role": "Head Maintainer",
+    "tone": "founder"
+  },
+  {
+    "name": "William Patton",
+    "affiliation": "PattonWebz",
+    "role": "Contributor",
+    "tone": "secondary"
+  },
+  {
+    "name": "Magistr",
+    "affiliation": "umag",
+    "role": "Contributor",
+    "tone": "secondary"
+  },
+  {
+    "name": "Tim",
+    "affiliation": "tslater2006",
+    "role": "Contributor",
+    "tone": "secondary"
+  },
+  {
+    "name": "Ada Phillips",
+    "affiliation": "ada-phillips",
+    "role": "Contributor",
+    "tone": "secondary"
+  },
+  {
+    "name": "Sin",
+    "affiliation": "SinXIV",
+    "role": "Contributor",
+    "tone": "accent"
+  },
+  {
+    "name": "Aaron Baca",
+    "affiliation": "aaron1138",
+    "role": "Contributor",
+    "tone": "secondary"
+  },
+  {
+    "name": "David Martínez Moreno",
+    "affiliation": "Jo-Con-El",
+    "role": "Maintainer",
+    "tone": "accent"
+  },
+  {
+    "name": "craigsturgess",
+    "affiliation": "csreades",
+    "role": "Contributor",
+    "tone": "secondary"
+  },
+  {
+    "name": "pkElectronics",
+    "affiliation": "pkElectronics",
+    "role": "Contributor",
+    "tone": "secondary"
+  },
+  {
+    "name": "DevMiner",
+    "affiliation": "TheDevMinerTV",
+    "role": "Contributor",
+    "tone": "secondary"
+  },
+  {
+    "name": "Columbus Labs",
+    "affiliation": "ColumbusLabs",
+    "role": "Contributor",
+    "tone": "secondary"
+  },
+  {
+    "name": "Aysajan Eziz",
+    "affiliation": "AysajanE",
+    "role": "Contributor",
+    "tone": "secondary"
+  },
+  {
+    "name": "Norman",
+    "affiliation": "Barasatii",
+    "role": "Contributor",
+    "tone": "secondary"
+  },
+  {
+    "name": "Jonathan",
+    "affiliation": "mgalore",
+    "role": "Contributor",
+    "tone": "secondary"
+  },
+  {
+    "name": "AJRubenstein",
+    "affiliation": "AJRubenstein",
+    "role": "Contributor",
+    "tone": "secondary"
+  }
+]

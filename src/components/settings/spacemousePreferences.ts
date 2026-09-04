@@ -1,3 +1,4 @@
+import { clamp } from '@/utils/math';
 export const SPACEMOUSE_SETTINGS_STORAGE_KEY = 'lumenslicer:spacemouse:settings:v1';
 export const SPACEMOUSE_SETTINGS_EVENT = 'lumenslicer:spacemouse-settings-changed';
 
@@ -40,9 +41,6 @@ export const DEFAULT_SPACEMOUSE_SETTINGS: SpaceMouseSettings = {
 let cachedRawSettings: string | null | undefined;
 let cachedNormalizedSettings: SpaceMouseSettings = DEFAULT_SPACEMOUSE_SETTINGS;
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
 
 export function normalizeSpaceMouseSettings(value?: Partial<SpaceMouseSettings> | null): SpaceMouseSettings {
   const merged: SpaceMouseSettings = {

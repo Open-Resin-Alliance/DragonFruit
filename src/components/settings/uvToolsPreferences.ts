@@ -1,3 +1,5 @@
+import { detectPlatform } from '@/hooks/usePlatform';
+
 export type UvToolsSettings = {
   enabled: boolean;
   customPath: string;
@@ -93,12 +95,27 @@ export function subscribeToUvToolsSettings(listener: () => void): () => void {
 }
 
 /**
- * Common installation paths to scan for UVTools on Windows.
+ * Common installation paths to scan for UVTools, per platform.
+ *
+ * macOS ships UVTools as an `.app` bundle rather than a bare executable; both
+ * the release zip and the Homebrew cask land it in one of the two Applications
+ * folders. `~` is expanded by the Tauri command.
+ *
+ * Linux has no candidates yet — see issue #604.
  */
-const UVTOOLS_CANDIDATE_PATHS: string[] = [
-  'C:\\Program Files\\UVtools\\UVTools.exe',
-  'C:\\Program Files (x86)\\UVtools\\UVTools.exe',
-];
+function uvToolsCandidatePaths(): string[] {
+  switch (detectPlatform()) {
+    case 'windows':
+      return [
+        'C:\\Program Files\\UVtools\\UVTools.exe',
+        'C:\\Program Files (x86)\\UVtools\\UVTools.exe',
+      ];
+    case 'mac':
+      return ['/Applications/UVtools.app', '~/Applications/UVtools.app'];
+    default:
+      return [];
+  }
+}
 
 /**
  * Scan common install locations and PATH for UVTools.
@@ -110,7 +127,7 @@ export async function autoDiscoverUvToolsPath(): Promise<string | null> {
   try {
     const { invoke } = await import('@tauri-apps/api/core');
     const result = await invoke<string | null>('discover_uvtools_path', {
-      candidates: UVTOOLS_CANDIDATE_PATHS,
+      candidates: uvToolsCandidatePaths(),
     });
     return result ?? null;
   } catch {

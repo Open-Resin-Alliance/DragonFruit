@@ -5,6 +5,9 @@ import type { Vec3 } from '../../types';
 import type { SupportTipProfile } from './types';
 import { getConeCenterPosition, getConeQuaternion } from './contactConeUtils';
 import { calculateDiskThickness, getDiskCenter, getDiskRotation } from '../ContactDisk/contactDiskUtils';
+import { subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot, getActiveMaterialProfile, getActivePrinterProfile } from '@/features/profiles/profileStore';
+import { calculateTipOffset } from '@/supports/rendering/calculateTipOffset';
+import { quantizeToScale } from '@/utils/math';
 
 export interface InstancedContactCone {
     id: string;
@@ -27,6 +30,7 @@ interface InstancedContactConeGroupProps {
     clippingPlanes?: THREE.Plane[] | null;
     outOfBoundsMaterial?: THREE.ShaderMaterial | null;
     onConeClick?: (cone: InstancedContactCone, event: ThreeEvent<MouseEvent>) => void;
+    onConePointerDown?: (cone: InstancedContactCone, event: ThreeEvent<PointerEvent>) => void;
     onConePointerMove?: (cone: InstancedContactCone, event: ThreeEvent<PointerEvent>) => void;
     onConePointerOut?: (cone: InstancedContactCone | null, event: ThreeEvent<PointerEvent>) => void;
 }
@@ -41,8 +45,6 @@ interface ConeBucket {
     diskThickness: number;
     penetration: number;
 }
-
-const quantize = (value: number) => Math.round(value * 1000) / 1000;
 
 const getProfileType = (profile: SupportTipProfile): 'disk' | 'sphere' | 'legacy' => {
     if (profile.type === 'disk') return 'disk';
@@ -67,8 +69,10 @@ function ConeBucketMesh({
     clippingPlanes,
     outOfBoundsMaterial,
     onConeClick,
+    onConePointerDown,
     onConePointerMove,
     onConePointerOut,
+    resolvePenetration,
 }: {
     bucket: ConeBucket;
     diskThicknessByCone: ReadonlyMap<InstancedContactCone, number>;
@@ -77,11 +81,13 @@ function ConeBucketMesh({
     emissiveIntensity: number;
     transparent: boolean;
     opacity: number;
-    clippingPlanes: THREE.Plane[] | null;
+    clippingPlanes?: THREE.Plane[] | null;
     outOfBoundsMaterial?: THREE.ShaderMaterial | null;
     onConeClick?: (cone: InstancedContactCone, event: ThreeEvent<MouseEvent>) => void;
+    onConePointerDown?: (cone: InstancedContactCone, event: ThreeEvent<PointerEvent>) => void;
     onConePointerMove?: (cone: InstancedContactCone, event: ThreeEvent<PointerEvent>) => void;
     onConePointerOut?: (cone: InstancedContactCone | null, event: ThreeEvent<PointerEvent>) => void;
+    resolvePenetration: (cone: InstancedContactCone) => number;
 }) {
     const diskRef = useRef<THREE.InstancedMesh>(null);
     const bodyRef = useRef<THREE.InstancedMesh>(null);
@@ -150,7 +156,7 @@ function ConeBucketMesh({
             const effectiveSurfaceNormal = cone.surfaceNormal ?? cone.normal;
             const thickness = resolveDiskThickness(cone);
             const center = getDiskCenter(cone.pos, effectiveSurfaceNormal, thickness);
-            const penetration = Math.max(0, cone.profile.penetrationMm ?? 0);
+            const penetration = Math.max(0, resolvePenetration(cone));
             return {
                 position: new THREE.Vector3(
                     center.x - effectiveSurfaceNormal.x * (penetration / 2),
@@ -192,7 +198,7 @@ function ConeBucketMesh({
             const effectiveSurfaceNormal = cone.surfaceNormal ?? cone.normal;
             const thickness = resolveDiskThickness(cone);
             const center = getDiskCenter(cone.pos, effectiveSurfaceNormal, thickness);
-            const penetration = Math.max(0, cone.profile.penetrationMm ?? 0);
+            const penetration = Math.max(0, resolvePenetration(cone));
             return {
                 position: new THREE.Vector3(
                     center.x - effectiveSurfaceNormal.x * (penetration / 2),
@@ -202,7 +208,7 @@ function ConeBucketMesh({
                 quaternion: getDiskRotation(effectiveSurfaceNormal),
             };
         });
-    }, [bucket, diskThicknessByCone, hasOverlay]);
+    }, [bucket, diskThicknessByCone, hasOverlay, resolvePenetration]);
 
     const resolveCone = (instanceId: number | undefined | null) => {
         if (instanceId == null) return null;
@@ -215,6 +221,14 @@ function ConeBucketMesh({
         const cone = resolveCone(event.instanceId);
         if (!cone) return;
         onConeClick(cone, event);
+    };
+
+    const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
+        if (!onConePointerDown) return;
+        event.stopPropagation();
+        const cone = resolveCone(event.instanceId);
+        if (!cone) return;
+        onConePointerDown(cone, event);
     };
 
     const handlePointerMove = (event: ThreeEvent<PointerEvent>) => {
@@ -235,6 +249,7 @@ function ConeBucketMesh({
 
     const sharedHandlers = {
         onClick: onConeClick ? handleClick : undefined,
+        onPointerDown: onConePointerDown ? handlePointerDown : undefined,
         onPointerMove: onConePointerMove ? handlePointerMove : undefined,
         onPointerOut: onConePointerOut ? handlePointerOut : undefined,
     };
@@ -353,9 +368,32 @@ export function InstancedContactConeGroup({
     clippingPlanes = null,
     outOfBoundsMaterial = null,
     onConeClick,
+    onConePointerDown,
     onConePointerMove,
     onConePointerOut,
 }: InstancedContactConeGroupProps) {
+    const storeState = React.useSyncExternalStore(
+        subscribeToProfileStore,
+        getProfileStoreSnapshot,
+        getProfileStoreServerSnapshot
+    );
+    const activeMaterial = React.useMemo(() => getActiveMaterialProfile(storeState), [storeState]);
+    const activePrinter = React.useMemo(() => getActivePrinterProfile(storeState), [storeState]);
+    
+    const resolvePenetration = React.useCallback((cone: InstancedContactCone) => {
+        if (activeMaterial && activePrinter && activeMaterial.antiAliasingSettings?.tipOffsetDisplayInUi) {
+            const pxX = activePrinter.pixelSize?.x ? activePrinter.pixelSize.x / 1000 : (activePrinter.buildVolumeMm?.width ?? 143) / (activePrinter.display?.resolutionX ?? 2560);
+            const pxY = activePrinter.pixelSize?.y ? activePrinter.pixelSize.y / 1000 : (activePrinter.buildVolumeMm?.depth ?? 89) / (activePrinter.display?.resolutionY ?? 1620);
+            return calculateTipOffset(
+                activeMaterial.antiAliasingSettings,
+                activeMaterial.layerHeightMm,
+                pxX,
+                pxY
+            );
+        }
+        return cone.profile.penetrationMm ?? 0;
+    }, [activeMaterial, activePrinter]);
+
     const validCones = useMemo(() => {
         return cones.filter((cone) => {
             const normalLenSq = (cone.normal.x * cone.normal.x) + (cone.normal.y * cone.normal.y) + (cone.normal.z * cone.normal.z);
@@ -382,15 +420,15 @@ export function InstancedContactConeGroup({
             const contactRadius = Math.max(0.001, cone.profile.contactDiameterMm / 2);
             const bodyRadius = Math.max(0.001, cone.profile.bodyDiameterMm / 2);
             const length = Math.max(0.001, cone.profile.lengthMm);
-            const penetration = Math.max(0, cone.profile.penetrationMm ?? 0);
+            const penetration = Math.max(0, resolvePenetration(cone));
 
             const key = [
                 profileType,
-                quantize(contactRadius),
-                quantize(bodyRadius),
-                quantize(length),
-                quantize(diskThickness),
-                quantize(penetration),
+                quantizeToScale(contactRadius, 1000),
+                quantizeToScale(bodyRadius, 1000),
+                quantizeToScale(length, 1000),
+                quantizeToScale(diskThickness, 1000),
+                quantizeToScale(penetration, 1000),
             ].join(':');
 
             const existing = grouped.get(key);
@@ -412,7 +450,7 @@ export function InstancedContactConeGroup({
         }
 
         return Array.from(grouped.values());
-    }, [validCones, diskThicknessByCone]);
+    }, [validCones, diskThicknessByCone, resolvePenetration]);
 
     if (validCones.length === 0) return null;
 
@@ -431,8 +469,10 @@ export function InstancedContactConeGroup({
                     clippingPlanes={clippingPlanes}
                     outOfBoundsMaterial={outOfBoundsMaterial}
                     onConeClick={onConeClick}
+                    onConePointerDown={onConePointerDown}
                     onConePointerMove={onConePointerMove}
                     onConePointerOut={onConePointerOut}
+                    resolvePenetration={resolvePenetration}
                 />
             ))}
         </group>

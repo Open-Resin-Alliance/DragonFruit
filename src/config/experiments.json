@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "experiments": [
+    {
+      "id": "chitubox-import",
+      "name": "Chitubox File Import",
+      "description": "Enable importing .chitubox project files. Lacks comprehensive testing and may not work with all files.",
+      "defaultEnabled": false,
+      "gatedPlugins": ["chitubox-import"]
+    },
+    {
+      "id": "auto-supports",
+      "name": "Auto Supports",
+      "description": "Automatic support generation from model analysis. Early access.",
+      "defaultEnabled": false
+    }
+  ]
+}

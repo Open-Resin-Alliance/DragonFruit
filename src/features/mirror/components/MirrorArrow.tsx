@@ -141,7 +141,7 @@ export function MirrorArrow({
     (e: ThreeEvent<PointerEvent>) => {
       if (e.button === 2) return;
       e.stopPropagation();
-      (e as any).stopped = true;
+      e.stopped = true;
       onClick(axis);
     },
     [axis, onClick]

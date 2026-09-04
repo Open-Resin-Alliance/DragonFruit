@@ -80,6 +80,13 @@ export type PluginNetworkUiAdapterContract = {
         discover: string;
         materials: string;
         materialsEdit: string;
+        /**
+         * Optional operation that probes a printer endpoint and reports the
+         * detected bit-depth (`bitdepth`), used to auto-select a model variant
+         * (see `PrinterPreset.modelVariantDetectPath`). Omit when the backend
+         * has no variant-detection probe.
+         */
+        printerData?: string;
     };
     defaultLocalHostnames: string[];
 } & RemoteMaterialSettingsAdapter;

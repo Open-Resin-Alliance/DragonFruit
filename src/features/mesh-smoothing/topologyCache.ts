@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { quantizeToCell } from '@/utils/math';
 
 export type MeshTopology = {
   geometry: THREE.BufferGeometry;
@@ -36,10 +37,6 @@ function makeKey(ix: number, iy: number, iz: number): string {
   return `${ix},${iy},${iz}`;
 }
 
-function quantize(v: number, tol: number): number {
-  return Math.round(v / tol);
-}
-
 function getOrCreateUniqueVertex(
   state: BuildState,
   dedupe: Map<string, number>,
@@ -50,9 +47,9 @@ function getOrCreateUniqueVertex(
   originalIndex: number,
   originalToUnique: Uint32Array,
 ): number {
-  const qx = quantize(x, tol);
-  const qy = quantize(y, tol);
-  const qz = quantize(z, tol);
+  const qx = quantizeToCell(x, tol);
+  const qy = quantizeToCell(y, tol);
+  const qz = quantizeToCell(z, tol);
   const key = makeKey(qx, qy, qz);
 
   const existing = dedupe.get(key);

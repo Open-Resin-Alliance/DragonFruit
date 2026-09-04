@@ -39,7 +39,9 @@ export function useEditorToasts({
   const [isExportErrorToastVisible, setIsExportErrorToastVisible] = React.useState(false);
   const [isSaveToastVisible, setIsSaveToastVisible] = React.useState(false);
   const [isSaveToastAnimatedVisible, setIsSaveToastAnimatedVisible] = React.useState(false);
-  const [saveToastLabel, setSaveToastLabel] = React.useState<'Saving…' | 'Autosaving…'>('Autosaving…');
+  // A mode rather than a label: the wording is resolved where it is rendered,
+  // so it follows the active locale instead of freezing English into state.
+  const [saveToastMode, setSaveToastMode] = React.useState<'saving' | 'autosaving'>('autosaving');
   const historyActionToastFadeTimeoutRef = React.useRef<number | null>(null);
   const historyActionToastClearTimeoutRef = React.useRef<number | null>(null);
   const printingMonitorErrorToastFadeTimeoutRef = React.useRef<number | null>(null);
@@ -142,7 +144,7 @@ export function useEditorToasts({
         saveToastEnterRafRef.current = null;
       }
 
-      setSaveToastLabel(isSceneSaveInProgress ? 'Saving…' : 'Autosaving…');
+      setSaveToastMode(isSceneSaveInProgress ? 'saving' : 'autosaving');
 
       if (!isSaveToastVisible) {
         saveToastShownAtRef.current = Date.now();
@@ -276,8 +278,8 @@ export function useEditorToasts({
     setIsSaveToastVisible,
     isSaveToastAnimatedVisible,
     setIsSaveToastAnimatedVisible,
-    saveToastLabel,
-    setSaveToastLabel,
+    saveToastMode,
+    setSaveToastMode,
     historyActionToastFadeTimeoutRef,
     historyActionToastClearTimeoutRef,
     printingMonitorErrorToastFadeTimeoutRef,

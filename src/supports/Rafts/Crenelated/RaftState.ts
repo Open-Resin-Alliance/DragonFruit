@@ -4,7 +4,7 @@ import { DEFAULT_RAFT_SETTINGS } from './RaftDefaults';
 let currentRaftSettings: RaftSettings = { ...DEFAULT_RAFT_SETTINGS };
 
 /** Tracks per-model raft settings overrides */
-let perModelRaftSettings: Map<string, RaftSettings> = new Map();
+const perModelRaftSettings: Map<string, RaftSettings> = new Map();
 
 /** Flag indicating raft settings were manually changed in the current session */
 let wasManuallyModifiedInSession = false;

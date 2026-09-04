@@ -126,7 +126,6 @@ export function IslandListCard({
             </span>
           </Button>
         )}
-        hideDivider={!expanded}
       />
 
       {expanded && (

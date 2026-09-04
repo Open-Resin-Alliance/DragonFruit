@@ -4,9 +4,11 @@ import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import { resolveModelMeshModifiers } from '@/features/mesh-modifiers/meshModifierStore';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
-import { buildSupportExportFromStores, serializeVoxlDocumentV2 } from '@/features/scene/voxl';
+import { buildSupportExportFromStores, serializeVoxlDocumentV2, serializeVoxlDocumentV2Streaming, VoxlSizeLimitError, VoxlUnchangedError, type PrecompressedChunk, type VoxlChunkCache, type VoxlChunkReportEntry } from '@/features/scene/voxl';
+import { type BakedChunk, meshChunkStore } from '@/features/scene/voxl/meshChunkStore';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
-import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
+import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath, writeFileAtomicToNativePath, writeFileAtomicStreamedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
+import { info as logInfo } from '@tauri-apps/plugin-log';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getSnapshot } from '@/supports/state';
 import { getRaftSettings, getRaftSettingsForModel } from '@/supports/Rafts/Crenelated/RaftState';
@@ -27,6 +29,7 @@ export interface ExportOptions {
   includeRaft: boolean;
   includeSupports: boolean;
   includeModel: boolean;
+  embedOriginalMesh?: boolean;
 }
 
 export interface ExportSceneContext {
@@ -38,9 +41,55 @@ export interface ExportSceneContext {
 
 export interface ExportSceneSaveTarget {
   nativePath?: string | null;
+  /**
+   * VOXL 2.2 modifier-snapshot chunking. Omitted/`true` writes the newest
+   * (chunked 2.2) layout — the manual-save default. Autosave passes `false` to
+   * preserve a pre-2.2 file's inline layout, and escalates to `true` itself if
+   * that write throws (see `useSceneAutosave`). Never write `false` for a file
+   * that is already 2.2 — that would downgrade it.
+   */
+  chunkModifierSnapshots?: boolean;
+  /**
+   * Cross-tick chunk cache (autosave incremental writes, Phase 1). When present,
+   * unchanged modifier/SUPP chunks reuse their compressed bytes and the write is
+   * skipped when the document fingerprint matches `previousFingerprint`. Manual
+   * saves omit it (they always write fresh).
+   */
+  chunkCache?: VoxlChunkCache;
+  /** Fingerprint of the last committed autosave to this path; enables the write-skip. */
+  previousFingerprint?: string;
+  /**
+   * Reports the fingerprint of the file now on disk (whether freshly written or
+   * confirmed-unchanged), or `undefined` when it could not be determined (browser
+   * fallback) so the caller invalidates its stored value rather than skipping on
+   * a stale one.
+   */
+  onFingerprint?: (fingerprint: string | undefined) => void;
+}
+
+/**
+ * Assigns each distinct store-snapshot object a stable token so the SUPP chunk
+ * can be content-keyed by identity. The support/kickstand stores replace their
+ * snapshot immutably on every mutation, so an unchanged snapshot keeps the same
+ * reference → same token → cache hit; any edit yields a new reference → new
+ * token → miss. Keyed weakly so retired snapshots are collected.
+ */
+const snapshotTokens = new WeakMap<object, string>();
+let snapshotTokenCounter = 0;
+function snapshotToken(obj: unknown): string {
+  if (obj === null || typeof obj !== 'object') return '0';
+  let token = snapshotTokens.get(obj);
+  if (token === undefined) {
+    snapshotTokenCounter += 1;
+    token = `s${snapshotTokenCounter}`;
+    snapshotTokens.set(obj, token);
+  }
+  return token;
 }
 
 export class ExportManager {
+  private static readonly BAKE_WAIT_MS = 2_000;
+
   private static readonly embeddedBinaryStlCache = new Map<string, {
     geometrySignature: string;
     rawBytes: Uint8Array;
@@ -144,7 +193,20 @@ export class ExportManager {
     return new Uint8Array(bytes);
   }
 
-  private static computeModelGeometrySignature(model: LoadedModel): string {
+  /**
+   * The dirty primitive for the COW chunk store (Ph0.1 sub-phase C).
+   *
+   * Derived entirely from the geometry object — `uuid` changes when
+   * `replaceModelGeometry` swaps in a new `BufferGeometry` (hollow, punch,
+   * mirror, repair), and `position.version` / `index.version` change on an
+   * in-place edit. That is why this, and not a boolean `dirty` flag, is the
+   * authority: a flag depends on every present and future mutation path
+   * remembering to set it, whereas a signature cannot drift from the object it
+   * is read out of. The cost of getting it wrong is asymmetric — a missed flag
+   * writes stale geometry into the user's recovery file; a missed bake hook only
+   * costs one lazy re-bake.
+   */
+  static computeModelGeometrySignature(model: LoadedModel): string {
     const geometry = model.geometry.geometry;
     const position = geometry.getAttribute('position');
     const index = geometry.getIndex();
@@ -156,28 +218,75 @@ export class ExportManager {
     return `${geometry.uuid}:${positionVersion}:${indexVersion}:${vertexCount}`;
   }
 
-  private static async getEmbeddedBinaryStlWithSha(model: LoadedModel): Promise<{
-    rawBytes: Uint8Array;
-    sha256: string;
-  }> {
-    const geometrySignature = this.computeModelGeometrySignature(model);
-    const cached = this.embeddedBinaryStlCache.get(model.id);
-    if (cached && cached.geometrySignature === geometrySignature) {
-      return {
-        rawBytes: cached.rawBytes,
-        sha256: cached.sha256,
-      };
+  /**
+   * Encode → SHA → zlib-6 → store, once, for this model's current geometry.
+   *
+   * Call it at finalization (`replaceModelGeometry`, import completion, both
+   * split paths) so the work lands on the operation the user is already waiting
+   * for rather than on the next autosave tick. Idempotent and cheap on a hit, so
+   * the tick calls it too as a lazy fallback — that is what makes the hooks an
+   * optimization rather than a correctness dependency.
+   *
+   * **Ph5:** the original-mesh embed baked with `slot: 'original'` goes through
+   * this same seam; nothing about the tick or the writer changes to accommodate
+   * it, because the writer consumes the store rather than the geometry.
+   */
+  static async bakeModelGeometryChunk(model: LoadedModel): Promise<BakedChunk> {
+    return meshChunkStore.bake({
+      modelId: model.id,
+      signature: this.computeModelGeometrySignature(model),
+      encode: () => this.exportModelAsEmbeddedBinaryStlBytes(model),
+    });
+  }
+
+  /**
+   * Resolves this model's chunk for a tick.
+   *
+   * Waits a bounded {@link BAKE_WAIT_MS} for a bake that is already in flight;
+   * if that expires, falls back to whatever chunk the store last committed for
+   * this model and reports `stale`. Losing the tick entirely would be worse than
+   * writing one-operation-old geometry — but presenting it as current would be a
+   * lie, so the caller stamps `geometryStale` on the MODL entry (D2).
+   */
+  static async resolveModelChunkForTick(model: LoadedModel): Promise<{
+    chunk: BakedChunk;
+    stale: boolean;
+  } | null> {
+    const signature = this.computeModelGeometrySignature(model);
+
+    const cached = meshChunkStore.lookup(model.id, signature);
+    if (cached) return { chunk: cached, stale: false };
+
+    const inFlight = meshChunkStore.pending(model.id, signature);
+    if (inFlight) {
+      const timeout = new Promise<null>((resolve) => {
+        setTimeout(() => resolve(null), this.BAKE_WAIT_MS);
+      });
+      const settled = await Promise.race([inFlight, timeout]);
+      if (settled) return { chunk: settled, stale: false };
+
+      const lastCommitted = meshChunkStore.lastCommitted(model.id);
+      if (lastCommitted) return { chunk: lastCommitted, stale: true };
     }
 
-    const rawBytes = this.exportModelAsEmbeddedBinaryStlBytes(model);
-    const sha256 = await this.sha256Hex(rawBytes);
-    this.embeddedBinaryStlCache.set(model.id, {
-      geometrySignature,
-      rawBytes,
-      sha256,
-    });
+    return { chunk: await this.bakeModelGeometryChunk(model), stale: false };
+  }
 
-    return { rawBytes, sha256 };
+  /**
+   * Eviction hook (Ph0.1 sub-phase C2). Called from `deleteModels`.
+   *
+   * Before this the encode memo had exactly one `.get` and one `.set` and no
+   * eviction anywhere, so deleting a 4M-tri model left ~191 MiB of raw STL
+   * resident for the rest of the session. Releasing every slot the model owns
+   * also covers Ph5's original embed without a second hook.
+   */
+  static releaseModelChunks(modelIds: Iterable<string>): void {
+    for (const id of modelIds) meshChunkStore.release(id);
+  }
+
+  /** Backstop for paths that drop models without going through `deleteModels`. */
+  static retainModelChunks(modelIds: Iterable<string>): void {
+    meshChunkStore.retainOnly(modelIds);
   }
 
   private static encodeRleU8(input: Uint8Array): Uint8Array {
@@ -787,7 +896,7 @@ export class ExportManager {
     ws('<triangles>');
 
     for (const entry of geoEntries) {
-      const { geo, mat, startVertex } = entry;
+      const { geo, startVertex } = entry;
       const pos = geo.getAttribute('position')!;
       const idx = geo.getIndex();
 
@@ -906,7 +1015,12 @@ export class ExportManager {
 
     // VOXL path: serialization can be expensive, so destination is pre-picked above.
     if (options.format === 'voxl') {
-      return this.exportVoxl(sceneContext, options, prePickedNativePath, useNativeWrite);
+      return this.exportVoxl(sceneContext, options, prePickedNativePath, useNativeWrite, {
+        chunkModifierSnapshots: saveTarget?.chunkModifierSnapshots ?? true,
+        chunkCache: saveTarget?.chunkCache,
+        previousFingerprint: saveTarget?.previousFingerprint,
+        onFingerprint: saveTarget?.onFingerprint,
+      });
     }
 
     // Collect live scene objects for serialization — no cloning, no InstancedMesh expansion.
@@ -981,7 +1095,10 @@ export class ExportManager {
           const modelId = modelKey === '__orphan__' ? null : modelKey;
           const raftSettings = modelId ? getRaftSettingsForModel(modelId) : globalRaftSettings;
 
-          const chamferInset = Math.max(0, raftSettings.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettings.chamferAngle))));
+          const thickness = raftSettings.bottomMode === 'line' ? raftSettings.lineHeightMm : raftSettings.thickness;
+          const chamferInset = Math.max(0, thickness) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettings.chamferAngle))));
+          const wallInset = raftSettings.wallEnabled ? Math.max(0, raftSettings.wallThickness) : 0;
+          const dynamicMargin = 0.2 + Math.max(chamferInset, wallInset);
 
           const circles: SupportBaseCircle[] = roots.map(r => ({
             x: r.transform.pos.x,
@@ -989,7 +1106,7 @@ export class ExportManager {
             r: r.diameter / 2
           }));
 
-          const profile = computeFootprint(circles, { marginMm: 0.2 + (raftSettings.bottomMode === 'line' ? chamferInset : 0), samplesPerCircle: 24 });
+          const profile = computeFootprint(circles, { marginMm: dynamicMargin, samplesPerCircle: 24 });
 
           if (!profile || profile.length < 3) continue;
 
@@ -1094,12 +1211,60 @@ export class ExportManager {
     return this.downloadFile(stlBytes, options.filename, 'stl', 'application/octet-stream', null, false);
   }
 
+  /**
+   * Emit the per-autosave "which chunks changed" line to the platform log file
+   * via the Tauri log plugin's `info` (plain `console.*` never reaches the file —
+   * `attachConsole` only mirrors Rust records INTO the devtools console). Called
+   * only when a chunkCache is in play, i.e. autosave. A skipped write means the
+   * whole document matched disk; otherwise we list the chunks that moved and note
+   * the ones reused untouched. `info` takes a single string, so the whole report
+   * is folded into `message`; fire-and-forget (a reject outside Tauri is ignored).
+   */
+  private static logVoxlChunkReport(report: VoxlChunkReportEntry[], skipped: boolean): void {
+    if (report.length === 0) return;
+
+    if (skipped) {
+      void logInfo(
+        `[SceneAutosave] VOXL unchanged — write skipped; all ${report.length} chunk(s) identical to disk.`,
+      ).catch(() => {});
+      return;
+    }
+
+    const label = (c: VoxlChunkReportEntry): string => `${c.type}[${c.index}]`;
+    const changed = report.filter((c) => c.changed);
+    const unchanged = report.filter((c) => !c.changed);
+
+    const changedList = changed
+      .map((c) => `${label(c)} ${c.isNew ? 'new' : 'changed'} (${c.source}, ${(c.compressedSize / 1024).toFixed(1)} KB)`)
+      .join(', ') || '(none)';
+    const reusedList = unchanged
+      .map((c) => `${label(c)} (${c.source})`)
+      .join(', ') || '(none)';
+
+    void logInfo(
+      `[SceneAutosave] VOXL chunk delta — ${changed.length} changed, ${unchanged.length} unchanged`
+      + ` | changed: ${changedList} | unchanged: ${reusedList}`,
+    ).catch(() => {});
+  }
+
   private static async exportVoxl(
     sceneContext: ExportSceneContext | undefined,
     options: ExportOptions,
     prePickedNativePath: string | null,
     useNativeWrite: boolean,
+    voxlOptions: {
+      chunkModifierSnapshots?: boolean;
+      chunkCache?: VoxlChunkCache;
+      previousFingerprint?: string;
+      onFingerprint?: (fingerprint: string | undefined) => void;
+    } = {},
   ): Promise<string | null> {
+    const {
+      chunkModifierSnapshots = true,
+      chunkCache,
+      previousFingerprint,
+      onFingerprint,
+    } = voxlOptions;
     // Yield before the (synchronous) support snapshot so the render loop stays
     // alive on scenes with many support nodes.
     await this.yieldToBrowserFrame();
@@ -1135,8 +1300,18 @@ export class ExportManager {
       supports.kickstands = [];
     }
 
+    // Post-C the writer is fed from the chunk store, so `meshBytesMap` stays
+    // empty on this path: the raw STL bytes exist only inside the bake and are
+    // dropped immediately after. `precompressedMap` carries the payload, its
+    // compression tag, and its uncompressed length — everything the directory
+    // and the MODL entries need.
     const meshBytesMap = new Map<number, Uint8Array>();
     const sha256Map = new Map<number, string>();
+    const precompressedMap = new Map<number, PrecompressedChunk>();
+    const precompressedOriginalMap = new Map<number, PrecompressedChunk>();
+    // ORIG content digests, for the document fingerprint (autosave write-skip).
+    const sha256OriginalMap = new Map<number, string>();
+    const staleModelIds = new Set<string>();
 
     const models = options.includeModel
       ? await (async () => {
@@ -1148,12 +1323,22 @@ export class ExportManager {
             color: string;
             polygonCount: number;
             fileSizeBytes: number;
+            sourcePath?: string;
+            nativePreview?: {
+              originalTriangleCount: number;
+              previewTriangleCount: number;
+              cPre?: [number, number, number];
+              sourceFingerprint?: { sizeBytes: number; mtimeMs: number };
+            };
+            geometryStale?: boolean;
             transform: {
               position: { x: number; y: number; z: number };
               rotation: { x: number; y: number; z: number };
               scale: { x: number; y: number; z: number };
             };
             meshModifiers?: ModelMeshModifiers;
+            isSupportGeometry?: boolean;
+            linkGroupId?: string;
             mesh: {
               mode: 'embedded-file';
               fileName: string;
@@ -1167,9 +1352,26 @@ export class ExportManager {
 
           for (let index = 0; index < sourceModels.length; index += 1) {
             const model = sourceModels[index];
-            const { rawBytes, sha256 } = await this.getEmbeddedBinaryStlWithSha(model);
-            meshBytesMap.set(index, rawBytes);
-            sha256Map.set(index, sha256);
+            const resolvedChunk = await this.resolveModelChunkForTick(model);
+            if (resolvedChunk) {
+              sha256Map.set(index, resolvedChunk.chunk.sha256);
+              precompressedMap.set(index, {
+                data: resolvedChunk.chunk.data,
+                compression: resolvedChunk.chunk.compression,
+                uncompressedSize: resolvedChunk.chunk.uncompressedSize,
+              });
+              if (resolvedChunk.stale) staleModelIds.add(model.id);
+            }
+
+            const origChunk = meshChunkStore.lastCommitted(model.id, 'original');
+            if (origChunk) {
+              precompressedOriginalMap.set(index, {
+                data: origChunk.data,
+                compression: origChunk.compression,
+                uncompressedSize: origChunk.uncompressedSize,
+              });
+              sha256OriginalMap.set(index, origChunk.sha256);
+            }
 
             exportedModels.push({
               id: model.id,
@@ -1178,6 +1380,24 @@ export class ExportManager {
               color: model.color,
               polygonCount: model.polygonCount,
               fileSizeBytes: model.fileSizeBytes ?? 0,
+              // Preserves sourcePath / nativePreview if present on model
+              ...(typeof model.sourcePath === 'string' && model.sourcePath.trim().length > 0
+                ? { sourcePath: model.sourcePath }
+                : {}),
+              ...(model.geometry.nativePreview
+                ? { nativePreview: { ...model.geometry.nativePreview } }
+                : {}),
+              ...(model.originalRef
+                ? { originalRef: origChunk ? { ...model.originalRef, sha256: origChunk.sha256, uncompressedSizeBytes: origChunk.uncompressedSize } : model.originalRef }
+                : (options.embedOriginalMesh && origChunk
+                  ? { originalRef: { mode: 'embedded-chunk' as const, sha256: origChunk.sha256, uncompressedSizeBytes: origChunk.uncompressedSize } }
+                  : (!options.embedOriginalMesh && typeof model.sourcePath === 'string' && model.sourcePath.trim().length > 0
+                    ? { originalRef: { mode: 'external-file' as const, fileName: model.sourcePath } }
+                    : {}))),
+              // Honesty flag (Ph0.1 D2): this model's embedded mesh is the last
+              // committed bake, not the geometry currently on screen, because a
+              // mutation was still baking when the bounded wait expired.
+              ...(staleModelIds.has(model.id) ? { geometryStale: true as const } : {}),
               transform: {
                 position: {
                   x: model.transform.position.x,
@@ -1200,6 +1420,8 @@ export class ExportManager {
               // every saved VOXL silently loses hollowing/hole-punch
               // re-editability (voxl-format-spec.md V2.1 requirement).
               meshModifiers: resolveModelMeshModifiers(model),
+              isSupportGeometry: model.isSupportGeometry,
+              linkGroupId: model.linkGroupId,
               mesh: {
                 mode: 'embedded-file',
                 fileName: `${this.normalizeExportFilenameBase(model.name || 'model')}.stl`,
@@ -1228,20 +1450,91 @@ export class ExportManager {
         }
       : undefined;
 
+    const documentInput = {
+      models,
+      activeModelId: sceneContext?.activeModelId ?? null,
+      selectedModelIds: sceneContext?.selectedModelIds ?? [],
+      supports,
+      meta: {
+        generator: 'DragonFruit',
+      },
+      extensions: voxlExtensions,
+    };
+    // The SUPP chunk's bytes are a pure function of the two store snapshots plus
+    // the include/scope flags. Key on the snapshot identities so an unchanged
+    // support forest (every non-support edit) reuses the cached compressed SUPP
+    // chunk and skips its `JSON.stringify`. Only derived when a cache is in play.
+    const supportsCacheKey = chunkCache
+      ? [
+          snapshotToken(supportSnapshot),
+          snapshotToken(kickstandSnapshot),
+          options.includeSupports ? 'S1' : 'S0',
+          hasScopedModelFilter ? [...scopedModelIds].sort().join(',') : '*',
+        ].join('|')
+      : undefined;
+
+    // `chunkModifierSnapshots` selects the VOXL 2.2 layout (chunked, the default
+    // and the manual-save path) or the pre-2.2 inline layout (autosave preserving
+    // an old file's format). Autosave owns the escalate-on-failure decision so it
+    // can also latch the scene to 2.2 — see `useSceneAutosave`.
+    const serializeOptions = {
+      precompressed: precompressedMap,
+      precompressedOriginal: precompressedOriginalMap,
+      embedOriginalMesh: options.embedOriginalMesh ?? true,
+      chunkModifierSnapshots,
+      chunkCache,
+      sha256Original: sha256OriginalMap,
+      supportsCacheKey,
+      previousFingerprint,
+    };
+
+    // Native path: stream straight into the atomic writer's temp file, so the
+    // 172–515 MiB contiguous document buffer never exists (Ph0.1 sub-phase E).
+    // A pre-picked destination is the autosave and in-place Ctrl+S case — the
+    // one that runs unattended and the one that most needed the buffer gone.
+    if (useNativeWrite && prePickedNativePath && this.requiresAtomicCommit('voxl')) {
+      try {
+        let streamFingerprint = '';
+        await writeFileAtomicStreamedToNativePath(prePickedNativePath, async (emit) => {
+          const streamResult = await serializeVoxlDocumentV2Streaming(
+            documentInput,
+            meshBytesMap,
+            sha256Map,
+            emit,
+            serializeOptions,
+          );
+          streamFingerprint = streamResult.fingerprint;
+          // Only autosave supplies a chunkCache; that is exactly when the report
+          // is populated and the "which chunks changed" log is wanted.
+          if (chunkCache) this.logVoxlChunkReport(streamResult.chunkReport, streamResult.skipped);
+          // Fingerprint matched the file already on disk: nothing was emitted.
+          // Throw so the atomic writer discards its (empty) temp and leaves the
+          // correct file untouched; caught just below as success.
+          if (streamResult.skipped) throw new VoxlUnchangedError(streamResult.fingerprint);
+        });
+        onFingerprint?.(streamFingerprint || undefined);
+        return prePickedNativePath;
+      } catch (error) {
+        if (error instanceof VoxlUnchangedError) {
+          onFingerprint?.(error.fingerprint);
+          return prePickedNativePath;
+        }
+        if (error instanceof VoxlSizeLimitError) throw error;
+        console.warn('[ExportManager] Streamed VOXL write failed, retrying buffered.', error);
+      }
+    }
+
+    // Buffered fallback (browser download, or after a streamed failure). It does
+    // not surface a fingerprint, so invalidate any stored one — the caller must
+    // not skip a future write against a fingerprint we did not confirm on disk.
+    onFingerprint?.(undefined);
+
     // serializeVoxlDocumentV2 is async — compression runs off the main thread.
     const binary = await serializeVoxlDocumentV2(
-      {
-        models,
-        activeModelId: sceneContext?.activeModelId ?? null,
-        selectedModelIds: sceneContext?.selectedModelIds ?? [],
-        supports,
-        meta: {
-          generator: 'DragonFruit',
-        },
-        extensions: voxlExtensions,
-      },
+      documentInput,
       meshBytesMap,
       sha256Map,
+      serializeOptions,
     );
 
     return this.downloadFile(
@@ -1252,6 +1545,19 @@ export class ExportManager {
       prePickedNativePath,
       useNativeWrite,
     );
+  }
+
+  /**
+   * Which exported formats must be committed atomically rather than written in
+   * place. A scene file IS the user's document — losing it to an interrupted
+   * overwrite is unrecoverable data loss — whereas a mesh export is a
+   * regenerable artifact.
+   *
+   * Exported for the shared-seam test: this predicate, not the caller, decides
+   * whether a given save is crash-safe.
+   */
+  static requiresAtomicCommit(extension: string): boolean {
+    return extension.trim().toLowerCase() === 'voxl';
   }
 
   private static async downloadFile(
@@ -1273,12 +1579,31 @@ export class ExportManager {
         ? data
         : new TextEncoder().encode(data);
 
+    // The shared write seam (Ph0.1 sub-phase A, finding N1).
+    //
+    // Scene files go through the atomic writer: temp → fsync → rename. The
+    // truncate-first chunked writer destroyed the destination before the first
+    // byte of the new payload landed, so a crash mid-write left a truncated file
+    // with no fallback.
+    //
+    // Autosave and explicit save BOTH arrive here — autosave via
+    // `useSceneAutosave.performAutosave` → `exportScene({nativePath})`, Ctrl+S
+    // via the same `exportScene` with a picked path — so this one branch is what
+    // makes both crash-safe. Do not fork them into separate writers.
+    //
+    // STL/3MF keep the raw chunked writer: they are new-file exports rather than
+    // overwrites of the working document, and 3MF's native path additionally
+    // depends on the existing truncate-on-fresh-appender semantics.
+    const writeNative = this.requiresAtomicCommit(extension)
+      ? writeFileAtomicToNativePath
+      : writeChunkedToNativePath;
+
     // If a native path was already picked before heavy work started, write directly.
     let nativeDestinationPath = prePickedNativePath;
 
     if (nativeDestinationPath && useNativeWrite) {
       try {
-        await writeChunkedToNativePath(nativeDestinationPath, bytes);
+        await writeNative(nativeDestinationPath, bytes);
         return nativeDestinationPath;
       } catch (error) {
         console.warn('[ExportManager] Chunked write failed, retrying with a fresh save destination.', error);
@@ -1290,7 +1615,7 @@ export class ExportManager {
       // Fallback: try native dialog + write (e.g. VOXL path that doesn't pre-pick)
       try {
         const destinationPath = await pickSavePathWithNativeDialog(resolvedFilename);
-        await writeChunkedToNativePath(destinationPath, bytes);
+        await writeNative(destinationPath, bytes);
         return destinationPath;
       } catch (error) {
         const message = this.getErrorMessage(error);

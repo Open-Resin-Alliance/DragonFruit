@@ -8,6 +8,7 @@ type UsePrepareTransformHotkeysParams = {
   hasModels: boolean;
   transformMode: TransformMode;
   setTransformMode: (mode: TransformMode) => void;
+  setLocalTransformSpace: (value: boolean) => void;
   onArrangeAll: () => void;
 };
 
@@ -16,6 +17,7 @@ export function usePrepareTransformHotkeys({
   hasModels,
   transformMode,
   setTransformMode,
+  setLocalTransformSpace,
   onArrangeAll,
 }: UsePrepareTransformHotkeysParams) {
   useEffect(() => {
@@ -24,6 +26,7 @@ export function usePrepareTransformHotkeys({
 
     let wasSelectActive = false;
     let wasModifyActive = false;
+    let wasModifyLocalActive = false;
     let wasSmoothActive = false;
     let wasArrangeActive = false;
     let wasDuplicateActive = false;
@@ -32,6 +35,7 @@ export function usePrepareTransformHotkeys({
     const unsubscribe = hotkeyStore.subscribe(() => {
       const isSelectActive = isActionActiveSync('CANVAS', 'TOOL_SELECT');
       const isModifyActive = isActionActiveSync('CANVAS', 'TOOL_MODIFY');
+      const isModifyLocalActive = isActionActiveSync('CANVAS', 'TOOL_MODIFY_LOCAL');
       const isSmoothActive = isActionActiveSync('CANVAS', 'TOOL_SMOOTH');
       const isArrangeActive = isActionActiveSync('CANVAS', 'TOOL_ARRANGE');
       const isDuplicateActive = isActionActiveSync('CANVAS', 'TOOL_DUPLICATE');
@@ -40,6 +44,11 @@ export function usePrepareTransformHotkeys({
       if (isSelectActive && !wasSelectActive) {
         setTransformMode('select');
       } else if (isModifyActive && !wasModifyActive) {
+        // Modify on the build plate's axes; the shifted twin below takes the model's.
+        setLocalTransformSpace(false);
+        setTransformMode('transform');
+      } else if (isModifyLocalActive && !wasModifyLocalActive) {
+        setLocalTransformSpace(true);
         setTransformMode('transform');
       } else if (isSmoothActive && !wasSmoothActive) {
         setTransformMode('smoothing');
@@ -57,6 +66,7 @@ export function usePrepareTransformHotkeys({
 
       wasSelectActive = isSelectActive;
       wasModifyActive = isModifyActive;
+      wasModifyLocalActive = isModifyLocalActive;
       wasSmoothActive = isSmoothActive;
       wasArrangeActive = isArrangeActive;
       wasDuplicateActive = isDuplicateActive;
@@ -64,5 +74,5 @@ export function usePrepareTransformHotkeys({
     });
 
     return unsubscribe;
-  }, [appMode, hasModels, transformMode, setTransformMode, onArrangeAll]);
+  }, [appMode, hasModels, transformMode, setTransformMode, setLocalTransformSpace, onArrangeAll]);
 }

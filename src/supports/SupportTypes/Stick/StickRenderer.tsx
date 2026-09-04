@@ -63,6 +63,16 @@ export const StickRenderer = React.memo(function StickRenderer({
   const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
   const [, setDragTick] = React.useState(0);
 
+  React.useEffect(() => {
+    return () => {
+      dragSessionRef.current?.stop();
+      dragSessionRef.current = null;
+      liveDragConeARef.current = null;
+      liveDragConeBRef.current = null;
+      beforeHistoryRef.current = null;
+    };
+  }, []);
+
   const { pickRef, visuals } = useHighlight({
     id: stick.id,
     category: 'support',

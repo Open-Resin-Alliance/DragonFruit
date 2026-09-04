@@ -19,6 +19,9 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashSet;
+use tauri::Emitter;
+
+use crate::overhang;
 
 /// A detected local vertical minimum: a vertex whose Z is strictly below all its
 /// graph neighbours, surviving the down-facing / even-odd interior filter.
@@ -279,18 +282,68 @@ fn load_and_transform_mesh(
     let mut mesh = dragonfruit_mesh_repair::io::load_mesh_from_path(path)
         .map_err(|e| format!("Failed to load mesh from path {}: {:?}", file_path, e))?;
 
-    // Transform vertices: p_world = matrix * (p_local - center)
+    // Replicate exactly what `processGeometry` + `prepareWorldGeom` do on the
+    // frontend so sideload and fallback produce identical world positions and
+    // thus identical triangleIds. `processGeometry` normalizes: center X/Z and
+    // set bottom (minY) to 0 via `translate(-preCenter.x, -preBBox.min.y,
+    // -preCenter.z)`. `prepareWorldGeom` then does `translate(-center2)` where
+    // `center2` is the bbox center of that normalized geometry, then
+    // `applyMatrix4(matrix)`. The old code did `matrix*(p - center)` where
+    // `center` was already the normalized geometry's center, missing the
+    // processGeometry offset and causing a world-space shift.
+    // Compute the same two-step centering from the raw file bbox.
+    let mut pre_min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+    let mut pre_max = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for p in &mesh.positions {
+        pre_min.x = pre_min.x.min(p.x);
+        pre_min.y = pre_min.y.min(p.y);
+        pre_min.z = pre_min.z.min(p.z);
+        pre_max.x = pre_max.x.max(p.x);
+        pre_max.y = pre_max.y.max(p.y);
+        pre_max.z = pre_max.z.max(p.z);
+    }
+    let pre_center = Vec3::new(
+        (pre_min.x + pre_max.x) * 0.5,
+        (pre_min.y + pre_max.y) * 0.5,
+        (pre_min.z + pre_max.z) * 0.5,
+    );
+    // First normalization (processGeometry): center X/Z, bottom Y to 0.
     for pos in &mut mesh.positions {
-        let centered = Vec3::new(pos.x - center[0], pos.y - center[1], pos.z - center[2]);
-
+        pos.x -= pre_center.x;
+        pos.y -= pre_min.y;
+        pos.z -= pre_center.z;
+    }
+    // Second centering (prepareWorldGeom): fully center the normalized mesh.
+    let mut norm_min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+    let mut norm_max = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for p in &mesh.positions {
+        norm_min.x = norm_min.x.min(p.x);
+        norm_min.y = norm_min.y.min(p.y);
+        norm_min.z = norm_min.z.min(p.z);
+        norm_max.x = norm_max.x.max(p.x);
+        norm_max.y = norm_max.y.max(p.y);
+        norm_max.z = norm_max.z.max(p.z);
+    }
+    let norm_center = Vec3::new(
+        (norm_min.x + norm_max.x) * 0.5,
+        (norm_min.y + norm_max.y) * 0.5,
+        (norm_min.z + norm_max.z) * 0.5,
+    );
+    for pos in &mut mesh.positions {
+        pos.x -= norm_center.x;
+        pos.y -= norm_center.y;
+        pos.z -= norm_center.z;
+    }
+    // Finally apply the scene matrix (position/rotation/scale).
+    for pos in &mut mesh.positions {
         let x =
-            matrix[0] * centered.x + matrix[4] * centered.y + matrix[8] * centered.z + matrix[12];
+            matrix[0] * pos.x + matrix[4] * pos.y + matrix[8] * pos.z + matrix[12];
         let y =
-            matrix[1] * centered.x + matrix[5] * centered.y + matrix[9] * centered.z + matrix[13];
+            matrix[1] * pos.x + matrix[5] * pos.y + matrix[9] * pos.z + matrix[13];
         let z =
-            matrix[2] * centered.x + matrix[6] * centered.y + matrix[10] * centered.z + matrix[14];
+            matrix[2] * pos.x + matrix[6] * pos.y + matrix[10] * pos.z + matrix[14];
         let w =
-            matrix[3] * centered.x + matrix[7] * centered.y + matrix[11] * centered.z + matrix[15];
+            matrix[3] * pos.x + matrix[7] * pos.y + matrix[11] * pos.z + matrix[15];
 
         if w.abs() > 1e-6 {
             pos.x = x / w;
@@ -302,7 +355,7 @@ fn load_and_transform_mesh(
             pos.z = z;
         }
     }
-
+    let _ = center;
     Ok(mesh)
 }
 
@@ -403,7 +456,7 @@ pub async fn scan_voxel_islands_from_path(
         };
 
         let scan_result =
-            run_island_scan_streaming(&job, &triangles, bbox.min.z as f64, false, None);
+            run_island_scan_streaming(&job, &triangles, bbox.min.z as f64, bbox.max.z as f64, false, None);
 
         // 5a. Build Z-bucket index for projection raycasting
         let z_min = bbox.min.z;
@@ -554,7 +607,12 @@ pub async fn scan_voxel_islands_from_path(
                     source: "voxel".to_string(),
                     contact,
                     base_z: contact_z,
-                    area_mm2: island.total_area_mm2 as f32,
+                    // Contact footprint = base-layer area, not accumulated area.
+                    area_mm2: island
+                        .per_layer_area_mm2
+                        .get(&island.first_layer)
+                        .copied()
+                        .unwrap_or(island.total_area_mm2) as f32,
                     layer_span: [island.first_layer, island.last_layer],
                 });
             } else {
@@ -571,7 +629,11 @@ pub async fn scan_voxel_islands_from_path(
                         source: "voxel".to_string(),
                         contact,
                         base_z: contact_z,
-                        area_mm2: island.total_area_mm2 as f32,
+                        area_mm2: island
+                            .per_layer_area_mm2
+                            .get(&island.first_layer)
+                            .copied()
+                            .unwrap_or(island.total_area_mm2) as f32,
                         layer_span: [island.first_layer, island.last_layer],
                     });
                 }
@@ -595,6 +657,7 @@ pub async fn scan_voxel_islands_from_path(
 pub struct CombinedIslandScanResult {
     pub voxel_islands: Vec<VoxelIsland>,
     pub minima_islands: Vec<LocalMinimum>,
+    pub overhang_islands: Vec<overhang::OverhangRegion>,
 }
 
 /// Single Tauri command that loads the mesh once and runs both the voxel island
@@ -602,6 +665,7 @@ pub struct CombinedIslandScanResult {
 /// minima scan **concurrently**. Surface-snapping projections are also parallelized.
 #[tauri::command]
 pub async fn scan_islands_from_path(
+    app: crate::DragonFruitAppHandle,
     file_path: String,
     matrix: [f32; 16],
     center: [f32; 3],
@@ -610,6 +674,8 @@ pub async fn scan_islands_from_path(
     support_buffer_mm: f64,
     connectivity: u8,
     k: Option<usize>,
+    overhang_self_support_angle_deg: Option<f32>,
+    overhang_px_mm: Option<f32>,
 ) -> Result<CombinedIslandScanResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         // ── 1. Load and transform mesh ONCE ──────────────────────────────
@@ -621,6 +687,7 @@ pub async fn scan_islands_from_path(
             "[islands-combined] Mesh loaded: {} triangles, {} vertices",
             tri_count, vert_count,
         );
+        let _ = app.emit("island-scan-progress", serde_json::json!({ "done": 5, "total": 100 }));
 
         let bbox = mesh.bbox();
         let soup = mesh.to_triangle_soup();
@@ -648,8 +715,14 @@ pub async fn scan_islands_from_path(
             candidate_only: true,
         };
 
-        // ── 2. Run voxel rasterization + scan AND minima scan CONCURRENTLY ──
-        let (scan_result, minima_islands) = std::thread::scope(|s| {
+        // ── 2. Run voxel rasterization + scan, minima scan, AND overhang
+        //       classification CONCURRENTLY (all share the loaded mesh) ──
+        let angle_deg = overhang_self_support_angle_deg.unwrap_or(45.0);
+        let oh_px_mm = overhang_px_mm.unwrap_or(0.25);
+        let app_a = app.clone();
+        let app_b = app.clone();
+        let app_c = app.clone();
+        let (scan_result, minima_islands, overhang_islands) = std::thread::scope(|s| {
             // Thread A: voxel rasterization + island scan
             let voxel_handle = s.spawn(|| {
                 log::info!(
@@ -666,6 +739,7 @@ pub async fn scan_islands_from_path(
                 );
                 let rasterize_sec = rasterize_start.elapsed().as_secs_f64();
                 log::info!("[islands-combined] Rasterized {} layers in {:.1}s", num_layers, rasterize_sec);
+                let _ = app_a.emit("island-scan-progress", serde_json::json!({ "done": 30, "total": 100 }));
 
                 log::info!("[islands-combined] Running island scan (batch pipeline)…");
                 let scan_start = std::time::Instant::now();
@@ -675,6 +749,7 @@ pub async fn scan_islands_from_path(
                     "[islands-combined] Island scan done in {:.1}s — {} islands (rasterize {:.1}s + scan {:.1}s = {:.1}s)",
                     scan_sec + rasterize_sec, result.islands.len(), rasterize_sec, scan_sec, rasterize_sec + scan_sec,
                 );
+                let _ = app_a.emit("island-scan-progress", serde_json::json!({ "done": 65, "total": 100 }));
                 result
             });
 
@@ -685,10 +760,31 @@ pub async fn scan_islands_from_path(
                 let minima = scan_minima_internal(&mesh, k);
                 let minima_sec = minima_start.elapsed().as_secs_f64();
                 log::info!("[islands-combined] Minima scan done in {:.1}s — {} minima", minima_sec, minima.len());
+                let _ = app_b.emit("island-scan-progress", serde_json::json!({ "done": 80, "total": 100 }));
                 minima
             });
 
-            (voxel_handle.join().unwrap(), minima_handle.join().unwrap())
+            // Thread C: overhang (mesh-normal) classification — the same mesh
+            // the voxel/minima paths use, so the TS side never round-trips
+            // geometry for it.
+            let overhang_handle = s.spawn(|| {
+                log::info!("[islands-combined] Running overhang classification (angle={}°)…", angle_deg);
+                let oh_start = std::time::Instant::now();
+                let regions = overhang::classify_overhangs(&mesh, angle_deg, oh_px_mm);
+                log::info!(
+                    "[islands-combined] Overhang classification done in {:.1}s — {} regions",
+                    oh_start.elapsed().as_secs_f64(),
+                    regions.len(),
+                );
+                let _ = app_c.emit("island-scan-progress", serde_json::json!({ "done": 90, "total": 100 }));
+                regions
+            });
+
+            (
+                voxel_handle.join().unwrap(),
+                minima_handle.join().unwrap(),
+                overhang_handle.join().unwrap(),
+            )
         });
 
         // ── 3. Build Z-bucket index for surface-snapping projections ──────
@@ -746,7 +842,12 @@ pub async fn scan_islands_from_path(
                     source: "voxel".to_string(),
                     contact,
                     base_z: contact_z as f64,
-                    area_mm2: island.total_area_mm2 as f32,
+                    // Contact footprint = base-layer area, not accumulated area.
+                    area_mm2: island
+                        .per_layer_area_mm2
+                        .get(&island.first_layer)
+                        .copied()
+                        .unwrap_or(island.total_area_mm2) as f32,
                     layer_span: [island.first_layer, island.last_layer],
                 }
             })
@@ -758,14 +859,18 @@ pub async fn scan_islands_from_path(
         );
 
         log::info!(
-            "[islands-combined] Complete: {} voxel islands, {} minima islands",
+            "[islands-combined] Complete: {} voxel islands, {} minima islands, {} overhang regions",
             voxel_islands.len(),
             minima_islands.len(),
+            overhang_islands.len(),
         );
+
+        let _ = app.emit("island-scan-progress", serde_json::json!({ "done": 100, "total": 100 }));
 
         Ok(CombinedIslandScanResult {
             voxel_islands,
             minima_islands,
+            overhang_islands,
         })
     })
     .await

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Roots, Segment, Joint, Vec3 } from '@/supports/types';
+import { bezierToLineSegments } from '@/supports/Curves/BezierUtils';
 import { SupportData } from '@/supports/rendering/SupportBuilder';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone';
 import { getConeQuaternion } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
@@ -99,9 +100,10 @@ export class SupportGeometryGenerator {
         endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 10));
       }
 
-      // Generate Shaft
-      const shaftMesh = this.generateShaftMesh(segStart, endPoint, seg.diameter);
-      if (shaftMesh) group.add(shaftMesh);
+      // Generate Shaft (curved segments tessellate into piecewise cylinders)
+      for (const shaftMesh of this.generateSegmentShaftMeshes(seg, segStart, endPoint)) {
+        group.add(shaftMesh);
+      }
 
       // Generate Joints ("balls") at both ends (deduplicated across segments)
       addJointSphere(seg.bottomJoint);
@@ -129,9 +131,8 @@ export class SupportGeometryGenerator {
   private static getStartPosition(data: SupportData, raftSettings?: RaftSettings): THREE.Vector3 {
     if (data.roots) {
       // RootsRenderer logic for vertical offset
-      const hasSolidBottom = (raftSettings?.bottomMode ?? 'off') === 'solid';
-      const diskHeight = hasSolidBottom ? 0.05 : data.roots.diskHeight;
-      const verticalOffset = hasSolidBottom && raftSettings ? Math.max(raftSettings.thickness - diskHeight, 0) : 0;
+      const diskHeight = data.roots.diskHeight;
+      const verticalOffset = 0;
 
       const basePos = new THREE.Vector3(
         data.roots.transform.pos.x,
@@ -152,9 +153,8 @@ export class SupportGeometryGenerator {
     const group = new THREE.Group();
     
     // Raft offset logic matching RootsRenderer
-    const hasSolidBottom = (raftSettings?.bottomMode ?? 'off') === 'solid';
-    const diskHeight = hasSolidBottom ? 0.05 : root.diskHeight;
-    const verticalOffset = hasSolidBottom && raftSettings ? Math.max(raftSettings.thickness - diskHeight, 0) : 0;
+    const diskHeight = root.diskHeight;
+    const verticalOffset = 0;
     
     const pos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z + verticalOffset);
     // Group is at world pos (lifted if needed)
@@ -193,6 +193,36 @@ export class SupportGeometryGenerator {
     return group;
   }
 
+  /**
+   * Generates the shaft mesh(es) for a segment: one cylinder for a straight
+   * segment, or a piecewise-cylinder approximation of the curve for a bezier
+   * segment (matching the live renderers and the raster slicing path).
+   */
+  public static generateSegmentShaftMeshes(segment: Segment, start: THREE.Vector3, end: THREE.Vector3): THREE.Mesh[] {
+    if (segment.type === 'bezier') {
+      const points = bezierToLineSegments(
+        { x: start.x, y: start.y, z: start.z },
+        segment.controlPoint1,
+        segment.controlPoint2,
+        { x: end.x, y: end.y, z: end.z },
+        segment.resolution,
+      );
+      const meshes: THREE.Mesh[] = [];
+      for (let i = 0; i < points.length - 1; i += 1) {
+        const mesh = this.generateShaftMesh(
+          new THREE.Vector3(points[i].x, points[i].y, points[i].z),
+          new THREE.Vector3(points[i + 1].x, points[i + 1].y, points[i + 1].z),
+          segment.diameter,
+        );
+        if (mesh) meshes.push(mesh);
+      }
+      return meshes;
+    }
+
+    const mesh = this.generateShaftMesh(start, end, segment.diameter);
+    return mesh ? [mesh] : [];
+  }
+
   public static generateShaftMesh(start: THREE.Vector3, end: THREE.Vector3, diameter: number): THREE.Mesh | null {
     const length = start.distanceTo(end);
     if (length < 0.001) return null;
@@ -221,7 +251,7 @@ export class SupportGeometryGenerator {
     return this.buildSphereMesh(knot.pos, this.getExportKnotDiameter(knot.diameter ?? 1.2), 8, 8);
   }
 
-  public static generateConeMesh(coneData: any): THREE.Group {
+  public static generateConeMesh(coneData: any, penetrationMm: number = 0): THREE.Group {
     const group = new THREE.Group();
     
     // Replicating ContactConeRenderer logic
@@ -245,9 +275,9 @@ export class SupportGeometryGenerator {
       ? (coneData.diskLengthOverride ?? calculateDiskThickness(effectiveSurfaceNormal, coneData.normal, profile))
       : 0;
     const coneStartPos = {
-      x: coneData.pos.x + effectiveSurfaceNormal.x * primitiveThickness,
-      y: coneData.pos.y + effectiveSurfaceNormal.y * primitiveThickness,
-      z: coneData.pos.z + effectiveSurfaceNormal.z * primitiveThickness,
+      x: coneData.pos.x + effectiveSurfaceNormal.x * primitiveThickness - effectiveSurfaceNormal.x * penetrationMm,
+      y: coneData.pos.y + effectiveSurfaceNormal.y * primitiveThickness - effectiveSurfaceNormal.y * penetrationMm,
+      z: coneData.pos.z + effectiveSurfaceNormal.z * primitiveThickness - effectiveSurfaceNormal.z * penetrationMm,
     };
     const center = {
       x: coneStartPos.x + coneData.normal.x * (length / 2),
@@ -274,7 +304,7 @@ export class SupportGeometryGenerator {
     return group;
   }
 
-  public static generateContactDiskMesh(coneData: any): THREE.Group {
+  public static generateContactDiskMesh(coneData: any, penetrationMm: number = 0): THREE.Group {
     const group = new THREE.Group();
     
     // Extract contact disk data
@@ -288,7 +318,7 @@ export class SupportGeometryGenerator {
     const coneAxis = coneData.normal;
     // Twig disks carry contactDiameterMm on the disk object; cone profiles
     // (SupportTipProfile) carry it inside the profile. Prefer the object-level
-    // value so twig disks — whose ContactDiskProfile has no contactDiameterMm —
+    // value so twig disks - whose ContactDiskProfile has no contactDiameterMm -
     // don't build a NaN-radius cylinder/sphere that silently drops the tip from
     // the STL export.
     const contactDiameterMm = coneData.contactDiameterMm ?? profile.contactDiameterMm;
@@ -305,9 +335,9 @@ export class SupportGeometryGenerator {
     
     // Create the contact disk geometry (cylinder shaft + spherical tip)
     // Shaft: From Surface to Tip Center
-    const shaftGeometry = new THREE.CylinderGeometry(radius, radius, thickness, 16);
+    const shaftGeometry = new THREE.CylinderGeometry(radius, radius, thickness + penetrationMm, 16);
     const shaftMesh = new THREE.Mesh(shaftGeometry);
-    shaftMesh.position.set(0, 0, 0); // Local origin in group
+    shaftMesh.position.set(0, -penetrationMm / 2, 0); // Local origin in group
     
     // Round Tip: Centered at the top of the shaft
     const tipGeometry = new THREE.SphereGeometry(radius, 16, 16);

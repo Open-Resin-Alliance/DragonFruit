@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 interface TooltipProps {
   /** Content to show inside the tooltip popover. Falsy content skips the tooltip entirely (children render unwrapped). */
@@ -96,6 +97,34 @@ export function Tooltip({ content, offsetY = 28, maxWidth = 260, wrapperClassNam
     top = coords ? coords.top : pos.y + offsetY;
   }
 
+  // The popover is portalled to <body> rather than left where it sits in the
+  // tree. `position: fixed` resolves against the nearest ancestor that carries a
+  // transform, filter or backdrop-filter — and inside the settings modal that is
+  // the panel itself, which also clips with overflow:hidden. Left in place the
+  // popover is positioned against the panel and then clipped away: present in
+  // the DOM, reported visible, and painted nowhere.
+  const popover = show ? (
+    <div
+      ref={popoverRef}
+      className="fixed pointer-events-none z-50 rounded px-2 py-1.5 text-[11px] leading-tight font-medium shadow-lg"
+      style={{
+        left,
+        top,
+        visibility: coords ? 'visible' : 'hidden',
+        background: 'rgba(24, 24, 24, 0.98)',
+        color: 'var(--text-strong, #e0e0e0)',
+        border: '1px solid var(--accent, #baf72e)',
+        width: 'max-content',
+        maxWidth,
+        whiteSpace: 'normal',
+        textAlign: 'left',
+        boxShadow: '0 6px 32px 0 rgba(0,0,0,0.44), 0 1.5px 8px 0 rgba(0,0,0,0.28)',
+      }}
+    >
+      {content}
+    </div>
+  ) : null;
+
   return (
     <span
       className={wrapperClassName ? `inline-flex ${wrapperClassName}` : 'inline-flex'}
@@ -108,27 +137,9 @@ export function Tooltip({ content, offsetY = 28, maxWidth = 260, wrapperClassNam
     >
       {children}
 
-      {show && (
-        <div
-          ref={popoverRef}
-          className="fixed pointer-events-none z-50 rounded px-2 py-1.5 text-[11px] leading-tight font-medium shadow-lg"
-          style={{
-            left,
-            top,
-            visibility: coords ? 'visible' : 'hidden',
-            background: 'rgba(24, 24, 24, 0.98)',
-            color: 'var(--text-strong, #e0e0e0)',
-            border: '1px solid var(--accent, #baf72e)',
-            width: 'max-content',
-            maxWidth,
-            whiteSpace: 'normal',
-            textAlign: 'left',
-            boxShadow: '0 6px 32px 0 rgba(0,0,0,0.44), 0 1.5px 8px 0 rgba(0,0,0,0.28)',
-          }}
-        >
-          {content}
-        </div>
-      )}
+      {popover && typeof document !== 'undefined'
+        ? createPortal(popover, document.body)
+        : null}
     </span>
   );
 }

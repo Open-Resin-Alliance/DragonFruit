@@ -580,6 +580,9 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         stageMeshIpcMs += performance.now() - chunkInvokeStart;
     };
 
+    /** Byte offset of the next chunk in the file-backed stage sequence. */
+    let meshStageFileOffset = 0;
+
     const handleMeshFileChunk = async (chunk: Uint8Array) => {
         throwIfAborted(options.abortSignal);
         if (!meshStageFilePath) {
@@ -594,11 +597,15 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         stageMeshChunkCount += 1;
         maybeEmitStageProgress();
 
+        const chunkOffset = meshStageFileOffset;
+        meshStageFileOffset += transportChunk.byteLength;
+
         const appendStart = performance.now();
         const appendedLen = await invoke<number>('append_mesh_stage_chunk', transportChunk, {
             headers: {
                 'Content-Type': 'application/octet-stream',
                 'x-mesh-stage-path': meshStageFilePath,
+                'x-mesh-stage-offset': String(chunkOffset),
             },
         });
         stageMeshIpcMs += performance.now() - appendStart;

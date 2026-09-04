@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { ViewTypeDropdown } from '@/components/controls/ViewTypeDropdown';
@@ -8,7 +9,6 @@ import { SettingsModal, type SettingsTabKey } from '@/components/settings/Settin
 import { ProfileSettingsModal } from '@/components/settings/ProfileSettingsModal';
 import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
-import type { SelectionHighlightMode } from '@/components/selection';
 import { Button } from '@/components/atoms';
 import { Activity, AlertTriangle, Anchor, ChevronDown, FolderInput, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, SaveAll, Square, Upload, X } from 'lucide-react';
 import {
@@ -18,7 +18,6 @@ import {
 } from '@/components/settings/themeCustomizations';
 import {
   OPEN_PROFILE_SETTINGS_MODAL_EVENT,
-  PROFILE_SETTINGS_MODAL_OPEN_CHANGE_EVENT,
   dispatchProfileSettingsModalOpenChange,
   type ProfileSettingsTab,
 } from '@/components/settings/profileModalEvents';
@@ -34,6 +33,7 @@ import {
 
 import type { View3DSettings } from '@/components/settings/view3dPreferences';
 import type { SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
+import { useSceneFileInputAccept } from '@/features/plugins/pluginFileTypeExtensions';
 
 interface TopBarProps {
   meshColor: string;
@@ -58,16 +58,14 @@ interface TopBarProps {
   onMaterialRoughnessChange: (value: number) => void;
   xrayOpacity: number;
   onXrayOpacityChange: (value: number) => void;
-  heatmapBlend: number;
-  onHeatmapBlendChange: (value: number) => void;
-  heatmapContrast: number;
-  onHeatmapContrastChange: (value: number) => void;
+  heatmapMinAngle: number;
+  onHeatmapMinAngleChange: (value: number) => void;
+  heatmapMaxAngle: number;
+  onHeatmapMaxAngleChange: (value: number) => void;
   hoverTintStrength: number;
   onHoverTintStrengthChange: (value: number) => void;
   selectedTintStrength: number;
   onSelectedTintStrengthChange: (value: number) => void;
-  selectionHighlightMode: SelectionHighlightMode;
-  onSelectionHighlightModeChange: (mode: SelectionHighlightMode) => void;
   debugPrimitivesPanelVisible: boolean;
   onDebugPrimitivesPanelVisibleChange: (value: boolean) => void;
   view3dSettings: View3DSettings;
@@ -100,6 +98,9 @@ interface TopBarProps {
   printerReachabilityByDeviceId?: Record<string, boolean | null>;
   onOpenMonitor?: () => void;
   warnBeforeProfileSettingsOpen?: boolean;
+  /** During first-run onboarding, hide the workflow-mode steps and the
+   *  scene/view controls so the app bar reads as minimal chrome. */
+  hideWorkflowControls?: boolean;
 }
 
 export function TopBar({
@@ -125,16 +126,14 @@ export function TopBar({
   onMaterialRoughnessChange,
   xrayOpacity,
   onXrayOpacityChange,
-  heatmapBlend,
-  onHeatmapBlendChange,
-  heatmapContrast,
-  onHeatmapContrastChange,
+  heatmapMinAngle,
+  onHeatmapMinAngleChange,
+  heatmapMaxAngle,
+  onHeatmapMaxAngleChange,
   hoverTintStrength,
   onHoverTintStrengthChange,
   selectedTintStrength,
   onSelectedTintStrengthChange,
-  selectionHighlightMode,
-  onSelectionHighlightModeChange,
   debugPrimitivesPanelVisible,
   onDebugPrimitivesPanelVisibleChange,
   view3dSettings,
@@ -166,8 +165,10 @@ export function TopBar({
   printerReachabilityByDeviceId,
   onOpenMonitor,
   warnBeforeProfileSettingsOpen = false,
+  hideWorkflowControls = false,
 }: TopBarProps) {
   const { _ } = useLingui();
+  const sceneFileAccept = useSceneFileInputAccept();
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTabKey>('general');
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
@@ -176,6 +177,7 @@ export function TopBar({
   const [profileModalOpenNetworkSettingsToken, setProfileModalOpenNetworkSettingsToken] = useState(0);
   const [profileModalOpenMaterialAntiAliasingToken, setProfileModalOpenMaterialAntiAliasingToken] = useState(0);
   const [showProfileChangeWarning, setShowProfileChangeWarning] = useState(false);
+  useEscapeToClose(showProfileChangeWarning, () => setShowProfileChangeWarning(false));
   const [isDesktopWindow, setIsDesktopWindow] = useState(false);
   const [isDesktopWindowMaximized, setIsDesktopWindowMaximized] = useState(false);
   const [isLightTheme, setIsLightTheme] = useState(() => {
@@ -186,10 +188,6 @@ export function TopBar({
     return window.matchMedia?.('(prefers-color-scheme: light)').matches ?? false;
   });
   const [printerThumbnailFailed, setPrinterThumbnailFailed] = useState(false);
-  const [windowMetrics, setWindowMetrics] = useState(() => ({
-    innerWidth: 0,
-    innerHeight: 0,
-  }));
   const topbarActionsDisabled = isSlicingBusy;
   const [isAppMenuOpen, setIsAppMenuOpen] = useState(false);
   const [appMenuPosition, setAppMenuPosition] = useState<{ x: number; y: number } | null>(null);
@@ -261,26 +259,6 @@ export function TopBar({
 
     return () => {
       cancelled = true;
-    };
-  }, []);
-
-  React.useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const updateMetrics = () => {
-      setWindowMetrics({
-        innerWidth: window.innerWidth,
-        innerHeight: window.innerHeight,
-      });
-    };
-
-    updateMetrics();
-    window.addEventListener('resize', updateMetrics);
-    window.addEventListener('orientationchange', updateMetrics);
-
-    return () => {
-      window.removeEventListener('resize', updateMetrics);
-      window.removeEventListener('orientationchange', updateMetrics);
     };
   }, []);
 
@@ -493,14 +471,20 @@ export function TopBar({
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    const handleOpenSettings = () => {
-      setSettingsInitialTab('general');
+    const handleOpenSettings = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { tab?: string } | undefined;
+      const tab = detail?.tab as SettingsTabKey | undefined;
+      if (tab && ['general', 'camera', 'workspaces', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys', 'plugins', 'experiments', 'sceneAutosave', 'backups', 'uvtools', 'logging', 'updates', 'about'].includes(tab)) {
+        setSettingsInitialTab(tab as SettingsTabKey);
+      } else {
+        setSettingsInitialTab('general');
+      }
       setIsSettingsOpen(true);
     };
 
-    window.addEventListener(OPEN_SETTINGS_MODAL_EVENT, handleOpenSettings);
+    window.addEventListener(OPEN_SETTINGS_MODAL_EVENT, handleOpenSettings as EventListener);
     return () => {
-      window.removeEventListener(OPEN_SETTINGS_MODAL_EVENT, handleOpenSettings);
+      window.removeEventListener(OPEN_SETTINGS_MODAL_EVENT, handleOpenSettings as EventListener);
     };
   }, []);
 
@@ -613,7 +597,10 @@ export function TopBar({
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+    // The steps container is unmounted while the workflow controls are hidden
+    // (onboarding), so re-observe it when they come back to avoid measuring a
+    // detached node (which pinned the icons hidden).
+  }, [hideWorkflowControls]);
 
   const steps: Array<{
     mode: SupportMode;
@@ -658,10 +645,12 @@ export function TopBar({
   ];
 
   return (
-    <div
-      className="ui-topbar fixed top-0 left-0 right-0 z-50 flex items-center relative"
-      onMouseDownCapture={handleTopBarPointerDown}
-    >
+    <>
+      <div className={`ui-topbar-blur ${hideWorkflowControls ? 'ui-topbar-blur-transparent' : ''}`} aria-hidden="true" />
+      <div
+        className={`ui-topbar fixed top-0 left-0 right-0 z-50 flex items-center relative ${hideWorkflowControls ? 'justify-between ui-topbar-transparent' : ''}`}
+        onMouseDownCapture={handleTopBarPointerDown}
+      >
       <div
         className={`flex flex-1 max-w-[430px] items-center gap-2.5 pl-0 pr-4 py-1.5 transition-opacity ${topbarActionsDisabled ? 'opacity-45 pointer-events-none' : ''}`}
         data-no-window-drag="false"
@@ -697,6 +686,8 @@ export function TopBar({
           />
         </button>
 
+        {!hideWorkflowControls && (
+        <>
         <div
           className="h-6 w-px mx-0.5 shrink-0"
           style={{ background: 'color-mix(in srgb, var(--border-subtle), transparent 24%)' }}
@@ -755,6 +746,8 @@ export function TopBar({
           </span>
           <ChevronDown className={`h-3.5 w-3.5 ml-auto shrink-0 transition-transform ${isPrinterQuickMenuOpen ? 'rotate-180' : ''}`} style={{ color: 'color-mix(in srgb, var(--text-muted), white 8%)' }} />
         </button>
+        </>
+        )}
 
         {showMonitorButton && (
           <button
@@ -935,7 +928,7 @@ export function TopBar({
       <input
         id="topbar-scene-input"
         type="file"
-        accept=".voxl,.lys,.zip"
+        accept={sceneFileAccept}
         onChange={onImportSceneChange}
         className="hidden"
       />
@@ -1036,6 +1029,7 @@ export function TopBar({
         </div>
       )}
 
+      {!hideWorkflowControls && (
       <div className="flex min-w-0 flex-1 justify-center px-2">
         <div
           className={`relative w-full transition-opacity ${topbarActionsDisabled ? 'opacity-45' : ''}`}
@@ -1060,7 +1054,7 @@ export function TopBar({
                   }}
                   disabled={nativeDisabled}
                   aria-disabled={disabled}
-                  className={`group relative flex cursor-pointer items-center gap-1.5 rounded-lg border px-1.5 py-2 transition-all duration-200 flex-1 min-w-[90px] max-w-[190px] h-[36px] ${
+                  className={`group relative flex cursor-pointer items-center gap-1.5 rounded-lg border px-1.5 py-1.5 transition-all duration-200 flex-1 min-w-[90px] max-w-[190px] h-[32px] ${
                     active
                       ? 'shadow-[0_6px_16px_rgba(0,0,0,0.25)]'
                       : 'hover:-translate-y-[1px] hover:shadow-[0_6px_14px_rgba(0,0,0,0.18)]'
@@ -1123,9 +1117,12 @@ export function TopBar({
           </div>
         </div>
       </div>
+      )}
 
       <div className="flex flex-1 max-w-[430px] items-center justify-end gap-2 pr-2">
         <div className={`flex items-center gap-2 transition-opacity ${topbarActionsDisabled ? 'opacity-45 pointer-events-none' : ''}`}>
+          {!hideWorkflowControls && (
+          <>
           <ViewTypeDropdown
             value={viewTypeOverride}
             onChange={onViewTypeOverrideChange}
@@ -1150,6 +1147,8 @@ export function TopBar({
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 11l-2 2m2-2l2 2m-2-2v3" />
             </svg>
           </Button>
+          </>
+          )}
             <Button
               type="button"
               variant="secondary"
@@ -1345,16 +1344,14 @@ export function TopBar({
         onMaterialRoughnessChange={onMaterialRoughnessChange}
         xrayOpacity={xrayOpacity}
         onXrayOpacityChange={onXrayOpacityChange}
-        heatmapBlend={heatmapBlend}
-        onHeatmapBlendChange={onHeatmapBlendChange}
-        heatmapContrast={heatmapContrast}
-        onHeatmapContrastChange={onHeatmapContrastChange}
+        heatmapMinAngle={heatmapMinAngle}
+        onHeatmapMinAngleChange={onHeatmapMinAngleChange}
+        heatmapMaxAngle={heatmapMaxAngle}
+        onHeatmapMaxAngleChange={onHeatmapMaxAngleChange}
         hoverTintStrength={hoverTintStrength}
         onHoverTintStrengthChange={onHoverTintStrengthChange}
         selectedTintStrength={selectedTintStrength}
         onSelectedTintStrengthChange={onSelectedTintStrengthChange}
-        selectionHighlightMode={selectionHighlightMode}
-        onSelectionHighlightModeChange={onSelectionHighlightModeChange}
         debugPrimitivesPanelVisible={debugPrimitivesPanelVisible}
         onDebugPrimitivesPanelVisibleChange={onDebugPrimitivesPanelVisibleChange}
         view3dSettings={view3dSettings}
@@ -1375,5 +1372,6 @@ export function TopBar({
         openMaterialAntiAliasingToken={profileModalOpenMaterialAntiAliasingToken}
       />
     </div>
+    </>
   );
 }

@@ -14,6 +14,8 @@ import { useJointDragPosition } from '../../interaction/jointDragPosition';
 // Primitives
 import { ContactDiskRenderer, calculateDiskThickness } from '../ContactDisk';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
+import { subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot, getActiveMaterialProfile, getActivePrinterProfile } from '@/features/profiles/profileStore';
+import { calculateTipOffset } from '@/supports/rendering/calculateTipOffset';
 
 interface ContactConeRendererProps {
     contactDiskId?: string;
@@ -84,7 +86,28 @@ export function ContactConeRenderer({
     const liveSocketJointPos = useJointDragPosition(socketJointId ?? '');
     const contactRadius = profile.contactDiameterMm / 2;
     const bodyRadius = profile.bodyDiameterMm / 2;
-    const penetrationMm = profile.penetrationMm ?? 0;
+    
+    const storeState = React.useSyncExternalStore(
+        subscribeToProfileStore,
+        getProfileStoreSnapshot,
+        getProfileStoreServerSnapshot
+    );
+    const activeMaterial = React.useMemo(() => getActiveMaterialProfile(storeState), [storeState]);
+    const activePrinter = React.useMemo(() => getActivePrinterProfile(storeState), [storeState]);
+    const penetrationMm = React.useMemo(() => {
+        if (activeMaterial && activePrinter && activeMaterial.antiAliasingSettings?.tipOffsetDisplayInUi) {
+            const pxX = activePrinter.pixelSize?.x ? activePrinter.pixelSize.x / 1000 : (activePrinter.buildVolumeMm?.width ?? 143) / (activePrinter.display?.resolutionX ?? 2560);
+            const pxY = activePrinter.pixelSize?.y ? activePrinter.pixelSize.y / 1000 : (activePrinter.buildVolumeMm?.depth ?? 89) / (activePrinter.display?.resolutionY ?? 1620);
+            return calculateTipOffset(
+                activeMaterial.antiAliasingSettings,
+                activeMaterial.layerHeightMm,
+                pxX,
+                pxY
+            );
+        }
+        return profile.penetrationMm ?? 0;
+    }, [activeMaterial, activePrinter, profile.penetrationMm]);
+    
     const [isHovered, setIsHovered] = useState(false);
     const hoverVisible = isHovered && isInteractable && isParentSelected;
 
@@ -119,7 +142,7 @@ export function ContactConeRenderer({
             if (surfaceNormalVec.lengthSq() < 0.000001) surfaceNormalVec.set(0, 0, 1);
             surfaceNormalVec.normalize();
 
-            let axis = new THREE.Vector3(renderNormal.x, renderNormal.y, renderNormal.z);
+            const axis = new THREE.Vector3(renderNormal.x, renderNormal.y, renderNormal.z);
             if (axis.lengthSq() < 0.000001) {
                 axis.copy(socketPos).sub(contactPos);
             }

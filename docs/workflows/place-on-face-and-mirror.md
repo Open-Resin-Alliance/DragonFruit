@@ -25,6 +25,8 @@ Use **On-Face** and **Mirror** in Prepare mode for fast orientation and symmetry
 
 ### Behavior notes
 
+- Mirror operates on one model. Entering Mirror with multiple models selected
+	keeps only the last model pressed selected.
 - Mirror uses a preview/session flow and then finalizes geometry when leaving the tool.
 - Z-axis mirror may require destructive-operation confirmation if supports are present.
 - Finalization updates model geometry and transform state together.

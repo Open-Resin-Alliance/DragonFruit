@@ -240,13 +240,15 @@ export function KnotRenderer({
                 <meshBasicMaterial transparent opacity={0} depthWrite={false} />
             </mesh>
             <mesh raycast={raycast} userData={{ supportPrimitiveType: 'knot' }}>
-                <sphereGeometry args={[radius, 8, 8]} />
+                {/* Same sphere resolution + matte material as the trunk joint
+                    spheres — auto leaf base knots should read as joints. */}
+                <sphereGeometry args={[radius, 16, 12]} />
                 <meshStandardMaterial
                     color={displayColor}
                     emissive={displayEmissive}
                     emissiveIntensity={displayEmissiveIntensity}
-                    metalness={0.3}
-                    roughness={0.6}
+                    roughness={1}
+                    metalness={0}
                     transparent={effectiveTransparent}
                     opacity={effectiveOpacity}
                     depthWrite={!effectiveTransparent}

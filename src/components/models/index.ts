@@ -27,5 +27,3 @@ export {
   getModelCount,
 } from './modelStore';
 
-// Hooks
-export { useModelSelection } from './hooks/useModelSelection';

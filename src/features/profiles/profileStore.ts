@@ -83,6 +83,29 @@ export type PrinterPreset = {
     pixelSize?: PrinterPixelSize;
     bitDepth?: PrinterBitDepth;
     buildDimensionMode?: PrinterBuildDimensionMode;
+    /**
+     * Concrete variant presetIds for a "family" preset (e.g. an Athena II 16K
+     * entry that resolves to separate 3-bit / 8-bit variants). When set, the
+     * library shows a single card that resolves to one variant on add.
+     */
+    modelVariants?: string[];
+    /**
+     * Optional cleaner display name shown on the library card for a family
+     * preset, e.g. "Athena II 16K" when `name` is "Athena II 16K · 8-bit".
+     * Variant contexts keep using `name`.
+     */
+    libraryDisplayName?: string;
+    /**
+     * Optional HTTP path a plugin network adapter can probe to auto-detect
+     * which variant a physical printer is running. Absent when the preset has
+     * no network-detectable variants.
+     */
+    modelVariantDetectPath?: string;
+    /**
+     * Marks a preset as a hidden variant of a family preset — not shown as a
+     * standalone library card, but still addable via its presetId.
+     */
+    isModelVariant?: boolean;
     buildVolumeMm: {
         width: number;
         depth: number;
@@ -229,6 +252,9 @@ export type MaterialAntiAliasingSettings = {
     ditherEnabled: boolean;
     ditherBitDepth: number;
     ditherDeviceGamma: number;
+    tipOffsetMode: 'disabled' | 'auto' | 'manual';
+    tipOffsetMm: number;
+    tipOffsetDisplayInUi: boolean;
 };
 
 export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettings = {
@@ -256,8 +282,11 @@ export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettin
     selectedLutCurveId: 'default',
     aaOnSupports: false,
     ditherEnabled: false,
-    ditherBitDepth: 3,
-    ditherDeviceGamma: 3.0,
+    ditherBitDepth: 8,
+    ditherDeviceGamma: 2.2,
+    tipOffsetMode: 'disabled',
+    tipOffsetMm: 0.05,
+    tipOffsetDisplayInUi: false,
 };
 
 const MATERIAL_PROFILE_LOCAL_OVERRIDE_KEYS = new Set<keyof MaterialProfile>([
@@ -276,6 +305,13 @@ export type MaterialProfile = {
     printerProfileId: string;
     officialTemplateId?: string;
     officialTemplateVersion?: number;
+    /**
+     * User-applied lock on a non-official (custom) material profile. When true,
+     * the profile is treated as read-only in the UI, mirroring official
+     * profiles, but can be unlocked by the user. Official profiles are always
+     * locked regardless of this flag.
+     */
+    locked?: boolean;
     name: string;
     brand: string;
     currencyCode: string;
@@ -330,12 +366,19 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
     const levelRaw = typeof source.level === 'string' ? source.level.trim().toLowerCase() : defaults.level;
     const levelSteps = Number(levelRaw.endsWith('x') ? levelRaw.slice(0, -1) : levelRaw);
     const level = `${Math.max(2, Math.min(64, Number.isFinite(levelSteps) ? Math.round(levelSteps) : 4))}x`;
+    const tipOffsetMode = source.tipOffsetMode === 'auto' || source.tipOffsetMode === 'manual' 
+        ? source.tipOffsetMode 
+        : defaults.tipOffsetMode;
+
+    const enableCustomSettings = typeof source.enableCustomSettings === 'boolean'
+        ? source.enableCustomSettings
+        : (typeof source.enableOverride === 'boolean' ? source.enableOverride : defaults.enableCustomSettings);
+    const rawEnableOverride = typeof source.enableOverride === 'boolean' ? source.enableOverride : defaults.enableOverride;
+    const enableOverride = enableCustomSettings ? rawEnableOverride : false;
 
     return {
-        enableCustomSettings: typeof source.enableCustomSettings === 'boolean'
-            ? source.enableCustomSettings
-            : (typeof source.enableOverride === 'boolean' ? source.enableOverride : defaults.enableCustomSettings),
-        enableOverride: typeof source.enableOverride === 'boolean' ? source.enableOverride : defaults.enableOverride,
+        enableCustomSettings,
+        enableOverride,
         mode,
         level,
         useCustomLevel: typeof source.useCustomLevel === 'boolean' ? source.useCustomLevel : defaults.useCustomLevel,
@@ -360,6 +403,9 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
         ditherEnabled: typeof source.ditherEnabled === 'boolean' ? source.ditherEnabled : defaults.ditherEnabled,
         ditherBitDepth: Math.round(clampNumber(source.ditherBitDepth, defaults.ditherBitDepth, 2, 7)),
         ditherDeviceGamma: clampNumber(source.ditherDeviceGamma, defaults.ditherDeviceGamma, 0.5, 4.0),
+        tipOffsetMode,
+        tipOffsetMm: Number.isFinite(Number(source.tipOffsetMm)) ? Number(source.tipOffsetMm) : defaults.tipOffsetMm,
+        tipOffsetDisplayInUi: Boolean(source.tipOffsetDisplayInUi ?? defaults.tipOffsetDisplayInUi),
     };
 }
 
@@ -1148,6 +1194,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                         printerProfileId,
                         officialTemplateId: inferredTemplateId || undefined,
                         officialTemplateVersion: normalizeProfileVersion(materialProfile.officialTemplateVersion, normalizeProfileVersion((matchedTemplate as any)?.profileVersion, 1)),
+                        locked: materialProfile.locked === true,
                         name: profile.name,
                         brand: typeof (profile as any).brand === 'string' ? (profile as any).brand : 'Default',
                         currencyCode: typeof (profile as any).currencyCode === 'string' ? (profile as any).currencyCode.toUpperCase() : 'USD',
@@ -1604,6 +1651,39 @@ export function getAvailablePrinterPresets(): PrinterPreset[] {
     return getAllPrinterPresets();
 }
 
+/**
+ * Presets shown as standalone cards in the printer library: the full set minus
+ * hidden variants (`isModelVariant`). Family presets that carry `modelVariants`
+ * remain, and resolve to a concrete variant via {@link getPrinterPresetVariants}.
+ */
+export function getLibraryPrinterPresets(): PrinterPreset[] {
+    ensureHydrated();
+    return getAllPrinterPresets().filter((preset) => preset.isModelVariant !== true);
+}
+
+/**
+ * Resolve the concrete variant presets of a family preset, ordered as declared
+ * in its `modelVariants`. Returns [] for non-family presets or unknown ids.
+ */
+export function getPrinterPresetVariants(presetId: string): PrinterPreset[] {
+    ensureHydrated();
+    const presets = getAllPrinterPresets();
+    const family = presets.find((preset) => preset.presetId === presetId);
+    if (!family?.modelVariants?.length) return [];
+    return family.modelVariants
+        .map((variantId) => presets.find((preset) => preset.presetId === variantId))
+        .filter((preset): preset is PrinterPreset => preset != null);
+}
+
+/**
+ * Match a detected bit-depth (e.g. from a plugin `printerData` probe) to a
+ * variant preset by comparing against each variant's declared `bitDepth.bits`.
+ */
+export function matchPrinterVariantByBitDepth(variants: PrinterPreset[], detectedBitDepth: number | null | undefined): PrinterPreset | null {
+    if (!Number.isFinite(detectedBitDepth)) return null;
+    return variants.find((variant) => variant.bitDepth?.bits === detectedBitDepth) ?? null;
+}
+
 export function addPrinterProfileFromPreset(presetId: string): string {
     ensureHydrated();
     const preset = getAllPrinterPresets().find((item) => item.presetId === presetId);
@@ -1693,6 +1773,7 @@ export function addMaterialProfile(
         officialTemplateVersion: Number.isFinite(Number((partial as any)?.officialTemplateVersion))
             ? normalizeProfileVersion((partial as any).officialTemplateVersion, 1)
             : undefined,
+        locked: (partial as any)?.locked === true,
         name: partial?.name?.trim() || `Material ${state.materialProfiles.length + 1}`,
         brand: partial?.brand?.trim() || 'Default',
         currencyCode: partial?.currencyCode?.trim().toUpperCase() || 'USD',
@@ -2010,12 +2091,14 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
         if (profile.id !== id) return profile;
         // Official template materials are read-only; only internal update paths (applyOfficialMaterialProfileUpdate) may change them.
         const isOfficial = typeof profile.officialTemplateId === 'string' && profile.officialTemplateId.trim().length > 0;
-        if (isOfficial) return profile;
+        // User-locked custom materials are read-only too; only setMaterialProfileLocked may change them.
+        if (isOfficial || profile.locked === true) return profile;
         changed = true;
         return {
             ...profile,
             ...updates,
             printerProfileId: profile.printerProfileId,
+            locked: profile.locked,
             brand: updates.brand !== undefined ? updates.brand : profile.brand,
             currencyCode: updates.currencyCode !== undefined ? updates.currencyCode.toUpperCase() : profile.currencyCode,
             name: updates.name !== undefined ? updates.name : profile.name,
@@ -2025,6 +2108,34 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
             antiAliasingSettings: updates.antiAliasingSettings !== undefined
                 ? sanitizeMaterialAntiAliasingSettings(updates.antiAliasingSettings)
                 : profile.antiAliasingSettings,
+        };
+    });
+
+    if (!changed) return;
+
+    setState(ensureActiveMaterialForActivePrinter({
+        ...state,
+        materialProfiles,
+    }));
+}
+
+/**
+ * Lock or unlock a user-made (non-official) material profile. Official
+ * profiles are always locked and cannot be toggled here.
+ */
+export function setMaterialProfileLocked(id: string, locked: boolean): void {
+    ensureHydrated();
+    let changed = false;
+
+    const materialProfiles = state.materialProfiles.map((profile) => {
+        if (profile.id !== id) return profile;
+        const isOfficial = typeof profile.officialTemplateId === 'string' && profile.officialTemplateId.trim().length > 0;
+        if (isOfficial) return profile;
+        if (profile.locked === locked) return profile;
+        changed = true;
+        return {
+            ...profile,
+            locked,
         };
     });
 

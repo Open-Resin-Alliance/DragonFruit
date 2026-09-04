@@ -90,7 +90,6 @@ export function IslandOverlayControls({
             {enabled ? 'ON' : 'OFF'}
           </button>
         )}
-        hideDivider={!expanded}
       />
 
       {expanded && (

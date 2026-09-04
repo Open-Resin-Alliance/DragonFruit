@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import * as THREE from 'three';
 import { computeLoopsAtZ } from '../Slice2D';
 
-test('Slicing Performance Benchmark', (t) => {
+test('Slicing Performance Benchmark', () => {
     // Create a high-res sphere (approx 10k triangles)
     const geometry = new THREE.SphereGeometry(50, 100, 100);
     const numTriangles = geometry.getAttribute('position').count / 3;

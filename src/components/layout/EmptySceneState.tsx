@@ -4,13 +4,20 @@ import React from 'react';
 import { FolderInput, Loader2, Upload, Printer, Wrench } from 'lucide-react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
-import { Trans } from '@lingui/react/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import type { RecentOpenedFileEntry } from '@/features/scene/useSceneCollectionManager';
+import { Tooltip } from '@/components/ui/Tooltip';
+import { useSceneFileExtensions, useSceneFileExtensionLabels, useSceneFileInputAccept } from '@/features/plugins/pluginFileTypeExtensions';
 
 const BUILD_CHANNEL = (process.env.NEXT_PUBLIC_BUILD_CHANNEL ?? '').toLowerCase();
 const APP_VERSION = (process.env.NEXT_PUBLIC_APP_VERSION ?? '').toLowerCase();
+const GIT_COMMIT = process.env.NEXT_PUBLIC_GIT_COMMIT ?? '';
+const GIT_REF = process.env.NEXT_PUBLIC_GIT_REF ?? '';
 const IS_BETA_BUILD = BUILD_CHANNEL.includes('beta') || APP_VERSION.includes('beta');
+// Full build identity (branch @ full commit) — shown in the hover tooltip and copied on click.
+const FULL_BUILD_LABEL = GIT_COMMIT
+  ? `${GIT_REF ? `${GIT_REF} @ ` : ''}${GIT_COMMIT}`
+  : '';
 
 type EmptySceneStateProps = {
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -20,6 +27,7 @@ type EmptySceneStateProps = {
   onDropMeshFiles?: (files: File[]) => void | Promise<void>;
   recentOpenedFiles?: RecentOpenedFileEntry[];
   onReopenRecentFile?: (entryId: string) => Promise<boolean> | boolean;
+  onClearRecentFiles?: () => void;
   isLoading?: boolean;
   loadingLabel?: string;
   loadingDetail?: string;
@@ -121,12 +129,20 @@ function getFileExtension(name: string): string {
   return trimmed.slice(dotIndex);
 }
 
-function isSupportedDropName(name: string): boolean {
+const MESH_DROP_EXTENSIONS = ['.stl', '.obj', '.3mf'];
+
+function isSupportedDropName(name: string, sceneExtensions: readonly string[]): boolean {
   const ext = getFileExtension(name);
-  return ext === '.stl' || ext === '.obj' || ext === '.3mf' || ext === '.voxl' || ext === '.lys';
+  if (MESH_DROP_EXTENSIONS.includes(ext)) return true;
+  // Scene formats come from the plugin registry, so a newly registered plugin
+  // is droppable without touching this list.
+  return sceneExtensions.some((sceneExt) => ext === `.${sceneExt}`);
 }
 
-function getDropSupportStateFromDataTransfer(dataTransfer: DataTransfer | null): 'supported' | 'unsupported' | 'unknown' {
+function getDropSupportStateFromDataTransfer(
+  dataTransfer: DataTransfer | null,
+  sceneExtensions: readonly string[],
+): 'supported' | 'unsupported' | 'unknown' {
   if (!dataTransfer) return 'unknown';
 
   const fileNames = new Set<string>();
@@ -188,7 +204,7 @@ function getDropSupportStateFromDataTransfer(dataTransfer: DataTransfer | null):
 
   if (fileNames.size === 0) return 'unknown';
 
-  const hasSupported = Array.from(fileNames).some((name) => isSupportedDropName(name));
+  const hasSupported = Array.from(fileNames).some((name) => isSupportedDropName(name, sceneExtensions));
   return hasSupported ? 'supported' : 'unsupported';
 }
 
@@ -200,6 +216,7 @@ export function EmptySceneState({
   onDropMeshFiles,
   recentOpenedFiles = [],
   onReopenRecentFile,
+  onClearRecentFiles,
   isLoading = false,
   loadingLabel,
   loadingDetail,
@@ -208,7 +225,20 @@ export function EmptySceneState({
   onUseWithoutPrinter,
 }: EmptySceneStateProps) {
   const { _ } = useLingui();
+  const sceneExtensions = useSceneFileExtensions();
+  const sceneExtensionLabels = useSceneFileExtensionLabels();
+  const sceneFileAccept = useSceneFileInputAccept();
   const [taglineDescriptor] = React.useState(() => TAGLINES[Math.floor(Math.random() * TAGLINES.length)]);
+  const [copied, setCopied] = React.useState(false);
+  const handleCopyBuildInfo = React.useCallback(async () => {
+    // Full build identity in one string — what a bug report needs.
+    const buildInfo = `DragonFruit ${APP_VERSION} (${BUILD_CHANNEL})${FULL_BUILD_LABEL ? ` — ${FULL_BUILD_LABEL}` : ''}`;
+    try {
+      await navigator.clipboard.writeText(buildInfo);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* clipboard unavailable */ }
+  }, []);
   const [isDropActive, setIsDropActive] = React.useState(false);
   const [isDropUnsupported, setIsDropUnsupported] = React.useState(false);
   const [reopeningEntryId, setReopeningEntryId] = React.useState<string | null>(null);
@@ -308,7 +338,7 @@ export function EmptySceneState({
     if (!isLikelyFileDrag(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
-    const supportState = getDropSupportStateFromDataTransfer(e.dataTransfer);
+    const supportState = getDropSupportStateFromDataTransfer(e.dataTransfer, sceneExtensions);
     if (supportState === 'unsupported') {
       setIsDropUnsupported(true);
     } else if (supportState === 'supported') {
@@ -316,13 +346,13 @@ export function EmptySceneState({
     }
     setIsDropActive(true);
     scheduleDropAutoClear();
-  }, [isLikelyFileDrag, scheduleDropAutoClear]);
+  }, [isLikelyFileDrag, scheduleDropAutoClear, sceneExtensions]);
 
   const handleDragOver = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
     if (!isLikelyFileDrag(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
-    const supportState = getDropSupportStateFromDataTransfer(e.dataTransfer);
+    const supportState = getDropSupportStateFromDataTransfer(e.dataTransfer, sceneExtensions);
     if (supportState === 'unsupported') {
       setIsDropUnsupported(true);
       e.dataTransfer.dropEffect = 'none';
@@ -334,7 +364,7 @@ export function EmptySceneState({
     }
     setIsDropActive(true);
     scheduleDropAutoClear();
-  }, [isLikelyFileDrag, scheduleDropAutoClear]);
+  }, [isLikelyFileDrag, scheduleDropAutoClear, sceneExtensions]);
 
   const handleDragLeave = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -350,7 +380,7 @@ export function EmptySceneState({
     const files = Array.from(e.dataTransfer.files ?? []);
     if (files.length === 0) return;
 
-    const hasSupportedFiles = files.some((file) => isSupportedDropName(file.name));
+    const hasSupportedFiles = files.some((file) => isSupportedDropName(file.name, sceneExtensions));
     if (!hasSupportedFiles) {
       setIsDropActive(true);
       setIsDropUnsupported(true);
@@ -367,7 +397,7 @@ export function EmptySceneState({
     clearDropActive();
     if (!onDropMeshFiles) return;
     void onDropMeshFiles(files);
-  }, [clearDropActive, onDropMeshFiles]);
+  }, [clearDropActive, onDropMeshFiles, sceneExtensions]);
 
   const handleReopenRecentFile = React.useCallback(async (entryId: string) => {
     if (!onReopenRecentFile) return;
@@ -385,7 +415,7 @@ export function EmptySceneState({
     } finally {
       setReopeningEntryId(null);
     }
-  }, [onReopenRecentFile]);
+  }, [_, onReopenRecentFile]);
 
   const triggerMeshPicker = React.useCallback(() => {
     if (onLoadMeshClick) {
@@ -412,30 +442,43 @@ export function EmptySceneState({
   const shouldShowFirstTimeOnboarding = showFirstTimeOnboarding && !isLoading;
 
   return (
-    <div className="absolute inset-0 top-14 z-30 flex items-center justify-center pointer-events-none">
+    <div className="absolute inset-0 top-[var(--topbar-height)] z-30 flex items-center justify-center pointer-events-none">
       <div className="ui-empty-state pointer-events-auto">
-        {IS_BETA_BUILD ? (
-          <div
-            className="mb-2 inline-flex rounded-full border-2 px-3.5 py-1 text-[13px] font-black uppercase tracking-[0.2em]"
-            style={{
+        <Tooltip
+          content={
+            <span className="whitespace-pre-line">
+              {_(msg`Click to copy build info`)}{FULL_BUILD_LABEL ? `\n${FULL_BUILD_LABEL}` : ''}
+            </span>
+          }
+        >
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={handleCopyBuildInfo}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCopyBuildInfo(); } }}
+            className="mb-2 inline-flex cursor-pointer items-center rounded-full border px-3.5 py-1 text-[13px] font-bold tabular-nums transition-colors"
+            style={copied ? {
+              color: '#2d8a4e',
+              borderColor: '#2d8a4e',
+              background: 'rgba(45,138,78,0.12)',
+              boxShadow: '0 0 6px rgba(45,138,78,0.3)',
+            } : IS_BETA_BUILD ? {
               color: isLightTheme ? '#9a3412' : '#fdba74',
-              borderColor: 'color-mix(in srgb, #f97316, var(--border-subtle) 22%)',
+              borderColor: 'color-mix(in srgb, #f97316, var(--border-subtle) 40%)',
               background: isLightTheme
-                ? 'color-mix(in srgb, #f97316, var(--surface-1) 88%)'
-                : 'color-mix(in srgb, #f97316, transparent 96%)',
-              textShadow: isLightTheme ? 'none' : '0 0 4px color-mix(in srgb, #fb923c, transparent 66%)',
-              boxShadow: isLightTheme
-                ? 'none'
-                : '0 0 0 1px color-mix(in srgb, #f97316, transparent 62%), 0 0 10px color-mix(in srgb, #fb923c, transparent 74%)',
+                ? 'color-mix(in srgb, #f97316, var(--surface-1) 90%)'
+                : 'color-mix(in srgb, #f97316, transparent 94%)',
+              boxShadow: isLightTheme ? 'none' : '0 0 6px color-mix(in srgb, #f97316, transparent 84%)',
+            } : {
+              color: 'var(--accent)',
+              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)',
+              background: 'color-mix(in srgb, var(--accent), transparent 94%)',
+              boxShadow: '0 0 6px color-mix(in srgb, var(--accent), transparent 84%)',
             }}
           >
-            {_(msg({ message: 'BETA VERSION', comment: 'Badge shown in the top of the empty workspace when the app is a beta build. Uppercase label.' }))}
-          </div>
-        ) : (
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>
-            {_(msg`Empty workspace`)}
-          </div>
-        )}
+            {copied ? '✓ Copied!' : `Version ${APP_VERSION}${IS_BETA_BUILD ? ' — Beta' : ''}`}
+          </span>
+        </Tooltip>
         <h1 className="ui-empty-title" suppressHydrationWarning>{_(taglineDescriptor)}</h1>
         <p className="ui-empty-text" style={{ maxWidth: 560, marginLeft: 'auto', marginRight: 'auto' }}>
           {_(msg`Bring in a mesh or scene to start preparing, analyzing, supporting, and exporting your print.`)}
@@ -525,59 +568,43 @@ export function EmptySceneState({
           </>
         ) : (
           <>
-            <div
-              className="rounded-lg border p-3 text-left"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--border-subtle), transparent 8%)',
-                background: 'color-mix(in srgb, var(--surface-1), transparent 6%)',
-              }}
-            >
-              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                {_(msg({ message: 'Import', comment: 'Section header label above the file import buttons. Noun, not imperative verb.' }))}
-              </div>
-              <div className={`grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}>
+            <div className={`grid gap-2 w-full ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}>
+              <button
+                type="button"
+                onClick={triggerMeshPicker}
+                className="group cursor-pointer rounded-md border px-3 py-3 text-center transition-colors"
+                style={{
+                  background: 'var(--primary-button-surface)',
+                  borderColor: 'color-mix(in srgb, var(--primary-button-surface), white 16%)',
+                }}
+              >
+                <div className="mb-1 inline-flex items-center justify-center gap-1.5 text-sm font-semibold w-full" style={{ color: 'var(--accent-contrast)' }}>
+                  <Upload className="w-4 h-4" />
+                  <span>{_(msg`Load Mesh`)}</span>
+                </div>
+                <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-contrast), black 16%)' }}>
+                  {MESH_DROP_EXTENSIONS.join(' • ')}
+                </div>
+              </button>
+              {onImportSceneChange && (
                 <button
                   type="button"
-                  onClick={triggerMeshPicker}
-                  className="group cursor-pointer rounded-md border px-3 py-3 text-left transition-colors"
+                  onClick={triggerScenePicker}
+                  className="group cursor-pointer rounded-md border px-3 py-3 text-center transition-colors"
                   style={{
-                    background: 'var(--primary-button-surface)',
-                    borderColor: 'color-mix(in srgb, var(--primary-button-surface), white 16%)',
+                    background: 'var(--secondary-button-surface)',
+                    borderColor: 'color-mix(in srgb, var(--secondary-button-surface), white 16%)',
                   }}
                 >
-                  <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold" style={{ color: 'var(--accent-contrast)' }}>
-                    <Upload className="w-4 h-4" />
-                    <span>{_(msg`Load mesh`)}</span>
+                  <div className="mb-1 inline-flex items-center justify-center gap-1.5 text-sm font-semibold w-full" style={{ color: 'var(--accent-secondary-contrast)' }}>
+                    <FolderInput className="w-4 h-4" />
+                    <span>{_(msg`Import Scene`)}</span>
                   </div>
-                  <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-contrast), black 16%)' }}>
-                    {_(msg`Mesh files (.stl, .obj, .3mf)`)}
+                  <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-secondary-contrast), black 18%)' }}>
+                    {sceneExtensionLabels.map((label) => `.${label.toLowerCase()}`).join(' • ')}
                   </div>
                 </button>
-
-                {onImportSceneChange && (
-                  <button
-                    type="button"
-                    onClick={triggerScenePicker}
-                    className="group cursor-pointer rounded-md border px-3 py-3 text-left transition-colors"
-                    style={{
-                      background: 'var(--secondary-button-surface)',
-                      borderColor: 'color-mix(in srgb, var(--secondary-button-surface), white 16%)',
-                    }}
-                  >
-                    <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold" style={{ color: 'var(--accent-secondary-contrast)' }}>
-                      <FolderInput className="w-4 h-4" />
-                      <span>{_(msg`Import scene`)}</span>
-                    </div>
-                    <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-secondary-contrast), black 18%)' }}>
-                      {_(msg`Scene files (.voxl, .lys)`)}
-                    </div>
-                  </button>
-                )}
-              </div>
-
-              <div className="mt-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                <Trans comment="Tip shown below the import buttons. <0> wraps the highlighted label 'Load mesh'; <1> wraps 'Import scene'. These match the button labels above verbatim (same casing) — keep them consistent with however you translated those buttons. Keep both placeholders in your translation.">Tip: Start with <span style={{ color: 'var(--text-strong)' }}>Load mesh</span> for clean prints, or <span style={{ color: 'var(--text-strong)' }}>Import scene</span> to continue an existing setup.</Trans>
-              </div>
+              )}
             </div>
 
             <div
@@ -589,25 +616,37 @@ export function EmptySceneState({
             >
               <div className="flex items-center justify-between text-[10px]" style={{ color: 'var(--text-muted)' }}>
                 <span className="font-semibold uppercase tracking-wide">{_(msg`Recent files`)}</span>
-                <span
-                  className="inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold"
-                  style={{
-                    color: 'var(--text-muted)',
-                    background: 'color-mix(in srgb, var(--surface-2), transparent 26%)',
-                    border: '1px solid color-mix(in srgb, var(--border-subtle), transparent 20%)',
-                  }}
-                >
-                  {Math.min(recentOpenedFiles.length, 6)}
-                </span>
+                <div className="flex items-center gap-1.5">
+                  {onClearRecentFiles && recentOpenedFiles.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={onClearRecentFiles}
+                      className="rounded px-1.5 py-0.5 font-semibold uppercase tracking-wide transition-colors hover:bg-white/10"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      {_(msg`Clear`)}
+                    </button>
+                  )}
+                  <span
+                    className="inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold"
+                    style={{
+                      color: 'var(--text-muted)',
+                      background: 'color-mix(in srgb, var(--surface-2), transparent 26%)',
+                      border: '1px solid color-mix(in srgb, var(--border-subtle), transparent 20%)',
+                    }}
+                  >
+                    {Math.min(recentOpenedFiles.length, 8)}
+                  </span>
+                </div>
               </div>
 
               {recentOpenedFiles.length === 0 ? (
-                <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                  {_(msg`No recent files yet.`)}
+                <div className="mt-1.5 flex h-[38px] items-center justify-center rounded-md text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                  {_(msg`No recent files`)}
                 </div>
               ) : (
                 <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-                  {recentOpenedFiles.slice().reverse().slice(0, 6).map((entry) => {
+                  {recentOpenedFiles.slice().reverse().slice(0, 8).map((entry) => {
                     const sizeLabel = formatBytes(entry.sizeBytes);
                     const isBusy = reopeningEntryId === entry.id;
                     const period = formatRecentOpenedAt(entry.openedAt, _);
@@ -707,12 +746,13 @@ export function EmptySceneState({
                         : '1px solid color-mix(in srgb, var(--accent), var(--border-subtle) 56%)',
                     }}
                   >
-                    STL • OBJ • 3MF • VOXL • LYS
+                    {['STL', 'OBJ', '3MF', ...sceneExtensionLabels].join(' • ')}
                   </span>
                 </div>
                 {isDropUnsupported && (
                   <div className="mt-1 text-[11px]" style={{ color: 'var(--danger)' }}>
-                    {_(msg`Unsupported format detected. Please drop STL, OBJ, 3MF, VOXL, or LYS files.`)}
+                    {_(msg`Unsupported format detected.`)}{' '}
+                    {['STL', 'OBJ', '3MF', ...sceneExtensionLabels].join(', ')}
                   </div>
                 )}
               </div>
@@ -733,7 +773,7 @@ export function EmptySceneState({
           <input
             id="empty-state-scene-file-input"
             type="file"
-            accept=".voxl,.lys,.zip"
+            accept={sceneFileAccept}
             multiple
             onChange={onImportSceneChange}
             className="hidden"

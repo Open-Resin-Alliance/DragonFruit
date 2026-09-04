@@ -7,7 +7,7 @@
 
 "use client";
 
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { useSelection } from './SelectionContext';
 import type { SupportMode } from '@/supports/types';
 

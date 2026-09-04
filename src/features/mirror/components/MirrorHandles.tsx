@@ -32,26 +32,6 @@ export function MirrorHandles({ activeModelId, onMirror }: MirrorHandlesProps) {
     };
   }, []);
 
-  // Get center position for view culling
-  const centerPos = React.useMemo(() => {
-    if (placements.length === 0) return new THREE.Vector3();
-    let minX = Infinity, minY = Infinity, minZ = Infinity;
-    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-    for (const p of placements) {
-      minX = Math.min(minX, p.position.x);
-      minY = Math.min(minY, p.position.y);
-      minZ = Math.min(minZ, p.position.z);
-      maxX = Math.max(maxX, p.position.x);
-      maxY = Math.max(maxY, p.position.y);
-      maxZ = Math.max(maxZ, p.position.z);
-    }
-    return new THREE.Vector3(
-      (minX + maxX) / 2,
-      (minY + maxY) / 2,
-      (minZ + maxZ) / 2
-    );
-  }, [placements]);
-
   useFrame(() => {
     const meshGroup = findActiveModelGroup(scene, activeModelId);
     if (!meshGroup) {
@@ -123,8 +103,8 @@ export function MirrorHandles({ activeModelId, onMirror }: MirrorHandlesProps) {
   };
 
   const isDimmed = (axis: MirrorAxis) => activeAxis !== null && activeAxis !== axis;
-  const isHidden = (axis: MirrorAxis) => false;
-  const opacityScale = (axis: MirrorAxis) => isGlobalDragging ? 0.6 : 1;
+  const isHidden = () => false;
+  const opacityScale = () => isGlobalDragging ? 0.6 : 1;
 
   return (
     <group>
@@ -137,9 +117,9 @@ export function MirrorHandles({ activeModelId, onMirror }: MirrorHandlesProps) {
           isHovered={hoveredAxis === p.axis}
           isActive={activeAxis === p.axis}
           isDimmed={isDimmed(p.axis)}
-          isHidden={isHidden(p.axis)}
+          isHidden={isHidden()}
           suppressHover={isGlobalDragging}
-          opacityScale={opacityScale(p.axis)}
+          opacityScale={opacityScale()}
           onPointerEnter={() => handlePointerEnter(p.axis)}
           onPointerLeave={handlePointerLeave}
           onClick={() => handleMirrorClick(p.axis)}

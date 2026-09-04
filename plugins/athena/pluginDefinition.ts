@@ -31,6 +31,7 @@ const ATHENA_NANODLP_NETWORK_ADAPTER: PluginNetworkUiAdapterContract = {
     discover: 'nanodlp/discover',
     materials: 'nanodlp/materials',
     materialsEdit: 'nanodlp/materials/edit',
+    printerData: 'nanodlp/printerData',
   },
   defaultLocalHostnames: ['nanodlp.local', 'athena.local', 'printer.local', 'resin.local'],
   remoteMaterialEditingWipNotice: 'Remote material editing for NanoDLP is not yet available.',

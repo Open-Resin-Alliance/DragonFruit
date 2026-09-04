@@ -9,6 +9,7 @@ import { getRaftSettings, subscribeToRaftStore } from './Rafts/Crenelated/RaftSt
 import type { RaftSettings } from './Rafts/Crenelated/RaftTypes';
 import { buildSolidRaftPreviewMeshes } from './Settings/AnatomyPreview/PreviewTypes/Raft/buildSolidRaftPreviewMeshes';
 import { buildLineRaftPreviewMeshes } from './Settings/AnatomyPreview/PreviewTypes/Raft/buildLineRaftPreviewMeshes';
+import { MARQUEE_CANDIDATE_TINT_FACTOR } from '@/utils/marqueeCandidateTint';
 import {
   collectRaftBaseCirclesByModel,
   fromRaftModelKey,
@@ -22,12 +23,17 @@ interface RaftProxyMeshLayerProps {
   activeModelId?: string | null;
   selectedModelIds?: string[];
   hoverModelId?: string | null;
+  /** Models the marquee would take if the drag ended now. */
+  marqueeCandidateModelIds?: readonly string[];
   modelFilterId?: string | null;
   excludeModelId?: string | null;
   excludeModelIds?: string[];
   ghostOpacity?: number;
   ghostRenderOrder?: number;
   onModelPointerSelect?: (modelId: string) => void;
+  /** In Select mode, a pointer-down on a raft reports a potential model XY-drag
+   *  start (model + screen coords). The scene owns the drag. */
+  onModelPointerDragStart?: (modelId: string, clientX: number, clientY: number) => void;
   enablePointerSelection?: boolean;
   colorized?: boolean;
   hoverized?: boolean;
@@ -60,6 +66,7 @@ type RaftProxyCacheEntry = {
 };
 
 let raftProxyCache: RaftProxyCacheEntry | null = null;
+const EMPTY_RAFT_MARQUEE_CANDIDATES: readonly string[] = Object.freeze([]);
 const RAFT_BASE_COLOR = '#a3a3a3';
 const SOLID_BOTTOM_TINT_COLOR = '#3b82f6';
 const LINE_BOTTOM_TINT_COLOR = '#f97316';
@@ -175,12 +182,14 @@ export function RaftProxyMeshLayer({
   activeModelId = null,
   selectedModelIds = [],
   hoverModelId = null,
+  marqueeCandidateModelIds = EMPTY_RAFT_MARQUEE_CANDIDATES,
   modelFilterId = null,
   excludeModelId = null,
   excludeModelIds = [],
   ghostOpacity = 1,
   ghostRenderOrder = 0,
   onModelPointerSelect,
+  onModelPointerDragStart,
   enablePointerSelection = true,
   colorized = true,
   hoverized = false,
@@ -209,6 +218,10 @@ export function RaftProxyMeshLayer({
   }, [clipLower, clipUpper]);
 
   const effectiveHoverModelId = passive ? null : hoverModelId;
+  const marqueeCandidateModelIdSet = React.useMemo(
+    () => new Set(passive ? [] : marqueeCandidateModelIds),
+    [marqueeCandidateModelIds, passive],
+  );
 
   const hasSelectedModels = selectedModelIdSet.size > 0;
   const raftSignature = React.useMemo(() => buildRaftSignature(raft), [raft]);
@@ -305,6 +318,9 @@ export function RaftProxyMeshLayer({
       if (!modelId) return colorized ? (hoverized ? 0.5 : 1) : 0;
       if (!colorized) return 0;
       if (selectedModelIdSet.has(modelId)) return 1;
+      // A model the marquee is about to take tints like a hovered one, but
+      // lighter: model, supports and raft all light up together.
+      if (marqueeCandidateModelIdSet.has(modelId)) return 0.5 * MARQUEE_CANDIDATE_TINT_FACTOR;
       if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
       if (hasSelectedModels) return 0;
       return hoverized ? 0.5 : 1;
@@ -349,6 +365,7 @@ export function RaftProxyMeshLayer({
     geometriesByModel,
     hasSelectedModels,
     hoverized,
+    marqueeCandidateModelIdSet,
     modelFilterId,
     selectedModelIdSet,
   ]);
@@ -409,7 +426,7 @@ export function RaftProxyMeshLayer({
   const handleClick = React.useCallback((event: any, modelId?: string) => {
     if (!pointerEnabled) return;
     if (!modelId || !onModelPointerSelect) return;
-    
+
     // Don't select model if a gizmo handle is being interacted with
     if (hit.category === 'gizmo') return;
 
@@ -421,6 +438,16 @@ export function RaftProxyMeshLayer({
 
     onModelPointerSelect(modelId);
   }, [hit.category, onModelPointerSelect, pointerEnabled]);
+
+  const handlePointerDown = React.useCallback((event: any, modelId?: string) => {
+    if (!pointerEnabled || !onModelPointerDragStart) return;
+    if (!modelId) return;
+    if (hit.category === 'gizmo') return;
+    const native = event.nativeEvent as PointerEvent | undefined;
+    if (native?.ctrlKey || native?.metaKey || native?.shiftKey) return;
+    if (event.button !== 0) return;
+    onModelPointerDragStart(modelId, event.clientX, event.clientY);
+  }, [hit.category, onModelPointerDragStart, pointerEnabled]);
 
   const handlePointerMove = React.useCallback((event: any, modelId?: string) => {
     if (!pointerEnabled) return;
@@ -452,6 +479,7 @@ export function RaftProxyMeshLayer({
               geometry={entry.bottomGeometry}
               renderOrder={ghostRenderOrder}
               onClick={pointerEnabled ? (event) => handleClick(event, entry.modelId) : undefined}
+              onPointerDown={pointerEnabled && onModelPointerDragStart ? (event) => handlePointerDown(event, entry.modelId) : undefined}
               onPointerMove={pointerEnabled ? (event) => handlePointerMove(event, entry.modelId) : undefined}
               onPointerOut={pointerEnabled ? handlePointerOut : undefined}
             >
@@ -474,6 +502,7 @@ export function RaftProxyMeshLayer({
               geometry={entry.wallGeometry}
               renderOrder={ghostRenderOrder}
               onClick={pointerEnabled ? (event) => handleClick(event, entry.modelId) : undefined}
+              onPointerDown={pointerEnabled && onModelPointerDragStart ? (event) => handlePointerDown(event, entry.modelId) : undefined}
               onPointerMove={pointerEnabled ? (event) => handlePointerMove(event, entry.modelId) : undefined}
               onPointerOut={pointerEnabled ? handlePointerOut : undefined}
             >

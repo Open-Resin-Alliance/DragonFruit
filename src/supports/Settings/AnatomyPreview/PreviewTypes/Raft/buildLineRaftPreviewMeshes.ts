@@ -17,7 +17,10 @@ export function buildLineRaftPreviewMeshes(args: {
     if (nodes2d.length === 0) return null;
 
     const chamferInset = Math.max(0, args.raftSettings.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, args.raftSettings.chamferAngle))));
-    const profile = computeFootprint(args.circles, { marginMm: 0.2 + chamferInset, samplesPerCircle: 24 });
+    const wallInset = args.raftSettings.wallEnabled ? Math.max(0, args.raftSettings.wallThickness) : 0;
+    const dynamicMargin = 0.2 + Math.max(chamferInset, wallInset);
+
+    const profile = computeFootprint(args.circles, { marginMm: dynamicMargin, samplesPerCircle: 24 });
     const hasBorderRing = !!profile && profile.length >= 3;
 
     const edgePairs = buildLineRaftEdgePairs(nodes2d, {

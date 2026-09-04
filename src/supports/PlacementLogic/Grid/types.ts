@@ -8,6 +8,7 @@ export type GridNodeKey = string;
 
 export type GridPlacementRejectReason =
     | 'KNOT_ABOVE_TIP'
+    | 'ANCHOR_BELOW_ROOT'
     | 'NO_HOST_SEGMENT'
     | 'MODEL_MISMATCH'
     | 'NO_VALID_ATTACHMENT'
@@ -55,6 +56,10 @@ export type GridPlacementDecision =
         nodeKey: GridNodeKey;
         reason: GridPlacementRejectReason;
         trunkBuild?: TrunkBuildResult;
+        /** Optional ghost preview for rejections that already built geometry
+         * (e.g. anchors). Carries the reject reason as `error` so the hover
+         * tooltip renders. */
+        supportData?: SupportData;
     };
 
 export interface DecideGridPlacementArgs {

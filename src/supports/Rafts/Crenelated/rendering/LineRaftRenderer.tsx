@@ -262,7 +262,10 @@ export default function LineRaftRenderer({
     // Important: the border is chamfered (bottom inset). To ensure the *bottom* of the chamfer
     // still covers the support disks, we expand the footprint by the chamfer inset amount.
     const chamferInset = Math.max(0, raft.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raft.chamferAngle))));
-    const profile = computeFootprint(circles, { marginMm: 0.2 + chamferInset, samplesPerCircle: 24 });
+    const wallInset = raft.wallEnabled ? Math.max(0, raft.wallThickness) : 0;
+    const dynamicMargin = 0.2 + Math.max(chamferInset, wallInset);
+
+    const profile = computeFootprint(circles, { marginMm: dynamicMargin, samplesPerCircle: 24 });
     const hasBorderRing = !!profile && profile.length >= 3;
 
     const edgePairs = buildLineRaftEdgePairs(nodes2d, {

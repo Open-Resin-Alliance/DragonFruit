@@ -76,11 +76,11 @@ export function PrintingPreviewPane({
 }: PrintingPreviewPaneProps) {
   return (
     <div
-      className="h-full w-1/2 min-w-0 min-h-0 grid overflow-hidden"
-      style={{ gridTemplateColumns: '56px minmax(0, 1fr)', background: 'var(--surface-0)' }}
+      className="absolute right-0 w-1/2 min-w-0 grid overflow-hidden"
+      style={{ top: 'var(--topbar-height)', bottom: 0, gridTemplateColumns: '56px minmax(0, 1fr)', background: 'var(--surface-0)' }}
     >
       <div
-        className="relative z-20 h-full overflow-visible border-r px-0 py-1.5"
+        className="relative z-20 h-full overflow-visible border-r px-0 pt-1.5 pb-0"
         style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}
       >
         <LayerSlider

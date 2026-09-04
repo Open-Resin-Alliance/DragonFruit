@@ -40,7 +40,7 @@ export function VisualSettingsPanel({
   }, [onLayerIndexChange]);
 
   return (
-    <Card className="h-[calc(100vh-var(--topbar-height)-24px)] flex flex-col">
+    <Card className="h-[calc(100vh-var(--topbar-height)-8px)] flex flex-col">
       <div className="px-0 py-1 min-h-0 flex-1 flex flex-col">
         <div className="flex-1 min-h-[220px] overflow-visible">
           <LayerSlider

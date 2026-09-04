@@ -2,12 +2,6 @@
 
 import * as THREE from 'three';
 
-export type XZLoopPrism = {
-  loops: THREE.Vector2[][]; // loops in (x, -z) space to match CrossSectionCap/IslandScan
-  y0: number;               // inclusive bottom
-  y1: number;               // inclusive top
-};
-
 type ColorStorageArray = Float32Array | Uint8Array | Uint8ClampedArray;
 
 function clamp01(value: number): number {
@@ -361,83 +355,8 @@ export function applyIslandGradientSinglePass(
   return painted;
 }
 
-function pointInPolygon(p: THREE.Vector2, loop: THREE.Vector2[]): boolean {
-  let inside = false;
-  for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
-    const xi = loop[i].x, yi = loop[i].y;
-    const xj = loop[j].x, yj = loop[j].y;
-    const intersect = ((yi > p.y) !== (yj > p.y)) && (p.x < (xj - xi) * (p.y - yi) / ((yj - yi) || 1e-9) + xi);
-    if (intersect) inside = !inside;
-  }
-  return inside;
-}
-
-function isPointInsideAnyLoopXZ(pXZ: THREE.Vector2, loops: THREE.Vector2[][]): boolean {
-  for (const loop of loops) {
-    if (loop.length < 3) continue;
-    if (pointInPolygon(pXZ, loop)) return true;
-  }
-  return false;
-}
-
 export function clearPaintToBase(geometry: THREE.BufferGeometry, baseColor: THREE.Color) {
   ensureColorAttribute(geometry, baseColor);
-}
-
-export function applyTintPrisms(
-  geometry: THREE.BufferGeometry,
-  baseColor: THREE.Color,
-  prisms: XZLoopPrism[],
-  tint: THREE.Color,
-  strength: number, // 0..1, lerp to tint
-) {
-  // Initialize base if needed
-  ensureColorAttribute(geometry, baseColor);
-  const pos = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
-  const col = geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
-  if (!pos || !col) return;
-
-  const arrPos = pos.array as Float32Array;
-  const arrCol = col.array as ColorStorageArray;
-  const useByteColors = isByteColorBuffer(col);
-  const tmpColor = new THREE.Color();
-
-  const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-
-  // Paint per triangle by centroid test (more robust than per-vertex)
-  let painted = 0;
-  for (let i = 0; i < pos.count; i += 3) {
-    const ax = arrPos[i * 3 + 0], ay = arrPos[i * 3 + 1], az = arrPos[i * 3 + 2];
-    const bx = arrPos[(i + 1) * 3 + 0], by = arrPos[(i + 1) * 3 + 1], bz = arrPos[(i + 1) * 3 + 2];
-    const cx = arrPos[(i + 2) * 3 + 0], cy = arrPos[(i + 2) * 3 + 1], cz = arrPos[(i + 2) * 3 + 2];
-
-    const centX = (ax + bx + cx) / 3;
-    const centY = (ay + by + cy) / 3;
-    const centZ = (az + bz + cz) / 3;
-    const pXZ = new THREE.Vector2(centX, -centZ);
-
-    let hit = false;
-    for (const prism of prisms) {
-      if (centY < prism.y0 || centY > prism.y1) continue;
-      if (isPointInsideAnyLoopXZ(pXZ, prism.loops)) { hit = true; break; }
-    }
-    if (!hit) continue;
-
-    // Tint all three vertices of this triangle
-    for (let k = 0; k < 3; k++) {
-      const idx = i + k;
-      const { r, g, b } = readColorAt(arrCol, idx, useByteColors);
-      tmpColor.setRGB(
-        lerp(r, tint.r, strength),
-        lerp(g, tint.g, strength),
-        lerp(b, tint.b, strength)
-      );
-      writeColorAt(arrCol, idx, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
-    }
-  }
-
-  col.needsUpdate = true;
-  return painted;
 }
 
 // Variable-strength painter: tint strength determined per pixel via callback.
@@ -517,7 +436,6 @@ export function applyTintAll(
   const pos = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
   const col = geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
   if (!pos || !col) return;
-  const arrPos = pos.array as Float32Array;
   const arrCol = col.array as ColorStorageArray;
   const useByteColors = isByteColorBuffer(col);
   const tmpColor = new THREE.Color();

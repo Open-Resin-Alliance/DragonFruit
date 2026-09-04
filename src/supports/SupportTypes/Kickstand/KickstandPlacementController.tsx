@@ -1,3 +1,4 @@
+import { toVector3 } from '@/supports/Curves/BezierUtils';
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
@@ -30,9 +31,6 @@ interface ShaftClickDetail {
     intersection?: unknown;
 }
 
-function toVector3(v: Vec3): THREE.Vector3 {
-    return new THREE.Vector3(v.x, v.y, v.z);
-}
 
 function perpendicularDirection(
     path: NonNullable<SnapTarget['pathSegment']>,

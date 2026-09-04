@@ -4,6 +4,7 @@ import React from 'react';
 import { ExternalLink, Search, CheckCircle2, Loader2 } from 'lucide-react';
 import type { UvToolsSettings } from '@/components/settings/uvToolsPreferences';
 import { autoDiscoverUvToolsPath } from '@/components/settings/uvToolsPreferences';
+import { detectPlatform } from '@/hooks/usePlatform';
 
 interface UvToolsSettingsTabProps {
   uvToolsSettings: UvToolsSettings;
@@ -21,6 +22,14 @@ export function UvToolsSettingsTab({
   const [showNotFound, setShowNotFound] = React.useState(false);
   const foundGlowTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const notFoundTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Resolved in an effect so the server-rendered markup and the first client
+  // render agree; macOS points at the `.app` bundle, not at an executable.
+  const [isMac, setIsMac] = React.useState(false);
+  const executableLabel = isMac ? 'UVtools.app' : 'UVTools.exe';
+
+  React.useEffect(() => {
+    setIsMac(detectPlatform() === 'mac');
+  }, []);
 
   React.useEffect(() => {
     return () => {
@@ -83,7 +92,7 @@ export function UvToolsSettingsTab({
             <ExternalLink className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
               UVTools Integration
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
@@ -99,7 +108,7 @@ export function UvToolsSettingsTab({
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Enable UVTools Integration
               </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 Adds a &ldquo;Send to UVTools&rdquo; option in the slicing panel.
               </div>
             </div>
@@ -131,8 +140,8 @@ export function UvToolsSettingsTab({
                 <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                   UVTools Executable Path
                 </div>
-                <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                  Use auto-discover or enter the path to UVTools.exe manually.
+                <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                  Use auto-discover or enter the path to {executableLabel} manually.
                 </div>
               </div>
               <button
@@ -166,7 +175,7 @@ export function UvToolsSettingsTab({
                 type="text"
                 value={uvToolsSettings.customPath}
                 onChange={(e) => onUvToolsSettingsChange({ ...uvToolsSettings, customPath: e.target.value })}
-                placeholder="Select or type the path to UVTools.exe"
+                placeholder={`Select or type the path to ${executableLabel}`}
                 className="w-full rounded-md border px-2.5 py-1.5 text-xs font-mono"
                 style={{
                   borderColor: 'var(--border-subtle)',

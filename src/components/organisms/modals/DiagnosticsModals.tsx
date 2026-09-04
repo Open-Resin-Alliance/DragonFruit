@@ -14,6 +14,8 @@ export type DiagnosticsModalsProps = {
   historyDebugEvents: HistoryDebugEvent[];
   historyPreviewTargetEventId: number | null;
   historyStackCounts: { undo: number; redo: number; };
+  historyStackBytes: { undo: number; redo: number; total: number };
+  sceneSnapshotBytes: number;
   isDiagnosticsOpen: boolean;
   isHistoryDebugOpen: boolean;
   isHistoryPreviewActive: boolean;
@@ -38,6 +40,8 @@ export function DiagnosticsModals({
   historyDebugEvents,
   historyPreviewTargetEventId,
   historyStackCounts,
+  historyStackBytes,
+  sceneSnapshotBytes,
   isDiagnosticsOpen,
   isHistoryDebugOpen,
   isHistoryPreviewActive,
@@ -71,6 +75,8 @@ export function DiagnosticsModals({
         onClose={() => setIsHistoryDebugOpen(false)}
         historyDebugEvents={historyDebugEvents}
         historyStackCounts={historyStackCounts}
+        historyStackBytes={historyStackBytes}
+        sceneSnapshotBytes={sceneSnapshotBytes}
         selectedPreviewEventId={historyPreviewTargetEventId}
         isPreviewActive={isHistoryPreviewActive}
         onJumpToEvent={handleHistoryJumpToEvent}

@@ -20,6 +20,12 @@ interface GizmoScaleProps {
   interactionsEnabled?: boolean;
   isUniform?: boolean;
   gizmoPosition: THREE.Vector3;
+  /**
+   * World-space direction for this axis. When the gizmo parent group is rotated,
+   * the hardcoded local-axis direction no longer matches the visual handle.
+   * Falls back to world X/Y/Z when not provided.
+   */
+  worldAxisDir?: THREE.Vector3;
   onDragStart: (isUniform: boolean) => boolean | void;
   onDrag: (factor: number, isUniform: boolean) => void;
   onDragEnd: () => void;
@@ -41,6 +47,7 @@ export function GizmoScale({
   interactionsEnabled = true,
   isUniform: isUniformProp = true,
   gizmoPosition,
+  worldAxisDir,
   onDragStart,
   onDrag,
   onDragEnd,
@@ -51,6 +58,7 @@ export function GizmoScale({
   const [isUniformScale, setIsUniformScale] = useState(false);
   const startDistance = useRef<number>(0);
   const startDirectionRef = useRef(new THREE.Vector2(1, 0));
+  const scratchCameraOffsetRef = useRef(new THREE.Vector3());
   const { camera, gl } = useThree();
 
   // GPU Picking registration
@@ -88,18 +96,30 @@ export function GizmoScale({
   // Get colors for this axis
   const axisColors = axis === 'x' ? GIZMO_COLORS.xAxis : axis === 'y' ? GIZMO_COLORS.yAxis : GIZMO_COLORS.zAxis;
 
-  const shouldFlipX = axis === 'x' && (camera.position.x - gizmoPosition.x > 0);
-  const shouldFlipY = axis === 'y' && (camera.position.y - gizmoPosition.y > 0);
-  const shouldFlipZ = axis === 'z' && (camera.position.z - gizmoPosition.z > 0);
+  // The handle sits on whichever side of the model the camera is on, the same rule
+  // the move arrow follows so the two never end up on opposite sides. Which side
+  // that is has to be asked of the direction the axis really points: in the model's
+  // own frame, comparing world components would answer for a different axis.
+  const axisDirection = useMemo(() => {
+    if (worldAxisDir) return worldAxisDir.clone();
+    if (axis === 'x') return new THREE.Vector3(1, 0, 0);
+    if (axis === 'y') return new THREE.Vector3(0, 1, 0);
+    return new THREE.Vector3(0, 0, 1);
+  }, [axis, worldAxisDir]);
+
+  const pointsTowardCamera = axisDirection.dot(
+    scratchCameraOffsetRef.current.subVectors(camera.position, gizmoPosition),
+  ) > 0;
 
   // Position for each axis (at end of line) with camera-relative flipping
   const length = GIZMO_SIZES.scaleLineLength;
+  const offset = pointsTowardCamera ? length : -length;
   const position: [number, number, number] =
     axis === 'x'
-      ? [shouldFlipX ? length : -length, 0, 0]
+      ? [offset, 0, 0]
       : axis === 'y'
-      ? [0, shouldFlipY ? length : -length, 0]
-      : [0, 0, shouldFlipZ ? length : -length];
+      ? [0, offset, 0]
+      : [0, 0, offset];
 
   // Rotate hexagon to face perpendicular to axis
   const rotation: [number, number, number] =

@@ -298,7 +298,6 @@ export function ExportPanel({
               <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Export</h3>
             </>
           )}
-          hideDivider={!isExpanded}
         />
         {isExpanded && (
           <div className="px-3 pb-3 text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -336,7 +335,6 @@ export function ExportPanel({
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Export</h3>
           </>
         )}
-        hideDivider={!isExpanded}
       />
 
       {isExpanded && (

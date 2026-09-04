@@ -3,6 +3,7 @@ import { tryHandleNanoDlpDiscoverOperation } from './discover';
 import { tryHandleNanoDlpMaterialsOperation } from './materials';
 import { tryHandleNanoDlpJobOperation } from './jobs';
 import { tryHandleNanoDlpPrinterOperation } from './printer';
+import { tryHandleNanoDlpPrinterDataOperation } from './printerData';
 
 type HandlerResult = {
   status: number;
@@ -24,6 +25,7 @@ export type NanoDlpOperationHandlers = {
   printerEmergencyStop: (payload: unknown) => Promise<HandlerResult>;
   printerStatus: (payload: unknown) => Promise<HandlerResult>;
   printerWebcamInfo: (payload: unknown) => Promise<HandlerResult>;
+  printerData: (payload: unknown) => Promise<HandlerResult>;
 };
 
 export async function dispatchNanoDlpOperation(
@@ -64,6 +66,11 @@ export async function dispatchNanoDlpOperation(
     webcamInfo: handlers.printerWebcamInfo,
   });
   if (printer) return printer;
+
+  const printerData = await tryHandleNanoDlpPrinterDataOperation(op, payload, {
+    printerData: handlers.printerData,
+  });
+  if (printerData) return printerData;
 
   return null;
 }

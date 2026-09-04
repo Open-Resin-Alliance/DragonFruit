@@ -11,7 +11,7 @@ import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
-import { generateUuid } from '@/utils/uuid';
+import { v4 as uuidv4 } from 'uuid';
 
 type SupportClipboardPayload = {
   roots: Roots[];
@@ -44,7 +44,7 @@ function clonePlain<T>(value: T): T {
 function getOrCreateMappedId(sourceId: string, idMap: Map<string, string>): string {
   const mapped = idMap.get(sourceId);
   if (mapped) return mapped;
-  const created = generateUuid();
+  const created = uuidv4();
   idMap.set(sourceId, created);
   return created;
 }
@@ -169,7 +169,7 @@ function mergeSupportClipboardPayload(
   const jointIdMap = new Map<string, string>();
 
   const clonedRoots = payload.roots.map((root) => {
-    const id = generateUuid();
+    const id = uuidv4();
     rootIdMap.set(root.id, id);
     return {
       ...clonePlain(root),
@@ -179,9 +179,9 @@ function mergeSupportClipboardPayload(
   });
 
   const clonedTrunks = payload.trunks.map((trunk) => {
-    const id = generateUuid();
+    const id = uuidv4();
     const clonedSegments = trunk.segments.map((segment) => {
-      const segmentId = generateUuid();
+      const segmentId = uuidv4();
       segmentIdMap.set(segment.id, segmentId);
       return {
         ...clonePlain(segment),
@@ -200,7 +200,7 @@ function mergeSupportClipboardPayload(
       contactCone: trunk.contactCone
         ? {
             ...clonePlain(trunk.contactCone),
-            id: generateUuid(),
+            id: uuidv4(),
             socketJointId: trunk.contactCone.socketJointId
               ? getOrCreateMappedId(trunk.contactCone.socketJointId, jointIdMap)
               : trunk.contactCone.socketJointId,
@@ -210,15 +210,15 @@ function mergeSupportClipboardPayload(
   });
 
   payload.knots.forEach((knot) => {
-    knotIdMap.set(knot.id, generateUuid());
+    knotIdMap.set(knot.id, uuidv4());
   });
 
   const clonedBranches = payload.branches.map((branch) => {
-    const id = generateUuid();
+    const id = uuidv4();
     branchIdMap.set(branch.id, id);
 
     const clonedSegments = branch.segments.map((segment) => {
-      const segmentId = generateUuid();
+      const segmentId = uuidv4();
       segmentIdMap.set(segment.id, segmentId);
       return {
         ...clonePlain(segment),
@@ -237,7 +237,7 @@ function mergeSupportClipboardPayload(
       contactCone: branch.contactCone
         ? {
             ...clonePlain(branch.contactCone),
-            id: generateUuid(),
+            id: uuidv4(),
             socketJointId: branch.contactCone.socketJointId
               ? getOrCreateMappedId(branch.contactCone.socketJointId, jointIdMap)
               : branch.contactCone.socketJointId,
@@ -247,7 +247,7 @@ function mergeSupportClipboardPayload(
   });
 
   const clonedLeaves = payload.leaves.map((leaf) => {
-    const id = generateUuid();
+    const id = uuidv4();
     leafIdMap.set(leaf.id, id);
     return {
       ...clonePlain(leaf),
@@ -256,7 +256,7 @@ function mergeSupportClipboardPayload(
       parentKnotId: getOrCreateMappedId(leaf.parentKnotId, knotIdMap),
       contactCone: {
         ...clonePlain(leaf.contactCone),
-        id: generateUuid(),
+        id: uuidv4(),
         socketJointId: leaf.contactCone.socketJointId
           ? getOrCreateMappedId(leaf.contactCone.socketJointId, jointIdMap)
           : leaf.contactCone.socketJointId,
@@ -265,11 +265,11 @@ function mergeSupportClipboardPayload(
   });
 
   const clonedTwigs = payload.twigs.map((twig) => {
-    const id = generateUuid();
+    const id = uuidv4();
     twigIdMap.set(twig.id, id);
 
     const clonedSegments = twig.segments.map((segment) => {
-      const segmentId = generateUuid();
+      const segmentId = uuidv4();
       segmentIdMap.set(segment.id, segmentId);
       return {
         ...clonePlain(segment),
@@ -286,21 +286,21 @@ function mergeSupportClipboardPayload(
       segments: clonedSegments,
       contactDiskA: {
         ...clonePlain(twig.contactDiskA),
-        id: generateUuid(),
+        id: uuidv4(),
       },
       contactDiskB: {
         ...clonePlain(twig.contactDiskB),
-        id: generateUuid(),
+        id: uuidv4(),
       },
     } as Twig;
   });
 
   const clonedSticks = payload.sticks.map((stick) => {
-    const id = generateUuid();
+    const id = uuidv4();
     stickIdMap.set(stick.id, id);
 
     const clonedSegments = stick.segments.map((segment) => {
-      const segmentId = generateUuid();
+      const segmentId = uuidv4();
       segmentIdMap.set(segment.id, segmentId);
       return {
         ...clonePlain(segment),
@@ -317,14 +317,14 @@ function mergeSupportClipboardPayload(
       segments: clonedSegments,
       contactConeA: {
         ...clonePlain(stick.contactConeA),
-        id: generateUuid(),
+        id: uuidv4(),
         socketJointId: stick.contactConeA.socketJointId
           ? getOrCreateMappedId(stick.contactConeA.socketJointId, jointIdMap)
           : stick.contactConeA.socketJointId,
       },
       contactConeB: {
         ...clonePlain(stick.contactConeB),
-        id: generateUuid(),
+        id: uuidv4(),
         socketJointId: stick.contactConeB.socketJointId
           ? getOrCreateMappedId(stick.contactConeB.socketJointId, jointIdMap)
           : stick.contactConeB.socketJointId,
@@ -333,7 +333,7 @@ function mergeSupportClipboardPayload(
   });
 
   const clonedBraces = payload.braces.map((brace) => {
-    const id = generateUuid();
+    const id = uuidv4();
     braceIdMap.set(brace.id, id);
     return {
       ...clonePlain(brace),
@@ -345,7 +345,7 @@ function mergeSupportClipboardPayload(
   });
 
   const clonedKnots = payload.knots.map((knot) => {
-    const id = knotIdMap.get(knot.id) ?? generateUuid();
+    const id = knotIdMap.get(knot.id) ?? uuidv4();
 
     let parentShaftId = knot.parentShaftId;
     if (parentShaftId.startsWith('leafCone:')) {
@@ -366,7 +366,7 @@ function mergeSupportClipboardPayload(
   });
 
   const clonedKickstandRoots = payload.kickstandRoots.map((root) => {
-    const id = generateUuid();
+    const id = uuidv4();
     kickstandRootIdMap.set(root.id, id);
     return {
       ...clonePlain(root),
@@ -376,7 +376,7 @@ function mergeSupportClipboardPayload(
   });
 
   const clonedKickstandKnots = payload.kickstandKnots.map((knot) => {
-    const id = generateUuid();
+    const id = uuidv4();
     kickstandKnotIdMap.set(knot.id, id);
     return {
       ...clonePlain(knot),
@@ -386,7 +386,7 @@ function mergeSupportClipboardPayload(
   });
 
   const clonedKickstands = payload.kickstands.map((kickstand) => {
-    const id = generateUuid();
+    const id = uuidv4();
     kickstandIdMap.set(kickstand.id, id);
 
     const clonedSegments = kickstand.segments.map((segment) => {
@@ -510,12 +510,13 @@ export function estimateSupportBoundsForModel(modelId: string): SupportModelBoun
       r: root.diameter / 2,
     }));
 
-    const chamferInset = raftSettings.bottomMode === 'line'
-      ? Math.max(0, raftSettings.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettings.chamferAngle))))
-      : 0;
+    const thickness = raftSettings.bottomMode === 'line' ? raftSettings.lineHeightMm : raftSettings.thickness;
+    const chamferInset = Math.max(0, thickness) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettings.chamferAngle))));
+    const wallInset = raftSettings.wallEnabled ? Math.max(0, raftSettings.wallThickness) : 0;
+    const dynamicMargin = 0.2 + Math.max(chamferInset, wallInset);
 
     const baseProfile = computeFootprint(circles, {
-      marginMm: 0.2 + chamferInset,
+      marginMm: dynamicMargin,
       samplesPerCircle: 24,
     });
 

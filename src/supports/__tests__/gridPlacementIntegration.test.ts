@@ -4,6 +4,7 @@ import * as THREE from 'three';
 
 import type { TrunkPlacementResult } from '../PlacementLogic/StandardPlacement';
 import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
+import { getFinalSocketPosition } from '../SupportPrimitives/ContactCone';
 import { setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
 import type { SupportState } from '../types';
@@ -478,4 +479,66 @@ test('decideGridPlacement places branch on neighbor host when co-located host ca
     assert.equal(decision.kind, 'place_branch');
     assert.equal(decision.nodeKey, '1,0'); // Snapped to neighbor node
     assert.equal(decision.hostTrunkId, neighborHost.build.trunk.id);
+});
+
+test('decideGridPlacement rejects an anchor whose tip sits below the root joint and previews the ghost', () => {
+    const settings = makeSettings();
+    setSettings(settings);
+
+    const snapshot = makeEmptySnapshot();
+    const candidate = buildStraightFixture({
+        x: 0,
+        y: 0,
+        tipZ: 0.5, // Below the anchor root joint (~1.1mm) — shaft would dip into -Z
+        socketZ: 0.4,
+    });
+
+    const decision = decideGridPlacement({
+        settings,
+        snapshot,
+        candidate: candidate.build,
+        tipPos: candidate.input.tipPos,
+        tipNormal: { x: 0, y: 0, z: -1 },
+        modelId: MODEL_ID,
+    });
+
+    if (decision.kind !== 'reject' || decision.reason !== 'ANCHOR_BELOW_ROOT') {
+        assert.fail(`expected ANCHOR_BELOW_ROOT reject, got ${decision.kind}`);
+    }
+    // Ghost preview carries the reason so the hover tooltip can render it.
+    assert.equal(decision.supportData?.error, 'ANCHOR_BELOW_ROOT');
+});
+
+test('decideGridPlacement places a valid anchor for an above-root near-plate tip', () => {
+    const settings = makeSettings();
+    setSettings(settings);
+
+    const snapshot = makeEmptySnapshot();
+    const candidate = buildStraightFixture({
+        x: 0,
+        y: 0,
+        tipZ: 3,
+        socketZ: 2.5,
+    });
+
+    const decision = decideGridPlacement({
+        settings,
+        snapshot,
+        candidate: candidate.build,
+        tipPos: candidate.input.tipPos,
+        tipNormal: { x: 0, y: 0, z: -1 },
+        modelId: MODEL_ID,
+    });
+    if (decision.kind !== 'place_anchor') assert.fail(`expected place_anchor, got ${decision.kind}`);
+    const anchor = decision.anchor;
+    const socketZ = getFinalSocketPosition(anchor.contactCone).z;
+    const lowestShaftZ = Math.min(anchor.contactCone.pos.z, socketZ);
+    assert.ok(
+        lowestShaftZ >= anchor.joint.pos.z - 1e-3,
+        `shaft dips below the root joint: ${lowestShaftZ} < ${anchor.joint.pos.z}`,
+    );
+    assert.ok(
+        Math.abs(socketZ - anchor.joint.pos.z) <= 1e-3,
+        `cone socket does not land on the root joint: ${socketZ} vs ${anchor.joint.pos.z}`,
+    );
 });

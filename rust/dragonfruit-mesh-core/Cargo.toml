@@ -1,0 +1,15 @@
+[package]
+name = "dragonfruit-mesh-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "dragonfruit_mesh_core"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+bytemuck = { version = "1", features = ["derive"] }
+ahash = "0.8"
+smallvec = "1"

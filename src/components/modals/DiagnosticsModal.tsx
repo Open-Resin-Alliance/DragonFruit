@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { X } from 'lucide-react';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { getSnapshot as getSupportSnapshot } from '@/supports/state';
@@ -241,6 +242,8 @@ export function DiagnosticsModal({
   totalPolygons,
   selectedPolygons,
 }: DiagnosticsModalProps) {
+  useEscapeToClose(isOpen, onClose);
+
   const [stats, setStats] = React.useState<RuntimeStats>({
     fps: 0,
     frameTimeMs: 0,
@@ -332,15 +335,8 @@ export function DiagnosticsModal({
 
     rafId = requestAnimationFrame(tick);
 
-    const onKeyDown = (event: CustomEvent) => {
-      if (event.detail.key === 'Escape') onClose();
-    };
-
-    window.addEventListener('app-hotkey-keydown', onKeyDown as EventListener);
-
     return () => {
       cancelAnimationFrame(rafId);
-      window.removeEventListener('app-hotkey-keydown', onKeyDown as EventListener);
     };
   }, [isOpen, onClose]);
 

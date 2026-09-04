@@ -196,6 +196,9 @@ function mapModelToVoxl(model: VoxlModelRuntimeLike): VoxlModelEntry {
     fileSizeBytes: typeof model.fileSizeBytes === 'number' && Number.isFinite(model.fileSizeBytes)
       ? Math.max(0, Math.floor(model.fileSizeBytes))
       : undefined,
+    ...(model.sourcePath ? { sourcePath: model.sourcePath } : {}),
+    ...(model.nativePreview ? { nativePreview: model.nativePreview } : {}),
+    ...(model.originalRef ? { originalRef: model.originalRef } : {}),
     transform: {
       position: toVec3(model.transform.position),
       rotation: toVec3(model.transform.rotation),
@@ -206,6 +209,8 @@ function mapModelToVoxl(model: VoxlModelRuntimeLike): VoxlModelEntry {
       mode: 'external-file',
       fileName: model.name,
     },
+    isSupportGeometry: model.isSupportGeometry,
+    linkGroupId: model.linkGroupId,
   };
 }
 

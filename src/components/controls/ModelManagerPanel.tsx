@@ -27,6 +27,7 @@ import { Card, CardHeader, IconButton } from '@/components/atoms';
 import { formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { Tooltip } from '@/components/ui/Tooltip';
+import { getCompactListPreference, saveCompactListPreference } from '@/components/controls/compactListPreference';
 
 type SelectMode = 'single' | 'toggle' | 'add';
 
@@ -141,6 +142,13 @@ export function ModelManagerPanel({
   const [renamingModelName, setRenamingModelName] = useState('');
   const [renamingModelSuffix, setRenamingModelSuffix] = useState('');
   const [contextMenu, setContextMenu] = useState<PanelContextMenuState | null>(null);
+  const [compactList, setCompactList] = useState(() => getCompactListPreference());
+
+  const toggleCompactList = () => {
+    const next = !compactList;
+    setCompactList(next);
+    saveCompactListPreference(next);
+  };
   void _onDelete;
   const cardRef = useRef<HTMLDivElement | null>(null);
   const resizeDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -408,7 +416,6 @@ export function ModelManagerPanel({
             </span>
           </div>
         )}
-        hideDivider={!expanded}
       />
 
       {expanded && (
@@ -587,7 +594,7 @@ export function ModelManagerPanel({
                             });
                           }}
                         >
-                          {isActive
+                          {!compactList && (isActive
                             ? (
                               <div className="p-1 rounded" style={{ background: 'color-mix(in srgb, var(--accent), var(--surface-2) 72%)', color: 'var(--accent)' }}>
                                 <Crosshair className="w-3.5 h-3.5" />
@@ -596,7 +603,7 @@ export function ModelManagerPanel({
                               <div className="p-1 rounded" style={isSelected ? { background: 'color-mix(in srgb, var(--accent), var(--surface-2) 82%)', color: 'var(--accent)' } : { background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
                                 <Box className="w-3.5 h-3.5" />
                               </div>
-                            )}
+                            ))}
 
                           <div className="flex-1 min-w-0">
                             {renamingModelId === model.id ? (
@@ -639,13 +646,27 @@ export function ModelManagerPanel({
                                 </div>
                               </Tooltip>
                             )}
-                            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                              {formatMeshStats(model, _)}
-                            </div>
+                            {!compactList && (
+                              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                                {formatMeshStats(model, _)}
+                              </div>
+                            )}
                           </div>
 
                           <div className="flex items-center gap-1">
-                            {onOpenSupportsInfo && (
+                            {onOpenSupportsInfo && (compactList ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onOpenSupportsInfo(model.id);
+                                }}
+                                className="inline-flex items-center justify-center p-0.5 rounded hover:bg-white/10"
+                                title={_(msg`Supports for model`)}
+                              >
+                                <Info className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+                              </button>
+                            ) : (
                               <IconButton
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -656,17 +677,31 @@ export function ModelManagerPanel({
                               >
                                 <Info className="w-3.5 h-3.5" />
                               </IconButton>
+                            ))}
+                            {compactList ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onVisibilityChange(model.id, !model.visible);
+                                }}
+                                className="inline-flex items-center justify-center p-0.5 rounded hover:bg-white/10"
+                                title={model.visible ? _(msg`Hide`) : _(msg`Show`)}
+                              >
+                                {model.visible ? <Eye className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} /> : <EyeOff className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />}
+                              </button>
+                            ) : (
+                              <IconButton
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onVisibilityChange(model.id, !model.visible);
+                                }}
+                                className="!p-1.5"
+                                title={model.visible ? _(msg`Hide`) : _(msg`Show`)}
+                              >
+                                {model.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                              </IconButton>
                             )}
-                            <IconButton
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onVisibilityChange(model.id, !model.visible);
-                              }}
-                              className="!p-1.5"
-                              title={model.visible ? _(msg`Hide`) : _(msg`Show`)}
-                            >
-                              {model.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                            </IconButton>
 
                           </div>
                         </div>
@@ -852,6 +887,23 @@ export function ModelManagerPanel({
                 )}
               </>
             )}
+
+            <div className="my-1 h-px" style={{ background: 'var(--border-subtle)' }} />
+
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
+              style={{ color: 'var(--text-strong)' }}
+              onClick={() => {
+                toggleCompactList();
+                closeContextMenu();
+              }}
+            >
+              <span className="inline-flex h-3.5 w-3.5 items-center justify-center text-[10px] leading-none" style={{ color: compactList ? 'var(--accent)' : 'var(--text-muted)' }}>
+                {compactList ? '✓' : ''}
+              </span>
+              <span><Trans>Compact list</Trans></span>
+            </button>
           </div>
         </div>
       )}

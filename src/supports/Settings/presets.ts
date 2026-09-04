@@ -7,6 +7,7 @@
 import { SupportPreset, PresetCollection, SupportSettings, createDefaultSettings } from './types';
 import { getSettings, setSettings, saveSettingsToLocalStorage } from './state';
 import { createDefaultAutoBracingSettings } from '../autoBracing/settings';
+import { createDefaultAutoSupportSettings } from '../autoSupport/settings';
 
 function normalizePresetSettings(
     settings: Partial<SupportSettings> | undefined,
@@ -59,10 +60,35 @@ function normalizePresetSettings(
             ...fallback.autoBracing,
             ...(source.autoBracing ?? {}),
         },
+        autoSupport: {
+            ...defaults.autoSupport,
+            ...fallback.autoSupport,
+            ...(source.autoSupport ?? {}),
+        },
     };
 }
 
 // --- Built-in Presets ---
+
+/**
+ * Migration: the built-in presets now carry per-preset auto-support density
+ * (detail 12 / structure 8 / anchor 5 mm² per support). Presets persisted
+ * before that change stored the old flat default autoSupport block, which
+ * would silently override the new per-preset values on load — reapply the
+ * built-in block when the stored one is exactly the legacy default. A
+ * customized (non-default) autoSupport block is preserved as-is.
+ */
+function migrateLegacyPresetAutoSupport(
+    parsedSettings: SupportSettings,
+    fallbackSettings: SupportSettings,
+): SupportSettings {
+    const normalized = normalizePresetSettings(parsedSettings, fallbackSettings);
+    if (normalized.autoSupport
+        && JSON.stringify(normalized.autoSupport) === JSON.stringify(createDefaultAutoSupportSettings())) {
+        return { ...normalized, autoSupport: fallbackSettings.autoSupport };
+    }
+    return normalized;
+}
 
 const DETAIL_PRESET: SupportPreset = {
     id: 'detail',
@@ -120,8 +146,10 @@ const DETAIL_PRESET: SupportPreset = {
             stickVsTwigCutoffMm: 5.0,
         },
         autoBracing: createDefaultAutoBracingSettings(),
+        autoSupport: { ...createDefaultAutoSupportSettings(), areaPerSupportMm2: 16, sizingPreset: 'detail' },
         devToolsEnabled: false,
         devTools: createDefaultSettings().devTools,
+        debugSimpleSupportRender: false,
     },
 };
 
@@ -166,7 +194,7 @@ const ANCHOR_PRESET: SupportPreset = {
         tip: {
             shape: 'cone',
             contactDiameterMm: 0.4,
-            bodyDiameterMm: 1.2,
+            bodyDiameterMm: 1.4,
             lengthMm: 2.5,
             penetrationMm: 0,
             coneAngleMode: 'adaptive',
@@ -176,14 +204,14 @@ const ANCHOR_PRESET: SupportPreset = {
         },
         shaft: {
             shape: 'cylinder',
-            diameterMm: 1.2,
-            secondaryDiameterMm: 1.2,
+            diameterMm: 1.4,
+            secondaryDiameterMm: 1.4,
             isStraight: true,
             maxAngleDeg: 80,
         },
         roots: {
             shape: 'cylinder',
-            diameterMm: 2.0,
+            diameterMm: 2.3,
             diskHeightMm: 0.5,
             coneHeightMm: 1.0,
             neckDiameterMm: 1.5,
@@ -191,11 +219,11 @@ const ANCHOR_PRESET: SupportPreset = {
         },
         baseFlare: {
             enabled: true,
-            diameterMm: 4.0,
+            diameterMm: 4.5,
             heightMm: 2.0,
         },
         joint: {
-            ballDiameterMm: 2.0,
+            ballDiameterMm: 2.2,
             maxRotationDeg: 45,
             maxSlideMm: 5,
         },
@@ -210,8 +238,10 @@ const ANCHOR_PRESET: SupportPreset = {
             stickVsTwigCutoffMm: 5.0,
         },
         autoBracing: createDefaultAutoBracingSettings(),
+        autoSupport: { ...createDefaultAutoSupportSettings(), areaPerSupportMm2: 5, sizingPreset: 'anchor' },
         devToolsEnabled: false,
         devTools: createDefaultSettings().devTools,
+        debugSimpleSupportRender: false,
     },
 };
 
@@ -219,12 +249,16 @@ const ANCHOR_PRESET: SupportPreset = {
 
 // --- Store ---
 
+/** Built-in preset definitions — the canonical default detail/structure/
+ *  anchor values (auto-support sizing derives its bands from these). */
+export { DETAIL_PRESET, STRUCTURE_PRESET, ANCHOR_PRESET };
+
 const PRESET_STORAGE_KEY = 'support-presets-v1';
 const ACTIVE_PRESET_STORAGE_KEY = 'support-active-preset-id-v1';
 const SUPPORT_SETTINGS_STORAGE_KEY = 'support-settings';
 const LEGACY_CUSTOM_IDS = new Set(['custom1', 'custom2', 'custom3']);
 
-let presets: PresetCollection = loadPresetsFromStorage();
+const presets: PresetCollection = loadPresetsFromStorage();
 
 function loadPresetsFromStorage(): PresetCollection {
     const defaults: PresetCollection = {
@@ -255,7 +289,7 @@ function loadPresetsFromStorage(): PresetCollection {
                         ...fallbackPreset,
                         name: parsedPreset.name || fallbackPreset.name,
                         pinnedSlot: parsedPreset.pinnedSlot ?? fallbackPreset.pinnedSlot,
-                        settings: normalizePresetSettings(
+                        settings: migrateLegacyPresetAutoSupport(
                             parsedPreset.settings,
                             fallbackPreset.settings,
                         ),
@@ -521,6 +555,14 @@ export function setActivePreset(id: string | null): void {
         autoBracing: {
             ...current.autoBracing,
         },
+        // Preserve current Auto Supports settings. Trunk presets are sizing/
+        // geometry profiles; auto-support density is owned by the Auto
+        // Support panel (whose light/medium/heavy quick-select writes it via
+        // updateAutoSupportSettings before calling this), never by the
+        // trunk-preset dropdown.
+        autoSupport: {
+            ...current.autoSupport,
+        },
     });
 
     // Keep selected preset + persisted settings in sync across app restarts.
@@ -552,6 +594,9 @@ export function savePreset(id: string): void {
         },
         autoBracing: {
             ...existingPreset.settings.autoBracing,
+        },
+        autoSupport: {
+            ...existingPreset.settings.autoSupport,
         },
     };
 

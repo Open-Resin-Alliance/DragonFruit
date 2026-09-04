@@ -28,7 +28,7 @@ export function JointPlacementPreview({ position, diameter, normal }: Props) {
         const norm = new THREE.Vector3(normal.x, normal.y, normal.z).normalize();
         
         // Find a perpendicular vector (tangent)
-        let tangent = new THREE.Vector3(1, 0, 0);
+        const tangent = new THREE.Vector3(1, 0, 0);
         if (Math.abs(norm.x) > 0.9) tangent.set(0, 1, 0); // If normal is X-aligned, use Y
         
         const right = new THREE.Vector3().crossVectors(norm, tangent).normalize();

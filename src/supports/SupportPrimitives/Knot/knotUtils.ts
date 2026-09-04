@@ -111,6 +111,83 @@ export function getBranchSegmentEndpoints(
 }
 
 /**
+ * Decide whether a dragged knot should stay on its current segment or hand off
+ * to the closest neighbouring segment.
+ *
+ * While dragging a knot along a multi-segment shaft, each frame picks the
+ * segment whose curve is closest to the pointer ray. A small stickiness bias
+ * keeps the knot on its current segment when distances are near-equal, which
+ * stops flicker mid-segment. That bias must NOT apply when the current
+ * segment's closest point has saturated at one of its endpoints (i.e. right at
+ * a joint): there the neighbour's closest point also starts at the same joint,
+ * so a blanket bias would pin the knot to the joint and refuse to cross until
+ * the neighbour won by more than the bias margin. That is the "knot hangs on
+ * the joint" bug (only intermittent because whether the neighbour ever wins by
+ * the margin depends on the camera angle).
+ */
+export function shouldStayOnCurrentSegment(
+    currentT: number,
+    currentDistSq: number,
+    bestDistSq: number,
+    stickiness: number,
+    interiorEps: number
+): boolean {
+    const interior = currentT > interiorEps && currentT < 1 - interiorEps;
+    if (!interior) return false;
+    return currentDistSq <= bestDistSq * stickiness;
+}
+
+/**
+ * A minimal patch describing how a knot re-anchors when its host segment is
+ * split in two by an inserted joint. `parentShaftId` moves to the top segment
+ * only when the knot sat above the split; `t` is always rescaled onto whichever
+ * half the knot now lives on so its absolute world position is preserved.
+ */
+export interface KnotSplitRemap {
+    knotId: string;
+    parentShaftId: string;
+    t: number;
+}
+
+/**
+ * Re-anchor a knot across a segment split so it stays at the same world point.
+ *
+ * When a joint is inserted at parametric position `splitT` on the original
+ * segment, that segment becomes a bottom half (keeps the original id) and a top
+ * half (new id). A knot's stored `t` is expressed against the WHOLE original
+ * segment, so after the split it must be converted to the sub-segment it now
+ * belongs to. De Casteljau subdivision guarantees the original curve at `t`
+ * equals the left sub-curve at `t / splitT` (for t <= splitT) and the right
+ * sub-curve at `(t - splitT) / (1 - splitT)` (for t >= splitT). The same
+ * reparametrization holds for straight segments (the degenerate cubic case), so
+ * one formula covers both.
+ *
+ * Returns null when the knot is not attached to the split segment, has no `t`,
+ * or the split is too degenerate to remap safely (the caller leaves it as-is).
+ */
+export function remapKnotAcrossSplit(
+    knot: Knot,
+    originalSegmentId: string,
+    bottomSegmentId: string,
+    topSegmentId: string,
+    splitT: number
+): KnotSplitRemap | null {
+    if (knot.parentShaftId !== originalSegmentId) return null;
+    if (knot.t === undefined) return null;
+    const EPS = 1e-6;
+    if (!(splitT > EPS) || !(splitT < 1 - EPS)) return null;
+    const t = Math.min(1, Math.max(0, knot.t));
+    if (t <= splitT) {
+        return { knotId: knot.id, parentShaftId: bottomSegmentId, t: t / splitT };
+    }
+    return {
+        knotId: knot.id,
+        parentShaftId: topSegmentId,
+        t: (t - splitT) / (1 - splitT),
+    };
+}
+
+/**
  * Calculate the position of a knot along a segment using its t parameter (0-1).
  * This is used to update knot positions when the parent segment moves.
  */

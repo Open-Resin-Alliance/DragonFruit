@@ -3,6 +3,7 @@
 import React, { useEffect } from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
 import { hotkeyStore, useActionActive } from '@/hotkeys/hotkeyStore';
 import dynamic from 'next/dynamic';
 import * as THREE from 'three';
@@ -17,21 +18,25 @@ import {
 } from '@/components/scene/CrossSectionStencilCap';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import IslandSurfaceDotsOverlay from '@/components/scene/IslandSurfaceDotsOverlay';
+import { IslandOverhangOverlay } from '@/components/scene/IslandOverhangOverlay';
+import type { DetectedIsland } from '@/volumeAnalysis/Islands/types';
 import { IslandVoxelVisualization } from '@/components/scene/IslandVoxelVisualization';
 import { IslandExpansionVisualization } from '@/components/scene/IslandExpansionVisualization';
 import { MeshClassificationRenderer } from '@/components/scene/MeshClassificationRenderer';
 import { IslandIdLabels } from '@/components/scene/IslandIdLabels';
 import { ScreenSpaceGizmo as UnifiedGizmo } from '@/components/gizmo';
 import { warmTransformGizmoGeometryCache } from '@/components/gizmo/gizmoGeometryCache';
+import { cancelActiveGizmoDrag } from '@/components/gizmo/gizmoDragRegistry';
 import { PickingDebugOverlay } from '@/components/picking';
-import { SelectionProvider, SelectionManager, SelectionOutlineRenderer, SelectionSpotlight } from '@/components/selection';
+import { SelectionProvider, SelectionManager, SelectionSpotlight } from '@/components/selection';
 import type { SelectionHighlightMode } from '@/components/selection';
 import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
 import type { ScanResults } from '@/volumeAnalysis/islandVolume/steps/voxelization/ScanOrchestrator';
 import type { BasinFillSimulator } from '@/volumeAnalysis/islandVolume/steps/expansion/BasinFillSimulator';
 import type { BasinFillProxy } from '@/volumeAnalysis/islandVolume/steps/expansion/BasinFillProxy';
 import type { TransformMode, ModelTransform } from '@/hooks/useModelTransform';
-import type { SupportMode } from '@/supports/types';
+import type { Segment, SupportMode } from '@/supports/types';
+import type { ContactCone } from '@/supports/SupportPrimitives/ContactCone/types';
 import type { SupportData } from '@/supports/rendering';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { getModelIdForSupportEntityId } from '@/supports/state';
@@ -54,11 +59,27 @@ import { clearSupportSelection } from '@/supports/interaction/shared/selection/s
 import { isSupportTargetHoverCategory } from '@/supports/interaction/shared/hover/supportHoverResolver';
 import { useSceneHoveredSupportId } from '@/supports/interaction/shared/hover/sceneHoverStore';
 import { SupportLimitationFeedback } from '@/supports/PlacementLogic/SupportLimitations';
+import {
+  getSupportPlacementHelpEnabled,
+  subscribeSupportPlacementHelp,
+} from '@/components/settings/supportPlacementPreferences';
 import { useCurveInteractionState } from '@/supports/Curves/curveInteractionState';
 import { getSettings, subscribeToSettings } from '@/supports/Settings';
 import { DEFAULT_TIP_CONTACT_DIAMETER_MM } from '@/supports/Settings/defaults';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import { CameraFocusHotkeyController, CameraHomeResetController, CameraIntroController, SpaceMouseController, useStlLoadCameraIntro } from '@/components/scene/camera';
+import {
+  CameraControlsRecovery,
+  CameraFocusHotkeyController,
+  CameraHomeResetController,
+  CameraIntroController,
+  NativeSpaceMouseController,
+  SpaceMouseController,
+  useStlLoadCameraIntro,
+} from '@/components/scene/camera';
+import {
+  getNativeSpaceMouseActive,
+  subscribeNativeSpaceMouseActive,
+} from '@/components/scene/camera/nativeSpaceMouseBridge';
 import { CameraFocusController } from '@/components/scene/CameraFocusController';
 
 import { PickingStateSyncer } from '../PickingStateSyncer';
@@ -83,12 +104,23 @@ import {
   OrbitPivotIndicator,
 } from './SceneCanvasCameraControllers';
 import { useMarqueeSelectionHandlers } from './useMarqueeSelectionHandlers';
+import {
+  marqueeModeForDrag,
+  marqueeRectForDrag,
+  meshHitsMarquee,
+  ringHitsMarquee,
+  shapeHitsMarquee,
+  type MarqueePoint,
+  type MarqueeSegment,
+  type ProjectedMesh,
+} from './marqueeHitTest';
 import { PickingEmptySpaceHoverResetter, SceneRenderBindings } from './SceneCanvasInteractionBits';
 
 import { PickingProviderWrapper, SelectionSync, useInteractionWarning } from './SceneSelectionAndPicking';
 import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers, Lights, SceneMoodOverlay } from './SceneEnvironment';
 import { StlMesh } from './StlMesh';
 import { setClipBounds } from './clipBoundsStore';
+import { setModelMesh } from '@/supports/autoSupport/meshStore';
 import { useIsLinux } from '@/hooks/usePlatform';
 import {
   DEFAULT_CAMERA_PROJECTION_SETTINGS,
@@ -96,6 +128,11 @@ import {
   subscribeToCameraProjectionSettings,
   type CameraProjectionMode,
 } from '@/components/settings/cameraProjectionPreferences';
+import {
+  DEFAULT_CAMERA_FOV_SETTINGS,
+  getSavedCameraFovSettings,
+  subscribeToCameraFovSettings,
+} from '@/components/settings/cameraFovPreferences';
 import {
   DEFAULT_CAMERA_FEEL_SETTINGS,
   getSavedCameraFeelSettings,
@@ -129,6 +166,8 @@ import {
 } from '@/utils/modelBounds';
 import { computeLowestZ } from '@/utils/geometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { Toast } from '@/components/atoms';
+import { getCenteredPositions } from '@/utils/modelBounds';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 import { SupportPathfindingDebugHud, SupportPathfindingDebugOverlay } from '@/components/scene/SupportPathfindingDebugOverlay';
 import {
@@ -138,6 +177,8 @@ import {
   toggleSupportPathfindingDebugTuningEnabled,
 } from '@/supports/PlacementLogic/Pathfinding/pathfindingDebugState';
 import { applyScaleFactor } from '@/components/gizmo/scale/applyScaleFactor';
+import { createWheelDeviceClassifier, type WheelDevice } from '@/components/scene/SceneCanvas/wheelDeviceClassifier';
+import { getSelectionGizmoCenter } from '@/features/scene/selectionPosition';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
@@ -149,25 +190,107 @@ type GhostPreviewTransform = {
 
 type TrackpadGestureAction = 'pan' | 'orbit';
 
-function isLikelyTrackpadWheelEvent(event: WheelEvent): boolean {
-  // Use numeric DOM_DELTA_PIXEL (=0) to avoid relying on global WheelEvent in all runtimes.
-  if (event.deltaMode !== 0) return false;
-  if (event.ctrlKey) return true;
+// Interpolated and pluralized, so it follows the house rule: a static ICU
+// pattern in a module-level formatter with the value passed to `translate`.
+// Inline template literals get their placeholders renamed by the React
+// Compiler, and the renamed id then misses the catalog in production builds.
+function formatOutOfBoundsLabel(
+  translate: (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string,
+  count: number,
+): string {
+  return translate(msg({
+    message: '{count, plural, one {# model out of build volume} other {# models out of build volume}}',
+    comment: 'Warning badge over the viewport when models stick out of the printer build volume.',
+  }), { count });
+}
 
-  const absX = Math.abs(event.deltaX);
-  const absY = Math.abs(event.deltaY);
-  const dominantDelta = Math.max(absX, absY);
-  const recessiveDelta = Math.min(absX, absY);
+/**
+ * Projects a model's mesh to container pixels for the marquee hit test. Runs
+ * once per drag — the camera cannot move while the marquee is up — and the
+ * result is reused for every pointer move.
+ */
+function projectModelMesh(
+  positions: Float32Array,
+  modelMatrix: THREE.Matrix4,
+  camera: THREE.Camera,
+  rect: DOMRect,
+): ProjectedMesh {
+  const clip = new THREE.Matrix4()
+    .multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+    .multiply(modelMatrix);
+  const m = clip.elements;
 
-  if (dominantDelta <= 0) return false;
+  const count = positions.length / 3;
+  const xs = new Float32Array(count);
+  const ys = new Float32Array(count);
 
-  // Exclude typical mouse wheel events: one axis nearly zero, other large.
-  // This prevents regular mouse scroll from triggering trackpad gestures.
-  if (recessiveDelta < 2 && dominantDelta > 16) return false;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let dropped = false;
 
-  if (absX > 0) return true;
-  if (!Number.isInteger(event.deltaX) || !Number.isInteger(event.deltaY)) return true;
-  return dominantDelta <= 16;
+  for (let i = 0; i < count; i += 1) {
+    const px = positions[i * 3];
+    const py = positions[(i * 3) + 1];
+    const pz = positions[(i * 3) + 2];
+
+    const w = (m[3] * px) + (m[7] * py) + (m[11] * pz) + m[15];
+    if (w <= 0) {
+      // Behind the camera: no screen position to compare against.
+      xs[i] = NaN;
+      ys[i] = NaN;
+      dropped = true;
+      continue;
+    }
+
+    const ndcX = ((m[0] * px) + (m[4] * py) + (m[8] * pz) + m[12]) / w;
+    const ndcY = ((m[1] * px) + (m[5] * py) + (m[9] * pz) + m[13]) / w;
+
+    const x = ((ndcX + 1) * 0.5) * rect.width;
+    const y = ((1 - ndcY) * 0.5) * rect.height;
+
+    xs[i] = x;
+    ys[i] = y;
+
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+
+  return {
+    xs,
+    ys,
+    count,
+    bounds: minX > maxX ? null : { minX, minY, maxX, maxY },
+    dropped,
+  };
+}
+
+/**
+ * Projects support positions to container pixels for the marquee hit test.
+ * Points that fall outside clip space come back as null.
+ */
+function makeSupportPointProjector(rect: DOMRect, camera: THREE.Camera) {
+  const point = new THREE.Vector3();
+  const projected = new THREE.Vector3();
+
+  return (positions: Array<{ x: number; y: number; z: number }>): Array<MarqueePoint | null> => (
+    positions.map((position) => {
+      projected.copy(point.set(position.x, position.y, position.z)).project(camera);
+
+      if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y) || !Number.isFinite(projected.z)) {
+        return null;
+      }
+      if (projected.z < -1 || projected.z > 1) return null;
+
+      return {
+        x: ((projected.x + 1) * 0.5) * rect.width,
+        y: ((1 - projected.y) * 0.5) * rect.height,
+      };
+    })
+  );
 }
 
 function isTrackpadModifierPressed(event: WheelEvent, modifierKey: CameraTrackpadModifierKey): boolean {
@@ -176,33 +299,20 @@ function isTrackpadModifierPressed(event: WheelEvent, modifierKey: CameraTrackpa
 
 function resolveTrackpadGestureAction(
   event: WheelEvent,
+  device: WheelDevice,
   primaryAction: CameraTrackpadPrimaryAction,
   modifierKey: CameraTrackpadModifierKey,
 ): TrackpadGestureAction | null {
   if (primaryAction === 'off') return null;
   if (event.ctrlKey || event.metaKey) return null;
-  if (!isLikelyTrackpadWheelEvent(event)) return null;
+  if (device !== 'trackpad') return null;
 
   const modifierPressed = isTrackpadModifierPressed(event, modifierKey);
   if (!modifierPressed) return primaryAction;
   return primaryAction === 'pan' ? 'orbit' : 'pan';
 }
 
-function computeFloatingPanelWidthScale(width: number, height: number) {
-  if (width >= 3200 && height >= 1100) return 1.14;
-  if (width >= 2600 && height >= 980) return 1.08;
-  if (width <= 1100 || height <= 700) return 0.72;
-  if (width <= 1366 || height <= 820) return 0.82;
-  if (width <= 1600 || height <= 900) return 0.9;
-  if (width <= 1800 || height <= 980) return 0.95;
-  return 1;
-}
-
-function computeVisualSettingsPanelWidth(width: number, height: number) {
-  const baseWidth = 48;
-  const scale = Math.min(1, computeFloatingPanelWidthScale(width, height));
-  return Math.max(44, Math.round(baseWidth * scale));
-}
+const EMPTY_MODEL_ID_LIST: readonly string[] = Object.freeze([]);
 
 const FLOATING_PANEL_RIGHT_INSET_PX = 12;
 // Drei GizmoHelper positions by gizmo center, not right edge.
@@ -320,8 +430,8 @@ export function SceneCanvas({
   flatUseVertexColors,
   toonSteps,
   xrayOpacity,
-  heatmapBlend,
-  heatmapContrast,
+  heatmapMinAngle,
+  heatmapMaxAngle,
   heatmapColors,
   interiorView = false,
   disableRaycast,
@@ -331,11 +441,12 @@ export function SceneCanvas({
   onCameraChange,
   onCameraEnd,
   islandMarkers,
+  overhangIslands,
   overlayBrushRadius,
   overlayColor,
   overlayOpacity,
   overlaySelectedIslandId,
-  enableVolumeGlow = true,
+  showOverhangs = true,
   materialRoughness,
   scanResults,
   layerHeightMm,
@@ -349,6 +460,7 @@ export function SceneCanvas({
   transformMode,
   transform,
   uniformScaling = true,
+  localTransformSpace = false,
   autoLift = false,
   liftDistance = 5,
   autoSnapEnabled = true,
@@ -362,6 +474,9 @@ export function SceneCanvas({
   onSupportClick,
   onHolePunchClick,
   onHolePunchHover,
+  onOrganicCutClick,
+  organicCutDragging,
+  organicCutKeyGizmo,
   onSupportHover,
   onActiveModelChange,
   onMarqueeSelectionChange,
@@ -438,8 +553,8 @@ export function SceneCanvas({
   flatUseVertexColors?: boolean;
   toonSteps?: number;
   xrayOpacity?: number;
-  heatmapBlend?: number;
-  heatmapContrast?: number;
+  heatmapMinAngle?: number;
+  heatmapMaxAngle?: number;
   heatmapColors?: string[];
   interiorView?: boolean;
   disableRaycast?: boolean;
@@ -447,11 +562,12 @@ export function SceneCanvas({
   onCameraChange?: () => void;
   onCameraEnd?: () => void;
   islandMarkers?: IslandMarker[];
+  overhangIslands?: DetectedIsland[];
   overlayBrushRadius?: number;
   overlayColor?: string;
   overlayOpacity?: number;
   overlaySelectedIslandId?: number | null;
-  enableVolumeGlow?: boolean;
+  showOverhangs?: boolean;
   ambientIntensity?: number;
   directionalIntensity?: number;
   headlightIntensity?: number;
@@ -468,6 +584,8 @@ export function SceneCanvas({
   transformMode?: TransformMode;
   transform?: ModelTransform;
   uniformScaling?: boolean;
+  /** Drive the transform gizmo in the model's own frame instead of the world axes. */
+  localTransformSpace?: boolean;
   autoLift?: boolean;
   liftDistance?: number;
   autoSnapEnabled?: boolean;
@@ -500,6 +618,15 @@ export function SceneCanvas({
   onSupportClick?: (hit: THREE.Intersection) => void;
   onHolePunchClick?: (hit: THREE.Intersection) => void;
   onHolePunchHover?: (hit: THREE.Intersection | null) => void;
+  onOrganicCutClick?: (hit: THREE.Intersection) => void;
+  /** True while an organic-cut waypoint is being dragged — disables OrbitControls. */
+  organicCutDragging?: boolean;
+  /**
+   * The cut-tool registration-tenon aim/roll gizmo, rendered INSIDE the picking
+   * provider (so its handles are grabbable through the model). Supplied by the host
+   * because the gizmo needs session state; null when the cut tool isn't active.
+   */
+  organicCutKeyGizmo?: React.ReactNode;
   onSupportHover?: (hit: THREE.Intersection | null) => void;
   onActiveModelChange?: (id: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => void;
   onMarqueeSelectionChange?: (ids: string[]) => void;
@@ -678,6 +805,11 @@ export function SceneCanvas({
     () => getSavedCameraProjectionSettings().mode,
     () => DEFAULT_CAMERA_PROJECTION_SETTINGS.mode,
   );
+  const perspectiveFov = React.useSyncExternalStore(
+    subscribeToCameraFovSettings,
+    () => getSavedCameraFovSettings().fov,
+    () => DEFAULT_CAMERA_FOV_SETTINGS.fov,
+  );
   const cameraFeelPreset = React.useSyncExternalStore(
     subscribeToCameraFeelSettings,
     () => getSavedCameraFeelSettings().preset,
@@ -726,48 +858,9 @@ export function SceneCanvas({
     isKickstandPlacementActive,
     isJointCreationActive
   ]);
-  const [viewportSizeForUiAnchors, setViewportSizeForUiAnchors] = React.useState({ width: 0, height: 0 });
-
-  React.useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const container = containerRef.current;
-    if (!container) return;
-
-    const updateViewportSize = () => {
-      const next = {
-        width: container.clientWidth,
-        height: container.clientHeight,
-      };
-
-      setViewportSizeForUiAnchors((prev) => {
-        if (prev.width === next.width && prev.height === next.height) return prev;
-        return next;
-      });
-    };
-
-    updateViewportSize();
-    const observer = new ResizeObserver(updateViewportSize);
-    observer.observe(container);
-    window.addEventListener('resize', updateViewportSize);
-
-    return () => {
-      observer.disconnect();
-      window.removeEventListener('resize', updateViewportSize);
-    };
-  }, []);
-
-  const nonPrintingViewCubeRightMargin = React.useMemo(() => {
-    const width = viewportSizeForUiAnchors.width > 0
-      ? viewportSizeForUiAnchors.width
-      : (typeof window === 'undefined' ? 1920 : window.innerWidth);
-    const height = viewportSizeForUiAnchors.height > 0
-      ? viewportSizeForUiAnchors.height
-      : (typeof window === 'undefined' ? 1080 : window.innerHeight);
-
-    const visualSettingsPanelWidth = computeVisualSettingsPanelWidth(width, height);
-    const visualSettingsLeftInset = visualSettingsPanelWidth + FLOATING_PANEL_RIGHT_INSET_PX;
-    return visualSettingsLeftInset + VIEW_CUBE_PANEL_GAP_PX + VIEW_CUBE_HALF_EXTENT_PX;
-  }, [viewportSizeForUiAnchors.height, viewportSizeForUiAnchors.width]);
+  // The visual-settings panel is a fixed 48px-wide strip; the view cube offsets
+  // by its full extent so it never overlaps the floating panel.
+  const nonPrintingViewCubeRightMargin = 48 + FLOATING_PANEL_RIGHT_INSET_PX + VIEW_CUBE_PANEL_GAP_PX + VIEW_CUBE_HALF_EXTENT_PX;
 
   const smoothingProcessing = React.useSyncExternalStore(
     subscribeToMeshSmoothingProcessingState,
@@ -945,6 +1038,8 @@ export function SceneCanvas({
   const supportPlacementGuideRafRef = React.useRef<number | null>(null);
   const supportPlacementGuidePendingZRef = React.useRef<number | null>(null);
   const [supportPlacementGuideZ, setSupportPlacementGuideZ] = React.useState<number | null>(null);
+  const [supportHelpEnabled, setSupportHelpEnabled] = React.useState(() => getSupportPlacementHelpEnabled());
+  React.useEffect(() => subscribeSupportPlacementHelp(() => setSupportHelpEnabled(getSupportPlacementHelpEnabled())), []);
 
   const [isModelSelected, setIsModelSelected] = React.useState(true); // Track for gizmo visibility
 
@@ -953,6 +1048,10 @@ export function SceneCanvas({
   const effectiveModelSelected = isModelSelected || !!activeModelId;
   const [isGizmoDragging, setIsGizmoDragging] = React.useState(false);
   const [isGizmoRetargeting, setIsGizmoRetargeting] = React.useState(false);
+  // True from the moment a Select-mode model is pressed until the pointer is
+  // released. Drives the bounding-box corner cage, which appears on grab (before
+  // any movement) rather than only once the model is actually moving.
+  const [selectDragPressed, setSelectDragPressed] = React.useState(false);
   const [activeGizmoDragDescriptor, setActiveGizmoDragDescriptor] = React.useState<{
     operation: 'move' | 'rotate' | 'scale';
     axis?: 'x' | 'y' | 'z' | 'uniform';
@@ -1182,6 +1281,9 @@ export function SceneCanvas({
   const wheelZoomInteractionActiveRef = React.useRef(false);
   const trackpadGestureEndTimeoutRef = React.useRef<number | null>(null);
   const trackpadGestureActionRef = React.useRef<TrackpadGestureAction | null>(null);
+  // One classifier for both wheel handlers: they see the same events, and its
+  // verdict is only stable if it watches the whole stream.
+  const wheelDeviceClassifierRef = React.useRef(createWheelDeviceClassifier());
   const navigationResumeDelayRef = React.useRef(0);
   const benchmarkRunIdRef = React.useRef<string | null>(null);
   const [isOrbitInteracting, setIsOrbitInteracting] = React.useState(false);
@@ -1211,6 +1313,14 @@ export function SceneCanvas({
     }, []);
 
   const [mouseOrbitDragRunId, setMouseOrbitDragRunId] = React.useState(0);
+  // When the native 3DxWare/navlib bridge is driving the camera, the Gamepad-API
+  // SpaceMouseController is unmounted entirely so the two never fight over the
+  // same physical puck.
+  const nativeSpaceMouseActive = React.useSyncExternalStore(
+    subscribeNativeSpaceMouseActive,
+    getNativeSpaceMouseActive,
+    getNativeSpaceMouseActive,
+  );
   const activeBuildVolumeSettings = view3dSettings ?? DEFAULT_VIEW3D_SETTINGS;
 
   const buildVolumeCenterTarget = React.useMemo(() => {
@@ -1428,7 +1538,7 @@ export function SceneCanvas({
     text: '#f8fafc',
     accent: '#baf72e',
   });
-  // Orientation labels are resolved out here, in the React tree, and handed to
+    // Orientation labels are resolved out here, in the React tree, and handed to
   // the 3D helpers as props — those live inside the r3f reconciler, where the
   // i18n provider is not in scope. "Front" is shared with the build plate's
   // front-edge marker so both always read the same word.
@@ -1567,12 +1677,13 @@ export function SceneCanvas({
         r: root.diameter / 2,
       }));
 
-      const chamferInset = raftSettingsForBounds.bottomMode === 'line'
-        ? Math.max(0, raftSettingsForBounds.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettingsForBounds.chamferAngle))))
-        : 0;
+      const thickness = raftSettingsForBounds.bottomMode === 'line' ? raftSettingsForBounds.lineHeightMm : raftSettingsForBounds.thickness;
+      const chamferInset = Math.max(0, thickness) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettingsForBounds.chamferAngle))));
+      const wallInset = raftSettingsForBounds.wallEnabled ? Math.max(0, raftSettingsForBounds.wallThickness) : 0;
+      const dynamicMargin = 0.2 + Math.max(chamferInset, wallInset);
 
       const baseProfile = computeFootprint(circles, {
-        marginMm: 0.2 + chamferInset,
+        marginMm: dynamicMargin,
         samplesPerCircle: 24,
       });
 
@@ -2157,6 +2268,14 @@ export function SceneCanvas({
       return transform;
     }
 
+    // Select mode: always report a transform while a model is active so its
+    // supports stay parented to its group (like Modify mode). Keeping them
+    // attached at all times — not just during a gesture — means the model and
+    // its supports never render in different layers, so they can't lag each other.
+    if (transformMode === 'select' && activeModelId && transform) {
+      return transform;
+    }
+
     if (transformMode === 'arrange' && transform) {
       return transform;
     }
@@ -2173,6 +2292,13 @@ export function SceneCanvas({
 
   const useActiveModelAttachedSupportProxy = React.useMemo(() => {
     if (mode !== 'prepare' || !activeModelId || !activeModelVisualSupportTransform) return false;
+
+    // Select mode: the active model's supports are ALWAYS parented to its group,
+    // so the model and its supports render in the same layer at every moment and
+    // can never lag each other during a drag (no press/drag/release transitions).
+    if (transformMode === 'select' && activeModelId) {
+      return true;
+    }
 
     // During live gizmo interaction, force active-model support attachment so
     // global support batching doesn't get dragged as a single cloud.
@@ -2477,19 +2603,10 @@ export function SceneCanvas({
   const multiGizmoAnchorRef = React.useRef<THREE.Group | null>(null);
 
   const computeCenterFromTransforms = React.useCallback((byModelId: Record<string, ModelTransform>) => {
-    const ids = selectedTransformableModelIds;
-    if (ids.length === 0) return null;
-
-    const sum = new THREE.Vector3();
-    let count = 0;
-    for (const modelId of ids) {
-      const t = byModelId[modelId];
-      if (!t) continue;
-      sum.add(t.position);
-      count += 1;
-    }
-    if (count === 0) return null;
-    return sum.multiplyScalar(1 / count);
+    return getSelectionGizmoCenter(
+      selectedTransformableModelIds,
+      (modelId) => byModelId[modelId]?.position,
+    );
   }, [selectedTransformableModelIds]);
 
   const setMultiGizmoAnchorPosition = React.useCallback((position: THREE.Vector3 | null) => {
@@ -2559,6 +2676,247 @@ export function SceneCanvas({
     return map;
   }, [models]);
 
+  // Model matrices for the marquee, rebuilt whenever a model moves.
+  const modelMarqueeMatrices = React.useMemo(() => {
+    const map = new Map<string, THREE.Matrix4>();
+
+    for (const model of models) {
+      if (!model.visible) continue;
+
+      const t = (model.id === activeTransformOverrideModelId && transform) ? transform : model.transform;
+      map.set(model.id, new THREE.Matrix4().compose(
+        t.position,
+        quaternionFromGlobalEuler(t.rotation),
+        t.scale,
+      ));
+    }
+
+    return map;
+  }, [activeTransformOverrideModelId, models, transform]);
+
+  // Projected meshes are heavy to build and identical for every pointer move of
+  // one drag, so they are cached until the camera, the viewport or a model
+  // transform makes them stale.
+  const projectedModelMeshesRef = React.useRef<{
+    matrices: Map<string, THREE.Matrix4>;
+    cameraKey: string;
+    viewportKey: string;
+    meshes: Map<string, ProjectedMesh>;
+  } | null>(null);
+
+  const getProjectedModelMeshes = React.useCallback((rect: DOMRect, camera: THREE.Camera) => {
+    const cameraKey = `${camera.projectionMatrix.elements.join(',')}|${camera.matrixWorldInverse.elements.join(',')}`;
+    const viewportKey = `${rect.width}x${rect.height}`;
+    const cached = projectedModelMeshesRef.current;
+
+    if (
+      cached
+      && cached.matrices === modelMarqueeMatrices
+      && cached.cameraKey === cameraKey
+      && cached.viewportKey === viewportKey
+    ) {
+      return cached.meshes;
+    }
+
+    const meshes = new Map<string, ProjectedMesh>();
+    for (const model of models) {
+      if (!model.visible) continue;
+
+      const matrix = modelMarqueeMatrices.get(model.id);
+      const positions = getCenteredPositions(model.geometry);
+      if (!matrix || !positions) continue;
+
+      meshes.set(model.id, projectModelMesh(positions, matrix, camera, rect));
+    }
+
+    projectedModelMeshesRef.current = { matrices: modelMarqueeMatrices, cameraKey, viewportKey, meshes };
+    return meshes;
+  }, [modelMarqueeMatrices, models]);
+
+  // The outline of each model's raft, at the plate and at its top, so a drag
+  // can catch the raft the same way it catches the model and its supports.
+  const raftMarqueeRingsByModelId = React.useMemo(() => {
+    const map = new Map<string, Array<Array<{ x: number; y: number; z: number }>>>();
+    if (raftSettingsForBounds.bottomMode === 'off') return map;
+
+    const circlesByModelId = new Map<string, SupportBaseCircle[]>();
+    const collectRoot = (modelId: string | undefined, pos: { x: number; y: number }, diameter: number) => {
+      if (!modelId) return;
+      const circles = circlesByModelId.get(modelId) ?? [];
+      circles.push({ x: pos.x, y: pos.y, r: diameter / 2 });
+      circlesByModelId.set(modelId, circles);
+    };
+
+    for (const root of Object.values(supportStateForBounds.roots)) {
+      collectRoot(root.modelId, root.transform.pos, root.diameter);
+    }
+    for (const root of Object.values(kickstandStateForBounds.roots)) {
+      collectRoot(root.modelId, root.transform.pos, root.diameter);
+    }
+
+    const thickness = raftSettingsForBounds.bottomMode === 'line'
+      ? raftSettingsForBounds.lineHeightMm
+      : raftSettingsForBounds.thickness;
+    const chamferInset = Math.max(0, thickness) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettingsForBounds.chamferAngle))));
+    const wallInset = raftSettingsForBounds.wallEnabled ? Math.max(0, raftSettingsForBounds.wallThickness) : 0;
+    const dynamicMargin = 0.2 + Math.max(chamferInset, wallInset);
+    const raftMaxZ = thickness + (raftSettingsForBounds.wallEnabled ? raftSettingsForBounds.wallHeight : 0);
+
+    for (const [modelId, circles] of circlesByModelId) {
+      const baseProfile = computeFootprint(circles, { marginMm: dynamicMargin, samplesPerCircle: 24 });
+      if (!baseProfile || baseProfile.length < 3) continue;
+
+      const outerProfile = raftSettingsForBounds.wallEnabled
+        ? computeRaftOuterBoundary(baseProfile, raftSettingsForBounds)
+        : baseProfile;
+      if (!outerProfile || outerProfile.length < 3) continue;
+
+      map.set(modelId, [
+        outerProfile.map((p) => ({ x: p.x, y: p.y, z: 0 })),
+        outerProfile.map((p) => ({ x: p.x, y: p.y, z: raftMaxZ })),
+      ]);
+    }
+
+    return map;
+  }, [kickstandStateForBounds.roots, raftSettingsForBounds, supportStateForBounds.roots]);
+
+  // Every support drawn as the polyline that runs along it: root or host knot,
+  // each joint in order, and the contact cone at the tip. Built once per state
+  // change — the marquee walks this on every pointer move. A curved segment is
+  // approximated by its chord.
+  const supportMarqueeShapes = React.useMemo(() => {
+    type SupportPoint = { x: number; y: number; z: number };
+
+    const shapes: Array<{
+      id: string;
+      modelId: string | undefined;
+      points: SupportPoint[];
+      struts: MarqueeSegment[];
+    }> = [];
+
+    const chain = (
+      id: string,
+      modelId: string | undefined,
+      positions: Array<SupportPoint | null | undefined>,
+    ) => {
+      if (!id) return;
+
+      const points: SupportPoint[] = [];
+      for (const position of positions) {
+        if (!position) continue;
+        const previous = points[points.length - 1];
+        // Consecutive segments share a joint; keep it once.
+        if (previous && previous.x === position.x && previous.y === position.y && previous.z === position.z) {
+          continue;
+        }
+        points.push(position);
+      }
+
+      if (points.length === 0) return;
+
+      const struts: MarqueeSegment[] = [];
+      for (let i = 1; i < points.length; i += 1) {
+        struts.push([i - 1, i]);
+      }
+
+      shapes.push({ id, modelId, points, struts });
+    };
+
+    const jointPositions = (segments: Segment[]) => segments.flatMap((segment) => [
+      segment.bottomJoint?.pos,
+      segment.topJoint?.pos,
+    ]);
+
+    const conePositions = (cone: ContactCone) => [getFinalSocketPosition(cone), cone.pos];
+
+    for (const root of Object.values(supportStateForBounds.roots)) {
+      chain(root.id, root.modelId, [root.transform.pos]);
+    }
+
+    for (const trunk of Object.values(supportStateForBounds.trunks)) {
+      const root = supportStateForBounds.roots[trunk.rootId];
+      chain(trunk.id, trunk.modelId, [
+        root?.transform.pos,
+        ...jointPositions(trunk.segments),
+        ...(trunk.contactCone ? conePositions(trunk.contactCone) : []),
+      ]);
+    }
+
+    for (const branch of Object.values(supportStateForBounds.branches)) {
+      chain(branch.id, branch.modelId, [
+        supportStateForBounds.knots[branch.parentKnotId]?.pos,
+        ...jointPositions(branch.segments),
+        ...(branch.contactCone ? conePositions(branch.contactCone) : []),
+      ]);
+    }
+
+    for (const leaf of Object.values(supportStateForBounds.leaves)) {
+      if (!leaf.contactCone) continue;
+      chain(leaf.id, leaf.modelId, [
+        supportStateForBounds.knots[leaf.parentKnotId]?.pos,
+        ...conePositions(leaf.contactCone),
+      ]);
+    }
+
+    for (const twig of Object.values(supportStateForBounds.twigs)) {
+      chain(twig.id, twig.modelId, [
+        twig.contactDiskA.pos,
+        ...jointPositions(twig.segments),
+        twig.contactDiskB.pos,
+      ]);
+    }
+
+    for (const stick of Object.values(supportStateForBounds.sticks)) {
+      chain(stick.id, stick.modelId, [
+        stick.contactConeA.pos,
+        getFinalSocketPosition(stick.contactConeA),
+        ...jointPositions(stick.segments),
+        getFinalSocketPosition(stick.contactConeB),
+        stick.contactConeB.pos,
+      ]);
+    }
+
+    for (const brace of Object.values(supportStateForBounds.braces)) {
+      chain(brace.id, brace.modelId, [
+        supportStateForBounds.knots[brace.startKnotId]?.pos,
+        supportStateForBounds.knots[brace.endKnotId]?.pos,
+      ]);
+    }
+
+    for (const anchor of Object.values(supportStateForBounds.anchors)) {
+      chain(anchor.id, anchor.modelId, [
+        anchor.rootPos,
+        anchor.joint?.pos,
+        ...jointPositions(anchor.segments),
+        ...(anchor.contactCone ? conePositions(anchor.contactCone) : []),
+      ]);
+    }
+
+    for (const kickstand of Object.values(kickstandStateForBounds.kickstands)) {
+      const kickstandModelId = kickstand.modelId
+        ?? kickstandStateForBounds.roots[kickstand.rootId]?.modelId;
+      chain(kickstand.id, kickstandModelId, [
+        kickstandStateForBounds.roots[kickstand.rootId]?.transform.pos,
+        ...jointPositions(kickstand.segments),
+        supportStateForBounds.knots[kickstand.hostKnotId]?.pos
+          ?? kickstandStateForBounds.knots[kickstand.hostKnotId]?.pos,
+      ]);
+    }
+
+    return shapes;
+  }, [kickstandStateForBounds, supportStateForBounds]);
+
+  const supportMarqueeShapesByModelId = React.useMemo(() => {
+    const map = new Map<string, typeof supportMarqueeShapes>();
+    for (const shape of supportMarqueeShapes) {
+      if (!shape.modelId) continue;
+      const forModel = map.get(shape.modelId);
+      if (forModel) forModel.push(shape);
+      else map.set(shape.modelId, [shape]);
+    }
+    return map;
+  }, [supportMarqueeShapes]);
+
   const resolveMarqueeSelectedIds = React.useCallback((selection: {
     start: { x: number; y: number };
     current: { x: number; y: number };
@@ -2567,64 +2925,83 @@ export function SceneCanvas({
     const camera = cameraRef.current;
     if (!rect || !camera) return [] as string[];
 
-    if (customPrepareMarqueeSelection?.enabled) {
-      const projected = new THREE.Vector3();
-      return customPrepareMarqueeSelection.resolveSelection(selection, {
-        projectWorldPoint: (point: THREE.Vector3) => {
-          projected.copy(point).project(camera);
-          if (
-            !Number.isFinite(projected.x)
-            || !Number.isFinite(projected.y)
-            || !Number.isFinite(projected.z)
-            || projected.z < -1
-            || projected.z > 1
-          ) {
-            return null;
-          }
+    const projected = new THREE.Vector3();
+    const projectWorldPoint = (point: THREE.Vector3) => {
+      projected.copy(point).project(camera);
+      if (
+        !Number.isFinite(projected.x)
+        || !Number.isFinite(projected.y)
+        || !Number.isFinite(projected.z)
+        || projected.z < -1
+        || projected.z > 1
+      ) {
+        return null;
+      }
 
-          return {
-            x: ((projected.x + 1) * 0.5) * rect.width,
-            y: ((1 - projected.y) * 0.5) * rect.height,
-            z: projected.z,
-          };
-        },
-      });
+      return {
+        x: ((projected.x + 1) * 0.5) * rect.width,
+        y: ((1 - projected.y) * 0.5) * rect.height,
+        z: projected.z,
+      };
+    };
+
+    if (customPrepareMarqueeSelection?.enabled) {
+      return customPrepareMarqueeSelection.resolveSelection(selection, { projectWorldPoint });
     }
 
-    const minX = Math.min(selection.start.x, selection.current.x);
-    const maxX = Math.max(selection.start.x, selection.current.x);
-    const minY = Math.min(selection.start.y, selection.current.y);
-    const maxY = Math.max(selection.start.y, selection.current.y);
+    const marqueeRect = marqueeRectForDrag(selection.start, selection.current);
+    const marqueeMode = marqueeModeForDrag(selection.start, selection.current);
+    const projectSupportPoints = makeSupportPointProjector(rect, camera);
+    const projectedMeshes = getProjectedModelMeshes(rect, camera);
 
-    const projected = new THREE.Vector3();
     const selectedIds: string[] = [];
 
     for (const model of models) {
       if (!model.visible) continue;
 
-      const bounds = modelWorldBounds.get(model.id) ?? computeModelWorldBounds(model, model.transform, buildVolumeBounds);
-      if (bounds.isEmpty()) continue;
+      const mesh = projectedMeshes.get(model.id);
+      if (!mesh) continue;
 
-      projected.copy(bounds.getCenter(new THREE.Vector3()));
-      projected.project(camera);
+      const meshHit = meshHitsMarquee(marqueeRect, mesh, marqueeMode);
 
-      if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y) || !Number.isFinite(projected.z)) {
-        continue;
-      }
+      // A model is selected together with its supports: they are on screen, so
+      // a drag has to enclose them too, and touching one touches the model.
+      const supportShapes = supportMarqueeShapesByModelId.get(model.id) ?? [];
+      const supportHit = marqueeMode === 'window'
+        ? supportShapes.every((shape) => shapeHitsMarquee(
+          marqueeRect,
+          projectSupportPoints(shape.points),
+          shape.struts,
+          'window',
+        ))
+        : supportShapes.some((shape) => shapeHitsMarquee(
+          marqueeRect,
+          projectSupportPoints(shape.points),
+          shape.struts,
+          'crossing',
+        ));
 
-      // Skip centers outside clip space.
-      if (projected.z < -1 || projected.z > 1) continue;
+      const raftRings = raftMarqueeRingsByModelId.get(model.id) ?? [];
+      const raftHit = marqueeMode === 'window'
+        ? raftRings.every((ring) => ringHitsMarquee(marqueeRect, projectSupportPoints(ring), 'window'))
+        : raftRings.some((ring) => ringHitsMarquee(marqueeRect, projectSupportPoints(ring), 'crossing'));
 
-      const sx = ((projected.x + 1) * 0.5) * rect.width;
-      const sy = ((1 - projected.y) * 0.5) * rect.height;
-
-      if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) {
+      const hit = marqueeMode === 'window'
+        ? (meshHit && supportHit && raftHit)
+        : (meshHit || supportHit || raftHit);
+      if (hit) {
         selectedIds.push(model.id);
       }
     }
 
     return selectedIds;
-  }, [buildVolumeBounds, computeModelWorldBounds, customPrepareMarqueeSelection, modelWorldBounds, models]);
+  }, [
+    customPrepareMarqueeSelection,
+    getProjectedModelMeshes,
+    models,
+    raftMarqueeRingsByModelId,
+    supportMarqueeShapesByModelId,
+  ]);
 
   const resolveMarqueeSelectedSupportIds = React.useCallback((selection: {
     start: { x: number; y: number };
@@ -2634,118 +3011,25 @@ export function SceneCanvas({
     const camera = cameraRef.current;
     if (!rect || !camera) return [] as string[];
 
-    const minX = Math.min(selection.start.x, selection.current.x);
-    const maxX = Math.max(selection.start.x, selection.current.x);
-    const minY = Math.min(selection.start.y, selection.current.y);
-    const maxY = Math.max(selection.start.y, selection.current.y);
+    const marqueeRect = marqueeRectForDrag(selection.start, selection.current);
+    const marqueeMode = marqueeModeForDrag(selection.start, selection.current);
+    const projectSupportPoints = makeSupportPointProjector(rect, camera);
 
-    const point = new THREE.Vector3();
-    const projected = new THREE.Vector3();
     const selectedSupportIds: string[] = [];
 
-    const pushIfProjectedInside = (id: string, points: Array<{ x: number; y: number; z: number }>) => {
-      if (!id || points.length === 0) return;
+    // Support mode only draws the active model's supports (SupportRenderer's
+    // `restrictToActiveModel`), so the marquee must not reach the rest.
+    const restrictedToModelId = activeModelId || null;
 
-      point.set(0, 0, 0);
-      for (const p of points) {
-        point.x += p.x;
-        point.y += p.y;
-        point.z += p.z;
+    for (const shape of supportMarqueeShapes) {
+      if (restrictedToModelId && shape.modelId !== restrictedToModelId) continue;
+      if (shapeHitsMarquee(marqueeRect, projectSupportPoints(shape.points), shape.struts, marqueeMode)) {
+        selectedSupportIds.push(shape.id);
       }
-
-      point.multiplyScalar(1 / points.length);
-      projected.copy(point).project(camera);
-
-      if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y) || !Number.isFinite(projected.z)) {
-        return;
-      }
-      if (projected.z < -1 || projected.z > 1) return;
-
-      const sx = ((projected.x + 1) * 0.5) * rect.width;
-      const sy = ((1 - projected.y) * 0.5) * rect.height;
-      if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) {
-        selectedSupportIds.push(id);
-      }
-    };
-
-    const segmentPoints = (segments: Array<{
-      topJoint?: { pos?: { x: number; y: number; z: number } };
-      bottomJoint?: { pos?: { x: number; y: number; z: number } };
-    }>) => {
-      const points: Array<{ x: number; y: number; z: number }> = [];
-      for (const segment of segments) {
-        const top = segment.topJoint?.pos;
-        const bottom = segment.bottomJoint?.pos;
-        if (top) points.push(top);
-        if (bottom) points.push(bottom);
-      }
-      return points;
-    };
-
-    for (const root of Object.values(supportStateForBounds.roots)) {
-      pushIfProjectedInside(root.id, [root.transform.pos]);
-    }
-
-    for (const trunk of Object.values(supportStateForBounds.trunks)) {
-      const points = segmentPoints(trunk.segments);
-      if (trunk.contactCone) {
-        points.push(trunk.contactCone.pos);
-        points.push(getFinalSocketPosition(trunk.contactCone));
-      }
-      pushIfProjectedInside(trunk.id, points);
-    }
-
-    for (const branch of Object.values(supportStateForBounds.branches)) {
-      const points = segmentPoints(branch.segments);
-      if (branch.contactCone) {
-        points.push(branch.contactCone.pos);
-        points.push(getFinalSocketPosition(branch.contactCone));
-      }
-      pushIfProjectedInside(branch.id, points);
-    }
-
-    for (const leaf of Object.values(supportStateForBounds.leaves)) {
-      if (!leaf.contactCone) continue;
-      pushIfProjectedInside(leaf.id, [leaf.contactCone.pos, getFinalSocketPosition(leaf.contactCone)]);
-    }
-
-    for (const twig of Object.values(supportStateForBounds.twigs)) {
-      const points = segmentPoints(twig.segments);
-      points.push(twig.contactDiskA.pos, twig.contactDiskB.pos);
-      pushIfProjectedInside(twig.id, points);
-    }
-
-    for (const stick of Object.values(supportStateForBounds.sticks)) {
-      const points = segmentPoints(stick.segments);
-      points.push(stick.contactConeA.pos, stick.contactConeB.pos);
-      points.push(getFinalSocketPosition(stick.contactConeA), getFinalSocketPosition(stick.contactConeB));
-      pushIfProjectedInside(stick.id, points);
-    }
-
-    for (const brace of Object.values(supportStateForBounds.braces)) {
-      const startKnot = supportStateForBounds.knots[brace.startKnotId];
-      const endKnot = supportStateForBounds.knots[brace.endKnotId];
-      const points: Array<{ x: number; y: number; z: number }> = [];
-      if (startKnot?.pos) points.push(startKnot.pos);
-      if (endKnot?.pos) points.push(endKnot.pos);
-      pushIfProjectedInside(brace.id, points);
-    }
-
-    for (const anchor of Object.values(supportStateForBounds.anchors)) {
-      const points: Array<{ x: number; y: number; z: number }> = [anchor.rootPos];
-      if (anchor.contactCone) {
-        points.push(anchor.contactCone.pos);
-      }
-      pushIfProjectedInside(anchor.id, points);
-    }
-
-    for (const kickstand of Object.values(kickstandStateForBounds.kickstands)) {
-      const points = segmentPoints(kickstand.segments);
-      pushIfProjectedInside(kickstand.id, points);
     }
 
     return selectedSupportIds;
-  }, [kickstandStateForBounds.kickstands, supportStateForBounds]);
+  }, [activeModelId, supportMarqueeShapes]);
 
   const {
     marqueeSelection,
@@ -2765,11 +3049,7 @@ export function SceneCanvas({
     isPostGizmoInteractionGuardActive,
     hoveredModelId,
     supportHoveredCategory: supportStateForBounds.hoveredCategory,
-    onActiveModelChange,
-    activeModelId,
     selectedModelIds,
-    isOrbitInteracting,
-    spaceMouseNavigationActive,
     onMarqueeSelectionChange: customPrepareMarqueeSelection?.enabled
       ? customPrepareMarqueeSelection.onSelectionChange
       : onMarqueeSelectionChange,
@@ -2777,6 +3057,27 @@ export function SceneCanvas({
     resolveMarqueeSelectedSupportIds,
     suppressNextCanvasClickRef,
   });
+
+  // The projected meshes are worth a few MB per model, and only a live drag
+  // reads them.
+  React.useEffect(() => {
+    if (!marqueeSelection) projectedModelMeshesRef.current = null;
+  }, [marqueeSelection]);
+
+  const marqueeMode = React.useMemo(
+    () => (marqueeSelection ? marqueeModeForDrag(marqueeSelection.start, marqueeSelection.current) : null),
+    [marqueeSelection],
+  );
+  const marqueeHue = marqueeMode === 'crossing' ? 'var(--accent)' : 'var(--accent-secondary)';
+  const marqueeModeLabel = marqueeMode === 'crossing'
+    ? _(msg({
+      message: 'Selection Mode: Contact (Right to Left)',
+      comment: 'Shown while dragging a selection rectangle right to left, which takes every object the rectangle touches. Mirrors the CAD convention; keep it on one short line.',
+    }))
+    : _(msg({
+      message: 'Selection Mode: Enclosed (Left to Right)',
+      comment: 'Shown while dragging a selection rectangle left to right, which takes only the objects the rectangle fully encloses. Mirrors the CAD convention; keep it on one short line.',
+    }));
 
   const marqueeCandidateIdSet = React.useMemo(() => {
     if (!marqueeSelection || mode !== 'prepare') return new Set<string>();
@@ -2788,6 +3089,13 @@ export function SceneCanvas({
 
     return new Set(resolveMarqueeSelectedIds(marqueeSelection));
   }, [marqueeSelection, mode, resolveMarqueeSelectedIds]);
+
+  // Models the marquee would take if the drag ended now, so their supports can
+  // tint along with them.
+  const marqueeCandidateModelIds = React.useMemo(
+    () => (isMarqueeSelecting ? Array.from(marqueeCandidateIdSet) : EMPTY_MODEL_ID_LIST),
+    [isMarqueeSelecting, marqueeCandidateIdSet],
+  );
 
   const supportMarqueeCandidateIdSet = React.useMemo(() => {
     if (!marqueeSelection || mode !== 'support') return new Set<string>();
@@ -3158,11 +3466,17 @@ export function SceneCanvas({
       ids.push(duplicateSourceSupportPreviewModelId);
     }
     if (useActiveModelAttachedSupportProxy && activeModelId) ids.push(activeModelId);
+    // When a model is hidden via the model manager panel, its supports should
+    // also be hidden so they don't float orphaned in the scene.
+    for (const model of models) {
+      if (!model.visible) ids.push(model.id);
+    }
     return Array.from(new Set(ids));
   }, [
     activeModelId,
     arrangeSupportPreviewModelIds,
     duplicateSourceSupportPreviewModelId,
+    models,
     multiGizmoSupportPreviewIds,
     renderDuplicateSourceSupportGhostPreview,
     useActiveModelAttachedSupportProxy,
@@ -3211,31 +3525,56 @@ export function SceneCanvas({
     return activeModel.transform;
   }, [activeModel, transform, activeModelId]);
 
+  // Local space puts the gizmo in the model's own frame: its arrows point along the
+  // model's axes and its rings turn about them. A multi-selection has no single
+  // frame to borrow, so it stays on the world axes.
+  const gizmoUsesLocalFrame = localTransformSpace && !isMultiGizmoSelection;
+
+  const gizmoFrameQuaternion = React.useMemo(() => (
+    gizmoUsesLocalFrame && activeModelTransform
+      ? quaternionFromGlobalEuler(activeModelTransform.rotation)
+      : new THREE.Quaternion()
+  ), [activeModelTransform, gizmoUsesLocalFrame]);
+
+  const gizmoFrameRotation = React.useMemo<[number, number, number]>(() => {
+    // The gizmo group takes an XYZ-ordered Euler, so the model's global-axis
+    // rotation has to travel through a quaternion to arrive unchanged.
+    const frame = new THREE.Euler().setFromQuaternion(gizmoFrameQuaternion, 'XYZ');
+    return [frame.x, frame.y, frame.z];
+  }, [gizmoFrameQuaternion]);
+
+  /**
+   * Where a gizmo handle's axis points in world coordinates. Handles with no axis
+   * of their own (the centre nub) get a zero vector, which reads as horizontal.
+   */
+  const gizmoAxisWorldDirection = React.useCallback((axis?: 'x' | 'y' | 'z') => new THREE.Vector3(
+    axis === 'x' ? 1 : 0,
+    axis === 'y' ? 1 : 0,
+    axis === 'z' ? 1 : 0,
+  ).applyQuaternion(gizmoFrameQuaternion), [gizmoFrameQuaternion]);
+
+  /**
+   * The frame a rotation drag turns about, frozen at the grab. In local space that
+   * is the model's orientation when the drag started — and since a rotation about
+   * an axis leaves that same axis where it was, holding it for the whole gesture is
+   * exact, not an approximation. Identity in world space.
+   */
+  const gizmoRotationFrameRef = React.useRef(new THREE.Quaternion());
+
   const multiGizmoCenter = React.useMemo(() => {
     if (!isMultiGizmoSelection || selectedTransformableModelIds.length === 0) return null;
 
-    const sum = new THREE.Vector3();
-    let count = 0;
-
-    for (const modelId of selectedTransformableModelIds) {
+    return getSelectionGizmoCenter(selectedTransformableModelIds, (modelId) => {
       const preview = multiGizmoPreviewTransformsById[modelId];
-      if (preview) {
-        sum.add(preview.position);
-        count += 1;
-        continue;
-      }
+      if (preview) return preview.position;
 
       const model = models.find((entry) => entry.id === modelId);
-      if (!model) continue;
+      if (!model) return undefined;
       const sourceTransform = (modelId === activeModelId && liveActiveTransformForMultiPreview)
         ? liveActiveTransformForMultiPreview
         : model.transform;
-      sum.add(sourceTransform.position);
-      count += 1;
-    }
-
-    if (count === 0) return null;
-    return sum.multiplyScalar(1 / count);
+      return sourceTransform.position;
+    });
   }, [
     activeModelId,
     isMultiGizmoSelection,
@@ -3365,6 +3704,15 @@ export function SceneCanvas({
 
   const dragCornerCageModelIds = React.useMemo(() => {
     if (mode !== 'prepare') return [] as string[];
+    // Modify mode shows the cage only while a gizmo drag is running; Select mode
+    // shows it from the moment the model is pressed (grabbed) through the end of
+    // the drag — not just while the model is actively moving — and it follows the
+    // model as it moves.
+    if (transformMode === 'select') {
+      if (!activeModelId) return [] as string[];
+      if (!selectDragPressed && !isGizmoDragging) return [] as string[];
+      return modelById.get(activeModelId)?.visible ? [activeModelId] : ([] as string[]);
+    }
     if (transformMode !== 'transform') return [] as string[];
     if (!isGizmoDragging || !activeModelId) return [] as string[];
 
@@ -3376,7 +3724,7 @@ export function SceneCanvas({
       const model = modelById.get(modelId);
       return !!model?.visible;
     });
-  }, [activeModelId, isGizmoDragging, isMultiGizmoSelection, mode, modelById, selectedTransformableModelIds, transformMode]);
+  }, [activeModelId, isGizmoDragging, isMultiGizmoSelection, mode, modelById, selectDragPressed, selectedTransformableModelIds, transformMode]);
 
   const updateDragCornerCagesNow = React.useCallback(() => {
     if (dragCornerCageModelIds.length === 0) {
@@ -3979,6 +4327,14 @@ export function SceneCanvas({
       const isEscapeJustPressed = isEscapePressed && !wasEscapePressed;
 
       if (isEscapeJustPressed) {
+        // A gizmo handle being dragged owns Escape: it calls the gesture off and
+        // puts back what it had changed. Dropping the selection instead pulled
+        // the tool out from under a live drag, which left it unable to end.
+        if (cancelActiveGizmoDrag()) {
+          wasEscapePressed = isEscapePressed;
+          return;
+        }
+
         if (!activeModelId && (!selectedModelIds || selectedModelIds.length === 0)) {
           wasEscapePressed = isEscapePressed;
           return;
@@ -4134,9 +4490,6 @@ export function SceneCanvas({
   const modifyToolActive = mode === 'prepare' && transformMode === 'transform';
   const navigationLodActive = isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting || isLayerScrubbing;
   const suppressSupportProxyPointerInteraction = supportCreationModeActive || suppressSupportSelectionAndHover || modifyToolActive;
-  const isSpotlightHighlightActive =
-    effectiveModelSelected
-    && selectionHighlightMode === 'spotlight';
 
   const updateOrbitControlSpeeds = React.useCallback(() => {
     const controls = orbitControlsRef.current;
@@ -4398,13 +4751,16 @@ export function SceneCanvas({
       if (!container.contains(event.target as Node | null)) return;
       const controls = orbitControlsRef.current;
       if (!controls || controls.enabled === false) return;
+      const device = wheelDeviceClassifierRef.current.classify(event, event.timeStamp);
       // Trackpad: allow zoom only for pinch gestures (ctrlKey).
       // Regular two-finger scroll should never trigger zoom.
-      if (isLikelyTrackpadWheelEvent(event) && !event.ctrlKey) {
+      // An 'unknown' verdict zooms: a wheel must always zoom, and that is the
+      // reading a bare wheel event gets everywhere else.
+      if (device === 'trackpad' && !event.ctrlKey) {
         return;
       }
       try {
-        if (resolveTrackpadGestureAction(event, cameraTrackpadSettings, cameraTrackpadModifierKey) !== null) {
+        if (resolveTrackpadGestureAction(event, device, cameraTrackpadSettings, cameraTrackpadModifierKey) !== null) {
           return;
         }
       } catch (error) {
@@ -4946,6 +5302,7 @@ export function SceneCanvas({
       try {
         const action = resolveTrackpadGestureAction(
           event,
+          wheelDeviceClassifierRef.current.classify(event, event.timeStamp),
           cameraTrackpadSettings,
           cameraTrackpadModifierKey,
         );
@@ -5272,6 +5629,303 @@ export function SceneCanvas({
     };
   }, []);
 
+  // ── Select-mode model drag ────────────────────────────────────────────────
+  // In Select mode, pressing a model and dragging moves it on the world XY
+  // plane — the same plane the Modify-mode center disc drags on — while a plain
+  // click still just selects. Pointer-down only records a candidate; the drag
+  // actually begins once the pointer crosses a small threshold, by which time
+  // the click-to-select state has flushed and the newly selected model is active.
+  const SELECT_DRAG_START_DIST_SQ = 25; // ~5px of travel before a press becomes a move
+  const selectDragCandidateRef = React.useRef<{
+    modelId: string;
+    clientX: number;
+    clientY: number;
+  } | null>(null);
+  const selectDragActiveRef = React.useRef(false);
+  const selectDragPlaneRef = React.useRef<THREE.Plane | null>(null);
+  const selectDragLastPointRef = React.useRef<THREE.Vector3 | null>(null);
+  const selectDragStartSnapshotRef = React.useRef<ModelTransform | null>(null);
+  const selectDragRaycasterRef = React.useRef(new THREE.Raycaster());
+  const selectDragIntersectionRef = React.useRef(new THREE.Vector3());
+  const selectDragDeltaRef = React.useRef(new THREE.Vector3());
+  const selectDragNdcRef = React.useRef(new THREE.Vector2());
+
+  // Mirrors activeModelId synchronously so the deferred drag-begin can confirm
+  // the pointer-down model is the active one even when the effect closure is
+  // stale. Updated during render (a ref, not state) so a pointermove that lands
+  // right after the selection render sees the fresh value.
+  const selectDragActiveModelIdRef = React.useRef<string | null>(activeModelId);
+  if (selectDragActiveModelIdRef.current !== activeModelId) {
+    selectDragActiveModelIdRef.current = activeModelId;
+  }
+
+  const clearSelectDragCandidate = React.useCallback(() => {
+    selectDragCandidateRef.current = null;
+    selectDragActiveRef.current = false;
+    selectDragPlaneRef.current = null;
+    selectDragLastPointRef.current = null;
+    selectDragStartSnapshotRef.current = null;
+    setSelectDragPressed(false);
+  }, []);
+
+  const getSelectDragWorldPoint = React.useCallback((clientX: number, clientY: number): THREE.Vector3 | null => {
+    const plane = selectDragPlaneRef.current;
+    const canvas = rendererRef.current?.domElement;
+    const camera = cameraRef.current;
+    if (!plane || !canvas || !camera) return null;
+
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+
+    const ndc = selectDragNdcRef.current;
+    ndc.set(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+
+    const raycaster = selectDragRaycasterRef.current;
+    raycaster.setFromCamera(ndc, camera);
+
+    // Orthographic cameras: same origin push-back GizmoCenter uses so the drag
+    // plane always yields a forward (t>0) intersection (see GizmoCenter).
+    if ('isOrthographicCamera' in camera) {
+      raycaster.ray.origin.addScaledVector(raycaster.ray.direction, -100000);
+    }
+
+    const hit = raycaster.ray.intersectPlane(plane, selectDragIntersectionRef.current);
+    return hit ? selectDragIntersectionRef.current.clone() : null;
+  }, []);
+
+  const beginSelectDrag = React.useCallback((candidate: { modelId: string; clientX: number; clientY: number }): boolean => {
+    if (selectDragActiveModelIdRef.current !== candidate.modelId) return false;
+    if (isGizmoDragging || isOrbitInteracting || spaceMouseNavigationActive) return false;
+    if (!modelPickerEnabled || !cameraInteractionCycleEnabled) return false;
+
+    const model = modelById.get(candidate.modelId);
+    const group = meshRefs.current[candidate.modelId];
+    if (!model || !group) return false;
+
+    const shouldProceed = onTransformStart?.('move', { axis: undefined });
+    if (shouldProceed === false) return false;
+
+    stopActiveModelDropAnimation();
+
+    const sourceTransform = model.transform;
+
+    selectDragStartSnapshotRef.current = {
+      position: sourceTransform.position.clone(),
+      rotation: sourceTransform.rotation.clone(),
+      scale: sourceTransform.scale.clone(),
+    };
+
+    // Prime the bounding-box corner cage (same async prime the gizmo uses) so it
+    // can follow the model during the drag.
+    scheduleDragCornerCagePrime([candidate.modelId], sourceTransform);
+
+    const planeZ = sourceTransform.position.z;
+    selectDragPlaneRef.current = new THREE.Plane(new THREE.Vector3(0, 0, 1), -planeZ);
+
+    const initial = getSelectDragWorldPoint(candidate.clientX, candidate.clientY);
+    if (!initial) {
+      selectDragStartSnapshotRef.current = null;
+      selectDragPlaneRef.current = null;
+      return false;
+    }
+    selectDragLastPointRef.current = initial;
+
+    selectDragActiveRef.current = true;
+    setIsGizmoDragging(true);
+    return true;
+  }, [
+    cameraInteractionCycleEnabled,
+    getSelectDragWorldPoint,
+    isGizmoDragging,
+    isOrbitInteracting,
+    modelById,
+    modelPickerEnabled,
+    onTransformStart,
+    scheduleDragCornerCagePrime,
+    spaceMouseNavigationActive,
+    stopActiveModelDropAnimation,
+  ]);
+
+  const applySelectDragMove = React.useCallback((clientX: number, clientY: number) => {
+    const candidate = selectDragCandidateRef.current;
+    if (!candidate || !selectDragActiveRef.current) return;
+
+    const last = selectDragLastPointRef.current;
+    if (!last) return;
+    const worldPoint = getSelectDragWorldPoint(clientX, clientY);
+    if (!worldPoint) return;
+
+    const delta = selectDragDeltaRef.current.copy(worldPoint).sub(last);
+    // Constrain to the world XY plane, exactly like the Modify-mode center disc.
+    delta.z = 0;
+    if (delta.lengthSq() < 1e-12) return;
+
+    const group = meshRefs.current[candidate.modelId];
+    if (!group) return;
+
+    // Move the model imperatively. Its supports follow because the select drag
+    // activates the active-model support proxy (parented to the group), and the
+    // OTHER models' supports render in a static layer — so the shared drag group
+    // is deliberately NOT touched here. Applying it would shift every model's
+    // supports by this delta for a frame before they snap back.
+    group.position.add(delta);
+    const live = {
+      position: group.position.clone(),
+      rotation: new THREE.Euler().setFromQuaternion(group.quaternion, 'ZYX'),
+      scale: group.scale.clone(),
+    };
+    group.position.copy(live.position);
+    group.quaternion.copy(new THREE.Quaternion().setFromEuler(live.rotation));
+    group.scale.copy(live.scale);
+    queueLiveDragTransform({
+      position: live.position.clone(),
+      rotation: live.rotation.clone(),
+      scale: live.scale.clone(),
+    });
+    requestDragCornerCageUpdate();
+    last.copy(worldPoint);
+  }, [getSelectDragWorldPoint, queueLiveDragTransform, requestDragCornerCageUpdate]);
+
+  const finishSelectDrag = React.useCallback(() => {
+    const candidate = selectDragCandidateRef.current;
+    const wasActive = selectDragActiveRef.current;
+    const snapshot = selectDragStartSnapshotRef.current;
+    clearSelectDragCandidate();
+
+    if (!wasActive || !candidate) return;
+
+    // If the active model changed mid-gesture (should not happen while dragging,
+    // but be safe), abort without committing a transform to the wrong model.
+    if (selectDragActiveModelIdRef.current !== candidate.modelId) {
+      setIsGizmoDragging(false);
+      queueLiveDragTransform(null);
+      return;
+    }
+
+    const group = meshRefs.current[candidate.modelId];
+    const live = group
+      ? {
+          position: group.position.clone(),
+          rotation: new THREE.Euler().setFromQuaternion(group.quaternion, 'ZYX'),
+          scale: group.scale.clone(),
+        }
+      : null;
+
+    markGizmoDragEnded(true);
+
+    if (live && snapshot) {
+      if (onTransformChange) {
+        flushPendingTransformChange();
+        onTransformChange(live.position, live.rotation, live.scale);
+      }
+      onGizmoTransformCommit?.({
+        modelId: candidate.modelId,
+        operation: 'move',
+        before: snapshot,
+        after: {
+          position: live.position.clone(),
+          rotation: live.rotation.clone(),
+          scale: live.scale.clone(),
+        },
+      });
+    }
+
+    onTransformEnd?.('move', live ?? undefined);
+    queueLiveDragTransform(null);
+    setIsGizmoDragging(false);
+    // The cage is already drawn at the final live position by the last move
+    // update, and the primed base snapshot keeps the delta-matrix path valid for
+    // any later recompute, so nothing else needs to be done here.
+  }, [
+    clearSelectDragCandidate,
+    flushPendingTransformChange,
+    markGizmoDragEnded,
+    onGizmoTransformCommit,
+    onTransformChange,
+    onTransformEnd,
+    queueLiveDragTransform,
+  ]);
+
+  const handleSelectModeDragStart = React.useCallback((modelId: string, clientX: number, clientY: number) => {
+    selectDragCandidateRef.current = { modelId, clientX, clientY };
+    setSelectDragPressed(true);
+  }, []);
+
+  // Support/raft presses in Select mode also grab the model: select its model
+  // (so the drag targets it) then start the same XY drag as a model-mesh press.
+  const handleSelectModeSupportDragStart = React.useCallback((modelId: string, clientX: number, clientY: number) => {
+    if (mode !== 'prepare' || transformMode !== 'select') return;
+    if (!modelId) return;
+    if (onActiveModelChange) {
+      onActiveModelChange(modelId, { selectionMode: 'single' });
+    }
+    handleSelectModeDragStart(modelId, clientX, clientY);
+  }, [handleSelectModeDragStart, mode, onActiveModelChange, transformMode]);
+
+  // Window-level pointer tracking for the select-mode drag: candidate presses
+  // only start moving once the pointer crosses the drag threshold, and moves /
+  // release are followed globally so the drag survives leaving the mesh.
+  React.useEffect(() => {
+    if (mode !== 'prepare' || transformMode !== 'select') return;
+
+    const handleWindowPointerMove = (e: PointerEvent) => {
+      const candidate = selectDragCandidateRef.current;
+      if (!candidate) return;
+
+      // Only a held left button drives the model move — a right-button orbit
+      // started while the left press is still down must not drag the model.
+      if ((e.buttons & 1) === 0) {
+        if (selectDragActiveRef.current) finishSelectDrag();
+        return;
+      }
+
+      if (!selectDragActiveRef.current) {
+        const dx = e.clientX - candidate.clientX;
+        const dy = e.clientY - candidate.clientY;
+        if (dx * dx + dy * dy < SELECT_DRAG_START_DIST_SQ) return;
+        if (!beginSelectDrag(candidate)) {
+          clearSelectDragCandidate();
+          return;
+        }
+        // Let the isGizmoDragging render (which attaches the dragged model's
+        // supports to its group) land before the first move — the same cadence
+        // the gizmo uses, so supports never detach at the start of a drag.
+        return;
+      }
+
+      applySelectDragMove(e.clientX, e.clientY);
+    };
+
+    const handleWindowPointerUp = () => {
+      if (!selectDragCandidateRef.current && !selectDragActiveRef.current) return;
+      finishSelectDrag();
+    };
+
+    window.addEventListener('pointermove', handleWindowPointerMove);
+    window.addEventListener('pointerup', handleWindowPointerUp);
+    window.addEventListener('pointercancel', handleWindowPointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handleWindowPointerMove);
+      window.removeEventListener('pointerup', handleWindowPointerUp);
+      window.removeEventListener('pointercancel', handleWindowPointerUp);
+    };
+  }, [
+    applySelectDragMove,
+    beginSelectDrag,
+    clearSelectDragCandidate,
+    finishSelectDrag,
+    mode,
+    transformMode,
+  ]);
+
+  React.useEffect(() => {
+    if (mode !== 'prepare' || transformMode !== 'select') return;
+    clearSelectDragCandidate();
+  }, [clearSelectDragCandidate, interactionResetNonce, mode, transformMode]);
+
   const [showCrossSectionCapDebugPanel, setShowCrossSectionCapDebugPanel] = React.useState(false);
   const [crossSectionCapDebugState, setCrossSectionCapDebugState] = React.useState<CrossSectionCapDebugPanelState>(
     DEFAULT_CROSS_SECTION_CAP_DEBUG_STATE,
@@ -5376,9 +6030,9 @@ export function SceneCanvas({
           safetyMarginMm={activeBuildVolumeSettings.safetyMarginMm}
           frontLabel={frontFaceLabel}
         />
-        <EnableLocalClipping enabled={clipLower != null || clipUpper != null || indicatorPlaneZ != null} />
+        <EnableLocalClipping enabled={clipLower != null || clipUpper != null || indicatorPlaneZ != null || !!organicCutKeyGizmo} />
         <CameraProvider cameraRef={cameraRef} />
-        <CameraProjectionController mode={cameraProjectionMode} />
+        <CameraProjectionController mode={cameraProjectionMode} perspectiveFov={perspectiveFov} />
         <CameraClipPlaneStabilizer />
         {/* GPU Picking Provider - wraps all pickable content when enabled */}
         <PickingProviderWrapper
@@ -5409,6 +6063,7 @@ export function SceneCanvas({
                 const actualMeshRefCallback = actualMeshRefCallbacks.current[model.id]
                   ?? ((node: THREE.Mesh | null) => {
                     actualMeshRefs.current[model.id] = node;
+                    setModelMesh(model.id, node);
                   });
                 if (!actualMeshRefCallbacks.current[model.id]) {
                   actualMeshRefCallbacks.current[model.id] = actualMeshRefCallback;
@@ -5426,7 +6081,9 @@ export function SceneCanvas({
                   && duplicatePreviewModel
                   && model.id === duplicatePreviewModel.id,
                 );
-                const likelySupportGeometry = !!model.geometry.meshDefects?.nativeRepairReport?.likely_support_geometry;
+                const likelySupportGeometry = model.isSupportGeometry !== undefined
+                  ? model.isSupportGeometry
+                  : !!model.geometry.meshDefects?.nativeRepairReport?.likely_support_geometry;
                 const modelHoverTintColor = likelySupportGeometry ? likelySupportGeometryTintColor : hoverTintColor;
                 const modelSelectedTintColor = likelySupportGeometry ? likelySupportGeometryTintColor : selectedTintColor;
                 // Use live drag transform only during active/guarded gizmo interaction.
@@ -5475,8 +6132,10 @@ export function SceneCanvas({
                 // The native repair/classify routines end with a manifold_csg
                 // status check on the model section. When the CSG backend reports
                 // any non-manifold status, overlay a red stripe pattern on
-                // the model to flag it.
+                // the model to flag it. Suppressed in the support tab so it
+                // doesn't obscure support editing.
                 const modelIsNonManifold =
+                  mode !== 'support' &&
                   model.geometry.meshDefects?.nativeRepairReport?.model_is_manifold === false;
 
                 return (
@@ -5496,8 +6155,8 @@ export function SceneCanvas({
                       flatUseVertexColors={flatUseVertexColors}
                       toonSteps={toonSteps}
                       xrayOpacity={xrayOpacity}
-                      heatmapBlend={heatmapBlend}
-                      heatmapContrast={heatmapContrast}
+                      heatmapMinAngle={heatmapMinAngle}
+                      heatmapMaxAngle={heatmapMaxAngle}
                       heatmapColors={heatmapColors ?? emptyHeatmapColors}
                       interiorView={interiorView}
                       cavityGeometry={cavityGeometryByModelId?.get(model.id) ?? null}
@@ -5512,6 +6171,7 @@ export function SceneCanvas({
                       onSupportClick={onSupportClick}
                       onSupportHover={handleSupportHover}
                       onActiveModelChange={onActiveModelChange}
+                      onSelectModeDragStart={handleSelectModeDragStart}
                       disableRaycast={disableRaycast || !modelPickerEnabled || !cameraInteractionCycleEnabled}
                       blockSupportPlacement={!cameraInteractionCycleEnabled || isGizmoDragging || blockSupportPlacement}
                       suppressNextClickRef={suppressNextCanvasClickRef}
@@ -5547,7 +6207,7 @@ export function SceneCanvas({
                       deferExternalTransformUpdates={
                         isActive
                         && mode === 'prepare'
-                        && transformMode === 'transform'
+                        && (transformMode === 'transform' || transformMode === 'select')
                         && !!liveDragTransformRef.current
                         && (isGizmoDragging || isPostGizmoInteractionGuardActive)
                       }
@@ -5555,6 +6215,7 @@ export function SceneCanvas({
                       modelSectionGeometry={model.geometry.meshDefects?.modelSectionGeometry ?? null}
                       onHolePunchClick={onHolePunchClick}
                       onHolePunchHover={onHolePunchHover}
+                      onOrganicCutClick={onOrganicCutClick}
                     >
                       {useActiveModelAttachedSupportProxy && isActive && (
                         <group
@@ -5575,13 +6236,16 @@ export function SceneCanvas({
                             selectedTintStrength={selectedTintStrength}
                             activeModelId={activeModelId}
                             selectedModelIds={selectedModelIds}
-                            hoverModelId={supportHoverModelId}
+                            marqueeCandidateModelIds={marqueeCandidateModelIds}
+                  hoverModelId={supportHoverModelId}
                             modelDropOffsetsById={entryDropOffsets}
                             navigationLodActive={navigationLodActive}
                             disableSelectionAndHover={suppressSupportProxyPointerInteraction}
                             raftColorized={raftColorized}
                             raftHoverized={raftHoverized}
-                            passive
+                            passive={transformMode !== 'select'}
+                            onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
+                            onModelPointerDragStart={handleSelectModeSupportDragStart}
                             supportRenderRefreshNonce={supportRenderRefreshNonce}
                             showOutOfBoundsOverlay={showOutOfBoundsOverlay}
                             outOfBoundsMin={shaderOutOfBoundsBounds?.min ?? null}
@@ -5604,6 +6268,13 @@ export function SceneCanvas({
                           clipUpper={clipUpper}
                           opacity={overlayOpacity ?? 0.9}
                           transform={transformToUse}
+                        />
+                      )}
+
+                      {isActive && (mode === 'support' || mode === 'analysis') && showOverhangs && overhangIslands && overhangIslands.length > 0 && (
+                        <IslandOverhangOverlay
+                          geometry={model.geometry.geometry}
+                          regions={overhangIslands}
                         />
                       )}
                     </StlMesh>
@@ -5885,6 +6556,7 @@ export function SceneCanvas({
                   selectedTintStrength={selectedTintStrength}
                   activeModelId={activeModelId}
                   selectedModelIds={selectedModelIds}
+                  marqueeCandidateModelIds={marqueeCandidateModelIds}
                   hoverModelId={supportHoverModelId}
                   modelDropOffsetsById={entryDropOffsets}
                   navigationLodActive={navigationLodActive}
@@ -5892,6 +6564,7 @@ export function SceneCanvas({
                   raftColorized={raftColorized}
                   raftHoverized={raftHoverized}
                   onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
+                  onModelPointerDragStart={handleSelectModeSupportDragStart}
                   supportRendererRef={supportsRef as React.Ref<THREE.Group>}
                   supportRenderRefreshNonce={supportRenderRefreshNonce}
                   showOutOfBoundsOverlay={!!activeBuildVolumeSettings?.enabled && outOfBoundsModelIds.size > 0}
@@ -6008,13 +6681,16 @@ export function SceneCanvas({
                   selectedTintStrength={selectedTintStrength}
                   activeModelId={activeModelId}
                   selectedModelIds={selectedModelIds}
+                  marqueeCandidateModelIds={marqueeCandidateModelIds}
                   hoverModelId={supportHoverModelId}
                   modelDropOffsetsById={entryDropOffsets}
-                  navigationLodActive
+                  navigationLodActive={transformMode !== 'select'}
                   disableSelectionAndHover={suppressSupportProxyPointerInteraction}
                   raftColorized={raftColorized}
                   raftHoverized={raftHoverized}
-                  passive
+                  passive={transformMode !== 'select'}
+                  onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
+                  onModelPointerDragStart={handleSelectModeSupportDragStart}
                   supportRenderRefreshNonce={supportRenderRefreshNonce}
                   interiorView={interiorView}
                   cavityGeometryByModelId={cavityGeometryByModelId}
@@ -6048,6 +6724,7 @@ export function SceneCanvas({
                         selectedTintStrength={selectedTintStrength}
                         activeModelId={activeModelId}
                         selectedModelIds={selectedModelIds}
+                        marqueeCandidateModelIds={marqueeCandidateModelIds}
                         hoverModelId={supportHoverModelId}
                         modelDropOffsetsById={entryDropOffsets}
                         modelFilterId={modelId}
@@ -6081,7 +6758,7 @@ export function SceneCanvas({
                     (isMultiGizmoSelection ? (multiGizmoCenter?.y ?? activeModelTransform?.position.y) : activeModelTransform?.position.y) ?? 0,
                     (isMultiGizmoSelection ? (multiGizmoCenter?.z ?? activeModelTransform?.position.z) : activeModelTransform?.position.z) ?? 0,
                   ]}
-                  rotation={[0, 0, 0]}
+                  rotation={gizmoFrameRotation}
                   enableMove
                   enableRotate={!isMultiGizmoSelection}
                   enableScale
@@ -6134,7 +6811,13 @@ export function SceneCanvas({
                       setActiveGizmoDragDescriptor({ operation: 'move', axis });
                     if (activeModelId && activeModel) {
                       const sourceTransform = transform ?? activeModel.transform;
-                      dragMoveLockZEnabledRef.current = axis !== 'z';
+                      // Dragging an in-plane arrow pins the height, so a sideways drag
+                      // can't drift off the plate. In the model's own frame those arrows
+                      // tilt out of the plate's plane, so ask the axis this drag actually
+                      // follows: pin the height only while it really is horizontal.
+                      dragMoveLockZEnabledRef.current = Math.abs(
+                        gizmoAxisWorldDirection(axis).z,
+                      ) < 1e-6;
                       dragMoveLockedZRef.current = sourceTransform.position.z;
                       const idsForCage = isMultiGizmoSelection
                         ? selectedTransformableModelIds
@@ -6270,6 +6953,9 @@ export function SceneCanvas({
                           : axis === 'y'
                             ? new THREE.Vector3(0, 1, 0)
                             : new THREE.Vector3(0, 0, 1);
+                      // In local space the ring's axis is the model's, so carry it into
+                      // world coordinates before turning about it.
+                      rotationAxis.applyQuaternion(gizmoRotationFrameRef.current);
                       const quaternion = new THREE.Quaternion().setFromAxisAngle(rotationAxis, -angle);
                       activeGroupRef.current.quaternion.premultiply(quaternion);
                       applySupportGroupDelta();
@@ -6291,6 +6977,7 @@ export function SceneCanvas({
                   onRotateStart={(axis) => {
                     stopActiveModelDropAnimation();
                     captureGizmoDragBeforeMatrix();
+                    gizmoRotationFrameRef.current.copy(gizmoFrameQuaternion);
                     const shouldProceed = onTransformStart?.('rotate', { axis });
                     if (shouldProceed === false) return false;
                     setActiveGizmoDragDescriptor({ operation: 'rotate', axis });
@@ -6529,7 +7216,12 @@ export function SceneCanvas({
                 />
               )}
 
-              {selectedMarker && enableVolumeGlow && (
+              {/* Cut-tool tenon aim/roll gizmo — rendered INSIDE the picking provider
+                  (like the main gizmo) so its handles are grabbable through the mesh
+                  via the GPU picking system. Supplied by the host (page.tsx). */}
+              {organicCutKeyGizmo}
+
+              {selectedMarker && (
                 <IslandOverlay
                   markers={[selectedMarker]}
                   brushRadiusMm={overlayBrushRadius ?? 2}
@@ -6646,17 +7338,6 @@ export function SceneCanvas({
             </React.Suspense>
           </SelectionProvider>
         </PickingProviderWrapper>
-        {/* Selection outline - renders when model is selected */}
-        <SelectionOutlineRenderer
-          meshRef={activeActualMeshRef as React.RefObject<THREE.Mesh>}
-          enabled={!thumbnailCaptureActive && effectiveModelSelected && selectionHighlightMode === 'fresnel'}
-          color="#82ccff"
-          intensity={0.38}
-          power={3.5}
-          rimMin={0.22}
-          rimMax={0.5}
-          alphaCut={0.03}
-        />
         {/* Selection spotlight - illuminates only the selected model via layers */}
         <SelectionSpotlight
           meshRef={activeActualMeshRef as React.RefObject<THREE.Mesh>}
@@ -6685,6 +7366,7 @@ export function SceneCanvas({
             && !isGizmoDragging
             && !isMarqueeSelecting
             && !isPlacementActive
+            && !organicCutDragging
           }
           onStart={handleOrbitStart}
           onChange={handleOrbitChange}
@@ -6710,6 +7392,14 @@ export function SceneCanvas({
         )}
         <OrbitPivotIndicator visible={!thumbnailCaptureActive && isOrbitInteracting && isOrbitRotating} />
         {cameraInteractionCycleEnabled && (
+          <NativeSpaceMouseController
+            pivotPoint={selectedSpaceMousePivotPoint}
+            fallbackPivot={buildVolumeCenterTarget}
+            onNavigationActiveChange={setSpaceMouseNavigationActive}
+            onNavigationFrame={handleSpaceMouseNavigationFrame}
+          />
+        )}
+        {cameraInteractionCycleEnabled && !nativeSpaceMouseActive && (
           <SpaceMouseController
             pivotPoint={selectedSpaceMousePivotPoint}
             pivotCandidates={spaceMousePivotCandidates}
@@ -6755,11 +7445,11 @@ export function SceneCanvas({
           plateWidthMm={activeBuildVolumeSettings.widthMm}
           plateDepthMm={activeBuildVolumeSettings.depthMm}
         />
+        <CameraControlsRecovery />
         <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} onClearSelection={onClearSelection} />
         {mode === 'support' && supportPathfindingDebugState.enabled && (
           <SupportPathfindingDebugOverlay snapshot={supportPathfindingDebugState.snapshot} />
         )}
-        {/* Selection outline effect - rendered by SelectionOutlineRenderer inside SelectionProvider */}
         {children}
       </Canvas>
 
@@ -6833,21 +7523,22 @@ export function SceneCanvas({
         </div>
       )}
 
-      {/* Support Limitation Tooltip Overlay */}
-      <SupportLimitationFeedback
-        error={suppressSupportPlacementPreviewRendering || supportPathfindingDebugState.enabled ? null : (leafPlacementPreview?.error ?? (isBranchPlacementActive ? branchPlacementPreview?.error : null) ?? trunkPlacementPreview?.error ?? null)}
-        warning={
-          suppressSupportPlacementPreviewRendering || supportPathfindingDebugState.enabled
-            ? null
-            : (
-              leafPlacementPreview?.warning ??
-              (isBranchPlacementActive ? branchPlacementPreview?.warning : null) ??
-              trunkPlacementPreview?.warning ??
-              interactionWarning ??
-              null
-            )
-        }
-      />
+      {supportHelpEnabled && (
+        <SupportLimitationFeedback
+          error={suppressSupportPlacementPreviewRendering || supportPathfindingDebugState.enabled ? null : (leafPlacementPreview?.error ?? (isBranchPlacementActive ? branchPlacementPreview?.error : null) ?? trunkPlacementPreview?.error ?? null)}
+          warning={
+            suppressSupportPlacementPreviewRendering || supportPathfindingDebugState.enabled
+              ? null
+              : (
+                leafPlacementPreview?.warning ??
+                (isBranchPlacementActive ? branchPlacementPreview?.warning : null) ??
+                trunkPlacementPreview?.warning ??
+                interactionWarning ??
+                null
+              )
+          }
+        />
+      )}
 
       {/* GPU Picking Debug Overlay - shows what's under cursor */}
       {gpuPickingTest && <PickingDebugOverlay position="top-right" />}
@@ -7016,14 +7707,30 @@ export function SceneCanvas({
             top: Math.min(marqueeSelection.start.y, marqueeSelection.current.y),
             width: Math.abs(marqueeSelection.current.x - marqueeSelection.start.x),
             height: Math.abs(marqueeSelection.current.y - marqueeSelection.start.y),
-            border: '1px solid color-mix(in srgb, var(--accent), white 18%)',
-            background: 'color-mix(in srgb, var(--accent), transparent 82%)',
-            boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--accent-secondary), transparent 68%)',
+            // Green for a window drag, magenta for a crossing one. The dashed
+            // border is the same in both: the app draws one kind of marquee.
+            border: `1px dashed color-mix(in srgb, ${marqueeHue}, white 18%)`,
+            background: `color-mix(in srgb, ${marqueeHue}, transparent 82%)`,
+            boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${marqueeHue}, transparent 62%)`,
             borderRadius: 6,
             pointerEvents: 'none',
             zIndex: 45,
           }}
         />
+      )}
+
+      {marqueeSelection && (
+        <div className="pointer-events-none absolute bottom-6 left-1/2 z-50 -translate-x-1/2">
+          <Toast
+            tone="neutral"
+            style={{
+              borderColor: `color-mix(in srgb, ${marqueeHue}, var(--border-subtle) 40%)`,
+              color: `color-mix(in srgb, ${marqueeHue}, var(--text-strong) 40%)`,
+            }}
+          >
+            {marqueeModeLabel}
+          </Toast>
+        </div>
       )}
 
       {prepareLassoPath && prepareLassoPath.length > 1 && (
@@ -7055,7 +7762,7 @@ export function SceneCanvas({
           title={outOfBoundsModels.map((m) => m.name).join(', ')}
         >
           <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-          <span>{outOfBoundsModels.length} model{outOfBoundsModels.length === 1 ? '' : 's'} out of build volume</span>
+          <span>{formatOutOfBoundsLabel(_, outOfBoundsModels.length)}</span>
         </div>
       )}
     </div>

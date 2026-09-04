@@ -1,3 +1,4 @@
+import { clamp } from '@/utils/math';
 import React from 'react';
 import windowLayouts from '@/config/window-layouts.json';
 import {
@@ -108,19 +109,18 @@ type WindowContextMenuState = {
   y: number;
 };
 
-const PANEL_MARGIN = 12;
+const PANEL_MARGIN = 4;
 const EDGE_SNAP_THRESHOLD = 20;
 const EDGE_MAGNET_THRESHOLD = 22;
 const EDGE_HINT_THRESHOLD = 36;
 const PANEL_MAGNET_THRESHOLD = 24;
-const PANEL_GAP = 12;
+const PANEL_GAP = 4;
 const DEFAULT_PANEL_WIDTH = 320;
 const DEFAULT_PANEL_HEIGHT = 150;
 const PANEL_WIDTH_OVERRIDES: Record<string, number> = {
   'visual-settings': 48,
   'transform-debug-overlay': 420,
 };
-const PANEL_SCALE_EXEMPT_IDS = new Set<string>(['support-settings']);
 const LOCKED_PANEL_IDS = new Set<string>(['visual-settings']);
 const CHAIN_ATTACH_TOLERANCE = 30;
 
@@ -152,9 +152,6 @@ type LayoutConfig = {
 
 const WINDOW_LAYOUTS: LayoutConfig = windowLayouts as unknown as LayoutConfig;
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
-}
 
 function overlaps(a: PanelRect, b: PanelRect, gap = PANEL_GAP) {
   return !(
@@ -783,48 +780,14 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
     () => (panelIdsSignature.length > 0 ? panelIdsSignature.split('\u001f') : []),
     [panelIdsSignature],
   );
-  const panelWidthScale = React.useMemo(() => {
-    const width = containerSize.width;
-    const height = containerSize.height;
-
-    if (width >= 3200 && height >= 1100) return 1.14;
-    if (width >= 2600 && height >= 980) return 1.08;
-    if (width <= 1100 || height <= 700) return 0.72;
-    if (width <= 1366 || height <= 820) return 0.82;
-    if (width <= 1600 || height <= 900) return 0.9;
-    if (width <= 1800 || height <= 980) return 0.95;
-    return 1;
-  }, [containerSize.height, containerSize.width]);
-
-  const panelGap = React.useMemo(() => {
-    if (panelWidthScale <= 0.72) return 7;
-    if (panelWidthScale <= 0.82) return 8;
-    if (panelWidthScale <= 0.9) return 9;
-    if (panelWidthScale <= 0.95) return 10;
-    return PANEL_GAP;
-  }, [panelWidthScale]);
+  // Panel widths and gaps are fixed; no resolution-based scale factor is applied.
+  // Native webview DPI scaling (plus the user UI-scale setting via useUiScale)
+  // keeps the UI at a consistent physical size on every monitor.
+  const panelGap = PANEL_GAP;
 
   const getPanelWidth = React.useCallback((panelId: string) => {
-    const baseWidth = getPanelBaseWidth(panelId);
-    if (panelId === 'visual-settings') {
-      const visualSettingsScale = Math.min(1, panelWidthScale);
-      return Math.max(44, Math.round(baseWidth * visualSettingsScale));
-    }
-    if (PANEL_SCALE_EXEMPT_IDS.has(panelId)) {
-      if (panelWidthScale <= 1) {
-        return baseWidth;
-      }
-      const supportUltrawideBoost = panelId === 'support-settings'
-        ? (panelWidthScale >= 1.14 ? 1.1 : panelWidthScale >= 1.08 ? 1.06 : 1)
-        : 1;
-      return Math.max(panelId === 'visual-settings' ? 44 : 72, Math.round(baseWidth * panelWidthScale * supportUltrawideBoost));
-    }
-    const analysisCompactFactor = panelId.startsWith('analysis-')
-      ? (panelWidthScale < 1 ? 0.88 : 1)
-      : 1;
-    const scaledWidth = Math.round(baseWidth * panelWidthScale * analysisCompactFactor);
-    return Math.max(panelId === 'visual-settings' ? 44 : 72, scaledWidth);
-  }, [panelWidthScale]);
+    return getPanelBaseWidth(panelId);
+  }, []);
 
   const getPanelSize = React.useCallback((panelId: string): PanelSize => {
     return panelSizesRef.current[panelId] ?? { width: getPanelWidth(panelId), height: DEFAULT_PANEL_HEIGHT };
@@ -1641,12 +1604,11 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
       const panelEl = document.querySelector(`[data-panel-id="${panelId}"]`) as HTMLElement | null;
       if (panelEl) {
         const base = PANEL_WIDTH_OVERRIDES[panelId] ?? DEFAULT_PANEL_WIDTH;
-        const scale = panelWidthScale;
-        const defaultWidth = Math.max(72, Math.round(base * scale));
+        const defaultWidth = Math.max(72, base);
         panelEl.style.width = `${defaultWidth}px`;
       }
     }
-  }, [closeWindowContextMenu, seededPositions, panelWidthScale]);
+  }, [closeWindowContextMenu, seededPositions]);
 
   const resetAllWindows = React.useCallback(() => {
     closeWindowContextMenu();

@@ -100,6 +100,7 @@ export class IslandTracker {
 
       // We can use the same RLE connected components logic on solidMask
       const { labels: solidLabels, components: solidComps } = this.rleLabelSolidComponents(solidMask);
+      const solidRowSpans = this.rowSpansByComponent(solidLabels);
 
       const solidCompIdToIslandId = new Map<number, number>();
 
@@ -108,7 +109,8 @@ export class IslandTracker {
         const prevIdOverlapCounts = this.findOverlappingIslandIdsRle(
           component.id,
           solidLabels,
-          prevIslandLabels
+          prevIslandLabels,
+          solidRowSpans.get(component.id)
         );
 
         const prevIds = new Set<number>();
@@ -140,10 +142,6 @@ export class IslandTracker {
           }
           return currentId;
         };
-
-        if (activePrevIds.size > 1) {
-          console.log(`Layer ${layerIndex}: Component overlaps with islands: ${Array.from(activePrevIds).join(', ')}`);
-        }
 
         const areaMm2 = component.area_px * this.px_mm * this.px_mm;
         let assignedId: number;
@@ -258,16 +256,45 @@ export class IslandTracker {
   /**
    * Find which previous island IDs overlap with a specific solid component.
    */
+  /**
+   * Rows spanned by each component label, in one pass over the RLE.
+   *
+   * Without it {@link findOverlappingIslandIdsRle} walks every row of the layer
+   * for every component, so a layer with C components costs C full-image scans
+   * even though each component usually occupies a handful of rows.
+   */
+  private rowSpansByComponent(solidLabels: RleLabels): Map<number, { minY: number; maxY: number }> {
+    const spans = new Map<number, { minY: number; maxY: number }>();
+    for (let y = 0; y < solidLabels.height; y++) {
+      const row = solidLabels.rows[y];
+      for (let i = 0; i < row.length; i += 3) {
+        const id = row[i + 2];
+        const span = spans.get(id);
+        if (span) {
+          span.maxY = y;
+        } else {
+          spans.set(id, { minY: y, maxY: y });
+        }
+      }
+    }
+    return spans;
+  }
+
   private findOverlappingIslandIdsRle(
     compId: number,
     solidLabels: RleLabels,
-    prevIslandLabels: RleLabels
+    prevIslandLabels: RleLabels,
+    rowSpan?: { minY: number; maxY: number },
   ): Map<number, number> {
     const prevIdOverlapCounts = new Map<number, number>();
     const { height } = solidLabels;
 
-    // Iterate all rows where this component exists
-    for (let y = 0; y < height; y++) {
+    // Only the rows this component actually occupies; the whole layer when the
+    // span is unknown.
+    const firstRow = rowSpan ? rowSpan.minY : 0;
+    const lastRow = rowSpan ? rowSpan.maxY : height - 1;
+
+    for (let y = firstRow; y <= lastRow; y++) {
       const solidRow = solidLabels.rows[y];
 
       if (solidRow.length === 0) continue;

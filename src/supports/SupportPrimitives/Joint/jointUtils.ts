@@ -1,155 +1,150 @@
 import { Trunk, Branch, Twig, Stick, Segment, Joint, Vec3, Roots, Knot, BezierSegment } from '../../types';
 import * as THREE from 'three';
+import { v4 as uuidv4 } from 'uuid';
 import { getSocketPosition, getFinalSocketPosition } from '../ContactCone';
 import { calculateDiskThickness } from '../ContactDisk/contactDiskUtils';
 import { getJointDiameter } from '../../constants';
 import { getBezierPointAtT, toVector3, subdivideCubicBezier, toVec3 } from '../../Curves/BezierUtils';
 import { getKnotById } from '../../state';
 import { solveJointConstraint } from '../../PlacementLogic/JointConstraintSolver';
+import { remapKnotAcrossSplit, type KnotSplitRemap } from '../Knot/knotUtils';
 
-function uuid() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-        const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-    });
+function remapKnotsForSplit(
+    knots: Record<string, Knot> | undefined,
+    originalSegmentId: string,
+    topSegmentId: string,
+    splitT: number | undefined
+): KnotSplitRemap[] {
+    if (!knots || splitT === undefined) return [];
+    const remaps: KnotSplitRemap[] = [];
+    for (const knot of Object.values(knots)) {
+        const remap = remapKnotAcrossSplit(knot, originalSegmentId, originalSegmentId, topSegmentId, splitT);
+        if (remap) remaps.push(remap);
+    }
+    return remaps;
 }
 
 /**
+ * Generic segment splitter that preserves bezier geometry via De Casteljau
+ * subdivision and falls back to a linear split. Host-specific start/end
+ * resolution is supplied by the light wrappers below so the core logic lives
+ * in one place (Jo review: single place to change split geometry).
+ */
+function splitSegmentArray(
+    segments: Segment[],
+    segmentId: string,
+    splitPoint: Vec3,
+    splitT: number | undefined,
+    resolveStart: (segIndex: number, seg: Segment) => Vec3 | null,
+    resolveEnd: (startPos: Vec3, seg: Segment) => Vec3 | null,
+): { newSegments: Segment[]; topSegmentId: string; joint: Joint } | null {
+    const segIndex = segments.findIndex((s) => s.id === segmentId);
+    if (segIndex === -1) return null;
+    const originalSegment = segments[segIndex];
+    const joint: Joint = {
+        id: uuidv4(),
+        pos: splitPoint,
+        diameter: getJointDiameter(originalSegment.diameter),
+    };
+
+    let bottomSegment: Segment;
+    let topSegment: Segment;
+
+    const isBezierSplit = originalSegment.type === 'bezier' && splitT !== undefined;
+    if (isBezierSplit) {
+        const startPos = resolveStart(segIndex, originalSegment);
+        const endPos = startPos ? resolveEnd(startPos, originalSegment) : null;
+        if (startPos && endPos) {
+            const [leftCurve, rightCurve] = subdivideCubicBezier(
+                startPos,
+                (originalSegment as BezierSegment).controlPoint1,
+                (originalSegment as BezierSegment).controlPoint2,
+                endPos,
+                splitT!,
+            );
+            bottomSegment = {
+                ...originalSegment,
+                id: originalSegment.id,
+                topJoint: joint,
+                controlPoint1: leftCurve[1],
+                controlPoint2: leftCurve[2],
+            } as BezierSegment;
+            topSegment = {
+                ...originalSegment,
+                id: uuidv4(),
+                bottomJoint: joint,
+                topJoint: originalSegment.topJoint,
+                controlPoint1: rightCurve[1],
+                controlPoint2: rightCurve[2],
+            } as BezierSegment;
+            const newSegments = [
+                ...segments.slice(0, segIndex),
+                bottomSegment,
+                topSegment,
+                ...segments.slice(segIndex + 1),
+            ];
+            return { newSegments, topSegmentId: topSegment.id, joint };
+        }
+    }
+
+    bottomSegment = {
+        ...originalSegment,
+        id: originalSegment.id,
+        topJoint: joint,
+    };
+    topSegment = {
+        ...originalSegment,
+        id: uuidv4(),
+        bottomJoint: joint,
+        topJoint: originalSegment.topJoint,
+    };
+    return {
+        newSegments: [...segments.slice(0, segIndex), bottomSegment, topSegment, ...segments.slice(segIndex + 1)],
+        topSegmentId: topSegment.id,
+        joint,
+    };
+}
+
+
+/**
  * Splits a trunk shaft segment by inserting a new joint.
- * 
- * @param trunk The trunk to modify
- * @param segmentId The ID of the segment to split
- * @param splitPoint The 3D position where the joint should be created
- * @param splitT The parameter t along the curve where the split occurs (required for Bezier preservation)
- * @param root The root of the trunk (required to determine start position)
- * @returns A new Trunk object with the split segment
  */
 export function splitShaft(
     trunk: Trunk,
     segmentId: string,
     splitPoint: Vec3,
     splitT?: number,
-    root?: Roots
-): Trunk {
-    // 1. Find segment index
-    const segIndex = trunk.segments.findIndex(s => s.id === segmentId);
-    if (segIndex === -1) {
+    root?: Roots,
+    knots?: Record<string, Knot>
+): { trunk: Trunk; knotRemaps: KnotSplitRemap[] } {
+    const res = splitSegmentArray(
+        trunk.segments,
+        segmentId,
+        splitPoint,
+        splitT,
+        (segIndex, seg) => {
+            if (seg.bottomJoint) return seg.bottomJoint.pos;
+            if (segIndex === 0 && root) {
+                const rPos = root.transform.pos;
+                const startZ = rPos.z + root.diskHeight + root.coneHeight;
+                return { x: rPos.x, y: rPos.y, z: startZ };
+            }
+            if (segIndex > 0) return trunk.segments[segIndex - 1].topJoint?.pos ?? null;
+            return null;
+        },
+        (startPos, seg) => {
+            if (seg.topJoint) return seg.topJoint.pos;
+            if (trunk.contactCone) return getFinalSocketPosition(trunk.contactCone);
+            return { x: startPos.x, y: startPos.y, z: startPos.z + 10 };
+        }
+    );
+    if (!res) {
         console.warn('[JointUtils] Segment not found:', segmentId);
-        return trunk;
+        return { trunk, knotRemaps: [] };
     }
-
-    const originalSegment = trunk.segments[segIndex];
-
-    // 2. Create new Joint
-    const joint: Joint = {
-        id: uuid(),
-        pos: splitPoint,
-        diameter: getJointDiameter(originalSegment.diameter)
-    };
-
-    let bottomSegment: Segment;
-    let topSegment: Segment;
-
-    if (originalSegment.type === 'bezier' && splitT !== undefined && root) {
-        // Bezier Subdivision (Exact Geometry Preservation)
-
-        // Find Start Point
-        let startPos: Vec3;
-        if (originalSegment.bottomJoint) {
-            startPos = originalSegment.bottomJoint.pos;
-        } else if (segIndex === 0) {
-            const rPos = root.transform.pos;
-            const startZ = rPos.z + root.diskHeight + root.coneHeight;
-            startPos = { x: rPos.x, y: rPos.y, z: startZ };
-        } else {
-            const prev = trunk.segments[segIndex - 1];
-            startPos = prev.topJoint!.pos;
-        }
-
-        // Find End Point
-        let endPos: Vec3;
-        if (originalSegment.topJoint) {
-            endPos = originalSegment.topJoint.pos;
-        } else if (trunk.contactCone) {
-            endPos = getFinalSocketPosition(trunk.contactCone);
-        } else {
-            endPos = { x: startPos.x, y: startPos.y, z: startPos.z + 10 }; // Fallback
-        }
-
-        const [leftCurve, rightCurve] = subdivideCubicBezier(
-            startPos,
-            originalSegment.controlPoint1,
-            originalSegment.controlPoint2,
-            endPos,
-            splitT
-        );
-
-        // leftCurve = [p0, p1, p2, p3] (p0=start, p3=split)
-        // rightCurve = [p0, p1, p2, p3] (p0=split, p3=end)
-
-        // Bottom (Left)
-        bottomSegment = {
-            ...originalSegment,
-            id: originalSegment.id,
-            topJoint: joint,
-            // bottomJoint preserved
-            controlPoint1: leftCurve[1],
-            controlPoint2: leftCurve[2],
-            // startTangent is v1-v0? No, we store tangents as vectors.
-            // We should update tangents? Or do renderers use CP directly?
-            // The type defines CP1, CP2. Tangents are usually derived or auxiliary.
-            // Let's ensure we don't break tangent continuity logic later.
-            // Tangent at split point = derivative.
-            // Left End Tangent = (p3 - p2) normalized
-            // Right Start Tangent = (p1 - p0) normalized (of right curve)
-            // They should be opposite?
-            // Wait, renderer uses CP. curveUtils uses Tangents to *derive* CP.
-            // If we set CP directly, curveUtils might overwrite them if we call `updateCurves` later.
-            // But we are preserving geometry here.
-            // Let's just set CPs.
-        } as BezierSegment;
-
-        // Top (Right)
-        topSegment = {
-            ...originalSegment,
-            id: uuid(),
-            bottomJoint: joint,
-            topJoint: originalSegment.topJoint,
-            controlPoint1: rightCurve[1],
-            controlPoint2: rightCurve[2]
-        } as BezierSegment;
-
-    } else {
-        // Linear Split (Original Logic)
-        bottomSegment = {
-            ...originalSegment,
-            id: originalSegment.id, // Keep original ID for the bottom part usually
-            topJoint: joint
-            // bottomJoint: originalSegment.bottomJoint (preserved)
-        };
-
-        topSegment = {
-            ...originalSegment,
-            id: uuid(),
-            bottomJoint: joint,
-            topJoint: originalSegment.topJoint
-        };
-    }
-
-    // 4. Construct new segments array
-    const newSegments = [
-        ...trunk.segments.slice(0, segIndex),
-        bottomSegment,
-        topSegment,
-        ...trunk.segments.slice(segIndex + 1)
-    ];
-
-    return {
-        ...trunk,
-        segments: newSegments
-    };
+    const knotRemaps = remapKnotsForSplit(knots, segmentId, res.topSegmentId, splitT);
+    return { trunk: { ...trunk, segments: res.newSegments }, knotRemaps };
 }
-
 
 /**
  * Splits a branch shaft segment by inserting a new joint.
@@ -160,275 +155,84 @@ export function splitBranchShaft(
     segmentId: string,
     splitPoint: Vec3,
     splitT?: number,
-    parentKnot?: Knot
-): Branch {
-    // 1. Find segment index
-    const segIndex = branch.segments.findIndex(s => s.id === segmentId);
-    if (segIndex === -1) {
+    parentKnot?: Knot,
+    knots?: Record<string, Knot>
+): { branch: Branch; knotRemaps: KnotSplitRemap[] } {
+    const res = splitSegmentArray(
+        branch.segments,
+        segmentId,
+        splitPoint,
+        splitT,
+        (segIndex) => {
+            if (segIndex === 0) return parentKnot?.pos ?? null;
+            return branch.segments[segIndex - 1].topJoint?.pos ?? null;
+        },
+        (startPos, seg) => {
+            if (seg.topJoint) return seg.topJoint.pos;
+            if (branch.contactCone) return getFinalSocketPosition(branch.contactCone);
+            return { x: startPos.x, y: startPos.y, z: startPos.z + 5 };
+        }
+    );
+    if (!res) {
         console.warn('[JointUtils] Segment not found in branch:', segmentId);
-        return branch;
+        return { branch, knotRemaps: [] };
     }
-
-    const originalSegment = branch.segments[segIndex];
-
-    // 2. Create new Joint
-    const joint: Joint = {
-        id: uuid(),
-        pos: splitPoint,
-        diameter: getJointDiameter(originalSegment.diameter)
-    };
-
-    let bottomSegment: Segment;
-    let topSegment: Segment;
-
-    if (originalSegment.type === 'bezier' && splitT !== undefined && parentKnot) {
-        // Bezier Subdivision (Exact Geometry Preservation)
-
-        // Find Start Point
-        let startPos: Vec3;
-        if (segIndex === 0) {
-            startPos = parentKnot.pos;
-        } else {
-            const prev = branch.segments[segIndex - 1];
-            startPos = prev.topJoint!.pos;
-        }
-
-        // Find End Point
-        let endPos: Vec3;
-        if (originalSegment.topJoint) {
-            endPos = originalSegment.topJoint.pos;
-        } else if (branch.contactCone) {
-            endPos = getFinalSocketPosition(branch.contactCone);
-        } else {
-            endPos = { x: startPos.x, y: startPos.y, z: startPos.z + 5 };
-        }
-
-        const [leftCurve, rightCurve] = subdivideCubicBezier(
-            startPos,
-            originalSegment.controlPoint1,
-            originalSegment.controlPoint2,
-            endPos,
-            splitT
-        );
-
-        bottomSegment = {
-            ...originalSegment,
-            id: originalSegment.id,
-            topJoint: joint,
-            controlPoint1: leftCurve[1],
-            controlPoint2: leftCurve[2],
-        } as BezierSegment;
-
-        topSegment = {
-            ...originalSegment,
-            id: uuid(),
-            bottomJoint: joint,
-            topJoint: originalSegment.topJoint,
-            controlPoint1: rightCurve[1],
-            controlPoint2: rightCurve[2]
-        } as BezierSegment;
-
-    } else {
-        // Linear Split
-        bottomSegment = {
-            ...originalSegment,
-            id: originalSegment.id,
-            topJoint: joint
-        };
-
-        topSegment = {
-            ...originalSegment,
-            id: uuid(),
-            bottomJoint: joint,
-            topJoint: originalSegment.topJoint
-        };
-    }
-
-    // 4. Construct new segments array
-    const newSegments = [
-        ...branch.segments.slice(0, segIndex),
-        bottomSegment,
-        topSegment,
-        ...branch.segments.slice(segIndex + 1)
-    ];
-
-    return {
-        ...branch,
-        segments: newSegments
-    };
+    const knotRemaps = remapKnotsForSplit(knots, segmentId, res.topSegmentId, splitT);
+    return { branch: { ...branch, segments: res.newSegments }, knotRemaps };
 }
 
- export function splitTwigShaft(
-     twig: Twig,
-     segmentId: string,
-     splitPoint: Vec3,
-     splitT?: number,
- ): Twig {
-     const segIndex = twig.segments.findIndex((s: Segment) => s.id === segmentId);
-     if (segIndex === -1) {
-         console.warn('[JointUtils] Segment not found in twig:', segmentId);
-         return twig;
-     }
+export function splitTwigShaft(
+    twig: Twig,
+    segmentId: string,
+    splitPoint: Vec3,
+    splitT?: number,
+    knots?: Record<string, Knot>
+): { twig: Twig; knotRemaps: KnotSplitRemap[] } {
+    const res = splitSegmentArray(
+        twig.segments,
+        segmentId,
+        splitPoint,
+        splitT,
+        (segIndex, seg) => {
+            if (segIndex === 0) return seg.bottomJoint?.pos ?? splitPoint;
+            return twig.segments[segIndex - 1].topJoint?.pos ?? splitPoint;
+        },
+        (startPos, seg) => seg.topJoint?.pos ?? { x: startPos.x, y: startPos.y, z: startPos.z + 5 }
+    );
+    if (!res) {
+        console.warn('[JointUtils] Segment not found in twig:', segmentId);
+        return { twig, knotRemaps: [] };
+    }
+    const knotRemaps = remapKnotsForSplit(knots, segmentId, res.topSegmentId, splitT);
+    return { twig: { ...twig, segments: res.newSegments }, knotRemaps };
+}
 
-     const originalSegment = twig.segments[segIndex];
+export function splitStickShaft(
+    stick: Stick,
+    segmentId: string,
+    splitPoint: Vec3,
+    splitT?: number,
+    knots?: Record<string, Knot>
+): { stick: Stick; knotRemaps: KnotSplitRemap[] } {
+    const res = splitSegmentArray(
+        stick.segments,
+        segmentId,
+        splitPoint,
+        splitT,
+        (segIndex, seg) => {
+            if (segIndex === 0) return seg.bottomJoint?.pos ?? splitPoint;
+            return stick.segments[segIndex - 1].topJoint?.pos ?? splitPoint;
+        },
+        (startPos, seg) => seg.topJoint?.pos ?? { x: startPos.x, y: startPos.y, z: startPos.z + 5 }
+    );
+    if (!res) {
+        console.warn('[JointUtils] Segment not found in stick:', segmentId);
+        return { stick, knotRemaps: [] };
+    }
+    const knotRemaps = remapKnotsForSplit(knots, segmentId, res.topSegmentId, splitT);
+    return { stick: { ...stick, segments: res.newSegments }, knotRemaps };
+}
 
-     const joint: Joint = {
-         id: uuid(),
-         pos: splitPoint,
-         diameter: getJointDiameter(originalSegment.diameter)
-     };
-
-     let bottomSegment: Segment;
-     let topSegment: Segment;
-
-     if (originalSegment.type === 'bezier' && splitT !== undefined) {
-         let startPos: Vec3;
-         if (segIndex === 0) {
-             startPos = originalSegment.bottomJoint?.pos ?? splitPoint;
-         } else {
-             const prev = twig.segments[segIndex - 1];
-             startPos = prev.topJoint?.pos ?? splitPoint;
-         }
-
-         const endPos: Vec3 = originalSegment.topJoint?.pos ?? { x: startPos.x, y: startPos.y, z: startPos.z + 5 };
-
-         const [leftCurve, rightCurve] = subdivideCubicBezier(
-             startPos,
-             originalSegment.controlPoint1,
-             originalSegment.controlPoint2,
-             endPos,
-             splitT
-         );
-
-         bottomSegment = {
-             ...originalSegment,
-             id: originalSegment.id,
-             topJoint: joint,
-             controlPoint1: leftCurve[1],
-             controlPoint2: leftCurve[2],
-         } as BezierSegment;
-
-         topSegment = {
-             ...originalSegment,
-             id: uuid(),
-             bottomJoint: joint,
-             topJoint: originalSegment.topJoint,
-             controlPoint1: rightCurve[1],
-             controlPoint2: rightCurve[2]
-         } as BezierSegment;
-     } else {
-         bottomSegment = {
-             ...originalSegment,
-             id: originalSegment.id,
-             topJoint: joint
-         };
-
-         topSegment = {
-             ...originalSegment,
-             id: uuid(),
-             bottomJoint: joint,
-             topJoint: originalSegment.topJoint
-         };
-     }
-
-     const newSegments = [
-         ...twig.segments.slice(0, segIndex),
-         bottomSegment,
-         topSegment,
-         ...twig.segments.slice(segIndex + 1)
-     ];
-
-     return {
-         ...twig,
-         segments: newSegments
-     };
- }
-
- export function splitStickShaft(
-     stick: Stick,
-     segmentId: string,
-     splitPoint: Vec3,
-     splitT?: number,
- ): Stick {
-     const segIndex = stick.segments.findIndex((s: Segment) => s.id === segmentId);
-     if (segIndex === -1) {
-         console.warn('[JointUtils] Segment not found in stick:', segmentId);
-         return stick;
-     }
-
-     const originalSegment = stick.segments[segIndex];
-
-     const joint: Joint = {
-         id: uuid(),
-         pos: splitPoint,
-         diameter: getJointDiameter(originalSegment.diameter)
-     };
-
-     let bottomSegment: Segment;
-     let topSegment: Segment;
-
-     if (originalSegment.type === 'bezier' && splitT !== undefined) {
-         let startPos: Vec3;
-         if (segIndex === 0) {
-             startPos = originalSegment.bottomJoint?.pos ?? splitPoint;
-         } else {
-             const prev = stick.segments[segIndex - 1];
-             startPos = prev.topJoint?.pos ?? splitPoint;
-         }
-
-         const endPos: Vec3 = originalSegment.topJoint?.pos ?? { x: startPos.x, y: startPos.y, z: startPos.z + 5 };
-
-         const [leftCurve, rightCurve] = subdivideCubicBezier(
-             startPos,
-             originalSegment.controlPoint1,
-             originalSegment.controlPoint2,
-             endPos,
-             splitT
-         );
-
-         bottomSegment = {
-             ...originalSegment,
-             id: originalSegment.id,
-             topJoint: joint,
-             controlPoint1: leftCurve[1],
-             controlPoint2: leftCurve[2],
-         } as BezierSegment;
-
-         topSegment = {
-             ...originalSegment,
-             id: uuid(),
-             bottomJoint: joint,
-             topJoint: originalSegment.topJoint,
-             controlPoint1: rightCurve[1],
-             controlPoint2: rightCurve[2]
-         } as BezierSegment;
-     } else {
-         bottomSegment = {
-             ...originalSegment,
-             id: originalSegment.id,
-             topJoint: joint
-         };
-
-         topSegment = {
-             ...originalSegment,
-             id: uuid(),
-             bottomJoint: joint,
-             topJoint: originalSegment.topJoint
-         };
-     }
-
-     const newSegments = [
-         ...stick.segments.slice(0, segIndex),
-         bottomSegment,
-         topSegment,
-         ...stick.segments.slice(segIndex + 1)
-     ];
-
-     return {
-         ...stick,
-         segments: newSegments
-     };
- }
 
 export function findClosestSegment(trunk: Trunk, root: Roots, point: Vec3): { segment: Segment, t: number, pointOnLine: Vec3 } | null {
     // Reconstruct skeleton start
@@ -453,7 +257,7 @@ export function findClosestSegment(trunk: Trunk, root: Roots, point: Vec3): { se
         }
 
         let dist: number;
-        let closest = new THREE.Vector3();
+        const closest = new THREE.Vector3();
         let tVal = 0;
 
         if (seg.type === 'bezier') {

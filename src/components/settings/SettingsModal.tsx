@@ -1,12 +1,18 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import { GeneralSettingsTab } from '@/components/settings/GeneralSettingsTab';
 import { useLocale } from '@/components/I18nClientProvider';
+import contributors from '@/components/settings/contributors.json';
+import { SponsorsCarousel } from '@/components/settings/SponsorsCarousel';
 import { CameraSettingsTab } from '@/components/settings/CameraSettingsTab';
 import { HotkeysSettingsTab } from '@/components/settings/HotkeysSettingsTab';
 import { MeshSettingsTab } from '@/components/settings/MeshSettingsTab';
 import { PluginsSettingsTab } from '@/components/settings/PluginsSettingsTab';
+import { ExperimentsSettingsTab } from '@/components/settings/ExperimentsSettingsTab';
+import { getEnabledExperimentIds } from '@/features/experiments/experimentsRegistry';
 import { LocalBackupsSettingsTab } from '@/components/settings/LocalBackupsSettingsTab';
 import { SceneAutosaveSettingsTab } from '@/components/settings/SceneAutosaveSettingsTab';
 import { UvToolsSettingsTab } from '@/components/settings/UvToolsSettingsTab';
@@ -17,7 +23,7 @@ import { UpdatesSettingsTab } from '@/features/updater/UpdatesSettingsTab';
 import { getUpdateChannel, type UpdateChannel } from '@/features/updater/updateBridge';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
 import { PerformanceSettingsTab, type SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
-import { AlertTriangle, Check, CloudDownload, Edit3, ExternalLink, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Save, Settings2, Trash2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
+import { AlertTriangle, Check, CloudDownload, Edit3, ExternalLink, FlaskConical, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Save, Settings2, Trash2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   applyThemeCustomColors,
@@ -40,11 +46,13 @@ import {
   THEME_CUSTOM_PROFILES_STORAGE_KEY,
   THEME_PRESET_STORAGE_KEY,
   THEME_STORAGE_KEY,
-  type ThemePreset,
   type ThemeCustomColors,
+  type ThemePreset,
   type SavedCustomThemeProfile,
 } from '@/components/settings/themeCustomizations';
+import { DEFAULT_HOVER_COLOR, DEFAULT_SELECTION_COLOR } from '@/features/scene/useSceneCollectionManager';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { Tooltip } from '@/components/ui/Tooltip';
 import {
   DEFAULT_SPACEMOUSE_SETTINGS,
@@ -80,6 +88,11 @@ import {
   type WorkspaceCameraDefaults,
 } from '@/components/settings/workspaceCameraPreferences';
 import {
+  DEFAULT_CAMERA_FOV_SETTINGS,
+  getSavedCameraFovSettings,
+  saveCameraFovSettings,
+} from '@/components/settings/cameraFovPreferences';
+import {
   pickOpenFilesWithNativeDialog,
   readPrintArtifactBytesFromPath,
   savePrintArtifactWithNativeDialog,
@@ -104,7 +117,6 @@ import {
   type UvToolsSettings,
 } from '@/components/settings/uvToolsPreferences';
 import { outputFormatUsesPngLayers } from '@/features/slicing/formats/registry';
-import type { SelectionHighlightMode } from '@/components/selection';
 import {
   clearSavedFloatingLayout,
   isDebugPrimitivesPanelVisibleEnabled,
@@ -120,6 +132,8 @@ import {
 } from '@/features/scene/importDefaultsPreferences';
 
 const DEFAULT_MESH_COLOR = '#a3a3a3';
+const DEFAULT_HEATMAP_MIN_ANGLE = 0;
+const DEFAULT_HEATMAP_MAX_ANGLE = 45;
 const DEFAULT_AMBIENT_INTENSITY = 0.6;
 const DEFAULT_DIRECTIONAL_INTENSITY = 0.8;
 const DEFAULT_MATERIAL_ROUGHNESS = 0.65;
@@ -177,19 +191,17 @@ type SettingsModalProps = {
   materialRoughness: number;
   onMaterialRoughnessChange: (value: number) => void;
   xrayOpacity: number;
-  heatmapBlend: number;
-  heatmapContrast: number;
+  heatmapMinAngle: number;
+  heatmapMaxAngle: number;
   onXrayOpacityChange: (value: number) => void;
-  onHeatmapBlendChange: (value: number) => void;
-  onHeatmapContrastChange: (value: number) => void;
+  onHeatmapMinAngleChange: (value: number) => void;
+  onHeatmapMaxAngleChange: (value: number) => void;
   heatmapColors: string[];
   onHeatmapColorChange: (index: number, color: string) => void;
   hoverTintStrength: number;
   onHoverTintStrengthChange: (value: number) => void;
   selectedTintStrength: number;
   onSelectedTintStrengthChange: (value: number) => void;
-  selectionHighlightMode: SelectionHighlightMode;
-  onSelectionHighlightModeChange: (mode: SelectionHighlightMode) => void;
   debugPrimitivesPanelVisible: boolean;
   onDebugPrimitivesPanelVisibleChange: (value: boolean) => void;
   view3dSettings: View3DSettings;
@@ -201,8 +213,78 @@ type SettingsModalProps = {
   initialTab?: SettingsTabKey;
 };
 
-export type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'sceneAutosave' | 'backups' | 'uvtools' | 'ui' | 'hotkeys' | 'logging' | 'updates' | 'about';
+export type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'experiments' | 'sceneAutosave' | 'backups' | 'uvtools' | 'ui' | 'hotkeys' | 'logging' | 'updates' | 'about';
 type SettingsTabTone = 'primary' | 'secondary';
+
+/**
+ * A sidebar description line that only offers a tooltip when it is actually
+ * clipped. Translated descriptions run much longer than the English ones — the
+ * Spanish "Comportamiento del espacio de trabajo y disposición de los paneles"
+ * is more than twice "Workspace behavior and panel layout" — so the truncation
+ * that never triggered in English hides most of the sentence in other locales.
+ *
+ * Two traps this deliberately avoids:
+ *
+ * 1. Measuring the truncating span itself. `Tooltip` renders no wrapper at all
+ *    when its content is falsy, so a measurement taken on the span reacts to
+ *    the very wrapper it decides to add — the element measures, gets wrapped,
+ *    measures differently, gets unwrapped. The reference box here is the outer
+ *    span, whose width is set by the sidebar and never by this decision, and
+ *    the text is measured through a Range, which reports the full laid-out
+ *    width regardless of what clips it.
+ * 2. Measuring once. A late webfont changes text metrics after the first pass,
+ *    and the outer box never resizes, so a ResizeObserver alone would keep a
+ *    stale answer forever. Hence the `fonts.ready` re-measure.
+ */
+function TabDescription({ text }: { text: string }) {
+  const outerRef = React.useRef<HTMLSpanElement>(null);
+  const textRef = React.useRef<HTMLSpanElement>(null);
+  const [isClipped, setIsClipped] = useState(false);
+
+  useEffect(() => {
+    const outer = outerRef.current;
+    const textEl = textRef.current;
+    if (!outer || !textEl) return;
+
+    let disposed = false;
+
+    const measure = () => {
+      if (disposed) return;
+      const range = document.createRange();
+      range.selectNodeContents(textEl);
+      const textWidth = range.getBoundingClientRect().width;
+      range.detach();
+      // The 1px slack absorbs sub-pixel rounding, which otherwise reports a
+      // one-pixel overflow on text that visibly fits.
+      setIsClipped(textWidth > outer.clientWidth + 1);
+    };
+
+    measure();
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(outer);
+    void document.fonts?.ready.then(measure);
+
+    return () => {
+      disposed = true;
+      observer.disconnect();
+    };
+  }, [text]);
+
+  return (
+    <span ref={outerRef} className="block min-w-0">
+      <Tooltip content={isClipped ? text : null} fullWidth maxWidth={280}>
+        <span
+          ref={textRef}
+          className="block min-w-0 flex-1 truncate text-xs"
+          style={{ color: 'var(--text-muted)' }}
+        >
+          {text}
+        </span>
+      </Tooltip>
+    </span>
+  );
+}
 
 export function SettingsModal({
   isOpen,
@@ -228,19 +310,17 @@ export function SettingsModal({
   materialRoughness,
   onMaterialRoughnessChange,
   xrayOpacity,
-  heatmapBlend,
-  heatmapContrast,
+  heatmapMinAngle,
+  heatmapMaxAngle,
   onXrayOpacityChange,
-  onHeatmapBlendChange,
-  onHeatmapContrastChange,
+  onHeatmapMinAngleChange,
+  onHeatmapMaxAngleChange,
   heatmapColors,
   onHeatmapColorChange,
   hoverTintStrength,
   onHoverTintStrengthChange,
   selectedTintStrength,
   onSelectedTintStrengthChange,
-  selectionHighlightMode,
-  onSelectionHighlightModeChange,
   debugPrimitivesPanelVisible,
   onDebugPrimitivesPanelVisibleChange,
   view3dSettings,
@@ -251,6 +331,45 @@ export function SettingsModal({
   initialTab,
 }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTabKey>(initialTab ?? 'general');
+  // The modal stays mounted while closed (isOpen toggles visibility), so activeTab
+  // would otherwise persist across open/close. Reset it to the caller's requested
+  // tab each time the modal opens — the normal open path passes 'general', so
+  // closing on Experiments reopens to General rather than the last-active tab.
+  const wasOpenRef = React.useRef(isOpen);
+  // Snapshot of enabled experiments at open; if it differs when the user closes
+  // the modal, they toggled an experiment this session and we prompt to reload.
+  const experimentsSnapshotRef = React.useRef<string>(getEnabledExperimentIds().sort().join(','));
+  const [showReloadPrompt, setShowReloadPrompt] = useState(false);
+  React.useEffect(() => {
+    if (isOpen && !wasOpenRef.current) {
+      setActiveTab(initialTab ?? 'general');
+      setShowReloadPrompt(false);
+      experimentsSnapshotRef.current = getEnabledExperimentIds().sort().join(',');
+    }
+    wasOpenRef.current = isOpen;
+  }, [isOpen, initialTab]);
+
+  const requestClose = React.useCallback(() => {
+    const currentKey = getEnabledExperimentIds().sort().join(',');
+    if (currentKey !== experimentsSnapshotRef.current) {
+      setShowReloadPrompt(true);
+      return;
+    }
+    onClose();
+  }, [onClose]);
+
+  const reloadToApplyExperiments = React.useCallback(() => {
+    if (typeof window !== 'undefined') {
+      window.location.reload();
+    }
+  }, []);
+  // Tracks the tab active before the current one, so the Experiments disclaimer
+  // can return the user where they were if they decline to acknowledge.
+  const previousTabRef = React.useRef<SettingsTabKey>(initialTab ?? 'general');
+  const handleSelectTab = React.useCallback((tab: SettingsTabKey) => {
+    previousTabRef.current = activeTab;
+    setActiveTab(tab);
+  }, [activeTab]);
 
   const [copied, setCopied] = useState(false);
   const handleCopyBuildInfo = React.useCallback(async () => {
@@ -265,6 +384,7 @@ export function SettingsModal({
 
   // Language is a draft like every other setting: changing the switcher only
   // updates draftLocale; the actual loadLocale happens in handleApply.
+  const { _ } = useLingui();
   const { locale: activeLocale, setLocale: applyLocale } = useLocale();
   const [draftLocale, setDraftLocale] = useState(activeLocale);
 
@@ -277,12 +397,11 @@ export function SettingsModal({
   const [draftDirectionalIntensity, setDraftDirectionalIntensity] = useState(directionalIntensity);
   const [draftMaterialRoughness, setDraftMaterialRoughness] = useState(materialRoughness);
   const [draftXrayOpacity, setDraftXrayOpacity] = useState(xrayOpacity);
-  const [draftHeatmapBlend, setDraftHeatmapBlend] = useState(heatmapBlend);
-  const [draftHeatmapContrast, setDraftHeatmapContrast] = useState(heatmapContrast);
+  const [draftHeatmapMinAngle, setDraftHeatmapMinAngle] = useState(heatmapMinAngle);
+  const [draftHeatmapMaxAngle, setDraftHeatmapMaxAngle] = useState(heatmapMaxAngle);
   const [draftHeatmapColors, setDraftHeatmapColors] = useState(heatmapColors);
   const [draftHoverTintStrength, setDraftHoverTintStrength] = useState(hoverTintStrength);
   const [draftSelectedTintStrength, setDraftSelectedTintStrength] = useState(selectedTintStrength);
-  const [draftSelectionHighlightMode, setDraftSelectionHighlightMode] = useState(selectionHighlightMode);
   const [draftSelectionColor, setDraftSelectionColor] = useState(selectionColor);
   const [draftHoverColor, setDraftHoverColor] = useState(hoverColor);
   const [draftCameraProjectionMode, setDraftCameraProjectionMode] = useState<CameraProjectionMode>(() => getSavedCameraProjectionSettings().mode);
@@ -294,9 +413,14 @@ export function SettingsModal({
   const [draftCameraTrackpadZoomAcceleration, setDraftCameraTrackpadZoomAcceleration] = useState<number>(() => getSavedCameraTrackpadSettings().zoomAcceleration);
   const [draftCameraScope, setDraftCameraScope] = useState<CameraScopeMode>(() => getSavedWorkspaceCameraSettings().scope);
   const [draftHigherContrastModelEdges, setDraftHigherContrastModelEdges] = useState<boolean>(() => getSavedWorkspaceCameraSettings().higherContrastModelEdges);
+  const [draftPerspectiveFov, setDraftPerspectiveFov] = useState<number>(() => getSavedCameraFovSettings().fov);
   const [draftThemePreference, setDraftThemePreference] = useState(getSavedThemePreference());
   const [draftThemePreset, setDraftThemePreset] = useState<ThemePreset>(getSavedThemePreset());
-  const [draftThemeColors, setDraftThemeColors] = useState<ThemeCustomColors>(getSavedThemeCustomColors());
+  const [draftThemeColors, setDraftThemeColors] = useState<ThemeCustomColors>(() => {
+    const preset = getSavedThemePreset();
+    const profile = getThemeProfile(preset, getSavedCustomThemeProfiles());
+    return { ...profile.colors };
+  });
   const [draftThemeProfiles, setDraftThemeProfiles] = useState<SavedCustomThemeProfile[]>(() => getSavedCustomThemeProfiles());
   const [draftCustomThemeName, setDraftCustomThemeName] = useState<string>(() => {
     const savedPreset = getSavedThemePreset();
@@ -375,14 +499,13 @@ export function SettingsModal({
     setDraftDirectionalIntensity(directionalIntensity);
     setDraftMaterialRoughness(materialRoughness);
     setDraftXrayOpacity(xrayOpacity);
-    setDraftHeatmapBlend(heatmapBlend);
-    setDraftHeatmapContrast(heatmapContrast);
+    setDraftHeatmapMinAngle(heatmapMinAngle);
+    setDraftHeatmapMaxAngle(heatmapMaxAngle);
     setDraftHeatmapColors(heatmapColors);
     setDraftHoverTintStrength(hoverTintStrength);
     setDraftSelectedTintStrength(selectedTintStrength);
-    setDraftSelectionHighlightMode(selectionHighlightMode);
-    setDraftSelectionColor(savedThemeProfile.colors.accent);
-    setDraftHoverColor(savedThemeProfile.colors.accentHover);
+    setDraftSelectionColor(selectionColor);
+    setDraftHoverColor(hoverColor);
     setDraftCameraProjectionMode(getSavedCameraProjectionSettings().mode);
     setDraftCameraFeelPreset(getSavedCameraFeelSettings().preset);
     setDraftCameraTrackpadPrimaryAction(getSavedCameraTrackpadSettings().primaryAction);
@@ -392,6 +515,7 @@ export function SettingsModal({
     setDraftCameraTrackpadZoomAcceleration(getSavedCameraTrackpadSettings().zoomAcceleration);
     setDraftCameraScope(getSavedWorkspaceCameraSettings().scope);
     setDraftHigherContrastModelEdges(getSavedWorkspaceCameraSettings().higherContrastModelEdges);
+    setDraftPerspectiveFov(getSavedCameraFovSettings().fov);
     setDraftThemePreference(getSavedThemePreference());
     setDraftThemePreset(savedThemePreset);
     setDraftThemeColors(getSavedThemeCustomColors());
@@ -420,28 +544,55 @@ export function SettingsModal({
     heatmapColors,
     hoverTintStrength,
     selectedTintStrength,
-    selectionHighlightMode,
+    selectionColor,
+    hoverColor,
     debugPrimitivesPanelVisible,
     view3dSettings,
     slicingThumbnailRenderSettings,
     shaderType,
     xrayOpacity,
-    heatmapBlend,
-    heatmapContrast,
+    heatmapMinAngle,
+    heatmapMaxAngle,
     heatmapColors,
   ]);
 
   const handleThemeColorChange = React.useCallback((key: keyof ThemeCustomColors, value: string) => {
+    if (key === 'accent' && typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value)) {
+      const oldAccent = draftThemeColors.accent?.toLowerCase();
+      const newAccent = value.toLowerCase();
+      if (oldAccent && newAccent && oldAccent !== newAccent) {
+        const selLower = draftSelectionColor.toLowerCase();
+        const hovLower = draftHoverColor.toLowerCase();
+        if (selLower === oldAccent) setDraftSelectionColor(value);
+        if (hovLower === oldAccent) setDraftHoverColor(value);
+      }
+    }
     setDraftThemeColors((prev) => ({
       ...prev,
       [key]: value,
     }));
-  }, []);
-
+  }, [draftThemeColors.accent, draftSelectionColor, draftHoverColor]);
   const restoreSavedThemePreview = React.useCallback(() => {
     applyThemePreference(getSavedThemePreference());
     applyThemeCustomColors(getSavedThemeCustomColors());
   }, []);
+  const handleThemePresetChange = React.useCallback((preset: ThemePreset) => {
+    const oldProfile = getThemeProfile(draftThemePreset, draftThemeProfiles);
+    const newProfile = getThemeProfile(preset, draftThemeProfiles);
+    const oldAccent = oldProfile.colors.accent?.toLowerCase();
+    const newAccent = newProfile.colors.accent?.toLowerCase();
+    if (oldAccent && newAccent && oldAccent !== newAccent) {
+      const selLower = draftSelectionColor.toLowerCase();
+      const hovLower = draftHoverColor.toLowerCase();
+      const defSel = DEFAULT_SELECTION_COLOR.toLowerCase();
+      const defHov = DEFAULT_HOVER_COLOR.toLowerCase();
+      const isSelDefault = selLower === oldAccent || selLower === defSel;
+      const isHovDefault = hovLower === oldAccent || hovLower === defHov;
+      if (isSelDefault) setDraftSelectionColor(newProfile.colors.accent);
+      if (isHovDefault) setDraftHoverColor(newProfile.colors.accent);
+    }
+    setThemeDraftFromProfile(preset, draftThemeProfiles);
+  }, [draftThemePreset, draftThemeProfiles, draftSelectionColor, draftHoverColor, setThemeDraftFromProfile]);
 
   const handleDraftHeatmapColorChange = React.useCallback((index: number, color: string) => {
     setDraftHeatmapColors((prev) => {
@@ -450,10 +601,6 @@ export function SettingsModal({
       return copy;
     });
   }, []);
-
-  const handleThemePresetChange = React.useCallback((preset: ThemePreset) => {
-    setThemeDraftFromProfile(preset, draftThemeProfiles);
-  }, [draftThemeProfiles, setThemeDraftFromProfile]);
 
   const handleResetThemeColors = React.useCallback(() => {
     const profile = getThemeProfile(draftThemePreset, draftThemeProfiles);
@@ -701,8 +848,8 @@ export function SettingsModal({
     didCommitThemeDraftRef.current = false;
     restoreSavedThemePreview();
     resetDraftFromProps();
-    onClose();
-  }, [onClose, resetDraftFromProps, restoreSavedThemePreview]);
+    requestClose();
+  }, [requestClose, resetDraftFromProps, restoreSavedThemePreview]);
 
   const applyRestoreDefaultsToDraft = React.useCallback(() => {
     setDraftMeshColor(DEFAULT_MESH_COLOR);
@@ -714,11 +861,10 @@ export function SettingsModal({
     setDraftDirectionalIntensity(DEFAULT_DIRECTIONAL_INTENSITY);
     setDraftMaterialRoughness(DEFAULT_MATERIAL_ROUGHNESS);
     setDraftXrayOpacity(DEFAULT_XRAY_OPACITY);
-    setDraftHeatmapBlend(0.85);
-    setDraftHeatmapContrast(1.0);
+    setDraftHeatmapMinAngle(DEFAULT_HEATMAP_MIN_ANGLE);
+    setDraftHeatmapMaxAngle(DEFAULT_HEATMAP_MAX_ANGLE);
     setDraftHoverTintStrength(DEFAULT_HOVER_TINT_STRENGTH);
     setDraftSelectedTintStrength(DEFAULT_SELECTED_TINT_STRENGTH);
-    setDraftSelectionHighlightMode('tint');
     setDraftSelectionColor(DEFAULT_THEME_CUSTOM_COLORS.accent);
     setDraftHoverColor(DEFAULT_THEME_CUSTOM_COLORS.accentHover);
     setDraftCameraProjectionMode(DEFAULT_CAMERA_PROJECTION_SETTINGS.mode);
@@ -730,6 +876,7 @@ export function SettingsModal({
     setDraftCameraTrackpadZoomAcceleration(DEFAULT_CAMERA_TRACKPAD_SETTINGS.zoomAcceleration);
     setDraftCameraScope(DEFAULT_WORKSPACE_CAMERA_SETTINGS.scope);
     setDraftHigherContrastModelEdges(DEFAULT_WORKSPACE_CAMERA_SETTINGS.higherContrastModelEdges);
+    setDraftPerspectiveFov(DEFAULT_CAMERA_FOV_SETTINGS.fov);
     setDraftThemePreference('dark');
     setDraftThemePreset('dragonfruit-dark');
     setDraftThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
@@ -796,15 +943,32 @@ export function SettingsModal({
     onDirectionalIntensityChange(draftDirectionalIntensity);
     onMaterialRoughnessChange(draftMaterialRoughness);
     onXrayOpacityChange(draftXrayOpacity);
-    onHeatmapBlendChange(draftHeatmapBlend);
-    onHeatmapContrastChange(draftHeatmapContrast);
+    onHeatmapMinAngleChange(draftHeatmapMinAngle);
+    onHeatmapMaxAngleChange(draftHeatmapMaxAngle);
     draftHeatmapColors.forEach((color, i) => onHeatmapColorChange(i, color));
     onHoverTintStrengthChange(draftHoverTintStrength);
     onSelectedTintStrengthChange(draftSelectedTintStrength);
-    onSelectionHighlightModeChange(draftSelectionHighlightMode);
-    onSelectionColorChange(draftThemeColors.accent);
-    onHoverColorChange(draftThemeColors.accentHover);
-
+    // Auto-apply theme accent to selection/hover if not user-overridden (theme changed and selection still at old default)
+    let finalSelectionColor = draftSelectionColor;
+    let finalHoverColor = draftHoverColor;
+    try {
+      const savedThemeAccent = getSavedThemeCustomColors().accent?.toLowerCase();
+      const draftAccent = draftThemeColors.accent?.toLowerCase();
+      if (savedThemeAccent && draftAccent && savedThemeAccent !== draftAccent) {
+        const savedSel = selectionColor.toLowerCase();
+        const defSel = DEFAULT_SELECTION_COLOR.toLowerCase();
+        const isSavedSelDefault = savedSel === savedThemeAccent || savedSel === defSel;
+        const isDraftSelUnchanged = draftSelectionColor.toLowerCase() === savedSel;
+        if (isSavedSelDefault && isDraftSelUnchanged) finalSelectionColor = draftThemeColors.accent;
+        const savedHov = hoverColor.toLowerCase();
+        const defHov = DEFAULT_HOVER_COLOR.toLowerCase();
+        const isSavedHovDefault = savedHov === savedThemeAccent || savedHov === defHov;
+        const isDraftHovUnchanged = draftHoverColor.toLowerCase() === savedHov;
+        if (isSavedHovDefault && isDraftHovUnchanged) finalHoverColor = draftThemeColors.accent;
+      }
+    } catch {}
+    onSelectionColorChange(finalSelectionColor);
+    onHoverColorChange(finalHoverColor);
     applyThemePreference(draftThemePreference);
     applyThemeCustomColors(draftThemeColors);
     setFloatingLayoutPersistenceEnabled(draftFloatingLayoutPersistence);
@@ -812,6 +976,7 @@ export function SettingsModal({
     saveImportDefaultsSettings(draftImportDefaults);
     saveSpaceMouseSettings(draftSpaceMouseSettings);
     saveCameraProjectionSettings({ mode: draftCameraProjectionMode });
+    saveCameraFovSettings({ fov: draftPerspectiveFov });
     saveCameraFeelSettings({ preset: draftCameraFeelPreset });
     saveCameraTrackpadSettings({
       primaryAction: draftCameraTrackpadPrimaryAction,
@@ -843,7 +1008,7 @@ export function SettingsModal({
     }
 
     didCommitThemeDraftRef.current = true;
-    onClose();
+    requestClose();
   }, [
     applyLocale,
     draftLocale,
@@ -855,7 +1020,10 @@ export function SettingsModal({
     draftMeshColor,
     draftHoverTintStrength,
     draftSelectedTintStrength,
-    draftSelectionHighlightMode,
+    draftSelectionColor,
+    draftHoverColor,
+    selectionColor,
+    hoverColor,
     draftCameraScope,
     draftHigherContrastModelEdges,
     draftThemePreset,
@@ -869,6 +1037,7 @@ export function SettingsModal({
     draftImportDefaults,
     draftSpaceMouseSettings,
     draftCameraProjectionMode,
+    draftPerspectiveFov,
     draftCameraFeelPreset,
     draftCameraTrackpadPrimaryAction,
     draftCameraTrackpadModifierKey,
@@ -881,12 +1050,13 @@ export function SettingsModal({
     draftUvToolsSettings,
     draftView3dSettings,
     draftXrayOpacity,
-    draftHeatmapBlend,
-    draftHeatmapContrast,
+    draftHeatmapMinAngle,
+    draftHeatmapMaxAngle,
     draftHeatmapColors,
     draftLogLevel,
     onAmbientIntensityChange,
     onClose,
+    requestClose,
     onDirectionalIntensityChange,
     onFlatUseVertexColorsChange,
     onMatcapVariantChange,
@@ -894,7 +1064,6 @@ export function SettingsModal({
     onMeshColorChange,
     onHoverTintStrengthChange,
     onSelectedTintStrengthChange,
-    onSelectionHighlightModeChange,
     onSelectionColorChange,
     onHoverColorChange,
     onDebugPrimitivesPanelVisibleChange,
@@ -903,8 +1072,8 @@ export function SettingsModal({
     onShaderTypeChange,
     onToonStepsChange,
     onXrayOpacityChange,
-    onHeatmapBlendChange,
-    onHeatmapContrastChange,
+    onHeatmapMinAngleChange,
+    onHeatmapMaxAngleChange,
     onHeatmapColorChange,
   ]);
 
@@ -936,12 +1105,6 @@ export function SettingsModal({
     applyThemeCustomColors(draftThemeColors);
   }, [draftThemeColors, draftThemePreference, isOpen]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-
-    setDraftSelectionColor(draftThemeColors.accent);
-    setDraftHoverColor(draftThemeColors.accentHover);
-  }, [draftThemeColors.accent, draftThemeColors.accentHover, isOpen]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -983,44 +1146,28 @@ export function SettingsModal({
     };
   }, []);
 
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const onKeyDown = (e: CustomEvent) => {
-      if (e.detail.key !== 'Escape') return;
-      if (showThemeDeleteConfirm) {
-        handleCancelThemeDeleteConfirm();
-        return;
-      }
-      if (showThemeRenameDialog) {
-        handleCancelThemeRenameDialog();
-        return;
-      }
-      if (showThemeSaveConfirm) {
-        handleCancelThemeSaveConfirm();
-        return;
-      }
-      if (showRestoreDefaultsConfirm) {
-        handleCancelRestoreDefaults();
-        return;
-      }
-      handleCancel();
-    };
-
-    window.addEventListener('app-hotkey-keydown', onKeyDown as EventListener);
-    return () => window.removeEventListener('app-hotkey-keydown', onKeyDown as EventListener);
-  }, [
-    isOpen,
-    handleCancel,
-    handleCancelRestoreDefaults,
-    handleCancelThemeDeleteConfirm,
-    handleCancelThemeRenameDialog,
-    handleCancelThemeSaveConfirm,
-    showRestoreDefaultsConfirm,
-    showThemeDeleteConfirm,
-    showThemeRenameDialog,
-    showThemeSaveConfirm,
-  ]);
+  // Nested dialogs rendered through StructuredDialogModal register their own
+  // Escape handler and take precedence; the cascade here covers the inline
+  // restore-defaults confirmation, which does not.
+  useEscapeToClose(isOpen, () => {
+    if (showThemeDeleteConfirm) {
+      handleCancelThemeDeleteConfirm();
+      return;
+    }
+    if (showThemeRenameDialog) {
+      handleCancelThemeRenameDialog();
+      return;
+    }
+    if (showThemeSaveConfirm) {
+      handleCancelThemeSaveConfirm();
+      return;
+    }
+    if (showRestoreDefaultsConfirm) {
+      handleCancelRestoreDefaults();
+      return;
+    }
+    handleCancel();
+  });
 
   const handleSpaceMouseChange = React.useCallback((partial: Partial<SpaceMouseSettings>) => {
     setDraftSpaceMouseSettings((prev) => normalizeSpaceMouseSettings({ ...prev, ...partial }));
@@ -1059,99 +1206,105 @@ export function SettingsModal({
 
   const tabMeta: Record<SettingsTabKey, { label: string; description: string; icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>; tone: SettingsTabTone }> = {
     general: {
-      label: 'General',
-      description: 'Workspace behavior and panel layout',
+      label: _(msg`General`),
+      description: _(msg`Workspace behavior and panel layout`),
       icon: Settings2,
       tone: 'primary',
     },
     camera: {
-      label: 'Camera',
-      description: 'Projection and navigation behavior',
+      label: _(msg`Camera`),
+      description: _(msg`Projection and navigation behavior`),
       icon: Camera,
       tone: 'primary',
     },
     mesh: {
-      label: 'Mesh',
-      description: 'Shader, rendering options, and selection behavior',
+      label: _(msg`Mesh`),
+      description: _(msg`Shader, rendering options, and selection behavior`),
       icon: Grid3x3,
       tone: 'primary',
     },
     performance: {
-      label: 'Slicing',
-      description: 'PNG compression and engine metadata',
+      label: _(msg`Slicing`),
+      description: _(msg`PNG compression and engine metadata`),
       icon: MonitorCog,
       tone: 'primary',
     },
     workspaces: {
-      label: 'Workspaces',
-      description: 'Per-workspace camera defaults',
+      label: _(msg`Workspaces`),
+      description: _(msg`Per-workspace camera defaults`),
       icon: MonitorCog,
       tone: 'primary',
     },
     ui: {
-      label: 'UI & Theme',
-      description: 'Theme and custom UI token customization',
+      label: _(msg`UI & Theme`),
+      description: _(msg`Theme and custom UI token customization`),
       icon: Palette,
       tone: 'primary',
     },
     hotkeys: {
-      label: 'Hotkeys',
-      description: 'Keyboard bindings and presets',
+      label: _(msg`Hotkeys`),
+      description: _(msg`Keyboard bindings and presets`),
       icon: Keyboard,
       tone: 'primary',
     },
     spacemouse: {
-      label: '3D Mouse',
-      description: '3D mouse navigation controls',
+      label: _(msg`3D Mouse`),
+      description: _(msg`3D mouse navigation controls`),
       icon: Gamepad2,
       tone: 'primary',
     },
     plugins: {
-      label: 'Plugins',
-      description: 'Load vendor profile plugins',
+      label: _(msg`Plugins`),
+      description: _(msg`Load vendor profile plugins`),
       icon: Plug,
       tone: 'secondary',
     },
+    experiments: {
+      label: _(msg`Experiments`),
+      description: _(msg`Early-access and experimental features`),
+      icon: FlaskConical,
+      tone: 'secondary',
+    },
     sceneAutosave: {
-      label: 'Scene Autosave',
-      description: 'Autosave and crash recovery behavior',
+      label: _(msg`Scene Autosave`),
+      description: _(msg`Autosave and crash recovery behavior`),
       icon: HardDrive,
       tone: 'secondary',
     },
     backups: {
-      label: 'Backups',
-      description: 'Local on-disk backup snapshots',
+      label: _(msg`Backups`),
+      description: _(msg`Local on-disk backup snapshots`),
       icon: ArchiveRestore,
       tone: 'secondary',
     },
     uvtools: {
-      label: 'UVTools',
-      description: 'Send sliced files to UVTools for analysis',
+      label: _(msg`UVTools`),
+      description: _(msg`Send sliced files to UVTools for analysis`),
       icon: ExternalLink,
       tone: 'secondary',
     },
     logging: {
-      label: 'Logging',
-      description: 'Log file location and verbosity',
+      label: _(msg`Logging`),
+      description: _(msg`Log file location and verbosity`),
       icon: ScrollText,
       tone: 'secondary',
     },
     updates: {
-      label: 'Updates',
-      description: 'Check for new versions and manage channels',
+      label: _(msg`Updates`),
+      description: _(msg`Check for new versions and manage channels`),
       icon: CloudDownload,
       tone: 'secondary',
     },
     about: {
-      label: 'About',
-      description: 'Version info and project details',
+      label: _(msg`About`),
+      description: _(msg`Version info and project details`),
       icon: Info,
       tone: 'secondary',
     },
   };
 
   const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys'];
-  const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'sceneAutosave', 'backups', 'uvtools', 'logging', 'updates', 'about'];
+  const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'experiments', 'sceneAutosave', 'backups', 'uvtools', 'logging', 'updates', 'about'];
 
 
   const ActiveTabIcon = tabMeta[activeTab].icon;
@@ -1212,7 +1365,7 @@ export function SettingsModal({
             </span>
             <div>
               <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>Settings</h2>
-              <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 Customize DragonFruit behavior, visuals, and controls.
               </p>
             </div>
@@ -1247,7 +1400,7 @@ export function SettingsModal({
                     <button
                       key={tab}
                       type="button"
-                      onClick={() => setActiveTab(tab)}
+                      onClick={() => handleSelectTab(tab)}
                       className="w-full rounded-lg border px-3 py-2 text-left transition-all duration-150"
                       style={active
                         ? {
@@ -1278,9 +1431,7 @@ export function SettingsModal({
                           <span className="block text-sm font-semibold" style={{ color: active ? 'var(--text-strong)' : 'var(--text-strong)' }}>
                             {meta.label}
                           </span>
-                          <span className="block text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
-                            {meta.description}
-                          </span>
+                          <TabDescription text={meta.description} />
                         </span>
                       </div>
                     </button>
@@ -1300,7 +1451,7 @@ export function SettingsModal({
                       key={tab}
                       type="button"
                       aria-disabled={false}
-                      onClick={() => setActiveTab(tab)}
+                      onClick={() => handleSelectTab(tab)}
                       className="w-full rounded-lg border px-3 py-2 text-left transition-all duration-150"
                       style={{
                         ...(active
@@ -1333,9 +1484,7 @@ export function SettingsModal({
                           <span className="block text-sm font-semibold" style={{ color: active ? 'var(--text-strong)' : 'var(--text-strong)' }}>
                             {meta.label}
                           </span>
-                          <span className="block text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
-                            {meta.description}
-                          </span>
+                          <TabDescription text={meta.description} />
                         </span>
                       </div>
                     </button>
@@ -1367,6 +1516,8 @@ export function SettingsModal({
                   onCameraScopeChange={setDraftCameraScope}
                   cameraProjectionMode={draftCameraProjectionMode}
                   onCameraProjectionModeChange={setDraftCameraProjectionMode}
+                  perspectiveFov={draftPerspectiveFov}
+                  onPerspectiveFovChange={setDraftPerspectiveFov}
                   cameraFeelPreset={draftCameraFeelPreset}
                   onCameraFeelPresetChange={setDraftCameraFeelPreset}
                   cameraTrackpadPrimaryAction={draftCameraTrackpadPrimaryAction}
@@ -1410,23 +1561,23 @@ export function SettingsModal({
                   materialRoughness={draftMaterialRoughness}
                   onMaterialRoughnessChange={setDraftMaterialRoughness}
                   xrayOpacity={draftXrayOpacity}
-                  heatmapBlend={draftHeatmapBlend}
-                  heatmapContrast={draftHeatmapContrast}
+                  heatmapMinAngle={draftHeatmapMinAngle}
+                  heatmapMaxAngle={draftHeatmapMaxAngle}
                   onXrayOpacityChange={setDraftXrayOpacity}
-                  onHeatmapBlendChange={setDraftHeatmapBlend}
-                  onHeatmapContrastChange={setDraftHeatmapContrast}
+                  onHeatmapMinAngleChange={setDraftHeatmapMinAngle}
+                  onHeatmapMaxAngleChange={setDraftHeatmapMaxAngle}
                   heatmapColors={draftHeatmapColors}
                   onHeatmapColorChange={handleDraftHeatmapColorChange}
                   selectionColor={draftSelectionColor}
                   onSelectionColorChange={setDraftSelectionColor}
                   hoverColor={draftHoverColor}
                   onHoverColorChange={setDraftHoverColor}
-                  selectionHighlightMode={draftSelectionHighlightMode}
-                  onSelectionHighlightModeChange={setDraftSelectionHighlightMode}
                   hoverTintStrength={draftHoverTintStrength}
                   onHoverTintStrengthChange={setDraftHoverTintStrength}
                   selectedTintStrength={draftSelectedTintStrength}
                   onSelectedTintStrengthChange={setDraftSelectedTintStrength}
+                  defaultSelectionColor={draftThemeColors.accent}
+                  defaultHoverColor={draftThemeColors.accent}
                 />
               )}
               {activeTab === 'performance' && (
@@ -1471,6 +1622,14 @@ export function SettingsModal({
                 />
               )}
               {activeTab === 'plugins' && <PluginsSettingsTab />}
+              {activeTab === 'experiments' && (
+                <ExperimentsSettingsTab
+                  // Declining the disclaimer returns to the tab the user came
+                  // from — unless they deep-linked straight here, in which case
+                  // fall back to General rather than re-showing the gate.
+                  onExit={() => setActiveTab(previousTabRef.current === 'experiments' ? 'general' : previousTabRef.current)}
+                />
+              )}
               {activeTab === 'sceneAutosave' && <SceneAutosaveSettingsTab />}
               {activeTab === 'backups' && <LocalBackupsSettingsTab />}
               {activeTab === 'uvtools' && (
@@ -1496,9 +1655,8 @@ export function SettingsModal({
                   <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1">
                     <div className="space-y-3.5 pb-2">
                       <div
-                        className="rounded-xl border p-4"
+                        className="rounded-xl p-4"
                         style={{
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 62%)',
                           background: 'linear-gradient(145deg, color-mix(in srgb, var(--accent), var(--surface-0) 95%), color-mix(in srgb, var(--accent-secondary), var(--surface-0) 94%))',
                         }}
                       >
@@ -1547,7 +1705,7 @@ export function SettingsModal({
                               </span>
                             </Tooltip>
                             <span
-                              className="inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-semibold"
+                              className="inline-flex rounded-full border px-2.5 py-0.5 text-xs font-semibold"
                               style={buildStatusStyle}
                             >
                               {buildStatusLabel}
@@ -1562,274 +1720,79 @@ export function SettingsModal({
                         </h5>
 
                         <div className="mt-2.5 space-y-2">
-                          <div
-                            className="rounded-lg border px-3 py-2.5"
-                            style={{
-                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                              background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
-                            }}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                                  Ty Mansfield
-                                </div>
-                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                  Open Resin Alliance & Tableflip Foundry
-                                </div>
-                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                  Core Framework, Supports, Bugfixes, and General Mayhem
-                                </div>
-                              </div>
-                              <div
-                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                                style={{
-                                  color: 'var(--accent-contrast)',
-                                  borderColor: 'color-mix(in srgb, var(--accent), white 18%)',
-                                  background: 'color-mix(in srgb, var(--accent), transparent 18%)',
-                                }}
-                              >
-                                Main Developer & Maintainer
-                              </div>
-                            </div>
-                          </div>
+                          {(() => {
+                            const sorted = [...contributors].sort((a, b) => {
+                              const toneRank = (t: string) => t === 'founder' ? 0 : t === 'accent' ? 1 : 2;
+                              const tr = toneRank(a.tone) - toneRank(b.tone);
+                              if (tr !== 0) return tr;
+                              return a.name.localeCompare(b.name);
+                            });
 
-                          <div
-                            className="rounded-lg border px-3 py-2.5"
-                            style={{
-                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                              background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
-                            }}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                                  Paul Skapczyk
-                                </div>
-                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                  Open Resin Alliance
-                                </div>
-                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                  Core Framework, UI & UX, Backend, Plugins and Chaos Engineering
-                                </div>
-                              </div>
-                              <div
-                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                                style={{
-                                  color: 'var(--accent-contrast)',
-                                  borderColor: 'color-mix(in srgb, var(--accent), white 18%)',
-                                  background: 'color-mix(in srgb, var(--accent), transparent 18%)',
-                                }}
-                              >
-                                Main Developer & Maintainer
-                              </div>
-                            </div>
-                          </div>
+                            const tones = ['founder', 'accent', 'secondary'] as const;
 
-                          <div
-                            className="rounded-lg border px-3 py-2.5"
-                            style={{
-                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
-                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
-                            }}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                                  William Patton
-                                </div>
-                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                  PattonWebz
-                                </div>
-                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                  Breaks stuff, maybe fixes it. Maybe.
-                                </div>
-                              </div>
-                              <div
-                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                                style={{
-                                  color: 'var(--accent-secondary-contrast)',
-                                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
-                                  background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
-                                }}
-                              >
-                                Contributor
-                              </div>
-                              
-                            </div>
-                          </div>
-                          
-                          <div
-                            className="rounded-lg border px-3 py-2.5"
-                            style={{
-                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
-                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
-                            }}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                                  Magistr
-                                </div>
-                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                  umag
-                                </div>
-                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                  Support Tooling, Physics, and General Bugfixes. Linux Builds mysteriously work better when he's around, but who knows why.
-                                </div>
-                              </div>
-                              <div
-                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                                style={{
-                                  color: 'var(--accent-secondary-contrast)',
-                                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
-                                  background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
-                                }}
-                              >
-                                Contributor
-                              </div>          
-                            </div>                      
-                          </div>
-                          
-                          <div
-                            className="rounded-lg border px-3 py-2.5"
-                            style={{
-                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
-                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
-                            }}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                                  Tim
-                                </div>
-                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                  tslater2006
-                                </div>
-                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                  Anycubic Photon Support, Testing, and Bugfixes. Prints fun stuff.
-                                </div>
-                              </div>
-                              <div
-                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                                style={{
-                                  color: 'var(--accent-secondary-contrast)',
-                                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
-                                  background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
-                                }}
-                              >
-                                Contributor
-                              </div>          
-                            </div>                      
-                          </div>
-                          
-                          <div
-                            className="rounded-lg border px-3 py-2.5"
-                            style={{
-                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
-                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
-                            }}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                                  Ada Phillips
-                                </div>
-                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                  Open Resin Alliance
-                                </div>
-                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                  Ensures the software doesn't set itself on fire.
-                                </div>
-                              </div>
-                              <div
-                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                                style={{
-                                  color: 'var(--accent-secondary-contrast)',
-                                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
-                                  background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
-                                }}
-                              >
-                                Contributor
-                              </div>          
-                            </div>                      
-                          </div>
-                          
-                          <div
-                            className="rounded-lg border px-3 py-2.5"
-                            style={{
-                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
-                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
-                            }}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                                  SinXIV
-                                </div>
-                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                  Open Resin Alliance
-                                </div>
-                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                  File Format QA, Edge Case Discovery, and Testing. Finds creative ways to break things so the rest of us don't have to.
-                                </div>
-                              </div>
-                              <div
-                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                                style={{
-                                  color: 'var(--accent-secondary-contrast)',
-                                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
-                                  background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
-                                }}
-                              >
-                                Contributor
-                              </div>          
-                            </div>                      
-                          </div>
-                          
-                          <div
-                            className="rounded-lg border px-3 py-2.5"
-                            style={{
-                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
-                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
-                            }}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                                  Aaron Baca
-                                </div>
-                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                  Open Resin Alliance
-                                </div>
-                                <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                                  Likes anti-aliasing and long walks on the beach. Also automation, scripting, and general bugfixes.
-                                </div>
-                              </div>
-                              <div
-                                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                                style={{
-                                  color: 'var(--accent-secondary-contrast)',
-                                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
-                                  background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
-                                }}
-                              >
-                                Contributor
-                              </div>          
-                            </div>                      
-                          </div>
-                          
-                        </div>
-                      </div>
-                      
-
-                      <div className="rounded-lg border px-3 py-2 text-center" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 25%)' }}>
-                        <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                          DragonFruit is under active development - expect frequent updates and iterative improvements to workflows and features.
+                            return tones.map((tone, i) => {
+                              const people = sorted.filter((p) => p.tone === tone);
+                              if (people.length === 0) return null;
+                              return (
+                                <React.Fragment key={tone}>
+                                  {i > 0 && (
+                                    <div
+                                      className="my-2.5 h-px rounded-full"
+                                      style={{
+                                        background: 'linear-gradient(90deg, transparent 0%, var(--border-subtle) 22%, var(--border-subtle) 78%, transparent 100%)',
+                                      }}
+                                    />
+                                  )}
+                                  <div className="grid grid-cols-2 gap-2">
+                                    {people.map((person) => {
+                                      const toneVar =
+                                        person.tone === 'founder' ? '#d4a017' :
+                                        person.tone === 'accent' ? 'var(--accent)' :
+                                        'var(--accent-secondary)';
+                                      const bgMix = person.tone === 'founder' ? '94%' : person.tone === 'accent' ? '90%' : '93%';
+                                      return (
+                                        <div
+                                          key={person.name}
+                                          className="rounded-lg border px-3 py-2.5"
+                                          style={{
+                                            borderColor: `color-mix(in srgb, ${toneVar}, var(--border-subtle) 45%)`,
+                                            background: `color-mix(in srgb, ${toneVar}, var(--surface-0) ${bgMix})`,
+                                          }}
+                                        >
+                                          <div className="flex items-center justify-between gap-2 text-sm">
+                                            <span className="font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
+                                              {person.name}
+                                            </span>
+                                            <button
+                                              type="button"
+                                              onClick={async () => {
+                                                try {
+                                                  const { invoke } = await import('@tauri-apps/api/core');
+                                                  await invoke('open_external_url', { url: `https://github.com/${person.affiliation}` });
+                                                } catch { /* ignore */ }
+                                              }}
+                                              className="inline-flex shrink-0 items-center gap-0.5 font-normal hover:underline"
+                                              style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                                            >
+                                              <Github className="h-3 w-3" />
+                                              {person.affiliation}
+                                            </button>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </React.Fragment>
+                              );
+                            });
+                          })()}
                         </div>
                       </div>
                     </div>
                   </div>
+
+                  <SponsorsCarousel />
+
 
                   <div className="flex items-center gap-4 rounded-xl border px-4 py-3" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 52%)', background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 94%)' }}>
                       <img
@@ -1950,10 +1913,10 @@ export function SettingsModal({
                   <RotateCcw className="h-4 w-4" />
                 </span>
                 <div className="min-w-0">
-                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                     Restore Defaults?
                   </h3>
-                  <p className="text-[11px] leading-snug mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                  <p className="text-xs leading-snug mt-0.5" style={{ color: 'var(--text-muted)' }}>
                     This resets settings in this dialog to their default values.
                   </p>
                 </div>
@@ -1970,7 +1933,7 @@ export function SettingsModal({
             </div>
 
             <div className="p-4 space-y-3">
-              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
                 You can still review the changes before saving. Nothing is written until you click <strong>Apply</strong>.
               </p>
 
@@ -1985,11 +1948,99 @@ export function SettingsModal({
                 <button
                   type="button"
                   onClick={handleConfirmRestoreDefaults}
-                  className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
-                  style={accentSecondaryActionStyle92}
+                  className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+                  style={{
+                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                    color: 'var(--accent)',
+                  }}
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   Restore Defaults
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showReloadPrompt && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setShowReloadPrompt(false);
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-md overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Apply experiments"
+          >
+            <div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
+                    color: '#d97706',
+                  }}
+                >
+                  <RotateCcw className="h-4 w-4" />
+                </span>
+                <div className="min-w-0">
+                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+                    Apply Experiments
+                  </h2>
+                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                    Experiment changes take effect after a restart.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowReloadPrompt(false)}
+                className="ui-button ui-button-secondary inline-flex items-center justify-center leading-none !h-8 !w-8 !p-0"
+                aria-label="Close restart prompt"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+                Reload DragonFruit now to apply your experiment changes? Any unsaved changes to the current scene will be lost.
+              </p>
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setShowReloadPrompt(false); onClose(); }}
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                >
+                  Not Now
+                </button>
+                <button
+                  type="button"
+                  onClick={reloadToApplyExperiments}
+                  className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+                  style={{
+                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                    color: 'var(--accent)',
+                  }}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Reload Now
                 </button>
               </div>
             </div>
@@ -2019,8 +2070,12 @@ export function SettingsModal({
             <button
               type="button"
               onClick={handleConfirmSaveCurrentCustomTheme}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
-              style={accentSecondaryActionStyle92}
+              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+              style={{
+                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                color: 'var(--accent)',
+              }}
             >
               <Save className="h-3.5 w-3.5" />
               Save Theme
@@ -2028,7 +2083,7 @@ export function SettingsModal({
           </>
         )}
       >
-        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+        <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
           Save <strong>{draftCustomThemeName.trim() || 'this custom theme'}</strong> with the current scheme and palette values?
         </p>
       </StructuredDialogModal>
@@ -2055,11 +2110,11 @@ export function SettingsModal({
             <button
               type="button"
               onClick={handleConfirmDeleteCurrentCustomTheme}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center gap-1.5"
+              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
               style={{
+                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
+                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
                 color: 'var(--danger)',
-                borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 40%)',
-                background: 'color-mix(in srgb, var(--danger), var(--surface-1) 92%)',
               }}
             >
               <Trash2 className="h-3.5 w-3.5" />
@@ -2068,7 +2123,7 @@ export function SettingsModal({
           </>
         )}
       >
-        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+        <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
           Delete <strong>{draftCustomThemeName.trim() || 'this custom theme'}</strong>? DragonFruit will switch back to a built-in preset.
         </p>
       </StructuredDialogModal>
@@ -2095,8 +2150,12 @@ export function SettingsModal({
             <button
               type="button"
               onClick={handleConfirmRenameCurrentCustomTheme}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center gap-1.5"
-              style={accentSecondaryActionStyle92}
+              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+              style={{
+                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                color: 'var(--accent)',
+              }}
               disabled={draftThemeRenameName.trim().length === 0}
             >
               <Check className="h-3.5 w-3.5" />
@@ -2106,7 +2165,7 @@ export function SettingsModal({
         )}
       >
         <div className="space-y-2">
-          <label className="block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+          <label className="block text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
             Theme name
           </label>
           <input
@@ -2120,7 +2179,7 @@ export function SettingsModal({
           {isCreatingCustomThemeName ? (
             <div className="space-y-2">
               <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                   Base preset
                 </label>
                 <div
@@ -2134,7 +2193,7 @@ export function SettingsModal({
                         key={preset}
                         type="button"
                         onClick={() => handleThemeCreateBasePresetChange(preset)}
-                        className="flex-1 rounded-sm border px-2 py-1 text-[11px] font-semibold transition-colors"
+                        className="flex-1 rounded-sm border px-2 py-1 text-xs font-semibold transition-colors"
                         style={active
                           ? {
                             color: 'var(--accent)',
@@ -2157,7 +2216,7 @@ export function SettingsModal({
 
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                   Primary branding
                 </label>
                 <div className="flex items-center gap-1.5">
@@ -2179,7 +2238,7 @@ export function SettingsModal({
               </div>
 
               <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                   Secondary branding
                 </label>
                 <div className="flex items-center gap-1.5">

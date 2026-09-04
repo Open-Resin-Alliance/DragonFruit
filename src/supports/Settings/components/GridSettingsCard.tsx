@@ -13,7 +13,7 @@ export function GridSettingsCard({ grid, onChange }: GridSettingsCardProps) {
     const unitHint = (unit: string) => (
         <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>{unit}</span>
     );
-    const compactInputClass = 'ui-input w-full h-[36px] px-3 py-2 text-base text-center no-spinners';
+    const compactInputClass = 'ui-input w-full h-[36px] px-3 py-2 text-base text-center no-spinners !bg-[var(--surface-0)]';
 
     const enabled = grid.enabled;
 

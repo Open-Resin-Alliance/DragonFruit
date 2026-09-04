@@ -150,6 +150,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
   const { getHotkey } = useHotkeyConfig();
 
   const altDownRef = useRef(false);
+  const deletingRef = useRef(false);
 
   // V2 Joint Creation State
   useJointCreationHotkey(mode);
@@ -368,7 +369,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
             });
           }
           setSelectedId(result.trunkId);
-        } else {
+        } else if (result.kind === 'branch') {
           if (recordHistory) {
             pushSupportHistory({
               type: SUPPORT_UPDATE_BRANCH,
@@ -376,6 +377,11 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
             });
           }
           setSelectedId(result.branchId);
+        } else if (result.kind === 'kickstand') {
+          // Joint removed from kickstand — just select the parent kickstand.
+          // No dedicated SUPPORT_UPDATE_KICKSTAND history type exists yet,
+          // so undo is handled via full state snapshot if needed.
+          setSelectedId(result.kickstandId);
         }
         return true;
       }
@@ -656,6 +662,9 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     };
 
     const performDeleteSelection = () => {
+      if (deletingRef.current) return;
+      deletingRef.current = true;
+      try {
       const multiSelectedIds = Array.from(new Set(getResolvedPrimarySelection().selectedIds));
       if (multiSelectedIds.length > 0) {
         const beforeSupportSnapshot = structuredClone(getSnapshot());
@@ -696,6 +705,9 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       deleteSelectionByCategoryAndId(category, id);
 
       setHoveredState('none', null);
+      } finally {
+        deletingRef.current = false;
+      }
     };
 
     const onKeyDown = (e: CustomEvent) => {
@@ -730,9 +742,9 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
         return;
       }
 
-      // Deletion is handled centrally through the delete registry (registered
-      // below with priority 100), which honors the configurable GLOBAL.DELETE
-      // binding plus the fixed `Delete` secondary key. No inline delete here.
+      // Delete/Backspace is handled by the delete registry (registerDeleteHandler)
+      // — do NOT handle it here or it fires twice: once here (removes the joint,
+      // selects the parent) and once via triggerDelete() (deletes the parent).
 
       if (key === 'Escape') {
         if (getSelectedId() || getResolvedPrimarySelection().selectedIds.length > 0) {

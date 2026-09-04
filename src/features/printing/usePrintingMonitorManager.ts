@@ -2007,7 +2007,7 @@ export function usePrintingMonitorManager(deps: PrintingMonitorManagerDeps) {
         }));
       } catch (error) {
         if (cancelled) return;
-        let timeoutCount = printingMonitorWebcamConsecutiveTimeoutsRef.current + 1;
+        const timeoutCount = printingMonitorWebcamConsecutiveTimeoutsRef.current + 1;
         printingMonitorWebcamConsecutiveTimeoutsRef.current = timeoutCount;
 
         const timeoutCircuitBreakerTripped = timeoutCount >= printingMonitorWebcamMaxConsecutiveTimeouts;

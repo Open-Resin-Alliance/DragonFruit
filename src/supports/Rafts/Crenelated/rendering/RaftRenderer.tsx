@@ -166,7 +166,11 @@ export default function RaftRenderer({
       if (circles.length === 0) continue;
       const modelId = fromRaftModelKey(modelKey, 'unknown') ?? modelKey;
 
-      const profile = computeFootprint(circles, { marginMm: 0.2, samplesPerCircle: 24 });
+      const chamferInset = Math.max(0, raft.thickness) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raft.chamferAngle))));
+      const wallInset = raft.wallEnabled ? Math.max(0, raft.wallThickness) : 0;
+      const dynamicMargin = 0.2 + Math.max(chamferInset, wallInset);
+
+      const profile = computeFootprint(circles, { marginMm: dynamicMargin, samplesPerCircle: 24 });
       if (!profile || profile.length < 3) continue;
 
       const baseMesh = generateChamferedBase(profile, { thickness: raft.thickness, chamferAngle: raft.chamferAngle });
@@ -254,7 +258,6 @@ export default function RaftRenderer({
         if (meshes.wallMesh) group.add(meshes.wallMesh);
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [raftMeshes]);
 
   React.useEffect(() => {

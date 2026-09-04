@@ -23,19 +23,6 @@ export function SliceCompletedModal({
   const [openDirectoryError, setOpenDirectoryError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    if (!isOpen) return;
-
-    const handleKeyDown = (event: CustomEvent) => {
-      if (event.detail.key === 'Escape') {
-        onClose();
-      }
-    };
-
-    window.addEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
-    return () => window.removeEventListener('app-hotkey-keydown', handleKeyDown as EventListener);
-  }, [isOpen, onClose]);
-
-  React.useEffect(() => {
     if (!isOpen) {
       setOpenDirectoryError(null);
     }
@@ -78,7 +65,12 @@ export function SliceCompletedModal({
             type="button"
             onClick={() => filePath && onOpenInUvTools(filePath)}
             disabled={!filePath}
-            className="ui-button ui-button-accent !h-9 px-3 text-sm inline-flex items-center gap-1.5 disabled:opacity-45"
+            className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-45"
+            style={{
+              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+              color: 'var(--accent)',
+            }}
           >
             <ExternalLink className="w-4 h-4" />
             Open in UVTools
@@ -87,7 +79,12 @@ export function SliceCompletedModal({
             type="button"
             onClick={handleOpenDirectory}
             disabled={!filePath}
-            className="ui-button ui-button-secondary !h-9 px-3 text-sm inline-flex items-center gap-1.5 disabled:opacity-45"
+            className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-45"
+            style={{
+              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+              color: 'var(--accent)',
+            }}
           >
             <FolderOpen className="w-4 h-4" />
             Open Directory
@@ -98,7 +95,7 @@ export function SliceCompletedModal({
           <button
             type="button"
             onClick={onClose}
-            className="ui-button ui-button-secondary !h-9 px-3 text-sm"
+            className="ui-button ui-button-secondary !h-9 px-3 text-xs"
           >
             Close
           </button>
@@ -106,7 +103,12 @@ export function SliceCompletedModal({
             type="button"
             onClick={handleOpenDirectory}
             disabled={!filePath}
-            className="ui-button ui-button-accent !h-9 px-3 text-sm inline-flex items-center gap-1.5 disabled:opacity-45"
+            className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-45"
+            style={{
+              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+              color: 'var(--accent)',
+            }}
           >
             <FolderOpen className="w-4 h-4" />
             Open Directory

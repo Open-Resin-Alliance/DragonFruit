@@ -1,9 +1,12 @@
-import { GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS } from '@/features/plugins/generatedBuiltinComplexPlugins';
+import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 
-const PLUGIN_SCENE_FILE_TYPES = GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS.flatMap(
+// Plugin file types are derived from the filtered getter so plugins gated behind
+// disabled experiments (e.g. chitubox-import) are excluded from drop targets,
+// scene detection and MIME resolution at module load.
+const PLUGIN_SCENE_FILE_TYPES = getBuiltinComplexPluginDefinitions().flatMap(
   (def) => (def.fileTypes ?? []).filter((ft) => ft.isSceneFile),
 );
-const PLUGIN_ALL_FILE_TYPES = GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS.flatMap(
+const PLUGIN_ALL_FILE_TYPES = getBuiltinComplexPluginDefinitions().flatMap(
   (def) => def.fileTypes ?? [],
 );
 const PREPARE_DROP_EXTENSIONS = new Set([
@@ -13,6 +16,63 @@ const PREPARE_DROP_EXTENSIONS = new Set([
 export const PLUGIN_IMPORT_WARNING_DISMISSED_STORAGE_KEY =
   PLUGIN_SCENE_FILE_TYPES.find((ft) => ft.fileExtension === '.lys')?.importWarning?.storageKey
   ?? 'dragonfruit.lysImportWarningDismissed';
+
+/**
+ * The import warning declared by the plugin that owns this file's extension,
+ * or null when the extension is unknown or its plugin declares no warning.
+ *
+ * Each plugin supplies its own title, body and storageKey, so the dismissal is
+ * remembered per format rather than globally.
+ */
+export function getPluginImportWarningForFileName(name: string): {
+  title: string;
+  body: string;
+  storageKey: string;
+} | null {
+  const ext = getFileExtension(name);
+  if (!ext) return null;
+  const fileType = PLUGIN_SCENE_FILE_TYPES.find((ft) => ft.fileExtension.toLowerCase() === ext);
+  return fileType?.importWarning ?? null;
+}
+
+/** First plugin import warning among the given files, or null if none apply. */
+export function findPluginImportWarning(files: File[]): {
+  title: string;
+  body: string;
+  storageKey: string;
+} | null {
+  for (const file of files) {
+    const warning = getPluginImportWarningForFileName(file.name);
+    if (warning) return warning;
+  }
+  return null;
+}
+
+/**
+ * File extensions (without leading dot) the native "Scene Files" open-dialog
+ * filter should offer, derived from the currently available scene file types.
+ * Passed to the Rust `pick_open_files` command so gated extensions are hidden.
+ */
+export function getNativeSceneDialogExtensions(): string[] {
+  return [
+    'voxl',
+    ...PLUGIN_SCENE_FILE_TYPES.map((ft) => ft.fileExtension.replace(/^\./, '').toLowerCase()),
+    'zip',
+  ];
+}
+
+/**
+ * `accept` string for the web (browser) scene-file input, so enabled
+ * plugin-gated scene extensions (e.g. `.chitubox` behind an enabled experiment)
+ * are selectable there too. Derived from the filtered plugin scene types.
+ */
+export function getWebSceneAcceptString(): string {
+  const extensions = new Set(['.voxl', '.lys', '.zip']);
+  for (const ft of PLUGIN_SCENE_FILE_TYPES) {
+    extensions.add(ft.fileExtension.toLowerCase());
+  }
+  return [...extensions].join(',');
+}
 
 export function getFileExtension(name: string): string {
   const trimmed = name.trim().toLowerCase();

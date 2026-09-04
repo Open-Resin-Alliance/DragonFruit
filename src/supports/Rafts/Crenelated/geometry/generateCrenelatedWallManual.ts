@@ -2,17 +2,9 @@ import * as THREE from 'three';
 import { FootprintProfile, RaftSettings } from '../RaftTypes';
 import { insetConvexPolygon } from './insetConvexPolygon';
 import { generatePerimeterWall } from './generatePerimeterWall';
+import { signedArea2d } from './signedArea2d';
 
 const LOOP_EPS = 1e-4;
-
-function signedArea(poly: THREE.Vector2[]): number {
-  let area = 0;
-  for (let i = 0; i < poly.length; i++) {
-    const j = (i + 1) % poly.length;
-    area += poly[i].x * poly[j].y - poly[j].x * poly[i].y;
-  }
-  return area * 0.5;
-}
 
 function cross(o: THREE.Vector2, a: THREE.Vector2, b: THREE.Vector2): number {
   return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
@@ -89,7 +81,7 @@ function sanitizeLoop(loop: THREE.Vector2[]): THREE.Vector2[] {
 
   if (compacted.length < 3) return [];
   if (!isSimpleLoop(compacted)) return [];
-  if (Math.abs(signedArea(compacted)) <= LOOP_EPS) return [];
+  if (Math.abs(signedArea2d(compacted)) <= LOOP_EPS) return [];
 
   return compacted;
 }

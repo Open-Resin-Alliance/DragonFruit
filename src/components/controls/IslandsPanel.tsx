@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { Settings, RotateCcw } from 'lucide-react';
-import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
+import { Card, CardHeader, IconButton } from '@/components/atoms';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
@@ -66,7 +66,6 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
 
   const {
     scanning,
-    scanProgress,
     showVoxelOnly,
     setShowVoxelOnly,
     showMinimaOnly,
@@ -80,8 +79,8 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
     selectPrev,
     selectNext,
     tableStats,
-    enableVolumeGlow,
-    setEnableVolumeGlow,
+    showOverhangs,
+    setShowOverhangs,
     draftPxMm,
     setDraftPxMm,
     draftSupportBufMm,
@@ -154,17 +153,16 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
           right={(
             <IconButton
               onClick={() => setShowSettings(true)}
-              className="!p-1.5"
+              className="!p-0.5"
               title="Scan settings"
             >
               <Settings className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
             </IconButton>
           )}
-          hideDivider={!expanded}
         />
 
         {expanded && (
-          <div className="px-2.5 pb-3 space-y-2.5 overflow-y-auto custom-scrollbar" style={{ maxHeight: `calc(100vh - var(--topbar-height) - ${computedBottomClearance}px)` }}>
+          <div className="px-2.5 pt-1 pb-3 space-y-2.5 overflow-y-auto custom-scrollbar" style={{ maxHeight: `calc(100vh - var(--topbar-height) - ${computedBottomClearance}px)` }}>
             {applyingSettings && (
               <div
                 className="absolute inset-0 flex flex-col items-center justify-center z-50 rounded-md"
@@ -195,23 +193,9 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                 color: 'var(--accent)',
               }}
             >
-              {scanning
-                ? `Scanning… ${scanProgress?.done ?? 0}/${scanProgress?.total ?? 0}`
-                : 'Scan Islands'}
+              {scanning ? 'Scanning…' : 'Scan Islands'}
             </button>
 
-            {/* Progress bar */}
-            {scanning && scanProgress && (
-              <div className="h-1 rounded-full overflow-hidden" style={{ background: 'var(--surface-2)' }}>
-                <div
-                  className="h-full rounded-full transition-all duration-200"
-                  style={{
-                    width: `${Math.min(100, (scanProgress.done / Math.max(1, scanProgress.total)) * 100)}%`,
-                    background: 'var(--accent)',
-                  }}
-                />
-              </div>
-            )}
 
             {/* --- Post-scan content --- */}
             {hasData && !scanning && (
@@ -237,9 +221,8 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                   </div>
                 </div>
 
-                {/* Navigation */}
+                {/* Navigation (no header label — arrows + counter are self-explanatory) */}
                 <div className="rounded-md border p-2" style={SECTION_CARD}>
-                  <SectionHeader title="Navigate" />
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
@@ -280,47 +263,18 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                   </div>
                 </div>
 
-                {/* Display toggles */}
+                {/* Display toggles (no header label — the chips are self-explanatory) */}
                 <div className="rounded-md border p-2" style={SECTION_CARD}>
-                  <SectionHeader title="Display" />
                   <div className="grid grid-cols-2 gap-1.5">
                     <ToggleBtn label="Voxels" checked={showVoxelOnly} onChange={setShowVoxelOnly} color={ISLAND_LAYER_COLORS.voxel} hint="Slicing islands and suspended areas detected from layer contours" />
                     <ToggleBtn label="Minima" checked={showMinimaOnly} onChange={setShowMinimaOnly} color={ISLAND_LAYER_COLORS.minima} hint="Individual lowest-vertex triangles on the mesh surface" />
                     <ToggleBtn label="Coincident" checked={showIntersection} onChange={setShowIntersection} color={ISLAND_LAYER_COLORS.intersection} hint="Regions where both voxel and geometric islands overlap" />
-                    <ToggleBtn label="Glow" checked={enableVolumeGlow} onChange={setEnableVolumeGlow} color="#baf72e" hint="Volumetric selection glow around the active island" />
+                    <ToggleBtn label="Overhangs" checked={showOverhangs} onChange={setShowOverhangs} color="#ffa500" hint="Shallow surfaces detected by the mesh-normal classifier (the surfaces auto-supports grid)" />
                   </div>
                 </div>
 
-                {/* Filter toggles */}
-                <div className="rounded-md border p-2" style={SECTION_CARD}>
-                  <SectionHeader title="Filters" />
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {[
-                      { label: 'Supported', key: 'supported', checked: filterToggles.showAlreadySupported, onChange: (v: boolean) => setFilterToggles({ ...filterToggles, showAlreadySupported: v }) },
-                      { label: 'Plate', key: 'plate', checked: filterToggles.showPlateContact, onChange: (v: boolean) => setFilterToggles({ ...filterToggles, showPlateContact: v }) },
-                    ].map(b => (
-                      <button
-                        key={b.key}
-                        type="button"
-                        onClick={() => b.onChange(!b.checked)}
-                        className="min-h-[36px] rounded-md border px-2 text-[11px] font-semibold uppercase tracking-wide transition-colors flex items-center justify-center gap-1.5"
-                        style={b.checked
-                          ? {
-                              borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)',
-                              color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
-                            }
-                          : {
-                              borderColor: 'var(--border-subtle)',
-                              background: 'var(--surface-1)',
-                              color: 'var(--text-muted)',
-                            }}
-                      >
-                        {b.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                {/* Filter toggles live in Scan Settings (supported + plate) */}
+
               </>
             )}
 
@@ -352,18 +306,26 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
         onBackdropClick={() => setShowSettings(false)}
         actions={
           <>
-            <Button onClick={() => setShowSettings(false)} variant="secondary" size="sm" className="!h-9 text-[12px]">
+            <button
+              type="button"
+              onClick={() => setShowSettings(false)}
+              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+            >
               Cancel
-            </Button>
-            <Button
+            </button>
+            <button
+              type="button"
               onClick={() => { applySettings(); setShowSettings(false); }}
-              variant="primary"
-              size="sm"
-              className="!h-9 text-[12px]"
               disabled={!hasPendingChanges}
+              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{
+                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                color: 'var(--accent)',
+              }}
             >
               Apply
-            </Button>
+            </button>
           </>
         }
       >
@@ -390,6 +352,31 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                 </div>
                 <input type="range" min="0" max="1" step="0.05" value={draftSupportBufMm} onChange={(e) => setDraftSupportBufMm(parseFloat(e.target.value))} disabled={scanning} className="ui-range w-full" />
               </div>
+            </div>
+          </div>
+
+          {/* Filters section */}
+          <div className="rounded-md border p-2.5" style={SECTION_CARD}>
+            <SectionHeader title="Filters" />
+            <div className="space-y-3">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={filterToggles.showAlreadySupported}
+                  onChange={(e) => setFilterToggles({ ...filterToggles, showAlreadySupported: e.target.checked })}
+                  className="ui-checkbox !w-4 !h-4"
+                />
+                <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>Show already-supported islands</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={filterToggles.showPlateContact}
+                  onChange={(e) => setFilterToggles({ ...filterToggles, showPlateContact: e.target.checked })}
+                  className="ui-checkbox !w-4 !h-4"
+                />
+                <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>Show plate-contact islands</span>
+              </label>
             </div>
           </div>
 

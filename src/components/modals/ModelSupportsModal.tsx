@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { ChevronDown, ChevronRight, X } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { getSnapshot as getSupportSnapshot, subscribe as subscribeSupportState } from '@/supports/state';
@@ -45,16 +46,7 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
   const kickstandSnapshot = React.useSyncExternalStore(subscribeToKickstandStore, getKickstandSnapshot, getKickstandSnapshot);
   const [collapsedGroups, setCollapsedGroups] = React.useState<Record<string, boolean>>({});
 
-  React.useEffect(() => {
-    if (!isOpen) return;
-
-    const onKeyDown = (event: CustomEvent) => {
-      if (event.detail.key === 'Escape') onClose();
-    };
-
-    window.addEventListener('app-hotkey-keydown', onKeyDown as EventListener);
-    return () => window.removeEventListener('app-hotkey-keydown', onKeyDown as EventListener);
-  }, [isOpen, onClose]);
+  useEscapeToClose(isOpen, onClose);
 
   const groups = React.useMemo<ModelSupportGroups>(() => {
     const modelId = model?.id;

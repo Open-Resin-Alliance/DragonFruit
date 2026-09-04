@@ -1,3 +1,4 @@
+import { isTauriRuntime } from '@/utils/tauriRuntime';
 import { useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
@@ -13,7 +14,6 @@ import {
   applyRepairedPositions,
   classifyFromGeometry,
   isHeavyRepair,
-  isTauriRuntime,
   repairFromGeometry,
   type MeshAnalysisJson,
   type MeshHealthReport,
@@ -126,9 +126,18 @@ export interface ProcessGeometryOptions {
    * attribute (e.g. from the Rust-side STL parser).
    * @internal
    */
-  _skipComputeNormals?: boolean;
+  assumeSupportGeometry?: boolean;
   /** Skip nonessential analysis for a native reduced-detail preview. @internal */
   _isNativePreview?: boolean;
+  /** Model section boundary offset extracted directly from the DFST binary IPC header. @internal */
+  _nativeModelTriangleCount?: number;
+  /** Skip classification/repair in Tauri when loading a pre-repaired mesh */
+  skipClassification?: boolean;
+  /** Skip `computeVertexNormals()` - the geometry already has a `normal` attribute */
+  _skipComputeNormals?: boolean;
+  _isTauriRuntime?: () => boolean;
+  _classifyFromGeometry?: typeof classifyFromGeometry;
+  _repairFromGeometry?: typeof repairFromGeometry;
 }
 
 // Cloning extremely large position buffers can require hundreds of MB and can
@@ -277,14 +286,13 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   // In the browser we fall back to the legacy Manifold WASM path (which only
   // activates when NaN defects were detected).
   let nativeModifiedGeometry = false;
-  if (isTauriRuntime()) {
+  const skipAll = options.skipClassification === true;
+  const checkTauri = options._isTauriRuntime ?? isTauriRuntime;
+  
+  if (checkTauri() && !skipAll) {
     const nativeMode = options.nativeProcessingMode ?? 'auto';
     const skipAutoNativeProcessingForSize = nativeMode === 'auto'
       && sourceTriangleEstimate >= AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD;
-
-    if (nativeMode === 'none') {
-      console.log('[processGeometry] Native repair skipped (mode=none) — running classification for support geometry detection');
-    }
 
     if (skipAutoNativeProcessingForSize) {
       console.warn(
@@ -325,9 +333,14 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
       options.onNativeProcessingStage?.(classifyOnly ? 'classifying' : 'repairing');
       console.log(`[${new Date().toISOString()}] [processGeometry] Running native ${classifyOnly ? 'classification' : 'repair/classification'}`);
       const nativeStart = performance.now();
+      const repairOpts = options.assumeSupportGeometry != null
+        ? { assumeSupportGeometry: options.assumeSupportGeometry }
+        : {};
+      const runClassify = options._classifyFromGeometry ?? classifyFromGeometry;
+      const runRepair = options._repairFromGeometry ?? repairFromGeometry;
       const result = classifyOnly
-        ? await classifyFromGeometry(geometry)
-        : await repairFromGeometry(geometry);
+        ? await runClassify(geometry, repairOpts)
+        : await runRepair(geometry, repairOpts);
       if (result) {
         let effectiveResult = result;
         let usedFallbackClassification = false;
@@ -339,7 +352,7 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
             console.warn(`[processGeometry] Rejecting native auto-repair result: ${qualityGate.reason}. Falling back to classify-only pass.`);
             try {
               options.onNativeProcessingStage?.('classifying');
-              const fallbackClassification = await classifyFromGeometry(geometry);
+              const fallbackClassification = await runClassify(geometry, repairOpts);
               if (fallbackClassification) {
                 effectiveResult = fallbackClassification;
                 usedFallbackClassification = true;
@@ -399,11 +412,15 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
         // If the repaired mesh has a model/support split, extract the support
         // section as a separate geometry for orange overlay rendering.
         const positionsWereApplied = shouldApplyPositions;
+        const effectiveModelTriCount = report.model_triangle_count ?? options._nativeModelTriangleCount;
 
-        if (positionsWereApplied && report.model_triangle_count != null && report.model_triangle_count > 0) {
+        if ((positionsWereApplied || options._skipComputeNormals) && effectiveModelTriCount != null && effectiveModelTriCount > 0) {
+          if (!report.model_triangle_count) {
+            report.model_triangle_count = effectiveModelTriCount;
+          }
           const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
           const allPos = posAttr.array as Float32Array;
-          const modelFloatEnd = report.model_triangle_count * 9; // 3 vertices × 3 floats per tri
+          const modelFloatEnd = effectiveModelTriCount * 9; // 3 vertices × 3 floats per tri
           if (modelFloatEnd < allPos.length) {
             const supportPositions = allPos.slice(modelFloatEnd);
             const supportGeo = new THREE.BufferGeometry();
@@ -724,8 +741,28 @@ type NativeStlLoadResult = {
   geometry: THREE.BufferGeometry;
   originalTriangleCount: number;
   previewTriangleCount: number;
+  modelTriangleCount?: number;
   isPreview: boolean;
 };
+
+/**
+ * DragonFruit Streaming Transfer (DFST) Binary IPC Protocol Specification:
+ * Header Length: 64 Bytes Total (Single header at index 0 per STL payload)
+ * 
+ * Byte Offsets:
+ *   0 ..  3 : ASCII Magic "DFST" (0x44465354)
+ *   4 ..  7 : Flags u32 (Bit 0: IS_PREVIEW)
+ *   8 .. 11 : Original Input Triangle Count (u32 LE)
+ *  12 .. 15 : Output Preview Triangle Count (u32 LE)
+ *  16 .. 31 : Reserved / Bounding Box Extents (16 bytes)
+ *  32 .. 35 : Model Section Triangle Count / Boundary Offset (u32 LE)
+ *  36 .. 63 : Reserved Metadata Padding (28 bytes)
+ * 
+ * Payload (starts at Byte 64):
+ *   64 .. 64 + (previewTriangleCount * 36) : Positions (Float32Array, 9 floats per triangle)
+ *   64 + (previewTriangleCount * 36) .. End : Normals (Float32Array, 9 floats per triangle)
+ */
+const STL_RESPONSE_HEADER_BYTES = 64;
 
 async function loadStlViaTauri(filePath: string): Promise<NativeStlLoadResult | null> {
   try {
@@ -733,8 +770,8 @@ async function loadStlViaTauri(filePath: string): Promise<NativeStlLoadResult | 
     const bytes = await invoke<ArrayBuffer>('load_stl_file', { filePath });
     if (!bytes || bytes.byteLength === 0) return null;
 
-    if (bytes.byteLength < 16) return null;
-    const header = new DataView(bytes, 0, 16);
+    if (bytes.byteLength < STL_RESPONSE_HEADER_BYTES) return null;
+    const header = new DataView(bytes, 0, STL_RESPONSE_HEADER_BYTES);
     const hasMagic = header.getUint8(0) === 0x44
       && header.getUint8(1) === 0x46
       && header.getUint8(2) === 0x53
@@ -744,15 +781,18 @@ async function loadStlViaTauri(filePath: string): Promise<NativeStlLoadResult | 
     const flags = header.getUint32(4, true);
     const originalTriangleCount = header.getUint32(8, true);
     const previewTriangleCount = header.getUint32(12, true);
-    const expectedBytes = 16 + previewTriangleCount * 18 * Float32Array.BYTES_PER_ELEMENT;
+    const modelTriangleCount = header.getUint32(32, true);
+
+    const triangleBytes = previewTriangleCount * 18 * Float32Array.BYTES_PER_ELEMENT;
+    const expectedBytes = STL_RESPONSE_HEADER_BYTES + triangleBytes;
     if (previewTriangleCount === 0 || bytes.byteLength !== expectedBytes) {
       throw new Error('Native STL loader returned a truncated response.');
     }
 
-    const positions = new Float32Array(bytes, 16, previewTriangleCount * 9);
+    const positions = new Float32Array(bytes, STL_RESPONSE_HEADER_BYTES, previewTriangleCount * 9);
     const normals = new Float32Array(
       bytes,
-      16 + previewTriangleCount * 9 * Float32Array.BYTES_PER_ELEMENT,
+      STL_RESPONSE_HEADER_BYTES + previewTriangleCount * 9 * Float32Array.BYTES_PER_ELEMENT,
       previewTriangleCount * 9,
     );
 
@@ -776,6 +816,7 @@ async function loadStlViaTauri(filePath: string): Promise<NativeStlLoadResult | 
       geometry,
       originalTriangleCount,
       previewTriangleCount,
+      modelTriangleCount: modelTriangleCount > 0 ? modelTriangleCount : undefined,
       isPreview: (flags & 1) !== 0,
     };
   } catch (error) {
@@ -797,6 +838,7 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
         ...options,
         _skipComputeNormals: true,
         _isNativePreview: nativeResult.isPreview,
+        _nativeModelTriangleCount: nativeResult.modelTriangleCount,
         ...(nativeResult.isPreview ? { nativeProcessingMode: 'none' as const } : {}),
       });
       if (nativeResult.isPreview) {
@@ -833,6 +875,19 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
         reject(error);
       }
     );
+  });
+}
+
+export async function loadStlGeometryFromBuffer(buffer: Uint8Array, options: ProcessGeometryOptions = {}): Promise<GeometryWithBounds> {
+  return new Promise((resolve, reject) => {
+    try {
+      const loader = new STLLoader();
+      const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+      const geometry = loader.parse(arrayBuffer);
+      processGeometry(geometry, options).then(resolve).catch(reject);
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 
@@ -1160,15 +1215,22 @@ export async function loadObjGeometry(fileUrl: string, options?: ProcessGeometry
   });
 }
 
-export async function loadMeshGeometry(fileUrl: string, fileName?: string, options?: ProcessGeometryOptions): Promise<GeometryWithBounds> {
+export async function loadMeshGeometry(fileUrlOrBuffer: string | Uint8Array, fileName?: string, options?: ProcessGeometryOptions): Promise<GeometryWithBounds> {
+  const opts = options?.skipClassification ? { ...options, nativeProcessingMode: 'none' as const } : options;
+  
+  if (fileUrlOrBuffer instanceof Uint8Array) {
+    return loadStlGeometryFromBuffer(fileUrlOrBuffer, opts);
+  }
+
+  const fileUrl = fileUrlOrBuffer;
   const ext = (fileName ?? '').trim().toLowerCase();
   if (ext.endsWith('.3mf')) {
-    return load3mfGeometry(fileUrl, options);
+    return load3mfGeometry(fileUrl, opts);
   }
   if (ext.endsWith('.obj')) {
-    return loadObjGeometry(fileUrl, options);
+    return loadObjGeometry(fileUrl, opts);
   }
-  return loadStlGeometry(fileUrl, options);
+  return loadStlGeometry(fileUrl, opts);
 }
 
 export function useStlGeometry(fileUrl: string | null, directGeometry?: THREE.BufferGeometry | null): GeometryWithBounds | null {

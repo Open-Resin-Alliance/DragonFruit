@@ -42,6 +42,15 @@ export const AnchorRenderer = React.memo(function AnchorRenderer({
     const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
     const [, setDragTick] = React.useState(0);
 
+    React.useEffect(() => {
+        return () => {
+            dragSessionRef.current?.stop();
+            dragSessionRef.current = null;
+            liveDragConeRef.current = null;
+            beforeHistoryRef.current = null;
+        };
+    }, []);
+
     const { pickRef, visuals, isPickingHovered } = useHighlight({
         id: anchor.id,
         category: 'support',

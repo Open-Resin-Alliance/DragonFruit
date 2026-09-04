@@ -344,8 +344,8 @@ export const TwigRenderer = React.memo(function TwigRenderer({
     let endPoint: THREE.Vector3;
     // Shaft tapers between the two contact disks. Joints bulge slightly at
     // each end (their own diameter, sized from the disks in twigBuilder).
-    let diameterStart = effectiveTwig.contactDiskA.contactDiameterMm;
-    let diameterEnd = effectiveTwig.contactDiskB.contactDiameterMm;
+    const diameterStart = effectiveTwig.contactDiskA.contactDiameterMm;
+    const diameterEnd = effectiveTwig.contactDiskB.contactDiameterMm;
 
     if (seg.bottomJoint) {
       startPoint = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);

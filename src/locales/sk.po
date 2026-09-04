@@ -18,30 +18,56 @@ msgstr ""
 "X-Crowdin-File: /dev/src/locales/en.po\n"
 "X-Crowdin-File-ID: 22\n"
 
+#: src/components/settings/BackupsSettingsTab.tsx:1662
+msgid ".env template"
+msgstr ""
+
 #. placeholder {0}: model.polygonCount
-#: src/components/controls/ModelManagerPanel.tsx:88
+#: src/components/controls/ModelManagerPanel.tsx:89
 msgid "{0, plural, one {{compactTriangles} triangle} other {{compactTriangles} triangles}}"
 msgstr ""
 
 #. placeholder {0}: models.length
-#: src/components/controls/ModelManagerPanel.tsx:400
+#: src/components/controls/ModelManagerPanel.tsx:408
 msgid "{0, plural, one {# model loaded} other {# models loaded}}"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:52
+#. Badge counting the printers the network scan turned up.
+#: src/components/settings/FleetManagement.tsx:22
+msgid "{count, plural, one {# found} other {# found}}"
+msgstr ""
+
+#. Counter under a printer profile in a backup snapshot: how many materials belong to it.
+#. Counter under a printer profile in a backup snapshot: how many materials belong to it.
+#: src/components/settings/BackupsSettingsTab.tsx:28
+#: src/components/settings/LocalBackupsSettingsTab.tsx:21
+msgid "{count, plural, one {# material} other {# materials}}"
+msgstr ""
+
+#. Warning badge over the viewport when models stick out of the printer build volume.
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:196
+msgid "{count, plural, one {# model out of build volume} other {# models out of build volume}}"
+msgstr ""
+
+#. How many matching printers the network scan discovered. {count} is a positive integer.
+#: src/components/printers/PrinterVariantPickerModal.tsx:41
+msgid "{count, plural, one {# printer found} other {# printers found}}"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:60
 msgid "{deltaDays} d"
 msgstr "{deltaDays} d"
 
-#: src/components/layout/EmptySceneState.tsx:48
+#: src/components/layout/EmptySceneState.tsx:56
 msgid "{deltaHours} h"
 msgstr "{deltaHours} h"
 
-#: src/components/layout/EmptySceneState.tsx:44
+#: src/components/layout/EmptySceneState.tsx:52
 msgid "{deltaMin} min"
 msgstr "{deltaMin} min"
 
-#: src/app/page.tsx:6354
-#: src/components/controls/ModelStatsCard.tsx:244
+#: src/app/page.tsx:436
+#: src/components/controls/ModelStatsCard.tsx:209
 msgid "{hours} h {minutes} min"
 msgstr "{hours} h {minutes} min"
 
@@ -49,26 +75,59 @@ msgstr "{hours} h {minutes} min"
 msgid "{hours} h {paddedMinutes} min"
 msgstr "{hours} h {paddedMinutes} min"
 
+#: src/features/slicing/components/SlicingPanel.tsx:143
+msgid "{materialId} (Remote ID)"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:139
+msgid "{materialName} ({sourceName})"
+msgstr ""
+
 #: src/features/printing/printingMonitorFormat.ts:21
 msgid "{minutes} min"
 msgstr "{minutes} min"
 
-#: src/app/page.tsx:3695
-#: src/app/page.tsx:6355
-#: src/components/controls/ModelStatsCard.tsx:245
+#: src/app/page.tsx:428
+#: src/app/page.tsx:437
+#: src/components/controls/ModelStatsCard.tsx:210
 msgid "{minutes} min {seconds} s"
 msgstr ""
 
-#: src/features/updater/GlobalUpdateIndicator.tsx:272
+#: src/features/updater/GlobalUpdateIndicator.tsx:270
 msgid "{pct}% — Downloading update, please wait…"
 msgstr ""
 
-#: src/components/controls/ModelStatsCard.tsx:246
+#: src/features/slicing/components/SlicingPanel.tsx:131
+msgid "{pixels}px Edge Blur"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:127
+msgid "{pixels}px XY · {layers}L Z"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:211
+msgid "{rate} layers/s"
+msgstr ""
+
+#. Counter above the managed printer list: how many printers are saved and how many are reachable.
+#: src/components/settings/FleetManagement.tsx:15
+msgid "{saved, plural, one {# saved} other {# saved}} • {online, plural, one {# online} other {# online}}"
+msgstr ""
+
+#: src/components/controls/ModelStatsCard.tsx:211
 msgid "{seconds} s"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:96
+#: src/components/controls/ModelManagerPanel.tsx:97
 msgid "{shells, plural, one {# shell} other {# shells}}"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:123
+msgid "{steps}x Coverage"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:119
+msgid "{steps}x ZAA Samples"
 msgstr ""
 
 #. Shown when the estimated print time rounds down to under one minute. Keep the "<" comparison symbol.
@@ -77,141 +136,535 @@ msgid "< 1 min"
 msgstr "< 1 min"
 
 #. Approximate estimated print time (the "~" marks it as a rough estimate). {hours}/{mins} are whole-number quantities.
-#: src/app/page.tsx:3026
+#: src/app/page.tsx:420
 msgid "~{hours} h {mins} min"
 msgstr "~{hours} h {mins} min"
 
 #. Approximate estimated print time under an hour (the "~" marks it as a rough estimate).
-#: src/app/page.tsx:3027
+#: src/app/page.tsx:421
 msgid "~{mins} min"
 msgstr "~{mins} min"
 
+#: src/features/slicing/components/SlicingPanel.tsx:1581
+msgid "2D Blur"
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1209
+msgid "3D Mouse"
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1210
+msgid "3D mouse navigation controls"
+msgstr ""
+
+#. <name> is a literal placeholder in the filename, not markup — leave it as-is.
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:370
+msgid "A recovery copy is written beside each saved project, as <name>_autosave.voxl. It uses roughly as much disk as the project itself."
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1257
+msgid "About"
+msgstr ""
+
 #. Badge next to the currently-selected printer in the fleet list (adjective describing the device, e.g. "the active one").
-#: src/components/layout/TopBar.tsx:1032
+#: src/components/layout/TopBar.tsx:1003
+#: src/features/slicing/components/SlicingPanel.tsx:2815
 msgid "Active"
 msgstr "Aktívne"
 
-#: src/app/page.tsx:1999
+#: src/components/settings/BackupsSettingsTab.tsx:1518
+#: src/components/settings/BackupsSettingsTab.tsx:1571
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1297
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1350
+msgid "ACTIVE"
+msgstr ""
+
+#: src/app/page.tsx:2214
 msgid "Add joint"
 msgstr "Pridať Kĺb"
 
-#: src/components/layout/EmptySceneState.tsx:522
+#: src/components/layout/EmptySceneState.tsx:559
 msgid "Add or switch printer anytime from the top bar."
 msgstr "Pridaj alebo vymeň tlačiareň kedykoľvek na vrchnej lište."
 
-#: src/components/layout/EmptySceneState.tsx:494
+#: src/components/layout/EmptySceneState.tsx:531
+#: src/components/layout/OnboardingPrinterLibrary.tsx:413
+#: src/components/printers/PrinterVariantPickerModal.tsx:711
 msgid "Add printer"
 msgstr "Pridať tlačiareň"
 
-#: src/components/layout/EmptySceneState.tsx:93
+#: src/components/settings/FleetManagement.tsx:267
+msgid "Add Printer"
+msgstr ""
+
+#: src/components/ui/EditorContextMenu.tsx:66
+msgid "Add waypoint here"
+msgstr ""
+
+#: src/components/printers/PrinterVariantPickerModal.tsx:663
+msgid "Added"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1009
+msgid "After updating .env, restart the app, then click “I configured it”."
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2637
+msgid "Anti-Aliasing"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:101
 msgid "Anti-aliasing: nothing to anti-alias."
 msgstr "Anti-aliasing: nič sa nedá anti-aliasovať."
 
+#: src/features/slicing/components/SlicingPanel.tsx:3896
+msgid "Apply for Session"
+msgstr ""
+
 #. Cross-sectional area stats for the current print layer: "Area Σ" = total/summed solid area (Σ is the mathematical summation symbol, usually kept as-is); "Min"/"Max" = smallest/largest single contiguous area, abbreviating "Minimum"/"Maximum".
-#: src/components/organisms/modals/PrintingModals.tsx:1850
+#: src/components/organisms/modals/PrintingModals.tsx:1873
 msgid "Area Σ {totalAreaLabel} • Min {minAreaLabel} • Max {maxAreaLabel}"
 msgstr "Plocha Σ {totalAreaLabel} • Min {minAreaLabel} • Max {maxAreaLabel}"
 
-#: src/components/controls/TransformToolbar.tsx:35
+#: src/components/controls/TransformToolbar.tsx:36
 msgid "Arrange"
 msgstr "Usporiadať"
 
-#: src/components/layout/TopBar.tsx:647
+#: src/components/layout/TopBar.tsx:612
 msgid "Arrange model and transforms"
 msgstr "Usporiadať modely a transformy"
 
-#: src/components/controls/TransformToolbar.tsx:35
+#: src/components/settings/BackupsSettingsTab.tsx:975
+msgid "Authorize DragonFruit so backups can be saved into your private repository."
+msgstr ""
+
+#: src/components/printers/SetupMethodChooser.tsx:25
+#: src/features/slicing/components/SlicingPanel.tsx:2643
+msgid "Auto"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2638
+msgid "Auto derives slice settings from your printer resolution and material layer height. Expert lets you jump to material AA settings or apply a temporary session override."
+msgstr ""
+
+#: src/components/printers/SetupMethodChooser.tsx:61
+msgid "Auto Detect"
+msgstr ""
+
+#: src/components/controls/TransformToolbar.tsx:36
 msgid "Auto-arrange models on plate"
 msgstr "Automaticky usporiadať modely na ploche"
 
 #. placeholder {0}: model.geometry.meshDefects.repairedFloats
-#: src/components/controls/ModelStatsCard.tsx:644
+#: src/components/controls/ModelStatsCard.tsx:609
 msgid "Auto-repaired — {0} errors"
 msgstr ""
 
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:167
+msgid "Automatically saves a crash-recovery .voxl scene in the background and offers restore on next launch."
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:718
+msgid "Automatically saves snapshots of your settings and profiles to a folder on your computer."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1207
+msgid "Automatically sync to your private GitHub backup on an interval."
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:845
+msgid "Automatically write snapshots to local disk on an interval."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1202
+#: src/components/settings/LocalBackupsSettingsTab.tsx:840
+msgid "Automation"
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1228
+msgid "Autosave and crash recovery behavior"
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:327
+msgid "Autosave files are available in the DragonFruit desktop build."
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:208
+msgid "Autosave idle delay"
+msgstr ""
+
+#: src/app/page.tsx:951
+msgid "Autosave is not working"
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:122
+msgid "Autosave recovery state marked clean."
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:364
+msgid "Autosave scene file"
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:308
+msgid "Autosave Status"
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:99
+msgid "Autosave status refreshed."
+msgstr ""
+
+#: src/components/organisms/NotificationStack.tsx:55
+msgid "Autosaving…"
+msgstr ""
+
 #. View cube face (the side opposite Front), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1439
+#: src/components/layout/FirstRunOnboarding.tsx:273
+#: src/components/layout/OnboardingPrinterLibrary.tsx:279
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1542
 msgid "Back"
 msgstr ""
 
-#. Badge shown in the top of the empty workspace when the app is a beta build. Uppercase label.
-#: src/components/layout/EmptySceneState.tsx:432
-msgid "BETA VERSION"
-msgstr "BETA VERZIA"
+#: src/components/layout/OnboardingPrinterLibrary.tsx:280
+msgid "Back to setup step"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3932
+msgid "Background Pipeline"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1122
+#: src/components/settings/LocalBackupsSettingsTab.tsx:804
+msgid "Backup Management"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1141
+#: src/components/settings/LocalBackupsSettingsTab.tsx:824
+msgid "Backup Now"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:601
+msgid "Backup repository is ready."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:676
+msgid "Backup restored. Run \"Restore Remote\" in conflict mode or sync this device if needed."
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:446
+msgid "Backup saved to local disk."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1349
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1121
+msgid "Backup Snapshot Content"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:661
+#: src/components/settings/LocalBackupsSettingsTab.tsx:545
+msgid "Backup snapshot deleted."
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:28
+msgid "Backup snapshot from {timestamp} will be permanently removed from disk."
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:516
+msgid "Backup snapshot is malformed."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:546
+#: src/components/settings/BackupsSettingsTab.tsx:561
+msgid "Backup sync failed."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:558
+msgid "Backup synced to GitHub repository."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1639
+msgid "BACKUP_COOKIE_SECRET helper"
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1233
+msgid "Backups"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1077
+msgid "Backups are not configured on this build yet. Add GitHub OAuth env values to enable this tab."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:945
+msgid "Backups are stored in your own private GitHub repository. DragonFruit does not run a central backup server and does not keep a copy of your backup data outside your repository."
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:782
+msgid "Balanced"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:1566
+msgid "Binary Base"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2751
+msgid "Blur"
+msgstr ""
 
 #. View cube face (seen from below), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1443
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1546
 msgid "Bottom"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:441
+#: src/components/layout/FirstRunOnboarding.tsx:259
+msgid "Bright surfaces for well-lit workspaces."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:478
 msgid "Bring in a mesh or scene to start preparing, analyzing, supporting, and exporting your print."
 msgstr "Pridaj mesh alebo scénu a začni pripravovať, analyzovať, podporovať a exportovať tvoj výtlačok."
 
-#: src/components/layout/TopBar.tsx:655
+#: src/components/layout/TopBar.tsx:620
 msgid "Build and tune supports"
 msgstr "Budovať a štelovať podpery"
 
+#. placeholder {0}: selectedProfilesPrinter.buildVolumeMm?.width ?? '-'
+#. placeholder {1}: selectedProfilesPrinter.buildVolumeMm?.depth ?? '-'
+#. placeholder {2}: selectedProfilesPrinter.buildVolumeMm?.height ?? '-'
+#: src/components/settings/BackupsSettingsTab.tsx:1544
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1323
+msgid "Build: {0} × {1} × {2} mm"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2797
+msgid "Bypassed"
+msgstr ""
+
 #. Shown in place of file size when the file is in cache but its size is unknown. Adjective/state label.
-#: src/components/layout/EmptySceneState.tsx:660
+#: src/components/layout/EmptySceneState.tsx:694
 msgid "cached"
 msgstr "kešované"
+
+#: src/features/slicing/components/SlicingPanel.tsx:2737
+msgid "Calculating AA profile…"
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1173
+msgid "Camera"
+msgstr ""
 
 #: src/components/controls/ViewTypeDropdown.tsx:85
 msgid "Camera view mode: {currentLabel}"
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:1284
+#: src/components/printers/PrinterVariantPickerModal.tsx:701
+#: src/components/settings/FleetManagement.tsx:436
+#: src/components/settings/LocalBackupsSettingsTab.tsx:990
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1083
+msgid "Cancel"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:982
+msgid "Cancel delete"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1066
+msgid "Cancel restore"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:4042
+msgid "Cancel Slicing"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:158
+#: src/features/slicing/components/SlicingPanel.tsx:3964
+msgid "Cancelled"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:159
+msgid "Cancelling"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:1261
 msgid "Changing print settings invalidates the current sliced file."
 msgstr "Zmena tlačových nastavení spôsobí invalidáciu nasekaného súboru."
 
-#: src/components/layout/TopBar.tsx:1265
+#: src/components/layout/TopBar.tsx:1242
 msgid "Changing printer profile requires re-slice"
 msgstr "Zmena profilu tlačiarne spôsobí potrebu znovu nasekania"
 
-#: src/components/controls/ModelStatsCard.tsx:651
+#: src/components/settings/SettingsModal.tsx:1252
+msgid "Check for new versions and manage channels"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:418
+msgid "Choose a local backup directory before syncing."
+msgstr ""
+
+#: src/components/layout/OnboardingPrinterLibrary.tsx:393
+msgid "Choose a printer to add"
+msgstr ""
+
+#: src/components/layout/OnboardingPrinterLibrary.tsx:298
+msgid "Choose an official printer preset to add."
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:780
+msgid "Choose Folder"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3685
+msgid "Choose slice action"
+msgstr ""
+
+#: src/components/layout/FirstRunOnboarding.tsx:197
+msgid "Choose your theme"
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:342
+msgid "Clean (no pending recovery)"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:622
+#: src/features/slicing/components/SlicingPanel.tsx:1059
+msgid "Clear"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3870
+msgid "Clear Override"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2835
+msgid "Clear Session Override"
+msgstr ""
+
+#: src/components/controls/ModelStatsCard.tsx:616
 msgid "Click card to return to print settings"
 msgstr ""
 
-#: src/components/controls/ModelStatsCard.tsx:595
+#: src/components/controls/ModelStatsCard.tsx:560
 msgid "Click card to view model details"
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:1245
-#: src/features/updater/GlobalUpdateIndicator.tsx:202
+#: src/components/layout/EmptySceneState.tsx:444
+msgid "Click to copy build info"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1433
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1205
+msgid "Client ID"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:1222
+#: src/components/printers/PrinterVariantPickerModal.tsx:422
+#: src/features/updater/GlobalUpdateIndicator.tsx:197
 msgid "Close"
 msgstr "Zatvoriť"
 
-#: src/components/layout/TopBar.tsx:937
+#: src/features/slicing/components/SlicingPanel.tsx:3768
+msgid "Close material anti-aliasing settings"
+msgstr ""
+
+#: src/components/settings/FleetManagement.tsx:114
+msgid "Close network settings"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1623
+msgid "Close OAuth setup"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:4051
+msgid "Close Plate"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:908
 msgid "Close program"
 msgstr "Zatvoriť Program"
 
-#: src/features/updater/GlobalUpdateIndicator.tsx:380
+#: src/features/updater/GlobalUpdateIndicator.tsx:378
 msgid "Close release notes"
 msgstr ""
 
-#: src/features/updater/GlobalUpdateIndicator.tsx:192
+#: src/features/slicing/components/SlicingPanel.tsx:3838
+msgid "Close session anti-aliasing override"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1375
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1147
+msgid "Close snapshot details"
+msgstr ""
+
+#: src/features/updater/GlobalUpdateIndicator.tsx:187
 msgid "Close update dialog"
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:1297
+#: src/components/layout/TopBar.tsx:1274
 msgid "Close warning"
 msgstr "Zatvoriť varovanie"
 
-#: src/components/layout/TopBar.tsx:1246
+#: src/components/layout/TopBar.tsx:1223
 msgid "Close window"
 msgstr "Zatvoriť okno"
 
-#: src/components/controls/ModelManagerPanel.tsx:371
+#: src/components/controls/ModelManagerPanel.tsx:379
+#: src/features/slicing/components/SlicingPanel.tsx:2468
+#: src/features/slicing/components/SlicingPanel.tsx:2506
 msgid "Collapse card"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:478
+#: src/components/controls/ModelManagerPanel.tsx:486
 msgid "Collapse folder"
 msgstr ""
 
+#: src/components/controls/ModelManagerPanel.tsx:906
+msgid "Compact list"
+msgstr ""
+
+#: src/components/printers/PrinterVariantPickerModal.tsx:582
+msgid "Configure Networking Later"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:975
+msgid "Confirm delete snapshot"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1035
+msgid "Confirm restore snapshot"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1168
+msgid "Conflict detected"
+msgstr ""
+
+#: src/components/printers/SetupMethodChooser.tsx:111
+#: src/components/settings/FleetManagement.tsx:218
+#: src/components/settings/FleetManagement.tsx:219
+#: src/components/settings/FleetManagement.tsx:393
+msgid "Connect"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:993
+msgid "Connect GitHub now"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:971
+msgid "Connect your GitHub account"
+msgstr ""
+
+#: src/components/settings/FleetManagement.tsx:382
+msgid "Connected"
+msgstr ""
+
+#: src/components/printers/SetupMethodChooser.tsx:140
+#: src/components/settings/FleetManagement.tsx:393
+msgid "Connecting…"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1082
+msgid "Connection"
+msgstr ""
+
 #. Confirms proceeding with the profile change despite the re-slice warning above (paired with "Keep current profiles", which cancels).
-#: src/components/layout/TopBar.tsx:1330
+#: src/components/layout/FirstRunOnboarding.tsx:280
+#: src/components/layout/TopBar.tsx:1307
 msgid "Continue"
 msgstr "Pokračovať"
 
@@ -220,35 +673,106 @@ msgstr "Pokračovať"
 msgid "Cool"
 msgstr ""
 
-#: src/components/ui/EditorContextMenu.tsx:50
+#: src/components/ui/EditorContextMenu.tsx:82
 msgid "Copy"
 msgstr "Kopírovať"
 
-#: src/components/layout/EmptySceneState.tsx:381
-#: src/components/layout/EmptySceneState.tsx:384
+#: src/components/settings/BackupsSettingsTab.tsx:1670
+msgid "Copy template"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1634
+msgid "Copy the Client ID and Client Secret into your local <0>.env</0>."
+msgstr ""
+
+#: src/components/printers/PrinterVariantPickerModal.tsx:338
+msgid "Could not read printer data."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:405
+#: src/components/layout/EmptySceneState.tsx:408
 msgid "Could not reopen this file from cache."
 msgstr "Nepodarilo sa znovu otvoriť súbor z cachu"
 
+#. {reason} is a technical filesystem error, passed through untranslated.
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:51
+msgid "Could not write beside the project ({reason}), so the default location is being used."
+msgstr ""
+
+#. Network connect failed for the given printer host/IP. {host} is the address.
+#: src/components/printers/PrinterVariantPickerModal.tsx:56
+msgid "Couldn't connect to {host}."
+msgstr ""
+
 #. Badge label next to the number of loaded models. Rendered uppercase; keep it to one short word.
-#: src/components/controls/ModelManagerPanel.tsx:404
+#: src/components/controls/ModelManagerPanel.tsx:412
 msgid "Count"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:1580
+msgid "Coverage"
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:274
+msgid "Crash Recovery"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1031
+msgid "Create {suggestedNewRepoName}"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:814
+msgid "Create a snapshot now and refresh history."
 msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:33
 msgid "Create cavity or open-face shell"
 msgstr "Vytvoriť dutinu alebo mušlu s otvorenou stranou"
 
-#: src/features/updater/GlobalUpdateIndicator.tsx:286
+#: src/components/settings/BackupsSettingsTab.tsx:1048
+msgid "Create your first backup snapshot"
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:176
+msgid "Creates recovery snapshots while editing."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1043
+msgid "Creating and configuring repository…"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:24
+msgid "Creating new repository: {repoName}"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:781
+msgid "Crisp text and details."
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3830
+msgid "Current material"
+msgstr ""
+
+#: src/features/updater/GlobalUpdateIndicator.tsx:284
 msgid "Current version"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:71
+#: src/components/layout/EmptySceneState.tsx:79
 msgid "Currently displaying nothing at maximum fidelity."
 msgstr "Momentálne sa nezobrazuje nič s maximálnou fidelitou."
 
-#: src/components/ui/EditorContextMenu.tsx:49
+#: src/components/controls/TransformToolbar.tsx:34
+#: src/components/ui/EditorContextMenu.tsx:81
 msgid "Cut"
 msgstr "Vystrihnúť"
+
+#: src/components/layout/FirstRunOnboarding.tsx:224
+msgid "Dark"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2619
+msgid "Decrease offline layer height"
+msgstr ""
 
 #. View mode dropdown: the shader inherited from the project setting.
 #: src/components/controls/ViewTypeDropdown.tsx:62
@@ -259,139 +783,443 @@ msgstr ""
 msgid "Default (project setting)"
 msgstr ""
 
+#: src/components/settings/LocalBackupsSettingsTab.tsx:732
+msgid "Default directory"
+msgstr ""
+
 #. placeholder {0}: model.geometry.meshDefects.repairedFloats
-#: src/components/controls/ModelStatsCard.tsx:645
+#: src/components/controls/ModelStatsCard.tsx:610
 msgid "Defective — {0} errors"
 msgstr ""
 
-#: src/components/ui/EditorContextMenu.tsx:48
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1005
+#: src/components/ui/EditorContextMenu.tsx:80
 msgid "Delete"
 msgstr "Odstrániť"
 
+#: src/components/settings/LocalBackupsSettingsTab.tsx:976
+msgid "Delete Backup Snapshot"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1319
+#: src/components/settings/LocalBackupsSettingsTab.tsx:959
+msgid "Delete snapshot"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:645
+msgid "Delete this backup snapshot from GitHub history? This cannot be undone."
+msgstr ""
+
+#: src/components/ui/EditorContextMenu.tsx:73
+msgid "Delete waypoint"
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:310
+msgid "Desktop-only diagnostics for autosave files and recovery state."
+msgstr ""
+
+#. Auto-detection found a bit depth with no matching variant. {bitsLabel} is the detected bit depth, {presetName} the printer family name.
+#: src/components/printers/PrinterVariantPickerModal.tsx:49
+msgid "Detected a {bitsLabel} screen that doesn't match any known variant of {presetName}."
+msgstr ""
+
+#. Confirmation that the printer model variant was auto-detected over the network. {variantName} is the variant display name.
+#: src/components/printers/PrinterVariantPickerModal.tsx:27
+msgid "Detected: {variantName}"
+msgstr ""
+
+#: src/components/printers/PrinterVariantPickerModal.tsx:469
+msgid "Detecting model…"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:780
+msgid "Disabled"
+msgstr ""
+
+#: src/components/scene/SceneAutosaveRecoveryModal.tsx:161
+msgid "Discard"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1161
+#: src/components/settings/FleetManagement.tsx:229
+#: src/components/settings/FleetManagement.tsx:230
+msgid "Disconnect"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:615
+msgid "Disconnected GitHub account."
+msgstr ""
+
+#: src/components/settings/FleetManagement.tsx:347
+msgid "Discovered Printers"
+msgstr ""
+
+#: src/components/scene/SceneAutosaveRecoveryModal.tsx:108
+msgid "Dismiss"
+msgstr ""
+
+#. placeholder {0}: selectedProfilesPrinter.display?.resolutionX ?? '-'
+#. placeholder {1}: selectedProfilesPrinter.display?.resolutionY ?? '-'
+#. placeholder {2}: selectedProfilesPrinter.display?.outputFormat ? ` (${selectedProfilesPrinter.display.outputFormat})` : ''
+#: src/components/settings/BackupsSettingsTab.tsx:1547
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1326
+msgid "Display: {0} × {1}{2}"
+msgstr ""
+
 #. Paraphrase of Yoda's line from Star Wars: The Empire Strikes Back (1980): "Do or do not. There is no try."
-#: src/components/layout/EmptySceneState.tsx:76
+#: src/components/layout/EmptySceneState.tsx:84
 msgid "Do or do not. There is no try... oh wait, just click Load mesh."
 msgstr "Urob či neurob. Tu niesu žiadne pokusy… ó počkaj, len klikni na Načítať Mesh."
 
-#: src/features/updater/GlobalUpdateIndicator.tsx:239
+#: src/components/settings/BackupsSettingsTab.tsx:1429
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1201
+msgid "Document Updated"
+msgstr ""
+
+#: src/components/settings/FleetManagement.tsx:277
+msgid "Done Adding"
+msgstr ""
+
+#: src/features/updater/GlobalUpdateIndicator.tsx:234
 msgid "Download & install"
 msgstr ""
 
-#: src/features/updater/GlobalUpdateIndicator.tsx:181
+#: src/features/updater/GlobalUpdateIndicator.tsx:176
 msgid "Downloading update"
 msgstr ""
 
-#: src/features/updater/GlobalUpdateIndicator.tsx:221
+#: src/features/updater/GlobalUpdateIndicator.tsx:216
 msgid "Downloading… {pct}%"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:74
+#: src/components/layout/EmptySceneState.tsx:82
 msgid "Drag a file in. The platform is judging you."
 msgstr "Potiahni sem súbor. Tvoja plocha ťa súdi."
 
 #. "DragonFruit" is the product name and should stay untranslated/unchanged.
-#: src/components/layout/TopBar.tsx:814
+#: src/components/layout/TopBar.tsx:785
 msgid "DragonFruit app menu"
 msgstr "Menu aplikácie DragonFruit"
 
+#: src/components/scene/SceneAutosaveRecoveryModal.tsx:95
+msgid "DragonFruit autosaved a scene at {formattedDate}"
+msgstr ""
+
+#: src/components/layout/FirstRunOnboarding.tsx:102
+msgid "DragonFruit first-time setup"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:964
+msgid "DragonFruit handles setup automatically and uses only your own private GitHub repository."
+msgstr ""
+
+#: src/components/layout/FirstRunOnboarding.tsx:175
+msgid "DragonFruit is a free, open-source slicer for resin 3D printing. Load a model, orient it, add supports, and slice it for your printer."
+msgstr ""
+
 #. "DragonFruit" is the product name and should stay untranslated/unchanged; only "menu" needs translating.
-#: src/components/layout/TopBar.tsx:703
+#: src/components/layout/TopBar.tsx:670
 msgid "DragonFruit menu"
 msgstr "Menu DragonFruit"
 
-#: src/components/layout/EmptySceneState.tsx:695
+#: src/components/settings/BackupsSettingsTab.tsx:954
+msgid "DragonFruit stores backups in your own private GitHub repository. We intentionally avoid ORA-hosted cloud storage and we do not operate a DragonFruit backup server."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:729
 msgid "Drop supported files"
 msgstr "Hoď podporované súbory"
 
-#: src/app/page.tsx:2005
-#: src/components/ui/EditorContextMenu.tsx:88
+#: src/components/settings/SettingsModal.tsx:1222
+msgid "Early-access and experimental features"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2797
+msgid "Edit"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2555
+msgid "Edit material profile"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2537
+msgid "Edit printer profile"
+msgstr ""
+
+#: src/app/page.tsx:2220
+#: src/components/ui/EditorContextMenu.tsx:126
 msgid "Editor"
 msgstr "Editor"
 
-#: src/components/ui/EditorContextMenu.tsx:85
+#: src/components/ui/EditorContextMenu.tsx:123
 msgid "Editor context menu"
 msgstr "Kontextové menu editoru"
 
+#: src/features/slicing/components/SlicingPanel.tsx:4031
+msgid "Elapsed {slicingElapsedLabel}"
+msgstr ""
+
 #. Paraphrase of "Elementary, my dear Watson", the line associated with Sherlock Holmes (Arthur Conan Doyle stories; multiple film and TV adaptations).
-#: src/components/layout/EmptySceneState.tsx:87
+#: src/components/layout/EmptySceneState.tsx:95
 msgid "Elementary, my dear user — load a model."
 msgstr "Základy, môj milý používateľ — načítaj model."
 
-#: src/components/layout/EmptySceneState.tsx:436
-msgid "Empty workspace"
-msgstr "Prázdne pracovisko"
+#: src/components/settings/BackupsSettingsTab.tsx:1206
+#: src/components/settings/LocalBackupsSettingsTab.tsx:844
+msgid "Enable automatic backups"
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:175
+msgid "Enable scene autosave"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:1223
+msgid "Encoded Layers"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:155
+msgid "Encoding"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2593
+msgid "Engine"
+msgstr ""
+
+#: src/components/printers/SetupMethodChooser.tsx:85
+msgid "Enter your printer's IP address"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:902
+msgid "Env config required"
+msgstr ""
 
 #. "Est." abbreviates "Estimated", qualifying the print-time figure that follows it (e.g. "Est. 2h 05m • 12.50 ml"), not an abbreviation of anything else.
-#: src/components/organisms/modals/PrintingModals.tsx:1842
+#: src/components/organisms/modals/PrintingModals.tsx:1865
 msgid "Est. {estimatedTimeLabel} • {usedMaterialLabel}"
 msgstr "Est. {estimatedTimeLabel} • {usedMaterialLabel}"
 
+#: src/features/slicing/components/SlicingPanel.tsx:2583
+msgid "Est. Print Time"
+msgstr ""
+
 #. Row label on the printer card. "Est." is short for "estimated"; keep the abbreviation terse — the label column is narrow.
-#: src/components/controls/ModelStatsCard.tsx:581
+#: src/components/controls/ModelStatsCard.tsx:546
 msgid "Est. print time:"
 msgstr ""
 
 #. Row label on the printer card: estimated resin volume. Keep it terse — the label column is narrow.
-#: src/components/controls/ModelStatsCard.tsx:586
+#: src/components/controls/ModelStatsCard.tsx:551
 msgid "Est. resin:"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:63
+#: src/features/slicing/components/SlicingPanel.tsx:2579
+msgid "Est. Volume"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:71
 msgid "Every great print starts with an empty scene."
 msgstr "Každý skvelý výtlačok začína prázdnou scénou."
 
-#: src/components/controls/ModelManagerPanel.tsx:371
+#: src/components/settings/BackupsSettingsTab.tsx:1014
+msgid "Existing backup repository detected"
+msgstr ""
+
+#: src/components/controls/ModelManagerPanel.tsx:379
+#: src/features/slicing/components/SlicingPanel.tsx:2468
+#: src/features/slicing/components/SlicingPanel.tsx:2506
 msgid "Expand card"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:478
+#: src/components/controls/ModelManagerPanel.tsx:486
 msgid "Expand folder"
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:660
+#: src/components/settings/SettingsModal.tsx:1221
+msgid "Experiments"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2643
+msgid "Expert"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:625
 msgid "Export"
 msgstr "Exportovať"
 
-#: src/components/controls/ModelStatsCard.tsx:568
+#: src/components/controls/ModelStatsCard.tsx:533
 msgid "Exposure:"
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:663
+#: src/features/slicing/components/SlicingPanel.tsx:3965
+msgid "Failed"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:469
+msgid "Failed to choose local backup directory."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:886
+msgid "Failed to copy OAuth template. Copy it manually from the setup dialog."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:651
+#: src/components/settings/BackupsSettingsTab.tsx:663
+#: src/components/settings/LocalBackupsSettingsTab.tsx:547
+msgid "Failed to delete backup snapshot."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:618
+msgid "Failed to disconnect GitHub account."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:600
+#: src/components/settings/BackupsSettingsTab.tsx:604
+msgid "Failed to ensure repository."
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:601
+msgid "Failed to initialize local backups."
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:85
+msgid "Failed to load autosave status."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:522
+#: src/components/settings/BackupsSettingsTab.tsx:526
+msgid "Failed to load backup history."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:634
+#: src/components/settings/BackupsSettingsTab.tsx:638
+#: src/components/settings/LocalBackupsSettingsTab.tsx:521
+msgid "Failed to load backup snapshot."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:507
+#: src/components/settings/BackupsSettingsTab.tsx:508
+msgid "Failed to load backup status."
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:409
+msgid "Failed to load local backup history."
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:124
+msgid "Failed to mark autosave as clean."
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:148
+msgid "Failed to open autosave location."
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:492
+msgid "Failed to open folder in file manager."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:673
+#: src/components/settings/BackupsSettingsTab.tsx:679
+#: src/components/settings/LocalBackupsSettingsTab.tsx:572
+msgid "Failed to restore backup snapshot."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:373
+msgid "Failed to start GitHub OAuth."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:584
+msgid "Failed to start OAuth."
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:628
 msgid "Finalize and export output"
 msgstr "Finalizuj a exportuj výstup"
 
+#: src/components/printers/SetupMethodChooser.tsx:64
+msgid "Find your printer on the network"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:4042
+msgid "Finishing…"
+msgstr ""
+
+#: src/components/settings/FleetManagement.tsx:105
+msgid "Fleet Management"
+msgstr ""
+
 #. "Fleet" means the set of physical network printers discovered under the current printer profile, not a literal fleet of vehicles.
-#: src/components/layout/TopBar.tsx:970
+#: src/components/layout/TopBar.tsx:941
 msgid "Fleet quick switch"
 msgstr "Rýchla výmena flotily"
 
 #. Section heading above the list of network printers belonging to the current profile. "Units" = individual printers.
-#: src/components/layout/TopBar.tsx:973
+#: src/components/layout/TopBar.tsx:944
 msgid "Fleet units"
 msgstr "Jednotky flotily"
 
-#: src/components/controls/ModelStatsCard.tsx:502
+#: src/components/controls/ModelStatsCard.tsx:467
 msgid "Flip model stats card"
 msgstr ""
 
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:243
+msgid "For continuous edits, save at least this often."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1195
+msgid "Force Push Local"
+msgstr ""
+
+#: src/components/layout/FirstRunOnboarding.tsx:178
+msgid "From the community, for the community. Free to use, open to contribute, and shaped by the people who print with it."
+msgstr ""
+
 #. Orientation label, rendered uppercase on the view cube and on the build plate's front edge. Keep it as short as possible — long words are auto-shrunk to fit and become hard to read.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1435
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1538
 msgid "Front"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:479
+#: src/components/settings/SettingsModal.tsx:1167
+msgid "General"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1656
+msgid "Generate"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1641
+msgid "Generate a local secret (at least 32 chars) and use it in your .env."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1649
+msgid "Generate a secret…"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:516
 msgid "Get started"
 msgstr "Začať"
 
-#: src/components/controls/ModelManagerPanel.tsx:717
+#: src/components/layout/FirstRunOnboarding.tsx:187
+msgid "Get Started"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:571
+msgid "GitHub OAuth popup opened."
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2752
+msgid "Grey"
+msgstr ""
+
+#: src/components/controls/ModelManagerPanel.tsx:753
 msgid "Group selected"
 msgstr ""
 
-#: src/components/controls/ModelStatsCard.tsx:622
+#: src/components/controls/ModelStatsCard.tsx:587
 msgid "Height:"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:666
+#: src/components/controls/ModelManagerPanel.tsx:690
+#: src/components/controls/ModelManagerPanel.tsx:701
 msgid "Hide"
 msgstr ""
 
@@ -399,159 +1227,407 @@ msgstr ""
 msgid "Hollow"
 msgstr "Duté"
 
+#: src/components/settings/SettingsModal.tsx:1203
+msgid "Hotkeys"
+msgstr ""
+
 #. Paraphrase of Walter White's line from Breaking Bad, S04E06 "Cornered": "I am the one who knocks."
-#: src/components/layout/EmptySceneState.tsx:79
+#: src/components/layout/EmptySceneState.tsx:87
 msgid "I am the one who slices."
 msgstr "Ja som ten, kdo seká"
 
+#: src/components/settings/BackupsSettingsTab.tsx:1002
+msgid "I configured it"
+msgstr ""
+
 #. Paraphrase of the Terminator's line from The Terminator (1984): "I'll be back."
-#: src/components/layout/EmptySceneState.tsx:84
+#: src/components/layout/EmptySceneState.tsx:92
 msgid "I'll be back. (Drop a file and I really will be.)"
 msgstr "Vrátim sa. (Podhoď mi súbor a naozaj sa vrátim.)"
 
+#. placeholder {0}: item.id
+#: src/components/settings/BackupsSettingsTab.tsx:1301
+#: src/components/settings/LocalBackupsSettingsTab.tsx:941
+msgid "ID {0}"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:153
+msgid "Idle"
+msgstr ""
+
 #. Adaptation of the English proverb "Idle hands are the devil's workshop".
-#: src/components/layout/EmptySceneState.tsx:72
+#: src/components/layout/EmptySceneState.tsx:80
 msgid "Idle hands do no slicing."
 msgstr "Nehybné ruky nič nenasekajú."
 
-#. Section header label above the file import buttons. Noun, not imperative verb.
-#: src/components/layout/EmptySceneState.tsx:536
-msgid "Import"
-msgstr "Importovať"
+#: src/components/settings/BackupsSettingsTab.tsx:1125
+msgid "If GitHub has a newer backup, DragonFruit pauses sync and asks whether to restore remote or force-push local."
+msgstr ""
 
-#: src/components/layout/TopBar.tsx:899
+#: src/components/layout/TopBar.tsx:870
 msgid "Import mesh…"
 msgstr "Importovať Mesh…"
 
-#: src/components/layout/EmptySceneState.tsx:569
-msgid "Import scene"
-msgstr "Importovať scénu"
+#: src/components/layout/EmptySceneState.tsx:596
+msgid "Import Scene"
+msgstr ""
 
-#: src/components/layout/TopBar.tsx:921
+#: src/components/layout/TopBar.tsx:892
 msgid "Import scene…"
 msgstr "Importovať Scénu…"
 
-#: src/components/layout/EmptySceneState.tsx:454
+#: src/components/layout/EmptySceneState.tsx:491
 msgid "Importing your file…"
 msgstr "Importujem tvoj súbor…"
 
 #. Parody of the tagline for Alien (1979): "In space, no one can hear you scream."
-#: src/components/layout/EmptySceneState.tsx:77
+#: src/components/layout/EmptySceneState.tsx:85
 msgid "In space, no one can hear you slice."
 msgstr "Vo vesmíre ťa nikdo nebude počuť sekať."
 
-#: src/components/layout/TopBar.tsx:671
+#: src/features/slicing/components/SlicingPanel.tsx:2620
+msgid "Increase offline layer height"
+msgstr ""
+
+#: src/components/printers/PrinterVariantPickerModal.tsx:413
+msgid "Initial Setup"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:636
 msgid "Inspect sliced layers before printing"
 msgstr "Inšpekcia nasekaných vrstiev pred tlačou"
 
-#: src/components/layout/TopBar.tsx:1158
-#: src/components/layout/TopBar.tsx:1159
+#: src/components/layout/TopBar.tsx:1133
+#: src/components/layout/TopBar.tsx:1134
 msgid "Interior view: Off"
 msgstr "Pohľad Vnútra: Vypnutý"
 
 #. Tooltip for a toggle button showing its current state, format "Feature name: state". Interior view is a 3D viewport mode that renders the inside of a hollowed model.
-#: src/components/layout/TopBar.tsx:1158
-#: src/components/layout/TopBar.tsx:1159
+#: src/components/layout/TopBar.tsx:1133
+#: src/components/layout/TopBar.tsx:1134
 msgid "Interior view: On"
 msgstr "Pohľad Vnútra: Zapnutý"
 
-#: src/components/layout/TopBar.tsx:1159
+#: src/components/layout/TopBar.tsx:1134
 msgid "Interior view: Unavailable"
 msgstr "Pohľad Vnútra: Nedostupný"
 
-#: src/components/layout/TopBar.tsx:1158
+#: src/components/layout/TopBar.tsx:1133
 msgid "Interior view: Unavailable (apply hollowing first)"
 msgstr "Pohľad Vnútra: Nedostupný (najprv aplikuj dutinu)"
 
+#: src/components/scene/SceneAutosaveRecoveryModal.tsx:119
+msgid "It looks like DragonFruit quit before you saved your last session. You can restore the autosaved scene or discard it and start fresh."
+msgstr ""
+
 #. Paraphrase of Admiral Ackbar's line from Star Wars: Return of the Jedi (1983): "It's a trap!"
-#: src/components/layout/EmptySceneState.tsx:85
+#: src/components/layout/EmptySceneState.tsx:93
 msgid "It's a trap! ...just kidding, drop your STL."
 msgstr "Je to pasca! ...robím si srandu, nahraj STL."
 
-#: src/components/layout/EmptySceneState.tsx:95
+#: src/components/layout/EmptySceneState.tsx:103
 msgid "Join the Open Resin Alliance!"
 msgstr "Pridaj sa k Open Resin Alliance!"
 
+#: src/features/slicing/components/SlicingPanel.tsx:3659
+msgid "Just Slice"
+msgstr ""
+
 #. Cancels the pending profile change and closes this warning dialog, leaving the previous profile selection untouched. Paired with the "Continue" button below.
-#: src/components/layout/TopBar.tsx:1315
+#: src/components/layout/TopBar.tsx:1292
 msgid "Keep current profiles"
 msgstr "Ponechať Terajšie Profily"
 
-#: src/components/layout/EmptySceneState.tsx:516
+#: src/components/layout/EmptySceneState.tsx:553
 msgid "Keep going without a printer. You can add one later."
 msgstr "Pokračuj bez tlačiarne. Môžeš ju pridať neskôr."
 
-#: src/components/layout/EmptySceneState.tsx:653
+#: src/components/settings/SettingsModal.tsx:1204
+msgid "Keyboard bindings and presets"
+msgstr ""
+
+#: src/components/scene/SceneAutosaveRecoveryModal.tsx:130
+msgid "Last autosave"
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:348
+msgid "Last autosave timestamp"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:746
+msgid "Last backup on disk"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1107
+#: src/components/settings/LocalBackupsSettingsTab.tsx:753
+msgid "Last local sync"
+msgstr ""
+
+#. placeholder {0}: lastLocalSyncAt ? new Date(lastLocalSyncAt).toLocaleString() : _(msg`never`)
+#: src/components/settings/BackupsSettingsTab.tsx:1261
+#: src/components/settings/LocalBackupsSettingsTab.tsx:899
+msgid "Last local sync: {0}"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:687
 msgid "last opened {period} ago"
 msgstr "naposledy otvorené pred {period}"
 
 # Shows when a recent file was last accessed. {relativeOpenedAt} is a translated relative time (e.g. "just now", "5m ago"). Place {relativeOpenedAt} wherever the time fits in your language.
-#: src/components/layout/EmptySceneState.tsx:652
+#: src/components/layout/EmptySceneState.tsx:686
 msgid "last opened just now"
 msgstr "naposledy otvorené práve teraz"
 
-#: src/components/layout/EmptySceneState.tsx:92
+#: src/components/settings/BackupsSettingsTab.tsx:1100
+msgid "Last remote backup"
+msgstr ""
+
+#. {timestamp} is a locale-formatted date and time.
+#: src/app/page.tsx:571
+msgid "Last successful autosave: {timestamp}. Save your project manually."
+msgstr ""
+
+#. placeholder {0}: material.layerHeightMm ?? '-'
+#. placeholder {1}: material.normalExposureSec ?? '-'
+#. placeholder {2}: material.bottomExposureSec ?? '-'
+#. placeholder {3}: material.bottomLayerCount ?? '-'
+#: src/components/settings/BackupsSettingsTab.tsx:1577
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1356
+msgid "Layer {0} mm • Normal {1}s • Bottom {2}s × {3}"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:147
+msgid "Layer {layer} preview"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:100
 msgid "Layer 0 of 0. Living dangerously."
 msgstr "Vrstva 0 z 0. Žiješ na hrane."
 
-#: src/components/controls/ModelStatsCard.tsx:563
+#: src/features/slicing/components/SlicingPanel.tsx:2573
+msgid "Layer Height"
+msgstr ""
+
+#: src/components/controls/ModelStatsCard.tsx:528
 msgid "Layer profile:"
 msgstr ""
 
-#: src/components/controls/ModelStatsCard.tsx:576
+#: src/features/slicing/components/SlicingPanel.tsx:2569
+msgid "Layers"
+msgstr ""
+
+#: src/components/controls/ModelStatsCard.tsx:541
 msgid "Layers:"
 msgstr ""
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1441
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1544
 msgid "Left"
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:1103
+#: src/components/layout/FirstRunOnboarding.tsx:254
+msgid "Light"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:1075
 msgid "Load a model in Prepare to unlock this stage"
 msgstr "Načítajte model v Príprave aby ste odomkli túto časť"
 
-#: src/components/layout/EmptySceneState.tsx:550
-msgid "Load mesh"
-msgstr "Načítať mesh"
+#: src/components/layout/EmptySceneState.tsx:577
+msgid "Load Mesh"
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1216
+msgid "Load vendor profile plugins"
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:332
+msgid "Loading autosave status…"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1073
+#: src/components/settings/LocalBackupsSettingsTab.tsx:727
+msgid "Loading backup status…"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:1901
+msgid "Loading remote material…"
+msgstr ""
+
+#: src/app/page.tsx:4292
+msgid "Loading Scene…"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1387
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1159
+msgid "Loading snapshot content…"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1354
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1126
+msgid "Loading snapshot..."
+msgstr ""
 
 #. Shown in place of file size while a recent file is being reopened. Keep it short.
-#: src/components/layout/EmptySceneState.tsx:659
+#: src/components/layout/EmptySceneState.tsx:693
 msgid "loading…"
 msgstr "načítavam…"
 
-#: src/components/organisms/modals/PrintingModals.tsx:1836
+#: src/components/settings/LocalBackupsSettingsTab.tsx:467
+msgid "Local backup directory updated."
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:449
+msgid "Local backup sync failed."
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1234
+msgid "Local on-disk backup snapshots"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:716
+msgid "Local On-Disk Backups"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:691
+msgid "Local on-disk backups are currently available in the DragonFruit desktop build only."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1395
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1167
+msgid "Local Storage"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1437
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1209
+msgid "LocalStorage Keys"
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1246
+msgid "Log file location and verbosity"
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1245
+msgid "Logging"
+msgstr ""
+
+#: src/components/layout/FirstRunOnboarding.tsx:229
+msgid "Low-glare surfaces for late-night printing."
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:135
+msgid "LUT: {curveName}"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1268
+#: src/components/settings/LocalBackupsSettingsTab.tsx:906
+msgid "Manage Backups"
+msgstr ""
+
+#: src/components/settings/FleetManagement.tsx:125
+msgid "Managed Printers"
+msgstr ""
+
+#: src/components/printers/SetupMethodChooser.tsx:25
+msgid "Manual"
+msgstr ""
+
+#: src/components/printers/SetupMethodChooser.tsx:82
+#: src/components/printers/SetupMethodChooser.tsx:116
+msgid "Manual IP Entry"
+msgstr ""
+
+#: src/components/ui/EditorContextMenu.tsx:88
+msgid "Mark as Model Geometry"
+msgstr ""
+
+#: src/components/ui/EditorContextMenu.tsx:87
+msgid "Mark as Support Geometry"
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:390
+msgid "Mark Recovery Clean"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2558
+msgid "Material"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3752
+msgid "Material anti-aliasing settings"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3757
+msgid "Material Anti-Aliasing Settings"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2795
+msgid "Material Profile Settings"
+msgstr ""
+
+#: src/components/organisms/modals/PrintingModals.tsx:1859
 msgid "Material profile unavailable"
 msgstr "Materiálový profil nedostupný"
 
-#: src/components/controls/ModelStatsCard.tsx:548
+#: src/components/controls/ModelStatsCard.tsx:513
 msgid "Material:"
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:1223
+#. placeholder {0}: filteredMaterialsForSelectedPrinter.length
+#: src/components/settings/BackupsSettingsTab.tsx:1553
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1332
+msgid "Materials for this printer ({0})"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:1200
 msgid "Maximize"
 msgstr "Maximalizovať"
 
-#: src/components/layout/TopBar.tsx:1224
+#: src/components/layout/TopBar.tsx:1201
 msgid "Maximize window"
 msgstr "Maximalizovať okno"
 
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:242
+msgid "Maximum autosave interval"
+msgstr ""
+
+#. Context-menu command that re-attaches the support scaffolding back to the model.
+#: src/components/ui/EditorContextMenu.tsx:86
+msgid "Merge supports"
+msgstr ""
+
 #. File type badge on the recent files list. Noun — labels a mesh file (.stl, .obj, .3mf).
-#: src/components/layout/EmptySceneState.tsx:644
+#: src/components/layout/EmptySceneState.tsx:678
+#: src/components/settings/SettingsModal.tsx:1179
 msgid "Mesh"
 msgstr "Mesh"
 
-#: src/components/layout/EmptySceneState.tsx:553
+#: src/components/layout/EmptySceneState.tsx:580
 msgid "Mesh files (.stl, .obj, .3mf)"
 msgstr "Mesh súbory (.stl, .obj, .3mf)"
 
-#: src/components/layout/TopBar.tsx:1205
+#. Unit suffix after a minutes input box. Keep it abbreviated.
+#: src/components/settings/BackupsSettingsTab.tsx:1255
+#: src/components/settings/LocalBackupsSettingsTab.tsx:893
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:262
+msgid "min"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:1182
 msgid "Minimize"
 msgstr "Minimizovať"
 
-#: src/components/layout/TopBar.tsx:1206
+#: src/components/layout/TopBar.tsx:1183
 msgid "Minimize window"
 msgstr "Minimizovať okno"
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:878
+msgid "Minutes between automatic local backups."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1240
+msgid "Minutes between automatic sync attempts."
+msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:32
 msgid "Mirror"
@@ -561,18 +1637,22 @@ msgstr "Zrkadliť"
 msgid "Mirror across X, Y, or Z"
 msgstr "Zrkadliť podľa X, Y alebo Z"
 
-#: src/components/controls/ModelManagerPanel.tsx:850
+#: src/features/slicing/components/SlicingPanel.tsx:2749
+msgid "Mode"
+msgstr ""
+
+#: src/components/controls/ModelManagerPanel.tsx:886
 msgid "Model actions…"
 msgstr ""
 
 #. Section heading of the models context menu. Rendered uppercase.
 #. Title of the panel listing every model loaded into the scene.
-#: src/components/controls/ModelManagerPanel.tsx:389
-#: src/components/controls/ModelManagerPanel.tsx:699
+#: src/components/controls/ModelManagerPanel.tsx:397
+#: src/components/controls/ModelManagerPanel.tsx:735
 msgid "Models"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:696
+#: src/components/controls/ModelManagerPanel.tsx:732
 msgid "Models context menu"
 msgstr ""
 
@@ -581,7 +1661,7 @@ msgid "Modify"
 msgstr "Modifikovať"
 
 #. Topbar button that opens the live print-progress monitoring view for the active printer. Refers to the monitoring feature, not a display screen.
-#: src/components/layout/TopBar.tsx:578
+#: src/components/layout/TopBar.tsx:540
 msgid "Monitor"
 msgstr "Monitorovať"
 
@@ -590,8 +1670,22 @@ msgid "Move, rotate, and scale"
 msgstr "Posunúť, otočiť a zväčšiť/zmenšiť"
 
 #. Value placeholder shown when the material is unknown because the printer is offline. Keep it as short as "N/A".
-#: src/components/controls/ModelStatsCard.tsx:158
+#: src/components/controls/ModelStatsCard.tsx:123
 msgid "N/A"
+msgstr ""
+
+#: src/components/printers/PrinterVariantPickerModal.tsx:215
+#: src/components/printers/PrinterVariantPickerModal.tsx:242
+#: src/components/printers/PrinterVariantPickerModal.tsx:266
+msgid "Network scan failed."
+msgstr ""
+
+#: src/components/settings/FleetManagement.tsx:105
+msgid "Network Settings"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2625
+msgid "Network unavailable."
 msgstr ""
 
 #. Matcap lighting preset: neither warm nor cool.
@@ -599,40 +1693,135 @@ msgstr ""
 msgid "Neutral"
 msgstr ""
 
-#: src/features/updater/GlobalUpdateIndicator.tsx:301
+#: src/components/settings/BackupsSettingsTab.tsx:1261
+#: src/components/settings/LocalBackupsSettingsTab.tsx:899
+msgid "never"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1102
+#: src/components/settings/BackupsSettingsTab.tsx:1109
+#: src/components/settings/LocalBackupsSettingsTab.tsx:748
+#: src/components/settings/LocalBackupsSettingsTab.tsx:755
+msgid "Never"
+msgstr ""
+
+#: src/features/updater/GlobalUpdateIndicator.tsx:299
 msgid "New version"
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:555
-#: src/components/layout/TopBar.tsx:562
-#: src/components/layout/TopBar.tsx:570
+#. Network discovery found no matching printers. {presetName} is the printer family name.
+#: src/components/printers/PrinterVariantPickerModal.tsx:63
+msgid "No {presetName} printers found on the network."
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:1564
+msgid "No AA"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:517
+#: src/components/layout/TopBar.tsx:524
+#: src/components/layout/TopBar.tsx:532
 msgid "No active printer"
 msgstr "Žiadne aktívne tlačiarne"
 
-#: src/components/layout/TopBar.tsx:1027
+#: src/app/page.tsx:955
+msgid "No autosave has succeeded this session. Save your project manually."
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:340
+msgid "No autosave manifest found"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:1571
+#: src/features/slicing/components/SlicingPanel.tsx:1573
+msgid "No Edge Blur"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:1583
+msgid "No Gray Map"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:925
+msgid "No history snapshots found in this folder."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1286
+msgid "No history snapshots yet. New syncs will appear here."
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:998
 msgid "No IP"
 msgstr "Žiadna IP"
 
-#: src/components/controls/ModelStatsCard.tsx:608
-#: src/components/controls/ModelStatsCard.tsx:609
+#: src/components/settings/BackupsSettingsTab.tsx:1448
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1220
+msgid "No LocalStorage keys found."
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:1909
+msgid "No material selected"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1557
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1336
+msgid "No materials linked to this printer."
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2491
+msgid "No meshes loaded yet. Import a model first, then return to Slicing."
+msgstr ""
+
+#: src/components/controls/ModelStatsCard.tsx:573
+#: src/components/controls/ModelStatsCard.tsx:574
 msgid "No model selected"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:419
+#: src/components/controls/ModelManagerPanel.tsx:427
 msgid "No models loaded"
 msgstr ""
 
-#: src/components/controls/ModelStatsCard.tsx:474
+#: src/components/controls/ModelStatsCard.tsx:439
 msgid "No printer connected"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:606
-msgid "No recent files yet."
-msgstr "Zatiaľ žiadne nedávne súbory."
+#: src/components/settings/BackupsSettingsTab.tsx:1496
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1275
+msgid "No printer profiles."
+msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:91
+#: src/features/slicing/components/SlicingPanel.tsx:2541
+#: src/features/slicing/components/SlicingPanel.tsx:2542
+msgid "No printer selected"
+msgstr ""
+
+#: src/components/printers/PrinterVariantPickerModal.tsx:501
+#: src/components/settings/FleetManagement.tsx:327
+msgid "No printers found."
+msgstr ""
+
+#: src/components/layout/OnboardingPrinterLibrary.tsx:348
+msgid "No printers match your search."
+msgstr ""
+
+#: src/components/settings/FleetManagement.tsx:139
+msgid "No printers saved yet. Add one below to start."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:640
+msgid "No recent files"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:926
+msgid "No snapshots yet. Run \"Backup Now\" to create your first local snapshot."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:99
 msgid "No supports needed for an empty scene."
 msgstr "Prázdna scéna nepotrebuje žiadne podpery."
+
+#: src/features/slicing/components/SlicingPanel.tsx:2054
+msgid "No visible models available for slicing."
+msgstr ""
 
 #. View mode that colours the surface by its normal vector, for debugging. "Normal" is the geometry term, not the opposite of "unusual".
 #: src/features/shaders/mesh/types.ts:39
@@ -640,70 +1829,146 @@ msgid "Normal (debug)"
 msgstr ""
 
 #. Play on "all men are created equal" from the United States Declaration of Independence (1776).
-#: src/components/layout/EmptySceneState.tsx:97
+#: src/components/layout/EmptySceneState.tsx:105
 msgid "Not all slicers are created equal. This one's free!"
 msgstr "Nie všetky slicery sú vytvorené rovnako. Tento je voľný!"
 
-#: src/components/layout/EmptySceneState.tsx:65
+#: src/components/settings/BackupsSettingsTab.tsx:1085
+msgid "Not connected"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1095
+msgid "Not created yet"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:741
+msgid "Not selected"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:73
 msgid "Nothing to see here. Yet."
 msgstr "Nič tu nieje. Zatiaľ."
 
-#: src/components/layout/TopBar.tsx:578
-#: src/components/layout/TopBar.tsx:1027
+#: src/components/settings/BackupsSettingsTab.tsx:884
+msgid "OAuth .env template copied to clipboard."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:928
+msgid "OAuth setup"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1226
+#: src/components/settings/LocalBackupsSettingsTab.tsx:864
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:195
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:300
+msgid "OFF"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:540
+#: src/components/layout/TopBar.tsx:998
+#: src/components/settings/FleetManagement.tsx:179
+#: src/components/settings/FleetManagement.tsx:192
 msgid "Offline"
 msgstr "Offline"
+
+#: src/features/slicing/components/SlicingPanel.tsx:2604
+msgid "Offline Layer Height"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2618
+msgid "Offline layer height override in micrometers"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1226
+#: src/components/settings/LocalBackupsSettingsTab.tsx:864
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:195
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:300
+msgid "ON"
+msgstr ""
 
 #. Toolbar button label. Short for "lay the model flat on a selected face"; keep it terse so the toolbar pill stays narrow.
 #: src/components/controls/TransformToolbar.tsx:31
 msgid "On-Face"
 msgstr "Na-Stranu"
 
+#: src/components/settings/BackupsSettingsTab.tsx:961
+msgid "Onboarding"
+msgstr ""
+
 #. Paraphrase of Boromir's line from The Lord of the Rings: The Fellowship of the Ring (2001): "One does not simply walk into Mordor."
-#: src/components/layout/EmptySceneState.tsx:83
+#: src/components/layout/EmptySceneState.tsx:91
 msgid "One does not simply import a mesh... or actually, you just click a button."
 msgstr "Jeden proste nevloží mesh… alebo, proste stlač tlačítko."
 
-#: src/components/layout/TopBar.tsx:1027
+#: src/components/layout/TopBar.tsx:998
+#: src/components/settings/FleetManagement.tsx:179
+#: src/components/settings/FleetManagement.tsx:192
 msgid "Online"
 msgstr "Online"
+
+#: src/features/slicing/components/SlicingPanel.tsx:1059
+msgid "Opaque"
+msgstr ""
 
 #. View mode: mesh edges drawn over a solid surface, so back edges stay hidden.
 #: src/features/shaders/mesh/types.ts:41
 msgid "Opaque wire mesh"
 msgstr ""
 
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:399
+msgid "Open Autosave Location"
+msgstr ""
+
 #. "DragonFruit" is the product name and should stay untranslated/unchanged.
-#: src/components/layout/TopBar.tsx:704
+#: src/components/layout/TopBar.tsx:671
 msgid "Open DragonFruit menu"
 msgstr "Otvoriť menu DragonFruitu"
 
-#: src/components/controls/ModelStatsCard.tsx:558
+#: src/components/settings/LocalBackupsSettingsTab.tsx:790
+msgid "Open Folder"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1631
+msgid "Open GitHub Developer Settings and create a new OAuth App."
+msgstr ""
+
+#: src/components/controls/ModelStatsCard.tsx:523
+#: src/features/slicing/components/SlicingPanel.tsx:2556
 msgid "Open material profiles"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:497
+#: src/components/layout/EmptySceneState.tsx:534
 msgid "Open printer library and add one now."
 msgstr "Otvoriť zotnam tlačiarní a pridať jednu teraz."
 
-#: src/components/layout/TopBar.tsx:785
-#: src/components/layout/TopBar.tsx:786
+#: src/components/layout/TopBar.tsx:756
+#: src/components/layout/TopBar.tsx:757
 msgid "Open printer monitor"
 msgstr "Otvoriť monitor tlačiarne"
 
-#: src/components/controls/ModelStatsCard.tsx:543
+#: src/components/controls/ModelStatsCard.tsx:508
+#: src/features/slicing/components/SlicingPanel.tsx:2538
 msgid "Open printer profiles"
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:877
+#: src/components/layout/TopBar.tsx:848
 msgid "Open scene…"
 msgstr "Otvoriť scénu…"
+
+#: src/features/slicing/components/SlicingPanel.tsx:157
+msgid "Opening"
+msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:31
 msgid "Orient flat against plate"
 msgstr "Orientovať rovinu proti ploche"
 
+#: src/features/slicing/components/SlicingPanel.tsx:2587
+msgid "Output"
+msgstr ""
+
 #. Name of the automatic folder collecting models that sit outside the build plate.
-#: src/components/controls/ModelManagerPanel.tsx:217
+#: src/components/controls/ModelManagerPanel.tsx:225
 msgid "Outside plate"
 msgstr ""
 
@@ -712,285 +1977,824 @@ msgstr ""
 msgid "Overhang heatmap"
 msgstr ""
 
-#: src/components/ui/EditorContextMenu.tsx:51
+#: src/features/slicing/components/SlicingPanel.tsx:2797
+msgid "Override On"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1394
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1166
+msgid "Overview"
+msgstr ""
+
+#: src/components/ui/EditorContextMenu.tsx:83
 msgid "Paste"
 msgstr "Prilepiť"
 
-#: src/components/layout/EmptySceneState.tsx:457
+#: src/components/settings/SettingsModal.tsx:1192
+msgid "Per-workspace camera defaults"
+msgstr ""
+
+#: src/components/layout/FirstRunOnboarding.tsx:200
+msgid "Pick what fits your workspace. You can change it anytime in Settings."
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3972
+msgid "Pipeline Stage"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:1224
+msgid "Pipeline Units"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3996
+msgid "Plate preview · Layer {previewSelectedLayer}/{previewTotalLayers}"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:494
 msgid "Please hang tight while we prepare your scene."
 msgstr "Vydrž kým ti pripravíme scénu."
 
-#: src/components/layout/TopBar.tsx:644
+#: src/components/settings/SettingsModal.tsx:1215
+msgid "Plugins"
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1186
+msgid "PNG compression and engine metadata"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:609
 msgid "Prepare"
 msgstr "Pripraviť"
 
+#: src/features/slicing/components/SlicingPanel.tsx:154
+msgid "Preparing"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1037
+msgid "Preparing things…"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1039
+msgid "Preparing your repository <0>{selectedBackupRepoName}</0>. This usually takes a moment."
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:4015
+msgid "Preview for this layer is not available."
+msgstr ""
+
+#: src/components/settings/FleetManagement.tsx:134
+msgid "Primary printer assigned to this profile."
+msgstr ""
+
 #. Static field-label shown above the printer name in the topbar badge (like "Printer: <name>"), not an instruction. Only shown when a profile has a single printer, so there is no fleet to pick from.
-#: src/components/layout/TopBar.tsx:551
+#: src/components/layout/TopBar.tsx:513
+#: src/features/slicing/components/SlicingPanel.tsx:2540
 msgid "Printer"
 msgstr "Tlačiareň"
 
 #. Fallback shown only when a network printer has no display name, host name, or IP address yet. {0} is an internal device identifier, not a human-friendly value.
 #. placeholder {0}: device.id
-#: src/components/layout/TopBar.tsx:979
+#: src/components/layout/TopBar.tsx:950
 msgid "Printer {0}"
 msgstr "Tlačiareň {0}"
 
+#: src/components/layout/OnboardingPrinterLibrary.tsx:295
+msgid "Printer Library"
+msgstr ""
+
+#: src/components/settings/FleetManagement.tsx:178
+msgid "Printer offline"
+msgstr ""
+
+#: src/components/settings/FleetManagement.tsx:178
+msgid "Printer online"
+msgstr ""
+
 #. placeholder {0}: activePrinterProfile.name
-#: src/components/layout/TopBar.tsx:573
+#: src/components/layout/TopBar.tsx:535
 msgid "Printer profile {0}"
 msgstr "Profil tlačiarne {0}"
 
 #. Same distinction as the title tooltip above (profile = saved configuration, printer = connected physical device), phrased for screen readers without the bullet separator.
-#: src/components/layout/TopBar.tsx:571
+#: src/components/layout/TopBar.tsx:533
 msgid "Printer profile {profileName}, active printer {printerName}"
 msgstr "Profil tlačiarne {profileName}, aktívna tlačiareň {printerName}"
 
 #. placeholder {0}: activePrinterProfile.name
-#: src/components/layout/TopBar.tsx:565
+#: src/components/layout/TopBar.tsx:527
 msgid "Printer profile: {0}"
 msgstr "Profil tlačiarne: {0}"
 
 #. "Printer profile" is the saved configuration (material, output format, etc.); "Active printer" is the physical network device currently connected under that profile. The two are distinct concepts that happen to both contain the word "printer".
-#: src/components/layout/TopBar.tsx:563
+#: src/components/layout/TopBar.tsx:525
 msgid "Printer profile: {profileName} • Active printer: {printerName}"
 msgstr "Profil tlačiarne: {profileName} • Aktívna tlačiareň: {printerName}"
 
-#: src/components/controls/ModelStatsCard.tsx:533
+#. placeholder {0}: parsedProfiles.printerProfiles.length
+#: src/components/settings/BackupsSettingsTab.tsx:1492
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1271
+msgid "Printer Profiles ({0})"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:782
+msgid "Printer-aware smoothing."
+msgstr ""
+
+#: src/components/controls/ModelStatsCard.tsx:498
 msgid "Printer:"
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:668
+#: src/components/layout/TopBar.tsx:633
 msgid "Printing"
 msgstr "Tlačenie"
 
+#: src/components/settings/BackupsSettingsTab.tsx:921
+msgid "Private GitHub Backups"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1095
+msgid "Private repo ready"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1396
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1168
+msgid "Profiles"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3674
+msgid "Profiling AA…"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3982
+msgid "Progress"
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1174
+msgid "Projection and navigation behavior"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1129
+#: src/components/settings/LocalBackupsSettingsTab.tsx:812
+msgid "Quick actions"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1397
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1169
+msgid "Raw JSON"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:780
+msgid "Raw masks only."
+msgstr ""
+
 #. "Slice"/"re-slice" is the 3D-printing step that converts a model into printer instructions (G-code). This dialog warns that switching printer profile invalidates the already-sliced file.
-#: src/components/layout/TopBar.tsx:1281
+#: src/components/layout/TopBar.tsx:1258
 msgid "Re-slice required after profile change"
 msgstr "Znovu nasekanie je potrebné po zmene v profile"
 
-#: src/components/layout/EmptySceneState.tsx:59
+#: src/app/page.tsx:4293
+msgid "Reading autosaved scene…"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:156
+#: src/features/slicing/components/SlicingPanel.tsx:3962
+msgid "Ready"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:67
 msgid "Ready for your next adventure?"
 msgstr "Pripravený na nové dobrodružstvo?"
 
-#: src/components/layout/EmptySceneState.tsx:591
+#: src/components/layout/EmptySceneState.tsx:613
 msgid "Recent files"
 msgstr "Nedávne súbory"
 
+#: src/components/scene/SceneAutosaveRecoveryModal.tsx:72
+msgid "Recover unsaved scene"
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:343
+msgid "Recovery available"
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:374
+msgid "Recovery copies are written to the app data folder above."
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:282
+msgid "Recovery prompt on startup"
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:337
+msgid "Recovery state"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1278
+#: src/components/settings/FleetManagement.tsx:218
+#: src/components/settings/FleetManagement.tsx:219
+#: src/components/settings/LocalBackupsSettingsTab.tsx:916
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:320
+msgid "Refresh"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:834
+msgid "Refresh History"
+msgstr ""
+
 #. placeholder {0}: info.version
-#: src/features/updater/GlobalUpdateIndicator.tsx:367
+#: src/features/updater/GlobalUpdateIndicator.tsx:365
 msgid "Release notes — v{0}"
 msgstr ""
 
-#: src/features/updater/GlobalUpdateIndicator.tsx:174
+#: src/features/updater/GlobalUpdateIndicator.tsx:169
 msgid "Released {releaseDate}"
 msgstr ""
 
-#: src/features/updater/GlobalUpdateIndicator.tsx:231
+#: src/features/updater/GlobalUpdateIndicator.tsx:226
 msgid "Remind me later"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:514
-#: src/components/controls/ModelManagerPanel.tsx:768
+#: src/features/slicing/components/SlicingPanel.tsx:1902
+msgid "Remote"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1170
+msgid "Remote backup is newer than your local snapshot. Choose how to resolve this sync."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:551
+msgid "Remote backup is newer. Choose restore or force sync."
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2607
+msgid "Remote material unavailable."
+msgstr ""
+
+#: src/components/settings/FleetManagement.tsx:241
+msgid "Remove"
+msgstr ""
+
+#: src/components/settings/FleetManagement.tsx:240
+msgid "Remove saved printer"
+msgstr ""
+
+#: src/components/controls/ModelManagerPanel.tsx:522
+#: src/components/controls/ModelManagerPanel.tsx:804
 msgid "Rename folder"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:802
+#: src/components/controls/ModelManagerPanel.tsx:838
 msgid "Rename model"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:627
+#: src/components/controls/ModelManagerPanel.tsx:635
 msgid "Rename model base name"
 msgstr ""
 
 #. placeholder {0}: entry.name
-#: src/components/layout/EmptySceneState.tsx:631
+#: src/components/layout/EmptySceneState.tsx:665
 msgid "Reopen {0}"
 msgstr "Znovu otvoriť {0}"
 
-#: src/components/ui/EditorContextMenu.tsx:52
+#: src/components/ui/EditorContextMenu.tsx:84
 msgid "Repair"
 msgstr "Opraviť"
 
-#: src/components/controls/ModelManagerPanel.tsx:817
+#: src/components/controls/ModelManagerPanel.tsx:853
 msgid "Repair mesh…"
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:1223
+#: src/components/settings/BackupsSettingsTab.tsx:1090
+msgid "Repository"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1050
+msgid "Repository <0>{selectedBackupRepoName}</0> is ready. Run your first backup to finish onboarding."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1615
+msgid "Required for self-compiled builds that do not ship with backup OAuth env values."
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:734
+msgid "Resolving..."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1635
+msgid "Restart DragonFruit, then click <0>I configured it</0>."
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:1200
 msgid "Restore"
 msgstr "Obnoviť"
 
-#: src/components/layout/TopBar.tsx:1224
+#: src/components/settings/BackupsSettingsTab.tsx:1367
+msgid "Restore as Current"
+msgstr ""
+
+#: src/app/page.tsx:4324
+#: src/app/page.tsx:4335
+msgid "Restore Failed"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1184
+msgid "Restore Remote"
+msgstr ""
+
+#: src/components/scene/SceneAutosaveRecoveryModal.tsx:175
+msgid "Restore Scene"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1051
+msgid "Restore Snapshot"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1139
+msgid "Restore to App"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:1201
 msgid "Restore window"
 msgstr "Obnoviť okno"
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1440
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1543
 msgid "Right"
 msgstr ""
 
 #. Paraphrase of Doc Brown's line from Back to the Future (1985): "Roads? Where we're going, we don't need roads."
-#: src/components/layout/EmptySceneState.tsx:88
+#: src/components/layout/EmptySceneState.tsx:96
 msgid "Roads? Where we're printing, we don't need roads."
 msgstr "Cesty? Kde tlačíme my, nepotrebujeme cesty."
 
-#: src/components/layout/TopBar.tsx:1102
+#: src/components/settings/BackupsSettingsTab.tsx:1131
+msgid "Run a sync, verify repository readiness, or disconnect this GitHub account."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1060
+msgid "Run first backup now"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:1074
 msgid "Run slicing in Export to unlock Printing preview"
 msgstr "Spusťi sekanie v Exporte aby si odomkol preview tlače"
 
-#: src/components/layout/TopBar.tsx:837
+#: src/features/slicing/components/SlicingPanel.tsx:3960
+msgid "Running"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2750
+msgid "Samples"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3803
+msgid "Save Material"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:808
 msgid "Save scene"
 msgstr "Uložiť Scénu"
 
-#: src/components/layout/TopBar.tsx:857
+#: src/components/layout/TopBar.tsx:828
 msgid "Save scene as…"
 msgstr "Uložiť Scénu Ako…"
 
+#: src/components/settings/LocalBackupsSettingsTab.tsx:806
+msgid "Save snapshots to your local backup folder, then review and restore any point-in-time snapshot in-app."
+msgstr ""
+
+#: src/components/scene/SceneAutosaveRecoveryModal.tsx:139
+msgid "Saved beside your project"
+msgstr ""
+
+#: src/components/scene/SceneAutosaveRecoveryModal.tsx:140
+msgid "Saved in the recovery folder"
+msgstr ""
+
+#: src/components/organisms/NotificationStack.tsx:55
+msgid "Saving…"
+msgstr ""
+
+#: src/components/printers/PrinterVariantPickerModal.tsx:508
+#: src/components/settings/FleetManagement.tsx:336
+msgid "Scan again"
+msgstr ""
+
+#: src/components/ui/EditorContextMenu.tsx:89
+msgid "Scan for Supports"
+msgstr ""
+
+#: src/components/settings/FleetManagement.tsx:319
+msgid "Scanning network…"
+msgstr ""
+
+#: src/components/settings/FleetManagement.tsx:305
+msgid "Scanning your local network…"
+msgstr ""
+
+#. Auto-detection is scanning the network for a matching printer. {presetName} is the printer family name.
+#: src/components/printers/PrinterVariantPickerModal.tsx:34
+msgid "Scanning your network for {presetName} printers…"
+msgstr ""
+
 #. File type badge on the recent files list. Noun — labels a saved scene file (.voxl, .lys).
-#: src/components/layout/EmptySceneState.tsx:643
+#: src/components/layout/EmptySceneState.tsx:677
 msgid "Scene"
 msgstr "Scéna"
 
-#: src/components/layout/EmptySceneState.tsx:572
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:165
+#: src/components/settings/SettingsModal.tsx:1227
+msgid "Scene Autosave"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:599
 msgid "Scene files (.voxl, .lys)"
 msgstr "Scénické súbory (.voxl, .lys)"
 
-#: src/components/controls/TransformToolbar.tsx:34
+#: src/components/controls/TransformToolbar.tsx:35
 msgid "Sculpt and smooth surface"
 msgstr "Skulptovať a vyhladzovať povrch"
 
+#: src/components/layout/OnboardingPrinterLibrary.tsx:313
+msgid "Search printers"
+msgstr ""
+
+#. Unit suffix after a seconds input box. Keep it abbreviated.
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:229
+msgid "sec"
+msgstr ""
+
 #: src/components/controls/TransformToolbar.tsx:29
+#: src/components/settings/FleetManagement.tsx:209
 msgid "Select"
 msgstr "Vybrať"
+
+#: src/components/settings/BackupsSettingsTab.tsx:1476
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1248
+msgid "Select a key"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1481
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1260
+msgid "Select a LocalStorage key from the left to view its value."
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2626
+msgid "Select a matching material during import instead."
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2048
+msgid "Select a material profile first."
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2043
+msgid "Select a printer profile first."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1534
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1313
+msgid "Select a printer profile to view details."
+msgstr ""
+
+#: src/components/printers/PrinterVariantPickerModal.tsx:495
+msgid "Select a printer to detect its model."
+msgstr ""
 
 #: src/components/controls/TransformToolbar.tsx:29
 msgid "Select and inspect model"
 msgstr "Vybrať a inšpektovať"
 
-#: src/components/controls/ModelManagerPanel.tsx:754
+#: src/components/controls/ModelManagerPanel.tsx:790
 msgid "Select folder"
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:557
+#: src/components/layout/TopBar.tsx:519
 msgid "Select printer"
 msgstr "Vybrať tlačiareň"
 
-#: src/components/layout/TopBar.tsx:565
-#: src/components/layout/TopBar.tsx:573
+#: src/components/layout/TopBar.tsx:527
+#: src/components/layout/TopBar.tsx:535
 msgid "Select printer profile"
 msgstr "Vybrať profil tlačiarne"
 
-#: src/components/layout/TopBar.tsx:549
-#: src/components/layout/TopBar.tsx:561
-#: src/components/layout/TopBar.tsx:569
+#: src/components/layout/TopBar.tsx:511
+#: src/components/layout/TopBar.tsx:523
+#: src/components/layout/TopBar.tsx:531
 msgid "Select profile"
 msgstr "Vybrať profil"
 
-#: src/components/layout/TopBar.tsx:785
-#: src/components/layout/TopBar.tsx:786
+#: src/components/settings/LocalBackupsSettingsTab.tsx:739
+msgid "Selected directory"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:756
+#: src/components/layout/TopBar.tsx:757
 msgid "Selected printer is offline"
 msgstr "Vybraná tlačiareň je offline"
 
-#: src/components/layout/TopBar.tsx:1175
-#: src/components/layout/TopBar.tsx:1176
+#. Shown while dragging a selection rectangle right to left, which takes every object the rectangle touches. Mirrors the CAD convention; keep it on one short line.
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3075
+msgid "Selection Mode: Contact (Right to Left)"
+msgstr ""
+
+#. Shown while dragging a selection rectangle left to right, which takes only the objects the rectangle fully encloses. Mirrors the CAD convention; keep it on one short line.
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3079
+msgid "Selection Mode: Enclosed (Left to Right)"
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1240
+msgid "Send sliced files to UVTools for analysis"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3658
+msgid "Send to UVTools"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3822
+msgid "Session anti-aliasing override"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3827
+msgid "Session Anti-Aliasing Override"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:1064
+msgid "Session Override active"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:2813
+msgid "Session Overrides"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1633
+msgid "Set <0>Authorization callback URL</0> to <1>{oauthCallbackUrl}</1>."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1632
+msgid "Set <0>Homepage URL</0> to <1>{oauthHomepageUrl}</1>."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:971
+#: src/components/settings/BackupsSettingsTab.tsx:1613
+msgid "Set up GitHub OAuth"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:993
+msgid "Set up OAuth"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:962
+msgid "Set up private backups"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:1152
+#: src/components/layout/TopBar.tsx:1153
 msgid "Settings"
 msgstr "Nastavenia"
 
+#: src/components/settings/SettingsModal.tsx:1180
+msgid "Shader, rendering options, and selection behavior"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:781
+msgid "Sharp"
+msgstr ""
+
 #. Row label on the model details card: number of separate connected surfaces ("shells"/bodies) in the mesh.
-#: src/components/controls/ModelStatsCard.tsx:619
+#: src/components/controls/ModelStatsCard.tsx:584
 msgid "Shells:"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:666
+#: src/components/controls/ModelManagerPanel.tsx:690
+#: src/components/controls/ModelManagerPanel.tsx:701
 msgid "Show"
 msgstr ""
 
 #. Opens the printer manager screen (printer profile settings), reached from this quick-switch popover. "Manager" refers to that screen.
-#: src/components/layout/TopBar.tsx:1049
+#: src/components/layout/TopBar.tsx:1020
 msgid "Show manager"
 msgstr "Ukázať Manažéra"
 
-#: src/features/updater/GlobalUpdateIndicator.tsx:323
+#: src/features/updater/GlobalUpdateIndicator.tsx:321
 msgid "Show release notes"
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:1099
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:276
+msgid "Show restore/discard prompt if a dirty autosave is detected at startup."
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3657
+msgid "Slice & Print"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3656
+msgid "Slice & Upload"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3655
+msgid "Slice to File"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:1221
+msgid "Sliced Layers"
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1185
+#: src/features/slicing/components/SlicingPanel.tsx:2484
+#: src/features/slicing/components/SlicingPanel.tsx:2522
+msgid "Slicing"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:1071
 msgid "Slicing in progress. Topbar actions are temporarily disabled."
 msgstr "Momentálne sekám. Akcie vo vrchnej lište sú momentálne vypnuté."
 
-#: src/components/controls/TransformToolbar.tsx:34
+#: src/features/slicing/components/SlicingPanel.tsx:3935
+msgid "Slicing Plate"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3916
+msgid "Slicing progress"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3674
+msgid "Slicing…"
+msgstr ""
+
+#: src/components/controls/TransformToolbar.tsx:35
+#: src/features/slicing/components/SlicingPanel.tsx:783
 msgid "Smooth"
 msgstr "Vyhladiť"
+
+#. placeholder {0}: new Date(Number(selectedHistoryId)).toLocaleString()
+#: src/components/settings/BackupsSettingsTab.tsx:1353
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1125
+msgid "Snapshot {0}"
+msgstr ""
+
+#. placeholder {0}: confirmRestoreId ? new Date(Number(confirmRestoreId)).toLocaleString() : ''
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1054
+msgid "Snapshot from {0}"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1425
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1197
+msgid "Snapshot ID"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:570
+msgid "Snapshot restored to current local backup state."
+msgstr ""
 
 #. View mode: matte clay-like surface with scene lighting.
 #: src/features/shaders/mesh/types.ts:37
 msgid "Soft clay (lit)"
 msgstr ""
 
+#: src/features/slicing/components/SlicingPanel.tsx:783
+msgid "Soft organic curves."
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3987
+msgid "Speed"
+msgstr ""
+
 #. Context-menu command that detaches the generated support scaffolding at the clicked point. "Supports" = the temporary print scaffolding structures, not customer support.
-#: src/components/ui/EditorContextMenu.tsx:53
+#: src/components/ui/EditorContextMenu.tsx:85
 msgid "Split supports"
 msgstr "Rozdeliť podpery"
 
+#: src/components/controls/TransformToolbar.tsx:34
+msgid "Split the model along a drawn seam"
+msgstr ""
+
 #. Context menu action: split a multi-body 3MF import into independent models.
-#: src/components/controls/ModelManagerPanel.tsx:834
+#: src/components/controls/ModelManagerPanel.tsx:870
 msgid "Split to bodies"
 msgstr ""
 
-#: src/components/controls/ModelStatsCard.tsx:613
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:358
+msgid "Standing Autosave Error"
+msgstr ""
+
+#: src/components/layout/FirstRunOnboarding.tsx:320
+msgid "Start using DragonFruit"
+msgstr ""
+
+#: src/components/controls/ModelStatsCard.tsx:578
 msgid "STL size:"
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:652
+#: src/components/layout/TopBar.tsx:617
 msgid "Support"
 msgstr "Podpera"
 
-#: src/app/page.tsx:2005
+#: src/app/page.tsx:2220
 msgid "Supports"
 msgstr "Podpery"
 
-#: src/components/controls/ModelManagerPanel.tsx:655
+#: src/components/controls/ModelManagerPanel.tsx:666
+#: src/components/controls/ModelManagerPanel.tsx:677
 msgid "Supports for model"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:67
+#: src/components/layout/EmptySceneState.tsx:75
 msgid "Suspiciously empty in here."
 msgstr "Je to tu podozrivo prázdne."
 
-#: src/components/layout/EmptySceneState.tsx:60
-msgid "The build plate awaits."
-msgstr "Pracovná plocha ťa čaká."
+#: src/components/settings/BackupsSettingsTab.tsx:1239
+#: src/components/settings/LocalBackupsSettingsTab.tsx:877
+msgid "Sync interval"
+msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:73
-msgid "The build volume misses you."
-msgstr "Chýbaš pracovnému priestoru."
+#: src/features/slicing/components/SlicingPanel.tsx:2815
+msgid "Temporary"
+msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:70
-msgid "The resin is ready. Are you?"
-msgstr "Živica je pripravená. Si ty?"
+#: src/app/page.tsx:4337
+msgid "The autosave recovery file could not be found."
+msgstr ""
 
-#. Paraphrase of "The spice must flow" from Dune (novel by Frank Herbert, 1965; films 1984 and 2021).
-#: src/components/layout/EmptySceneState.tsx:86
-msgid "The spice must flow. The resin must cure."
-msgstr "Syrup musí tiecť. Živica sa musí vytvrdzovať."
+#: src/app/page.tsx:4325
+#: src/app/page.tsx:4338
+msgid "The autosaved recovery file is corrupted or unreadable."
+msgstr ""
 
-#: src/features/updater/GlobalUpdateIndicator.tsx:253
-msgid "The update download or install failed. Please check your connection and try again."
+#: src/app/page.tsx:952
+msgid "The background recovery save failed repeatedly."
 msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:68
+msgid "The build plate awaits."
+msgstr "Pracovná plocha ťa čaká."
+
+#: src/components/layout/EmptySceneState.tsx:81
+msgid "The build volume misses you."
+msgstr "Chýbaš pracovnému priestoru."
+
+#: src/components/printers/PrinterVariantPickerModal.tsx:457
+#: src/components/printers/PrinterVariantPickerModal.tsx:601
+msgid "The printer reported this variant."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:78
+msgid "The resin is ready. Are you?"
+msgstr "Živica je pripravená. Si ty?"
+
+#: src/app/page.tsx:4326
+msgid "The scene importer rejected or could not parse the autosave data."
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:3643
+msgid "The selected Machine does not support AA at this time."
+msgstr ""
+
+#. Paraphrase of "The spice must flow" from Dune (novel by Frank Herbert, 1965; films 1984 and 2021).
+#: src/components/layout/EmptySceneState.tsx:94
+msgid "The spice must flow. The resin must cure."
+msgstr "Syrup musí tiecť. Živica sa musí vytvrdzovať."
+
+#: src/features/updater/GlobalUpdateIndicator.tsx:248
+msgid "The update download or install failed."
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1198
+msgid "Theme and custom UI token customization"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:977
+msgid "This action cannot be undone."
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1013
+msgid "This backup snapshot will be permanently removed from disk."
+msgstr ""
+
+#: src/components/printers/PrinterVariantPickerModal.tsx:461
+msgid "This model is already added."
+msgstr ""
+
+#: src/components/printers/PrinterVariantPickerModal.tsx:432
+msgid "This printer has no setup options."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:76
 msgid "This scene is aggressively unoccupied."
 msgstr "Táto scéna je agresívne prázdna."
 
-#: src/components/layout/EmptySceneState.tsx:62
+#: src/components/settings/BackupsSettingsTab.tsx:976
+msgid "This self-compiled build needs your own GitHub OAuth app in .env before sign-in can work."
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1075
+msgid "This will overwrite your current app settings and profiles with the data from this snapshot, then reload the app. This action cannot be undone."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:70
 msgid "Time to make something real."
 msgstr "Čas vytvoriť niečo ozajstné."
 
-#. Tip shown below the import buttons. <0> wraps the highlighted label 'Load mesh'; <1> wraps 'Import scene'. These match the button labels above verbatim (same casing) — keep them consistent with however you translated those buttons. Keep both placeholders in your translation.
-#: src/components/layout/EmptySceneState.tsx:579
-msgid "Tip: Start with <0>Load mesh</0> for clean prints, or <1>Import scene</1> to continue an existing setup."
-msgstr "Tip: Začnite s <0>Načítať mesh</0> pre čisté výtlačky, alebo <1>Importovať scénu</1> pre pokračovanie na existujúcom sete."
-
-#: src/app/page.tsx:1994
+#: src/app/page.tsx:2209
 msgid "Toggle curve"
 msgstr "Prepnúť Krivku"
 
@@ -1000,82 +2804,185 @@ msgid "Toon"
 msgstr ""
 
 #. View cube face (seen from above), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1442
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1545
 msgid "Top"
 msgstr ""
 
-#: src/components/controls/ModelStatsCard.tsx:616
+#: src/components/controls/ModelStatsCard.tsx:581
 msgid "Triangles:"
 msgstr ""
 
-#: src/features/updater/GlobalUpdateIndicator.tsx:210
+#: src/features/updater/GlobalUpdateIndicator.tsx:205
 msgid "Try again"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:783
+#: src/components/settings/SettingsModal.tsx:1197
+msgid "UI & Theme"
+msgstr ""
+
+#. Placeholder when the autosave file path could not be resolved.
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:366
+msgid "Unavailable"
+msgstr ""
+
+#: src/components/controls/ModelManagerPanel.tsx:819
 msgid "Ungroup folder"
 msgstr ""
 
-#: src/components/controls/ModelManagerPanel.tsx:732
+#: src/components/controls/ModelManagerPanel.tsx:768
 msgid "Ungroup selected"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:695
+#. Placeholder when the autosave timestamp could not be read.
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:352
+msgid "Unknown"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1574
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1353
+msgid "Unknown brand"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1521
+#: src/components/settings/BackupsSettingsTab.tsx:1540
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1300
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1319
+msgid "Unknown manufacturer"
+msgstr ""
+
+#: src/components/scene/SceneAutosaveRecoveryModal.tsx:92
+msgid "Unsaved Scene Found"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:729
 msgid "Unsupported file type"
 msgstr "Nepodporovaný typ súboru"
 
-#: src/components/layout/EmptySceneState.tsx:715
-msgid "Unsupported format detected. Please drop STL, OBJ, 3MF, VOXL, or LYS files."
-msgstr "Nepodporovaný formát. Prosím vlož STL, OBJ, 3MF, VOXL, alebo LYS súbory."
+#: src/components/layout/EmptySceneState.tsx:749
+msgid "Unsupported format detected."
+msgstr ""
 
-#: src/features/updater/GlobalUpdateIndicator.tsx:179
+#: src/features/updater/GlobalUpdateIndicator.tsx:174
 msgid "Update available"
 msgstr ""
 
-#: src/features/updater/GlobalUpdateIndicator.tsx:184
+#: src/features/updater/GlobalUpdateIndicator.tsx:179
 msgid "Update available — v{version}"
 msgstr ""
 
-#: src/features/updater/GlobalUpdateIndicator.tsx:183
+#: src/features/updater/GlobalUpdateIndicator.tsx:178
 msgid "Update failed"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:513
+#: src/components/settings/SettingsModal.tsx:1251
+msgid "Updates"
+msgstr ""
+
+#: src/components/settings/LocalBackupsSettingsTab.tsx:770
+msgid "Use Default Path"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1024
+msgid "Use existing repo"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:550
 msgid "Use without printer"
 msgstr "Používať bez tlačiarne"
 
-#: src/components/layout/TopBar.tsx:1149
+#: src/components/settings/LocalBackupsSettingsTab.tsx:481
+msgid "Using default local backup directory."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:20
+msgid "Using existing repository: {repoName}"
+msgstr ""
+
+#: src/features/slicing/components/SlicingPanel.tsx:1066
+msgid "Using Material Settings"
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1239
+msgid "UVTools"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1151
+msgid "Verify Repo"
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1258
+msgid "Version info and project details"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:1124
 msgid "View mode"
 msgstr "Režim pohľadu"
+
+#: src/components/settings/BackupsSettingsTab.tsx:936
+msgid "View privacy commitments"
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1310
+#: src/components/settings/LocalBackupsSettingsTab.tsx:950
+msgid "View snapshot"
+msgstr ""
 
 #: src/components/controls/ViewTypeDropdown.tsx:85
 msgid "View type"
 msgstr ""
 
-#: src/components/layout/EmptySceneState.tsx:90
+#: src/components/settings/LocalBackupsSettingsTab.tsx:907
+msgid "View, restore, or delete older snapshots from disk."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1269
+msgid "View, restore, or delete older snapshots from your private repository."
+msgstr ""
+
+#: src/components/settings/SceneAutosaveSettingsTab.tsx:209
+msgid "Wait this long after edits before autosaving."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:98
 msgid "Waiting for first layer adhesion... to reality."
 msgstr "Čakám na prvé priľnanie vrstvy… k realite."
+
+#: src/components/settings/BackupsSettingsTab.tsx:1043
+msgid "Waiting for repository check…"
+msgstr ""
 
 #. Matcap lighting preset with a warm (orange) tint.
 #: src/features/shaders/mesh/types.ts:28
 msgid "Warm"
 msgstr ""
 
+#: src/components/settings/BackupsSettingsTab.tsx:1016
+msgid "We found <0>{defaultRepoName}</0>. Choose whether to keep using it or create a fresh repository."
+msgstr ""
+
+#: src/components/settings/BackupsSettingsTab.tsx:1008
+msgid "We’ll open a secure GitHub popup to connect your account."
+msgstr ""
+
 #. Paraphrase of Chief Brody's line from Jaws (1975): "You're gonna need a bigger boat."
-#: src/components/layout/EmptySceneState.tsx:82
+#: src/components/layout/EmptySceneState.tsx:90
 msgid "We're gonna need a bigger build plate."
 msgstr "Budeme potrebovať väčšiu pracovnú plochu."
 
-#: src/components/layout/EmptySceneState.tsx:61
+#: src/components/layout/FirstRunOnboarding.tsx:172
+msgid "Welcome!"
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:69
 msgid "What are we printing today?"
 msgstr "Čo tlačíme dnes?"
 
 #. Paraphrase of the Joker's line from The Dark Knight (2008): "Why so serious?"
-#: src/components/layout/EmptySceneState.tsx:81
+#: src/components/layout/EmptySceneState.tsx:89
 msgid "Why so empty?"
 msgstr "Prečo tak prázdny?"
 
-#: src/components/layout/TopBar.tsx:1191
+#: src/components/layout/TopBar.tsx:1168
 msgid "Window controls"
 msgstr "Ovládanie okna"
 
@@ -1085,28 +2992,56 @@ msgid "Wireframe"
 msgstr ""
 
 #. Paraphrase of the Spider-Man motto, originating in Amazing Fantasy #15 (1962): "With great power comes great responsibility."
-#: src/components/layout/EmptySceneState.tsx:80
+#: src/components/layout/EmptySceneState.tsx:88
 msgid "With great resin comes great responsibility."
 msgstr "S veľkou živicou prichádza veľká zodpovednosť."
+
+#: src/components/settings/SettingsModal.tsx:1168
+msgid "Workspace behavior and panel layout"
+msgstr ""
+
+#: src/components/settings/SettingsModal.tsx:1191
+msgid "Workspaces"
+msgstr ""
 
 #. View mode: semi-transparent surface revealing the interior.
 #: src/features/shaders/mesh/types.ts:42
 msgid "X-ray"
 msgstr ""
 
-#: src/components/layout/TopBar.tsx:1306
+#: src/components/settings/LocalBackupsSettingsTab.tsx:1098
+msgid "Yes, restore"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:1283
 msgid "You can continue to adjust profiles, but you’ll be prompted to re-slice before printing with the updated settings."
 msgstr "Môžeš pokračovať v úprave profilov, ale bude potrebné znovu nasekať model pred tlačou s upravenými nastaveniami."
 
+#: src/components/settings/BackupsSettingsTab.tsx:948
+msgid "You can disconnect GitHub at any time. OAuth access is used only for repository checks and syncing backup files."
+msgstr ""
+
 #. Paraphrase of Gandalf's line from The Lord of the Rings: The Fellowship of the Ring (2001): "You shall not pass!"
-#: src/components/layout/EmptySceneState.tsx:78
+#: src/components/layout/EmptySceneState.tsx:86
 msgid "You shall not pass... until you load a model."
 msgstr "Neprejdeš… kým nenahráš model."
 
-#: src/components/layout/EmptySceneState.tsx:66
+#: src/components/layout/FirstRunOnboarding.tsx:308
+msgid "You're all set!"
+msgstr ""
+
+#: src/components/settings/FleetManagement.tsx:133
+msgid "Your fleet for this profile."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:74
 msgid "Your models called. They want to be sliced."
 msgstr "Tvoje modely volali. Chcú byť posekané."
 
-#: src/components/layout/EmptySceneState.tsx:69
+#: src/components/layout/FirstRunOnboarding.tsx:311
+msgid "Your printer is ready. Drag a model in to start preparing your first print."
+msgstr ""
+
+#: src/components/layout/EmptySceneState.tsx:77
 msgid "Zero polygons. Infinite potential."
 msgstr "Nula polygónov. Nekonečný potenciál."

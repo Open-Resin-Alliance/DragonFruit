@@ -1,8 +1,10 @@
 'use client';
 
 import React from 'react';
-import { Bug, ClipboardCopy, Database, Languages, LayoutGrid, RotateCcw } from 'lucide-react';
+import { Bug, ClipboardCopy, Database, HelpCircle, Languages, LayoutGrid, RotateCcw, ZoomIn } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/ui/LanguageSwitcher';
+import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
+import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { type Locale } from '@/i18n';
 import type { ImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
 import {
@@ -10,6 +12,20 @@ import {
   FLOATING_LAYOUT_STORAGE_KEY,
   type FloatingLayoutDebugRequestDetail,
 } from '@/components/layout/floatingLayoutPreferences';
+import {
+  UI_SCALE_PRESETS,
+  MIN_UI_SCALE,
+  MAX_UI_SCALE,
+  getSavedUiScale,
+  normalizeUiScale,
+  saveUiScale,
+  type UiScaleValue,
+} from '@/components/settings/uiScalePreference';
+import {
+  getSupportPlacementHelpEnabled,
+  setSupportPlacementHelpEnabled,
+  subscribeSupportPlacementHelp,
+} from '@/components/settings/supportPlacementPreferences';
 
 interface GeneralSettingsTabProps {
   floatingLayoutPersistence: boolean;
@@ -37,6 +53,31 @@ export function GeneralSettingsTab({
   const [layoutDump, setLayoutDump] = React.useState<string>('');
   const [dumpStatus, setDumpStatus] = React.useState<string | null>(null);
   const rootsLockedByLineRaft = importDefaults.raftBottomMode === 'line';
+
+  const [uiScale, setUiScale] = React.useState<UiScaleValue>(() => getSavedUiScale());
+  const [customScaleArmed, setCustomScaleArmed] = React.useState(false);
+  const isCustomScale = customScaleArmed || !UI_SCALE_PRESETS.includes(uiScale);
+  const [supportHelpEnabled, setSupportHelpEnabled] = React.useState(() => getSupportPlacementHelpEnabled());
+  React.useEffect(() => subscribeSupportPlacementHelp(() => setSupportHelpEnabled(getSupportPlacementHelpEnabled())), []);
+
+  const handleUiScaleChange = (rawValue: string) => {
+    // Selecting "Custom" arms the numeric input but saves nothing — the current
+    // scale stays until the user commits a value in the field.
+    if (rawValue === 'custom') {
+      setCustomScaleArmed(true);
+      return;
+    }
+    setCustomScaleArmed(false);
+    const next = normalizeUiScale(Number(rawValue));
+    setUiScale(next);
+    saveUiScale(next);
+  };
+
+  const handleCustomUiScaleChange = (percent: number) => {
+    const next = normalizeUiScale(percent / 100);
+    setUiScale(next);
+    saveUiScale(next);
+  };
 
   const handleDumpCurrentLayout = React.useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -106,7 +147,7 @@ export function GeneralSettingsTab({
             <Languages className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
               Language
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
@@ -121,7 +162,7 @@ export function GeneralSettingsTab({
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Interface language
               </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 Applied immediately across the app.
               </div>
             </div>
@@ -145,10 +186,84 @@ export function GeneralSettingsTab({
               background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
             }}
           >
+            <ZoomIn className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+              UI Scale
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Adjusts the size of the entire interface. 100% adapts to your screen automatically.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Interface scale
+              </div>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Larger percentages magnify the whole UI.
+              </div>
+            </div>
+            <SelectDropdown<string>
+              value={isCustomScale ? 'custom' : String(uiScale)}
+              options={[
+                ...UI_SCALE_PRESETS.map((preset) => ({ value: String(preset), label: `${Math.round(preset * 100)}%` })),
+                { value: 'custom', label: 'Custom' },
+              ]}
+              onChange={handleUiScaleChange}
+              ariaLabel="Interface scale"
+              title="Interface scale"
+              className="w-36"
+              menuAlign="right"
+              leadingDisplay={<ZoomIn className="w-4 h-4" />}
+              selectClassName="!text-[13px] !pr-9"
+            />
+          </div>
+
+          {isCustomScale && (
+            <div className="mt-2.5 flex items-center justify-between gap-3">
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Custom scale
+              </div>
+              <ScrollableNumberField
+                className="w-36"
+                value={Math.round(uiScale * 100)}
+                min={MIN_UI_SCALE * 100}
+                max={MAX_UI_SCALE * 100}
+                step={1}
+                unit="%"
+                ariaLabel="Custom interface scale"
+                commitOnBlur
+                onChange={handleCustomUiScaleChange}
+              />
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section
+        className="rounded-lg border p-3"
+        style={{
+          background: 'var(--surface-1)',
+          borderColor: 'var(--border-subtle)',
+        }}
+      >
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+            }}
+          >
             <LayoutGrid className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
               Floating Windows
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
@@ -163,7 +278,7 @@ export function GeneralSettingsTab({
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Remember window positions
               </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 Persist dragged panel positions in local storage.
               </div>
             </div>
@@ -194,7 +309,7 @@ export function GeneralSettingsTab({
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Reset saved window layout
               </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 Forget all stored panel positions and return to seeded layout.
               </div>
             </div>
@@ -215,7 +330,7 @@ export function GeneralSettingsTab({
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Show Debug Primitives panel
               </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 Toggle visibility of the Prepare-mode debug primitive window.
               </div>
             </div>
@@ -240,6 +355,70 @@ export function GeneralSettingsTab({
           </div>
         </div>
       </section>
+      <section
+        className="rounded-lg border p-3"
+        style={{
+          background: 'var(--surface-1)',
+          borderColor: 'var(--border-subtle)',
+        }}
+      >
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+            }}
+          >
+            <HelpCircle className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Support Tooltips
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Show placement tooltips next to the cursor while adding supports.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Show support tooltips
+              </div>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Shows &quot;Cannot Place Support&quot; and &quot;Stability Warning&quot; tooltips.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const next = !supportHelpEnabled;
+                setSupportPlacementHelpEnabled(next);
+                setSupportHelpEnabled(next);
+              }}
+              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+              style={
+                supportHelpEnabled
+                  ? {
+                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                      color: 'color-mix(in srgb, var(--accent), var(--text-strong) 25%)',
+                    }
+                  : {
+                      borderColor: 'var(--border-subtle)',
+                      background: 'var(--surface-1)',
+                      color: 'var(--text-muted)',
+                    }
+              }
+            >
+              {supportHelpEnabled ? 'ON' : 'OFF'}
+            </button>
+          </div>
+        </div>
+      </section>
 
       <section
         className="rounded-lg border p-3"
@@ -259,7 +438,7 @@ export function GeneralSettingsTab({
             <Database className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
               Import Defaults
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
@@ -272,7 +451,7 @@ export function GeneralSettingsTab({
           <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
             Default Raft Base
           </div>
-          <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+          <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
             Chooses raft bottom mode for imported supports.
           </div>
 
@@ -319,7 +498,7 @@ export function GeneralSettingsTab({
                 <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                   Default Raft Wall
                 </div>
-                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                   Enable perimeter wall for imported solid rafts.
                 </div>
               </div>
@@ -352,7 +531,7 @@ export function GeneralSettingsTab({
                 <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                   Roots Enabled on Import
                 </div>
-                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                   OFF makes imported root diameter match trunk diameter.
                 </div>
               </div>
@@ -384,7 +563,7 @@ export function GeneralSettingsTab({
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Auto-Repair
               </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 Automatically runs native mesh auto-repair for standard mesh imports.
               </div>
             </div>
@@ -415,7 +594,7 @@ export function GeneralSettingsTab({
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Auto-Repair Scenes
               </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 Automatically runs native mesh auto-repair for scene-file imports.
               </div>
             </div>

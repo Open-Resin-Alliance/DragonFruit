@@ -149,7 +149,7 @@ export function JointGizmo() {
         }
         surfaceNormal.normalize();
 
-        let axis = axisHint?.clone() ?? contactToDesiredSocket.clone();
+        const axis = axisHint?.clone() ?? contactToDesiredSocket.clone();
         if (axis.lengthSq() < 0.000001) {
             axis.set(disk.coneAxis.x, disk.coneAxis.y, disk.coneAxis.z);
         }

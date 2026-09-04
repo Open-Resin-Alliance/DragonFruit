@@ -8,6 +8,8 @@ import { getRaftSettings, subscribeToRaftStore } from '../RaftState';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { convexHull2d } from '../geometry/convexHull2d';
+import { signedArea2d } from '../geometry/signedArea2d';
 
 interface SliceSatBoundingMeshRendererProps {
   modelGeometry: GeometryWithBounds | null;
@@ -196,38 +198,6 @@ function buildAdaptiveSliceLevels(
   return decimated;
 }
 
-function convexHull(points: THREE.Vector2[]): THREE.Vector2[] {
-  if (points.length <= 1) return points.slice();
-
-  const pts = points
-    .map((p) => new THREE.Vector2(p.x, p.y))
-    .sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
-
-  const cross = (o: THREE.Vector2, a: THREE.Vector2, b: THREE.Vector2) =>
-    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
-
-  const lower: THREE.Vector2[] = [];
-  for (const p of pts) {
-    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
-      lower.pop();
-    }
-    lower.push(p);
-  }
-
-  const upper: THREE.Vector2[] = [];
-  for (let i = pts.length - 1; i >= 0; i--) {
-    const p = pts[i];
-    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
-      upper.pop();
-    }
-    upper.push(p);
-  }
-
-  upper.pop();
-  lower.pop();
-  return lower.concat(upper);
-}
-
 function offsetPolygonOutward(polygon: THREE.Vector2[], distance: number): THREE.Vector2[] {
   if (polygon.length < 3 || distance <= 0) return polygon.map((p) => p.clone());
 
@@ -302,17 +272,6 @@ function cloneRingPoints(points: THREE.Vector2[]): THREE.Vector2[] {
   return points.map((p) => p.clone());
 }
 
-function signedArea2D(points: THREE.Vector2[]): number {
-  if (points.length < 3) return 0;
-  let area = 0;
-  for (let i = 0; i < points.length; i++) {
-    const a = points[i];
-    const b = points[(i + 1) % points.length];
-    area += a.x * b.y - b.x * a.y;
-  }
-  return 0.5 * area;
-}
-
 function rotateRing(points: THREE.Vector2[], offset: number): THREE.Vector2[] {
   const n = points.length;
   if (n === 0) return [];
@@ -327,8 +286,8 @@ function rotateRing(points: THREE.Vector2[], offset: number): THREE.Vector2[] {
 function alignRingToReference(ring: THREE.Vector2[], reference: THREE.Vector2[]): THREE.Vector2[] {
   if (ring.length !== reference.length || ring.length < 3) return ring;
 
-  const refWinding = Math.sign(signedArea2D(reference));
-  const ringWinding = Math.sign(signedArea2D(ring));
+  const refWinding = Math.sign(signedArea2d(reference));
+  const ringWinding = Math.sign(signedArea2d(ring));
   let candidate = ring;
 
   if (refWinding !== 0 && ringWinding !== 0 && refWinding !== ringWinding) {
@@ -374,7 +333,7 @@ function normalizeRingSequence(rings: SliceRing[]): SliceRing[] {
 }
 
 function ringAreaAbs(points: THREE.Vector2[]): number {
-  return Math.abs(signedArea2D(points));
+  return Math.abs(signedArea2d(points));
 }
 
 function addFeatureEndMarginSlices(rings: SliceRing[]): SliceRing[] {
@@ -952,7 +911,7 @@ export default function SliceSatBoundingMeshRenderer({
 
         if (slicePoints.length < 3) continue;
 
-        const hull = convexHull(slicePoints);
+        const hull = convexHull2d(slicePoints);
         if (hull.length < 3) continue;
 
         const expanded = offsetPolygonOutward(hull, margin);

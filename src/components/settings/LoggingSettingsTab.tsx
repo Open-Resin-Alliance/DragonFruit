@@ -298,7 +298,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
             <ScrollText className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Log File</h3>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Log File</h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
               DragonFruit writes structured logs to a platform-specific directory.
               Share this file when reporting startup or network issues.
@@ -312,13 +312,13 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
         >
           <div className="flex-1 px-3 py-2.5 min-w-0">
             {logPathError ? (
-              <span className="text-[11px]" style={{ color: '#f87171' }}>{logPathError}</span>
+              <span className="text-xs" style={{ color: '#f87171' }}>{logPathError}</span>
             ) : logPath === null ? (
-              <span className="flex items-center gap-1.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <span className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
                 <Loader2 className="h-3 w-3 animate-spin" />Resolving path…
               </span>
             ) : (
-              <span className="block text-[11px] font-mono truncate select-all" style={{ color: 'var(--text-strong)' }} title={logPath}>
+              <span className="block text-xs font-mono truncate select-all" style={{ color: 'var(--text-strong)' }} title={logPath}>
                 {logPath}
               </span>
             )}
@@ -353,13 +353,13 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
         </div>
 
         {revealError && (
-          <p className="mt-2 text-[11px]" style={{ color: '#f87171' }}>{revealError}</p>
+          <p className="mt-2 text-xs" style={{ color: '#f87171' }}>{revealError}</p>
         )}
         {openError && (
-          <p className="mt-2 text-[11px]" style={{ color: '#f87171' }}>{openError}</p>
+          <p className="mt-2 text-xs" style={{ color: '#f87171' }}>{openError}</p>
         )}
         {deleteError && (
-          <p className="mt-2 text-[11px]" style={{ color: '#f87171' }}>{deleteError}</p>
+          <p className="mt-2 text-xs" style={{ color: '#f87171' }}>{deleteError}</p>
         )}
       </section>
 
@@ -376,7 +376,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
             <Filter className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Minimum Log Level</h3>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Minimum Log Level</h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
               Controls the least-significant event written to the log file. Changes apply immediately and persist across restarts.
             </p>
@@ -402,7 +402,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
                   style={{ background: color, boxShadow: active ? `0 0 6px ${color}` : 'none' }} />
                 <span className="min-w-0 flex-1">
                   <span className="block text-[12px] font-semibold" style={{ color: 'var(--text-strong)' }}>{label}</span>
-                  <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>{description}</span>
+                  <span className="block text-xs" style={{ color: 'var(--text-muted)' }}>{description}</span>
                 </span>
                 {active && <Check className="h-3.5 w-3.5 flex-shrink-0" style={{ color }} />}
               </button>
@@ -430,8 +430,8 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
                 boxShadow: isLive ? '0 0 5px #4ade80' : 'none',
               }}
             />
-            <span className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>Live Log</span>
-            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+            <span className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Live Log</span>
+            <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
               {visibleLines.length} line{visibleLines.length !== 1 ? 's' : ''}
               {lines.length !== visibleLines.length && ` (${lines.length - visibleLines.length} filtered)`}
             </span>
@@ -442,7 +442,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
             type="button"
             onClick={() => setHideNoise((v) => !v)}
             title={hideNoise ? 'Show low-level transport noise (tungstenite, reqwest…)' : 'Hide transport noise'}
-            className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] transition-colors duration-150"
+            className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] transition-colors duration-150"
             style={{
               borderColor: 'var(--border-subtle)',
               color: hideNoise ? 'var(--text-muted)' : '#fb923c',
@@ -457,7 +457,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
             <button
               type="button"
               onClick={() => setFilterOpen((o) => !o)}
-              className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] transition-colors duration-150"
+              className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors duration-150"
               style={{
                 borderColor: `color-mix(in srgb, ${filterColor}, var(--border-subtle) 50%)`,
                 background: `color-mix(in srgb, ${filterColor}, var(--surface-0) 88%)`,
@@ -481,7 +481,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
                       key={v}
                       type="button"
                       onClick={() => { setViewerFilter(v); setFilterOpen(false); }}
-                      className="flex items-center gap-2 w-full px-3 py-1.5 text-[11px] text-left transition-colors duration-100"
+                      className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors duration-100"
                       style={{
                         color: 'var(--text-strong)',
                         background: active ? `color-mix(in srgb, ${color}, var(--surface-0) 85%)` : 'transparent',
@@ -537,7 +537,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
         <div
           ref={scrollRef}
           onScroll={handleScroll}
-          className="overflow-y-auto font-mono text-[11px] leading-relaxed"
+          className="overflow-y-auto font-mono text-xs leading-snug"
           style={{
             height: 320,
             background: 'var(--surface-0, #0e0e0e)',
@@ -569,7 +569,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
         }}
       >
         <Info className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" style={{ color: 'var(--accent)' }} />
-        <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+        <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
           The minimum log level applies <strong style={{ color: 'var(--text-strong)' }}>immediately</strong> and is
           also saved for next launch. The viewer filter and noise suppression are local-only — they do not affect what is written to disk.
         </p>
@@ -587,18 +587,18 @@ function LogLineRow({ line }: { line: ParsedLogLine }) {
   return (
     <div className="flex gap-2 min-w-0 hover:bg-white/[0.03] rounded px-0.5 -mx-0.5">
       <span
-        className="flex-shrink-0 text-[10px] font-bold tracking-wide pt-px"
+        className="flex-shrink-0 text-[11px] font-bold tracking-wide pt-px"
         style={{ color, minWidth: 38, userSelect: 'none' }}
       >
         {levelLabel}
       </span>
       {line.timestamp && (
-        <span className="flex-shrink-0 text-[10px] pt-px" style={{ color: '#4b5563', userSelect: 'none' }}>
+        <span className="flex-shrink-0 text-[11px] pt-px" style={{ color: '#4b5563', userSelect: 'none' }}>
           {line.timestamp}
         </span>
       )}
       {line.target && (
-        <span className="flex-shrink-0 text-[10px] pt-px truncate max-w-[140px]" style={{ color: '#6b7280' }}>
+        <span className="flex-shrink-0 text-[11px] pt-px truncate max-w-[140px]" style={{ color: '#6b7280' }}>
           {line.target}
         </span>
       )}

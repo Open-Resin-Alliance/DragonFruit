@@ -1,4 +1,3 @@
-/* eslint-disable no-restricted-globals */
 import { type ScanLayerResult, type GridRef, VOXEL_OFFSET_X, VOXEL_OFFSET_Y, VOXEL_OFFSET_Z } from './ScanOrchestrator';
 import { type RleMask, rleEncode } from './rle';
 import { rasterizeLoopsScanline as rasterizeLoopsToMask, rasterizeLoopsToExistingGridScanline as rasterizeLoopsToExistingGrid } from './scanline';

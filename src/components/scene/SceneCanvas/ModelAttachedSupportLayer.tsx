@@ -6,9 +6,9 @@ import { SupportProxyMeshLayer } from '@/supports/SupportProxyMeshLayer';
 import { RaftProxyMeshLayer } from '@/supports/RaftProxyMeshLayer';
 import RaftRenderer from '@/supports/Rafts/Crenelated/rendering/RaftRenderer';
 import LineRaftRenderer from '@/supports/Rafts/Crenelated/rendering/LineRaftRenderer';
+import { getSettings, subscribeToSettings } from '@/supports/Settings/state';
 import type { SupportData } from '@/supports/rendering';
 import type { BracePreviewData } from '@/supports/SupportTypes/Brace/bracePlacementState';
-
 export type ModelAttachedSupportLayerProps = {
   mode?: SupportMode;
   modelFilterId?: string | null;
@@ -25,6 +25,7 @@ export type ModelAttachedSupportLayerProps = {
   selectedTintStrength?: number;
   activeModelId?: string | null;
   selectedModelIds?: string[];
+  marqueeCandidateModelIds?: readonly string[];
   hoverModelId?: string | null;
   modelDropOffsetsById?: Record<string, number>;
   navigationLodActive?: boolean;
@@ -33,6 +34,9 @@ export type ModelAttachedSupportLayerProps = {
   raftColorized?: boolean;
   raftHoverized?: boolean;
   onModelPointerSelect?: (modelId: string) => void;
+  /** In Select mode, a pointer-down on a support/raft reports a potential model
+   *  XY-drag start (model + screen coords). The scene owns the drag. */
+  onModelPointerDragStart?: (modelId: string, clientX: number, clientY: number) => void;
   ghostOpacity?: number;
   ghostRenderOrder?: number;
   supportRendererRef?: React.Ref<THREE.Group>;
@@ -75,6 +79,7 @@ export function ModelAttachedSupportLayer({
   selectedTintStrength,
   activeModelId = null,
   selectedModelIds = [],
+  marqueeCandidateModelIds,
   hoverModelId = null,
   modelDropOffsetsById,
   navigationLodActive = false,
@@ -83,6 +88,7 @@ export function ModelAttachedSupportLayer({
   raftColorized = true,
   raftHoverized = false,
   onModelPointerSelect,
+  onModelPointerDragStart,
   ghostOpacity,
   ghostRenderOrder,
   supportRendererRef,
@@ -106,22 +112,26 @@ export function ModelAttachedSupportLayer({
   const useUltraLazySupports = mode !== 'support';
   const proxyPointerSelectionEnabled = mode === 'prepare' && !navigationLodActive && !disableSelectionAndHover && !passive;
   const proxyIncludeDetailedPrimitives = supportProxyIncludeDetailedPrimitives;
+  const simpleRender = React.useSyncExternalStore(subscribeToSettings, getSettings, getSettings).debugSimpleSupportRender;
+  const hideRaftPrimitivesEffective = hideRaftPrimitives || simpleRender;
 
   return (
     <>
-      {!hideRaftPrimitives && !interiorView && useUltraLazySupports && (
+      {!hideRaftPrimitivesEffective && !interiorView && useUltraLazySupports && (
         <RaftProxyMeshLayer
           modelFilterId={hideRaftPrimitivesForInactiveModels && activeModelId ? activeModelId : modelFilterId}
           clipLower={clipLower}
           clipUpper={clipUpper}
           activeModelId={activeModelId}
           selectedModelIds={selectedModelIds}
+          marqueeCandidateModelIds={marqueeCandidateModelIds}
           hoverModelId={hoverModelId}
           excludeModelId={excludeModelId}
           excludeModelIds={excludeModelIds}
           ghostOpacity={ghostOpacity}
           ghostRenderOrder={ghostRenderOrder}
           onModelPointerSelect={onModelPointerSelect}
+          onModelPointerDragStart={onModelPointerDragStart}
           enablePointerSelection={proxyPointerSelectionEnabled}
           colorized={raftColorized}
           hoverized={raftHoverized}
@@ -130,7 +140,7 @@ export function ModelAttachedSupportLayer({
         />
       )}
 
-      {!hideRaftPrimitives && !interiorView && !useUltraLazySupports && (
+      {!hideRaftPrimitivesEffective && !interiorView && !useUltraLazySupports && (
         <>
           <RaftRenderer
             clipLower={clipLower}
@@ -176,6 +186,7 @@ export function ModelAttachedSupportLayer({
             supportColorsByModelId={supportColorsByModelId}
             activeModelId={activeModelId}
             selectedModelIds={selectedModelIds}
+            marqueeCandidateModelIds={marqueeCandidateModelIds}
             hoverModelId={hoverModelId}
             hoverTintColor={hoverTintColor}
             hoverTintStrength={hoverTintStrength}
@@ -189,6 +200,7 @@ export function ModelAttachedSupportLayer({
             outOfBoundsMax={outOfBoundsMax}
             outOfBoundsStripeColor={outOfBoundsStripeColor}
             onModelPointerSelect={onModelPointerSelect}
+            onModelPointerDragStart={onModelPointerDragStart}
             enablePointerSelection={proxyPointerSelectionEnabled}
             includeDetailedPrimitives={proxyIncludeDetailedPrimitives}
             interiorView={interiorView}
@@ -209,6 +221,7 @@ export function ModelAttachedSupportLayer({
             selectedTintStrength={selectedTintStrength}
             activeModelId={activeModelId}
             selectedModelIds={selectedModelIds}
+            marqueeCandidateModelIds={marqueeCandidateModelIds}
             hoverModelId={hoverModelId}
             modelDropOffsetsById={modelDropOffsetsById}
             modelFilterId={modelFilterId}

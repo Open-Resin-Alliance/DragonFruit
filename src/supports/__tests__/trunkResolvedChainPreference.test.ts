@@ -11,7 +11,7 @@ import type { Vec3 } from '../types';
 const socketPos: Vec3 = { x: 0, y: 0, z: 12 };
 const rootTopTarget: Vec3 = { x: 3, y: 0, z: 2 };
 
-test('resolved-chain comparison prefers a more vertical upper span over fewer joints', () => {
+test('resolved-chain comparison prefers fewer joints when the upper-span angle stays within limits', () => {
     const routed = getResolvedChainMetrics(
         socketPos,
         [
@@ -22,8 +22,11 @@ test('resolved-chain comparison prefers a more vertical upper span over fewer jo
     );
     const straight = getResolvedChainMetrics(socketPos, [], rootTopTarget);
 
-    assert.equal(isResolvedChainReplacementBetter(straight, routed), false);
-    assert.equal(isResolvedChainReplacementBetter(routed, straight), true);
+    // Weighted scorer: dropping both joints saves the exponential joint
+    // penalty (2.5²·20 vs 20), which outweighs the steeper first segment
+    // (16.7° vs 3.3°) as long as it stays within the angle limit.
+    assert.equal(isResolvedChainReplacementBetter(straight, routed), true);
+    assert.equal(isResolvedChainReplacementBetter(routed, straight), false);
 });
 
 test('resolved-chain comparison still allows fewer joints when upper-span quality is not worsened', () => {
@@ -58,15 +61,19 @@ test('simplifyJointsSDF collapses clear zig-zag joint clusters', () => {
     assert.deepEqual(simplified, []);
 });
 
-test('simplifyJointsSDF keeps the early upper-span drop while removing lower zig-zag joints', () => {
+test('simplifyJointsSDF collapses to the joint balancing joints against first-segment angle', () => {
     const sdf = {
         segmentBlocked: () => false,
     } as any;
-    const topPreservingJoint = { x: 0.2, y: 0, z: 8.5 };
 
+    // The early upper-span joint (0.2,0,8.5) and the middle joint are
+    // collapsed: each removal saves the exponential joint penalty while the
+    // first-segment angle stays within the limit. The last joint (1.8,0,3.8)
+    // is kept because removing it would steepen the first segment past what
+    // the joint savings are worth.
     const simplified = simplifyJointsSDF(
         [
-            topPreservingJoint,
+            { x: 0.2, y: 0, z: 8.5 },
             { x: 2.2, y: 0, z: 5 },
             { x: 1.8, y: 0, z: 3.8 },
         ],
@@ -77,5 +84,5 @@ test('simplifyJointsSDF keeps the early upper-span drop while removing lower zig
         80,
     );
 
-    assert.deepEqual(simplified, [topPreservingJoint]);
+    assert.deepEqual(simplified, [{ x: 1.8, y: 0, z: 3.8 }]);
 });

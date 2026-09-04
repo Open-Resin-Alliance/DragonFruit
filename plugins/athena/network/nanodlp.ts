@@ -69,10 +69,13 @@ export function resolveNanoDlpPort(rawPort: unknown, fallbackPort: number): numb
  * `ipAddress`.
  */
 export function resolveNanoDlpRawHost(payload: unknown): string {
-  const value = payload as any;
-  return typeof value?.host === 'string'
+  const value = (typeof payload === 'object' && payload !== null ? payload : {}) as {
+    host?: unknown;
+    ipAddress?: unknown;
+  };
+  return typeof value.host === 'string'
     ? value.host
-    : typeof value?.ipAddress === 'string'
+    : typeof value.ipAddress === 'string'
       ? value.ipAddress
       : '';
 }

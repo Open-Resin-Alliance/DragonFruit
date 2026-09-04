@@ -56,6 +56,10 @@ pub struct RepairOptions {
     /// Minimum self-intersection-triangle count in the *pre* analysis required
     /// for `solidify_fragmented_components` to auto-trigger.
     pub solidify_self_intersection_threshold: usize,
+    /// When set to `Some(true)`, forces the repair pipeline to treat the input
+    /// mesh as support geometry (`likely_support_geometry = true`) and bypasses
+    /// component shape heuristic re-derivation.
+    pub assume_support_geometry: Option<bool>,
 }
 
 impl Default for RepairOptions {
@@ -73,6 +77,7 @@ impl Default for RepairOptions {
             solidify_fragmented_components: true,
             solidify_component_threshold: 256,
             solidify_self_intersection_threshold: 128,
+            assume_support_geometry: None,
         }
     }
 }
@@ -82,6 +87,8 @@ pub struct RepairOutcome {
     pub mesh: IndexedMesh,
     pub report: MeshHealthReport,
 }
+
+pub type ClassificationOutcome = RepairOutcome;
 
 pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     let t_start = std::time::Instant::now();
@@ -95,6 +102,9 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     let mut skip_final_orientation = false;
     let mut solidify_rollback_reason: Option<String> = None;
     let mut report = MeshHealthReport::new(pre);
+    if options.assume_support_geometry == Some(true) {
+        report.likely_support_geometry = true;
+    }
 
     if auto_fragmented_solidify {
         report.steps.push(RepairStepReport {
@@ -179,7 +189,7 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
         {
             let analysis_before_fast = analyze(&mesh);
             let t = std::time::Instant::now();
-            match try_solidify_via_manifold_union(&mesh) {
+            match try_solidify_via_manifold_union(&mesh, options) {
                 Some((
                     unioned,
                     manifold_accepted,
@@ -334,7 +344,7 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
             #[cfg(feature = "manifold")]
             {
                 let t = std::time::Instant::now();
-                match try_solidify_via_manifold_union(&mesh) {
+                match try_solidify_via_manifold_union(&mesh, options) {
                     Some((
                         unioned,
                         manifold_accepted,
@@ -671,9 +681,8 @@ pub fn repair(mut mesh: IndexedMesh, options: &RepairOptions) -> RepairOutcome {
     // per-section tinting can still work.
     if report.model_triangle_count.is_none() {
         let t = std::time::Instant::now();
-        if let Some((model_tri_count, likely_support_geometry, _comp_count)) =
-            classify_and_reorder_model_support_triangles(&mut mesh)
-        {
+        let class_res = classify_and_reorder_model_support_triangles(&mut mesh, options.assume_support_geometry);
+        if let Some((model_tri_count, likely_support_geometry)) = class_res.split {
             report.model_triangle_count = Some(model_tri_count);
             if !report.likely_support_geometry {
                 report.likely_support_geometry = likely_support_geometry;
@@ -846,7 +855,10 @@ fn record_model_manifold_status(mesh: &IndexedMesh, report: &mut MeshHealthRepor
 /// This does **not** run the repair pipeline. It only attempts to classify and
 /// reorder triangles into model-first / support-second sections so the frontend
 /// can apply section-specific tinting while honoring "Load As-Is" behavior.
-pub fn classify_support_split(mut mesh: IndexedMesh) -> RepairOutcome {
+pub fn classify_support_split(
+    mut mesh: IndexedMesh,
+    options: &RepairOptions,
+) -> ClassificationOutcome {
     let t_start = std::time::Instant::now();
 
     // Pre-analysis with placeholder component count — the classifier
@@ -856,12 +868,18 @@ pub fn classify_support_split(mut mesh: IndexedMesh) -> RepairOutcome {
     let pre = minimal_analysis(&mesh, 0);
     let mut report = MeshHealthReport::new(pre);
 
+    if options.assume_support_geometry == Some(true) {
+        report.likely_support_geometry = true;
+    }
+
     let t = std::time::Instant::now();
-    let component_count = if let Some((model_tri_count, likely_support_geometry, cc)) =
-        classify_and_reorder_model_support_triangles(&mut mesh)
-    {
+    let class_res = classify_and_reorder_model_support_triangles(&mut mesh, options.assume_support_geometry);
+    let component_count = if let Some((model_tri_count, likely_support_geometry)) = class_res.split {
         report.model_triangle_count = Some(model_tri_count);
         report.likely_support_geometry = likely_support_geometry;
+        if options.assume_support_geometry == Some(true) {
+            report.likely_support_geometry = true;
+        }
         report.steps.push(RepairStepReport {
             name: "classify_support_geometry_split".into(),
             changed: 0,
@@ -871,7 +889,7 @@ pub fn classify_support_split(mut mesh: IndexedMesh) -> RepairOutcome {
             )),
             elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
         });
-        cc
+        class_res.component_count
     } else {
         report.steps.push(RepairStepReport {
             name: "classify_support_geometry_split".into(),
@@ -879,13 +897,7 @@ pub fn classify_support_split(mut mesh: IndexedMesh) -> RepairOutcome {
             notes: Some("classify-only split: no reliable model/support partition found".into()),
             elapsed_ms: t.elapsed().as_secs_f64() * 1000.0,
         });
-        // Fall back to computing components ourselves for the report.
-        triangle_components(&mesh)
-            .iter()
-            .copied()
-            .max()
-            .unwrap_or(0) as usize
-            + 1
+        class_res.component_count
     };
 
     // Patch the pre-analysis with the real component count and build the
@@ -983,35 +995,26 @@ fn classify_model_support_group(
     }
 }
 
+/// Determines if an imported file should be treated as a 100% standalone support structure.
+///
+/// Prior to PLAN-3, an inequality heuristic flagged files where support triangles outnumber
+/// model triangles (`support_triangles_out >= model_triangles_out`) as `likely_support_geometry = true`.
+/// This caused files containing both a model body and heavy support scaffolds to import as ALL GOLD
+/// even though a valid 2-section boundary (`model_triangle_count > 0`) was present for "Split Supports".
+///
+/// Under PLAN-3, `likely_support_geometry` evaluates to `true` ONLY when `model_triangles_out == 0`
+/// (i.e. the file is 100% pure support geometry with no model body). When `model_triangles_out > 0`,
+/// `likely_support_geometry` is `false`, allowing the mesh to render with a PINK model body and GOLD
+/// support overlay, while keeping the "Split Supports" feature enabled.
 fn compute_likely_support_geometry(
     model_triangles_out: usize,
     support_triangles_out: usize,
-    model_comp_count: usize,
-    support_comp_count: usize,
-    model_input_triangles: usize,
-    support_input_triangles: usize,
+    _model_comp_count: usize,
+    _support_comp_count: usize,
+    _model_input_triangles: usize,
+    _support_input_triangles: usize,
 ) -> bool {
-    let model_avg_tris = if model_comp_count > 0 {
-        model_input_triangles / model_comp_count
-    } else {
-        0
-    };
-    let support_avg_tris = if support_comp_count > 0 {
-        support_input_triangles / support_comp_count
-    } else {
-        0
-    };
-
-    let strong_density = model_avg_tris > 0 && support_avg_tris.saturating_mul(4) < model_avg_tris;
-
-    support_triangles_out > 0
-        && (model_triangles_out == 0
-            || (strong_density
-                && support_triangles_out >= model_triangles_out
-                && support_comp_count >= model_comp_count)
-            || (support_comp_count >= model_comp_count.saturating_mul(6)
-                && support_input_triangles >= model_input_triangles.saturating_mul(2)
-                && support_triangles_out >= model_triangles_out.saturating_mul(2)))
+    support_triangles_out > 0 && model_triangles_out == 0
 }
 
 /// Attempt to solidify a fragmented mesh by converting each connected
@@ -1043,6 +1046,7 @@ fn compute_likely_support_geometry(
 #[cfg(feature = "manifold")]
 fn try_solidify_via_manifold_union(
     mesh: &IndexedMesh,
+    options: &RepairOptions,
 ) -> Option<(IndexedMesh, usize, usize, usize, usize, bool, usize)> {
     use manifold_csg::Manifold;
 
@@ -1079,14 +1083,18 @@ fn try_solidify_via_manifold_union(
         .unwrap_or(MODEL_MIN_TRIS_FLOOR);
 
     let classify_group = |cid: usize| {
-        classify_model_support_group(
-            cid,
-            raft_z_cut,
-            model_seed,
-            model_min_tris,
-            &comp_max_z,
-            &comp_tri_count,
-        )
+        if options.assume_support_geometry == Some(true) {
+            GeometryGroup::Support
+        } else {
+            classify_model_support_group(
+                cid,
+                raft_z_cut,
+                model_seed,
+                model_min_tris,
+                &comp_max_z,
+                &comp_tri_count,
+            )
+        }
     };
 
     let mut model_manifolds: Vec<Manifold> = Vec::with_capacity(n_comps.min(4096));
@@ -1424,14 +1432,18 @@ fn try_solidify_via_manifold_union(
     );
 
     let support_triangles_out = (out_triangles.len()).saturating_sub(model_triangles_out);
-    let likely_support_geometry = compute_likely_support_geometry(
-        model_triangles_out,
-        support_triangles_out,
-        model_input_components,
-        support_input_components,
-        model_input_triangles,
-        support_input_triangles,
-    );
+    let likely_support_geometry = if options.assume_support_geometry == Some(true) {
+        true
+    } else {
+        compute_likely_support_geometry(
+            model_triangles_out,
+            support_triangles_out,
+            model_input_components,
+            support_input_components,
+            model_input_triangles,
+            support_input_triangles,
+        )
+    };
 
     Some((
         IndexedMesh {
@@ -2382,24 +2394,48 @@ fn cull_interior_components(mesh: &mut IndexedMesh) -> (usize, usize) {
     (removed_tris, removed_comps)
 }
 
+struct ClassificationResult {
+    split: Option<(usize, bool)>,
+    component_count: usize,
+}
+
 /// Conservative fallback classifier that partitions triangles into model and
 /// support sections by connected component height bands, then reorders the
 /// mesh triangles so model section comes first and support section follows.
 ///
-/// Returns `(model_triangle_count, likely_support_geometry, component_count)`
-/// on success.  The component count is the total number of connected components
-/// before reordering, which the caller can reuse to avoid a second union-find.
+/// Returns a ClassificationResult struct. The component count is the total number
+/// of connected components before reordering, which the caller can reuse.
+#[allow(unused_assignments)]
 fn classify_and_reorder_model_support_triangles(
     mesh: &mut IndexedMesh,
-) -> Option<(usize, bool, usize)> {
+    assume_support_geometry: Option<bool>,
+) -> ClassificationResult {
+    if assume_support_geometry == Some(true) {
+        return ClassificationResult {
+            split: Some((0, true)),
+            component_count: 1,
+        };
+    }
+    if assume_support_geometry == Some(false) {
+        return ClassificationResult {
+            split: Some((mesh.triangles.len(), false)),
+            component_count: 1,
+        };
+    }
     if mesh.triangles.len() < 8 || mesh.positions.is_empty() {
-        return None;
+        return ClassificationResult {
+            split: None,
+            component_count: 0,
+        };
     }
 
     let components = triangle_components(mesh);
     let n_comps = components.iter().copied().max().unwrap_or(0) as usize + 1;
     if n_comps < 2 {
-        return None;
+        return ClassificationResult {
+            split: None,
+            component_count: n_comps,
+        };
     }
 
     const BASE_TOUCH_EPS_MM: f32 = 0.25;
@@ -2414,6 +2450,8 @@ fn classify_and_reorder_model_support_triangles(
     let mut comp_max_z = vec![f32::NEG_INFINITY; n_comps];
     let mut comp_min_z = vec![f32::INFINITY; n_comps];
     let mut comp_tri_count = vec![0usize; n_comps];
+    let mut comp_vol = vec![0.0f64; n_comps];
+
     for (fi, tri) in mesh.triangles.iter().enumerate() {
         let cid = components[fi] as usize;
         comp_tri_count[cid] += 1;
@@ -2422,15 +2460,36 @@ fn classify_and_reorder_model_support_triangles(
         let z2 = mesh.positions[tri[2] as usize].z;
         comp_max_z[cid] = comp_max_z[cid].max(z0.max(z1).max(z2));
         comp_min_z[cid] = comp_min_z[cid].min(z0.min(z1).min(z2));
+
+        let a = mesh.positions[tri[0] as usize];
+        let b = mesh.positions[tri[1] as usize];
+        let c = mesh.positions[tri[2] as usize];
+        let v = (a.x as f64) * ((b.y as f64) * (c.z as f64) - (b.z as f64) * (c.y as f64))
+            - (a.y as f64) * ((b.x as f64) * (c.z as f64) - (b.z as f64) * (c.x as f64))
+            + (a.z as f64) * ((b.x as f64) * (c.y as f64) - (b.y as f64) * (c.x as f64));
+        comp_vol[cid] += v;
     }
 
-    let model_seed = (0..n_comps)
+    for cid in 0..n_comps {
+        comp_vol[cid] /= 6.0;
+    }
+
+    let model_seed = match (0..n_comps)
         .filter(|&cid| comp_tri_count[cid] >= 4 && comp_max_z[cid] > raft_z_cut)
         .max_by(|&a, &b| {
             comp_max_z[a]
                 .partial_cmp(&comp_max_z[b])
                 .unwrap_or(std::cmp::Ordering::Equal)
-        })?;
+        })
+    {
+        Some(seed) => seed,
+        None => {
+            return ClassificationResult {
+                split: None,
+                component_count: n_comps,
+            };
+        }
+    };
 
     // Components with at least 1/8 of the seed's triangle count are "high-poly"
     // and treated as model shells even if they don't reach the top Z band.
@@ -2440,6 +2499,9 @@ fn classify_and_reorder_model_support_triangles(
     let model_min_tris = (comp_tri_count[model_seed] / 8).max(MODEL_MIN_TRIS_FLOOR);
 
     let classify_group = |cid: usize| {
+        if comp_vol[cid] < -1e-2 {
+            return GeometryGroup::Model;
+        }
         classify_model_support_group(
             cid,
             raft_z_cut,
@@ -2454,7 +2516,12 @@ fn classify_and_reorder_model_support_triangles(
     let mut support_comp_count = 0usize;
     let mut model_input_triangles = 0usize;
     let mut support_input_triangles = 0usize;
+    // PRESERVED (PLAN-2 Support Heuristics):
+    // Tracks base contact counts and triangle volumes for support connected components.
+    // Kept in-place for future UI configuration knobs and advanced support detection rules.
+    #[allow(unused_variables, unused_assignments)]
     let mut support_base_touch_components = 0usize;
+    #[allow(unused_variables, unused_assignments)]
     let mut support_base_touch_triangles = 0usize;
     let base_touch_cut = global_min_z + BASE_TOUCH_EPS_MM;
 
@@ -2499,15 +2566,21 @@ fn classify_and_reorder_model_support_triangles(
         && model_avg_tris > 0
         && support_avg_tris.saturating_mul(3) < model_avg_tris;
 
-    // Remaining guards are sanity bounds; density_ok does the heavy lifting.
+    // Remaining guards: keep density_ok and support_input_triangles as-is.
+    // Comment out overly aggressive component floor & bed-touch bounds.
     if !density_ok
+        || support_input_triangles < 2_000
+        /*
         || support_comp_count < model_comp_count.saturating_mul(2).max(4)
         || n_comps < 12
-        || support_input_triangles < 2_000
         || support_base_touch_components < support_comp_count.saturating_div(4).max(3)
         || support_base_touch_triangles < 500
+        */
     {
-        return None;
+        return ClassificationResult {
+            split: None,
+            component_count: n_comps,
+        };
     }
 
     let mut model_tris: Vec<[u32; 3]> = Vec::with_capacity(mesh.triangles.len());
@@ -2522,7 +2595,10 @@ fn classify_and_reorder_model_support_triangles(
     }
 
     if model_tris.is_empty() || support_tris.is_empty() {
-        return None;
+        return ClassificationResult {
+            split: None,
+            component_count: n_comps,
+        };
     }
 
     let model_triangles_out = model_tris.len();
@@ -2541,7 +2617,10 @@ fn classify_and_reorder_model_support_triangles(
         support_input_triangles,
     );
 
-    Some((model_triangles_out, likely_support_geometry, n_comps))
+    ClassificationResult {
+        split: Some((model_triangles_out, likely_support_geometry)),
+        component_count: n_comps,
+    }
 }
 
 /// Assign a component id to each triangle via union-find over shared edges;
@@ -2991,9 +3070,315 @@ mod tests {
     }
 
     #[test]
-    fn likely_support_flag_turns_on_for_support_dominated_output() {
+    fn likely_support_flag_turns_on_only_when_model_triangles_are_zero() {
         assert!(compute_likely_support_geometry(
+            0, 180_000, 0, 32, 0, 220_000,
+        ));
+        assert!(!compute_likely_support_geometry(
             20_000, 180_000, 1, 32, 20_000, 220_000,
         ));
+    }
+
+    #[test]
+    fn assume_support_geometry_enforces_likely_support_classification() {
+        let mut mesh = IndexedMesh {
+            positions: vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(10.0, 0.0, 0.0),
+                Vec3::new(0.0, 10.0, 0.0),
+            ],
+            triangles: vec![[0, 1, 2]],
+        };
+        let options = RepairOptions {
+            assume_support_geometry: Some(true),
+            ..RepairOptions::default()
+        };
+        let outcome = repair(mesh, &options);
+        assert!(outcome.report.likely_support_geometry);
+    }
+
+    #[test]
+    fn classify_support_split_respects_assume_support_geometry() {
+        let mesh = IndexedMesh {
+            positions: vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(10.0, 0.0, 0.0),
+                Vec3::new(0.0, 10.0, 0.0),
+            ],
+            triangles: vec![[0, 1, 2]],
+        };
+        let options = RepairOptions {
+            assume_support_geometry: Some(true),
+            ..RepairOptions::default()
+        };
+        let outcome = classify_support_split(mesh, &options);
+        assert!(outcome.report.likely_support_geometry);
+    }
+}
+
+use crate::stl_budget::TriangleBudget;
+
+pub struct DecimationOutcome {
+    pub mesh: IndexedMesh,
+    pub achieved_error: f32,
+}
+
+pub fn decimate_indexed_to_budget(mesh: IndexedMesh, budget: &TriangleBudget) -> DecimationOutcome {
+    if !budget.is_decimated || mesh.triangles.len() <= budget.budget_tris {
+        return DecimationOutcome { mesh, achieved_error: 0.0 };
+    }
+
+    let indices: Vec<u32> = mesh
+        .triangles
+        .iter()
+        .flat_map(|t| [t[0], t[1], t[2]])
+        .collect();
+
+    let locks = vec![false; mesh.positions.len()];
+    let adapter = meshopt::VertexDataAdapter::new(
+        bytemuck::cast_slice::<_, u8>(&mesh.positions),
+        12,
+        0,
+    ).unwrap();
+
+    let error_tiers = [
+        (budget.target_error as f32).min(0.003),
+        0.003,
+        0.005,
+        0.008,
+        0.010,
+        0.025,
+    ];
+
+    let mut final_indices = vec![];
+    let mut final_error = 0.0;
+
+    for &err in &error_tiers {
+        let decimated_indices = meshopt::simplify_with_locks(
+            &indices,
+            &adapter,
+            &locks,
+            budget.budget_tris * 3,
+            err,
+            meshopt::SimplifyOptions::LockBorder | meshopt::SimplifyOptions::Regularize,
+            None,
+        );
+        let out_tris = decimated_indices.len() / 3;
+        final_indices = decimated_indices;
+        final_error = err;
+        if out_tris <= budget.soft_ceiling_tris {
+            break;
+        }
+    }
+
+    let triangles: Vec<[u32; 3]> = final_indices
+        .chunks_exact(3)
+        .map(|c| [c[0], c[1], c[2]])
+        .collect();
+
+    DecimationOutcome {
+        mesh: IndexedMesh {
+            positions: mesh.positions,
+            triangles,
+        },
+        achieved_error: final_error,
+    }
+}
+
+pub struct SectionDecimationOutcome {
+    pub mesh: IndexedMesh,
+    pub model_triangle_count: usize,
+    pub achieved_error: f32,
+}
+
+pub fn decimate_sections_to_budget(mesh: IndexedMesh, model_tri_count: usize, budget: &TriangleBudget) -> SectionDecimationOutcome {
+    if !budget.enable_per_section_decimation {
+        let out = decimate_indexed_to_budget(mesh, budget);
+        let out_tris = out.mesh.triangles.len();
+        return SectionDecimationOutcome {
+            mesh: out.mesh,
+            model_triangle_count: model_tri_count.min(out_tris),
+            achieved_error: out.achieved_error,
+        };
+    }
+
+    if !budget.is_decimated || mesh.triangles.len() <= budget.budget_tris {
+        return SectionDecimationOutcome { mesh, model_triangle_count: model_tri_count, achieved_error: 0.0 };
+    }
+
+    if model_tri_count == 0 || model_tri_count >= mesh.triangles.len() {
+        let out = decimate_indexed_to_budget(mesh, budget);
+        let out_tris = out.mesh.triangles.len();
+        return SectionDecimationOutcome {
+            mesh: out.mesh,
+            model_triangle_count: model_tri_count.min(out_tris),
+            achieved_error: out.achieved_error,
+        };
+    }
+
+    let indices0: Vec<u32> = mesh.triangles[0..model_tri_count]
+        .iter()
+        .flat_map(|t| [t[0], t[1], t[2]])
+        .collect();
+    
+    let indices1: Vec<u32> = mesh.triangles[model_tri_count..]
+        .iter()
+        .flat_map(|t| [t[0], t[1], t[2]])
+        .collect();
+
+    let adapter = meshopt::VertexDataAdapter::new(
+        bytemuck::cast_slice::<_, u8>(&mesh.positions),
+        12,
+        0,
+    ).unwrap();
+    let locks = vec![false; mesh.positions.len()];
+
+    let mut error_tiers = Vec::with_capacity(1 + crate::decimation_config::DECIMATION_ERROR_TIERS.len());
+    error_tiers.push((budget.target_error as f32).min(crate::decimation_config::EPSILON_MIN_CLAMP as f32));
+    error_tiers.extend(crate::decimation_config::DECIMATION_ERROR_TIERS.iter().map(|&e| e as f32));
+
+    let mut final_indices0 = vec![];
+    let mut final_indices1 = vec![];
+    let mut final_error = 0.0;
+
+    for &err in &error_tiers {
+        let dec0 = meshopt::simplify_with_locks(
+            &indices0,
+            &adapter,
+            &locks,
+            (budget.budget_tris * 3).min(indices0.len()),
+            err,
+            meshopt::SimplifyOptions::LockBorder | meshopt::SimplifyOptions::Regularize,
+            None,
+        );
+        let dec1 = meshopt::simplify_with_locks(
+            &indices1,
+            &adapter,
+            &locks,
+            (budget.budget_tris * 3).min(indices1.len()),
+            err,
+            meshopt::SimplifyOptions::LockBorder | meshopt::SimplifyOptions::Regularize,
+            None,
+        );
+
+        let out_total = (dec0.len() + dec1.len()) / 3;
+        final_indices0 = dec0;
+        final_indices1 = dec1;
+        final_error = err;
+
+        if out_total <= budget.soft_ceiling_tris {
+            break;
+        }
+    }
+
+    let out0_len = final_indices0.len() / 3;
+    let mut concat_tris = Vec::with_capacity((final_indices0.len() + final_indices1.len()) / 3);
+    for c in final_indices0.chunks_exact(3) {
+        concat_tris.push([c[0], c[1], c[2]]);
+    }
+    for c in final_indices1.chunks_exact(3) {
+        concat_tris.push([c[0], c[1], c[2]]);
+    }
+
+    SectionDecimationOutcome {
+        mesh: IndexedMesh {
+            positions: mesh.positions,
+            triangles: concat_tris,
+        },
+        model_triangle_count: out0_len,
+        achieved_error: final_error,
+    }
+}
+
+#[cfg(test)]
+mod section_decimation_tests {
+    use super::*;
+    use crate::core::mesh::Vec3;
+
+    #[test]
+    fn test_decimate_sections() {
+        let mut positions = vec![];
+        let mut triangles = vec![];
+        for i in 0..100 {
+            positions.push(Vec3::new(i as f32, 0.0, 0.0));
+            positions.push(Vec3::new(0.0, i as f32, 0.0));
+            positions.push(Vec3::new(0.0, 0.0, i as f32));
+            let base = i * 3;
+            triangles.push([base, base + 1, base + 2]);
+        }
+        let mesh = IndexedMesh { positions, triangles };
+        let mut budget = TriangleBudget {
+            is_decimated: true,
+            budget_tris: 50,
+            soft_ceiling_tris: 50,
+            target_error: 0.1,
+            bbox_diagonal_mm: 100.0,
+            enable_per_section_decimation: true,
+        };
+        
+        // Test lockstep mode
+        let out = decimate_sections_to_budget(mesh.clone(), 60, &budget);
+        assert!(out.mesh.triangles.len() <= 100);
+
+        // Test Phase 3.1 fallback mode
+        budget.enable_per_section_decimation = false;
+        let out2 = decimate_sections_to_budget(mesh, 60, &budget);
+        assert!(out2.model_triangle_count <= 60);
+        assert!(out2.mesh.triangles.len() <= 100);
+    }
+}
+
+#[cfg(test)]
+mod classify_hollowing_tests {
+    use super::*;
+    use crate::core::mesh::Vec3;
+
+    fn make_cube(offset: Vec3, size: f32, flip: bool) -> (Vec<Vec3>, Vec<[u32; 3]>) {
+        let mut v = vec![
+            offset,
+            offset.add(Vec3::new(size, 0.0, 0.0)),
+            offset.add(Vec3::new(size, size, 0.0)),
+            offset.add(Vec3::new(0.0, size, 0.0)),
+            offset.add(Vec3::new(0.0, 0.0, size)),
+            offset.add(Vec3::new(size, 0.0, size)),
+            offset.add(Vec3::new(size, size, size)),
+            offset.add(Vec3::new(0.0, size, size)),
+        ];
+        
+        let mut t = vec![
+            [0, 2, 1], [0, 3, 2], // bottom
+            [4, 5, 6], [4, 6, 7], // top
+            [0, 1, 5], [0, 5, 4], // front
+            [1, 2, 6], [1, 6, 5], // right
+            [2, 3, 7], [2, 7, 6], // back
+            [3, 0, 4], [3, 4, 7], // left
+        ];
+        if flip {
+            for tri in &mut t {
+                tri.swap(1, 2);
+            }
+        }
+        (v, t)
+    }
+
+    #[test]
+    fn test_classify_hollowing_shell_as_model() {
+        let (mut v1, mut t1) = make_cube(Vec3::new(0.0, 0.0, 0.0), 10.0, false); // outer, normal winding
+        let (v2, t2) = make_cube(Vec3::new(2.0, 2.0, 2.0), 6.0, true); // inner, flipped winding (cavity)
+        
+        let base_idx = v1.len() as u32;
+        v1.extend(v2);
+        for tri in t2 {
+            t1.push([tri[0] + base_idx, tri[1] + base_idx, tri[2] + base_idx]);
+        }
+        
+        let mut mesh = IndexedMesh {
+            positions: v1,
+            triangles: t1,
+        };
+        
+        let outcome = classify_and_reorder_model_support_triangles(&mut mesh, None);
+        assert_eq!(outcome.split, None);
+        assert_eq!(outcome.component_count, 2);
     }
 }

@@ -1552,15 +1552,29 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
   for (const model of visibleModels) {
     let positions: Float32Array;
 
-    // Prefer the full-res original (ORIG chunk) when present, else the decimated
-    // MESH bytes — either way the codec already decoded the geometry to STL.
-    const embedded = LOADED_ORIG_BYTES.get(model.id) ?? LOADED_MESH_BYTES.get(model.id);
+    // Mesh modifiers (hollowing / hole punches) are reconstructed by the codec
+    // from the MODL JSON + the HSRC/CAVT/PSRC snapshot chunks. Only a modifier
+    // that is *baked into geometry* affects what we slice — its result already
+    // lives in the MESH chunk, so we slice MESH as-is and never re-apply the
+    // snapshot chunks. Unbaked hollowing / hole punches are ignored (the GUI
+    // bakes those via desktop IPC before slicing; headless we take the stored
+    // geometry as given).
+    const mm = model.meshModifiers;
+    const hollow = mm?.hollowing;
+    const modifiersBaked = Boolean((hollow?.enabled && hollow.bakedIntoGeometry) || mm?.holePunchesBakedIntoGeometry);
+
+    // Geometry source: prefer the full-res ORIG chunk, EXCEPT when a modifier is
+    // baked in — ORIG is the pristine pre-modifier original and would slice the
+    // solid / un-punched shape, so a baked model reads the modified MESH chunk.
+    const meshBytes = LOADED_MESH_BYTES.get(model.id);
+    const origBytes = LOADED_ORIG_BYTES.get(model.id);
+    const embedded = modifiersBaked ? (meshBytes ?? origBytes) : (origBytes ?? meshBytes);
     if (embedded) {
       // `embedded-chunk`/`embedded-file`: the codec already decoded the geometry
       // to STL bytes — no filesystem lookup needed.
       positions = parseBinaryStl(Buffer.from(embedded.buffer, embedded.byteOffset, embedded.byteLength));
-      const src = LOADED_ORIG_BYTES.has(model.id) ? 'orig' : model.mesh.mode;
-      console.error(`  loading ${model.name}: <embedded ${src}>`);
+      const src = embedded === origBytes ? 'orig' : 'mesh';
+      console.error(`  loading ${model.name}: <embedded ${src}${modifiersBaked ? ', baked-modifiers' : ''}>`);
     } else if (model.mesh.mode === 'external-file' || model.mesh.fileName) {
       const meshFileName = model.mesh.fileName ?? model.name + '.stl';
       // Try mesh-dir, then absolute path, then cwd

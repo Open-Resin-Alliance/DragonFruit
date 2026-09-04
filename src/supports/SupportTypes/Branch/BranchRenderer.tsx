@@ -14,8 +14,10 @@ import { useHighlight } from '../../interaction/useHighlight';
 import { usePartDragUpdate } from '../../interaction/partDragPreview';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { getSnapshot, updateBranch } from '../../state';
+import { getSettings } from '../../Settings';
+import { decodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
-import { buildBranchData } from './branchBuilder';
+import { buildBranchData, remapBranchGeometryIds } from './branchBuilder';
 
 interface BranchRendererProps {
   branch: Branch;
@@ -65,6 +67,15 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
   const [, setDragTick] = React.useState(0);
 
+  React.useEffect(() => {
+    return () => {
+      dragSessionRef.current?.stop();
+      dragSessionRef.current = null;
+      liveDragBranchRef.current = null;
+      beforeHistoryRef.current = null;
+    };
+  }, []);
+
   // Use universal highlight hook (matches TrunkRenderer pattern)
   const { pickRef, visuals, isPickingHovered } = useHighlight({
     id: branch.id,
@@ -101,13 +112,23 @@ export const BranchRenderer = React.memo(function BranchRenderer({
       onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
         const latest = getSnapshot().branches[branch.id];
         if (!latest?.contactCone) return;
-        const rebuilt = buildBranchData({
+        // Size the rebuild from the branch's own settings and its existing
+        // geometry, not from whatever the global preset says now: moving a tip
+        // must not resize the support. The stored cone length is the solved one,
+        // so the nominal comes from the branch's own band instead.
+        const ownSettings = (latest.settingsCodeHex
+          ? decodeSupportSettingsHex(latest.settingsCodeHex, getSettings())
+          : null) ?? getSettings();
+        const rebuilt = remapBranchGeometryIds(buildBranchData({
           tipPos: point,
           tipNormal: surfaceNormal,
           modelId: branch.modelId,
           parentKnot,
           mesh,
-        }).branch;
+          settings: ownSettings,
+          shaftDiameterMm: latest.segments[0]?.diameter,
+          tipProfile: { ...latest.contactCone.profile, lengthMm: ownSettings.tip.lengthMm },
+        }).branch, latest);
         liveDragBranchRef.current = {
           ...rebuilt,
           contactCone: rebuilt.contactCone

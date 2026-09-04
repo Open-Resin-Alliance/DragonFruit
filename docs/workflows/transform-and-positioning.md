@@ -27,7 +27,13 @@ Quick actions:
 ## 3) Rotate
 
 - Edit X/Y/Z angles directly.
-- Use **Angle-Snap** toggle for snapped rotation behavior.
+- Hold a ring's handle and drag to rotate. A protractor dial appears, fixed at
+  the angle you grabbed, and the readout shows the sweep from that grab — so a
+  model already at 47.3° that you drag to the +10° mark ends at 57.3°.
+- The dial magnetises the moving radius onto its marks: 45° radii in the inner
+  band, 10° long marks and 5° short marks along the ring. The pull only applies
+  while the pointer is in the band where those marks are drawn — between the
+  bands, and outside the ring, rotation is free.
 - Use **Reset Rotation** when needed.
 
 ## 4) Scale

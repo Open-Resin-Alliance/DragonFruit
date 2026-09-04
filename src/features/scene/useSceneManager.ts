@@ -48,9 +48,9 @@ export function useSceneManager() {
       const data = await res.json();
       updateRaftSettings(getImportDefaultsRaftPatch(getSavedImportDefaultsSettings()));
       loadFromImportFormat(data);
-      console.log('Loaded LYS data:', data);
+      console.log('Loaded support JSON:', data);
     } catch (e) {
-      console.error('Failed to load LYS data:', e);
+      console.error('Failed to load support JSON:', e);
     }
   };
 

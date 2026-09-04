@@ -129,6 +129,43 @@ function resolveBuildDimensionMm(
 }
 
 /**
+ * The Athena printer entries exactly as `printers/printers.json` carries them.
+ * Fields only some entries declare are optional, and build width/depth are
+ * explicitly nullable — the JSON leaves them null so the pixel-size derivation
+ * runs instead.
+ */
+interface RawAthenaPreset {
+  presetId: string;
+  profileVersion: number;
+  manufacturer: string;
+  family?: string;
+  name: string;
+  libraryDisplayName?: string;
+  platformBadge?: { text: string; color: string };
+  imageAssetPath?: string;
+  pixelSize?: { x: number; y: number };
+  bitDepth?: { bits: number; description: string };
+  display?: {
+    resolutionX?: number;
+    resolutionY?: number;
+    outputFormat?: string;
+    webcamRotationDeg?: number;
+    webcamOrientation?: number;
+    mirrorX?: boolean;
+    mirrorY?: boolean;
+  };
+  antiAliasing?: boolean;
+  buildVolumeMm?: { width?: number | null; depth?: number | null; height?: number };
+  safetyMarginMm?: { front?: number; back?: number; left?: number; right?: number } | null;
+  hasCamera?: boolean;
+  networkSupport?: string;
+  networkFilter?: string;
+  modelVariants?: unknown[];
+  modelVariantDetectPath?: string;
+  isModelVariant?: boolean;
+}
+
+/**
  * Built-in Athena plugin manifest.
  *
  * Note:
@@ -144,64 +181,81 @@ export const ATHENA_PLUGIN_MANIFEST = {
   name: 'Athena Plugin',
   version: '1.1.0',
   description: 'Athena/NanoDLP integration and Athena profile pack.',
-  printerPresets: withResolvedImagePaths('plugins/athena/printers', athenaPrinters).map((preset) => {
-    const resolutionX = Number((preset as any).display?.resolutionX) || 2560;
-    const resolutionY = Number((preset as any).display?.resolutionY) || 1620;
-    const explicitBuildWidth = sanitizePositiveNumber((preset as any).buildVolumeMm?.width);
-    const explicitBuildDepth = sanitizePositiveNumber((preset as any).buildVolumeMm?.depth);
-    const pixelSizeX = sanitizePositiveNumber((preset as any).pixelSize?.x);
-    const pixelSizeY = sanitizePositiveNumber((preset as any).pixelSize?.y);
+  printerPresets: withResolvedImagePaths('plugins/athena/printers', athenaPrinters as RawAthenaPreset[]).map((preset) => {
+    const resolutionX = Number(preset.display?.resolutionX) || 2560;
+    const resolutionY = Number(preset.display?.resolutionY) || 1620;
+    const explicitBuildWidth = sanitizePositiveNumber(preset.buildVolumeMm?.width);
+    const explicitBuildDepth = sanitizePositiveNumber(preset.buildVolumeMm?.depth);
+    const pixelSizeX = sanitizePositiveNumber(preset.pixelSize?.x);
+    const pixelSizeY = sanitizePositiveNumber(preset.pixelSize?.y);
     const buildDimensionMode = explicitBuildWidth == null
       && explicitBuildDepth == null
       && pixelSizeX != null
       && pixelSizeY != null
         ? 'auto'
         : 'manual';
-    const outputFormat = ((preset as any).display?.outputFormat === '.nanodlp'
-      || (preset as any).display?.outputFormat === '.goo'
-      || (preset as any).display?.outputFormat === '.lumen')
-      ? (preset as any).display.outputFormat
+    const outputFormat = (preset.display?.outputFormat === '.nanodlp'
+      || preset.display?.outputFormat === '.goo'
+      || preset.display?.outputFormat === '.lumen')
+      ? preset.display?.outputFormat
       : '.nanodlp';
-    const mirrorX = typeof (preset as any).display?.mirrorX === 'boolean'
-      ? (preset as any).display.mirrorX
+    const mirrorX = typeof preset.display?.mirrorX === 'boolean'
+      ? preset.display?.mirrorX
       : undefined;
-    const mirrorY = typeof (preset as any).display?.mirrorY === 'boolean'
-      ? (preset as any).display.mirrorY
+    const mirrorY = typeof preset.display?.mirrorY === 'boolean'
+      ? preset.display?.mirrorY
       : undefined;
     const webcamRotationDeg = normalizeWebcamRotationDeg(
-      (preset as any).display?.webcamRotationDeg ?? (preset as any).display?.webcamOrientation,
+      preset.display?.webcamRotationDeg ?? preset.display?.webcamOrientation,
       DEFAULT_WEBCAM_ROTATION_DEG,
     );
 
     return {
-      presetId: String((preset as any).presetId),
-      profileVersion: sanitizeProfileVersion((preset as any).profileVersion),
-      manufacturer: String((preset as any).manufacturer),
-      name: String((preset as any).name),
-      family: typeof (preset as any).family === 'string' && (preset as any).family.trim().length > 0
-        ? (preset as any).family.trim()
+      presetId: String(preset.presetId),
+      profileVersion: sanitizeProfileVersion(preset.profileVersion),
+      manufacturer: String(preset.manufacturer),
+      name: String(preset.name),
+      family: typeof preset.family === 'string' && preset.family.trim().length > 0
+        ? preset.family.trim()
         : undefined,
-      imageAssetPath: (preset as any).imageAssetPath,
-      antiAliasing: typeof (preset as any).antiAliasing === 'boolean' ? (preset as any).antiAliasing : undefined,
-      hasCamera: typeof (preset as any).hasCamera === 'boolean' ? (preset as any).hasCamera : undefined,
-      platformBadge: (preset as any).platformBadge,
-      pixelSize: (preset as any).pixelSize,
-      bitDepth: (preset as any).bitDepth,
+      imageAssetPath: preset.imageAssetPath,
+      antiAliasing: typeof preset.antiAliasing === 'boolean' ? preset.antiAliasing : undefined,
+      hasCamera: typeof preset.hasCamera === 'boolean' ? preset.hasCamera : undefined,
+      platformBadge: preset.platformBadge,
+      pixelSize: preset.pixelSize,
+      bitDepth: preset.bitDepth,
+      modelVariants: Array.isArray(preset.modelVariants)
+        ? preset.modelVariants
+          .slice(0, 32)
+          .map((id) => String(id).trim())
+          .filter((id) => id.length > 0)
+        : undefined,
+      modelVariantDetectPath: typeof preset.modelVariantDetectPath === 'string'
+        && preset.modelVariantDetectPath.trim().length > 0
+        ? preset.modelVariantDetectPath.trim()
+        : undefined,
+      libraryDisplayName: typeof preset.libraryDisplayName === 'string'
+        && preset.libraryDisplayName.trim().length > 0
+        ? preset.libraryDisplayName.trim()
+        : undefined,
+      isModelVariant: typeof preset.isModelVariant === 'boolean'
+        ? preset.isModelVariant
+        : undefined,
       buildDimensionMode,
       buildVolumeMm: {
         width: resolveBuildDimensionMm(
-          (preset as any).buildVolumeMm?.width,
+          preset.buildVolumeMm?.width,
           resolutionX,
-          (preset as any).pixelSize?.x,
+          preset.pixelSize?.x,
           143,
         ),
         depth: resolveBuildDimensionMm(
-          (preset as any).buildVolumeMm?.depth,
+          preset.buildVolumeMm?.depth,
           resolutionY,
-          (preset as any).pixelSize?.y,
+          preset.pixelSize?.y,
           89,
         ),
-        height: Number((preset as any).buildVolumeMm?.height) || 175,
+        height: Number(preset.buildVolumeMm?.height) || 175,
       },
       display: {
         resolutionX,
@@ -211,16 +265,16 @@ export const ATHENA_PLUGIN_MANIFEST = {
         mirrorX,
         mirrorY,
       },
-      networkSupport: (preset as any).networkSupport === 'nanodlp' ? 'nanodlp' as const : undefined,
-      networkFilter: typeof (preset as any).networkFilter === 'string' && (preset as any).networkFilter.trim().length > 0
-        ? (preset as any).networkFilter.trim()
+      networkSupport: preset.networkSupport === 'nanodlp' ? 'nanodlp' as const : undefined,
+      networkFilter: typeof preset.networkFilter === 'string' && preset.networkFilter.trim().length > 0
+        ? preset.networkFilter.trim()
         : undefined,
-      safetyMarginMm: (preset as any).safetyMarginMm != null
+      safetyMarginMm: preset.safetyMarginMm != null
         ? {
-          front: Number((preset as any).safetyMarginMm.front) || 0,
-          back: Number((preset as any).safetyMarginMm.back) || 0,
-          left: Number((preset as any).safetyMarginMm.left) || 0,
-          right: Number((preset as any).safetyMarginMm.right) || 0,
+          front: Number(preset.safetyMarginMm.front) || 0,
+          back: Number(preset.safetyMarginMm.back) || 0,
+          left: Number(preset.safetyMarginMm.left) || 0,
+          right: Number(preset.safetyMarginMm.right) || 0,
         }
         : undefined,
     };

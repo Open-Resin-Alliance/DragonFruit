@@ -30,6 +30,7 @@ export const SUPPORT_REMOVE_KICKSTAND = 'support:remove-kickstand' as const;
 export const SUPPORT_REPLACE_TRUNK = 'support:replace-trunk' as const;
 export const SUPPORT_AUTO_BRACE_REPLACE = 'support:auto-brace-replace' as const;
 export const SUPPORT_EDIT_REPLACE = 'support:edit-replace' as const;
+export const SUPPORT_AUTO_PLACE = 'support:auto-place' as const;
 
 /** Every support history action type, derived from the payload map below. */
 export type SupportHistoryActionType = keyof SupportHistoryPayloadMap;
@@ -157,4 +158,5 @@ export type SupportHistoryPayloadMap = {
   [SUPPORT_REPLACE_TRUNK]: SupportReplaceTrunkPayload;
   [SUPPORT_EDIT_REPLACE]: SupportReplaceStatePayload;
   [SUPPORT_AUTO_BRACE_REPLACE]: SupportReplaceStatePayload;
+  [SUPPORT_AUTO_PLACE]: SupportReplaceStatePayload;
 };

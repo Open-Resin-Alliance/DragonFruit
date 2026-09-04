@@ -32,7 +32,7 @@ import { calculateSmoothedNormal, findClosestMeshToPoint } from '../../Placement
 import { buildTwig } from '../Twig/twigBuilder';
 import { buildStick } from '../Stick/stickBuilder';
 import type { SupportData } from '../../rendering/SupportBuilder';
-import { generateUuid } from '@/utils/uuid';
+import { v4 as uuidv4 } from 'uuid';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
@@ -785,7 +785,7 @@ export function BranchPlacementController() {
             const hostDiameterMm = snapTarget.hostDiameterMm ?? fallbackHostDiameterMm;
             if (snapTarget.t === undefined) return;
 
-            const knotId = generateUuid();
+            const knotId = uuidv4();
             const segmentId = snapTarget.targetId;
 
             const parentKnot: Knot = {

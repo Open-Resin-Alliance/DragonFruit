@@ -1,0 +1,62 @@
+name: Build check
+
+# Fast frontend build gate, complementary to "PR macOS build check".
+#
+# Two gaps this one covers:
+#
+#  1. pr-check-build.yml checks out github.event.pull_request.head.sha, i.e. the
+#     PR branch on its own. A branch can compile in isolation and still break
+#     once merged, when one side deletes a helper the other side is still
+#     calling — git reports no conflict and the macOS check stays green. Here we
+#     let actions/checkout do its default thing on pull_request, which is to
+#     check out the merge commit, so the build sees the post-merge tree.
+#
+#  2. Nothing compiled on push to dev/main; only unit tests ran. A break landing
+#     through a merge commit therefore stayed invisible until release time.
+#
+# `next build` is the right command because it runs both halves that failed:
+# module resolution for the client bundle, and the full TypeScript pass.
+# It needs no Rust toolchain, so this stays a couple of minutes on ubuntu.
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  push:
+    branches:
+      - dev
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-check-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Next.js build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        # No `ref:` on purpose — see note 1 above.
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22.23.2"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm run build` triggers prebuild, which generates the plugin registry
+      # and the builtin simple plugins; the TypeScript pass fails without them.
+      - name: Build
+        run: npm run build

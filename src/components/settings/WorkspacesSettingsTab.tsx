@@ -48,7 +48,7 @@ export function WorkspacesSettingsTab({
             <Layers3 className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
               3D View
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
@@ -60,7 +60,7 @@ export function WorkspacesSettingsTab({
         <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
           {isBuildVolumeManagedByPrinter ? (
             <div className="rounded-md border px-2 py-1.5" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)', background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 94%)' }}>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 Bounding box dimensions are handled by the selected printer profile (<span style={{ color: 'var(--text-strong)' }}>{activePrinterProfile?.name}</span>).
               </div>
             </div>
@@ -71,7 +71,7 @@ export function WorkspacesSettingsTab({
                   <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                     Enable build volume bounds
                   </div>
-                  <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                     Shows a faint printer volume outline and enables out-of-bounds checks.
                   </div>
                 </div>
@@ -98,7 +98,7 @@ export function WorkspacesSettingsTab({
               {view3dSettings.enabled && (
                 <>
                   <div className="mt-2 grid grid-cols-2 gap-2">
-            <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+            <label className="text-xs" style={{ color: 'var(--text-muted)' }}>
               Build Width (mm)
               <NumberInput
                 min={10}
@@ -110,7 +110,7 @@ export function WorkspacesSettingsTab({
               />
             </label>
 
-            <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+            <label className="text-xs" style={{ color: 'var(--text-muted)' }}>
               Build Depth (mm)
               <NumberInput
                 min={10}
@@ -122,7 +122,7 @@ export function WorkspacesSettingsTab({
               />
             </label>
 
-            <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+            <label className="text-xs" style={{ color: 'var(--text-muted)' }}>
               Max Z Height (mm)
               <NumberInput
                 min={10}
@@ -135,7 +135,7 @@ export function WorkspacesSettingsTab({
             </label>
 
             <div className="rounded-md border px-2 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Build Volume</div>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Build Volume</div>
               <div className="mt-0.5 text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 {Math.round(view3dSettings.widthMm)} × {Math.round(view3dSettings.depthMm)} × {Math.round(view3dSettings.maxZMm)} mm
               </div>
@@ -145,7 +145,7 @@ export function WorkspacesSettingsTab({
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Build volume origin
               </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 Choose where XYZ 0,0,0 is located for the printer volume.
               </div>
               <div className="mt-2 flex items-center gap-1.5">
@@ -188,7 +188,7 @@ export function WorkspacesSettingsTab({
               </div>
             </div>
 
-            <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+            <label className="text-xs" style={{ color: 'var(--text-muted)' }}>
               Screen Width (px)
               <NumberInput
                 min={320}
@@ -200,7 +200,7 @@ export function WorkspacesSettingsTab({
               />
             </label>
 
-            <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+            <label className="text-xs" style={{ color: 'var(--text-muted)' }}>
               Screen Height (px)
               <NumberInput
                 min={200}
@@ -222,7 +222,7 @@ export function WorkspacesSettingsTab({
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Show out-of-bounds warnings
               </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 Warn when any visible model extends beyond the configured build volume.
               </div>
             </div>
@@ -251,7 +251,7 @@ export function WorkspacesSettingsTab({
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Show model bounding boxes
               </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 Debug overlay: draws world-space bounds for each visible model (red if out-of-bounds).
               </div>
             </div>
@@ -280,7 +280,7 @@ export function WorkspacesSettingsTab({
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Show slice SAT bounding mesh
               </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 SAT debug overlay for nesting and diagnostics.
               </div>
             </div>
@@ -310,7 +310,7 @@ export function WorkspacesSettingsTab({
                 <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                   SAT debug scope
                 </div>
-                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                   Show SAT mesh on the active model only, or on all visible models.
                 </div>
               </div>
@@ -340,7 +340,7 @@ export function WorkspacesSettingsTab({
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 SAT mode
               </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 Choose accurate convex-hull SAT for nesting, or experimental slice-derived SAT for diagnostics.
               </div>
 
@@ -389,7 +389,7 @@ export function WorkspacesSettingsTab({
                     <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                       Experimental slice display
                     </div>
-                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                       Pick how the experimental slice-derived SAT is visualized.
                     </div>
                   </div>

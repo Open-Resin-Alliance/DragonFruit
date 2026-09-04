@@ -91,7 +91,7 @@ if (typeof EventTarget !== 'undefined') {
                 console.error(
                     `Forbidden keydown/keyup event listener registered on ${
                         (typeof window !== 'undefined' && this === window) ? 'window' : 'document'
-                    } from "${callerFrame}". Please use HotkeyRegistryManager or hotkeyStore. See /DragonFruit/docs/hotkeys/README.md`
+                    } from "${callerFrame}". Please use HotkeyRegistryManager or hotkeyStore. See docs/reference/hotkeys.md`
                 );
             }
         }

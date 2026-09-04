@@ -212,7 +212,7 @@ export function updateCurvesAtJoint(trunk: Trunk, jointId: string, root: Roots, 
         outgoingSeg = trunk.segments[incomingIdx + 1];
     }
 
-    let newSegments = [...trunk.segments];
+    const newSegments = [...trunk.segments];
 
     // Helper to get position of a joint or end
     const getPos = (seg: Segment, end: 'top' | 'bottom'): Vec3 | null => {
@@ -267,7 +267,7 @@ export function updateCurvesAtJoint(trunk: Trunk, jointId: string, root: Roots, 
         // Only update if it's already bezier OR we are forcing it
         if (incomingSeg.type === 'bezier' || forceCurve) {
             const idx = newSegments.findIndex(s => s.id === incomingSeg.id);
-            let seg = ensureBezierSegment(incomingSeg);
+            const seg = ensureBezierSegment(incomingSeg);
             
             seg.endTangent = tangentVec;
             
@@ -300,7 +300,7 @@ export function updateCurvesAtJoint(trunk: Trunk, jointId: string, root: Roots, 
         // Only update if it's already bezier OR we are forcing it
         if (outgoingSeg.type === 'bezier' || forceCurve) {
             const idx = newSegments.findIndex(s => s.id === outgoingSeg.id);
-            let seg = ensureBezierSegment(outgoingSeg);
+            const seg = ensureBezierSegment(outgoingSeg);
             
             seg.startTangent = tangentVec;
             

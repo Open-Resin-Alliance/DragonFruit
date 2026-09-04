@@ -31,7 +31,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.1"
+          node-version: "22.23.2"
           cache: npm
 
       - name: Install Rust stable
@@ -88,8 +88,17 @@ jobs:
           echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
           echo "commit_hash=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Export Apple notarization credentials for nightly builds
-        if: contains(github.event.pull_request.labels.*.name, 'nightly-build')
+      - name: Export Apple notarization credentials for preview builds
+        # Also gated on the certificate, not just the label. Without a Developer
+        # ID the build falls back to ad-hoc signing, which Apple will not
+        # notarize at all — and exporting an empty APPLE_ID is worse than
+        # exporting none: tauri-action reads the variable being set as "notarize
+        # this", tries to authenticate with nothing, and fails the build with an
+        # HTTP 401. Same reason as the TAURI_SIGNING_PRIVATE_KEY guard below.
+        if: >-
+          steps.apple_cert.outputs.available == 'true' &&
+          (contains(github.event.pull_request.labels.*.name, 'preview-build') ||
+           contains(github.event.pull_request.labels.*.name, 'nightly-build'))
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}

@@ -4,7 +4,9 @@ mod astar;
 mod mesh_minima;
 mod mesh_repair;
 mod network;
+mod overhang;
 mod sdf;
+mod spacemouse;
 mod updater_channel;
 
 fn default_minimum_aa_alpha_percent() -> f32 {
@@ -55,7 +57,9 @@ fn default_dither_device_gamma() -> f64 {
     3.0
 }
 
+mod experiments;
 mod plugin_registry;
+mod webview_watchdog;
 mod window_state;
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -66,6 +70,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::{InvokeBody, Response};
 use tauri::Emitter;
 use tauri::Manager;
+use base64::Engine as _;
 
 // Runtime type aliases — the feat/cef branch requires an explicit runtime
 // generic. These select Cef or Wry based on the active cargo feature.
@@ -91,6 +96,242 @@ fn temp_artifact_path(extension: &str) -> std::path::PathBuf {
     let clean_ext = extension.trim_start_matches('.');
     path.push(format!("dragonfruit-slice-{stamp}.{clean_ext}"));
     path
+}
+
+/// Marker that identifies a scene-file commit temp. Must stay byte-identical:
+/// `is_scene_commit_temp_path` gates the discard command on it, so an arbitrary
+/// caller-supplied path can never be deleted through that seam.
+const SCENE_COMMIT_TEMP_MARKER: &str = ".tmp-";
+
+/// Allocates the staging file for an atomic scene-file commit, as a **sibling**
+/// of the target: `<target>.tmp-<pid>-<seq>`.
+///
+/// Sibling by construction is what makes the commit atomic — `fs::rename` is
+/// only guaranteed atomic within a volume, and a temp-dir staging file can
+/// easily be on a different one (a project on D:, `%TEMP%` on C:).
+///
+/// pid + a process-wide counter, the same idiom as
+/// `allocate_mesh_stage_file_path` / `temp_artifact_path` above: nanos alone are
+/// NOT unique because Windows `SystemTime` granularity lets two concurrent
+/// allocations land in the same tick, and the consumer opens with
+/// `truncate(true)` — two in-flight saves sharing a name would let one overwrite
+/// the other's staging bytes and then rename the wrong content over the user's
+/// project. Unlike those two helpers the nanos stamp is deliberately **omitted**
+/// here: these temps live next to the user's project rather than in `%TEMP%`,
+/// and a bounded per-process name space means a hard crash leaves at most one
+/// residue file per concurrent write (reused and truncated by a later run)
+/// instead of an unbounded pile of dead files in the user's folder.
+fn sibling_commit_temp_path(target: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    static COMMIT_TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    let file_name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            format!(
+                "Cannot stage an atomic commit for '{}': no UTF-8 file name",
+                target.display()
+            )
+        })?;
+
+    let parent = target.parent().unwrap_or_else(|| std::path::Path::new("."));
+    if !parent.as_os_str().is_empty() {
+        std::fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "Failed creating destination directory '{}': {err}",
+                parent.display()
+            )
+        })?;
+    }
+
+    Ok(parent.join(format!(
+        "{file_name}{SCENE_COMMIT_TEMP_MARKER}{}-{}",
+        std::process::id(),
+        COMMIT_TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    )))
+}
+
+fn is_scene_commit_temp_path(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| {
+            let Some((_, suffix)) = name.rsplit_once(SCENE_COMMIT_TEMP_MARKER) else {
+                return false;
+            };
+            let mut parts = suffix.split('-');
+            let pid_ok = parts
+                .next()
+                .map(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+                .unwrap_or(false);
+            let seq_ok = parts
+                .next()
+                .map(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+                .unwrap_or(false);
+            pid_ok && seq_ok && parts.next().is_none()
+        })
+        .unwrap_or(false)
+}
+
+const SCENE_COMMIT_RENAME_BACKOFF_MS: [u64; 3] = [50, 150, 300];
+
+/// Commits a fully-written staging file over `target` atomically: fsync the
+/// temp, then rename it into place. Either the reader sees the previous good
+/// file or it sees the new one — never a truncated prefix of either.
+///
+/// The bounded retry is a Windows concession: a rename can transiently fail with
+/// `ERROR_ACCESS_DENIED` / `ERROR_SHARING_VIOLATION` while an antivirus scanner
+/// or an Explorer thumbnailer holds the destination open.
+///
+/// On terminal failure the temp is removed and the **previous good target is
+/// left untouched** — strictly better than the pre-Ph0.1 writer, which had
+/// already destroyed it by the time anything could fail.
+fn commit_scene_file_atomic(
+    temp: &std::path::Path,
+    target: &std::path::Path,
+) -> Result<(), String> {
+    if !temp.exists() {
+        return Err(format!(
+            "Atomic commit staging file is missing: {}",
+            temp.display()
+        ));
+    }
+
+    // fsync the payload BEFORE the rename, or a power loss can leave the
+    // rename durable while the bytes it points at are not.
+    //
+    // Opened for write rather than read-only (the obvious choice on unix):
+    // Windows `FlushFileBuffers` requires write access to the handle, so a
+    // read-only handle would fail with ERROR_ACCESS_DENIED on the platform this
+    // ships to first.
+    let sync_result = std::fs::OpenOptions::new()
+        .write(true)
+        .open(temp)
+        .and_then(|file| file.sync_all());
+    if let Err(err) = sync_result {
+        let _ = std::fs::remove_file(temp);
+        return Err(format!(
+            "Failed flushing '{}' to disk before commit: {err}",
+            temp.display()
+        ));
+    }
+
+    let mut last_error: Option<String> = None;
+    for (attempt, backoff_ms) in SCENE_COMMIT_RENAME_BACKOFF_MS.iter().enumerate() {
+        match std::fs::rename(temp, target) {
+            Ok(()) => {
+                // Best-effort directory fsync so the rename itself is durable.
+                // No portable Windows equivalent (a directory cannot be opened
+                // as a file), where NTFS metadata journalling covers it.
+                #[cfg(unix)]
+                {
+                    if let Some(parent) = target.parent() {
+                        if let Ok(dir) = std::fs::File::open(parent) {
+                            let _ = dir.sync_all();
+                        }
+                    }
+                }
+                return Ok(());
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+                if attempt + 1 < SCENE_COMMIT_RENAME_BACKOFF_MS.len() {
+                    std::thread::sleep(std::time::Duration::from_millis(*backoff_ms));
+                }
+            }
+        }
+    }
+
+    let _ = std::fs::remove_file(temp);
+    Err(format!(
+        "Failed committing '{}' over '{}' after {} attempts: {}",
+        temp.display(),
+        target.display(),
+        SCENE_COMMIT_RENAME_BACKOFF_MS.len(),
+        last_error.unwrap_or_else(|| "unknown error".to_string()),
+    ))
+}
+
+/// **User invariant: autosave ALWAYS writes `.voxl`.**
+///
+/// Deliberately NOT `is_scene_file_path`, which also accepts every plugin scene
+/// extension (`BUILTIN_PLUGIN_SCENE_EXTENSIONS`). Autosave emits VOXL bytes, so
+/// a plugin-format project must never be handed back as the autosave target —
+/// that would write VOXL into a file whose extension promises a foreign format.
+/// Since sub-phase B such a project gets a correctly-named
+/// `<stem>_autosave.voxl` sidecar instead of being handed back verbatim, and
+/// `resolve_scene_autosave_target` uses this predicate to check its own output
+/// before returning it.
+fn is_voxl_autosave_target(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            ext.trim()
+                .trim_start_matches('.')
+                .eq_ignore_ascii_case("voxl")
+        })
+        .unwrap_or(false)
+}
+
+/// Allocates the sibling staging path for an atomic scene-file write.
+#[tauri::command]
+async fn scene_file_begin_atomic_write(target_path: String) -> Result<String, String> {
+    let trimmed = target_path.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("scene_file_begin_atomic_write requires a non-empty target path".into());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let temp = sibling_commit_temp_path(std::path::Path::new(&trimmed))?;
+        Ok(temp.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|err| format!("scene_file_begin_atomic_write task failed: {err}"))?
+}
+
+/// fsync + atomic rename of a staged scene file over its destination.
+#[tauri::command]
+async fn scene_file_commit_atomic(temp_path: String, target_path: String) -> Result<(), String> {
+    let temp = temp_path.trim().to_string();
+    let target = target_path.trim().to_string();
+    if temp.is_empty() || target.is_empty() {
+        return Err("scene_file_commit_atomic requires non-empty temp and target paths".into());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        commit_scene_file_atomic(std::path::Path::new(&temp), std::path::Path::new(&target))
+    })
+    .await
+    .map_err(|err| format!("scene_file_commit_atomic task failed: {err}"))?
+}
+
+/// Removes an abandoned commit staging file (the write failed before commit),
+/// so a failed save does not litter the user's project folder.
+///
+/// Gated on `is_scene_commit_temp_path`: this command can only ever delete a
+/// path this process's own allocator could have produced, never an arbitrary
+/// caller-supplied file.
+#[tauri::command]
+async fn scene_file_discard_atomic_temp(temp_path: String) -> Result<(), String> {
+    let temp = temp_path.trim().to_string();
+    if temp.is_empty() {
+        return Err("scene_file_discard_atomic_temp requires a non-empty path".into());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = std::path::Path::new(&temp);
+        if !is_scene_commit_temp_path(path) {
+            return Err(format!(
+                "Refusing to discard '{temp}': not a scene-file commit temp"
+            ));
+        }
+        if path.exists() {
+            std::fs::remove_file(path)
+                .map_err(|err| format!("Failed discarding commit temp '{temp}': {err}"))?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|err| format!("scene_file_discard_atomic_temp task failed: {err}"))?
 }
 
 fn is_dragonfruit_temp_artifact(path: &std::path::Path) -> bool {
@@ -1022,9 +1263,53 @@ async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64
         None => false,
     };
 
+    stage_append_chunk(path_text, bytes, is_first_chunk)
+}
+
+/// Body of `append_mesh_stage_chunk`, extracted from the `#[tauri::command]`
+/// wrapper so the writer's crash-safety and contention contracts can be driven
+/// directly from unit tests (a `tauri::ipc::Request` cannot be constructed in
+/// one). Behaviour is byte-for-byte the pre-extraction behaviour apart from the
+/// explicitly-documented contention backstop below.
+pub(crate) fn stage_append_chunk(
+    path_text: &str,
+    bytes: &[u8],
+    is_first_chunk: bool,
+) -> Result<u64, String> {
+    let path = std::path::PathBuf::from(path_text);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("Failed creating mesh stage directory: {err}"))?;
+    }
+
     let mut appender_lock = staged_mesh_file_appender()
         .lock()
         .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
+
+    // Contention backstop (Ph0.1 A / finding N2). There is exactly ONE
+    // process-global appender. A mid-sequence chunk (offset != 0) that arrives
+    // while a *different* path owns the appender means two chunked writes are
+    // interleaving: the previous code silently evicted the other writer and
+    // re-opened with truncate(true), so this chunk landed at offset 0 and the
+    // other writer's bytes were destroyed — both files corrupt, no error.
+    // The frontend single-flight queue (`runExclusiveNativeWrite` in
+    // nativeSlicerBridge.ts) makes this unreachable for callers that go through
+    // it; this backstop covers the one caller that streams chunks directly
+    // (`sliceExportOrchestrator.handleMeshFileChunk`). A loud error beats two
+    // silently corrupt files.
+    //
+    // Deliberately NOT extended to the `None` case: `handleMeshFileChunk` sends
+    // no `x-mesh-stage-offset` header at all, so *every* chunk of a slice stage
+    // is `is_first_chunk == false` and relies on the `None` branch to open its
+    // file. Erroring there would break slicing outright.
+    if let Some(existing) = appender_lock.as_ref() {
+        if !is_first_chunk && existing.path != path_text {
+            return Err(format!(
+                "concurrent mesh-stage write detected: '{}' is mid-write while a chunk arrived for '{}'",
+                existing.path, path_text
+            ));
+        }
+    }
 
     let needs_new_appender = match appender_lock.as_ref() {
         Some(existing) => is_first_chunk || existing.path != path_text,
@@ -1071,6 +1356,12 @@ async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64
 
 #[tauri::command]
 async fn finish_mesh_stage_write(path: String) -> Result<u64, String> {
+    finish_stage_write(&path)
+}
+
+/// Body of `finish_mesh_stage_write`, extracted for the same reason as
+/// `stage_append_chunk`.
+pub(crate) fn finish_stage_write(path: &str) -> Result<u64, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return Err("finish_mesh_stage_write requires a non-empty path".into());
@@ -1501,7 +1792,7 @@ async fn cancel_slicing() -> Result<(), String> {
 // Native Island Scan
 // ---------------------------------------------------------------------------
 
-/// Parameters for native island scan. Field names match the JSON keys sent by
+/// Parameters for native island scan. Field names match the JSON tenons sent by
 /// nativeIslandScan.ts (snake_case).
 #[derive(Deserialize)]
 struct IslandScanParams {
@@ -1622,18 +1913,6 @@ async fn run_island_scan_native(
         let triangles_xyz = bytes_to_f32_vec(&mesh_bytes)?;
         let triangles = dragonfruit_slicing_engine::geometry::parse_triangles(&triangles_xyz);
 
-        // Debug dump: write positions + params to temp dir for offline reproduction
-        let dump_dir = std::env::temp_dir().join("dragonfruit-island-debug");
-        let _ = std::fs::create_dir_all(&dump_dir);
-        let _ = std::fs::write(
-            dump_dir.join("params.json"),
-            &params_json,
-        );
-        // Write positions as raw f32 binary (same format as stage_mesh_binary)
-        let _ = std::fs::write(
-            dump_dir.join("positions.bin"),
-            &mesh_bytes,
-        );
         log::debug!(
             "[island-scan-native] triangles={} bbox=({:.4},{:.4},{:.4})-({:.4},{:.4},{:.4}) px_mm={} layer_h={} buf={} conn={} min_area={} overlap_px={} neighborhood={}",
             triangles.len(),
@@ -1643,7 +1922,6 @@ async fn run_island_scan_native(
             params.connectivity, params.min_island_area_mm2,
             params.min_overlap_px, params.overlap_neighborhood_px,
         );
-        log::debug!("[island-scan-native] debug dump: {}", dump_dir.display());
 
         // Phase A: Calculate grid dimensions and bounds
         let origin_x = params.bbox_min_x;
@@ -1689,6 +1967,7 @@ async fn run_island_scan_native(
                 &job,
                 &triangles,
                 params.bbox_min_z,
+                params.bbox_max_z,
                 true, // store_labels = true for Volume Analysis
                 Some(&move |done: u32, total: u32| {
                     let _ = win_scan.emit("islandscan://progress", SliceProgressPayload {
@@ -1851,6 +2130,10 @@ struct WriteBytesToPathArgs {
 struct PickOpenFilesArgs {
     category: String,
     multiple: bool,
+    /// Optional override for the "Scene Files" filter extension list. When set,
+    /// the dialog uses exactly these extensions (e.g. so gated file types like
+    /// .chitubox behind a disabled experiment are hidden from the filter).
+    scene_extensions: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2255,21 +2538,525 @@ async fn local_backup_restore_history_item(
 // ---------------------------------------------------------------------------
 
 const SCENE_AUTOSAVE_DIR_NAME: &str = "autosave";
-const SCENE_AUTOSAVE_VOXL_FILE: &str = "scene.voxl";
+/// The generic-recovery payload name. It carries the `_autosave` marker so the
+/// **third** target invariant holds without an exception: every path autosave
+/// writes is self-describing, whether it is a sidecar or the fallback. The
+/// directory is unchanged, so this is still "the existing generic recovery
+/// location"; only the file name gained the marker.
+const SCENE_AUTOSAVE_VOXL_FILE: &str = "scene_autosave.voxl";
+/// The pre-Ph0.1 generic payload name. Never written any more, always searched:
+/// an autosave a user already has on disk must stay recoverable.
+const SCENE_AUTOSAVE_LEGACY_VOXL_FILE: &str = "scene.voxl";
 const SCENE_AUTOSAVE_MANIFEST_FILE: &str = "manifest.json";
 
+/// Every field added after `saved_at` / `clean` is `#[serde(default)]` so a
+/// manifest written by a pre-Ph0.1 build still parses â€” losing recovery for the
+/// autosave a user already has on disk would be a worse bug than the one this
+/// sub-phase fixes.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct SceneAutosaveManifest {
     saved_at: String,
     clean: bool,
+    /// Absolute path of the payload actually committed. **Authoritative**: the
+    /// manifest is written only after the atomic rename, so this can only ever
+    /// name a fully-committed file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    voxl_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin: Option<String>,
+    /// The project the sidecar belongs to; lets recovery re-derive the sidecar
+    /// when `voxl_path` has gone stale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    project_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    payload_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fallback_reason: Option<String>,
+    /// Failure message from the most recent tick, or None while autosave is healthy (D3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_error: Option<String>,
 }
+
+#[derive(Debug, Clone)]
+pub(crate) struct SceneAutosaveManifestWrite {
+    pub saved_at: String,
+    pub clean: bool,
+    pub voxl_path: Option<String>,
+    pub origin: Option<String>,
+    pub project_path: Option<String>,
+    pub payload_bytes: Option<u64>,
+    pub fallback_reason: Option<String>,
+    pub last_error: Option<String>,
+    pub delete_payload: bool,
+}
+
+/**
+ * Builds the manifest to persist for a tick (finding N4, sub-phase D3).
+ *
+ * Failure honesty requires that **a failed tick must not overwrite the pointer
+ * to the last committed payload nor advance `saved_at` past what is on disk.** A
+ * naive write that serialized `saved_at: now` on every attempt turned a transient
+ * (antivirus locking the file, a share blinking) into a false recovery prompt
+ * offering an old payload labeled with a fresh timestamp — turning a
+ * *reported* problem into a real one. So on a failure write every
+ * payload-describing field, `saved_at` included, falls back to the previous
+ * manifest's value. Conversely a successful write clears `last_error`: the
+ * condition is over, and a stale error in the settings tab is its own small
+ * dishonesty.
+ */
+pub(crate) fn build_scene_autosave_manifest(
+    previous: Option<&SceneAutosaveManifest>,
+    write: SceneAutosaveManifestWrite,
+) -> SceneAutosaveManifest {
+    if write.last_error.is_some() {
+        return SceneAutosaveManifest {
+            saved_at: previous
+                .map(|m| m.saved_at.clone())
+                .unwrap_or(write.saved_at),
+            clean: write.clean,
+            voxl_path: write
+                .voxl_path
+                .or_else(|| previous.and_then(|m| m.voxl_path.clone())),
+            origin: write
+                .origin
+                .or_else(|| previous.and_then(|m| m.origin.clone())),
+            project_path: write
+                .project_path
+                .or_else(|| previous.and_then(|m| m.project_path.clone())),
+            payload_bytes: write
+                .payload_bytes
+                .or_else(|| previous.and_then(|m| m.payload_bytes)),
+            fallback_reason: write
+                .fallback_reason
+                .or_else(|| previous.and_then(|m| m.fallback_reason.clone())),
+            last_error: write.last_error,
+        };
+    }
+
+    SceneAutosaveManifest {
+        saved_at: write.saved_at,
+        clean: write.clean,
+        voxl_path: if write.delete_payload {
+            None
+        } else {
+            write
+                .voxl_path
+                .or_else(|| previous.and_then(|m| m.voxl_path.clone()))
+        },
+        origin: write
+            .origin
+            .or_else(|| previous.and_then(|m| m.origin.clone())),
+        project_path: write
+            .project_path
+            .or_else(|| previous.and_then(|m| m.project_path.clone())),
+        payload_bytes: if write.delete_payload {
+            None
+        } else {
+            write
+                .payload_bytes
+                .or_else(|| previous.and_then(|m| m.payload_bytes))
+        },
+        fallback_reason: write
+            .fallback_reason
+            .or_else(|| previous.and_then(|m| m.fallback_reason.clone())),
+        last_error: None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sidecar naming, writability, and payload identity
+// ---------------------------------------------------------------------------
+
+/// The marker that makes a recovery file self-describing in Explorer and gates
+/// every deletion seam below.
+const SCENE_AUTOSAVE_SIDECAR_MARKER: &str = "_autosave";
+
+/// **THE ONE PLACE THE SIDECAR FILE NAME IS BUILT.**
+///
+/// Every target, every discovery candidate, and every deletion guard routes
+/// through this function, so the naming scheme has exactly one definition.
+///
+/// *Open decision, deliberately left as a one-line change:* a per-process name
+/// (`<stem>_<pid>_autosave.voxl`) would make two instances editing the same
+/// project unable to collide. It is **not** the default, because the pid is
+/// gone by the time it matters: after a crash â€” the one case clean-exit
+/// deletion cannot cover â€” recovery would face several `MyPrint_1234_autosave`
+/// files with no way to say which is current, and the orphans accumulate
+/// forever. A single well-known name is unambiguous at recovery time, which is
+/// the moment the file exists for. To switch, change only this format string
+/// (and `is_sidecar_autosave_file`'s suffix test to a marker `contains`).
+fn sidecar_autosave_file_name(project_stem: &str) -> String {
+    format!("{project_stem}{SCENE_AUTOSAVE_SIDECAR_MARKER}.voxl")
+}
+
+/// `<dir>/<stem>_autosave.voxl` for a project file. `None` when the path has no
+/// usable stem (the caller falls back to the recovery directory).
+fn sidecar_autosave_path_for_project(project: &std::path::Path) -> Option<std::path::PathBuf> {
+    let stem = project.file_stem().and_then(|s| s.to_str())?.trim();
+    if stem.is_empty() {
+        return None;
+    }
+    let parent = project.parent().unwrap_or_else(|| std::path::Path::new(""));
+    Some(parent.join(sidecar_autosave_file_name(stem)))
+}
+
+/// Windows paths are case-insensitive; a candidate-list check that missed
+/// `C:\Projects\...` vs `c:\projects\...` would reject a legitimate recovery.
+fn autosave_paths_equal(a: &std::path::Path, b: &std::path::Path) -> bool {
+    if a == b {
+        return true;
+    }
+    a.to_string_lossy().to_ascii_lowercase() == b.to_string_lossy().to_ascii_lowercase()
+}
+
+fn is_sidecar_autosave_file(path: &std::path::Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let suffix = format!("{SCENE_AUTOSAVE_SIDECAR_MARKER}.voxl");
+    let lower = name.to_ascii_lowercase();
+    // Strictly longer than the suffix: a file called exactly `_autosave.voxl`
+    // belongs to no project and is not ours to delete.
+    lower.ends_with(&suffix) && lower.len() > suffix.len()
+}
+
+/// The deletion gate. Only a file this policy could itself have produced â€” a
+/// `<stem>_autosave.voxl` sidecar, or the generic recovery payload â€” may be
+/// removed through any of the cleanup seams. The user's project never qualifies.
+fn is_deletable_autosave_payload(recovery_dir: &std::path::Path, path: &std::path::Path) -> bool {
+    is_sidecar_autosave_file(path)
+        || autosave_paths_equal(path, &recovery_dir.join(SCENE_AUTOSAVE_LEGACY_VOXL_FILE))
+}
+
+/// Deletes the sidecar belonging to `project`, if there is one.
+///
+/// Used on Save As, where the sidecar beside the **old** project would otherwise
+/// be orphaned â€” a `_autosave.voxl` next to a file the user no longer edits
+/// implies unsaved work that does not exist.
+fn delete_sidecar_for_project(project: &std::path::Path) -> Result<(), String> {
+    let Some(sidecar) = sidecar_autosave_path_for_project(project) else {
+        return Ok(());
+    };
+    if !is_sidecar_autosave_file(&sidecar) {
+        return Err(format!(
+            "Refusing to delete '{}': not an autosave sidecar",
+            sidecar.display()
+        ));
+    }
+    if !sidecar.exists() {
+        return Ok(());
+    }
+    std::fs::remove_file(&sidecar)
+        .map_err(|err| format!("Failed deleting sidecar '{}': {err}", sidecar.display()))
+}
+
+/// Real-syscall writability probe for a prospective sidecar location.
+///
+/// Deliberately not a metadata/permissions guess: read-only volumes,
+/// permission-denied folders, and unreachable network shares all present
+/// differently in metadata but identically to an actual create. Reuses sub-phase
+/// A's `sibling_commit_temp_path` so the probe exercises the very mechanism the
+/// real commit will use, rather than a lookalike.
+///
+/// Returns `None` when the directory is usable, or the `fallback_reason` to
+/// record in the manifest when it is not.
+fn probe_directory_writable(sidecar: &std::path::Path) -> Option<&'static str> {
+    let parent = sidecar
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    if !parent.as_os_str().is_empty() && !parent.is_dir() {
+        return Some("parent-missing");
+    }
+
+    let probe = sibling_commit_temp_path(sidecar).ok()?;
+    let writable = std::fs::write(&probe, b"").is_ok();
+    let _ = std::fs::remove_file(&probe);
+    if writable {
+        None
+    } else {
+        Some("parent-unwritable")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Recovery discovery
+// ---------------------------------------------------------------------------
+
+const VOXL_FILE_MAGIC: &[u8; 4] = b"VOXL";
+
+/// A candidate is only advertised if it exists, is non-empty, and actually
+/// starts with the VOXL magic â€” a truncated or foreign file must never be
+/// offered as a recoverable scene.
+fn is_readable_voxl_payload(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut magic = [0u8; 4];
+    file.read_exact(&mut magic).is_ok() && &magic == VOXL_FILE_MAGIC
+}
+
+/// The ordered recovery candidate list â€” and the **only** paths the recovery
+/// reader will ever open.
+///
+/// 1. `manifest.voxlPath` â€” authoritative: the manifest is written only after
+///    the atomic rename, so it can only name a fully-committed payload.
+/// 2. the sidecar derived from `manifest.projectPath` â€” covers a project that
+///    moved, and manifests from builds older than this change.
+/// 3. the legacy generic `<app_data>/autosave/scene.voxl` â€” every autosave
+///    written before sub-phase B; back-compat is free and mandatory.
+fn scene_autosave_recovery_candidates(
+    recovery_dir: &std::path::Path,
+    manifest: Option<&SceneAutosaveManifest>,
+) -> Vec<std::path::PathBuf> {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+
+    if let Some(manifest) = manifest {
+        if let Some(voxl_path) = manifest
+            .voxl_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            candidates.push(std::path::PathBuf::from(voxl_path));
+        }
+        if let Some(project) = manifest
+            .project_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if let Some(sidecar) = sidecar_autosave_path_for_project(std::path::Path::new(project))
+            {
+                candidates.push(sidecar);
+            }
+        }
+    }
+
+    candidates.push(recovery_dir.join(SCENE_AUTOSAVE_VOXL_FILE));
+    candidates.push(recovery_dir.join(SCENE_AUTOSAVE_LEGACY_VOXL_FILE));
+
+    let mut deduped: Vec<std::path::PathBuf> = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        if !deduped
+            .iter()
+            .any(|existing| autosave_paths_equal(existing, &candidate))
+        {
+            deduped.push(candidate);
+        }
+    }
+    deduped
+}
+
+/// The read gate: `scene_autosave_read_voxl_bytes` accepts a path **only** if
+/// the resolver itself produced it. Same discipline as
+/// `scene_file_discard_atomic_temp` â€” an arbitrary caller-supplied path can
+/// never be turned into a file read through this seam.
+fn is_allowed_recovery_read(candidates: &[std::path::PathBuf], path: &std::path::Path) -> bool {
+    candidates
+        .iter()
+        .any(|candidate| autosave_paths_equal(candidate, path))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SceneAutosaveRecoveryCandidate {
+    voxl_path: std::path::PathBuf,
+    origin: String,
+    saved_at: Option<String>,
+    clean: bool,
+    project_path: Option<String>,
+    payload_bytes: u64,
+    fallback_reason: Option<String>,
+}
+
+fn resolve_scene_autosave_recovery(
+    recovery_dir: &std::path::Path,
+    manifest: Option<&SceneAutosaveManifest>,
+) -> Option<SceneAutosaveRecoveryCandidate> {
+    let generic = recovery_dir.join(SCENE_AUTOSAVE_VOXL_FILE);
+    let legacy_generic = recovery_dir.join(SCENE_AUTOSAVE_LEGACY_VOXL_FILE);
+
+    for candidate in scene_autosave_recovery_candidates(recovery_dir, manifest) {
+        if !is_readable_voxl_payload(&candidate) {
+            continue;
+        }
+
+        let origin = if autosave_paths_equal(&candidate, &generic)
+            || autosave_paths_equal(&candidate, &legacy_generic)
+        {
+            SCENE_AUTOSAVE_ORIGIN_RECOVERY_DIR.to_string()
+        } else {
+            manifest
+                .and_then(|m| m.origin.clone())
+                .unwrap_or_else(|| SCENE_AUTOSAVE_ORIGIN_SIDECAR.to_string())
+        };
+
+        let payload_bytes = std::fs::metadata(&candidate).map(|m| m.len()).unwrap_or(0);
+
+        return Some(SceneAutosaveRecoveryCandidate {
+            voxl_path: candidate,
+            origin,
+            saved_at: manifest.map(|m| m.saved_at.clone()),
+            clean: manifest.map(|m| m.clean).unwrap_or(false),
+            project_path: manifest.and_then(|m| m.project_path.clone()),
+            payload_bytes,
+            fallback_reason: manifest.and_then(|m| m.fallback_reason.clone()),
+        });
+    }
+
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Stale commit-temp sweep (inherited from sub-phase A)
+// ---------------------------------------------------------------------------
+
+/// The pid segment of a `<target>.tmp-<pid>-<seq>` name.
+fn scene_commit_temp_pid(path: &std::path::Path) -> Option<u32> {
+    let name = path.file_name().and_then(|n| n.to_str())?;
+    let (_, suffix) = name.rsplit_once(SCENE_COMMIT_TEMP_MARKER)?;
+    suffix.split('-').next()?.parse::<u32>().ok()
+}
+
+/// Removes commit temps abandoned by a crashed write.
+///
+/// Conservative by construction, because these live in the user's own project
+/// folder: only names `is_scene_commit_temp_path` recognises (sub-phase A's
+/// exact pattern), only in a directory autosave already writes to, never this
+/// process's own temps (they may be in flight â€” `scene_file_discard_atomic_temp`
+/// owns those), and only past an age gate so another instance's in-flight write
+/// is never deleted out from under it.
+fn sweep_stale_scene_commit_temps(dir: &std::path::Path, min_age_seconds: u64) -> u32 {
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(min_age_seconds))
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    let current_pid = std::process::id();
+
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+
+    let mut removed = 0u32;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !is_scene_commit_temp_path(&path) {
+            continue;
+        }
+        if scene_commit_temp_pid(&path) == Some(current_pid) {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .map(|modified| modified <= cutoff)
+            .unwrap_or(false);
+        if stale && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// Crash residue can be minutes old for a large scene; anything younger than
+/// this may still be an in-flight write from a second instance.
+const SCENE_COMMIT_TEMP_SWEEP_MIN_AGE_SECONDS: u64 = 30 * 60;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SceneAutosavePaths {
     voxl_path: String,
     manifest_path: String,
+    origin: String,
+    project_path: Option<String>,
+    fallback_reason: Option<String>,
+}
+
+/// Where an autosave tick will land, and why.
+///
+/// Pure and app-handle-free on purpose: the recovery directory is passed in, so
+/// the whole target policy â€” including the three invariants the user pinned â€”
+/// is testable without a Tauri runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SceneAutosaveTarget {
+    voxl_path: std::path::PathBuf,
+    origin: &'static str,
+    project_path: Option<String>,
+    fallback_reason: Option<&'static str>,
+}
+
+const SCENE_AUTOSAVE_ORIGIN_SIDECAR: &str = "sidecar";
+const SCENE_AUTOSAVE_ORIGIN_RECOVERY_DIR: &str = "recovery-dir";
+
+/// Resolves where an autosave tick lands.
+///
+/// **User item 5.** A project that has been saved or opened gets its recovery
+/// copy *beside it* as `<stem>_autosave.voxl` â€” local and obvious, not a hidden
+/// app-data path the user would have to hunt for. Untitled scenes keep the
+/// generic recovery location exactly as before.
+///
+/// **Binding fallback directive.** Any failure of the sidecar target â€” folder
+/// gone, read-only volume, permission denied, unreachable network share â€” falls
+/// back to the generic recovery location with a `fallback_reason` recorded in
+/// the manifest. Never fail an autosave over a folder-policy question, and never
+/// lie about where the payload actually went.
+///
+/// Three invariants hold for every input, each with its own test: the result
+/// never equals the project path, always ends in `.voxl`, and always carries the
+/// `_autosave` marker.
+fn resolve_scene_autosave_target(
+    recovery_dir: &std::path::Path,
+    preferred_project_path: Option<&str>,
+) -> SceneAutosaveTarget {
+    let fallback = |project: Option<&str>, reason: &'static str| SceneAutosaveTarget {
+        voxl_path: recovery_dir.join(SCENE_AUTOSAVE_VOXL_FILE),
+        origin: SCENE_AUTOSAVE_ORIGIN_RECOVERY_DIR,
+        project_path: project.map(str::to_string),
+        fallback_reason: Some(reason),
+    };
+
+    let Some(project) = preferred_project_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return fallback(None, "no-project");
+    };
+
+    let path = std::path::Path::new(project);
+    // `is_scene_file_path`, not `is_voxl_autosave_target`: a project saved in a
+    // plugin scene format is still a project and still deserves a sidecar. It
+    // gets a correctly-named `.voxl` one, so VOXL bytes never land in a file
+    // whose extension promises a foreign format (invariant b).
+    if !is_scene_file_path(path) {
+        return fallback(Some(project), "not-a-scene-file");
+    }
+
+    let Some(sidecar) = sidecar_autosave_path_for_project(path) else {
+        return fallback(Some(project), "not-a-scene-file");
+    };
+
+    // Invariants (a) and (b), enforced rather than assumed: the target is never
+    // the file the user saves to, and it always ends in `.voxl`. Both are
+    // unreachable by construction â€” `sidecar_autosave_file_name` inserts the
+    // marker before a hard-coded `.voxl` â€” but they are the locks this whole
+    // sub-phase exists for, so the resolver checks its own output instead of
+    // trusting that the naming helper is never changed carelessly.
+    if autosave_paths_equal(&sidecar, path) || !is_voxl_autosave_target(&sidecar) {
+        return fallback(Some(project), "not-a-scene-file");
+    }
+
+    if let Some(reason) = probe_directory_writable(&sidecar) {
+        return fallback(Some(project), reason);
+    }
+
+    SceneAutosaveTarget {
+        voxl_path: sidecar,
+        origin: SCENE_AUTOSAVE_ORIGIN_SIDECAR,
+        project_path: Some(project.to_string()),
+        fallback_reason: None,
+    }
 }
 
 fn scene_autosave_resolve_dir(app: &DragonFruitAppHandle) -> Result<std::path::PathBuf, String> {
@@ -2291,57 +3078,137 @@ async fn scene_autosave_get_paths(
 ) -> Result<SceneAutosavePaths, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = scene_autosave_resolve_dir(&app)?;
+        let target = resolve_scene_autosave_target(&dir, preferred_save_path.as_deref());
 
-        // Determine VOXL autosave path: if user has explicitly saved to a .voxl file,
-        // autosave directly to that file. Otherwise use the generic recovery location.
-        let voxl_path = if let Some(preferred) = preferred_save_path {
-            let path = std::path::Path::new(&preferred);
-            if is_scene_file_path(path) && path.exists() {
-                // User has explicitly saved; autosave directly to that file
-                preferred
-            } else {
-                // Not a valid scene file or doesn't exist; fall back to generic recovery
-                dir.join(SCENE_AUTOSAVE_VOXL_FILE)
-                    .to_string_lossy()
-                    .to_string()
-            }
-        } else {
-            // No preferred path; use generic recovery location
-            dir.join(SCENE_AUTOSAVE_VOXL_FILE)
-                .to_string_lossy()
-                .to_string()
-        };
+        // Sweep crash residue from the directory we are about to write to, and
+        // only that one. A `<project>.voxl.tmp-<pid>-<seq>` left by a killed
+        // write is confusing clutter sitting next to the user's project.
+        if let Some(parent) = target.voxl_path.parent() {
+            sweep_stale_scene_commit_temps(parent, SCENE_COMMIT_TEMP_SWEEP_MIN_AGE_SECONDS);
+        }
 
         Ok(SceneAutosavePaths {
-            voxl_path,
+            voxl_path: target.voxl_path.to_string_lossy().to_string(),
             manifest_path: dir
                 .join(SCENE_AUTOSAVE_MANIFEST_FILE)
                 .to_string_lossy()
                 .to_string(),
+            origin: target.origin.to_string(),
+            project_path: target.project_path,
+            fallback_reason: target.fallback_reason.map(str::to_string),
         })
     })
     .await
     .map_err(|err| format!("scene_autosave_get_paths task failed: {err}"))?
 }
 
+/// Writes the recovery manifest â€” **always after** the payload has been
+/// committed by sub-phase A's atomic rename. That ordering is what makes
+/// `voxl_path` authoritative: the manifest can only ever name a file that is
+/// already complete on disk.
+///
+/// `delete_payload` is the cleanup seam. It removes the payload the *previous*
+/// manifest advertised (plus the legacy generic location), gated on
+/// `is_deletable_autosave_payload` so the user's project can never be reached
+/// through it. Callers use it only after a successful save, restore, or an
+/// explicit discard â€” never while unsaved work exists.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn scene_autosave_write_manifest(
     app: DragonFruitAppHandle,
     saved_at: String,
     clean: bool,
+    voxl_path: Option<String>,
+    origin: Option<String>,
+    project_path: Option<String>,
+    payload_bytes: Option<u64>,
+    fallback_reason: Option<String>,
+    last_error: Option<String>,
+    delete_payload: Option<bool>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = scene_autosave_resolve_dir(&app)?;
-        let manifest = SceneAutosaveManifest { saved_at, clean };
+        let path = dir.join(SCENE_AUTOSAVE_MANIFEST_FILE);
+
+        let previous: Option<SceneAutosaveManifest> = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| serde_json::from_str(&content).ok());
+
+        if delete_payload.unwrap_or(false) {
+            let mut targets: Vec<std::path::PathBuf> = vec![
+                dir.join(SCENE_AUTOSAVE_LEGACY_VOXL_FILE),
+                dir.join(SCENE_AUTOSAVE_VOXL_FILE),
+            ];
+            for advertised in [
+                previous.as_ref().and_then(|m| m.voxl_path.clone()),
+                voxl_path.clone(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                targets.push(std::path::PathBuf::from(advertised));
+            }
+            if let Some(project) = previous
+                .as_ref()
+                .and_then(|m| m.project_path.clone())
+                .or_else(|| project_path.clone())
+            {
+                if let Some(sidecar) =
+                    sidecar_autosave_path_for_project(std::path::Path::new(&project))
+                {
+                    targets.push(sidecar);
+                }
+            }
+
+            for target in targets {
+                if !is_deletable_autosave_payload(&dir, &target) {
+                    continue;
+                }
+                if target.exists() {
+                    let _ = std::fs::remove_file(&target);
+                }
+            }
+        }
+
+        let manifest = build_scene_autosave_manifest(
+            previous.as_ref(),
+            SceneAutosaveManifestWrite {
+                saved_at,
+                clean,
+                voxl_path,
+                origin,
+                project_path,
+                payload_bytes,
+                fallback_reason,
+                last_error,
+                delete_payload: delete_payload.unwrap_or(false),
+            },
+        );
         let json = serde_json::to_string(&manifest)
             .map_err(|err| format!("Failed serializing autosave manifest: {err}"))?;
-        let path = dir.join(SCENE_AUTOSAVE_MANIFEST_FILE);
         std::fs::write(&path, json.as_bytes())
             .map_err(|err| format!("Failed writing autosave manifest: {err}"))?;
         Ok(())
     })
     .await
     .map_err(|err| format!("scene_autosave_write_manifest task failed: {err}"))?
+}
+
+/// Deletes the sidecar belonging to a specific project.
+///
+/// Save As uses this on the **old** project path, so a successful Save As never
+/// orphans a `_autosave.voxl` beside a file the user has stopped editing.
+#[tauri::command]
+async fn scene_autosave_delete_sidecar(project_path: String) -> Result<(), String> {
+    let trimmed = project_path.trim().to_string();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        delete_sidecar_for_project(std::path::Path::new(&trimmed))
+    })
+    .await
+    .map_err(|err| format!("scene_autosave_delete_sidecar task failed: {err}"))?
 }
 
 #[tauri::command]
@@ -2364,15 +3231,67 @@ async fn scene_autosave_read_manifest(
     .map_err(|err| format!("scene_autosave_read_manifest task failed: {err}"))?
 }
 
+fn scene_autosave_read_manifest_from_dir(dir: &std::path::Path) -> Option<SceneAutosaveManifest> {
+    let path = dir.join(SCENE_AUTOSAVE_MANIFEST_FILE);
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+/// **Recovery-discovery parity.** Without this, sidecar path control would be a
+/// regression rather than a fix: the manifest would advertise a payload beside
+/// the project and the reader â€” hard-wired to the generic location before this
+/// change â€” could not open it.
 #[tauri::command]
-async fn scene_autosave_read_voxl_bytes(app: DragonFruitAppHandle) -> Result<Response, String> {
+async fn scene_autosave_resolve_recovery(
+    app: DragonFruitAppHandle,
+) -> Result<Option<SceneAutosaveRecoveryCandidate>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = scene_autosave_resolve_dir(&app)?;
+        let manifest = scene_autosave_read_manifest_from_dir(&dir);
+        Ok(resolve_scene_autosave_recovery(&dir, manifest.as_ref()))
+    })
+    .await
+    .map_err(|err| format!("scene_autosave_resolve_recovery task failed: {err}"))?
+}
+
+/// Reads a recovery payload. `path` is accepted **only** when it appears in the
+/// resolver's own candidate list â€” never an arbitrary caller-supplied path.
+/// Omitting it keeps the pre-Ph0.1 behaviour of reading the generic location.
+#[tauri::command]
+async fn scene_autosave_read_voxl_bytes(
+    app: DragonFruitAppHandle,
+    path: Option<String>,
+) -> Result<Response, String> {
     let bytes = tauri::async_runtime::spawn_blocking(move || {
         let dir = scene_autosave_resolve_dir(&app)?;
-        let path = dir.join(SCENE_AUTOSAVE_VOXL_FILE);
-        if !path.exists() {
+        let manifest = scene_autosave_read_manifest_from_dir(&dir);
+        let candidates = scene_autosave_recovery_candidates(&dir, manifest.as_ref());
+
+        let requested = path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(std::path::PathBuf::from);
+
+        let target = match requested {
+            Some(requested) => {
+                if !is_allowed_recovery_read(&candidates, &requested) {
+                    return Err(format!(
+                        "Refusing to read '{}': not an autosave recovery candidate",
+                        requested.display()
+                    ));
+                }
+                requested
+            }
+            None => resolve_scene_autosave_recovery(&dir, manifest.as_ref())
+                .map(|candidate| candidate.voxl_path)
+                .ok_or_else(|| "No autosaved scene file found".to_string())?,
+        };
+
+        if !target.exists() {
             return Err("No autosaved scene file found".to_string());
         }
-        std::fs::read(&path).map_err(|err| format!("Failed reading autosaved scene: {err}"))
+        std::fs::read(&target).map_err(|err| format!("Failed reading autosaved scene: {err}"))
     })
     .await
     .map_err(|err| format!("scene_autosave_read_voxl_bytes task failed: {err}"))??;
@@ -2424,13 +3343,27 @@ struct SceneFileHandoffPayload {
     source: String,
 }
 
-fn build_open_dialog_with_filters(category: &str) -> rfd::FileDialog {
+fn build_open_dialog_with_filters(
+    category: &str,
+    scene_extensions: Option<&[String]>,
+) -> rfd::FileDialog {
     let mut dialog = rfd::FileDialog::new();
 
-    // Build scene extension list: voxl + all plugin-registered extensions + zip (for bundles)
-    let mut scene_exts: Vec<&str> = vec!["voxl"];
-    scene_exts.extend_from_slice(BUILTIN_PLUGIN_SCENE_EXTENSIONS);
-    scene_exts.push("zip");
+    // Build scene extension list: the frontend-provided override when present
+    // (so gated file types are hidden), otherwise voxl + all plugin-registered
+    // extensions + zip (for bundles).
+    let scene_exts: Vec<&str> = match scene_extensions {
+        Some(extensions) => extensions
+            .iter()
+            .map(|extension| extension.as_str())
+            .collect(),
+        None => {
+            let mut fallback = vec!["voxl"];
+            fallback.extend_from_slice(BUILTIN_PLUGIN_SCENE_EXTENSIONS);
+            fallback.push("zip");
+            fallback
+        }
+    };
 
     let normalized = category.trim().to_ascii_lowercase();
     dialog = match normalized.as_str() {
@@ -2565,7 +3498,8 @@ async fn write_bytes_to_path(args: WriteBytesToPathArgs) -> Result<String, Strin
 #[tauri::command]
 async fn pick_open_files(args: PickOpenFilesArgs) -> Result<Vec<PickedOpenFile>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let dialog = build_open_dialog_with_filters(&args.category);
+        let dialog =
+            build_open_dialog_with_filters(&args.category, args.scene_extensions.as_deref());
 
         let picked_paths: Vec<std::path::PathBuf> = if args.multiple {
             dialog.pick_files().unwrap_or_default()
@@ -2880,22 +3814,57 @@ async fn reveal_in_file_manager(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Executable names to look for on PATH. Everywhere but Windows UVTools ships
+/// the same plain binary — `UVtools` inside the macOS bundle, `UVtools` in the
+/// Linux zip — that users sometimes symlink onto PATH in lowercase.
+#[cfg(target_os = "windows")]
+const UVTOOLS_PATH_EXECUTABLES: &[&str] = &["UVTools.exe"];
+#[cfg(not(target_os = "windows"))]
+const UVTOOLS_PATH_EXECUTABLES: &[&str] = &["UVtools", "uvtools"];
+
+/// Expand a leading `~/` against HOME. Candidate paths come from the frontend,
+/// which has no way to resolve the home directory itself.
+fn expand_tilde(path: &str) -> std::path::PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return std::path::PathBuf::from(home).join(rest);
+        }
+    }
+    std::path::PathBuf::from(path)
+}
+
+/// A candidate counts as UVTools when it is an executable file or, on macOS, an
+/// `.app` bundle — which is a directory, so `is_file()` alone rejects it.
+fn is_uvtools_install(path: &std::path::Path) -> bool {
+    if path.is_file() {
+        return true;
+    }
+
+    cfg!(target_os = "macos")
+        && path.is_dir()
+        && path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
+}
+
 #[tauri::command]
 async fn discover_uvtools_path(candidates: Vec<String>) -> Result<Option<String>, String> {
     // Check candidate absolute paths first
     for candidate in &candidates {
-        let p = std::path::Path::new(candidate);
-        if p.exists() && p.is_file() {
-            return Ok(Some(candidate.clone()));
+        let p = expand_tilde(candidate);
+        if is_uvtools_install(&p) {
+            return Ok(Some(p.to_string_lossy().to_string()));
         }
     }
 
-    // Check PATH for UVTools.exe
+    // Then PATH, for installs that are not in a standard location
     if let Ok(path_env) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path_env) {
-            let exe_candidate = dir.join("UVTools.exe");
-            if exe_candidate.exists() && exe_candidate.is_file() {
-                return Ok(Some(exe_candidate.to_string_lossy().to_string()));
+            for name in UVTOOLS_PATH_EXECUTABLES {
+                let exec_candidate = dir.join(name);
+                if exec_candidate.is_file() {
+                    return Ok(Some(exec_candidate.to_string_lossy().to_string()));
+                }
             }
         }
     }
@@ -2916,19 +3885,15 @@ async fn open_external_url(url: String) -> Result<(), String> {
         .args(["/c", "start", &url])
         .spawn();
     #[cfg(target_os = "macos")]
-    let result = std::process::Command::new("open")
-        .arg(&url)
-        .spawn();
+    let result = std::process::Command::new("open").arg(&url).spawn();
     #[cfg(target_os = "linux")]
-    let result = std::process::Command::new("xdg-open")
-        .arg(&url)
-        .spawn();
+    let result = std::process::Command::new("xdg-open").arg(&url).spawn();
 
     result.map_err(|e| format!("Failed to open URL in browser: {e}"))?;
     Ok(())
 }
 
-        #[tauri::command]
+#[tauri::command]
 async fn launch_external_process(exe_path: String, file_arg: String) -> Result<(), String> {
     let exe_path = exe_path.trim().to_string();
     let file_arg = file_arg.trim().to_string();
@@ -2937,12 +3902,106 @@ async fn launch_external_process(exe_path: String, file_arg: String) -> Result<(
         return Err("Executable path is empty".to_string());
     }
 
+    // A macOS `.app` bundle is a directory: it has to be started through
+    // `open -a`, which hands the file to the already-running instance if there
+    // is one. A bare executable (a CLI on PATH, or the binary inside the
+    // bundle) still spawns directly.
+    #[cfg(target_os = "macos")]
+    if std::path::Path::new(&exe_path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
+    {
+        let mut command = std::process::Command::new("open");
+        command.arg("-a").arg(&exe_path);
+        if !file_arg.is_empty() {
+            command.arg(&file_arg);
+        }
+        command
+            .spawn()
+            .map_err(|e| format!("Failed to launch external process: {e}"))?;
+        return Ok(());
+    }
+
     std::process::Command::new(&exe_path)
         .arg(&file_arg)
         .spawn()
         .map_err(|e| format!("Failed to launch external process: {e}"))?;
 
     Ok(())
+}
+/// Fetch a sponsor avatar via Rust (bypasses WebView CORS).
+/// Only `https` URLs from the Open Collective avatar hosts are allowed,
+/// mirroring the allowlist in `src/app/api/sponsor-avatar/route.ts`.
+/// Returns a `data:` URL so the frontend can render it without further network.
+#[tauri::command]
+async fn fetch_sponsor_avatar(url: String) -> Result<String, String> {
+    let trimmed = url.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("URL is empty".to_string());
+    }
+    let parsed = url::Url::parse(&trimmed).map_err(|e| format!("Invalid url: {e}"))?;
+    if parsed.scheme() != "https" {
+        return Err("Only https URLs are allowed".to_string());
+    }
+    let host = parsed.host_str().ok_or("Missing host")?.to_ascii_lowercase();
+    const ALLOWED_HOSTS: &[&str] = &[
+        "opencollective-production.s3.us-west-1.amazonaws.com",
+        "opencollective-production.s3-us-west-1.amazonaws.com",
+        "images.opencollective.com",
+        "avatars.githubusercontent.com",
+    ];
+    if !ALLOWED_HOSTS.contains(&host.as_str()) {
+        return Err(format!("Host not allowed: {host}"));
+    }
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(trimmed)
+        .header("Accept", "image/*,*/*")
+        .send()
+        .await
+        .map_err(|e| format!("Fetch failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Upstream {}", resp.status()));
+    }
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("image/png")
+        .to_string();
+    let bytes = resp.bytes().await.map_err(|e| format!("Read failed: {e}"))?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{content_type};base64,{b64}"))
+}
+/// Fetch external JSON/text via Rust (bypasses WebView CORS) for sponsors list.
+/// Only `https` URLs from `opencollective.com` are allowed.
+#[tauri::command]
+async fn fetch_external_text(url: String) -> Result<String, String> {
+    let trimmed = url.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("URL is empty".to_string());
+    }
+    let parsed = url::Url::parse(&trimmed).map_err(|e| format!("Invalid url: {e}"))?;
+    if parsed.scheme() != "https" {
+        return Err("Only https URLs are allowed".to_string());
+    }
+    let host = parsed.host_str().ok_or("Missing host")?.to_ascii_lowercase();
+    const ALLOWED_HOSTS: &[&str] = &["opencollective.com", "www.opencollective.com", "api.opencollective.com"];
+    if !ALLOWED_HOSTS.contains(&host.as_str()) {
+        return Err(format!("Host not allowed: {host}"));
+    }
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(trimmed)
+        .header("Accept", "application/json,*/*")
+        .send()
+        .await
+        .map_err(|e| format!("Fetch failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Upstream {}", resp.status()));
+    }
+    let text = resp.text().await.map_err(|e| format!("Read failed: {e}"))?;
+    Ok(text)
 }
 
 /// Returns the path to the log-level preference file.
@@ -2974,6 +4033,30 @@ fn resolve_log_level_pref_path() -> std::path::PathBuf {
             .join("org.openresinalliance.dragonfruit")
             .join("loglevel")
     }
+}
+
+/// Fixed header written once per run, as the first thing in the log file.
+///
+/// Every performance report needs an anchor: a 12-second freeze means nothing
+/// until you know the version, the platform and how many cores it had. The
+/// webview logs its own half (GPU, viewport) from `startupHeader.ts`.
+///
+/// Must run inside `setup()` — the log plugin attaches the `log` facade during
+/// plugin setup, so records emitted before that are dropped on the floor.
+fn log_startup_header() {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    log::info!(
+        "[header] DragonFruit {} (debug={}) os={} arch={} cores={} log_level={}",
+        env!("CARGO_PKG_VERSION"),
+        cfg!(debug_assertions),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        cores,
+        log::max_level(),
+    );
 }
 
 fn read_log_level_pref() -> log::LevelFilter {
@@ -3114,6 +4197,14 @@ fn main() {
         }
     }
 
+    // rustls 0.23 will not pick a crypto provider on its own. tauri-plugin-updater
+    // enables reqwest's `rustls-no-provider`, and reqwest then calls get_default()
+    // without the crate-features fallback, so building the updater's HTTP client
+    // panics with "No provider set" unless one was installed process-wide first.
+    // rustls' own `ring` feature being on (via ureq) is not enough. Err just means
+    // someone else got here first. See issue #615.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // Install a panic hook that writes the panic location and message to the
     // DragonFruit log before the default handler runs.  This ensures that even
     // hard crashes leave a human-readable trace in the log file rather than
@@ -3147,16 +4238,15 @@ fn main() {
         }
     }
 
-    log::info!(
-        "DragonFruit {} starting (debug={})",
-        env!("CARGO_PKG_VERSION"),
-        cfg!(debug_assertions)
-    );
+    // NOTE: nothing may be logged before this point. `tauri-plugin-log` attaches
+    // the `log` facade during its plugin setup, so any record emitted earlier is
+    // silently dropped. The startup header lives in `log_startup_header()`,
+    // called from `setup()`, for exactly this reason.
 
     let _log_level = read_log_level_pref();
-    // Log plugin disabled on CEF — it pulls tauri/wry transitively, causing
-    // E0252 collision. See Cargo.toml comment.
-    #[cfg(not(feature = "tauri-cef"))]
+    // Logging is backend-agnostic: tauri-plugin-log declares tauri with
+    // default-features = false, so it does not drag in wry.
+    #[cfg(feature = "logging")]
     let log_plugin = {
         use tauri_plugin_log::{Builder as LogBuilder, RotationStrategy, Target, TargetKind};
         LogBuilder::new()
@@ -3188,12 +4278,17 @@ fn main() {
     };
 
     let builder = tauri::Builder::default();
-    #[cfg(not(feature = "tauri-cef"))]
+    #[cfg(feature = "logging")]
     let builder = builder.plugin(log_plugin);
     let builder = builder.setup(|app| {
         let app_handle = app.handle().clone();
 
+        log_startup_header();
+
         app.manage(window_state::WindowStateTracker::default());
+        app.manage(webview_watchdog::WebviewLiveness::default());
+        webview_watchdog::spawn(app_handle.clone());
+        app.manage(experiments::ExperimentsState::default());
 
         // Defer main window creation to an async task so the splashscreen's
         // WebView2 instance fully initialises before the main window's does.
@@ -3287,10 +4382,14 @@ fn main() {
 
     builder
         .invoke_handler(tauri::generate_handler![
+            webview_watchdog::webview_heartbeat,
             stage_mesh_binary_start,
             allocate_mesh_stage_path,
             append_mesh_stage_chunk,
             finish_mesh_stage_write,
+            scene_file_begin_atomic_write,
+            scene_file_commit_atomic,
+            scene_file_discard_atomic_temp,
             stage_mesh_file_path,
             stage_mesh_binary_set,
             stage_mesh_binary_chunk,
@@ -3301,12 +4400,16 @@ fn main() {
             mesh_minima::scan_mesh_minima_from_path,
             mesh_minima::scan_voxel_islands_from_path,
             mesh_minima::scan_islands_from_path,
+            overhang::scan_overhangs,
             export_mesh_file,
             save_print_file,
             save_print_file_from_path,
             pick_save_path,
             pick_open_files,
             get_launch_scene_files,
+            experiments::set_experiment_overrides,
+            fetch_sponsor_avatar,
+            fetch_external_text,
             get_slicer_engine_version,
             notify_launch_scene_handoff,
             focus_main_window_command,
@@ -3331,14 +4434,20 @@ fn main() {
             scene_autosave_write_manifest,
             scene_autosave_read_manifest,
             scene_autosave_read_voxl_bytes,
+            scene_autosave_resolve_recovery,
+            scene_autosave_delete_sidecar,
             reveal_in_file_manager,
             open_external_url,
             launch_external_process,
+            fetch_sponsor_avatar,
             discover_uvtools_path,
             set_log_level_pref,
             read_log_tail,
             open_log_file,
             delete_log_file,
+            spacemouse::spacemouse_native_start,
+            spacemouse::spacemouse_native_stop,
+            spacemouse::spacemouse_native_sync,
             network::plugin_network_request,
             network::ensure_rtsp_relay,
             mesh_repair::mesh_analyze_from_path,
@@ -3363,6 +4472,17 @@ fn main() {
             mesh_repair::mesh_punch_capture_staged_source,
             mesh_repair::mesh_punch_from_captured_source,
             mesh_repair::mesh_punch_read_positions,
+            mesh_repair::mesh_organic_cut_staged,
+            mesh_repair::mesh_organic_cut_capture_staged_source,
+            mesh_repair::mesh_organic_cut_from_captured_source,
+            mesh_repair::mesh_organic_cut_read_part,
+            mesh_repair::mesh_organic_cut_geodesic_loop,
+            mesh_repair::mesh_organic_cut_geodesic_loop_bytes,
+            mesh_repair::mesh_organic_cut_read_geodesic,
+            mesh_repair::mesh_organic_cut_membrane_preview,
+            mesh_repair::mesh_organic_cut_plane_tenon_preview,
+            mesh_repair::mesh_organic_cut_read_membrane,
+            mesh_repair::mesh_organic_cut_read_tenon,
             mesh_repair::mesh_repair_read_positions,
             mesh_repair::load_stl_file,
             sdf::compute_sdf_from_staged,
@@ -3386,4 +4506,1005 @@ fn main() {
                 window_state::save(app_handle);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    // -----------------------------------------------------------------------
+    // Shared writer-test scaffolding (Ph0.1 sub-phase A)
+    // -----------------------------------------------------------------------
+
+    /// `append_mesh_stage_chunk` owns ONE process-global appender, so every test
+    /// that drives the writer must run alone. `cargo test` runs tests on
+    /// parallel threads by default; without this they would evict each other's
+    /// appenders and go flaky for the very reason sub-phase A exists.
+    static WRITER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_writer_tests() -> std::sync::MutexGuard<'static, ()> {
+        let guard = WRITER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // A test that simulated a crash leaves the appender open; start clean.
+        *super::staged_mesh_file_appender()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        guard
+    }
+
+    /// pid + process-wide sequence, same rationale as
+    /// `allocate_mesh_stage_file_path`: nanos alone collide on Windows.
+    fn unique_test_dir(tag: &str) -> std::path::PathBuf {
+        static TEST_DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "dragonfruit-test-{tag}-{}-{}",
+            std::process::id(),
+            TEST_DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("failed creating test dir");
+        dir
+    }
+
+    /// Mirrors the frontend's native VOXL write seam
+    /// (`ExportManager.downloadFile` → `writeFileAtomicToNativePath`, which both
+    /// autosave and explicit save funnel through) so the crash-safety invariant
+    /// is asserted against the real writer rather than a paraphrase of it.
+    /// `interrupt_after_bytes` models the process dying mid-write: chunks stop
+    /// and nothing commits, exactly as a kill would leave things.
+    fn voxl_write_seam(
+        target: &std::path::Path,
+        bytes: &[u8],
+        interrupt_after_bytes: Option<usize>,
+    ) -> Result<(), String> {
+        let temp = super::sibling_commit_temp_path(target)?;
+        let temp_text = temp.to_string_lossy().to_string();
+        let cut = interrupt_after_bytes
+            .unwrap_or(bytes.len())
+            .min(bytes.len());
+
+        super::stage_append_chunk(&temp_text, &bytes[..cut], true)?;
+        if interrupt_after_bytes.is_some() {
+            // Process dies here: no further chunks, no finish, no commit.
+            return Ok(());
+        }
+        super::stage_append_chunk(&temp_text, &bytes[cut..], false)?;
+        super::finish_stage_write(&temp_text)?;
+        super::commit_scene_file_atomic(&temp, target)
+    }
+
+    /// **The data-loss regression.** Before sub-phase A the seam wrote straight
+    /// to the destination with `truncate(true)` on chunk 0
+    /// (`append_mesh_stage_chunk`), so a crash between truncate and the last
+    /// chunk left a truncated scene file and no fallback — the user's project
+    /// destroyed by an autosave tick or a Ctrl+S that never finished.
+    #[test]
+    fn interrupted_voxl_write_preserves_previous_good_file() {
+        let _guard = lock_writer_tests();
+        let dir = unique_test_dir("atomic-commit");
+        let target = dir.join("MyPrint.voxl");
+
+        let good: Vec<u8> = (0..64u32).flat_map(|i| i.to_le_bytes()).collect();
+        voxl_write_seam(&target, &good, None).expect("initial good write failed");
+        assert_eq!(
+            std::fs::read(&target).expect("good file unreadable"),
+            good,
+            "the baseline write did not produce the expected file"
+        );
+
+        let replacement = vec![0xABu8; 4096];
+        let _ = voxl_write_seam(&target, &replacement, Some(1024));
+
+        assert_eq!(
+            std::fs::read(&target).expect("previous good file no longer exists"),
+            good,
+            "an interrupted write destroyed the previous good scene file"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The happy path of the commit: the target becomes the temp's bytes and no
+    /// `.tmp-` residue is left beside the user's project.
+    #[test]
+    fn commit_atomic_replaces_target_and_removes_temp() {
+        let _guard = lock_writer_tests();
+        let dir = unique_test_dir("atomic-replace");
+        let target = dir.join("MyPrint.voxl");
+        std::fs::write(&target, b"old contents").expect("seed write failed");
+
+        let temp = super::sibling_commit_temp_path(&target).expect("temp alloc failed");
+        std::fs::write(&temp, b"new contents").expect("temp write failed");
+        super::commit_scene_file_atomic(&temp, &target).expect("commit failed");
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"new contents");
+        assert!(!temp.exists(), "commit left a temp file beside the project");
+        let residue: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains(".tmp-"))
+            .collect();
+        assert!(residue.is_empty(), "temp residue left behind: {residue:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Terminal failure must be strictly better than the old behaviour: the
+    /// previous good target survives, the temp is cleaned up, and the caller
+    /// gets an `Err` instead of a silently destroyed file.
+    #[test]
+    fn commit_atomic_leaves_target_intact_when_rename_fails() {
+        let _guard = lock_writer_tests();
+        let dir = unique_test_dir("atomic-fail");
+        // A directory can never be replaced by a file rename on any platform.
+        let target = dir.join("MyPrint.voxl");
+        std::fs::create_dir_all(&target).expect("failed creating blocking directory");
+        std::fs::write(target.join("sentinel.txt"), b"still here").expect("sentinel write failed");
+
+        let temp = super::sibling_commit_temp_path(&target).expect("temp alloc failed");
+        std::fs::write(&temp, b"new contents").expect("temp write failed");
+
+        let result = super::commit_scene_file_atomic(&temp, &target);
+        assert!(result.is_err(), "commit onto a directory should fail");
+        assert_eq!(
+            std::fs::read(target.join("sentinel.txt")).unwrap(),
+            b"still here",
+            "a failed commit damaged the previous target"
+        );
+        assert!(!temp.exists(), "a failed commit left its temp behind");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Same collision geometry as the two allocator races already pinned below:
+    /// the commit temp is created with truncate, so two same-tick allocations
+    /// sharing a name would let one in-flight save overwrite another's staging
+    /// file and then rename the wrong bytes over the user's project.
+    #[test]
+    fn sibling_commit_temp_paths_are_unique_under_concurrent_allocation() {
+        const THREADS: usize = 8;
+        const ALLOCS_PER_THREAD: usize = 64;
+
+        let dir = unique_test_dir("temp-uniqueness");
+        let target = std::sync::Arc::new(dir.join("MyPrint.voxl"));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let barrier = std::sync::Arc::clone(&barrier);
+                let target = std::sync::Arc::clone(&target);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    (0..ALLOCS_PER_THREAD)
+                        .map(|_| {
+                            super::sibling_commit_temp_path(&target)
+                                .expect("commit temp allocation failed")
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        let mut all_paths = std::collections::HashSet::new();
+        for handle in handles {
+            for path in handle.join().expect("allocator thread panicked") {
+                assert_eq!(
+                    path.parent(),
+                    target.parent(),
+                    "commit temp must be a sibling of the target, or the rename is not atomic"
+                );
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .expect("commit temp path has a UTF-8 file name")
+                    .to_string();
+                assert!(
+                    name.starts_with("MyPrint.voxl.tmp-"),
+                    "commit temp name lost its contract: {name}"
+                );
+                assert!(
+                    super::is_scene_commit_temp_path(&path),
+                    "discard guard no longer recognizes its own temp: {name}"
+                );
+                assert!(all_paths.insert(path), "duplicate commit temp allocated");
+            }
+        }
+        assert_eq!(all_paths.len(), THREADS * ALLOCS_PER_THREAD);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Finding N2.** Two chunked writes to different paths used to evict each
+    /// other from the single process-global appender and re-truncate on every
+    /// switch-back — writer A's committed chunks destroyed, its next chunk
+    /// landing at offset 0, both files corrupt, and no error anywhere.
+    #[test]
+    fn concurrent_stage_writes_error_instead_of_truncating() {
+        let _guard = lock_writer_tests();
+        let dir = unique_test_dir("stage-contention");
+        let path_a = dir.join("a.bin").to_string_lossy().to_string();
+        let path_b = dir.join("b.bin").to_string_lossy().to_string();
+
+        // Writer A opens and writes its first chunk.
+        super::stage_append_chunk(&path_a, &[0xAA; 512], true).expect("writer A chunk 0 failed");
+        // Writer B interleaves with its own first chunk (evicts A's appender).
+        super::stage_append_chunk(&path_b, &[0xBB; 512], true).expect("writer B chunk 0 failed");
+        // A resumes mid-sequence. This is the corruption point.
+        let resumed = super::stage_append_chunk(&path_a, &[0xAA; 512], false);
+
+        assert!(
+            resumed.is_err(),
+            "an interleaved mid-sequence chunk was accepted — it silently re-truncated '{path_a}'"
+        );
+        let message = resumed.unwrap_err();
+        assert!(
+            message.contains("concurrent mesh-stage write detected"),
+            "contention error lost its identity: {message}"
+        );
+
+        *super::staged_mesh_file_appender()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Guard on the contention backstop itself: it must not fire on the ordinary
+    /// sequence of a *second* stage write.
+    ///
+    /// `stage_mesh_file_path` flushes the appender but deliberately does not
+    /// close it, and an aborted slice never reaches that call at all — so the
+    /// previous stage file's appender is routinely still open when the next
+    /// slice's first chunk arrives. That chunk must truncate its own new file,
+    /// not be rejected as an interleave, or the second slice of every session
+    /// (and every slice after an abort) would fail.
+    ///
+    /// This is what `sliceExportOrchestrator.handleMeshFileChunk`'s
+    /// `x-mesh-stage-offset` header buys: chunk 0 is identifiable.
+    #[test]
+    fn sequential_stage_writes_after_an_abandoned_one_still_succeed() {
+        let _guard = lock_writer_tests();
+        let dir = unique_test_dir("stage-sequential");
+        let first = dir.join("stage-1.bin").to_string_lossy().to_string();
+        let second = dir.join("stage-2.bin").to_string_lossy().to_string();
+
+        // Slice 1 streams and is abandoned (aborted) — appender left open.
+        super::stage_append_chunk(&first, &[0x11; 256], true).expect("stage 1 chunk 0 failed");
+        super::stage_append_chunk(&first, &[0x11; 256], false).expect("stage 1 chunk 1 failed");
+
+        // Slice 2 starts a brand-new stage file while that appender is open.
+        super::stage_append_chunk(&second, &[0x22; 256], true).expect(
+            "a new stage write was rejected as an interleave — the backstop is too aggressive",
+        );
+        super::stage_append_chunk(&second, &[0x22; 256], false).expect("stage 2 chunk 1 failed");
+        super::finish_stage_write(&second).expect("stage 2 finish failed");
+
+        assert_eq!(
+            std::fs::read(&second).unwrap().len(),
+            512,
+            "chunk 0 of a new stage file must truncate, not append to stale bytes"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **User invariant: autosave ALWAYS writes `.voxl`.** `is_scene_file_path`
+    /// also accepts the plugin scene extensions, so a project saved in a plugin
+    /// format used to be handed back verbatim as the autosave target — VOXL
+    /// bytes written into a file whose extension promises a foreign format.
+    #[test]
+    fn autosave_target_is_always_voxl_for_plugin_scene_extensions() {
+        for ext in super::BUILTIN_PLUGIN_SCENE_EXTENSIONS {
+            let candidate = std::path::PathBuf::from(format!("C:/projects/MyPrint.{ext}"));
+            assert!(
+                super::is_scene_file_path(&candidate),
+                "test fixture is not a recognised scene file: {}",
+                candidate.display()
+            );
+            assert!(
+                !super::is_voxl_autosave_target(&candidate),
+                "autosave would have written VOXL bytes into a .{ext} file"
+            );
+        }
+
+        assert!(super::is_voxl_autosave_target(std::path::Path::new(
+            "C:/projects/MyPrint.voxl"
+        )));
+        assert!(super::is_voxl_autosave_target(std::path::Path::new(
+            "C:/projects/MyPrint.VOXL"
+        )));
+        assert!(!super::is_voxl_autosave_target(std::path::Path::new(
+            "C:/projects/MyPrint.stl"
+        )));
+        assert!(!super::is_voxl_autosave_target(std::path::Path::new(
+            "C:/projects/MyPrint"
+        )));
+    }
+
+    /// **RED — NOT OWNED BY Ph0.1. DO NOT "FIX" BY LOOSENING TRUNCATE.**
+    ///
+    /// Corollary of finding N2. `writeChunkedToNativePath`'s `finally` always
+    /// calls `finish_mesh_stage_write` (nativeSlicerBridge.ts:597-607), which
+    /// drops the appender, and every call restarts at offset 0 — so *every*
+    /// call re-opens with `truncate(true)`. `streamZipToNativePath`
+    /// (ExportManager.ts:655-706) makes three sequential calls to the same path
+    /// and its docstring (:642-654) asserts append-on-subsequent. That
+    /// assertion is false: native 3MF export emits only its postamble.
+    ///
+    /// This test reproduces that call shape exactly and asserts the docstring's
+    /// contract, so it fails. It is `#[ignore]`d rather than deleted so the
+    /// suite stays green while the defect stays on the record.
+    ///
+    /// Owner: the 3MF export team — fix in `streamZipToNativePath` (e.g. a
+    /// single write sequence, or an explicit append mode), NOT by weakening
+    /// `append_mesh_stage_chunk`'s truncate-on-fresh-appender semantics, which
+    /// mesh staging and Ph0.1's atomic commit both depend on.
+    #[test]
+    #[ignore = "RED: pins the known native-3MF truncation defect (N2 corollary); owned by the 3MF export team, not Ph0.1"]
+    fn native_3mf_sequential_writes_append_instead_of_truncating() {
+        let _guard = lock_writer_tests();
+        let dir = unique_test_dir("3mf-corollary");
+        let path = dir.join("model.3mf").to_string_lossy().to_string();
+
+        // Exactly what streamZipToNativePath does: three separate
+        // writeChunkedToNativePath calls to one path, each starting at offset 0
+        // and each closing the appender in its `finally`.
+        for payload in [b"PREAMBLE".as_slice(), b"XMLXMLXML", b"POSTAMBLE"] {
+            super::stage_append_chunk(&path, payload, true).expect("3mf chunk write failed");
+            super::finish_stage_write(&path).expect("3mf finish failed");
+        }
+
+        let written = std::fs::read(&path).expect("3mf output unreadable");
+        assert_eq!(
+            written, b"PREAMBLEXMLXMLXMLPOSTAMBLE",
+            "native 3MF export is emitting only its last write — the ZIP has no local headers and no model data"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // Ph0.1 sub-phase B â€” sidecar target policy + recovery-discovery parity
+    // -----------------------------------------------------------------------
+
+    /// Builds a project folder with a real scene file in it, plus a separate
+    /// recovery dir, mirroring the two real locations at runtime.
+    fn autosave_fixture(
+        tag: &str,
+        project_file: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let root = unique_test_dir(tag);
+        let project_dir = root.join("projects");
+        let recovery_dir = root.join("recovery");
+        std::fs::create_dir_all(&project_dir).expect("failed creating project dir");
+        std::fs::create_dir_all(&recovery_dir).expect("failed creating recovery dir");
+        let project = project_dir.join(project_file);
+        std::fs::write(&project, voxl_payload(b"project")).expect("failed seeding project file");
+        (root, recovery_dir, project)
+    }
+
+    /// A minimally-valid VOXL payload: the 4-byte magic plus filler. The
+    /// recovery resolver magic-checks every candidate, so fixtures must carry it.
+    fn voxl_payload(tail: &[u8]) -> Vec<u8> {
+        let mut bytes = b"VOXL".to_vec();
+        bytes.extend_from_slice(tail);
+        bytes
+    }
+
+    /// **User item 5, the lock.** An autosave tick must never target the file the
+    /// user saves to. Before sub-phase B `scene_autosave_get_paths` returned the
+    /// project path verbatim, so every tick overwrote the user's project with a
+    /// scene state they never asked to save.
+    #[test]
+    fn autosave_target_never_equals_the_project_path() {
+        let (root, recovery_dir, project) = autosave_fixture("b-never-project", "MyPrint.voxl");
+        let project_text = project.to_string_lossy().to_string();
+
+        for candidate in [
+            project_text.as_str(),
+            // Already-sidecar-shaped names must not collapse onto themselves.
+            root.join("projects/MyPrint_autosave.voxl")
+                .to_string_lossy()
+                .to_string()
+                .as_str(),
+        ] {
+            let target = super::resolve_scene_autosave_target(&recovery_dir, Some(candidate));
+            assert_ne!(
+                target.voxl_path,
+                std::path::Path::new(candidate),
+                "autosave targeted the user's own project file: {candidate}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **Invariant (b).** Whatever the project's extension, the autosave target
+    /// ends in `.voxl` â€” autosave emits VOXL bytes and must never put them in a
+    /// file whose extension promises a foreign format.
+    #[test]
+    fn autosave_target_always_ends_in_voxl() {
+        let root = unique_test_dir("b-always-voxl");
+        let project_dir = root.join("projects");
+        std::fs::create_dir_all(&project_dir).expect("failed creating project dir");
+
+        let mut names: Vec<String> = vec!["MyPrint.voxl".to_string(), "MyPrint.VOXL".to_string()];
+        names.extend(
+            super::BUILTIN_PLUGIN_SCENE_EXTENSIONS
+                .iter()
+                .map(|ext| format!("MyPrint.{ext}")),
+        );
+
+        for name in names {
+            let project = project_dir.join(&name);
+            std::fs::write(&project, voxl_payload(b"p")).expect("seed failed");
+            let target = super::resolve_scene_autosave_target(
+                &root.join("recovery"),
+                Some(project.to_string_lossy().as_ref()),
+            );
+            let ext = target
+                .voxl_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            assert_eq!(
+                ext,
+                "voxl",
+                "autosave target for '{name}' does not end in .voxl: {}",
+                target.voxl_path.display()
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **Invariant (c).** The target always carries the `_autosave` marker, so a
+    /// recovery file is self-describing in Explorer and can never be mistaken for
+    /// a project. It is also what gates payload deletion
+    /// (`is_deletable_autosave_payload`).
+    #[test]
+    fn autosave_target_always_contains_the_autosave_marker() {
+        let (root, recovery_dir, project) = autosave_fixture("b-marker", "MyPrint.voxl");
+
+        for preferred in [
+            Some(project.to_string_lossy().to_string()),
+            Some("   ".to_string()),
+            None,
+        ] {
+            let target = super::resolve_scene_autosave_target(&recovery_dir, preferred.as_deref());
+            let name = target
+                .voxl_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string();
+            assert!(
+                name.contains("_autosave"),
+                "autosave target is not self-describing: {name}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **User item 5, the payoff.** A saved/opened project gets its recovery copy
+    /// beside it â€” local and obvious â€” not in a hidden app-data path.
+    #[test]
+    fn sidecar_lands_beside_the_project_as_stem_autosave_voxl() {
+        let (root, recovery_dir, project) = autosave_fixture("b-sidecar", "MyPrint.voxl");
+
+        let target = super::resolve_scene_autosave_target(
+            &recovery_dir,
+            Some(project.to_string_lossy().as_ref()),
+        );
+
+        assert_eq!(target.origin, super::SCENE_AUTOSAVE_ORIGIN_SIDECAR);
+        assert_eq!(target.fallback_reason, None);
+        assert_eq!(
+            target.voxl_path,
+            project.parent().unwrap().join("MyPrint_autosave.voxl"),
+            "the sidecar did not land beside the project"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A plugin-format project still gets a correctly-named VOXL sidecar in its
+    /// own folder rather than being exiled to the recovery dir.
+    #[test]
+    fn sidecar_is_derived_for_plugin_scene_extensions_too() {
+        let ext = super::BUILTIN_PLUGIN_SCENE_EXTENSIONS
+            .first()
+            .expect("no plugin scene extensions registered");
+        let (root, recovery_dir, project) =
+            autosave_fixture("b-plugin-ext", &format!("MyPrint.{ext}"));
+
+        let target = super::resolve_scene_autosave_target(
+            &recovery_dir,
+            Some(project.to_string_lossy().as_ref()),
+        );
+
+        assert_eq!(target.origin, super::SCENE_AUTOSAVE_ORIGIN_SIDECAR);
+        assert_eq!(
+            target.voxl_path,
+            project.parent().unwrap().join("MyPrint_autosave.voxl"),
+            "a plugin-format project did not get a .voxl sidecar beside it"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **Binding user directive.** Any failure of the sidecar target falls back
+    /// to the default recovery location and says why â€” never fail an autosave
+    /// over a folder-permission question, and never lie about where it went.
+    #[test]
+    fn sidecar_falls_back_to_recovery_dir_when_the_project_folder_is_unusable() {
+        let root = unique_test_dir("b-fallback");
+        let recovery_dir = root.join("recovery");
+        std::fs::create_dir_all(&recovery_dir).expect("failed creating recovery dir");
+        let generic = recovery_dir.join(super::SCENE_AUTOSAVE_VOXL_FILE);
+
+        // Parent directory does not exist (deleted folder / unreachable share).
+        let missing = root.join("gone/MyPrint.voxl");
+        let target = super::resolve_scene_autosave_target(
+            &recovery_dir,
+            Some(missing.to_string_lossy().as_ref()),
+        );
+        assert_eq!(target.voxl_path, generic);
+        assert_eq!(target.origin, super::SCENE_AUTOSAVE_ORIGIN_RECOVERY_DIR);
+        assert_eq!(target.fallback_reason, Some("parent-missing"));
+
+        // Not a scene file at all.
+        let not_scene = root.join("notes.txt");
+        std::fs::write(&not_scene, b"hi").expect("seed failed");
+        let target = super::resolve_scene_autosave_target(
+            &recovery_dir,
+            Some(not_scene.to_string_lossy().as_ref()),
+        );
+        assert_eq!(target.voxl_path, generic);
+        assert_eq!(target.fallback_reason, Some("not-a-scene-file"));
+
+        // No project at all (untitled scene) keeps today's behaviour exactly.
+        let target = super::resolve_scene_autosave_target(&recovery_dir, None);
+        assert_eq!(target.voxl_path, generic);
+        assert_eq!(target.fallback_reason, Some("no-project"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The writability probe must use a real syscall â€” a metadata guess passes on
+    /// read-only volumes and on network shares that deny writes.
+    #[test]
+    fn writability_probe_rejects_a_directory_that_cannot_be_written() {
+        let root = unique_test_dir("b-probe");
+        let usable = root.join("usable");
+        std::fs::create_dir_all(&usable).expect("failed creating dir");
+
+        assert!(
+            super::probe_directory_writable(&usable.join("MyPrint_autosave.voxl")).is_none(),
+            "a writable folder was reported unusable"
+        );
+        assert!(
+            !usable.join("MyPrint_autosave.voxl").exists(),
+            "the probe left its scratch file behind"
+        );
+        let residue: Vec<_> = std::fs::read_dir(&usable)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(residue.is_empty(), "the probe left residue: {residue:?}");
+
+        assert_eq!(
+            super::probe_directory_writable(&root.join("absent/MyPrint_autosave.voxl")),
+            Some("parent-missing"),
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **The parity requirement.** Path control without discovery is a
+    /// regression: a manifest would advertise a sidecar the reader could not
+    /// open. Resolution order is manifest â†’ sidecar-from-project â†’ legacy generic.
+    #[test]
+    fn recovery_discovery_prefers_manifest_then_sidecar_then_generic() {
+        let (root, recovery_dir, project) = autosave_fixture("b-discovery", "MyPrint.voxl");
+        let sidecar = project.parent().unwrap().join("MyPrint_autosave.voxl");
+        let generic = recovery_dir.join(super::SCENE_AUTOSAVE_VOXL_FILE);
+        std::fs::write(&sidecar, voxl_payload(b"sidecar")).expect("sidecar seed failed");
+        std::fs::write(&generic, voxl_payload(b"generic")).expect("generic seed failed");
+
+        let manifest = super::SceneAutosaveManifest {
+            saved_at: "2026-07-26T00:00:00.000Z".to_string(),
+            clean: false,
+            voxl_path: Some(sidecar.to_string_lossy().to_string()),
+            origin: Some(super::SCENE_AUTOSAVE_ORIGIN_SIDECAR.to_string()),
+            project_path: Some(project.to_string_lossy().to_string()),
+            payload_bytes: None,
+            fallback_reason: None,
+            last_error: None,
+        };
+
+        // 1. The manifest is authoritative.
+        let found = super::resolve_scene_autosave_recovery(&recovery_dir, Some(&manifest))
+            .expect("no recovery candidate found");
+        assert_eq!(found.voxl_path, sidecar);
+        assert_eq!(found.origin, super::SCENE_AUTOSAVE_ORIGIN_SIDECAR);
+
+        // 2. A manifest whose `voxlPath` no longer resolves falls through to the
+        //    sidecar derived from `projectPath` (project moved, or an older build
+        //    wrote no `voxlPath` at all).
+        let mut stale = manifest.clone();
+        stale.voxl_path = Some(
+            root.join("gone/MyPrint_autosave.voxl")
+                .to_string_lossy()
+                .to_string(),
+        );
+        let found = super::resolve_scene_autosave_recovery(&recovery_dir, Some(&stale))
+            .expect("no recovery candidate found via project path");
+        assert_eq!(found.voxl_path, sidecar);
+
+        // 3. With neither, the legacy generic location still recovers.
+        let mut legacy = manifest.clone();
+        legacy.voxl_path = None;
+        legacy.project_path = None;
+        let found = super::resolve_scene_autosave_recovery(&recovery_dir, Some(&legacy))
+            .expect("no recovery candidate found in the legacy location");
+        assert_eq!(found.voxl_path, generic);
+
+        // 4. Nothing on disk â‡’ no prompt.
+        std::fs::remove_file(&generic).expect("generic cleanup failed");
+        assert!(super::resolve_scene_autosave_recovery(&recovery_dir, Some(&legacy)).is_none());
+        assert!(super::resolve_scene_autosave_recovery(&recovery_dir, None).is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Back-compat lock: a manifest written before sub-phase B has none of the
+    /// new fields and must still parse and still recover from the generic path.
+    #[test]
+    fn recovery_discovery_reads_a_legacy_pre_sidecar_manifest() {
+        let root = unique_test_dir("b-legacy-manifest");
+        let recovery_dir = root.join("recovery");
+        std::fs::create_dir_all(&recovery_dir).expect("failed creating recovery dir");
+        // The pre-Ph0.1 payload name, which is never written any more.
+        let legacy = recovery_dir.join(super::SCENE_AUTOSAVE_LEGACY_VOXL_FILE);
+        std::fs::write(&legacy, voxl_payload(b"legacy")).expect("legacy seed failed");
+
+        let legacy_json = r#"{"savedAt":"2026-07-01T12:00:00.000Z","clean":false}"#;
+        let manifest: super::SceneAutosaveManifest =
+            serde_json::from_str(legacy_json).expect("a pre-Ph0.1 manifest no longer parses");
+        assert_eq!(manifest.voxl_path, None);
+
+        let found = super::resolve_scene_autosave_recovery(&recovery_dir, Some(&manifest))
+            .expect("a pre-Ph0.1 autosave became unrecoverable");
+        assert_eq!(found.voxl_path, legacy);
+        assert_eq!(found.origin, super::SCENE_AUTOSAVE_ORIGIN_RECOVERY_DIR);
+        assert_eq!(found.saved_at.as_deref(), Some("2026-07-01T12:00:00.000Z"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A payload that is not VOXL (truncated, foreign, or a leftover of some
+    /// other tool) must not be advertised as recoverable.
+    #[test]
+    fn recovery_discovery_skips_candidates_that_are_not_voxl() {
+        let (root, recovery_dir, project) = autosave_fixture("b-magic", "MyPrint.voxl");
+        let sidecar = project.parent().unwrap().join("MyPrint_autosave.voxl");
+        let generic = recovery_dir.join(super::SCENE_AUTOSAVE_VOXL_FILE);
+        std::fs::write(&sidecar, b"NOPE-not-a-voxl").expect("sidecar seed failed");
+        std::fs::write(&generic, voxl_payload(b"generic")).expect("generic seed failed");
+
+        let manifest = super::SceneAutosaveManifest {
+            saved_at: "2026-07-26T00:00:00.000Z".to_string(),
+            clean: false,
+            voxl_path: Some(sidecar.to_string_lossy().to_string()),
+            origin: Some(super::SCENE_AUTOSAVE_ORIGIN_SIDECAR.to_string()),
+            project_path: Some(project.to_string_lossy().to_string()),
+            payload_bytes: None,
+            fallback_reason: None,
+            last_error: None,
+        };
+
+        let found = super::resolve_scene_autosave_recovery(&recovery_dir, Some(&manifest))
+            .expect("recovery gave up instead of falling through a bad payload");
+        assert_eq!(
+            found.voxl_path, generic,
+            "a non-VOXL payload was advertised as recoverable"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The reader accepts only paths the resolver itself produced â€” never an
+    /// arbitrary caller-supplied path. Same discipline as
+    /// `scene_file_discard_atomic_temp`'s guard.
+    #[test]
+    fn recovery_read_rejects_paths_outside_the_candidate_list() {
+        let (root, recovery_dir, project) = autosave_fixture("b-candidate-guard", "MyPrint.voxl");
+        let sidecar = project.parent().unwrap().join("MyPrint_autosave.voxl");
+        std::fs::write(&sidecar, voxl_payload(b"sidecar")).expect("sidecar seed failed");
+
+        let manifest = super::SceneAutosaveManifest {
+            saved_at: "2026-07-26T00:00:00.000Z".to_string(),
+            clean: false,
+            voxl_path: Some(sidecar.to_string_lossy().to_string()),
+            origin: Some(super::SCENE_AUTOSAVE_ORIGIN_SIDECAR.to_string()),
+            project_path: Some(project.to_string_lossy().to_string()),
+            payload_bytes: None,
+            fallback_reason: None,
+            last_error: None,
+        };
+
+        let candidates = super::scene_autosave_recovery_candidates(&recovery_dir, Some(&manifest));
+        assert!(super::is_allowed_recovery_read(&candidates, &sidecar));
+        // The user's own project is never a recovery candidate.
+        assert!(!super::is_allowed_recovery_read(&candidates, &project));
+        assert!(!super::is_allowed_recovery_read(
+            &candidates,
+            std::path::Path::new("C:/Windows/System32/config/SAM")
+        ));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Cleanup gate: only a file this policy could have produced may be deleted
+    /// through the payload-deletion seam.
+    #[test]
+    fn only_autosave_payloads_are_deletable() {
+        let recovery_dir = std::path::Path::new("C:/appdata/autosave");
+        assert!(super::is_deletable_autosave_payload(
+            recovery_dir,
+            std::path::Path::new("C:/projects/MyPrint_autosave.voxl")
+        ));
+        assert!(super::is_deletable_autosave_payload(
+            recovery_dir,
+            &recovery_dir.join(super::SCENE_AUTOSAVE_VOXL_FILE)
+        ));
+        // The pre-Ph0.1 payload name has no marker; it is deletable only because
+        // it sits at the one well-known legacy location.
+        assert!(super::is_deletable_autosave_payload(
+            recovery_dir,
+            &recovery_dir.join(super::SCENE_AUTOSAVE_LEGACY_VOXL_FILE)
+        ));
+        assert!(!super::is_deletable_autosave_payload(
+            recovery_dir,
+            std::path::Path::new("C:/projects/scene.voxl")
+        ));
+        // The user's project, and anything else, never.
+        assert!(!super::is_deletable_autosave_payload(
+            recovery_dir,
+            std::path::Path::new("C:/projects/MyPrint.voxl")
+        ));
+        assert!(!super::is_deletable_autosave_payload(
+            recovery_dir,
+            std::path::Path::new("C:/projects/MyPrint_autosave.stl")
+        ));
+    }
+
+    /// **Save-As cleanup (user item 6).** A sidecar left beside the *old* project
+    /// after Save As is an orphan that implies unsaved work which does not exist.
+    #[test]
+    fn sidecar_for_a_project_is_deleted_by_name_and_nothing_else_is() {
+        let (root, _recovery, project) = autosave_fixture("b-saveas-cleanup", "MyPrint.voxl");
+        let sidecar = project.parent().unwrap().join("MyPrint_autosave.voxl");
+        let neighbour = project.parent().unwrap().join("OtherPrint_autosave.voxl");
+        std::fs::write(&sidecar, voxl_payload(b"s")).expect("sidecar seed failed");
+        std::fs::write(&neighbour, voxl_payload(b"n")).expect("neighbour seed failed");
+
+        super::delete_sidecar_for_project(&project).expect("sidecar deletion failed");
+
+        assert!(!sidecar.exists(), "the orphaned sidecar was not deleted");
+        assert!(project.exists(), "deletion touched the user's project");
+        assert!(neighbour.exists(), "deletion touched an unrelated sidecar");
+
+        // Idempotent: a project that never autosaved is not an error.
+        super::delete_sidecar_for_project(&project).expect("second deletion should be a no-op");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **Inherited from sub-phase A.** A crashed write leaves a
+    /// `<target>.tmp-<pid>-<seq>` sibling beside the user's project. Sweep them,
+    /// but only files matching A's exact pattern and only where we already write.
+    #[test]
+    fn stale_commit_temps_are_swept_conservatively() {
+        let root = unique_test_dir("b-temp-sweep");
+        let stale = root.join("MyPrint.voxl.tmp-424242-7");
+        let ours = root.join(format!("MyPrint.voxl.tmp-{}-0", std::process::id()));
+        let innocent = root.join("MyPrint.voxl");
+        let lookalike = root.join("MyPrint.voxl.tmp-notapid-0");
+        for path in [&stale, &ours, &innocent, &lookalike] {
+            std::fs::write(path, b"x").expect("seed failed");
+        }
+
+        // Nothing is old enough yet, so a fresh crash residue is left alone â€”
+        // an in-flight write from another instance must never be deleted.
+        assert_eq!(super::sweep_stale_scene_commit_temps(&root, 3600), 0);
+        assert!(stale.exists());
+
+        // With the age gate satisfied, only other processes' temps go.
+        assert_eq!(super::sweep_stale_scene_commit_temps(&root, 0), 1);
+        assert!(!stale.exists(), "a stale foreign temp survived the sweep");
+        assert!(
+            ours.exists(),
+            "the sweep deleted this process's own live temp"
+        );
+        assert!(innocent.exists(), "the sweep deleted a real scene file");
+        assert!(lookalike.exists(), "the sweep deleted a non-matching file");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn committed_manifest() -> super::SceneAutosaveManifest {
+        super::SceneAutosaveManifest {
+            saved_at: "2026-07-26T11:00:00.000Z".to_string(),
+            clean: false,
+            voxl_path: Some("C:/projects/MyPrint_autosave.voxl".to_string()),
+            origin: Some("sidecar".to_string()),
+            project_path: Some("C:/projects/MyPrint.voxl".to_string()),
+            payload_bytes: Some(12345),
+            fallback_reason: None,
+            last_error: None,
+        }
+    }
+
+    fn failure_write(error: &str) -> super::SceneAutosaveManifestWrite {
+        super::SceneAutosaveManifestWrite {
+            saved_at: "2026-07-26T12:00:00.000Z".to_string(),
+            clean: false,
+            voxl_path: None,
+            origin: None,
+            project_path: None,
+            payload_bytes: None,
+            fallback_reason: None,
+            last_error: Some(error.to_string()),
+            delete_payload: false,
+        }
+    }
+
+    /// Failure honesty (sub-phase D3, finding N4): an error must be recorded without
+    /// advancing `saved_at` past what is actually on disk or dropping the pointer
+    /// to the last committed payload. A naive write that updated `saved_at` turned a
+    /// transient (antivirus on destination, share blinking) into a false recovery prompt
+    /// offering old work labeled with a fresh timestamp — turning a *reported* problem into
+    /// a real one.
+    #[test]
+    fn autosave_failure_is_recorded_without_disturbing_the_last_good_payload() {
+        let previous = committed_manifest();
+        let next = super::build_scene_autosave_manifest(
+            Some(&previous),
+            failure_write("This scene is 4.3 GB compressed and exceeds the VOXL 4 GB limit."),
+        );
+
+        assert_eq!(
+            next.last_error.as_deref(),
+            Some("This scene is 4.3 GB compressed and exceeds the VOXL 4 GB limit.")
+        );
+        assert_eq!(
+            next.saved_at, previous.saved_at,
+            "a failed tick advanced the timestamp the recovery prompt shows"
+        );
+        assert_eq!(
+            next.voxl_path, previous.voxl_path,
+            "a failed tick erased the pointer to the last committed payload"
+        );
+        assert_eq!(next.origin, previous.origin);
+        assert_eq!(next.project_path, previous.project_path);
+        assert_eq!(next.payload_bytes, previous.payload_bytes);
+    }
+
+    #[test]
+    fn a_first_ever_failure_still_produces_a_readable_manifest() {
+        let next = super::build_scene_autosave_manifest(None, failure_write("disk full"));
+        assert_eq!(next.last_error.as_deref(), Some("disk full"));
+        assert_eq!(next.saved_at, "2026-07-26T12:00:00.000Z");
+        assert_eq!(next.voxl_path, None);
+    }
+
+    #[test]
+    fn a_successful_write_clears_a_recorded_failure() {
+        let mut previous = committed_manifest();
+        previous.last_error = Some("disk full".to_string());
+
+        let next = super::build_scene_autosave_manifest(
+            Some(&previous),
+            super::SceneAutosaveManifestWrite {
+                saved_at: "2026-07-26T12:00:00.000Z".to_string(),
+                clean: false,
+                voxl_path: Some("C:/projects/MyPrint_autosave.voxl".to_string()),
+                origin: Some("sidecar".to_string()),
+                project_path: Some("C:/projects/MyPrint.voxl".to_string()),
+                payload_bytes: Some(999),
+                fallback_reason: None,
+                last_error: None,
+                delete_payload: false,
+            },
+        );
+
+        assert_eq!(
+            next.last_error, None,
+            "a healthy autosave kept reporting a stale error"
+        );
+        assert_eq!(next.saved_at, "2026-07-26T12:00:00.000Z");
+        assert_eq!(next.payload_bytes, Some(999));
+    }
+
+    #[test]
+    fn clearing_the_manifest_drops_the_payload_pointer_it_just_deleted() {
+        let previous = committed_manifest();
+        let next = super::build_scene_autosave_manifest(
+            Some(&previous),
+            super::SceneAutosaveManifestWrite {
+                saved_at: "2026-07-26T12:00:00.000Z".to_string(),
+                clean: true,
+                voxl_path: previous.voxl_path.clone(),
+                origin: previous.origin.clone(),
+                project_path: previous.project_path.clone(),
+                payload_bytes: None,
+                fallback_reason: None,
+                last_error: None,
+                delete_payload: true,
+            },
+        );
+
+        assert!(next.clean);
+        assert_eq!(
+            next.voxl_path, None,
+            "a cleaned manifest advertised a file it had deleted"
+        );
+    }
+
+    /// Candidate paths come from the frontend, which cannot resolve `~`; the
+    /// macOS candidate `~/Applications/UVtools.app` depends on this.
+    #[test]
+    fn expand_tilde_resolves_against_home() {
+        let home = std::env::var("HOME").expect("HOME is set on the test hosts");
+
+        assert_eq!(
+            super::expand_tilde("~/Applications/UVtools.app"),
+            std::path::PathBuf::from(&home).join("Applications/UVtools.app"),
+        );
+        assert_eq!(
+            super::expand_tilde("/Applications/UVtools.app"),
+            std::path::PathBuf::from("/Applications/UVtools.app"),
+            "an absolute candidate must be left alone",
+        );
+        assert_eq!(
+            super::expand_tilde("~backup/UVtools"),
+            std::path::PathBuf::from("~backup/UVtools"),
+            "only a leading `~/` is a home reference",
+        );
+    }
+
+    /// UVTools ships on macOS as an `.app` bundle, which is a directory: the
+    /// `is_file()` check that discovery used before rejected every macOS
+    /// install (issue #604).
+    #[test]
+    fn app_bundles_count_as_uvtools_installs_on_macos() {
+        let dir = unique_test_dir("uvtools-discovery");
+
+        let bundle = dir.join("UVtools.app");
+        std::fs::create_dir_all(bundle.join("Contents/MacOS")).expect("failed creating bundle");
+        let binary = bundle.join("Contents/MacOS/UVtools");
+        std::fs::write(&binary, b"").expect("failed writing bundle binary");
+        let plain_dir = dir.join("UVtools");
+        std::fs::create_dir_all(&plain_dir).expect("failed creating plain dir");
+
+        assert!(
+            super::is_uvtools_install(&binary),
+            "a bare executable is an install on every platform",
+        );
+        assert!(!super::is_uvtools_install(&dir.join("missing.app")));
+        assert!(
+            !super::is_uvtools_install(&plain_dir),
+            "a directory without the .app extension is not a bundle",
+        );
+        assert_eq!(
+            super::is_uvtools_install(&bundle),
+            cfg!(target_os = "macos"),
+            "only macOS treats an .app directory as an install",
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

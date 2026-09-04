@@ -26,7 +26,7 @@ export function RootsSettingsCard({ roots, onChange }: RootsSettingsCardProps) {
                     />
                 </label>
                 <label className="flex flex-col gap-0.5">
-                    <span className="text-[9px] text-neutral-400">Disk H</span>
+                    <span className="text-[9px] text-neutral-400">Root Disk H</span>
                     <NumberInput
                         value={roots.diskHeightMm}
                         onChange={(val) => onChange({ diskHeightMm: val })}

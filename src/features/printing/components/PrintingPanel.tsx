@@ -163,7 +163,7 @@ export function PrintingPanel({
                     title={savedFilePath ?? outputName ?? ''}
                     style={{
                       color: 'var(--text-strong)',
-                      fontFamily: 'monospace',
+                      fontFamily: 'var(--font-geist-mono)',
                       maskImage: 'linear-gradient(to right, #000 0%, #000 calc(100% - 18px), transparent 100%)',
                       WebkitMaskImage: 'linear-gradient(to right, #000 0%, #000 calc(100% - 18px), transparent 100%)',
                     }}

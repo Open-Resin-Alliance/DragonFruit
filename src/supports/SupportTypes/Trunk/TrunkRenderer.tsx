@@ -50,6 +50,15 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
     const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
     const [, setDragTick] = React.useState(0);
 
+    React.useEffect(() => {
+        return () => {
+            dragSessionRef.current?.stop();
+            dragSessionRef.current = null;
+            liveDragConeRef.current = null;
+            beforeHistoryRef.current = null;
+        };
+    }, []);
+
     // Use universal highlight hook
     const { pickRef, visuals, isPickingHovered } = useHighlight({
         id: trunk.id,

@@ -16,6 +16,7 @@ import {
     updateRootsProfile,
     updateGridSettings,
     updateAutoBracingSettings,
+    updateAutoSupportSettings,
     updateDevToolsEnabled,
 } from './state';
 import {
@@ -23,14 +24,11 @@ import {
     getSnapshot as getSupportSnapshot,
     resolveEditableSupportTarget,
     getSupportSettingsForTarget,
-    applySettingsToSupportTarget,
-    beginSupportStateBatch,
-    endSupportStateBatch,
     type EditableSupportTarget,
 } from '../state';
-import { getSelectedSupportIds } from '../interaction/supportMultiSelection';
 import { checkPresetDrift, findMatchingPresetIdForSettings, getPresetById } from './presets';
 import { createDefaultSettings, type SupportSettings } from './types';
+import { applySettingsToSelectedSupports } from './applySettingsToSelectedSupports';
 import { areSupportGeometrySettingsEqual } from './supportSettingsCodec';
 import { captureSupportEditSnapshot, pushSupportEditHistory, type SupportEditHistorySnapshot } from '../history/supportEditHistory';
 import {
@@ -66,7 +64,7 @@ import { DEFAULT_RAFT_SETTINGS } from '../Rafts/Crenelated/RaftDefaults';
 import type { SupportKind } from './supportKindState';
 import { resetSupportSettingsScrollForTabChange } from './supportSidebarScroll';
 
-const INPUT_CLASS = 'ui-input h-8 w-full px-2.5 text-xs sm:text-sm text-center no-spinners';
+const INPUT_CLASS = 'ui-input h-8 w-full px-2.5 text-xs sm:text-sm text-center no-spinners !bg-[var(--surface-0)]';
 const SECTION_CARD_STYLE: React.CSSProperties = {
     borderColor: 'var(--border-subtle)',
     background: 'var(--surface-1)',
@@ -84,9 +82,10 @@ const KIND_META: Record<SupportKind, { label: string; icon: typeof Pickaxe }> = 
     raft: { label: 'Raft', icon: Sailboat },
     grid: { label: 'Grid', icon: Grid3X3 },
     stick: { label: 'Bracing', icon: WandSparkles },
+    auto: { label: 'Auto', icon: Sparkles },
 };
 
-const OVERFLOW_COMPACT_KIND_SET = new Set<SupportKind>(['trunk', 'raft', 'grid', 'stick']);
+const OVERFLOW_COMPACT_KIND_SET = new Set<SupportKind>(['trunk', 'raft', 'grid', 'stick', 'auto']);
 const POPUP_PREVIEW_KIND_SET = new Set<SupportKind>(['trunk']);
 
 function normalizeTabKind(kind: SupportKind): SupportKind {
@@ -166,40 +165,6 @@ function fieldFocusProps(
         onBlurCapture: onBlur,
         'data-setting-key': key,
     };
-}
-
-/** Apply settings to all currently selected supports (multi-selection aware). */
-function applySettingsToAllSelectedSupports(settings: SupportSettings): void {
-    const snap = getSupportSnapshot();
-    const selectedIds = getSelectedSupportIds();
-    const idsToApply = selectedIds.length > 0
-        ? selectedIds
-        : (snap.selectedId ? [snap.selectedId] : []);
-
-    if (idsToApply.length === 0) return;
-
-    // Batch all mutations so notify() only fires once after the loop,
-    // preventing cascading re-renders from useSyncExternalStore listeners.
-    beginSupportStateBatch();
-    try {
-        for (const id of idsToApply) {
-            let target: EditableSupportTarget | null = null;
-            if (snap.trunks[id]) {
-                target = { kind: 'trunk', id };
-            } else if (snap.branches[id]) {
-                target = { kind: 'branch', id };
-            } else if (snap.leaves[id]) {
-                target = { kind: 'leaf', id };
-            } else {
-                target = resolveEditableSupportTarget(id, snap.selectedCategory ?? undefined);
-            }
-            if (target) {
-                applySettingsToSupportTarget(target, settings);
-            }
-        }
-    } finally {
-        endSupportStateBatch();
-    }
 }
 
 /**
@@ -415,7 +380,7 @@ export function SupportSidebar() {
         const latestSettings = editSessionLatestSettingsRef.current ?? getSettings();
         const persisted = getSupportSettingsForTarget(target);
         if (!persisted || !areSupportGeometrySettingsEqual(persisted, latestSettings)) {
-            applySettingsToAllSelectedSupports(latestSettings);
+            applySettingsToSelectedSupports(latestSettings);
         }
 
         if (before) {
@@ -556,7 +521,7 @@ export function SupportSidebar() {
 
         supportEditSessionDirtyRef.current = true;
         editSessionLatestSettingsRef.current = settings;
-        applySettingsToAllSelectedSupports(settings);
+        applySettingsToSelectedSupports(settings);
     }, [editableTarget, settings]);
 
     React.useEffect(() => {
@@ -982,7 +947,7 @@ export function SupportSidebar() {
 
                     <div className="space-y-2">
                         <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.diskHeightMm')}>
-                            <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Disk Height</div>
+                            <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Root Disk Height</div>
                             <div className="relative">
                                 <NumberInput
                                     value={settings.roots.diskHeightMm}
@@ -1133,7 +1098,7 @@ export function SupportSidebar() {
 
             <div className={compactTrunkPairClass}>
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.diskHeightMm')}>
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Disk Height">Disk Height</div>
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title="Root Disk Height">Root Disk Height</div>
                     <div className="relative">
                         <NumberInput
                             value={settings.roots.diskHeightMm}
@@ -1205,14 +1170,14 @@ export function SupportSidebar() {
                     <div className="inline-flex items-center gap-1">
                         <IconButton
                             onClick={handleSave}
-                            className={`!p-1.5 transition-colors ${saveStatus === 'saved' ? '!bg-green-600/30 !text-green-400' : saveStatus === 'error' ? '!bg-red-600/30 !text-red-400' : '!text-green-400/70 hover:!text-green-400 hover:!bg-green-600/15'}`}
+                            className={`!p-0.5 transition-colors ${saveStatus === 'saved' ? '!bg-green-600/30 !text-green-400' : saveStatus === 'error' ? '!bg-red-600/30 !text-red-400' : '!text-green-400/70 hover:!text-green-400 hover:!bg-green-600/15'}`}
                             title={saveStatus !== 'idle' ? (saveStatus === 'saved' ? 'Saved' : 'Save failed') : 'Save settings'}
                         >
                             {saveStatus === 'saved' ? <Check className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
                         </IconButton>
                         <IconButton
                             onClick={handleRestoreDefaults}
-                            className={`!p-1.5 transition-colors ${defaultsAnimating ? '' : '!text-red-400/70 hover:!text-red-400 hover:!bg-red-600/15'}`}
+                            className={`!p-0.5 transition-colors ${defaultsAnimating ? '' : '!text-red-400/70 hover:!text-red-400 hover:!bg-red-600/15'}`}
                             title="Restore defaults"
                         >
                             <RotateCcw className={`h-3.5 w-3.5 ${defaultsAnimating ? 'animate-spin-once text-orange-400' : ''}`} />
@@ -1328,10 +1293,13 @@ export function SupportSidebar() {
                                                             autoBracing: {
                                                                 ...current.autoBracing,
                                                             },
+                                                            autoSupport: {
+                                                                ...current.autoSupport,
+                                                            },
                                                         };
                                                         editSessionLatestSettingsRef.current = nextSettings;
                                                         setSettings(nextSettings);
-                                                        applySettingsToAllSelectedSupports(nextSettings);
+                                                        applySettingsToSelectedSupports(nextSettings);
                                                         setOptimisticPresetId(presetId);
                                                     }}
                                                 />

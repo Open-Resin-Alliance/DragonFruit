@@ -85,6 +85,11 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             key: 'm',
             description: 'Switch canvas tool to Modify'
         },
+        TOOL_MODIFY_LOCAL: {
+            key: 'm',
+            modifier: 'shift',
+            description: 'Switch canvas tool to Modify with the gizmo in the model\'s own axes'
+        },
         TOOL_SMOOTH: {
             key: 's',
             description: 'Switch canvas tool to Smooth'
@@ -137,18 +142,6 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
         SLOT_6: {
             key: '6',
             description: 'Pinned Slot 6'
-        }
-    },
-    ROTATION: {
-        SNAP_COARSE: {
-            key: 'drag',
-            modifier: 'meta',
-            description: 'Rotation Snap (45°)'
-        },
-        SNAP_FINE: {
-            key: 'drag',
-            modifier: 'meta+shift',
-            description: 'Rotation Snap (15°)'
         }
     },
     GLOBAL: {
@@ -219,6 +212,11 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             key: 'k',
             modifier: 'ctrl+shift',
             description: 'Toggle cross section caps debug panel'
+        },
+        RE_RUN_ONBOARDING: {
+            key: 'o',
+            modifier: 'ctrl+shift',
+            description: 'Re-run the first-run onboarding wizard'
         }
     },
     MESH: {
@@ -243,6 +241,12 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             key: 'a',
             modifier: 'ctrl',
             description: 'Select all hole punches / items'
+        }
+    },
+    CUT: {
+        TOGGLE_PREVIEW: {
+            key: 'b',
+            description: 'Show or hide the cut preview while the Cut tool is open'
         }
     }
 } as const;

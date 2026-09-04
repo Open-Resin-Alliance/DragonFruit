@@ -67,7 +67,7 @@ export function useModifierApplyOverlay(
       && pendingHolePunchAutoApplyModelId === null
     ) {
       return {
-        title: 'Hollowing complete — loading mesh…',
+        title: 'Hollowing complete — Loading mesh…',
         detailLines: [
           'Uploading the new geometry to the viewport and rebuilding pick acceleration.',
           'The app may pause briefly.',
@@ -77,7 +77,7 @@ export function useModifierApplyOverlay(
 
     if (finalizingModifierApply === 'holePunch' && !isApplyingHollowing) {
       return {
-        title: 'Hole punches complete — loading mesh…',
+        title: 'Hole punches complete — Loading mesh…',
         detailLines: [
           'Uploading the new geometry to the viewport and rebuilding pick acceleration.',
           'The app may pause briefly.',

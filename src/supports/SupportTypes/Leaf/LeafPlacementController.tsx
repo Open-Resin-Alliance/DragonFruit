@@ -14,7 +14,7 @@ import type { SupportData } from '../../rendering/SupportBuilder';
 import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from '../Twig/twigTaper';
 import { SUPPORT_ADD_LEAF } from '../../history/actionTypes';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
-import { generateUuid } from '@/utils/uuid';
+import { v4 as uuidv4 } from 'uuid';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
@@ -611,7 +611,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     }
 
                     if (closestJoint && minJointDist < 3.0) {
-                        const newKnotId = generateUuid();
+                        const newKnotId = uuidv4();
                         const newKnot: Knot = {
                             id: newKnotId,
                             parentShaftId: closestJointSeg!.id,
@@ -624,13 +624,16 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                         leafPlacementStore.setStage('awaitingSproutTip');
                     } else {
                         // Create knot on the segment at snappedPos
-                        const newKnotId = generateUuid();
+                        const newKnotId = uuidv4();
                         const segmentId = snapTarget.targetId;
                         const committedKnotIsOnTwig = !!twigBySegmentId.get(segmentId);
                         const hostDiameterMm = snapTarget.hostDiameterMm ?? getSettings().shaft.diameterMm;
                         const committedKnotDiameter = committedKnotIsOnTwig
                             ? twigJointDiameterForLocalDiameter(hostDiameterMm)
-                            : hostDiameterMm + 0.1;
+                            // +0.125 renders at the trunk-joint diameter (the
+                            // KnotRenderer subtracts the full joint offset); the
+                            // legacy +0.1 rendered at the shaft — invisible.
+                            : hostDiameterMm + 0.125;
 
                         const newKnot: Knot = {
                             id: newKnotId,
@@ -689,7 +692,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 addLeaf(markedLeaf);
 
                 // Reload pattern: create new knot at the same position and lock junctionHubId to it
-                const newParentKnotId = generateUuid();
+                const newParentKnotId = uuidv4();
                 const newParentKnot: Knot = {
                     ...parentKnot,
                     id: newParentKnotId,
@@ -727,7 +730,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     : hostDiameterMm + 0.1;
 
                 const parentKnot: Knot = {
-                    id: generateUuid(),
+                    id: uuidv4(),
                     parentShaftId: segmentId,
                     t: snapTarget.t,
                     pos: snapTarget.snappedPos,
@@ -774,7 +777,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 });
 
                 if (snap.sproutParentingLockHeld) {
-                    const reloadKnotId = generateUuid();
+                    const reloadKnotId = uuidv4();
                     const reloadKnot: Knot = {
                         ...parentKnot,
                         id: reloadKnotId,

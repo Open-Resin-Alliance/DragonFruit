@@ -14,17 +14,6 @@ import type { TrunkReplacementPlan } from './types';
 import { computeAndApplyTrunkDiameterProfile } from './maxConnectedDiameter';
 import { v4 as uuidv4 } from 'uuid';
 
-function generateUuid() {
-    return uuidv4();
-}
-
-function distSq(a: Vec3, b: Vec3): number {
-    const dx = a.x - b.x;
-    const dy = a.y - b.y;
-    const dz = a.z - b.z;
-    return dx * dx + dy * dy + dz * dz;
-}
-
 function satisfiesMinAngleFromHorizontal(tipPos: Vec3, knotPos: Vec3, minAngleDeg: number): boolean {
     const dx = tipPos.x - knotPos.x;
     const dy = tipPos.y - knotPos.y;
@@ -160,7 +149,7 @@ function adjustBranchForNewParentKnot(branch: Branch, newParentKnot: Knot): Bran
     const baseMidJoint: Joint | undefined = seg0.topJoint ?? seg1.bottomJoint;
     const midJoint: Joint = baseMidJoint
         ? { ...baseMidJoint, pos: midPos }
-        : { id: generateUuid(), pos: midPos, diameter: seg0.diameter };
+        : { id: uuidv4(), pos: midPos, diameter: seg0.diameter };
 
     const nextSeg0 = {
         ...seg0,
@@ -313,7 +302,7 @@ function createAttachmentKnotOnTrunk(args: {
             if (!satisfiesMinAngleFromHorizontal(tipPos, pos, minAngleDeg)) continue;
 
             return {
-                id: generateUuid(),
+                id: uuidv4(),
                 parentShaftId: seg.id,
                 t,
                 pos,
@@ -325,7 +314,11 @@ function createAttachmentKnotOnTrunk(args: {
     return null;
 }
 
-export function applyTrunkReplacement(plan: TrunkReplacementPlan, historyBefore?: SupportState): boolean {
+export function applyTrunkReplacement(
+    plan: TrunkReplacementPlan,
+    historyBefore?: SupportState,
+    opts?: { skipHistory?: boolean },
+): boolean {
     const snapshot = getSnapshot();
     const before = structuredClone(historyBefore ?? snapshot);
     const trunk = snapshot.trunks[plan.trunkToRemoveId];
@@ -551,12 +544,14 @@ export function applyTrunkReplacement(plan: TrunkReplacementPlan, historyBefore?
 
     const after = structuredClone(getSnapshot());
 
-    const payload: SupportReplaceTrunkPayload = {
-        before,
-        after,
-    };
+    if (!opts?.skipHistory) {
+        const payload: SupportReplaceTrunkPayload = {
+            before,
+            after,
+        };
 
-    pushSupportHistory({ type: SUPPORT_REPLACE_TRUNK, payload });
+        pushSupportHistory({ type: SUPPORT_REPLACE_TRUNK, payload });
+    }
 
     return true;
 }

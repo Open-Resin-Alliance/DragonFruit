@@ -1,12 +1,11 @@
 import * as THREE from 'three';
+import {
+  type TauriInvoke,
+  loadTauriCore,
+  readPositionsFromCommand,
+  stageGeometryToStagedMesh,
+} from './tauriMeshBridge';
 
-type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown> | ArrayBuffer | ArrayBufferView, opts?: { headers?: Record<string, string> }) => Promise<T>;
-
-interface TauriCoreModule {
-  invoke: TauriInvoke;
-}
-
-let tauriCorePromise: Promise<TauriCoreModule | null> | null = null;
 let stagedHollowPreviewSourceKey: string | null = null;
 
 export type HollowMode = 'cavity' | 'infill' | 'shell_open_face';
@@ -86,82 +85,6 @@ export interface SelectRemovedVoxelsInPolygonRequest {
   options: HollowOptions;
 }
 
-export function isTauriRuntime(): boolean {
-  if (typeof window === 'undefined') return false;
-  return '__TAURI_INTERNALS__' in window;
-}
-
-async function loadTauriCore(): Promise<TauriCoreModule | null> {
-  if (!isTauriRuntime()) return null;
-  if (!tauriCorePromise) {
-    tauriCorePromise = import('@tauri-apps/api/core')
-      .then((mod) => ({ invoke: mod.invoke as TauriInvoke }))
-      .catch(() => null);
-  }
-  return tauriCorePromise;
-}
-
-async function readStagedPositions(invoke: TauriInvoke): Promise<Float32Array> {
-  const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>('mesh_repair_read_positions');
-  let u8: Uint8Array;
-  if (bytes instanceof ArrayBuffer) {
-    u8 = new Uint8Array(bytes);
-  } else if (bytes instanceof Uint8Array) {
-    u8 = bytes;
-  } else if (Array.isArray(bytes)) {
-    u8 = new Uint8Array(bytes);
-  } else {
-    throw new Error('mesh_repair_read_positions returned unexpected type');
-  }
-
-  const copy = new Uint8Array(u8.byteLength);
-  copy.set(u8);
-  return new Float32Array(copy.buffer);
-}
-
-async function stageGeometryToStagedMesh(
-  invoke: TauriInvoke,
-  geometry: THREE.BufferGeometry,
-): Promise<void> {
-  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | null;
-  if (!posAttr) throw new Error('stageGeometryToStagedMesh: geometry has no position attribute');
-
-  const soup = expandGeometryToTriangleSoup(geometry);
-  const bytes = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
-
-  await invoke('stage_mesh_binary_set', bytes, {
-    headers: { 'Content-Type': 'application/octet-stream' },
-  });
-}
-
-async function readPositionsFromCommand(
-  invoke: TauriInvoke,
-  command:
-    | 'mesh_repair_read_positions'
-    | 'mesh_hollow_preview_read_positions'
-    | 'mesh_hollow_preview_read_infill_positions'
-    | 'mesh_hollow_preview_read_removed_voxel_centers'
-    | 'mesh_hollow_preview_read_blocked_voxel_centers'
-    | 'mesh_hollow_preview_read_cavity_positions'
-    | 'mesh_hollow_staged_read_cavity_positions',
-): Promise<Float32Array> {
-  const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>(command);
-  let u8: Uint8Array;
-  if (bytes instanceof ArrayBuffer) {
-    u8 = new Uint8Array(bytes);
-  } else if (bytes instanceof Uint8Array) {
-    u8 = bytes;
-  } else if (Array.isArray(bytes)) {
-    u8 = new Uint8Array(bytes);
-  } else {
-    throw new Error(`${command} returned unexpected type`);
-  }
-
-  const copy = new Uint8Array(u8.byteLength);
-  copy.set(u8);
-  return new Float32Array(copy.buffer);
-}
-
 async function readUint32FromCommand(
   invoke: TauriInvoke,
   command:
@@ -185,28 +108,6 @@ async function readUint32FromCommand(
   return new Uint32Array(copy.buffer);
 }
 
-function expandGeometryToTriangleSoup(geometry: THREE.BufferGeometry): Float32Array {
-  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
-  const positions = posAttr.array as Float32Array;
-  const index = geometry.getIndex();
-
-  if (!index) {
-    if (positions instanceof Float32Array) return positions;
-    return new Float32Array(positions as unknown as ArrayLike<number>);
-  }
-
-  const indexArr = index.array as Uint16Array | Uint32Array;
-  const out = new Float32Array(indexArr.length * 3);
-  for (let i = 0; i < indexArr.length; i += 1) {
-    const vi = indexArr[i] * 3;
-    const oi = i * 3;
-    out[oi] = positions[vi];
-    out[oi + 1] = positions[vi + 1];
-    out[oi + 2] = positions[vi + 2];
-  }
-  return out;
-}
-
 export async function hollowFromGeometry(
   geometry: THREE.BufferGeometry,
   options: HollowOptions,
@@ -220,7 +121,7 @@ export async function hollowFromGeometry(
   const optionsJson = JSON.stringify(options);
   const reportJson = await core.invoke<string>('mesh_hollow_staged', { optionsJson });
   const report = JSON.parse(reportJson) as HollowReport;
-  const positions = await readStagedPositions(core.invoke);
+  const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
   let cavityPositions: Float32Array | undefined;
   try {
     cavityPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_staged_read_cavity_positions');
@@ -307,7 +208,7 @@ export async function hollowApplyFromCapturedSource(
   const optionsJson = JSON.stringify(options);
   const reportJson = await core.invoke<string>('mesh_hollow_apply_from_captured_source', { optionsJson });
   const report = JSON.parse(reportJson) as HollowReport;
-  const positions = await readStagedPositions(core.invoke);
+  const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
   let cavityPositions: Float32Array | undefined;
   try {
     cavityPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_staged_read_cavity_positions');

@@ -10,6 +10,10 @@ import {
     applyAutoBracingSettingsPatch,
     normalizeAutoBracingSettings,
 } from '../autoBracing/settings';
+import {
+    applyAutoSupportSettingsPatch,
+    normalizeAutoSupportSettings,
+} from '../autoSupport/settings';
 
 // --- Store ---
 
@@ -61,8 +65,13 @@ function mergeWithDefaults(settings: SupportSettings): SupportSettings {
         grid: mergedGrid,
         meshToMesh: { ...defaults.meshToMesh, ...(settings as any).meshToMesh },
         autoBracing: mergedAutoBracing,
+        autoSupport: normalizeAutoSupportSettings({
+            ...defaults.autoSupport,
+            ...((settings as any).autoSupport ?? {}),
+        }),
         devToolsEnabled: settings.devToolsEnabled !== undefined ? settings.devToolsEnabled : defaults.devToolsEnabled,
         devTools: settings.devTools ? { ...defaults.devTools, ...settings.devTools } : defaults.devTools,
+        debugSimpleSupportRender: typeof settings.debugSimpleSupportRender === 'boolean' ? settings.debugSimpleSupportRender : defaults.debugSimpleSupportRender,
     };
 }
 
@@ -115,6 +124,10 @@ export function getMeshToMeshSettings() {
 
 export function getAutoBracingSettings() {
     return currentSettings.autoBracing;
+}
+
+export function getAutoSupportSettings() {
+    return currentSettings.autoSupport;
 }
 
 // --- Setters ---
@@ -208,6 +221,14 @@ export function updateAutoBracingSettings(autoBracing: Partial<SupportSettings['
     notify();
 }
 
+export function updateAutoSupportSettings(autoSupport: Partial<SupportSettings['autoSupport']>): void {
+    currentSettings = {
+        ...currentSettings,
+        autoSupport: applyAutoSupportSettingsPatch(currentSettings.autoSupport, autoSupport),
+    };
+    notify();
+}
+
 export function updateDevToolsSettings(devTools: Partial<SupportSettings['devTools']>): void {
     currentSettings = {
         ...currentSettings,
@@ -224,6 +245,13 @@ export function updateDevToolsEnabled(enabled: boolean): void {
     notify();
 }
 
+export function updateDebugSimpleSupportRender(enabled: boolean): void {
+    currentSettings = {
+        ...currentSettings,
+        debugSimpleSupportRender: enabled,
+    };
+    notify();
+}
 // --- Subscription ---
 
 export function subscribeToSettings(listener: SettingsListener): () => void {

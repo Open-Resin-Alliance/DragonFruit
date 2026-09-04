@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import type { ThreeEvent } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import type { FlatteningPlane } from '../logic/computeFlatteningPlanes';
@@ -55,9 +56,9 @@ function PlanePolygon({
 }: {
   plane: FlatteningPlane;
   isHovered: boolean;
-  onPointerOver: (e: any) => void;
-  onPointerOut: (e: any) => void;
-  onClick: (e: any) => void;
+  onPointerOver: (e: ThreeEvent<PointerEvent>) => void;
+  onPointerOut: (e: ThreeEvent<PointerEvent>) => void;
+  onClick: (e: ThreeEvent<MouseEvent>) => void;
 }) {
   const geom = useMemo(() => {
     // Build a triangle fan from the vertices

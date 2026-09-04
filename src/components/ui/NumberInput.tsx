@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
+import { wheelStepDirection } from '@/components/ui/wheelStepDirection';
 
 interface NumberInputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'onChange' | 'value'> {
   value: number;
@@ -101,10 +102,14 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
     if (props.onWheel) props.onWheel(e);
     if (e.defaultPrevented) return;
     if (props.disabled || props.readOnly) return;
-    if (e.deltaY === 0) return;
+
+    // Dominant axis, not deltaY: Shift+wheel arrives as horizontal scroll, and
+    // Shift is what ScrollLockedInputs requires to step an unfocused field.
+    const direction = wheelStepDirection(e);
+    if (direction === 0) return;
 
     e.preventDefault();
-    applyStepDelta(e.deltaY < 0 ? 1 : -1);
+    applyStepDelta(direction);
   };
 
   const parsedCurrent = Number.parseFloat(displayValue);

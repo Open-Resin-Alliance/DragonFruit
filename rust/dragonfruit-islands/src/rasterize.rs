@@ -51,53 +51,6 @@ fn intersect_edge_z(
     Some((ax + t * (bx - ax), ay + t * (by - ay)))
 }
 
-/// Slice triangles at Z height and build closed polygon loops.
-/// Matches `BucketedSlicer.slice()` + `buildLoops()`.
-///
-/// Returns loops in the TS coordinate system: (world_x, -world_y).
-fn slice_to_loops(triangles: &[Triangle], z: f64) -> Vec<Vec<Pt2>> {
-    let z_slice = z + 1e-5; // matches TS: zSlice = z + 1e-5
-
-    let mut segments: Vec<(Pt2, Pt2)> = Vec::new();
-
-    for tri in triangles {
-        let (v0x, v0y, v0z) = (tri.a.x as f64, tri.a.y as f64, tri.a.z as f64);
-        let (v1x, v1y, v1z) = (tri.b.x as f64, tri.b.y as f64, tri.b.z as f64);
-        let (v2x, v2y, v2z) = (tri.c.x as f64, tri.c.y as f64, tri.c.z as f64);
-
-        let above0 = v0z >= z_slice + 10.0 * EPS;
-        let above1 = v1z >= z_slice + 10.0 * EPS;
-        let above2 = v2z >= z_slice + 10.0 * EPS;
-        let below0 = v0z <= z_slice - 10.0 * EPS;
-        let below1 = v1z <= z_slice - 10.0 * EPS;
-        let below2 = v2z <= z_slice - 10.0 * EPS;
-
-        if (above0 && above1 && above2) || (below0 && below1 && below2) {
-            continue;
-        }
-
-        let mut points: Vec<(f64, f64)> = Vec::new();
-        if let Some(p) = intersect_edge_z(v0x, v0y, v0z, v1x, v1y, v1z, z_slice) {
-            points.push(p);
-        }
-        if let Some(p) = intersect_edge_z(v1x, v1y, v1z, v2x, v2y, v2z, z_slice) {
-            points.push(p);
-        }
-        if let Some(p) = intersect_edge_z(v2x, v2y, v2z, v0x, v0y, v0z, z_slice) {
-            points.push(p);
-        }
-
-        if points.len() == 2 {
-            // TS: new Vector2(points[0].x, -points[0].y)
-            let a = (points[0].0, -points[0].1);
-            let b = (points[1].0, -points[1].1);
-            segments.push((a, b));
-        }
-    }
-
-    build_loops(&segments)
-}
-
 /// Stitch segments into closed polygon loops.
 /// Matches TS `buildLoops()` from Slice2D.ts.
 fn build_loops(segments: &[(Pt2, Pt2)]) -> Vec<Vec<Pt2>> {
@@ -441,9 +394,12 @@ fn slice_to_loops_from_slice(triangles: &[&Triangle], z: f64) -> Vec<Vec<Pt2>> {
     build_loops(&segments)
 }
 
-/// Helper to slice, rasterize, and RLE-encode a single layer.
-pub fn rasterize_layer_for_island_scan(
-    triangles: &[Triangle],
+/// Slice a caller-supplied subset of triangles at Z height and rasterize to an
+/// RLE mask. Same per-layer semantics as `rasterize_for_island_scan`, but the
+/// triangle set is provided by the caller (the streaming pipeline passes only
+/// the triangles whose Z-bucket intersects the layer's slice plane).
+pub(crate) fn rasterize_triangles_for_island_scan(
+    triangles: &[&Triangle],
     z: f64,
     grid_width: i32,
     grid_height: i32,
@@ -451,7 +407,7 @@ pub fn rasterize_layer_for_island_scan(
     origin_z: f64,
     px_mm: f64,
 ) -> RleMask {
-    let loops = slice_to_loops(triangles, z);
+    let loops = slice_to_loops_from_slice(triangles, z);
     let dense = rasterize_loops(
         &loops,
         grid_width as usize,

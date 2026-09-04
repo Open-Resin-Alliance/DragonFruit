@@ -78,7 +78,6 @@ export function TerritoryVoxelControls({
                         {enabled ? 'ON' : 'OFF'}
                     </button>
                 )}
-                hideDivider={!expanded}
             />
 
             {(islandCount > 0 || expanded) && (

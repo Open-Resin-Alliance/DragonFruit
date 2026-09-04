@@ -26,7 +26,6 @@ export type UseArrangeManagerOptions = {
   setSupportRenderRefreshNonce: React.Dispatch<React.SetStateAction<number>>;
   supportBoundsByModelId: Map<string, THREE.Box3>;
   arrangeSpacingMm: number;
-  setArrangeSpacingMm: React.Dispatch<React.SetStateAction<number>>;
   getArrangeTransform: (model: SceneModel) => SceneModel['transform'];
   getModelSupportAwareDimensionsMm: SupportAwareDimsFn;
   getModelSupportAwareFootprintPolygonRef: React.MutableRefObject<FootprintPolygonFn>;
@@ -41,7 +40,6 @@ export function useArrangeManager({
   setSupportRenderRefreshNonce,
   supportBoundsByModelId,
   arrangeSpacingMm,
-  setArrangeSpacingMm,
   getArrangeTransform,
   getModelSupportAwareDimensionsMm,
   getModelSupportAwareFootprintPolygonRef,

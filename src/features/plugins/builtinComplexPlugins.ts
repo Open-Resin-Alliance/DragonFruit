@@ -1,4 +1,5 @@
 import type { ComplexPluginDefinition } from '@/features/plugins/complexPluginContracts';
+import { isPluginGatedByDisabledExperiment } from '@/features/experiments/experimentsRegistry';
 import {
   GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS,
   GENERATED_BUILTIN_COMPLEX_PLUGIN_ID_ALLOWLIST,
@@ -30,10 +31,16 @@ function assertBuiltinComplexPluginIntegrity(definitions: ComplexPluginDefinitio
 }
 
 export function getBuiltinComplexPluginDefinitions(): ComplexPluginDefinition[] {
-  if (cachedDefinitions) return cachedDefinitions;
+  if (!cachedDefinitions) {
+    const definitions = [...GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS];
+    assertBuiltinComplexPluginIntegrity(definitions);
+    cachedDefinitions = definitions;
+  }
 
-  const definitions = [...GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS];
-  assertBuiltinComplexPluginIntegrity(definitions);
-  cachedDefinitions = definitions;
-  return cachedDefinitions;
+  // Gated plugins (e.g. chitubox-import behind a disabled experiment) are
+  // hidden from every consumer that goes through this getter. Not cached so a
+  // state change on reload is picked up; mid-session changes apply on reload.
+  return cachedDefinitions.filter(
+    (definition) => !isPluginGatedByDisabledExperiment(definition.id),
+  );
 }

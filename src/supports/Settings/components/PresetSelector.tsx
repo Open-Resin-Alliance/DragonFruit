@@ -466,7 +466,12 @@ export function PresetSelector({
                         </button>
                         <button
                             type="button"
-                            className="ui-button ui-button-primary !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
+                            className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
+                            style={{
+                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                                color: 'var(--accent)',
+                            }}
                             onClick={() => {
                                 if (selectedPreset) {
                                     savePreset(selectedPreset.id);
@@ -561,7 +566,7 @@ export function PresetSelector({
                             type="button"
                             className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
                             style={{
-                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 25%)',
+                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
                                 background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
                                 color: 'var(--accent)',
                             }}

@@ -1,3 +1,4 @@
+import { shouldDeferSupportPrimitiveSelection } from '../../interaction/clickHandlers';
 import React, { useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { Vec3 } from '../../types';
@@ -135,6 +136,7 @@ export function ShaftRenderer({
         });
 
         if (rayIntersectsJointOrKnot(e)) return;
+    if (shouldDeferSupportPrimitiveSelection(e)) return;
 
         // If Alt is held, this click is intended for placement tools (Brace/Branch/etc.).
         // Stop propagation so it does not fall through to the canvas/model click handlers.

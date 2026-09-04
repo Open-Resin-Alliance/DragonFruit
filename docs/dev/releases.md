@@ -111,6 +111,28 @@ That's it — `release.yml` tags `v0.1.10`, builds, publishes a GitHub
 prerelease, and points `latest-dev.json` at it. Repeat for `0.1.11`,
 `0.1.12`, etc. No RC step required for dev releases.
 
+### Contributors
+
+`npm version` also runs `scripts/sync-contributors.mjs` (via the `postversion`
+hook), so `src/components/settings/contributors.json` is refreshed in the same
+release commit as the version bump — no separate step, no workflow side effect.
+This is intentionally a release-procedure action, not a GH workflow step or a
+dev-start hook.
+
+The sync merges two sources: the GitHub contributors API (which only reflects
+the default branch, `main`) plus a walk of the `dev` branch's commits — so a
+dev-line contributor is added at the next version bump after their first commit
+lands on `dev`, not held until their work is promoted to `main`. The one thing
+the API doesn't let us avoid is its own staleness (contributor data can lag by
+a few hours); later bumps re-run the sync, so stragglers are picked up on the
+next release anyway.
+
+New contributors are appended with the GitHub profile display name as their
+default `name` (falling back to their username when the profile has no name
+set), `role: "Contributor"` and `tone: "secondary"`. If you want a different
+display name, role, or tone — a founder, a maintainer — edit the entry right
+after the bump: the sync only ever appends, so your edit survives future runs.
+
 ### Promoting dev → main (odd → even transition)
 
 This is the one point where a branch cut is doing real work — `dev` needs to
@@ -202,7 +224,8 @@ We are dropping the `nightly` codeword in favor of `preview` or
 
 Until we drop the term, the reality is this: Separate from all of the above:
 `build-nightly.yml` builds an arbitrary branch on demand (`workflow_dispatch`
-or a `/nightly` PR comment) and publishes a rolling `nightly_{branch}`
+or a `/preview` PR comment — `/nightly` still works but is deprecated) and
+publishes a rolling `nightly_{branch}`
 prerelease so a reviewer can download and try an exact commit. It is **not**
 a scheduled build of `dev`, doesn't participate in the versioning/channel
 model above, and isn't wired to the auto-updater at all. The name is
@@ -210,12 +233,35 @@ inherited from an older convention and is somewhat misleading given it isn't
 on any schedule — treat it as a branch/PR preview mechanism, not a "nightly
 channel."
 
+### External (fork) pull requests
+
+A preview build compiles the branch with the release signing secrets in scope,
+so external pull requests are never built automatically: the `preview-build`
+label does not dispatch for them, and `/preview` replies with a pointer to the
+command below.
+
+After reading the diff, a maintainer runs `/create-preview-external`. That
+resolves the pull request's head SHA, points `preview/pr-<number>` at it, and
+builds that branch. It imports **one commit** — later pushes need the command
+again, so every external build is one a maintainer chose to run. Preview
+branches whose pull request has closed are swept away the next time any
+preview is activated.
+
 ## Updater implementation notes
 
 - `src-tauri/tauri.conf.json`'s `plugins.updater.endpoints` points at the
   stable feed by default; `src-tauri/src/updater_channel.rs` overrides the
   endpoint at runtime based on the user's saved channel preference
   (`STABLE_ENDPOINT` / `DEV_ENDPOINT`), independent of the static config.
+- **Linux never runs the check.** The release job builds only a `.flatpak`
+  (`build_kind: flatpak`, `--no-bundle`), so `latest.json` / `latest-dev.json`
+  have no `linux-x86_64` key — and the updater could not install over a running
+  Flatpak anyway, since `/app` is read-only inside the sandbox. `check_updates`
+  returns `None` early on Linux and the Settings → Updates tab shows a
+  "Managed by Flatpak" card with the `flatpak update` command instead of the
+  channel picker (`updatesAreExternal()` in
+  `src/features/updater/updateBridge.ts`). Adding a Linux entry to the feed
+  would only make sense alongside an AppImage build.
 - The plugin's default version comparator is a plain `release.version >
   current_version` using `semver::Version::Ord` — no custom comparator is
   registered. This means there's no downgrade support: a user who updates to

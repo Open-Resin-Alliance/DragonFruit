@@ -180,7 +180,9 @@ fn build_row_spans_matched(
     let mut pairs: Vec<(f32, f32)> = Vec::with_capacity(active_edges.len() / 2 + 1);
     let mut orphans: Vec<(f32, i32)> = Vec::new();
 
-    for edge in active_edges {
+    let mut edge_index = 0usize;
+    while edge_index < active_edges.len() {
+        let edge = active_edges[edge_index];
         if !edge.x.is_finite() {
             break;
         }
@@ -188,6 +190,25 @@ fn build_row_spans_matched(
         // Normalize so w > 0 opens fill and w < 0 closes it, regardless of
         // the mesh's dominant orientation.
         let mut w = edge.wind * entry_wind;
+        if w == -1 && open.is_empty() {
+            // A nearby entry belongs to this unmatched exit when its next
+            // possible closing exit is farther away. Consume that local gap
+            // instead of carrying the entry into another model instance.
+            let next_entry = active_edges.get(edge_index + 1).filter(|next| {
+                next.x.is_finite() && next.wind * entry_wind == 1 && next.x > edge.x
+            });
+            if let Some(next_entry) = next_entry {
+                let next_exit = active_edges[edge_index + 2..].iter().find(|candidate| {
+                    candidate.x.is_finite() && candidate.wind * entry_wind < 0
+                });
+                if next_exit.is_some_and(|next_exit| {
+                    next_entry.x - edge.x < next_exit.x - next_entry.x
+                }) {
+                    edge_index += 2;
+                    continue;
+                }
+            }
+        }
         while w > 0 {
             open.push(edge.x);
             w -= 1;
@@ -203,6 +224,7 @@ fn build_row_spans_matched(
                 None => orphans.push((edge.x, -1)),
             }
         }
+        edge_index += 1;
     }
     for &x in &open {
         orphans.push((x, 1));
@@ -351,12 +373,47 @@ fn spans_total_px(spans: &[RowSpan]) -> u64 {
     spans.iter().map(|s| (s.end - s.start + 1) as u64).sum()
 }
 
+fn collapse_subpixel_pairs(active_edges: &[ActiveEdge]) -> Option<Vec<ActiveEdge>> {
+    let has_subpixel_pair = active_edges.windows(2).any(|pair| {
+        pair[0].x.is_finite()
+            && pair[1].x.is_finite()
+            && pair[0].wind + pair[1].wind == 0
+            && pair[1].x - pair[0].x < 1.0
+    });
+    if !has_subpixel_pair {
+        return None;
+    }
+
+    let mut collapsed = Vec::with_capacity(active_edges.len());
+    for &edge in active_edges {
+        let cancels_previous = collapsed.last().is_some_and(|previous: &ActiveEdge| {
+            previous.x.is_finite()
+                && edge.x.is_finite()
+                && previous.wind + edge.wind == 0
+                && edge.x - previous.x < 1.0
+        });
+        if cancels_previous {
+            collapsed.pop();
+        } else {
+            collapsed.push(edge);
+        }
+    }
+
+    Some(collapsed)
+}
+
 fn build_row_spans_nonzero_inner(
     active_edges: &[ActiveEdge],
     width: usize,
     snap_to_integer: bool,
     prev_spans: Option<&[RowSpan]>,
 ) -> (Vec<RowSpan>, bool) {
+    // Opposite crossings below the source raster's X resolution have zero
+    // printable extent. Remove them before winding repair so one crossing
+    // cannot be matched against another instance across the plate.
+    let collapsed_edges = collapse_subpixel_pairs(active_edges);
+    let active_edges = collapsed_edges.as_deref().unwrap_or(active_edges);
+
     let mut spans = Vec::with_capacity(active_edges.len() / 2 + 1);
     let mut winding = 0i32;
     let n = active_edges.len();
@@ -1845,15 +1902,19 @@ fn build_scanline_segment_index_z_perturbed(
         return None;
     }
 
-    let unique_sample_count = segments_list.len().min(aa_steps);
+    // With Duplicate Terminal Z there are fewer unique Z heights than Y
+    // sub-samples, so each Z sample feeds two consecutive sub-rows. Every
+    // sub-row must still be filled: skipping half of them would halve the
+    // accumulated coverage and turn solid interiors grey.
+    let z_steps = segments_list.len().min(aa_steps).max(1);
     let mut start_counts = vec![0usize; sub_height];
     let mut global_start = sub_height;
     let mut global_end = 0usize;
     let f_steps = aa_steps as f32;
 
-    for sample_idx in 0..unique_sample_count {
+    for sample_idx in 0..aa_steps {
         let phase = (sample_idx as f32 + 0.5) / f_steps;
-        for seg in &segments_list[sample_idx] {
+        for seg in &segments_list[sample_idx * z_steps / aa_steps] {
             let start_py = (seg.y_min - phase).ceil() as i32;
             let end_py = (seg.y_max - phase).ceil() as i32;
             let clamped_start = start_py.clamp(0, height as i32) as usize;
@@ -1891,9 +1952,9 @@ fn build_scanline_segment_index_z_perturbed(
     ];
     let mut write_offsets = row_offsets[..sub_height].to_vec();
 
-    for sample_idx in 0..unique_sample_count {
+    for sample_idx in 0..aa_steps {
         let phase = (sample_idx as f32 + 0.5) / f_steps;
-        for seg in &segments_list[sample_idx] {
+        for seg in &segments_list[sample_idx * z_steps / aa_steps] {
             let start_py = (seg.y_min - phase).ceil() as i32;
             let end_py = (seg.y_max - phase).ceil() as i32;
             let clamped_start = start_py.clamp(0, height as i32) as usize;
@@ -4135,6 +4196,33 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_terminal_z_keeps_solid_interiors_opaque() {
+        let mut xyz = Vec::new();
+        push_box_triangles(&mut xyz, 0.0, 0.0, -1.0, 2.0, 40.0, 40.0);
+
+        let center = |duplicate_z: Option<bool>| -> u8 {
+            let mut job = job_for_single_layer();
+            job.anti_aliasing_mode = "3DAA".to_string();
+            job.anti_aliasing_level = "16x".to_string();
+            job.zaa_duplicate_z = duplicate_z;
+
+            let width = job.source_width_px as usize;
+            let height = job.source_height_px as usize;
+            let mut triangles = parse_triangles(&xyz);
+            project_triangles_inplace(&mut triangles, &job);
+            let indices: Vec<usize> = (0..triangles.len()).collect();
+
+            let mask = rasterize_layer(&job, &triangles, &indices, 0);
+            mask[(height / 2) * width + width / 2]
+        };
+
+        // Halving the unique Z samples must not halve the accumulated coverage:
+        // the interior stays white, only the edges get grey.
+        assert_eq!(center(Some(false)), 255);
+        assert_eq!(center(Some(true)), 255);
+    }
+
+    #[test]
     fn windowed_rle_blocks_hstack_matches_full_width_raster() {
         let job = job_for_single_layer();
         let width = job.source_width_px as usize;
@@ -4552,6 +4640,120 @@ mod tests {
         assert_eq!(spans.len(), 2, "orphan entries must not pair across matched fill");
         assert_eq!((spans[0].start, spans[0].end), (30, 49));
         assert_eq!((spans[1].start, spans[1].end), (100, 119));
+    }
+
+    #[test]
+    fn repeated_subpixel_gap_pairs_do_not_bridge_in_any_raster_mode() {
+        let prev = build_row_spans_nonzero(
+            &[
+                edge(10.0, 1),
+                edge(20.0, -1),
+                edge(30.0, 1),
+                edge(40.0, -1),
+                edge(110.0, 1),
+                edge(120.0, -1),
+                edge(130.0, 1),
+                edge(140.0, -1),
+                edge(210.0, 1),
+                edge(220.0, -1),
+                edge(230.0, 1),
+                edge(240.0, -1),
+            ],
+            300,
+            true,
+        );
+        let defective = [
+            edge(10.0, 1),
+            edge(20.0, -1),
+            edge(30.0, 1),
+            edge(40.0, -1),
+            edge(50.0, -1),
+            edge(50.02, 1),
+            edge(110.0, 1),
+            edge(120.0, -1),
+            edge(130.0, 1),
+            edge(140.0, -1),
+            edge(150.0, -1),
+            edge(150.02, 1),
+            edge(210.0, 1),
+            edge(220.0, -1),
+            edge(230.0, 1),
+            edge(240.0, -1),
+            edge(250.0, -1),
+            edge(250.02, 1),
+        ];
+
+        for snap_to_integer in [true, false] {
+            let spans = super::build_row_spans_nonzero_ctx(
+                &defective,
+                300,
+                snap_to_integer,
+                Some(&prev),
+            );
+
+            assert_eq!(spans.len(), 6);
+            assert!(
+                spans.iter().all(|span| span.b - span.a <= 10.0),
+                "subpixel gaps must not bridge repeated instances: {spans:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_local_gap_signatures_do_not_bridge_between_instances() {
+        let mut prev_edges = Vec::new();
+        let mut edges = Vec::new();
+        for offset in [0.0, 100.0, 200.0] {
+            prev_edges.extend_from_slice(&[
+                edge(offset + 10.0, 1),
+                edge(offset + 20.0, -1),
+                edge(offset + 30.0, 1),
+                edge(offset + 40.0, -1),
+            ]);
+            edges.extend_from_slice(&[
+                edge(offset + 10.0, 1),
+                edge(offset + 20.0, -1),
+                edge(offset + 30.0, 1),
+                edge(offset + 40.0, -1),
+                edge(offset + 50.0, -1),
+                edge(offset + 55.0, 1),
+            ]);
+        }
+        let prev = build_row_spans_nonzero(&prev_edges, 300, true);
+
+        for snap_to_integer in [true, false] {
+            let spans = super::build_row_spans_nonzero_ctx(
+                &edges,
+                300,
+                snap_to_integer,
+                Some(&prev),
+            );
+            assert_eq!(spans.len(), 6);
+            assert!(
+                spans.iter().all(|span| span.b - span.a <= 10.0),
+                "local gap signatures must not bridge repeated instances: {spans:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unmatched_exit_does_not_consume_the_next_real_object() {
+        let spans = build_row_spans_nonzero(
+            &[edge(10.0, -1), edge(100.0, 1), edge(130.0, -1)],
+            256,
+            true,
+        );
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!((spans[0].start, spans[0].end), (100, 129));
+    }
+
+    #[test]
+    fn complete_subpixel_features_are_dropped_in_all_raster_modes() {
+        let edges = [edge(10.1, 1), edge(10.9, -1)];
+
+        assert!(build_row_spans_nonzero(&edges, 256, true).is_empty());
+        assert!(build_row_spans_nonzero(&edges, 256, false).is_empty());
     }
 
     #[test]

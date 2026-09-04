@@ -1,4 +1,5 @@
 import React from 'react';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { msg } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
 import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Maximize2, Minimize2, Play, Printer, RefreshCw, Trash2, X } from 'lucide-react';
@@ -37,7 +38,7 @@ import type {
 } from '@/features/plugins/complexPluginContracts';
 import type { ProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
 import type { SupportMode } from '@/supports/types';
-import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
+import type { SliceExportArtifact } from '@/features/slicing/sliceExportOrchestrator';
 
 export type PrintingModalsProps = {
   DEFAULT_RELAY_AUTORETRY_DELAY_MS: number;
@@ -192,7 +193,6 @@ export type PrintingModalsProps = {
   setShouldAutoSliceOnExportEntry: React.Dispatch<React.SetStateAction<boolean>>;
   setShowPrintingResliceModal: React.Dispatch<React.SetStateAction<boolean>>;
   setShowSliceCompletedModal: React.Dispatch<React.SetStateAction<boolean>>;
-  setUvToolsLaunchingPath: React.Dispatch<React.SetStateAction<string | null>>;
   shouldReturnToPrintingAfterSliceRef: React.RefObject<boolean>;
   shouldShowPrintingMonitorSlowResponseCard: boolean;
   showPrintingResliceModal: boolean;
@@ -357,7 +357,6 @@ export function PrintingModals({
   setShouldAutoSliceOnExportEntry,
   setShowPrintingResliceModal,
   setShowSliceCompletedModal,
-  setUvToolsLaunchingPath,
   shouldReturnToPrintingAfterSliceRef,
   shouldShowPrintingMonitorSlowResponseCard,
   showPrintingResliceModal,
@@ -368,6 +367,39 @@ export function PrintingModals({
   uvToolsLaunchingPath,
 }: PrintingModalsProps) {
   const { _ } = useLingui();
+
+  const cancelPreSlicePrintConfirm = React.useCallback(() => {
+    setPreSlicePrintConfirmOpen(false);
+    if (preSlicePrintConfirmResolverRef.current) {
+      preSlicePrintConfirmResolverRef.current(false);
+      preSlicePrintConfirmResolverRef.current = null;
+    }
+  }, [preSlicePrintConfirmResolverRef, setPreSlicePrintConfirmOpen]);
+
+  const cancelPrintingTargetPicker = React.useCallback(() => {
+    setPrintingTargetPickerOpen(false);
+    if (isPreSliceTargetPicker && preSliceTargetPickerResolverRef.current) {
+      preSliceTargetPickerResolverRef.current(null);
+      preSliceTargetPickerResolverRef.current = null;
+    }
+    setPrintingTargetPickerMode('post-slice');
+  }, [isPreSliceTargetPicker, preSliceTargetPickerResolverRef, setPrintingTargetPickerMode, setPrintingTargetPickerOpen]);
+
+  // Escape closes the top-most of these dialogs; the upload dialog only while
+  // its Close button is available, and never while a send is in flight.
+  useEscapeToClose(Boolean(printingMonitorPendingConfirmation), () => setPrintingMonitorPendingConfirmation(null));
+  useEscapeToClose(preSlicePrintConfirmOpen, cancelPreSlicePrintConfirm);
+  useEscapeToClose(printingTargetPickerOpen, printingSendBusy ? undefined : cancelPrintingTargetPicker);
+  useEscapeToClose(
+    printingUploadDialogOpen,
+    (printingUploadDialogStage === 'failed' || printingUploadDialogStage === 'started' || printingUploadDialogStage === 'ready')
+      && !printingSendBusy
+      && !printingPrintNowBusy
+      ? () => setPrintingUploadDialogOpen(false)
+      : undefined,
+  );
+  useEscapeToClose(printingMonitorModalOpen, () => setPrintingMonitorModalOpen(false));
+
   return (
     <>
       <SliceCompletedModal
@@ -386,7 +418,6 @@ export function PrintingModals({
       <UvToolsLaunchingModal
         isOpen={uvToolsLaunchingPath !== null}
         filePath={uvToolsLaunchingPath}
-        onLaunchComplete={() => setUvToolsLaunchingPath(null)}
       />
 
       {printingMonitorPendingConfirmation && (
@@ -577,11 +608,7 @@ export function PrintingModals({
           className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
-              setPreSlicePrintConfirmOpen(false);
-              if (preSlicePrintConfirmResolverRef.current) {
-                preSlicePrintConfirmResolverRef.current(false);
-                preSlicePrintConfirmResolverRef.current = null;
-              }
+              cancelPreSlicePrintConfirm();
             }
           }}
         >
@@ -675,7 +702,12 @@ export function PrintingModals({
                 </button>
                 <button
                   type="button"
-                  className="ui-button ui-button-accent !h-9 px-3 text-xs"
+                  className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+                  style={{
+                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                    color: 'var(--accent)',
+                  }}
                   onClick={() => {
                     setPreSlicePrintConfirmOpen(false);
                     if (preSlicePrintConfirmResolverRef.current) {
@@ -913,21 +945,19 @@ export function PrintingModals({
                 <button
                   type="button"
                   className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                  onClick={() => {
-                    setPrintingTargetPickerOpen(false);
-                    if (isPreSliceTargetPicker && preSliceTargetPickerResolverRef.current) {
-                      preSliceTargetPickerResolverRef.current(null);
-                      preSliceTargetPickerResolverRef.current = null;
-                    }
-                    setPrintingTargetPickerMode('post-slice');
-                  }}
+                  onClick={cancelPrintingTargetPicker}
                   disabled={printingSendBusy}
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  className="ui-button ui-button-accent !h-9 px-3 text-xs"
+                  className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+                  style={{
+                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                    color: 'var(--accent)',
+                  }}
                   disabled={
                     printingSendBusy
                     || isPrintingTargetMaterialsLoading
@@ -1128,18 +1158,27 @@ export function PrintingModals({
                 {printingUploadDialogStage === 'failed' && (
                   <button
                     type="button"
-                    className="ui-button ui-button-accent !h-9 px-3 text-xs"
+                    className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+                    style={{
+                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                      color: 'var(--accent)',
+                    }}
                     onClick={() => { void handleSendToPrinter(); }}
                     disabled={printingSendBusy || printingPrintNowBusy || !canSendToPrinter}
                   >
                     Retry Upload
                   </button>
                 )}
-
                 {printingUploadDialogStage === 'ready' && (
                   <button
                     type="button"
-                    className="ui-button ui-button-accent !h-9 px-3 text-xs"
+                    className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+                    style={{
+                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                      color: 'var(--accent)',
+                    }}
                     onClick={handlePrintNow}
                     disabled={!canPrintNow || printingPrintNowBusy || printingSendBusy}
                   >
@@ -1150,7 +1189,12 @@ export function PrintingModals({
                 {printingUploadDialogStage === 'started' && (
                   <button
                     type="button"
-                    className="ui-button ui-button-accent !h-9 px-3 text-xs"
+                    className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+                    style={{
+                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                      color: 'var(--accent)',
+                    }}
                     onClick={() => openPrintingMonitorForTargetDevice(printingTargetDevice?.id ?? null)}
                     disabled={printingSendBusy || printingPrintNowBusy}
                   >

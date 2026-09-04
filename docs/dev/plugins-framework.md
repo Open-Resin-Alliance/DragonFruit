@@ -42,12 +42,13 @@ Generated outputs include frontend registries and Rust/Tauri registries.
 ## Capability-gated files
 
 Capability flags in `pluginDefinition.ts` must match files on disk.
+Paths in the table below are relative to the plugin root (`plugins/<vendor>/`).
 
 | Capability           | Required file(s)                    | Required export                |
 | -------------------- | ----------------------------------- | ------------------------------ |
 | `networkOperations`  | `network/networkHandlers.ts`        | `handlePluginNetworkOperation` |
 | `uploadWithProgress` | `network/index.ts`                  | `uploadPrintJobWithProgress`   |
-| `tauriRuntimePlugin` | `rust/plugin.rs`, `rust/network.rs` | runtime registration symbols   |
+| `tauriRuntimePlugin` | `<plugin>/rust/plugin.rs`, `<plugin>/rust/network.rs` | runtime registration symbols   |
 | `slicerEncoder`      | `slicing/rust/encoder_impl.rs`      | `create_plugin_encoder()`      |
 | `fileType`           | `fileTypeHandlers.ts`               | `handleFileTypeImport`         |
 

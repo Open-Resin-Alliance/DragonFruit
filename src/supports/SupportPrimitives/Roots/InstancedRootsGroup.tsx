@@ -2,6 +2,7 @@ import React, { useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
 import type { Vec3 } from '../../types';
+import { quantizeToScale } from '@/utils/math';
 
 export interface InstancedRoot {
     id: string;
@@ -24,6 +25,7 @@ interface InstancedRootsGroupProps {
     clippingPlanes?: THREE.Plane[] | null;
     outOfBoundsMaterial?: THREE.ShaderMaterial | null;
     onRootClick?: (root: InstancedRoot, event: ThreeEvent<MouseEvent>) => void;
+    onRootPointerDown?: (root: InstancedRoot, event: ThreeEvent<PointerEvent>) => void;
     onRootPointerMove?: (root: InstancedRoot, event: ThreeEvent<PointerEvent>) => void;
     onRootPointerOut?: (root: InstancedRoot | null, event: ThreeEvent<PointerEvent>) => void;
 }
@@ -41,14 +43,12 @@ interface RootBucket {
 
 const ROOT_ROTATION = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
 
-const quantize = (value: number) => Math.round(value * 1000) / 1000;
-
 const toBucketKey = (root: InstancedRoot) => {
     return [
-        quantize(root.bottomRadius),
-        quantize(root.effectiveDiskHeight),
-        quantize(root.topRadius),
-        quantize(root.coneHeight),
+        quantizeToScale(root.bottomRadius, 1000),
+        quantizeToScale(root.effectiveDiskHeight, 1000),
+        quantizeToScale(root.topRadius, 1000),
+        quantizeToScale(root.coneHeight, 1000),
     ].join(':');
 };
 
@@ -62,6 +62,7 @@ function RootBucketMesh({
     clippingPlanes,
     outOfBoundsMaterial,
     onRootClick,
+    onRootPointerDown,
     onRootPointerMove,
     onRootPointerOut,
 }: {
@@ -74,6 +75,7 @@ function RootBucketMesh({
     clippingPlanes: THREE.Plane[] | null;
     outOfBoundsMaterial?: THREE.ShaderMaterial | null;
     onRootClick?: (root: InstancedRoot, event: ThreeEvent<MouseEvent>) => void;
+    onRootPointerDown?: (root: InstancedRoot, event: ThreeEvent<PointerEvent>) => void;
     onRootPointerMove?: (root: InstancedRoot, event: ThreeEvent<PointerEvent>) => void;
     onRootPointerOut?: (root: InstancedRoot | null, event: ThreeEvent<PointerEvent>) => void;
 }) {
@@ -146,6 +148,14 @@ function RootBucketMesh({
         onRootClick(root, event);
     };
 
+    const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
+        if (!onRootPointerDown) return;
+        event.stopPropagation();
+        const root = resolveRootFromEvent(event.instanceId);
+        if (!root) return;
+        onRootPointerDown(root, event);
+    };
+
     const handlePointerMove = (event: ThreeEvent<PointerEvent>) => {
         if (!onRootPointerMove) return;
         event.stopPropagation();
@@ -192,6 +202,7 @@ function RootBucketMesh({
                     frustumCulled={false}
                     renderOrder={100000}
                     onClick={onRootClick ? handleClick : undefined}
+                    onPointerDown={onRootPointerDown ? handlePointerDown : undefined}
                     onPointerMove={onRootPointerMove ? handlePointerMove : undefined}
                     onPointerOut={onRootPointerOut ? handlePointerOut : undefined}
                 >
@@ -215,6 +226,7 @@ function RootBucketMesh({
                     frustumCulled={false}
                     renderOrder={100000}
                     onClick={onRootClick ? handleClick : undefined}
+                    onPointerDown={onRootPointerDown ? handlePointerDown : undefined}
                     onPointerMove={onRootPointerMove ? handlePointerMove : undefined}
                     onPointerOut={onRootPointerOut ? handlePointerOut : undefined}
                 >
@@ -283,6 +295,7 @@ export function InstancedRootsGroup({
     clippingPlanes = null,
     outOfBoundsMaterial = null,
     onRootClick,
+    onRootPointerDown,
     onRootPointerMove,
     onRootPointerOut,
 }: InstancedRootsGroupProps) {
@@ -332,6 +345,7 @@ export function InstancedRootsGroup({
                     clippingPlanes={clippingPlanes}
                     outOfBoundsMaterial={outOfBoundsMaterial}
                     onRootClick={onRootClick}
+                    onRootPointerDown={onRootPointerDown}
                     onRootPointerMove={onRootPointerMove}
                     onRootPointerOut={onRootPointerOut}
                 />

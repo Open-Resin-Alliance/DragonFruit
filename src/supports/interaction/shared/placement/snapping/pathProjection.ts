@@ -1,3 +1,4 @@
+import { toVector3 } from '@/supports/Curves/BezierUtils';
 import * as THREE from 'three';
 import type { SnapTarget } from '../../../SnappingManager';
 import type { Vec3 } from '../../../../types';
@@ -10,9 +11,6 @@ export interface SnapPathProjection {
     distSq: number;
 }
 
-function toVector3(v: Vec3): THREE.Vector3 {
-    return new THREE.Vector3(v.x, v.y, v.z);
-}
 
 export function getSnapPathPointAtT(path: SnapPath, t: number): Vec3 {
     const clampedT = THREE.MathUtils.clamp(t, 0, 1);

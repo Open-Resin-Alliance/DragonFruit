@@ -377,6 +377,7 @@ export function generateRequiredKickstands(
             const dropDist = GENERATION_DISTANCE_MM;
             let selectedBuild: KickstandBuildResult | null = null;
             let selectedRootPos: Vec3 | null = null;
+            let selectedRootDistSq = Infinity;
 
             // Iterate through possible anchor points (highest first)
             for (const anchor of candidateAnchors) {
@@ -522,9 +523,18 @@ export function generateRequiredKickstands(
                             continue;
                         }
 
-                        selectedBuild = trialBuild;
-                        selectedRootPos = candidateRootPos;
-                        break;
+                        // Prefer the SNUGGEST valid root: the mirrored side
+                        // of the same axis (angle vs angle+π) is equivalent
+                        // for axis coverage, so keep whichever sits closer to
+                        // the host — minimal plate footprint, stable across
+                        // re-runs. Never break on the first valid drop.
+                        const hostDistSq = (candidateRootPos.x - rootPos.x) ** 2
+                            + (candidateRootPos.y - rootPos.y) ** 2;
+                        if (!selectedBuild || hostDistSq < selectedRootDistSq) {
+                            selectedBuild = trialBuild;
+                            selectedRootPos = candidateRootPos;
+                            selectedRootDistSq = hostDistSq;
+                        }
                     } catch (err) {
                         console.warn("Failed to build generative Kickstand", err);
                     }

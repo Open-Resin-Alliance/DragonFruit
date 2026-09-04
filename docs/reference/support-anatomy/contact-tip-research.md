@@ -1,6 +1,16 @@
 # Contact Tip Research
 
-This page keeps the open design notes for constant-area contact tips.
+This page keeps the design notes for constant-area contact tips.
+
+!!! note "Both candidates below have shipped"
+    They are no longer open questions. The micro-disc with angle-aware standoff
+    is `ContactDiskProfile` ("the nib") and the spherical cap is
+    `ContactSphereProfile` ("the ball joint") — two variants of the
+    `SupportTipProfile` union in
+    `src/supports/SupportPrimitives/ContactCone/types.ts`. See
+    [Contact Disk](contact-disk.md) for the standoff rule as implemented. What
+    remains open is the evaluation below: which to prefer at extreme tilt, and
+    the printed-footprint validation.
 
 ## Goal
 

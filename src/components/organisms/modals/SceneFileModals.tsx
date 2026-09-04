@@ -1,6 +1,7 @@
 import React from 'react';
 import { AlertTriangle, CheckCircle2, LayoutGrid, Trash2, X } from 'lucide-react';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
 import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveRecoveryModal';
 import { ZipFilePickerModal } from '@/components/modals/ZipFilePickerModal';
@@ -10,7 +11,7 @@ export type SceneFileModalsProps = {
   arrangeOverlayContent: { title: string; detailLines: string[]; };
   arrangeOverlayElapsedLabel: string;
   arrangeOverlayModelCount: number | null;
-  autosaveRecovery: { savedAt: string; } | null;
+  autosaveRecovery: { savedAt: string; voxlPath: string; origin: string } | null;
   closeUnsavedChangesBusy: "none" | "save_and_close" | "discard_and_close";
   handleAutosaveDiscard: () => Promise<void>;
   handleAutosaveRestore: () => Promise<void>;
@@ -20,10 +21,14 @@ export type SceneFileModalsProps = {
   handleSaveAndCloseProgram: () => void;
   hasUnsavedSceneChanges: boolean;
   pluginImportWarningSkipFuture: boolean;
+  pluginImportWarningTitle?: string | null;
+  pluginImportWarningBody?: string | null;
   resolveSceneSaveChoice: (choice: "overwrite" | "save_as" | "cancel") => void;
   scene: ReturnType<typeof useSceneCollectionManager>;
   sceneSaveChoiceFileName: string | null;
   sceneSaveChoicePath: string | null;
+  sceneSaveError?: { title: string; message: string; detail?: string | null } | null;
+  dismissSceneSaveError?: () => void;
   setPluginImportWarningSkipFuture: React.Dispatch<React.SetStateAction<boolean>>;
   setShowCloseUnsavedChangesModal: React.Dispatch<React.SetStateAction<boolean>>;
   setSupportsInfoModelId: React.Dispatch<React.SetStateAction<string | null>>;
@@ -37,7 +42,7 @@ export type SceneFileModalsProps = {
   zipPickerState: { zipName: string; files: File[]; category: "mesh" | "scene" | "mixed"; defaultSelectionCategory: "mesh" | "scene"; } | null;
 };
 
-/** Editor modal organism: ModelSupportsModal, sceneImportPlacementPrompt, autosaveRecovery, pluginImportWarning, zipPicker, StructuredDialog_closeUnsaved, sceneSaveChoice, arrangeBlockingOverlay. */
+/** Editor modal organism: ModelSupportsModal, sceneImportPlacementPrompt, autosaveRecovery, pluginImportWarning, zipPicker, StructuredDialog_closeUnsaved, sceneSaveChoice, arrangeBlockingOverlay, sceneSaveError. */
 export function SceneFileModals({
   arrangeOverlayContent,
   arrangeOverlayElapsedLabel,
@@ -52,10 +57,14 @@ export function SceneFileModals({
   handleSaveAndCloseProgram,
   hasUnsavedSceneChanges,
   pluginImportWarningSkipFuture,
+  pluginImportWarningTitle,
+  pluginImportWarningBody,
   resolveSceneSaveChoice,
   scene,
   sceneSaveChoiceFileName,
   sceneSaveChoicePath,
+  sceneSaveError = null,
+  dismissSceneSaveError,
   setPluginImportWarningSkipFuture,
   setShowCloseUnsavedChangesModal,
   setSupportsInfoModelId,
@@ -68,8 +77,47 @@ export function SceneFileModals({
   zipPickerResolveRef,
   zipPickerState,
 }: SceneFileModalsProps) {
+  // Escape mirrors each dialog's backdrop click; the arrange overlay is a
+  // blocking progress state, so it swallows the key instead.
+  useEscapeToClose(Boolean(scene.sceneImportPlacementPrompt), () => scene.resolveSceneImportPlacementPrompt('load_as_is'));
+  useEscapeToClose(showPluginImportWarningModal, handleCancelPluginImportWarning);
+  useEscapeToClose(showSceneSaveChoiceModal, () => resolveSceneSaveChoice('cancel'));
+  useEscapeToClose(showArrangeBlockingOverlay, undefined);
+
   return (
     <>
+      <StructuredDialogModal
+        open={sceneSaveError !== null}
+        onClose={() => dismissSceneSaveError?.()}
+        ariaLabel="Save Error"
+        icon={<AlertTriangle className="h-5 w-5 text-amber-400" />}
+        title={sceneSaveError?.title ?? 'Save error'}
+        actions={
+          <button
+            type="button"
+            className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+            style={{
+              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+              color: 'var(--accent)',
+            }}
+            onClick={() => dismissSceneSaveError?.()}
+          >
+            OK
+          </button>
+        }
+      >
+        <div className="space-y-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+          <p className="font-medium text-sm" style={{ color: 'var(--text-strong)' }}>
+            {sceneSaveError?.message}
+          </p>
+          {sceneSaveError?.detail && (
+            <pre className="mt-2 overflow-x-auto rounded bg-black/30 p-2 text-[11px] font-mono whitespace-pre-wrap">
+              {sceneSaveError.detail}
+            </pre>
+          )}
+        </div>
+      </StructuredDialogModal>
       <ModelSupportsModal
         isOpen={supportsInfoModelId !== null}
         onClose={() => setSupportsInfoModelId(null)}
@@ -162,7 +210,12 @@ export function SceneFileModals({
                 </button>
                 <button
                   type="button"
-                  className="ui-button ui-button-accent !h-9 w-full px-3 text-xs"
+                  className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
+                  style={{
+                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                    color: 'var(--accent)',
+                  }}
                   onClick={() => scene.resolveSceneImportPlacementPrompt('auto_arrange')}
                 >
                   Auto-Arrange
@@ -176,6 +229,8 @@ export function SceneFileModals({
       {autosaveRecovery && (
         <SceneAutosaveRecoveryModal
           savedAt={autosaveRecovery.savedAt}
+          voxlPath={autosaveRecovery.voxlPath}
+          origin={autosaveRecovery.origin}
           onRestore={handleAutosaveRestore}
           onDiscard={handleAutosaveDiscard}
         />
@@ -199,7 +254,7 @@ export function SceneFileModals({
             }}
             role="dialog"
             aria-modal="true"
-            aria-label="LYS import experimental warning"
+            aria-label="Plugin import experimental warning"
           >
             <div className="flex items-center justify-between gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
               <div className="flex min-w-0 items-center gap-3">
@@ -216,7 +271,9 @@ export function SceneFileModals({
 
                 <div className="min-w-0 pr-2">
                   <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    LYS Import is Experimental
+                    {pluginImportWarningTitle
+                      ? `${pluginImportWarningTitle} is Experimental`
+                      : 'Plugin Import is Experimental'}
                   </h2>
                   <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
                     This feature is still under development.
@@ -232,7 +289,7 @@ export function SceneFileModals({
                   background: 'var(--surface-1)',
                   color: 'var(--text-muted)',
                 }}
-                aria-label="Close LYS import warning"
+                aria-label="Close plugin import warning"
                 onClick={handleCancelPluginImportWarning}
               >
                 <X className="w-4 h-4" />
@@ -241,7 +298,8 @@ export function SceneFileModals({
 
             <div className="space-y-4 p-5">
               <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                Geometry, support placement, and transforms can import differently across `.lys` scene variants, so unforeseen results are still possible.
+                {pluginImportWarningBody
+                  ?? 'Geometry, support placement, and transforms can import differently across scene variants, so unforeseen results are still possible.'}
               </p>
 
               <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
@@ -448,7 +506,12 @@ export function SceneFileModals({
                 </button>
                 <button
                   type="button"
-                  className="ui-button ui-button-accent !h-9 px-3 text-xs whitespace-nowrap"
+                  className="ui-button !h-9 px-3 text-xs whitespace-nowrap inline-flex items-center justify-center gap-1.5"
+                  style={{
+                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                    color: 'var(--accent)',
+                  }}
                   disabled={!sceneSaveChoicePath}
                   onClick={() => resolveSceneSaveChoice('overwrite')}
                 >

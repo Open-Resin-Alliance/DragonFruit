@@ -77,18 +77,39 @@ pub fn run_island_scan(
     }
 
     tracker.finalize_islands(num_layers.saturating_sub(1) as u32);
-    let mut islands = tracker.get_islands();
 
-    // Phase 3: Volume calculation
+    // Phase 3: Volume calculation, max-area, placeholder resolution, and
+    // min-area filtering — shared with the streaming pipeline.
+    postprocess(
+        job.grid.clone(),
+        tracker.get_islands(),
+        island_labels_per_layer,
+        job.layer_height_mm,
+        job.min_island_area_mm2,
+    )
+}
+
+/// Phase 3 of the island pipeline: volume calculation, max-area, placeholder
+/// dropping, true-parent resolution, and min-area filtering. Shared by the
+/// batch (`run_island_scan`) and streaming (`run_island_scan_streaming`)
+/// orchestrators so both produce identical post-processing.
+pub fn postprocess(
+    grid: GridRef,
+    mut islands: Vec<Island>,
+    mut island_labels_per_layer: Vec<RleLabels>,
+    layer_height_mm: f64,
+    min_island_area_mm2: f64,
+) -> IslandScanResult {
+    // Volume: Σ per-layer area × layer height
     for island in &mut islands {
         let mut volume = 0.0;
         for &area_mm2 in island.per_layer_area_mm2.values() {
-            volume += area_mm2 * job.layer_height_mm;
+            volume += area_mm2 * layer_height_mm;
         }
         island.volume_mm3 = Some(volume);
     }
 
-    // Calculate max area
+    // Max area (overwrites the incremental max with the true per-layer max)
     for island in &mut islands {
         let mut max_area = 0.0_f64;
         for &area in island.per_layer_area_mm2.values() {
@@ -114,7 +135,7 @@ pub fn run_island_scan(
 
     let filtered_islands: Vec<Island> = real_islands
         .iter()
-        .filter(|i| i.max_area_mm2.unwrap_or(0.0) >= job.min_island_area_mm2)
+        .filter(|i| i.max_area_mm2.unwrap_or(0.0) >= min_island_area_mm2)
         .cloned()
         .cloned()
         .collect();
@@ -139,7 +160,7 @@ pub fn run_island_scan(
     });
 
     IslandScanResult {
-        grid: job.grid.clone(),
+        grid,
         islands: filtered_islands,
         island_labels_per_layer,
     }

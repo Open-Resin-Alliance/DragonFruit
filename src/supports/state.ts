@@ -10,7 +10,7 @@ import { addKickstand, getKickstandSnapshot, reassignAllKickstandModelIds, remov
 import type { Kickstand, KickstandBuildResult, KickstandRemoveResult } from './SupportTypes/Kickstand/types';
 import * as THREE from 'three';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
-import { generateUuid } from '@/utils/uuid';
+import { v4 as uuidv4 } from 'uuid';
 import { applyImportDefaultsToSupportPayload, getSavedImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
 import type { SupportSettings } from './Settings/types';
 import { createDefaultSettings } from './Settings/types';
@@ -1236,7 +1236,8 @@ export function removeBranchJoint(branchId: string, jointId: string): { before: 
 
 export type RemoveJointByIdResult =
     | { kind: 'trunk'; trunkId: string; before: Trunk; after: Trunk }
-    | { kind: 'branch'; branchId: string; before: Branch; after: Branch };
+    | { kind: 'branch'; branchId: string; before: Branch; after: Branch }
+    | { kind: 'kickstand'; kickstandId: string; before: Kickstand; after: Kickstand };
 
 export function removeJointById(jointId: string): RemoveJointByIdResult | null {
     for (const [trunkId, trunk] of Object.entries(state.trunks)) {
@@ -1259,6 +1260,42 @@ export function removeJointById(jointId: string): RemoveJointByIdResult | null {
         if (result) {
             return { kind: 'branch', branchId, ...result };
         }
+    }
+
+    // Kickstands live in a separate store — check them too so deleting a
+    // kickstand joint removes just that joint rather than the entire support.
+    const kickstandSnapshot = getKickstandSnapshot();
+    for (const [kickstandId, kickstand] of Object.entries(kickstandSnapshot.kickstands)) {
+        const hasJoint = kickstand.segments.some(
+            (seg) => seg.topJoint?.id === jointId || seg.bottomJoint?.id === jointId,
+        );
+        if (!hasJoint) continue;
+
+        const lowerIndex = resolveLowerSegmentIndex(kickstand.segments, jointId);
+        if (lowerIndex === -1) return null;
+
+        const before = deepClone(kickstand);
+        const after = deepClone(kickstand);
+        const segments = after.segments;
+        const lowerSegment = segments[lowerIndex];
+        if (!lowerSegment) return null;
+
+        const nextIndex = lowerIndex + 1;
+        const upperSegment = nextIndex < segments.length ? segments[nextIndex] : undefined;
+
+        if (upperSegment) {
+            // Merge: lower segment absorbs upper segment's top joint
+            lowerSegment.topJoint = upperSegment.topJoint
+                ? deepClone(upperSegment.topJoint)
+                : undefined;
+            segments.splice(nextIndex, 1);
+        } else {
+            // Last joint in the chain — just drop it
+            lowerSegment.topJoint = undefined;
+        }
+
+        updateKickstand(after);
+        return { kind: 'kickstand', kickstandId, before, after };
     }
 
     return null;
@@ -2545,7 +2582,7 @@ export function loadFromImportFormat(data: DragonfruitImportFormat) {
 function getOrCreateMappedId(sourceId: string, idMap: Map<string, string>): string {
     const mapped = idMap.get(sourceId);
     if (mapped) return mapped;
-    const created = generateUuid();
+    const created = uuidv4();
     idMap.set(sourceId, created);
     return created;
 }
@@ -2580,11 +2617,11 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
     const kickstandKnotIdMap = new Map<string, string>();
 
     cloned.knots.forEach((knot) => {
-        knotIdMap.set(knot.id, generateUuid());
+        knotIdMap.set(knot.id, uuidv4());
     });
 
     cloned.roots = cloned.roots.map((root) => {
-        const nextId = generateUuid();
+        const nextId = uuidv4();
         rootIdMap.set(root.id, nextId);
         return {
             ...root,
@@ -2594,7 +2631,7 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
 
     cloned.trunks = cloned.trunks.map((trunk) => {
         const nextSegments = trunk.segments.map((segment) => {
-            const nextSegmentId = generateUuid();
+            const nextSegmentId = uuidv4();
             segmentIdMap.set(segment.id, nextSegmentId);
             return {
                 ...segment,
@@ -2606,13 +2643,13 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
 
         return {
             ...trunk,
-            id: generateUuid(),
+            id: uuidv4(),
             rootId: getOrCreateMappedId(trunk.rootId, rootIdMap),
             segments: nextSegments,
             contactCone: trunk.contactCone
                 ? {
                     ...trunk.contactCone,
-                    id: generateUuid(),
+                    id: uuidv4(),
                     socketJointId: trunk.contactCone.socketJointId
                         ? getOrCreateMappedId(trunk.contactCone.socketJointId, jointIdMap)
                         : trunk.contactCone.socketJointId,
@@ -2623,7 +2660,7 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
 
     cloned.branches = cloned.branches.map((branch) => {
         const nextSegments = branch.segments.map((segment) => {
-            const nextSegmentId = generateUuid();
+            const nextSegmentId = uuidv4();
             segmentIdMap.set(segment.id, nextSegmentId);
             return {
                 ...segment,
@@ -2635,13 +2672,13 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
 
         return {
             ...branch,
-            id: generateUuid(),
+            id: uuidv4(),
             parentKnotId: getOrCreateMappedId(branch.parentKnotId, knotIdMap),
             segments: nextSegments,
             contactCone: branch.contactCone
                 ? {
                     ...branch.contactCone,
-                    id: generateUuid(),
+                    id: uuidv4(),
                     socketJointId: branch.contactCone.socketJointId
                         ? getOrCreateMappedId(branch.contactCone.socketJointId, jointIdMap)
                         : branch.contactCone.socketJointId,
@@ -2651,7 +2688,7 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
     });
 
     cloned.leaves = cloned.leaves.map((leaf) => {
-        const nextId = generateUuid();
+        const nextId = uuidv4();
         leafIdMap.set(leaf.id, nextId);
         return {
             ...leaf,
@@ -2659,7 +2696,7 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
             parentKnotId: getOrCreateMappedId(leaf.parentKnotId, knotIdMap),
             contactCone: {
                 ...leaf.contactCone,
-                id: generateUuid(),
+                id: uuidv4(),
                 socketJointId: leaf.contactCone.socketJointId
                     ? getOrCreateMappedId(leaf.contactCone.socketJointId, jointIdMap)
                     : leaf.contactCone.socketJointId,
@@ -2669,7 +2706,7 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
 
     cloned.twigs = (cloned.twigs ?? []).map((twig) => {
         const nextSegments = twig.segments.map((segment) => {
-            const nextSegmentId = generateUuid();
+            const nextSegmentId = uuidv4();
             segmentIdMap.set(segment.id, nextSegmentId);
             return {
                 ...segment,
@@ -2681,22 +2718,22 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
 
         return {
             ...twig,
-            id: generateUuid(),
+            id: uuidv4(),
             segments: nextSegments,
             contactDiskA: {
                 ...twig.contactDiskA,
-                id: generateUuid(),
+                id: uuidv4(),
             },
             contactDiskB: {
                 ...twig.contactDiskB,
-                id: generateUuid(),
+                id: uuidv4(),
             },
         };
     });
 
     cloned.sticks = (cloned.sticks ?? []).map((stick) => {
         const nextSegments = stick.segments.map((segment) => {
-            const nextSegmentId = generateUuid();
+            const nextSegmentId = uuidv4();
             segmentIdMap.set(segment.id, nextSegmentId);
             return {
                 ...segment,
@@ -2708,18 +2745,18 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
 
         return {
             ...stick,
-            id: generateUuid(),
+            id: uuidv4(),
             segments: nextSegments,
             contactConeA: {
                 ...stick.contactConeA,
-                id: generateUuid(),
+                id: uuidv4(),
                 socketJointId: stick.contactConeA.socketJointId
                     ? getOrCreateMappedId(stick.contactConeA.socketJointId, jointIdMap)
                     : stick.contactConeA.socketJointId,
             },
             contactConeB: {
                 ...stick.contactConeB,
-                id: generateUuid(),
+                id: uuidv4(),
                 socketJointId: stick.contactConeB.socketJointId
                     ? getOrCreateMappedId(stick.contactConeB.socketJointId, jointIdMap)
                     : stick.contactConeB.socketJointId,
@@ -2728,7 +2765,7 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
     });
 
     cloned.braces = cloned.braces.map((brace) => {
-        const nextId = generateUuid();
+        const nextId = uuidv4();
         braceIdMap.set(brace.id, nextId);
         return {
             ...brace,
@@ -2758,14 +2795,14 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
     });
 
     cloned.kickstands = (cloned.kickstands ?? []).map((build) => {
-        const nextRootId = generateUuid();
+        const nextRootId = uuidv4();
         kickstandRootIdMap.set(build.root.id, nextRootId);
 
-        const nextHostKnotId = generateUuid();
+        const nextHostKnotId = uuidv4();
         kickstandKnotIdMap.set(build.hostKnot.id, nextHostKnotId);
 
         const nextKickstandSegments = build.kickstand.segments.map((segment) => {
-            const nextSegmentId = generateUuid();
+            const nextSegmentId = uuidv4();
             segmentIdMap.set(segment.id, nextSegmentId);
             return {
                 ...segment,
@@ -2793,7 +2830,7 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
             },
             kickstand: {
                 ...build.kickstand,
-                id: generateUuid(),
+                id: uuidv4(),
                 rootId: getOrCreateMappedId(build.kickstand.rootId, kickstandRootIdMap),
                 hostKnotId: getOrCreateMappedId(build.kickstand.hostKnotId, kickstandKnotIdMap),
                 hostSegmentId: getOrCreateMappedId(build.kickstand.hostSegmentId, segmentIdMap),
@@ -2951,12 +2988,21 @@ export function updateTrunk(trunk: Trunk, options?: { skipDependentGeometry?: bo
 
             const seg = nextTrunk.segments[segIndex];
             const endpoints = getTrunkSegmentEndpoints(nextTrunk, seg, segIndex, root);
-            const nextDiameter = seg.diameter + 0.1;
+            // +0.125 (not the legacy +0.1): renders at the trunk-joint
+            // diameter; the legacy value rendered at the shaft — invisible.
+            const nextDiameter = seg.diameter + 0.125;
 
             let nextPos = knot.pos;
             let posChanged = false;
-            if (endpoints && knot.t !== undefined) {
-                const computed = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, seg, knot.t);
+            if (endpoints) {
+                // Auto merge/fan knots carry no `t` — project their position
+                // onto the (possibly moved) segment so the leaf follows the
+                // shaft on a joint drag. With a stored `t` the position is
+                // recomputed from it directly.
+                const tForKnot = knot.t !== undefined
+                    ? knot.t
+                    : computeClosestTOnSegmentFromPoint(knot.pos, endpoints.start, endpoints.end, seg);
+                const computed = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, seg, tForKnot);
                 if (computed.x !== knot.pos.x || computed.y !== knot.pos.y || computed.z !== knot.pos.z) {
                     nextPos = computed;
                     posChanged = true;

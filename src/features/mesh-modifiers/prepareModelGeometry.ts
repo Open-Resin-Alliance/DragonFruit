@@ -179,6 +179,7 @@ function splitClassifiedModelForOutput(model: LoadedModel): {
 
   const modelPart: LoadedModel = {
     ...model,
+    isSupportGeometry: false,
     geometry: modelBounds,
     polygonCount: split.modelTriangleCount,
     transform: {
@@ -191,6 +192,7 @@ function splitClassifiedModelForOutput(model: LoadedModel): {
     ...model,
     id: `${model.id}:slice-supports`,
     name: `${model.name} (Supports)`,
+    isSupportGeometry: true,
     geometry: supportBounds,
     polygonCount: split.supportTriangleCount,
     meshModifiers: undefined,
@@ -259,8 +261,7 @@ export async function prepareModelGeometryForOutput(model: LoadedModel): Promise
   // Hole punches are never auto-applied during slice/export — the user must
   // explicitly bake them first (via the hole-punch panel's Apply button or a
   // pre-slice confirmation dialog). This prevents unapplied LYS-imported holes
-  // from silently corrupting the sliced output.
-  const shouldApplyPunches = false;
+  // from silently corrupting the sliced output, so this list stays empty.
   const punches: ModelHolePunchPlacement[] = [];
 
   if (!shouldApplyHollowing && punches.length === 0) {

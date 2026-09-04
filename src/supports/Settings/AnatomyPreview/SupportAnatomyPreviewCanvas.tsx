@@ -455,7 +455,7 @@ function PreviewContent({
 
         let finalZoom = targetFocus.zoom;
 
-        let finalPosition = [...targetFocus.position] as [number, number, number];
+        const finalPosition = [...targetFocus.position] as [number, number, number];
 
         if (isContactDiameterFocus) {
             // Use REF to ensure fresh value inside frame loop
@@ -518,7 +518,7 @@ function PreviewContent({
         const isConeLengthFocus = previewState.activeSettingKey === 'tip.lengthMm';
 
         // We clone here because we might modify it
-        let finalTarget = [...targetFocus.target] as [number, number, number];
+        const finalTarget = [...targetFocus.target] as [number, number, number];
 
         if (isContactDiameterFocus && isTrunkKind) {
             const dx = finalPosition[0] - targetFocus.position[0];

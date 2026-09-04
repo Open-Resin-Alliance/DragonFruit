@@ -30,7 +30,7 @@ Grid support logic ensures deterministic trunk ownership and efficient branch re
 ## Related
 
 - [Support System](support-system.md)
-- [Architecture and Handoff](architecture-and-handoff.md)
+- [Architecture Overview](architecture-overview.md)
 - [Support Placement](../workflows/support-placement.md)
 
 Reference issues are tracked in historical docs and issue tracker; keep this page focused on invariant behavior.

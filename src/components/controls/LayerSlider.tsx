@@ -624,7 +624,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
       <div
         className={embedded
           ? isCompactMinimalRail
-            ? `${expandToContainer ? 'h-full min-h-0 flex flex-col' : ''} mx-auto w-[34px] py-1`
+            ? `${expandToContainer ? 'h-full min-h-0 flex flex-col' : ''} mx-auto w-[34px] pt-1 pb-0`
             : `${expandToContainer ? 'h-full min-h-0 flex flex-col' : ''} w-full rounded-lg ${isMinimalRail ? 'px-0 py-1.5' : 'px-1 py-1'}`
           : 'ui-panel w-44 rounded-lg px-2.5 py-2.5 shadow-lg'}
         style={embedded
@@ -973,7 +973,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
         </Tooltip>
 
         {!isMinimalRail && (
-          <div className="mt-1 text-center text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
+          <div className="mt-0 text-center text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
             {min}
           </div>
         )}

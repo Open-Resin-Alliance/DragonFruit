@@ -1270,9 +1270,17 @@ export function useHolePunchManager({
       return;
     }
 
+    // Wait until the placement-sync effect has loaded this model's holes into
+    // activeHolePunchPlacements. When the auto-apply target is a model that was
+    // just made active (e.g. the export-tab "Apply to All" sequence), applying
+    // with stale/empty placements would take the "no placements → restore
+    // geometry" path and wipe the model's holes.
+    if (activeHolePunchPlacements.length === 0) return;
+
     setPendingHolePunchAutoApplyModelId(null);
     handleApplyHolePunch();
   }, [
+    activeHolePunchPlacements.length,
     handleApplyHolePunch,
     isApplyingHolePunch,
     isApplyingHollowing,

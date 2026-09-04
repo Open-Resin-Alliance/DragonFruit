@@ -97,7 +97,6 @@ export function MeshSmoothingSettingsPanel() {
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Mesh Smoothing</h3>
           </>
         )}
-        hideDivider={!expanded}
       />
 
       {expanded && (

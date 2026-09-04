@@ -2,6 +2,13 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      force:
+        description: >-
+          Republish even if a release already exists for this version.
+          Overwrites its notes and assets. Leave off unless you mean it.
+        type: boolean
+        default: false
   push:
     branches:
       - main
@@ -39,7 +46,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          fetch-depth: 2
+          # A push of N commits puts github.event.before at HEAD~N, so any
+          # fixed depth is a guess. Getting it wrong used to make the version
+          # guard below fail open and republish a shipped release.
+          fetch-depth: 0
 
       - name: Detect package version bump
         id: version
@@ -117,7 +127,17 @@ jobs:
             previous_version=""
           fi
 
-          if [[ -n "$previous_version" && "$previous_version" == "${current_version}" ]]; then
+          # No readable previous version means we cannot tell a bump from an
+          # ordinary push, so we do not release. A genuine bump that lands
+          # here is recovered with a workflow_dispatch; the opposite mistake
+          # overwrites a published release.
+          if [[ -z "$previous_version" ]]; then
+            echo "::warning::Could not read package.json at ${{ github.event.before }}; not releasing."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$previous_version" == "${current_version}" ]]; then
             echo "should_release=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -131,6 +151,37 @@ jobs:
             echo "Automated release for version ${current_version} from the ${branch} branch."
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Refuse to overwrite an existing release
+        if: steps.version.outputs.should_release == 'true' && !inputs.force
+        uses: actions/github-script@v9
+        env:
+          TAG_NAME: ${{ steps.version.outputs.tag_name }}
+        with:
+          script: |
+            const tag = process.env.TAG_NAME;
+            let release;
+            try {
+              release = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+            } catch (error) {
+              if (error.status === 404) return;
+              throw error;
+            }
+
+            if (release.data.draft) {
+              core.info(`${tag} exists as a draft; publishing over it is fine.`);
+              return;
+            }
+
+            core.setFailed(
+              `${tag} is already published at ${release.data.html_url}. Publishing ` +
+              `would overwrite its notes and assets with freshly built ones. If ` +
+              `that is genuinely what you want, re-run from the Actions tab with ` +
+              `the "force" input enabled.`);
 
   build-tauri:
     name: Build ${{ matrix.artifact_name }}
@@ -173,7 +224,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.1"
+          node-version: "22.23.2"
           cache: npm
 
       - name: Install Rust stable
@@ -369,7 +420,9 @@ jobs:
 
       - name: Resolve release notes from matching prerelease
         id: release_notes
-        if: needs.detect-version-bump.outputs.has_prerelease_suffix == 'false'
+        if: |
+          github.ref_name == 'main' &&
+          needs.detect-version-bump.outputs.has_prerelease_suffix == 'false'
         uses: actions/github-script@v9
         env:
           VERSION: ${{ needs.detect-version-bump.outputs.version }}

@@ -21,10 +21,11 @@ import {
   SUPPORT_REPLACE_TRUNK,
   SUPPORT_EDIT_REPLACE,
   SUPPORT_AUTO_BRACE_REPLACE,
+  SUPPORT_AUTO_PLACE,
   SupportReplaceStatePayload,
 } from './actionTypes';
 import { registerSupportHistoryHandler } from './supportHistory';
-import { addAnchor, addKnot, addLeaf, addRoot, addTrunk, addBranch, addTwig, addStick, addBrace, removeAnchor, removeLeaf, removeTrunk, removeBranch, removeTwig, removeStick, removeBrace, removeKickstandCascade, updateTrunk, updateBranch, updateKnot, setSnapshot } from '../state';
+import { addAnchor, addKnot, addLeaf, addRoot, addTrunk, addBranch, addTwig, addStick, addBrace, removeAnchor, removeLeaf, removeTrunk, removeBranch, removeTwig, removeStick, removeBrace, removeKickstandCascade, updateTrunk, updateBranch, updateKnot, setSnapshot, getSnapshot } from '../state';
 import { addKickstand, setKickstandSnapshot } from '../SupportTypes/Kickstand/kickstandStore';
 import { clearSupportSelection } from '../interaction/shared/selection/selectionController';
 
@@ -40,6 +41,49 @@ function applySnapshotHistory(payload: SupportReplaceStatePayload, direction: 'u
     if (payload.kickstandAfter) {
       setKickstandSnapshot(payload.kickstandAfter);
     }
+  }
+}
+
+/**
+ * Whether the current selection still resolves to a live entity in the current
+ * snapshot. Used after per-entity undo/redo restores: a joint-move undo must
+ * not de-select the very support the user is editing, but a stale selection
+ * (entity removed beneath this undo entry) must still be cleared.
+ */
+function selectionExistsInSnapshot(): boolean {
+  const state = getSnapshot();
+  const id = state.selectedId;
+  const category = state.selectedCategory;
+  if (!id || !category) return false;
+
+  switch (category) {
+    case 'trunk': return !!state.trunks[id];
+    case 'branch': return !!state.branches[id];
+    case 'leaf': return !!state.leaves[id];
+    case 'twig': return !!state.twigs[id];
+    case 'stick': return !!state.sticks[id];
+    case 'brace': return !!state.braces[id];
+    case 'anchor': return !!state.anchors[id];
+    case 'root': return !!state.roots[id];
+    case 'knot': return !!state.knots[id];
+    case 'segment':
+      if (id.startsWith('braceSegment:')) {
+        return !!state.braces[id.slice('braceSegment:'.length)];
+      }
+      // fall through to joint scan for regular shaft segments
+    case 'joint': {
+      const hasJointOrSegment = (segments: Array<{ id: string; topJoint?: { id: string } | null; bottomJoint?: { id: string } | null }>) =>
+        segments.some((s) => s.id === id || s.topJoint?.id === id || s.bottomJoint?.id === id);
+      for (const t of Object.values(state.trunks)) {
+        if (hasJointOrSegment(t.segments)) return true;
+      }
+      for (const b of Object.values(state.branches)) {
+        if (hasJointOrSegment(b.segments)) return true;
+      }
+      return false;
+    }
+    default:
+      return false;
   }
 }
 
@@ -268,22 +312,26 @@ export function registerSupportHistoryHandlers(): () => void {
     }),
     registerSupportHistoryHandler(SUPPORT_UPDATE_TRUNK, (payload, direction) => {
       if (!payload?.before || !payload?.after) return false;
-      clearSupportSelection();
       if (direction === 'undo') {
         updateTrunk(payload.before);
       } else {
         updateTrunk(payload.after);
       }
+      // Keep the selection across the restore — the support still exists —
+      // unless it now points at an entity that was removed underneath.
+      if (!selectionExistsInSnapshot()) clearSupportSelection();
       return true;
     }),
     registerSupportHistoryHandler(SUPPORT_UPDATE_BRANCH, (payload, direction) => {
       if (!payload?.before || !payload?.after) return false;
-      clearSupportSelection();
       if (direction === 'undo') {
         updateBranch(payload.before);
       } else {
         updateBranch(payload.after);
       }
+      // Keep the selection across the restore — the support still exists —
+      // unless it now points at an entity that was removed underneath.
+      if (!selectionExistsInSnapshot()) clearSupportSelection();
       return true;
     }),
     registerSupportHistoryHandler(SUPPORT_REPLACE_TRUNK, (payload, direction) => {
@@ -302,6 +350,11 @@ export function registerSupportHistoryHandlers(): () => void {
       return true;
     }),
     registerSupportHistoryHandler(SUPPORT_AUTO_BRACE_REPLACE, (payload, direction) => {
+      if (!payload?.before || !payload?.after) return false;
+      applySnapshotHistory(payload, direction);
+      return true;
+    }),
+    registerSupportHistoryHandler(SUPPORT_AUTO_PLACE, (payload, direction) => {
       if (!payload?.before || !payload?.after) return false;
       applySnapshotHistory(payload, direction);
       return true;

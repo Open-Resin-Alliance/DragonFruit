@@ -202,7 +202,7 @@ export function SupportPathfindingDebugHud({
         top: 12,
         zIndex: 64,
         color: '#e5eefb',
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+        fontFamily: 'var(--font-geist-mono)',
         fontSize: 11,
         lineHeight: 1.35,
         width: 'min(360px, calc(100vw - 24px))',

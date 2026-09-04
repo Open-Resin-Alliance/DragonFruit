@@ -9,11 +9,6 @@
 import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
 import type { SelectionState, SelectionContextValue } from './types';
 
-const EMPTY_STATE: SelectionState = {
-  selectedModelId: null,
-  hasSelection: false,
-};
-
 const SelectionContext = createContext<SelectionContextValue | null>(null);
 
 interface SelectionProviderProps {

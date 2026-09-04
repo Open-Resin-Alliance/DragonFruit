@@ -161,7 +161,7 @@ export const calculateOptimalResolution = (
     
     // Base segments per mm of length?
     // e.g., 1 segment every 2mm?
-    let segments = Math.ceil(dist / 2);
+    const segments = Math.ceil(dist / 2);
     
     // Clamp resolution
     const MIN_RES = 8;
@@ -206,17 +206,6 @@ export function calculateAdaptiveBezierResolution(
 }
 
 /**
- * Result of constraint validation
- */
-export interface BezierValidationResult {
-    isValid: boolean;
-    maxCurvature: number; // Inverse of min radius of curvature
-    minRadiusOfCurvature: number;
-    maxOverhangAngle: number; // In degrees, 0 = vertical
-    violationMessage?: string;
-}
-
-/**
  * Subdivides a cubic Bezier curve at parameter t into two curves that exactly match the geometry.
  * Returns [leftCurve, rightCurve], where each is [p0, p1, p2, p3].
  */
@@ -246,96 +235,6 @@ export const subdivideCubicBezier = (
         [toVec3(v0), toVec3(p01), toVec3(p012), toVec3(p0123)],
         [toVec3(p0123), toVec3(p123), toVec3(p23), toVec3(v3)]
     ];
-};
-
-/**
- * Validates printability constraints along the curve.
- */
-export const validateBezierConstraints = (
-    p0: Vec3,
-    p1: Vec3,
-    p2: Vec3,
-    p3: Vec3,
-    options: {
-        minRadiusOfCurvature?: number; // e.g., 5mm?
-        maxOverhangAngle?: number; // e.g., 45 degrees
-        sampleCount?: number;
-    } = {}
-): BezierValidationResult => {
-    const {
-        minRadiusOfCurvature = 0, // 0 = no check
-        maxOverhangAngle = 180, // 180 = no check
-        sampleCount = 10
-    } = options;
-
-    let maxK = 0; // Max curvature found
-    let maxAngle = 0; // Max overhang angle found from vertical
-    
-    const up = new THREE.Vector3(0, 0, 1); // Assuming Z is up for printing? Or Y? 
-    // Project goals didn't specify axis, but commonly Z is up in 3D printing. 
-    // Let's assume Z is up based on "AnatomyOfSupports" usually implying Z-up.
-    // Verify with code search if needed. For now assume Z-up.
-
-    // We can reuse THREE.CubicBezierCurve3 for curvature helper if we want, 
-    // but let's do discrete checks.
-    
-    const curve = new THREE.CubicBezierCurve3(
-        toVector3(p0),
-        toVector3(p1),
-        toVector3(p2),
-        toVector3(p3)
-    );
-
-    // Check points along the curve
-    for (let i = 0; i <= sampleCount; i++) {
-        const t = i / sampleCount;
-        const tangent = curve.getTangent(t).normalize();
-        
-        // Overhang Check
-        // Angle with Z-up. 0 = vertical up, 180 = vertical down.
-        // 90 = horizontal.
-        // Support usually prints from bottom up?
-        // If tangent points UP (z > 0), angle is 0..90.
-        // If tangent points DOWN (z < 0), valid for printing? 
-        // Supports grow UP. So tangent should generally have positive Z?
-        // Wait, supports can curve sideways.
-        // Overhang is angle from vertical.
-        const angleRad = tangent.angleTo(up);
-        const angleDeg = THREE.MathUtils.radToDeg(angleRad);
-        
-        // We care about how "horizontal" it gets.
-        // 0 deg (Up) is safe.
-        // 90 deg (Horizontal) is dangerous.
-        // >90 deg (Down) is impossible for FDM support generation usually (can't print into void).
-        
-        maxAngle = Math.max(maxAngle, angleDeg);
-
-        if (angleDeg > maxOverhangAngle) {
-            return {
-                isValid: false,
-                maxCurvature: maxK,
-                minRadiusOfCurvature: (maxK > 0) ? 1/maxK : Infinity,
-                maxOverhangAngle: maxAngle,
-                violationMessage: `Steep overhang detected: ${angleDeg.toFixed(1)}° at t=${t.toFixed(2)}`
-            };
-        }
-        
-        // Curvature Check
-        // k = |r' x r''| / |r'|^3
-        // Need 1st and 2nd derivatives.
-        // Approximate with discrete change in tangent?
-        // Or use precise formula.
-        
-        // Let's skip complex curvature math for Step 1.1 unless critical.
-        // Just angle is the big one for now.
-    }
-
-    return {
-        isValid: true,
-        maxCurvature: maxK,
-        minRadiusOfCurvature: (maxK > 0) ? 1/maxK : Infinity,
-        maxOverhangAngle: maxAngle
-    };
 };
 
 /**

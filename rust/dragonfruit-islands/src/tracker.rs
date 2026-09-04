@@ -131,8 +131,9 @@ impl IslandTracker {
 
             let assigned_id = if active_prev_ids.is_empty() {
                 if !prev_ids.is_empty() {
-                    // Overlaps only non-active islands — resolve to parent chain
-                    let first = *prev_ids.iter().next().unwrap();
+                    // Overlaps only non-active islands — resolve to parent chain.
+                    // Pick the smallest id for determinism (HashSet order is not).
+                    let first = *prev_ids.iter().min_by_key(|id| id.0).unwrap();
                     let target = self.resolve_parent(first);
                     self.update_island(target, layer_index, area_mm2, Some(component));
                     target
@@ -201,8 +202,9 @@ impl IslandTracker {
 
             let assigned_id = if active_prev_ids.is_empty() {
                 if !prev_ids.is_empty() {
-                    // Overlaps only non-active islands — resolve to parent chain
-                    let first = *prev_ids.iter().next().unwrap();
+                    // Overlaps only non-active islands — resolve to parent chain.
+                    // Pick the smallest id for determinism (HashSet order is not).
+                    let first = *prev_ids.iter().min_by_key(|id| id.0).unwrap();
                     let target = self.resolve_parent(first);
                     self.update_island(target, layer_index, area_mm2, Some(component));
                     target
@@ -305,7 +307,12 @@ impl IslandTracker {
 
         self.pending_merges.push(PendingMerge {
             merge_layer: layer,
-            candidate_ids: prev_ids.iter().copied().collect(),
+            // Sort for deterministic iteration (child_ids order, parent selection).
+            candidate_ids: {
+                let mut ids: Vec<IslandId> = prev_ids.iter().copied().collect();
+                ids.sort_by_key(|id| id.0);
+                ids
+            },
             merged_island_id: merged_id,
             overlap_counts,
             pre_merge_labels,
@@ -327,11 +334,17 @@ impl IslandTracker {
         for &i in to_finalize.iter().rev() {
             let pending = self.pending_merges.remove(i);
 
-            // Determine parent = candidate with highest overlap count
+            // Determine parent = candidate with highest overlap count.
+            // Ties (equal overlap) prefer the smallest id so the choice is
+            // deterministic across processes (HashMap iteration order is not).
             let parent_id = pending
                 .overlap_counts
                 .iter()
-                .max_by_key(|(_, &count)| count)
+                .max_by(|(id_a, count_a), (id_b, count_b)| {
+                    count_a
+                        .cmp(count_b)
+                        .then_with(|| id_b.0.cmp(&id_a.0))
+                })
                 .map(|(&id, _)| id)
                 .unwrap_or(IslandId(0));
 

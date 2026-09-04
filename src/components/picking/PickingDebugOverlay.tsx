@@ -62,7 +62,7 @@ export function PickingDebugOverlay({
         color: '#fff',
         padding: '8px 12px',
         borderRadius: 4,
-        fontFamily: 'monospace',
+        fontFamily: 'var(--font-geist-mono)',
         fontSize: 11,
         zIndex: 1000,
         pointerEvents: 'none',

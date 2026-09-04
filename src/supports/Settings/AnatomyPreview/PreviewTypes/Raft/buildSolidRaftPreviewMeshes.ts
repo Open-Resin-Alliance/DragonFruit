@@ -11,7 +11,11 @@ export function buildSolidRaftPreviewMeshes(args: {
     baseColor: string;
     wallColor: string;
 }): { baseMesh: THREE.Mesh; wallMesh: THREE.Mesh | null } | null {
-    const profile = computeFootprint(args.circles, { marginMm: 0.2, samplesPerCircle: 24 });
+    const chamferInset = Math.max(0, args.raftSettings.thickness) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, args.raftSettings.chamferAngle))));
+    const wallInset = args.raftSettings.wallEnabled ? Math.max(0, args.raftSettings.wallThickness) : 0;
+    const dynamicMargin = 0.2 + Math.max(chamferInset, wallInset);
+
+    const profile = computeFootprint(args.circles, { marginMm: dynamicMargin, samplesPerCircle: 24 });
     if (!profile || profile.length < 3) return null;
 
     const baseMesh = generateChamferedBase(profile, {

@@ -7,19 +7,19 @@ import * as THREE from 'three';
  * Axis labels for X, Y, Z axes using sprites (no font loading)
  */
 export function AxisLabels({ size = 100 }: { size?: number }) {
-  const labelOffset = size + 10;
-  
+  const labelOffset = size + 2;
+
   // Create canvas-based texture for each label
   const createLabelTexture = (text: string, color: string) => {
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d');
     if (!context) return null;
-    
+
     canvas.width = 64;
     canvas.height = 64;
-    
+
     context.fillStyle = color;
-    context.font = 'Bold 48px Arial';
+    context.font = 'Bold 42px Arial';
     context.textAlign = 'center';
     context.textBaseline = 'middle';
     context.fillText(text, 32, 32);
@@ -38,21 +38,21 @@ export function AxisLabels({ size = 100 }: { size?: number }) {
     <>
       {/* X axis - Red */}
       {xTexture && (
-        <sprite position={[labelOffset, 0, 0]} scale={[8, 8, 1]} renderOrder={30} raycast={nullRaycast}>
+        <sprite position={[labelOffset, 0, 0]} scale={[6, 6, 1]} renderOrder={30} raycast={nullRaycast}>
           <spriteMaterial map={xTexture} transparent sizeAttenuation={true} depthTest depthWrite={false} toneMapped={false} />
         </sprite>
       )}
-      
+
       {/* Y axis - Green */}
       {yTexture && (
-        <sprite position={[0, labelOffset, 0]} scale={[8, 8, 1]} renderOrder={30} raycast={nullRaycast}>
+        <sprite position={[0, labelOffset, 0]} scale={[6, 6, 1]} renderOrder={30} raycast={nullRaycast}>
           <spriteMaterial map={yTexture} transparent sizeAttenuation={true} depthTest depthWrite={false} toneMapped={false} />
         </sprite>
       )}
-      
+
       {/* Z axis - Blue */}
       {zTexture && (
-        <sprite position={[0, 0, labelOffset]} scale={[8, 8, 1]} renderOrder={30} raycast={nullRaycast}>
+        <sprite position={[0, 0, labelOffset]} scale={[6, 6, 1]} renderOrder={30} raycast={nullRaycast}>
           <spriteMaterial map={zTexture} transparent sizeAttenuation={true} depthTest depthWrite={false} toneMapped={false} />
         </sprite>
       )}

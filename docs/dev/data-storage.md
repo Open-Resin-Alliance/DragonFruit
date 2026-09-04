@@ -82,7 +82,6 @@ This page is the developer-facing source of truth for client-side persistence us
 | Key                                 | Medium       | Purpose                  |
 | ----------------------------------- | ------------ | ------------------------ |
 | `app-hotkeys-config`                | localStorage | User hotkey overrides    |
-| `dragonfruit:rotation-snap-enabled` | localStorage | Rotation snap toggle     |
 | `autoLift`                          | localStorage | Auto-lift enable flag    |
 | `liftDistance`                      | localStorage | Auto-lift distance in mm |
 
