@@ -60,7 +60,7 @@ import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls
 import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { LayerSlider } from '@/components/controls/LayerSlider';
 import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
-import { SupportSidebar } from '@/supports/Settings';
+import { SupportSidebar } from '@/supports/Settings/SupportSidebar';
 import { useLeafPlacementState } from '@/supports/SupportTypes/Leaf/leafPlacementState';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { ExportManager } from '@/features/export/logic/ExportManager';
