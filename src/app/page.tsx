@@ -79,6 +79,7 @@ import {
   resolveModelActionTargetIds,
 } from '@/features/scene/modelActionTargets';
 import { buildLiftDropUpdates } from '@/features/scene/selectionLiftDrop';
+import { dropOverlaySupportedFormats, dropOverlayUnsupportedFormats } from '@/features/scene/sceneImportMessages';
 import {
   buildCenterSelectionUpdates,
   buildSelectionPositionUpdates,
@@ -10295,12 +10296,12 @@ export default function Home() {
                 }}
               >
                 <div className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  {isPrepareDragUnsupported ? 'Unsupported file format' : 'Drop supported files to import'}
+                  {isPrepareDragUnsupported ? _(msg`Unsupported file format`) : _(msg`Drop supported files to import`)}
                 </div>
                 <div className="mt-2 text-sm" style={{ color: 'var(--text-muted)' }}>
                   {isPrepareDragUnsupported
-                    ? `Please use: ${['STL', 'OBJ', '3MF', ...sceneFileExtensionLabelsValue].join(', ')}`
-                    : `Supported: ${['STL', 'OBJ', '3MF', ...sceneFileExtensionLabelsValue].join(', ')}`}
+                    ? dropOverlayUnsupportedFormats(['STL', 'OBJ', '3MF', ...sceneFileExtensionLabelsValue].join(', '), _)
+                    : dropOverlaySupportedFormats(['STL', 'OBJ', '3MF', ...sceneFileExtensionLabelsValue].join(', '), _)}
                 </div>
               </div>
             </div>

@@ -74,7 +74,7 @@ msgstr ""
 msgid "{downloaded} / {total} ({pct}%)"
 msgstr ""
 
-#: src/app/page.tsx:465
+#: src/app/page.tsx:466
 #: src/components/controls/ModelStatsCard.tsx:209
 msgid "{hours} h {minutes} min"
 msgstr "{hours} h {minutes} min"
@@ -99,8 +99,8 @@ msgstr ""
 msgid "{minutes} min"
 msgstr "{minutes} min"
 
-#: src/app/page.tsx:457
-#: src/app/page.tsx:466
+#: src/app/page.tsx:458
+#: src/app/page.tsx:467
 #: src/components/controls/ModelStatsCard.tsx:210
 msgid "{minutes} min {seconds} s"
 msgstr ""
@@ -148,12 +148,12 @@ msgid "< 1 min"
 msgstr "< 1 min"
 
 #. Approximate estimated print time (the "~" marks it as a rough estimate). {hours}/{mins} are whole-number quantities.
-#: src/app/page.tsx:449
+#: src/app/page.tsx:450
 msgid "~{hours} h {mins} min"
 msgstr "~{hours} h {mins} min"
 
 #. Approximate estimated print time under an hour (the "~" marks it as a rough estimate).
-#: src/app/page.tsx:450
+#: src/app/page.tsx:451
 msgid "~{mins} min"
 msgstr "~{mins} min"
 
@@ -191,7 +191,7 @@ msgstr "Aktívne"
 msgid "ACTIVE"
 msgstr ""
 
-#: src/app/page.tsx:2256
+#: src/app/page.tsx:2257
 msgid "Add joint"
 msgstr "Pridať Kĺb"
 
@@ -325,7 +325,7 @@ msgstr ""
 msgid "Autosave idle delay"
 msgstr ""
 
-#: src/app/page.tsx:993
+#: src/app/page.tsx:994
 msgid "Autosave is not working"
 msgstr ""
 
@@ -729,7 +729,7 @@ msgstr ""
 msgid "Continue"
 msgstr "Pokračovať"
 
-#: src/app/page.tsx:8159
+#: src/app/page.tsx:8160
 msgid "Converting support data and model metadata"
 msgstr ""
 
@@ -995,6 +995,10 @@ msgstr ""
 msgid "Drop supported files"
 msgstr "Hoď podporované súbory"
 
+#: src/app/page.tsx:10291
+msgid "Drop supported files to import"
+msgstr ""
+
 #: src/components/settings/SettingsModal.tsx:1264
 msgid "Early-access and experimental features"
 msgstr ""
@@ -1011,7 +1015,7 @@ msgstr ""
 msgid "Edit printer profile"
 msgstr ""
 
-#: src/app/page.tsx:2262
+#: src/app/page.tsx:2263
 #: src/components/ui/EditorContextMenu.tsx:126
 msgid "Editor"
 msgstr "Editor"
@@ -1497,7 +1501,7 @@ msgid "Last remote backup"
 msgstr ""
 
 #. {timestamp} is a locale-formatted date and time.
-#: src/app/page.tsx:600
+#: src/app/page.tsx:601
 msgid "Last successful autosave: {timestamp}. Save your project manually."
 msgstr ""
 
@@ -1539,7 +1543,7 @@ msgstr ""
 msgid "Left"
 msgstr ""
 
-#: src/app/page.tsx:8199
+#: src/app/page.tsx:8200
 msgid "Letting DragonFruit finish its startup animation before loading your scene."
 msgstr ""
 
@@ -1576,7 +1580,7 @@ msgstr ""
 msgid "Loading Mesh Files…"
 msgstr ""
 
-#: src/app/page.tsx:8149
+#: src/app/page.tsx:8150
 #: src/features/scene/sceneImportMessages.ts:23
 msgid "Loading Mesh…"
 msgstr ""
@@ -1585,9 +1589,9 @@ msgstr ""
 msgid "Loading remote material…"
 msgstr ""
 
-#: src/app/page.tsx:4339
-#: src/app/page.tsx:8149
-#: src/app/page.tsx:8158
+#: src/app/page.tsx:4340
+#: src/app/page.tsx:8150
+#: src/app/page.tsx:8159
 msgid "Loading Scene…"
 msgstr ""
 
@@ -1865,7 +1869,7 @@ msgstr ""
 msgid "No active printer"
 msgstr "Žiadne aktívne tlačiarne"
 
-#: src/app/page.tsx:997
+#: src/app/page.tsx:998
 msgid "No autosave has succeeded this session. Save your project manually."
 msgstr ""
 
@@ -2104,7 +2108,7 @@ msgstr "Otvoriť scénu…"
 msgid "Opening"
 msgstr ""
 
-#: src/app/page.tsx:8196
+#: src/app/page.tsx:8197
 msgid "Opening scene…"
 msgstr ""
 
@@ -2166,6 +2170,10 @@ msgstr ""
 #: src/components/layout/EmptySceneState.tsx:500
 msgid "Please hang tight while we prepare your scene."
 msgstr "Vydrž kým ti pripravíme scénu."
+
+#: src/features/scene/sceneImportMessages.ts:182
+msgid "Please use: {extensions}"
+msgstr ""
 
 #: src/components/settings/SettingsModal.tsx:1257
 msgid "Plugins"
@@ -2317,7 +2325,7 @@ msgstr ""
 msgid "Re-slice required after profile change"
 msgstr "Znovu nasekanie je potrebné po zmene v profile"
 
-#: src/app/page.tsx:4340
+#: src/app/page.tsx:4341
 msgid "Reading autosaved scene…"
 msgstr ""
 
@@ -2461,8 +2469,8 @@ msgstr "Obnoviť"
 msgid "Restore as Current"
 msgstr ""
 
-#: src/app/page.tsx:4371
-#: src/app/page.tsx:4382
+#: src/app/page.tsx:4372
+#: src/app/page.tsx:4383
 msgid "Restore Failed"
 msgstr ""
 
@@ -2646,6 +2654,10 @@ msgstr "Vybrať profil"
 
 #: src/components/settings/LocalBackupsSettingsTab.tsx:739
 msgid "Selected directory"
+msgstr ""
+
+#: src/components/layout/TopBar.tsx:725
+msgid "Selected printer"
 msgstr ""
 
 #: src/components/layout/TopBar.tsx:763
@@ -2854,7 +2866,11 @@ msgstr ""
 msgid "Support"
 msgstr "Podpera"
 
-#: src/app/page.tsx:2262
+#: src/features/scene/sceneImportMessages.ts:178
+msgid "Supported: {extensions}"
+msgstr ""
+
+#: src/app/page.tsx:2263
 msgid "Supports"
 msgstr "Podpery"
 
@@ -2876,16 +2892,16 @@ msgstr ""
 msgid "Temporary"
 msgstr ""
 
-#: src/app/page.tsx:4384
+#: src/app/page.tsx:4385
 msgid "The autosave recovery file could not be found."
 msgstr ""
 
-#: src/app/page.tsx:4372
-#: src/app/page.tsx:4385
+#: src/app/page.tsx:4373
+#: src/app/page.tsx:4386
 msgid "The autosaved recovery file is corrupted or unreadable."
 msgstr ""
 
-#: src/app/page.tsx:994
+#: src/app/page.tsx:995
 msgid "The background recovery save failed repeatedly."
 msgstr ""
 
@@ -2906,7 +2922,7 @@ msgstr ""
 msgid "The resin is ready. Are you?"
 msgstr "Živica je pripravená. Si ty?"
 
-#: src/app/page.tsx:4373
+#: src/app/page.tsx:4374
 msgid "The scene importer rejected or could not parse the autosave data."
 msgstr ""
 
@@ -2959,7 +2975,7 @@ msgstr ""
 msgid "Time to make something real."
 msgstr "Čas vytvoriť niečo ozajstné."
 
-#: src/app/page.tsx:2251
+#: src/app/page.tsx:2252
 msgid "Toggle curve"
 msgstr "Prepnúť Krivku"
 
@@ -3025,6 +3041,10 @@ msgstr ""
 
 #: src/components/scene/SceneAutosaveRecoveryModal.tsx:92
 msgid "Unsaved Scene Found"
+msgstr ""
+
+#: src/app/page.tsx:10291
+msgid "Unsupported file format"
 msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:734

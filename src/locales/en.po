@@ -69,7 +69,7 @@ msgstr "{done}/{total} processed"
 msgid "{downloaded} / {total} ({pct}%)"
 msgstr "{downloaded} / {total} ({pct}%)"
 
-#: src/app/page.tsx:465
+#: src/app/page.tsx:466
 #: src/components/controls/ModelStatsCard.tsx:209
 msgid "{hours} h {minutes} min"
 msgstr "{hours} h {minutes} min"
@@ -94,8 +94,8 @@ msgstr "{materialName} ({sourceName})"
 msgid "{minutes} min"
 msgstr "{minutes} min"
 
-#: src/app/page.tsx:457
-#: src/app/page.tsx:466
+#: src/app/page.tsx:458
+#: src/app/page.tsx:467
 #: src/components/controls/ModelStatsCard.tsx:210
 msgid "{minutes} min {seconds} s"
 msgstr "{minutes} min {seconds} s"
@@ -143,12 +143,12 @@ msgid "< 1 min"
 msgstr "< 1 min"
 
 #. Approximate estimated print time (the "~" marks it as a rough estimate). {hours}/{mins} are whole-number quantities.
-#: src/app/page.tsx:449
+#: src/app/page.tsx:450
 msgid "~{hours} h {mins} min"
 msgstr "~{hours} h {mins} min"
 
 #. Approximate estimated print time under an hour (the "~" marks it as a rough estimate).
-#: src/app/page.tsx:450
+#: src/app/page.tsx:451
 msgid "~{mins} min"
 msgstr "~{mins} min"
 
@@ -186,7 +186,7 @@ msgstr "Active"
 msgid "ACTIVE"
 msgstr "ACTIVE"
 
-#: src/app/page.tsx:2256
+#: src/app/page.tsx:2257
 msgid "Add joint"
 msgstr "Add joint"
 
@@ -320,7 +320,7 @@ msgstr "Autosave files are available in the DragonFruit desktop build."
 msgid "Autosave idle delay"
 msgstr "Autosave idle delay"
 
-#: src/app/page.tsx:993
+#: src/app/page.tsx:994
 msgid "Autosave is not working"
 msgstr "Autosave is not working"
 
@@ -724,7 +724,7 @@ msgstr "Connection"
 msgid "Continue"
 msgstr "Continue"
 
-#: src/app/page.tsx:8159
+#: src/app/page.tsx:8160
 msgid "Converting support data and model metadata"
 msgstr "Converting support data and model metadata"
 
@@ -990,6 +990,10 @@ msgstr "DragonFruit will <0>download, verify and install</0> the update, then re
 msgid "Drop supported files"
 msgstr "Drop supported files"
 
+#: src/app/page.tsx:10291
+msgid "Drop supported files to import"
+msgstr "Drop supported files to import"
+
 #: src/components/settings/SettingsModal.tsx:1264
 msgid "Early-access and experimental features"
 msgstr "Early-access and experimental features"
@@ -1006,7 +1010,7 @@ msgstr "Edit material profile"
 msgid "Edit printer profile"
 msgstr "Edit printer profile"
 
-#: src/app/page.tsx:2262
+#: src/app/page.tsx:2263
 #: src/components/ui/EditorContextMenu.tsx:126
 msgid "Editor"
 msgstr "Editor"
@@ -1492,7 +1496,7 @@ msgid "Last remote backup"
 msgstr "Last remote backup"
 
 #. {timestamp} is a locale-formatted date and time.
-#: src/app/page.tsx:600
+#: src/app/page.tsx:601
 msgid "Last successful autosave: {timestamp}. Save your project manually."
 msgstr "Last successful autosave: {timestamp}. Save your project manually."
 
@@ -1534,7 +1538,7 @@ msgstr "Layers:"
 msgid "Left"
 msgstr "Left"
 
-#: src/app/page.tsx:8199
+#: src/app/page.tsx:8200
 msgid "Letting DragonFruit finish its startup animation before loading your scene."
 msgstr "Letting DragonFruit finish its startup animation before loading your scene."
 
@@ -1571,7 +1575,7 @@ msgstr "Loading backup status…"
 msgid "Loading Mesh Files…"
 msgstr "Loading Mesh Files…"
 
-#: src/app/page.tsx:8149
+#: src/app/page.tsx:8150
 #: src/features/scene/sceneImportMessages.ts:23
 msgid "Loading Mesh…"
 msgstr "Loading Mesh…"
@@ -1580,9 +1584,9 @@ msgstr "Loading Mesh…"
 msgid "Loading remote material…"
 msgstr "Loading remote material…"
 
-#: src/app/page.tsx:4339
-#: src/app/page.tsx:8149
-#: src/app/page.tsx:8158
+#: src/app/page.tsx:4340
+#: src/app/page.tsx:8150
+#: src/app/page.tsx:8159
 msgid "Loading Scene…"
 msgstr "Loading Scene…"
 
@@ -1860,7 +1864,7 @@ msgstr "No AA"
 msgid "No active printer"
 msgstr "No active printer"
 
-#: src/app/page.tsx:997
+#: src/app/page.tsx:998
 msgid "No autosave has succeeded this session. Save your project manually."
 msgstr "No autosave has succeeded this session. Save your project manually."
 
@@ -2099,7 +2103,7 @@ msgstr "Open scene…"
 msgid "Opening"
 msgstr "Opening"
 
-#: src/app/page.tsx:8196
+#: src/app/page.tsx:8197
 msgid "Opening scene…"
 msgstr "Opening scene…"
 
@@ -2161,6 +2165,10 @@ msgstr "Please <0>save your scene and any unsaved progress</0> before continuing
 #: src/components/layout/EmptySceneState.tsx:500
 msgid "Please hang tight while we prepare your scene."
 msgstr "Please hang tight while we prepare your scene."
+
+#: src/features/scene/sceneImportMessages.ts:182
+msgid "Please use: {extensions}"
+msgstr "Please use: {extensions}"
 
 #: src/components/settings/SettingsModal.tsx:1257
 msgid "Plugins"
@@ -2312,7 +2320,7 @@ msgstr "Raw masks only."
 msgid "Re-slice required after profile change"
 msgstr "Re-slice required after profile change"
 
-#: src/app/page.tsx:4340
+#: src/app/page.tsx:4341
 msgid "Reading autosaved scene…"
 msgstr "Reading autosaved scene…"
 
@@ -2456,8 +2464,8 @@ msgstr "Restore"
 msgid "Restore as Current"
 msgstr "Restore as Current"
 
-#: src/app/page.tsx:4371
-#: src/app/page.tsx:4382
+#: src/app/page.tsx:4372
+#: src/app/page.tsx:4383
 msgid "Restore Failed"
 msgstr "Restore Failed"
 
@@ -2642,6 +2650,10 @@ msgstr "Select profile"
 #: src/components/settings/LocalBackupsSettingsTab.tsx:739
 msgid "Selected directory"
 msgstr "Selected directory"
+
+#: src/components/layout/TopBar.tsx:725
+msgid "Selected printer"
+msgstr "Selected printer"
 
 #: src/components/layout/TopBar.tsx:763
 #: src/components/layout/TopBar.tsx:764
@@ -2849,7 +2861,11 @@ msgstr "STL size:"
 msgid "Support"
 msgstr "Support"
 
-#: src/app/page.tsx:2262
+#: src/features/scene/sceneImportMessages.ts:178
+msgid "Supported: {extensions}"
+msgstr "Supported: {extensions}"
+
+#: src/app/page.tsx:2263
 msgid "Supports"
 msgstr "Supports"
 
@@ -2871,16 +2887,16 @@ msgstr "Sync interval"
 msgid "Temporary"
 msgstr "Temporary"
 
-#: src/app/page.tsx:4384
+#: src/app/page.tsx:4385
 msgid "The autosave recovery file could not be found."
 msgstr "The autosave recovery file could not be found."
 
-#: src/app/page.tsx:4372
-#: src/app/page.tsx:4385
+#: src/app/page.tsx:4373
+#: src/app/page.tsx:4386
 msgid "The autosaved recovery file is corrupted or unreadable."
 msgstr "The autosaved recovery file is corrupted or unreadable."
 
-#: src/app/page.tsx:994
+#: src/app/page.tsx:995
 msgid "The background recovery save failed repeatedly."
 msgstr "The background recovery save failed repeatedly."
 
@@ -2901,7 +2917,7 @@ msgstr "The printer reported this variant."
 msgid "The resin is ready. Are you?"
 msgstr "The resin is ready. Are you?"
 
-#: src/app/page.tsx:4373
+#: src/app/page.tsx:4374
 msgid "The scene importer rejected or could not parse the autosave data."
 msgstr "The scene importer rejected or could not parse the autosave data."
 
@@ -2954,7 +2970,7 @@ msgstr "This will overwrite your current app settings and profiles with the data
 msgid "Time to make something real."
 msgstr "Time to make something real."
 
-#: src/app/page.tsx:2251
+#: src/app/page.tsx:2252
 msgid "Toggle curve"
 msgstr "Toggle curve"
 
@@ -3021,6 +3037,10 @@ msgstr "Unsaved changes may be lost."
 #: src/components/scene/SceneAutosaveRecoveryModal.tsx:92
 msgid "Unsaved Scene Found"
 msgstr "Unsaved Scene Found"
+
+#: src/app/page.tsx:10291
+msgid "Unsupported file format"
+msgstr "Unsupported file format"
 
 #: src/components/layout/EmptySceneState.tsx:734
 msgid "Unsupported file type"

@@ -722,7 +722,7 @@ export function TopBar({
             {activePrinterThumbnailSrc ? (
               <img
                 src={activePrinterThumbnailSrc}
-                alt={activePrinterProfile?.name ?? 'Selected printer'}
+                alt={activePrinterProfile?.name ?? _(msg`Selected printer`)}
                 className="h-full w-full object-contain"
                 draggable={false}
                 onError={() => setPrinterThumbnailFailed(true)}

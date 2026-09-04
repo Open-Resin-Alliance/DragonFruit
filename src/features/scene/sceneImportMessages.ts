@@ -168,3 +168,16 @@ export function importDetailVoxlClassifying(
 ): string {
   return translate(msg`Classifying Mesh ${index}/${total}: ${modelName}`);
 }
+
+// ---------------------------------------------------------------------------
+// Drag-and-drop overlay
+// ---------------------------------------------------------------------------
+
+/** `extensions` is the comma-joined list of accepted formats, e.g. "STL, OBJ, 3MF". */
+export function dropOverlaySupportedFormats(extensions: string, translate: Translate): string {
+  return translate(msg`Supported: ${extensions}`);
+}
+
+export function dropOverlayUnsupportedFormats(extensions: string, translate: Translate): string {
+  return translate(msg`Please use: ${extensions}`);
+}
