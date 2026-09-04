@@ -1,8 +1,9 @@
 'use client';
 
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
-import { AlertTriangle, Box, Check, ChevronLeft, ChevronRight, Copy, Download, Edit3, FlaskConical, Frown, ImagePlus, LayoutGrid, Loader2, Lock, Plus, Printer, RefreshCw, Search, Trash2, Unlock, Upload, Wifi, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, Box, Check, Square, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, Edit3, FlaskConical, Frown, ImagePlus, Info, LayoutGrid, Loader2, Lock, Plus, Printer, RefreshCw, Search, Trash2, Unlock, Upload, Wifi, WifiOff, X } from 'lucide-react';
 import FleetManagement from '@/components/settings/FleetManagement';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
@@ -330,8 +331,12 @@ export function ProfileSettingsModal({
   const [selectedResinFamily, setSelectedResinFamily] = React.useState<MaterialProfile['resinFamily'] | null>(null);
   const [isCreateMaterialOpen, setIsCreateMaterialOpen] = React.useState(false);
   const [showMaterialPresetPicker, setShowMaterialPresetPicker] = React.useState(false);
+  const [showMaterialLibraryExplainer, setShowMaterialLibraryExplainer] = React.useState(false);
+  const [dontShowMaterialLibraryExplainerAgain, setDontShowMaterialLibraryExplainerAgain] = React.useState(false);
   const [materialPresetSearch, setMaterialPresetSearch] = React.useState('');
   const [selectedMaterialPresetBrand, setSelectedMaterialPresetBrand] = React.useState<string>('');
+  const [selectedMaterialPresetLayerHeight, setSelectedMaterialPresetLayerHeight] = React.useState<number | null>(null);
+  const [isMaterialBrandExpanded, setIsMaterialBrandExpanded] = React.useState(true);
   const [isMaterialEditorOpen, setIsMaterialEditorOpen] = React.useState(false);
   const [materialEditorTab, setMaterialEditorTab] = React.useState<string>('meta');
   const [showOfficialLockDialog, setShowOfficialLockDialog] = React.useState(false);
@@ -801,19 +806,28 @@ export function ProfileSettingsModal({
     return Array.from(uniq).sort((a, b) => a.localeCompare(b));
   }, [availableMaterialPresets]);
 
+  const materialPresetLayerHeights = React.useMemo(() => {
+    const candidatePresets = selectedMaterialPresetBrand
+      ? availableMaterialPresets.filter((preset) => ((preset.brand || 'Default').trim() || 'Default') === selectedMaterialPresetBrand)
+      : availableMaterialPresets;
+    const uniq = new Set(candidatePresets.map((preset) => preset.layerHeightMm));
+    return Array.from(uniq).sort((a, b) => a - b);
+  }, [availableMaterialPresets, selectedMaterialPresetBrand]);
+
   const filteredMaterialPresets = React.useMemo(() => {
     const search = materialPresetSearch.trim().toLowerCase();
     return availableMaterialPresets.filter((preset) => {
       const presetBrand = (preset.brand || 'Default').trim() || 'Default';
       const brandMatch = search.length > 0 || selectedMaterialPresetBrand.length === 0 || presetBrand === selectedMaterialPresetBrand;
+      const layerHeightMatch = search.length > 0 || selectedMaterialPresetLayerHeight == null || preset.layerHeightMm === selectedMaterialPresetLayerHeight;
       const searchMatch =
         search.length === 0
         || preset.name.toLowerCase().includes(search)
         || presetBrand.toLowerCase().includes(search)
         || preset.resinFamily.toLowerCase().includes(search);
-      return brandMatch && searchMatch;
+      return brandMatch && layerHeightMatch && searchMatch;
     });
-  }, [availableMaterialPresets, materialPresetSearch, selectedMaterialPresetBrand]);
+  }, [availableMaterialPresets, materialPresetSearch, selectedMaterialPresetBrand, selectedMaterialPresetLayerHeight]);
 
   const groupedFilteredMaterialPresets = React.useMemo(() => {
     const grouped = new Map<string, typeof filteredMaterialPresets>();
@@ -1628,6 +1642,25 @@ export function ProfileSettingsModal({
       setSelectedMaterialPresetBrand(materialPresetBrands[0]);
     }
   }, [materialPresetBrands, selectedMaterialPresetBrand]);
+
+  React.useEffect(() => {
+    if (!showMaterialPresetPicker) return;
+    try {
+      const dismissed = typeof window !== 'undefined' ? window.localStorage.getItem('dragonfruit.materialLibraryExplainerDismissed') : null;
+      if (dismissed === 'true') return;
+    } catch {}
+    setShowMaterialLibraryExplainer(true);
+  }, [showMaterialPresetPicker]);
+
+  React.useLayoutEffect(() => {
+    if (materialPresetLayerHeights.length === 0) {
+      if (selectedMaterialPresetLayerHeight !== null) setSelectedMaterialPresetLayerHeight(null);
+      return;
+    }
+    if (selectedMaterialPresetLayerHeight == null || !materialPresetLayerHeights.includes(selectedMaterialPresetLayerHeight)) {
+      setSelectedMaterialPresetLayerHeight(materialPresetLayerHeights[0]);
+    }
+  }, [materialPresetLayerHeights, selectedMaterialPresetLayerHeight]);
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -5252,19 +5285,31 @@ export function ProfileSettingsModal({
                     <FlaskConical className="w-4 h-4" style={{ color: 'var(--accent)' }} />
                   </span>
                   <div>
-                    <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Material Library</h3>
+                    <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Material Library{selectedPrinter ? ` for ${selectedPrinter.manufacturer} ${selectedPrinter.name}` : ''}</h3>
                     <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>Choose an official material preset to add.</p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setShowMaterialPresetPicker(false)}
-                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
-                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-                  aria-label="Close material library"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowMaterialLibraryExplainer(true)}
+                    className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+                    aria-label="About material presets"
+                    title="About material presets"
+                  >
+                    <Info className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowMaterialPresetPicker(false)}
+                    className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+                    aria-label="Close material library"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
               <div className="grid grid-cols-[220px_minmax(0,1fr)] grid-rows-[1fr] flex-1 min-h-0 overflow-hidden">
                 <div className="border-r flex flex-col min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
@@ -5282,27 +5327,70 @@ export function ProfileSettingsModal({
                   </div>
 
                   <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
-                    {materialPresetBrands.map((brand) => (
-                      <button
-                        key={brand}
-                        type="button"
-                        onClick={() => setSelectedMaterialPresetBrand(brand)}
-                        className="w-full rounded-md border px-2.5 py-2 text-left text-sm font-semibold"
-                        style={selectedMaterialPresetBrand === brand
-                          ? {
-                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)',
-                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 88%)',
-                              color: 'var(--text-strong)',
-                            }
-                          : {
-                              borderColor: 'var(--border-subtle)',
-                              background: 'var(--surface-1)',
-                              color: 'var(--text-muted)',
-                            }}
-                      >
-                        {brand}
-                      </button>
-                    ))}
+                    {materialPresetBrands.length > 0 && (
+                      <div className="space-y-1">
+                        <button
+                          type="button"
+                          onClick={() => setIsMaterialBrandExpanded((v) => !v)}
+                          className="w-full flex items-center justify-between gap-2 rounded-md border px-2 py-1.5 text-left text-sm font-semibold transition-colors"
+                          style={
+                            isMaterialBrandExpanded
+                              ? {
+                                  borderColor: 'transparent',
+                                  background: 'transparent',
+                                  color: 'var(--accent-secondary)',
+                                }
+                              : {
+                                  borderColor: 'var(--border-subtle)',
+                                  background: 'var(--surface-1)',
+                                  color: 'var(--text-muted)',
+                                }
+                          }
+                        >
+                          <span className="flex items-center gap-1.5 truncate">
+                            <ChevronDown className={`w-3 h-3 shrink-0 transition-transform ${isMaterialBrandExpanded ? '' : '-rotate-90'}`} />
+                            <span className="truncate">{materialPresetBrands[0] ?? 'Siraya Tech'}</span>
+                          </span>
+                          <span className="shrink-0 text-[11px] font-bold tabular-nums px-1 py-0.5 rounded" style={{ background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
+                            {availableMaterialPresets.filter((p) => ((p.brand || 'Default').trim() || 'Default') === (materialPresetBrands[0] ?? 'Siraya Tech')).length}
+                          </span>
+                        </button>
+                        {isMaterialBrandExpanded && materialPresetLayerHeights.length > 0 && (
+                          <div className="ml-4 pl-4 border-l space-y-1" style={{ borderColor: selectedMaterialPresetLayerHeight != null ? 'var(--accent)' : 'var(--border-subtle)' }}>
+                            {materialPresetLayerHeights.map((h) => {
+                              const isActive = selectedMaterialPresetLayerHeight === h;
+                              const count = availableMaterialPresets.filter((p) => p.layerHeightMm === h && ((p.brand || 'Default').trim() || 'Default') === (materialPresetBrands[0] ?? 'Siraya Tech')).length;
+                              return (
+                                <button
+                                    key={h}
+                                  type="button"
+                                  onClick={() => setSelectedMaterialPresetLayerHeight(h)}
+                                  className="w-full flex items-center justify-between gap-2 rounded-md border px-2 py-1 text-left text-xs font-medium transition-colors"
+                                  style={
+                                    isActive
+                                      ? {
+                                          borderColor: 'transparent',
+                                          background: 'transparent',
+                                          color: 'var(--accent)',
+                                        }
+                                      : {
+                                          borderColor: 'var(--border-subtle)',
+                                          background: 'var(--surface-0)',
+                                          color: 'var(--text-muted)',
+                                        }
+                                  }
+                                >
+                                  <span>{Math.round(h * 1000) + 'μm'}</span>
+                                  <span className="text-[11px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
+                                    {count}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -5343,59 +5431,52 @@ export function ProfileSettingsModal({
                           type="button"
                           disabled={isAlreadyAdded}
                           onClick={handleToggle}
-                          className="w-full rounded-lg border text-left transition-colors overflow-hidden disabled:opacity-60"
-                          style={isAlreadyAdded
-                            ? {
-                                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
-                                background: 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), var(--surface-1) 91%), color-mix(in srgb, var(--accent-secondary), var(--surface-1) 96%))',
-                              }
-                            : isSelected
+                          className="w-full rounded-md border text-left transition-colors overflow-hidden disabled:opacity-60"
+                          style={
+                            isAlreadyAdded
                               ? {
-                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 20%)',
-                                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                                  outline: '1.5px solid color-mix(in srgb, var(--accent), transparent 40%)',
+                                  borderColor: `color-mix(in srgb, ${familyColor}, var(--border-subtle) 30%)`,
+                                  background: `color-mix(in srgb, ${familyColor}, var(--surface-1) 88%)`,
                                 }
-                              : {
-                                  borderColor: 'var(--border-subtle)',
-                                  background: 'var(--surface-1)',
-                                }}
+                              : isSelected
+                                ? {
+                                    borderColor: familyColor,
+                                    background: `color-mix(in srgb, ${familyColor}, var(--surface-1) 82%)`,
+                                  }
+                                : {
+                                    borderColor: `color-mix(in srgb, ${familyColor}, transparent 62%)`,
+                                    background: `color-mix(in srgb, ${familyColor}, var(--surface-1) 92%)`,
+                                  }
+                          }
                         >
-                          <div className="flex h-full">
-                            <div className="w-[3px] shrink-0 self-stretch" style={{ background: isAlreadyAdded ? 'var(--accent-secondary)' : isSelected ? 'var(--accent)' : familyColor }} />
-                            <div className="flex-1 min-w-0 px-3 py-2.5">
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>{preset.name}</span>
-                                <div className="shrink-0 flex items-center gap-1.5">
-                                  {showFamily && !isAlreadyAdded && !isSelected && (
-                                    <span
-                                      className="text-[11px] rounded-full border px-1.5 py-0.5 font-medium whitespace-nowrap"
-                                      style={{ borderColor: `color-mix(in srgb, ${familyColor}, transparent 45%)`, color: familyColor, background: `color-mix(in srgb, ${familyColor}, var(--surface-0) 88%)` }}
-                                    >
-                                      {resinFamilyLabel}
-                                    </span>
-                                  )}
-                                  {isSelected && (
-                                    <span
-                                      className="inline-flex h-5 w-5 items-center justify-center rounded-full"
-                                      style={{ background: 'var(--accent)', color: '#0a0f0a' }}
-                                    >
-                                      <Check className="w-3 h-3" strokeWidth={3} />
-                                    </span>
-                                  )}
-                                  {isAlreadyAdded && (
-                                    <span
-                                      className="text-[11px] rounded-full border px-1.5 py-0.5 font-semibold whitespace-nowrap"
-                                      style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)', color: 'var(--accent-secondary)' }}
-                                    >
-                                      Added
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-1.5 mt-0.5">
-                                <span className="text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
-                                  {`${preset.layerHeightMm * 1000}μm · ${preset.normalExposureSec}s`}
-                                </span>
+                          <div className="flex-1 min-w-0 px-2.5 py-1.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>{preset.name.replace(/^Siraya Tech\s*-\s*/i, '')}</span>
+                              <div className="shrink-0 flex items-center gap-1.5">
+                                {showFamily && !isAlreadyAdded && !isSelected && (
+                                  <span
+                                    className="text-[11px] rounded-full border px-1.5 py-0.5 font-medium whitespace-nowrap"
+                                    style={{ borderColor: `color-mix(in srgb, ${familyColor}, transparent 45%)`, color: familyColor, background: `color-mix(in srgb, ${familyColor}, var(--surface-0) 88%)` }}
+                                  >
+                                    {resinFamilyLabel}
+                                  </span>
+                                )}
+                                {isSelected && (
+                                  <span
+                                    className="inline-flex h-5 w-5 items-center justify-center rounded-full"
+                                    style={{ background: 'var(--accent)', color: '#0a0f0a' }}
+                                  >
+                                    <Check className="w-3 h-3" strokeWidth={3} />
+                                  </span>
+                                )}
+                                {isAlreadyAdded && (
+                                  <span
+                                    className="text-[11px] rounded-full border px-1.5 py-0.5 font-semibold whitespace-nowrap"
+                                    style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)', color: 'var(--accent-secondary)' }}
+                                  >
+                                    Added
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -5405,7 +5486,7 @@ export function ProfileSettingsModal({
 
                     if (isSearchingMaterialPresets) {
                       return (
-                        <div className="space-y-1.5">
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-1.5">
                           {filteredMaterialPresets.map((preset, index) => renderMaterialPresetRow(preset, index, 'search', true))}
                         </div>
                       );
@@ -5423,7 +5504,7 @@ export function ProfileSettingsModal({
                                 {group.family}
                               </span>
                             </div>
-                            <div className="space-y-1.5">
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-1.5">
                               {group.presets.map((preset, index) => renderMaterialPresetRow(preset, index, group.family))}
                             </div>
                           </section>
@@ -5457,6 +5538,90 @@ export function ProfileSettingsModal({
                 </button>
               </div>
             </div>
+            {showMaterialLibraryExplainer && typeof document !== 'undefined' && createPortal(
+              <div
+                className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+                onMouseDown={(event) => {
+                  if (event.target === event.currentTarget) setShowMaterialLibraryExplainer(false);
+                }}
+                role="dialog"
+                aria-modal="true"
+                aria-label="Material presets disclaimer"
+              >
+                <div
+                  className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+                  style={{
+                    background: 'var(--surface-0)',
+                    borderColor: 'var(--border-subtle)',
+                    boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-center gap-4 border-b px-5 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <span
+                      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                      style={{
+                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 50%)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
+                        color: 'var(--accent)',
+                      }}
+                    >
+                      <Info className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0 pr-2">
+                      <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+                        Heads up about presets
+                      </h2>
+                      <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                        Good baselines, still calibrate.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="space-y-4 p-5">
+                    <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                      All material presets are good baselines and generally tested on hardware, but we still recommend individual calibration for the best results. Exposure, lift and temperature can vary by machine, resin batch and environment.
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <button
+                        type="button"
+                        className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
+                        style={{
+                          borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
+                          background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
+                          color: '#fde68a',
+                        }}
+                        onClick={() => setDontShowMaterialLibraryExplainerAgain((v) => !v)}
+                      >
+                        {dontShowMaterialLibraryExplainerAgain ? (
+                          <Check className="h-3.5 w-3.5 shrink-0" strokeWidth={2.5} style={{ color: '#fde68a' }} />
+                        ) : (
+                          <Square className="h-3.5 w-3.5 shrink-0" style={{ color: '#f59e0b' }} strokeWidth={1.5} />
+                        )}
+                        Do not show again
+                      </button>
+                      <button
+                        type="button"
+                        className="ui-button !h-9 w-full px-3 text-xs inline-flex items-center justify-center gap-1.5"
+                        style={{
+                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                          background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
+                          color: 'var(--accent)',
+                        }}
+                        onClick={() => {
+                          if (dontShowMaterialLibraryExplainerAgain) {
+                            try { window.localStorage.setItem('dragonfruit.materialLibraryExplainerDismissed', 'true'); } catch {}
+                          }
+                          setShowMaterialLibraryExplainer(false);
+                        }}
+                      >
+                        Got it
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            )}
           </div>
         )}
 
