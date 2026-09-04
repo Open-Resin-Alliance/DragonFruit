@@ -26,6 +26,11 @@
 #   --no-build           skip cargo build
 #
 #  Git multi-version options (measure several versions of the software):
+#   --codegen CSV        x86_64 codegen variants to sweep, e.g. shipped,v2,v3. Builds the
+#                        CLI once per variant (same source, different RUSTFLAGS) and runs
+#                        the whole matrix against each. Presets: v1, v2, v3, shipped,
+#                        v2avx2, native. Anything else is passed to RUSTFLAGS verbatim.
+#                        Variants this CPU cannot execute are skipped, not crashed into.
 #   --refs CSV           git refs to benchmark: branches/tags/commits, e.g. main,dev,v1.2.0
 #   --prs CSV            GitHub PR numbers, e.g. 418,424 (fetched via pull/N/head)
 #   --worktree-base DIR  where to create per-ref worktrees   (default: a temp dir)
@@ -82,6 +87,7 @@ OUT="bench-results.jsonl"
 REPEATS=1
 DO_BUILD=1
 REFS=""
+CODEGEN=""
 PRS=""
 WORKTREE_BASE=""
 KEEP_WT=0
@@ -101,6 +107,7 @@ while [[ $# -gt 0 ]]; do
     --out) OUT="$2"; shift 2;;
     --repeats) REPEATS="$2"; shift 2;;
     --no-build) DO_BUILD=0; shift;;
+    --codegen) CODEGEN="$2"; shift 2;;
     --refs) REFS="$2"; shift 2;;
     --prs) PRS="$2"; shift 2;;
     --worktree-base) WORKTREE_BASE="$2"; shift 2;;
@@ -288,7 +295,7 @@ read -r -d '' AVG_JQ <<'JQ' || true
 def avg(f): (map(f) | add) / length;
 [.[].perf] as $ps
 | {
-    ref: .[0].ref, git_sha: .[0].git_sha,
+    ref: .[0].ref, git_sha: .[0].git_sha, codegen: .[0].codegen,
     hw: .[0].hw, hw_cpus: .[0].hw_cpus, hw_mem: .[0].hw_mem,
     voxl: .[0].voxl, printer: .[0].printer, format: .[0].format,
     layer_height: .[0].layer_height,
@@ -396,7 +403,7 @@ validate_case() { # <produced-file> <voxl> <printer> <lh> <preset> -> prints val
 # A "target" is one version of the software to benchmark. With no --refs/--prs
 # there is a single target: the current working tree.
 # ---------------------------------------------------------------------------
-declare -a TARGET_LABEL TARGET_SHA TARGET_TS TARGET_RUST
+declare -a TARGET_LABEL TARGET_SHA TARGET_TS TARGET_RUST TARGET_CHECKOUT TARGET_CODEGEN
 WORKTREES=()
 CREATED_WT_BASE=0
 
@@ -418,8 +425,45 @@ trap cleanup_all EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-build_rust() { # <checkout-dir>
-  ( cd "$1/rust/dragonfruit-cli" && cargo build --release >/dev/null )
+# Codegen presets. `target-feature` only tells LLVM the instructions exist; the
+# cost model and scheduling still come from `target-cpu`, so the two knobs are
+# not interchangeable and the matrix carries both shapes on purpose.
+codegen_flags() { # <name> -> RUSTFLAGS on stdout, non-zero if unknown
+  case "$1" in
+    v1)      printf -- '-C target-cpu=x86-64' ;;
+    v2)      printf -- '-C target-cpu=x86-64-v2' ;;
+    v3)      printf -- '-C target-cpu=x86-64-v3' ;;
+    shipped) printf -- '-C target-feature=+avx2,+fma' ;;
+    v2avx2)  printf -- '-C target-cpu=x86-64-v2 -C target-feature=+avx2,+fma' ;;
+    native)  printf -- '-C target-cpu=native' ;;
+    -C*)     printf -- '%s' "$1" ;;
+    *)       return 1 ;;
+  esac
+}
+
+# A variant the host cannot execute dies with an illegal instruction partway
+# through the matrix. Saying so up front is friendlier than the crash.
+codegen_runnable() { # <name> -> non-zero (and a reason on stdout) if unrunnable
+  local name="$1" flags cpuflags
+  flags="$(codegen_flags "$name")" || return 0
+  [[ -r /proc/cpuinfo ]] || return 0
+  cpuflags=" $(sed -n 's/^flags[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | head -1) "
+  if [[ "$flags" == *avx2* || "$flags" == *x86-64-v3* ]] && [[ "$cpuflags" != *" avx2 "* ]]; then
+    echo "needs AVX2, which this CPU does not have"; return 1
+  fi
+  if [[ "$flags" == *x86-64-v* ]] && [[ "$cpuflags" != *" sse4_2 "* ]]; then
+    echo "needs SSE4.2, which this CPU does not have"; return 1
+  fi
+  return 0
+}
+
+build_rust() { # <checkout-dir> [rustflags] [target-dir]
+  # An empty CARGO_TARGET_DIR is not the same as an unset one, so the variables
+  # are only exported when a codegen variant actually asked for them.
+  ( cd "$1/rust/dragonfruit-cli" || exit 1
+    if [[ -n "${2-}" ]]; then export RUSTFLAGS="$2"; fi
+    if [[ -n "${3-}" ]]; then export CARGO_TARGET_DIR="$3"; fi
+    cargo build --release >/dev/null )
 }
 
 if [[ -z "$REFS" && -z "$PRS" ]]; then
@@ -434,6 +478,8 @@ if [[ -z "$REFS" && -z "$PRS" ]]; then
   TARGET_SHA+=("$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)")
   TARGET_TS+=("npx tsx scripts/dragonfruit-ts-cli.ts")
   TARGET_RUST+=("$rbin")
+  TARGET_CHECKOUT+=("$REPO_ROOT")
+  TARGET_CODEGEN+=("")
 else
   # ---- multiple targets: one git worktree per ref/PR ----
   if [[ -z "$WORKTREE_BASE" ]]; then WORKTREE_BASE="$(mktemp -d)"; CREATED_WT_BASE=1; fi
@@ -502,9 +548,56 @@ else
     TARGET_SHA+=("$sha")
     TARGET_TS+=("npx tsx $wt/scripts/dragonfruit-ts-cli.ts")
     TARGET_RUST+=("$rbin")
+    TARGET_CHECKOUT+=("$wt")
+    TARGET_CODEGEN+=("")
   done
 
   [[ ${#TARGET_LABEL[@]} -gt 0 ]] || { echo "No usable git targets to benchmark" >&2; exit 1; }
+fi
+
+# ---------------------------------------------------------------------------
+# Codegen sweep: multiply every target by the requested codegen variants. Same
+# source, same checkout — only RUSTFLAGS differs, each into its own target dir
+# so variants never reuse each other's artifacts. RUSTFLAGS fully overrides the
+# rustflags in .cargo/config.toml (cargo treats them as mutually exclusive), so
+# no variant silently inherits the flags we ship.
+# ---------------------------------------------------------------------------
+if [[ -n "$CODEGEN" ]]; then
+  declare -a CG_LABEL=() CG_SHA=() CG_TS=() CG_RUST=() CG_CHECKOUT=() CG_CODEGEN=()
+  IFS=',' read -ra CGLIST <<< "$CODEGEN"
+  for ti in "${!TARGET_LABEL[@]}"; do
+    for cg in "${CGLIST[@]}"; do
+      [[ -n "$cg" ]] || continue
+      if ! flags="$(codegen_flags "$cg")"; then
+        echo "  SKIP codegen '$cg': unknown preset (try v1, v2, v3, shipped, v2avx2, native, or -C flags)" >&2
+        continue
+      fi
+      if ! reason="$(codegen_runnable "$cg")"; then
+        echo "  SKIP codegen '$cg': $reason" >&2
+        continue
+      fi
+      co="${TARGET_CHECKOUT[$ti]}"
+      # printf, not echo: echo's trailing newline is outside the accepted set and
+      # tr -c would turn it into a trailing underscore, so the directory looked
+      # for and the directory built would not match.
+      safe_cg="$(printf '%s' "$cg" | tr -c 'A-Za-z0-9._-' '_')"
+      tdir="$co/rust/dragonfruit-cli/target-codegen-$safe_cg"
+      if [[ "$DO_BUILD" == 1 ]]; then
+        echo "==> building ${TARGET_LABEL[$ti]} with codegen '$cg' ($flags)" >&2
+        if ! build_rust "$co" "$flags" "$tdir"; then
+          echo "  SKIP codegen '$cg' on ${TARGET_LABEL[$ti]}: cargo build failed" >&2; continue
+        fi
+      fi
+      rbin="$tdir/release/dragonfruit-cli"
+      [[ -x "$rbin" ]] || { echo "  SKIP codegen '$cg' on ${TARGET_LABEL[$ti]}: binary not found (drop --no-build)" >&2; continue; }
+      CG_LABEL+=("${TARGET_LABEL[$ti]}");   CG_SHA+=("${TARGET_SHA[$ti]}")
+      CG_TS+=("${TARGET_TS[$ti]}");         CG_RUST+=("$rbin")
+      CG_CHECKOUT+=("$co");                 CG_CODEGEN+=("$cg")
+    done
+  done
+  [[ ${#CG_LABEL[@]} -gt 0 ]] || { echo "No usable codegen variants to benchmark" >&2; exit 1; }
+  TARGET_LABEL=("${CG_LABEL[@]}"); TARGET_SHA=("${CG_SHA[@]}"); TARGET_TS=("${CG_TS[@]}")
+  TARGET_RUST=("${CG_RUST[@]}");   TARGET_CHECKOUT=("${CG_CHECKOUT[@]}"); TARGET_CODEGEN=("${CG_CODEGEN[@]}")
 fi
 
 # ---------------------------------------------------------------------------
@@ -512,10 +605,11 @@ fi
 # target (one version of the software). Rows are tagged with ref/git_sha, and
 # optionally carry a validation:{...} block vs a known-good archive.
 # ---------------------------------------------------------------------------
-run_matrix() { # <label> <sha> <ts-cmd> <rust-binary> <hw-label> <hw-cpus> <hw-mem>
-  local REF="$1" SHA="$2" TS="$3" RUST="$4" HWL="$5" HWC="$6" HWM="$7"
+run_matrix() { # <label> <sha> <ts-cmd> <rust-binary> <hw-label> <hw-cpus> <hw-mem> <codegen>
+  local REF="$1" SHA="$2" TS="$3" RUST="$4" HWL="$5" HWC="$6" HWM="$7" CG="${8-}"
   local prefix=""
   [[ ${#TARGET_LABEL[@]} -gt 1 || "$REF" != "working-tree" ]] && prefix="[$REF] "
+  [[ -n "$CG" ]] && prefix="${prefix}<$CG> "
   [[ ${#HW_LABEL[@]} -gt 1 ]] && prefix="${prefix}{$HWL} "
 
   # Command prefix that imposes this machine's CPU/RAM envelope on the slice (and its
@@ -526,6 +620,7 @@ run_matrix() { # <label> <sha> <ts-cmd> <rust-binary> <hw-label> <hw-cpus> <hw-m
 
   local voxl printer lh aa vname pname pext repfile ok_repeats r tmp errf resf inspf reslog fsize row rc
   local valjson valfile hwcjson hwmjson fail_diag oom
+  local cgjson; cgjson="$([[ -n "$CG" ]] && printf '"%s"' "$CG" || printf 'null')"
   hwcjson="$([[ -n "$HWC" ]] && printf '%s' "$HWC" || printf 'null')"
   hwmjson="$([[ -n "$HWM" ]] && printf '"%s"' "$HWM" || printf 'null')"
   for voxl in "${voxls[@]}"; do
@@ -553,12 +648,12 @@ run_matrix() { # <label> <sha> <ts-cmd> <rust-binary> <hw-label> <hw-cpus> <hw-m
           if jq -c -n \
                 --arg voxl "$vname" --arg printer "$pname" --arg fmt "$pext" \
                 --arg lh "$lh" --arg aa "$aa" --argjson r "$r" --argjson fsize "$fsize" \
-                --arg ref "$REF" --arg sha "$SHA" \
+                --arg ref "$REF" --arg sha "$SHA" --argjson codegen "$cgjson" \
                 --arg hw "$HWL" --argjson hwc "$hwcjson" --argjson hwm "$hwmjson" '
             input as $s | input as $i
             | ($i.numeric_layer_count) as $nlc
             | {
-            ref:$ref, git_sha:$sha,
+            ref:$ref, git_sha:$sha, codegen:$codegen,
             hw:$hw, hw_cpus:$hwc, hw_mem:$hwm,
             voxl:$voxl, printer:$printer, format:$fmt,
             layer_height:($lh|tonumber), aa_preset:$aa, run:$r,
@@ -634,11 +729,12 @@ run_matrix() { # <label> <sha> <ts-cmd> <rust-binary> <hw-label> <hw-cpus> <hw-m
         # Merge the last failure's resource diagnostic ($fail_diag) so an OOM row carries its
         # RSS/CPU samples + peaks + exit_code/oom for debugging, not just "all repeats failed".
         [[ -n "$fail_diag" ]] || fail_diag='{}'
-        jq -c -n --arg ref "$REF" --arg sha "$SHA" --arg voxl "$vname" --arg printer "$pname" \
+        jq -c -n --arg ref "$REF" --arg sha "$SHA" --argjson codegen "$cgjson" \
+          --arg voxl "$vname" --arg printer "$pname" \
           --arg fmt "$pext" --arg lh "$lh" --arg aa "$aa" \
           --arg hw "$HWL" --argjson hwc "$hwcjson" --argjson hwm "$hwmjson" \
           --argjson diag "$fail_diag" \
-          '{ref:$ref,git_sha:$sha,hw:$hw,hw_cpus:$hwc,hw_mem:$hwm,voxl:$voxl,printer:$printer,format:$fmt,layer_height:($lh|tonumber),aa_preset:$aa,error:"all repeats failed"} + $diag' >> "$OUT"
+          '{ref:$ref,git_sha:$sha,codegen:$codegen,hw:$hw,hw_cpus:$hwc,hw_mem:$hwm,voxl:$voxl,printer:$printer,format:$fmt,layer_height:($lh|tonumber),aa_preset:$aa,error:"all repeats failed"} + $diag' >> "$OUT"
         printf '  %s%-14s %-20s lh=%-5s preset=%-9s ERROR (all %s repeats failed%s)\n' "$prefix" "$vname" "$pname" "$lh" "$aa" "$REPEATS" \
           "$(echo "$fail_diag" | jq -r 'if .oom then ", OOM peakRSS=\(.peak_rss_mb|round)MB \(.sample_count) samples" else "" end' 2>/dev/null)" >&2
       fi
@@ -652,13 +748,13 @@ run_matrix() { # <label> <sha> <ts-cmd> <rust-binary> <hw-label> <hw-cpus> <hw-m
 # Build once per git target, then sweep every hardware envelope under it (the software
 # is fixed per ref; only the imposed CPU/RAM machine changes between hw configs).
 for ti in "${!TARGET_LABEL[@]}"; do
-  [[ ${#TARGET_LABEL[@]} -gt 1 ]] && echo "==> benchmarking ${TARGET_LABEL[$ti]} (${TARGET_SHA[$ti]})" >&2
+  [[ ${#TARGET_LABEL[@]} -gt 1 ]] && echo "==> benchmarking ${TARGET_LABEL[$ti]} (${TARGET_SHA[$ti]})${TARGET_CODEGEN[$ti]:+ codegen '${TARGET_CODEGEN[$ti]}'}" >&2
   for hi in "${!HW_LABEL[@]}"; do
     if [[ ${#HW_LABEL[@]} -gt 1 || -n "${HW_CPUS[$hi]}${HW_MEM[$hi]}" ]]; then
       echo "==> hw config '${HW_LABEL[$hi]}' (cpus=${HW_CPUS[$hi]:-host} mem=${HW_MEM[$hi]:-unbounded})" >&2
     fi
     run_matrix "${TARGET_LABEL[$ti]}" "${TARGET_SHA[$ti]}" "${TARGET_TS[$ti]}" "${TARGET_RUST[$ti]}" \
-               "${HW_LABEL[$hi]}" "${HW_CPUS[$hi]}" "${HW_MEM[$hi]}"
+               "${HW_LABEL[$hi]}" "${HW_CPUS[$hi]}" "${HW_MEM[$hi]}" "${TARGET_CODEGEN[$ti]}"
   done
 done
 

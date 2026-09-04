@@ -87,8 +87,8 @@ scripts/bench/run-slicing-bench.sh \
 
 Core options: `--fixtures`, `--printers`, `--mesh-dir`, `--layer-heights` (CSV),
 `--aa-presets` (CSV, default `sharp,balanced,smooth,raw`), `--repeats`
-(averaged, with min/max spread kept), `--out`, `--no-build`. Requires `jq`
-(and `sha256sum` + `unzip` when validating).
+(averaged, with min/max spread kept), `--codegen` (CSV, see below), `--out`,
+`--no-build`. Requires `jq` (and `sha256sum` + `unzip` when validating).
 
 Repeats are **averaged** (every scalar + every perf field) into the row's
 top-level summary, with `total_s_min`/`total_s_max` for the spread — but every
@@ -96,6 +96,50 @@ repeat is **also kept un-averaged** under `runs[]` (its own timing, CPU, peak
 RSS, full perf block, and RSS/CPU sample series), so nothing is lost to the
 average. Failed repeats are logged with their error and, if all repeats of a
 case fail, an `{"error": ...}` row is written.
+
+### Sweeping codegen variants
+
+The driver can also re-run the whole matrix against the **same source built with different
+`RUSTFLAGS`**, which is how you find out what an x86_64 baseline actually costs rather than
+arguing about it:
+
+```bash
+scripts/bench/run-slicing-bench.sh --codegen shipped,v2,v3 --layer-heights 0.05 --out codegen.jsonl
+```
+
+Every row carries `codegen`, so a variant is directly comparable against the others across every
+printer, layer height and AA preset in the matrix.
+
+| Preset | RUSTFLAGS |
+|---|---|
+| `v1` | `-C target-cpu=x86-64` (baseline; runs on every x86-64 CPU) |
+| `v2` | `-C target-cpu=x86-64-v2` (SSE4.2; Nehalem 2008 / Bulldozer 2011 and up) |
+| `v3` | `-C target-cpu=x86-64-v3` (AVX2 + FMA + BMI; Haswell 2013 / Zen 2017 and up) |
+| `shipped` | `-C target-feature=+avx2,+fma` (what `.cargo/config.toml` ships today) |
+| `v2avx2` | `-C target-cpu=x86-64-v2 -C target-feature=+avx2,+fma` |
+| `native` | `-C target-cpu=native` — reference ceiling only, **never shippable** |
+
+Anything starting with `-C` is passed through verbatim, so you are not limited to the presets.
+
+`target-cpu` and `target-feature` are **not** the same knob, which is why both `v3` and
+`v2avx2` are in that list. `target-feature=+avx2` tells LLVM the instructions are *available*;
+the cost model and instruction scheduling still come from `target-cpu`, which stays at generic
+`x86-64` unless you set it. The two combinations generate visibly different amounts of vector
+code from identical source.
+
+Each variant builds into its own `target-codegen-<name>` directory, so variants never reuse each
+other's artifacts. `RUSTFLAGS` fully overrides the `rustflags` in `.cargo/config.toml` — cargo
+treats the two as mutually exclusive — so no variant silently inherits the shipped flags. A
+variant the host CPU cannot execute is skipped with a message rather than crashed into.
+
+Results are **per microarchitecture**: an Intel and an AMD part can disagree, and on Zen 1/2 the
+BMI2 `PDEP`/`PEXT` instructions `v3` permits are microcoded and very slow, so treat `v3` on
+those parts with extra suspicion. Running this on more than one machine is the point.
+
+Note that a slice total is dominated by PNG encoding, which codegen flags barely touch — read
+the per-stage perf fields (`render_wall`, and the rest of `SliceStatsV3`) rather than `total_s`
+alone, and use `--repeats` with the recorded `total_s_min`/`total_s_max` spread to check that a
+difference is bigger than the run-to-run noise before calling it a result.
 
 ### Sweeping hardware configurations
 

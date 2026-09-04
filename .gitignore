@@ -17,6 +17,8 @@
 /dist/
 /out/
 **/target/
+# per-variant build dirs from scripts/bench/run-slicing-bench.sh --codegen
+**/target-codegen-*/
 src-tauri/frontend-dist/**
 src-tauri/gen/
 
