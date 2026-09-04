@@ -4733,8 +4733,16 @@ export default function Home() {
     })();
   }, [closeDesktopWindowNow, saveCurrentSceneNow]);
 
+  // Web runtime only. The desktop build has its own close flow (the
+  // onCloseRequested effect below), which can actually save rather than just
+  // warn. Registering both is what produces Chromium's "Leave site?" prompt on
+  // exit: wry never implemented the beforeunload panel, so this handler was
+  // invisible under WebKitGTK/WKWebView, but CEF shows it — and it fires after
+  // the user already chose Discard, because closeDesktopWindowNow() tears the
+  // webview down with hasUnsavedSceneChangesRef still set.
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
+    if (isDesktopRuntime()) return;
 
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       if (!hasUnsavedSceneChangesRef.current) return;
@@ -4746,7 +4754,7 @@ export default function Home() {
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, []);
+  }, [isDesktopRuntime]);
 
   React.useEffect(() => {
     if (!isDesktopRuntime()) return;
