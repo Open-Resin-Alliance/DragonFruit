@@ -1,4 +1,7 @@
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { translateScanPhase } from '@/components/scene/scanProgressMessages';
 
 export type ScanProgress = {
   done: number;
@@ -20,6 +23,7 @@ export type ScanProgress = {
  * here was worse than nothing: it reads as the value moving on its own.
  */
 export function ScanProgressBar({ progress }: { progress: ScanProgress | null }) {
+  const { _ } = useLingui();
   const total = progress?.total ?? 0;
   const percent = total > 0
     ? Math.min(100, Math.max(0, (progress!.done / total) * 100))
@@ -29,7 +33,7 @@ export function ScanProgressBar({ progress }: { progress: ScanProgress | null })
     <div className="mt-3 space-y-1">
       <div className="flex items-baseline justify-between text-[11px]" style={{ color: 'var(--text-muted)' }}>
         <span>
-          {progress?.phase ?? 'Starting'}
+          {translateScanPhase(progress?.phase, _)}
           {progress?.phaseNumber && progress?.phaseCount
             ? ` (${progress.phaseNumber}/${progress.phaseCount})`
             : ''}
@@ -46,7 +50,7 @@ export function ScanProgressBar({ progress }: { progress: ScanProgress | null })
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={total > 0 ? Math.round(percent) : undefined}
-        aria-label={progress?.phase ?? 'Scan progress'}
+        aria-label={progress?.phase ? translateScanPhase(progress.phase, _) : _(msg`Scan progress`)}
       >
         <div
           className="h-full rounded-full transition-[width] duration-200"

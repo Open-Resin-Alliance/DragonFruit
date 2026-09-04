@@ -2,6 +2,9 @@
 
 import React from 'react';
 import { Settings } from 'lucide-react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
 import { Card, CardHeader, IconButton } from '@/components/atoms';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
@@ -48,12 +51,12 @@ interface AutoSupportPanelProps {
 
 type KnobDef = {
   key: NumericAutoSupportSettingKey;
-  label: string;
+  label: MessageDescriptor;
   min: number;
   max: number;
   step: number;
   unit: string;
-  hint: string;
+  hint: MessageDescriptor;
 };
 
 type NumericAutoSupportSettingKey =
@@ -72,19 +75,19 @@ type NumericAutoSupportSettingKey =
   | 'leafFanMaxAngleDeg';
 
 const KNOBS: KnobDef[] = [
-  { key: 'overhangSelfSupportAngleDeg', label: 'Self-Support Angle',  min: 20,   max: 75,  step: 5,  unit: '°',   hint: 'Surfaces flatter than this angle get supports (resin standard: 45°). Higher = fewer, mostly on the steepest parts.' },
-  { key: 'minIslandAreaMm2',     label: 'Min Island Size',       min: 0.01, max: 2,    step: 0.01, unit: 'mm²', hint: 'Skip detected areas smaller than this — tiny specks rarely need supports' },
-  { key: 'tipInfluenceRadiusMm',  label: 'Merge Radius',  min: 0.1,  max: 10,   step: 0.1,  unit: 'mm',  hint: 'A candidate within this 3D distance of an existing support merges into it instead of starting a new trunk' },
-  { key: 'areaPerSupportMm2',     label: 'Support Density',      min: 1,    max: 30,   step: 0.5, unit: 'mm²', hint: 'Projected area each support carries — smaller = more, tighter supports (grid spacing ≈ √value)' },
-  { key: 'gridAreaThresholdMm2',  label: 'Grid Threshold',       min: 5,    max: 200,  step: 5,   unit: 'mm²', hint: 'Flat regions at/above this area get a full grid; smaller regions get a single support' },
-  { key: 'flatDensityBoost',      label: 'Flat Boost',           min: 0.5,  max: 1,    step: 0.05, unit: '×',   hint: 'Grid spacing on flat ceilings — lower = denser supports on anchor surfaces (0.7 = ~2× the supports)' },
-  { key: 'slopeRelaxFactor',      label: 'Slope Relax',          min: 1,    max: 2,    step: 0.1,  unit: '×',   hint: 'Grid spacing on slopes at the self-support angle — higher = sparser' },
-  { key: 'suctionAreaExponent',   label: 'Suction Scale',        min: 0,    max: 0.4,  step: 0.05, unit: '',   hint: 'How strongly flat density grows with region area — large shallow ceilings carry more peel. 0 = off' },
-  { key: 'sizeScale',             label: 'Support Size',         min: 0.5,  max: 2,    step: 0.05, unit: '×',   hint: 'Master multiplier over the preset sizing bands — thicker or thinner everywhere' },
-  { key: 'coverageTargetPercent', label: 'Coverage Target',      min: 75,   max: 100,  step: 5,   unit: '%',   hint: 'How much of each region\'s footprint the grid must cover before gap-filling stops' },
-  { key: 'leafFanRadiusMm',       label: 'Fan Reach',            min: 2,    max: 15,   step: 0.5, unit: 'mm',  hint: 'Max horizontal distance a fan-out leaf may span from a trunk shaft' },
-  { key: 'leafFanMaxAngleDeg',    label: 'Fan Angle',            min: 20,   max: 80,   step: 5,   unit: '°',   hint: 'Max angle from vertical for fan-out leaves' },
-  { key: 'maxAttachmentsPerTrunk',         label: 'Branches per Column',   min: 2,  max: 50, step: 1,   unit: '',   hint: 'Max branches + leaves one trunk may carry before new trunks are started' },
+  { key: 'overhangSelfSupportAngleDeg', label: msg`Self-Support Angle`,  min: 20,   max: 75,  step: 5,  unit: '°',   hint: msg`Surfaces flatter than this angle get supports (resin standard: 45°). Higher = fewer, mostly on the steepest parts.` },
+  { key: 'minIslandAreaMm2',     label: msg`Min Island Size`,       min: 0.01, max: 2,    step: 0.01, unit: 'mm²', hint: msg`Skip detected areas smaller than this — tiny specks rarely need supports` },
+  { key: 'tipInfluenceRadiusMm',  label: msg`Merge Radius`,  min: 0.1,  max: 10,   step: 0.1,  unit: 'mm',  hint: msg`A candidate within this 3D distance of an existing support merges into it instead of starting a new trunk` },
+  { key: 'areaPerSupportMm2',     label: msg`Support Density`,      min: 1,    max: 30,   step: 0.5, unit: 'mm²', hint: msg`Projected area each support carries — smaller = more, tighter supports (grid spacing ≈ √value)` },
+  { key: 'gridAreaThresholdMm2',  label: msg`Grid Threshold`,       min: 5,    max: 200,  step: 5,   unit: 'mm²', hint: msg`Flat regions at/above this area get a full grid; smaller regions get a single support` },
+  { key: 'flatDensityBoost',      label: msg`Flat Boost`,           min: 0.5,  max: 1,    step: 0.05, unit: '×',   hint: msg`Grid spacing on flat ceilings — lower = denser supports on anchor surfaces (0.7 = ~2× the supports)` },
+  { key: 'slopeRelaxFactor',      label: msg`Slope Relax`,          min: 1,    max: 2,    step: 0.1,  unit: '×',   hint: msg`Grid spacing on slopes at the self-support angle — higher = sparser` },
+  { key: 'suctionAreaExponent',   label: msg`Suction Scale`,        min: 0,    max: 0.4,  step: 0.05, unit: '',   hint: msg`How strongly flat density grows with region area — large shallow ceilings carry more peel. 0 = off` },
+  { key: 'sizeScale',             label: msg`Support Size`,         min: 0.5,  max: 2,    step: 0.05, unit: '×',   hint: msg`Master multiplier over the preset sizing bands — thicker or thinner everywhere` },
+  { key: 'coverageTargetPercent', label: msg`Coverage Target`,      min: 75,   max: 100,  step: 5,   unit: '%',   hint: msg`How much of each region's footprint the grid must cover before gap-filling stops` },
+  { key: 'leafFanRadiusMm',       label: msg`Fan Reach`,            min: 2,    max: 15,   step: 0.5, unit: 'mm',  hint: msg`Max horizontal distance a fan-out leaf may span from a trunk shaft` },
+  { key: 'leafFanMaxAngleDeg',    label: msg`Fan Angle`,            min: 20,   max: 80,   step: 5,   unit: '°',   hint: msg`Max angle from vertical for fan-out leaves` },
+  { key: 'maxAttachmentsPerTrunk',         label: msg`Branches per Column`,   min: 2,  max: 50, step: 1,   unit: '',   hint: msg`Max branches + leaves one trunk may carry before new trunks are started` },
 ];
 
 const PRESETS = {
@@ -98,12 +101,21 @@ const PRESETS = {
     heavy: { ...ANCHOR_PRESET.settings.autoSupport },
 } satisfies Record<string, Partial<AutoSupportSettings>>;
 
+/** Density tiers on the quick-select row. Module level so React Compiler cannot
+ *  rename anything the Lingui macro depends on. */
+const PRESET_LABELS: Record<keyof typeof PRESETS, MessageDescriptor> = {
+  light: msg({ message: 'light', comment: 'Auto-support density tier, rendered uppercase on a narrow button next to "medium" and "heavy".' }),
+  medium: msg({ message: 'medium', comment: 'Auto-support density tier, rendered uppercase on a narrow button next to "light" and "heavy".' }),
+  heavy: msg({ message: 'heavy', comment: 'Auto-support density tier, rendered uppercase on a narrow button next to "light" and "medium".' }),
+};
+
 function SliderRow({ knob, draft, setDraft }: { knob: KnobDef; draft: AutoSupportSettings; setDraft: React.Dispatch<React.SetStateAction<AutoSupportSettings>> }) {
+  const { _ } = useLingui();
   const value = draft[knob.key];
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
-        <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }} title={knob.hint}>{knob.label}</span>
+        <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }} title={_(knob.hint)}>{_(knob.label)}</span>
         <span className="text-[11px] tabular-nums font-semibold" style={{ color: 'var(--text-strong)' }}>{value.toFixed(knob.step < 0.1 ? 2 : knob.step < 1 ? 1 : 0)}{knob.unit}</span>
       </div>
       <input type="range" min={knob.min} max={knob.max} step={knob.step} value={value}
@@ -115,6 +127,7 @@ function SliderRow({ knob, draft, setDraft }: { knob: KnobDef; draft: AutoSuppor
 }
 
 export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSupportPanelProps) {
+  const { _ } = useLingui();
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const [busy, setBusy] = React.useState(false);
   const [showSettings, setShowSettings] = React.useState(false);
@@ -404,7 +417,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
               <IconButton
                 onClick={() => setExpanded(!expanded)}
                 className="!p-0.5"
-                title={expanded ? 'Collapse card' : 'Expand card'}
+                title={expanded ? _(msg`Collapse card`) : _(msg`Expand card`)}
               >
                 <svg className="w-3 h-3 transform transition-transform"
                   style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
@@ -417,11 +430,11 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
                   )}
                 </svg>
               </IconButton>
-              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Auto Supports (Beta)</h3>
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Auto Supports (Beta)`)}</h3>
             </>
           )}
           right={(
-            <IconButton onClick={openSettings} className="!p-1.5" title="Auto-support settings">
+            <IconButton onClick={openSettings} className="!p-1.5" title={_(msg`Auto-support settings`)}>
               <Settings className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
             </IconButton>
           )}
@@ -442,20 +455,20 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
                 color: 'var(--accent)',
               }}
             >
-              {busy ? 'Running…' : 'Generate Supports'}
+              {busy ? _(msg`Running…`) : _(msg`Generate Supports`)}
             </button>
 
             {/* Island counts */}
             <div className="rounded-md border p-2" style={SECTION_CARD}>
               <div className="grid grid-cols-3 gap-2 text-center">
                 {([
-                  { label: 'Voxel', count: islands.voxelIslands.length },
-                  { label: 'Minima', count: islands.minimaIslands.length },
-                  { label: 'Total', count: islands.filteredIslands.length },
+                  { id: 'voxel', label: _(msg`Voxel`), count: islands.voxelIslands.length },
+                  { id: 'minima', label: _(msg`Minima`), count: islands.minimaIslands.length },
+                  { id: 'total', label: _(msg`Total`), count: islands.filteredIslands.length },
                 ]).map((s) => (
-                  <div key={s.label}>
+                  <div key={s.id}>
                     <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>{s.label}</div>
-                    <div className="text-sm font-bold" style={{ color: s.label === 'Total' ? 'var(--accent)' : 'var(--text-strong)' }}>
+                    <div className="text-sm font-bold" style={{ color: s.id === 'total' ? 'var(--accent)' : 'var(--text-strong)' }}>
                       {islands.scanning ? '…' : s.count}
                     </div>
                   </div>
@@ -478,7 +491,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
                     style={activePreset === key
                       ? { borderColor: 'color-mix(in srgb, var(--accent), white 10%)', background: 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)', color: 'var(--accent)' }
                       : { borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-                  >{key}</button>
+                  >{_(PRESET_LABELS[key])}</button>
                 ))}
               </div>
             </div>
@@ -490,7 +503,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
                   className="w-full flex items-center justify-between px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide"
                   style={{ color: 'var(--text-muted)' }}
                 >
-                  <span>Sizing Debug</span>
+                  <span>{_(msg`Sizing Debug`)}</span>
                   <svg className="w-3 h-3 transition-transform" style={{ transform: showSizingDebug ? 'rotate(180deg)' : 'rotate(0deg)' }}
                     fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -499,18 +512,18 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
                 {showSizingDebug && (
                   <div className="px-2.5 pb-2 space-y-1 text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
                     <div className="flex justify-between border-t pt-1.5" style={{ borderColor: 'var(--border-subtle)' }}>
-                      <span>Model volume</span><span style={{ color: 'var(--text-strong)' }}>{(sizingDebug.modelVolumeMm3 / 1000).toFixed(1)} cm³</span>
+                      <span>{_(msg`Model volume`)}</span><span style={{ color: 'var(--text-strong)' }}>{(sizingDebug.modelVolumeMm3 / 1000).toFixed(1)} cm³</span>
                     </div>
-                    <div className="flex justify-between"><span>Est. weight</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.estimatedWeightG.toFixed(1)} g</span></div>
-                    <div className="flex justify-between"><span>Candidates</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.totalCandidates}</span></div>
-                    <div className="flex justify-between"><span>Weight / support</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.weightPerSupportG.toFixed(2)} g</span></div>
-                    <div className="flex justify-between"><span>Avg island area</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.avgIslandAreaMm2.toFixed(2)} mm²</span></div>
-                    <div className="flex justify-between"><span>Standalone trunks</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.standaloneTrunks}</span></div>
-                    <div className="flex justify-between"><span>Grid infill trunks</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.gridInfillTrunks}</span></div>
+                    <div className="flex justify-between"><span>{_(msg`Est. weight`)}</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.estimatedWeightG.toFixed(1)} g</span></div>
+                    <div className="flex justify-between"><span>{_(msg`Candidates`)}</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.totalCandidates}</span></div>
+                    <div className="flex justify-between"><span>{_(msg`Weight / support`)}</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.weightPerSupportG.toFixed(2)} g</span></div>
+                    <div className="flex justify-between"><span>{_(msg`Avg island area`)}</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.avgIslandAreaMm2.toFixed(2)} mm²</span></div>
+                    <div className="flex justify-between"><span>{_(msg`Standalone trunks`)}</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.standaloneTrunks}</span></div>
+                    <div className="flex justify-between"><span>{_(msg`Grid infill trunks`)}</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.gridInfillTrunks}</span></div>
                     <div className="flex justify-between" style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 2, marginTop: 2 }}>
-                      <span>Shaft Ø range</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.shaftDiameterRange.min.toFixed(2)}–{sizingDebug.shaftDiameterRange.max.toFixed(2)} mm</span>
+                      <span>{_(msg`Shaft Ø range`)}</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.shaftDiameterRange.min.toFixed(2)}–{sizingDebug.shaftDiameterRange.max.toFixed(2)} mm</span>
                     </div>
-                    <div className="flex justify-between"><span>Tip Ø range</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.tipContactRange.min.toFixed(2)}–{sizingDebug.tipContactRange.max.toFixed(2)} mm</span></div>
+                    <div className="flex justify-between"><span>{_(msg`Tip Ø range`)}</span><span style={{ color: 'var(--text-strong)' }}>{sizingDebug.tipContactRange.min.toFixed(2)}–{sizingDebug.tipContactRange.max.toFixed(2)} mm</span></div>
                   </div>
                 )}
               </div>
@@ -524,7 +537,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
                 className="w-full rounded-md border px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide flex items-center justify-between"
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
               >
-                <span>Forest Report</span>
+                <span>{_(msg`Forest Report`)}</span>
                 <span className="text-[9px] normal-case tracking-normal">
                   {forestReport.trunkCount}T {forestReport.leafCount}L {forestReport.branchCount}B · {forestReport.trees.length} trees
                 </span>
@@ -533,7 +546,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
 
             {!hasGeometry && (
               <div className="text-[10px] italic text-center" style={{ color: 'var(--text-muted)' }}>
-                Load a model and scan for islands.
+                {_(msg`Load a model and scan for islands.`)}
               </div>
             )}
           </div>
@@ -542,9 +555,9 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
 
       <StructuredDialogModal
         open={showForestReport}
-        ariaLabel="Forest report"
-        title="Forest Report"
-        subtitle="Every placed support with its size and fan-out groups"
+        ariaLabel={_(msg`Forest report`)}
+        title={_(msg`Forest Report`)}
+        subtitle={_(msg`Every placed support with its size and fan-out groups`)}
         iconTone="neutral"
         maxWidthClassName="max-w-[72rem]"
         onClose={() => setShowForestReport(false)}
@@ -560,14 +573,14 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
               }}
               className="ui-button ui-button-secondary !h-9 px-3 text-xs"
             >
-              Copy
+              {_(msg`Copy`)}
             </button>
             <button
               type="button"
               onClick={() => setShowForestReport(false)}
               className="ui-button ui-button-secondary !h-9 px-3 text-xs"
             >
-              Close
+              {_(msg`Close`)}
             </button>
           </>
         }
@@ -586,9 +599,9 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
 
       <StructuredDialogModal
         open={showSettings}
-        ariaLabel="Auto-support settings"
-        title="Auto Supports (Beta) Settings"
-        subtitle="Tune candidate generation, clustering, and fan-out"
+        ariaLabel={_(msg`Auto-support settings`)}
+        title={_(msg`Auto Supports (Beta) Settings`)}
+        subtitle={_(msg`Tune candidate generation, clustering, and fan-out`)}
         iconTone="neutral"
         maxWidthClassName="max-w-2xl"
         onClose={() => setShowSettings(false)}
@@ -600,7 +613,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
               onClick={() => setShowSettings(false)}
               className="ui-button ui-button-secondary !h-9 px-3 text-xs"
             >
-              Cancel
+              {_(msg`Cancel`)}
             </button>
             <button
               type="button"
@@ -612,7 +625,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
                 color: 'var(--accent)',
               }}
             >
-              Apply
+              {_(msg`Apply`)}
             </button>
           </>
         }
@@ -622,10 +635,10 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
           <div className="rounded-md border p-2.5" style={SECTION_CARD}>
             <div className="grid grid-cols-5 gap-2">
               {([
-                { key: 'enabled' as const, label: 'Enabled', title: 'Generate supports automatically on scan' },
-                { key: 'prioritizeIntersection' as const, label: 'Prioritize Dual', title: 'Islands found by BOTH the slice and mesh scans are placed first (they are the most certain)' },
-                { key: 'debugSupportOriginColors' as const, label: 'Origin Colors', title: 'Debug: color supports by origin — anchor (red), overhang (orange), island (blue), standalone (purple)' },
-                { key: 'debugSkipAutoBracing' as const, label: 'No Brace', title: 'Debug: skip automatic bracing for this run' },
+                { key: 'enabled' as const, label: _(msg`Enabled`), title: _(msg`Generate supports automatically on scan`) },
+                { key: 'prioritizeIntersection' as const, label: _(msg`Prioritize Dual`), title: _(msg`Islands found by BOTH the slice and mesh scans are placed first (they are the most certain)`) },
+                { key: 'debugSupportOriginColors' as const, label: _(msg`Origin Colors`), title: _(msg`Debug: color supports by origin — anchor (red), overhang (orange), island (blue), standalone (purple)`) },
+                { key: 'debugSkipAutoBracing' as const, label: _(msg`No Brace`), title: _(msg`Debug: skip automatic bracing for this run`) },
               ]).map((t) => (
                 <button key={t.key} type="button" title={t.title}
                   onClick={() => setDraft((d) => ({ ...d, [t.key]: !d[t.key] }))}
@@ -635,13 +648,13 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
                     : { borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
                 >{t.label}</button>
               ))}
-              <button type="button" title="Debug: simplified support render — contact disks/cones plus line vectors instead of full shafts"
+              <button type="button" title={_(msg`Debug: simplified support render — contact disks/cones plus line vectors instead of full shafts`)}
                 onClick={() => updateDebugSimpleSupportRender(!debugSimpleRender)}
                 className="min-h-[36px] w-full rounded-md border px-2 text-[11px] font-semibold uppercase tracking-wide transition-colors flex items-center justify-center"
                 style={debugSimpleRender
                   ? { borderColor: 'color-mix(in srgb, var(--accent-secondary), white 10%)', background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 84%)', color: 'color-mix(in srgb, var(--accent-secondary), var(--text-strong) 25%)' }
                   : { borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-              >Simplified</button>
+              >{_(msg`Simplified`)}</button>
             </div>
           </div>
 
@@ -649,18 +662,18 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
           <div className="rounded-md border p-2.5" style={SECTION_CARD}>
             <div className="grid grid-cols-3 gap-1.5">
               {([
-                { key: 'detection' as const, label: 'Detection' },
-                { key: 'distribution' as const, label: 'Distribution' },
-                { key: 'density' as const, label: 'Density & Sizing' },
+                { key: 'detection' as const, label: _(msg`Detection`) },
+                { key: 'distribution' as const, label: _(msg`Distribution`) },
+                { key: 'density' as const, label: _(msg`Density & Sizing`) },
               ]).map((tab) => (
                 <button key={tab.key} type="button"
                   onClick={() => setSettingsTab(tab.key)}
                   className="h-8 rounded-md border text-[11px] font-semibold uppercase tracking-wide transition-colors"
                   title={tab.key === 'detection'
-                    ? 'What counts as a support-needing surface and how tightly regions merge'
+                    ? _(msg`What counts as a support-needing surface and how tightly regions merge`)
                     : tab.key === 'distribution'
-                      ? 'How points scatter (grid vs Poisson) and how leaves fan out from trunks'
-                      : 'How dense and thick the supports are'}
+                      ? _(msg`How points scatter (grid vs Poisson) and how leaves fan out from trunks`)
+                      : _(msg`How dense and thick the supports are`)}
                   style={settingsTab === tab.key
                     ? { borderColor: 'color-mix(in srgb, var(--accent), white 10%)', background: 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)', color: 'var(--accent)' }
                     : { borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
@@ -699,9 +712,9 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
 
       <StructuredDialogModal
         open={showReplaceDialog}
-        ariaLabel="Existing supports detected"
-        title="Existing Supports Detected"
-        subtitle="This model already has supports. How would you like to proceed?"
+        ariaLabel={_(msg`Existing supports detected`)}
+        title={_(msg`Existing Supports Detected`)}
+        subtitle={_(msg`This model already has supports. How would you like to proceed?`)}
         iconTone="neutral"
         onClose={() => setShowReplaceDialog(false)}
         onBackdropClick={() => setShowReplaceDialog(false)}
@@ -712,14 +725,14 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
               onClick={() => setShowReplaceDialog(false)}
               className="ui-button ui-button-secondary !h-9 px-3 text-xs"
             >
-              Cancel
+              {_(msg`Cancel`)}
             </button>
             <button
               type="button"
               onClick={() => { setShowReplaceDialog(false); doRun(false); }}
               className="ui-button ui-button-secondary !h-9 px-3 text-xs"
             >
-              Add to existing
+              {_(msg`Add to existing`)}
             </button>
             <button
               type="button"
@@ -731,14 +744,14 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId }: AutoSu
                 color: 'var(--accent)',
               }}
             >
-              Replace all
+              {_(msg`Replace all`)}
             </button>
           </>
         }
       >
         <div className="rounded-md border p-3" style={SECTION_CARD}>
           <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            You can replace all existing supports with auto-placed ones, or incorporate your existing supports and fill in the gaps.
+            {_(msg`You can replace all existing supports with auto-placed ones, or incorporate your existing supports and fill in the gaps.`)}
           </p>
         </div>
       </StructuredDialogModal>

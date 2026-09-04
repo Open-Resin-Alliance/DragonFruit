@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 import type { KickstandPlacementLayout } from './types';
 
 type NumericConstraint = {

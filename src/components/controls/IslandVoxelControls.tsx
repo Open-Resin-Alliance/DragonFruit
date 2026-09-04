@@ -1,6 +1,9 @@
 "use client";
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Plural } from '@lingui/react/macro';
 import { Card, CardHeader, IconButton, Select } from '@/components/atoms';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
@@ -30,6 +33,7 @@ export function IslandVoxelControls({
   onShowMergedChange,
   islandCount = 0,
 }: IslandVoxelControlsProps) {
+  const { _ } = useLingui();
   const [expanded, setExpanded] = useFloatingPanelCollapse(false);
 
   return (
@@ -56,7 +60,7 @@ export function IslandVoxelControls({
               )}
             </svg>
             </IconButton>
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Island Voxels</h3>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Island Voxels`)}</h3>
           </>
         )}
         right={(
@@ -75,9 +79,11 @@ export function IslandVoxelControls({
                   background: 'var(--surface-1)',
                   color: 'var(--text-muted)',
                 }}
-            title="Toggle Island Voxels"
+            title={_(msg`Toggle Island Voxels`)}
           >
-            {enabled ? 'ON' : 'OFF'}
+            {enabled
+              ? _(msg({ message: 'ON', comment: 'Toggle state on a narrow uppercase button. Keep it very short.' }))
+              : _(msg({ message: 'OFF', comment: 'Toggle state on a narrow uppercase button. Keep it very short.' }))}
           </button>
         )}
       />
@@ -86,29 +92,29 @@ export function IslandVoxelControls({
         <div className="px-2.5 pt-2 pb-3">
           {islandCount > 0 && (
             <div className="ui-meta mb-2">
-              {islandCount} island{islandCount !== 1 ? 's' : ''} detected
+              <Plural value={islandCount} one="# island detected" other="# islands detected" />
             </div>
           )}
 
           {expanded && (
             <div className="space-y-2.5">
               <div className="flex flex-col gap-1">
-            <label className="ui-meta">Color Scheme</label>
+            <label className="ui-meta">{_(msg`Color Scheme`)}</label>
             <Select
               value={colorScheme}
               onChange={(e) => onColorSchemeChange(e.target.value as 'unique' | 'lifecycle' | 'height')}
               disabled={!enabled}
               className="w-full !h-8 px-2 py-0 text-sm disabled:opacity-50"
             >
-              <option value="unique">Unique Colors</option>
-              <option value="lifecycle">Lifecycle (Merge Status)</option>
-              <option value="height">Height Gradient</option>
+              <option value="unique">{_(msg`Unique Colors`)}</option>
+              <option value="lifecycle">{_(msg`Lifecycle (Merge Status)`)}</option>
+              <option value="height">{_(msg`Height Gradient`)}</option>
             </Select>
           </div>
 
           <div className="flex flex-col gap-1">
             <div className="flex items-center justify-between">
-              <label className="ui-meta">Opacity</label>
+              <label className="ui-meta">{_(msg`Opacity`)}</label>
               <span className="ui-meta" style={{ color: 'var(--text-strong)' }}>{Math.round(opacity * 100)}%</span>
             </div>
             <input
@@ -131,11 +137,11 @@ export function IslandVoxelControls({
               disabled={!enabled}
               className="ui-checkbox !w-4 !h-4"
             />
-            <span className="ui-meta">Show Merged Islands</span>
+            <span className="ui-meta">{_(msg`Show Merged Islands`)}</span>
           </label>
 
           <div className="ui-meta pt-1.5 border-t leading-snug" style={{ borderColor: 'var(--border-subtle)' }}>
-            <p>Visualizes isolated grid-aligned islands.</p>
+            <p>{_(msg`Visualizes isolated grid-aligned islands.`)}</p>
           </div>
             </div>
           )}

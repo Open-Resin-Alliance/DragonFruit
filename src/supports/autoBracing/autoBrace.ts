@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+
 import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { getSettings } from '../Settings/state';
 import {
@@ -83,12 +84,26 @@ type PairDistanceOverride = {
     ignoreMaxDistance: boolean;
 };
 
+/**
+ * Outcome of a bracing run, as a code rather than a sentence.
+ *
+ * The engine has no business producing display copy: it is imported by the unit
+ * tests, which run under tsx with no Lingui macro transform, and a localized
+ * string here would also freeze the language at call time. The UI turns the code
+ * and the counts below into text — see `formatAutoBraceStatus`.
+ */
+export type AutoBraceStatus =
+    /** Fewer eligible trunks than the minimum group size — nothing to brace. */
+    | 'no-eligible-supports'
+    /** Braces were generated and/or legacy braces removed; see the counts. */
+    | 'complete';
+
 export interface AutoBraceResult {
     generatedBraceCount: number;
     removedBraceCount: number;
     skippedSupportCount: number;
     changed: boolean;
-    message: string;
+    status: AutoBraceStatus;
 }
 
 function sortSupports(a: SupportSample, b: SupportSample): number {
@@ -420,7 +435,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
             removedBraceCount: 0,
             skippedSupportCount: trunkSamples.length,
             changed: false,
-            message: "No eligible supports found for Auto Bracing.",
+            status: 'no-eligible-supports',
         };
     }
 
@@ -1007,9 +1022,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
         removedBraceCount,
         skippedSupportCount: trunkSamples.length - groupedIds.size,
         changed,
-        message: changed
-            ? `Auto Brace complete: generated ${generatedBraceCount} brace(s), removed ${removedBraceCount} legacy brace(s).`
-            : "No eligible supports found for Auto Bracing.",
+        status: changed ? 'complete' : 'no-eligible-supports',
     };
 }
 

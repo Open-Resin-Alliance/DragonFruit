@@ -3,18 +3,22 @@
 import React from 'react';
 import { Grid3X3, Pickaxe, Sailboat, WandSparkles, type LucideIcon } from 'lucide-react';
 import type { SupportKind } from '../supportKindState';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
 
 type TabDef = {
     kind: SupportKind;
-    label: string;
+    label: MessageDescriptor;
     icon: LucideIcon;
 };
 
+// Module level so React Compiler cannot rename anything the Lingui macro reads.
 const TABS: TabDef[] = [
-    { kind: 'trunk', label: 'Trunk', icon: Pickaxe },
-    { kind: 'raft', label: 'Raft', icon: Sailboat },
-    { kind: 'grid', label: 'Grid', icon: Grid3X3 },
-    { kind: 'stick', label: 'Bracing', icon: WandSparkles },
+    { kind: 'trunk', label: msg({ message: 'Trunk', comment: 'Support kind tab. One of four tabs on a narrow row, so keep it to one short word.' }), icon: Pickaxe },
+    { kind: 'raft', label: msg({ message: 'Raft', comment: 'Support kind tab. One of four tabs on a narrow row, so keep it to one short word.' }), icon: Sailboat },
+    { kind: 'grid', label: msg({ message: 'Grid', comment: 'Support kind tab. One of four tabs on a narrow row, so keep it to one short word.' }), icon: Grid3X3 },
+    { kind: 'stick', label: msg({ message: 'Bracing', comment: 'Support kind tab. One of four tabs on a narrow row, so keep it to one short word.' }), icon: WandSparkles },
 ];
 
 export function SupportKindTabs({
@@ -24,6 +28,7 @@ export function SupportKindTabs({
     value: SupportKind;
     onChange: (kind: SupportKind) => void;
 }) {
+    const { _ } = useLingui();
     const containerRef = React.useRef<HTMLDivElement | null>(null);
     const [showIcons, setShowIcons] = React.useState(true);
 
@@ -94,10 +99,10 @@ export function SupportKindTabs({
                                 borderColor: 'var(--border-subtle)',
                                 color: 'var(--text-muted)',
                             }}
-                        title={tab.label}
+                        title={_(tab.label)}
                     >
                         {showIcons && <Icon className="h-4 w-4 shrink-0" />}
-                        <span className="text-[13px] font-semibold leading-none">{tab.label}</span>
+                        <span className="text-[13px] font-semibold leading-none">{_(tab.label)}</span>
                     </button>
                 );
             })}

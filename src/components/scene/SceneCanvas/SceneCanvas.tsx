@@ -64,7 +64,7 @@ import {
   subscribeSupportPlacementHelp,
 } from '@/components/settings/supportPlacementPreferences';
 import { useCurveInteractionState } from '@/supports/Curves/curveInteractionState';
-import { getSettings, subscribeToSettings } from '@/supports/Settings';
+import { getSettings, subscribeToSettings } from '@/supports/Settings/state';
 import { DEFAULT_TIP_CONTACT_DIAMETER_MM } from '@/supports/Settings/defaults';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import {

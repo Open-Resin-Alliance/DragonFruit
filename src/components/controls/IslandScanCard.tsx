@@ -1,4 +1,6 @@
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Search, ScanLine, Cpu } from 'lucide-react';
@@ -33,6 +35,7 @@ export function IslandScanCard({
     onPluginStlFile,
     onCancelPluginImport
 }: IslandScanCardProps) {
+    const { _ } = useLingui();
     const cardRef = React.useRef<HTMLDivElement | null>(null);
     const fileInputRef = React.useRef<HTMLInputElement>(null);
     const stlInputRef = React.useRef<HTMLInputElement>(null);
@@ -136,7 +139,7 @@ export function IslandScanCard({
                             )}
                         </svg>
                         </IconButton>
-                        <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Island Scan</h3>
+                        <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Island Scan`)}</h3>
                     </>
                 )}
                 right={(
@@ -147,11 +150,11 @@ export function IslandScanCard({
                             variant="accent"
                             size="sm"
                             className={compactActions ? '!h-8 !w-8 !min-w-8 !px-0 !py-0 !inline-flex !items-center !justify-center !leading-none text-[11px]' : '!h-8 !px-2.5 !py-0 text-[11px]'}
-                            title="Run native Rust island scan (fastest)"
+                            title={_(msg`Run native Rust island scan (fastest)`)}
                         >
                             {compactActions
                                 ? (islands.scanning ? '…' : <Cpu className="h-3.5 w-3.5" />)
-                                : (islands.scanning ? 'Scanning…' : 'Native')}
+                                : (islands.scanning ? _(msg`Scanning…`) : _(msg({ message: 'Native', comment: 'Button that runs the fast native Rust island scan. Sits next to a "JS" button; keep it very short.' })))}
                         </Button>
                         <Button
                             onClick={islands.onRunScanlineScan}
@@ -159,7 +162,7 @@ export function IslandScanCard({
                             variant="secondary"
                             size="sm"
                             className={compactActions ? '!h-8 !w-8 !min-w-8 !px-0 !py-0 !inline-flex !items-center !justify-center !leading-none text-[11px]' : '!h-8 !px-2.5 !py-0 text-[11px]'}
-                            title="Run TypeScript scanline scan"
+                            title={_(msg`Run TypeScript scanline scan`)}
                         >
                             {compactActions
                                 ? (islands.scanning ? '…' : <ScanLine className="h-3.5 w-3.5" />)
@@ -175,7 +178,7 @@ export function IslandScanCard({
                 {useTwoStepFlow && pluginImportPhase === 'awaiting_stl' ? (
                     <div className="space-y-1">
                         <div className="text-[11px] px-1" style={{ color: 'var(--text-strong)' }}>
-                            JSON loaded. Now select the original STL file.
+                            {_(msg`JSON loaded. Now select the original STL file.`)}
                         </div>
                         <div className="flex gap-1">
                             <Button
@@ -184,7 +187,7 @@ export function IslandScanCard({
                                 size="sm"
                                 className="flex-1 !h-8 text-[11px]"
                             >
-                                Select STL File
+                                {_(msg`Select STL File`)}
                             </Button>
                             <Button
                                 onClick={onCancelPluginImport}
@@ -192,13 +195,13 @@ export function IslandScanCard({
                                 size="sm"
                                 className="!h-8 text-[11px]"
                             >
-                                Cancel
+                                {_(msg`Cancel`)}
                             </Button>
                         </div>
                     </div>
                 ) : pluginImportPhase === 'processing' ? (
                     <div className="text-[11px] px-1 py-1" style={{ color: 'var(--text-muted)' }}>
-                        Processing import...
+                        {_(msg`Processing import…`)}
                     </div>
                 ) : (
                     <Button
@@ -212,7 +215,7 @@ export function IslandScanCard({
                         variant="primary"
                         className="w-full mb-1 !h-8 text-[11px]"
                     >
-                        Load Support Data (V2)
+                        {_(msg`Load Support Data (V2)`)}
                     </Button>
                 )}
 
@@ -237,7 +240,7 @@ export function IslandScanCard({
                 <div className="rounded p-1 mt-1 border" style={{ background: 'var(--surface-1)', borderColor: 'var(--border-subtle)' }}>
                     <div className="grid grid-cols-2 gap-1.5">
                         <div className="flex flex-col gap-0.5">
-                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Pixel (mm)</label>
+                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>{_(msg`Pixel (mm)`)}</label>
                             <NumberInput
                                 value={islands.pxMm}
                                 onChange={(val) => {
@@ -249,7 +252,7 @@ export function IslandScanCard({
                             />
                         </div>
                         <div className="flex flex-col gap-0.5">
-                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Buffer (mm)</label>
+                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>{_(msg`Buffer (mm)`)}</label>
                             <NumberInput
                                 value={islands.supportBufMm}
                                 onChange={(val) => {
@@ -261,7 +264,7 @@ export function IslandScanCard({
                             />
                         </div>
                         <div className="flex flex-col gap-0.5">
-                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Connectivity</label>
+                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>{_(msg`Connectivity`)}</label>
                             <div className="flex rounded p-0.5 gap-0.5" style={{ background: 'var(--surface-2)' }}>
                                 <Button
                                     onClick={() => islands.setConnectivity(4)}
@@ -282,7 +285,7 @@ export function IslandScanCard({
                             </div>
                         </div>
                         <div className="flex flex-col gap-0.5">
-                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Min Area (mm²)</label>
+                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>{_(msg`Min Area (mm²)`)}</label>
                             <NumberInput
                                 value={islands.minIslandAreaMm2}
                                 onChange={(val) => {
@@ -295,7 +298,7 @@ export function IslandScanCard({
                         </div>
 
                         <div className="flex flex-col gap-0.5">
-                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Min Overlap (px)</label>
+                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>{_(msg`Min Overlap (px)`)}</label>
                             <NumberInput
                                 value={islands.minOverlapPx}
                                 onChange={(val) => {
@@ -308,7 +311,7 @@ export function IslandScanCard({
                         </div>
 
                         <div className="flex flex-col gap-0.5">
-                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Overlap Radius (px)</label>
+                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>{_(msg`Overlap Radius (px)`)}</label>
                             <NumberInput
                                 value={islands.overlapNeighborhoodPx}
                                 onChange={(val) => {
@@ -323,7 +326,7 @@ export function IslandScanCard({
 
                     {/* Debug options */}
                     <div className="mt-1 pt-1 border-t flex items-center justify-between" style={{ borderColor: 'var(--border-subtle)' }}>
-                        <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Show Island IDs (debug)</label>
+                        <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>{_(msg`Show Island IDs (debug)`)}</label>
                         <button
                             type="button"
                             onClick={() => islands.setShowIslandIdLabels(!islands.showIslandIdLabels)}

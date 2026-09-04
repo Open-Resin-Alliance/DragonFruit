@@ -6,7 +6,7 @@ import { getFinalSocketPosition } from '../../SupportPrimitives/ContactCone/cont
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
 import type { SupportData } from '../../rendering/SupportBuilder';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 import type { SupportSettings } from '../../Settings/types';
 import { applySizingOverridesToSettings } from '../../autoSupport/parameterSizing';
 import { getJointDiameter } from '../../constants';

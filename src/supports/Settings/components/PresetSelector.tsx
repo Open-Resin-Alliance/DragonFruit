@@ -4,6 +4,15 @@ import React, { useState, useEffect, useRef, useSyncExternalStore } from 'react'
 import ReactDOM from 'react-dom';
 import { PenLine, Pencil, Trash2, Save, Pin, PinOff } from 'lucide-react';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import {
+    formatDeletePresetTitle,
+    formatOverwritePresetTitle,
+    formatPresetSlotLabel,
+    translatePresetName,
+} from '@/supports/Settings/presetMessages';
 import {
     getPresetList,
     getActivePreset,
@@ -37,6 +46,7 @@ export function PresetSelector({
     disableGlobalPresetActivation = false,
     saveTrigger,
 }: PresetSelectorProps) {
+    const { _ } = useLingui();
     const settings = useSyncExternalStore(subscribeToSettings, getSettings, getSettings);
     const [presets, setPresets] = useState(() => getPresetList());
     const [activePreset, setActivePresetState] = useState(() => getActivePreset());
@@ -49,7 +59,7 @@ export function PresetSelector({
     const renameInputRef = useRef<HTMLInputElement | null>(null);
     const [tempName, setTempName] = useState('');
     const [tempDescription, setTempDescription] = useState('');
-    const [newPresetName, setNewPresetName] = useState('My Preset');
+    const [newPresetName, setNewPresetName] = useState(() => _(msg`My Preset`));
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; presetId: string } | null>(null);
     const [pinSubmenuOpen, setPinSubmenuOpen] = useState(false);
     const [restoreConfirmOpen, setRestoreConfirmOpen] = useState(false);
@@ -203,7 +213,7 @@ export function PresetSelector({
                 {showDirtyIndicator ? (
                     <span
                         aria-hidden="true"
-                        title="Preset has unsaved changes"
+                        title={_(msg`Preset has unsaved changes`)}
                         className="pointer-events-none absolute right-2 top-1/2 inline-flex -translate-y-1/2"
                         style={{ color: isSelected ? 'var(--text-muted)' : 'var(--text-muted)' }}
                     >
@@ -248,7 +258,7 @@ export function PresetSelector({
                             />
                         ) : (
                             <div className="flex-1 truncate" style={{ color: isSelected ? 'var(--text-strong)' : undefined }}>
-                                {preset.name}
+                                {translatePresetName(preset, _)}
                             </div>
                         )}
                     </div>
@@ -317,7 +327,7 @@ export function PresetSelector({
             setTempDescription(
                 tempDescription.trim().length > 0
                     ? tempDescription.trim()
-                    : 'User custom preset',
+                    : _(msg`User custom preset`),
             );
             setIsEditingName(false);
             return;
@@ -360,7 +370,7 @@ export function PresetSelector({
         // Auto-enter inline rename for the new preset
         setRenamingPresetId(created.id);
         setRenameValue(created.name);
-        setNewPresetName('My Preset');
+        setNewPresetName(_(msg`My Preset`));
         requestAnimationFrame(() => {
             renameInputRef.current?.focus();
             renameInputRef.current?.select();
@@ -447,13 +457,13 @@ export function PresetSelector({
             {/* ── Overwrite Preset Modal ─────────────────────────────────── */}
             <StructuredDialogModal
                 open={confirmId !== null && selectedPreset !== null && confirmId === selectedPreset.id}
-                ariaLabel="Overwrite preset"
-                title={`Save Over "${selectedPreset?.name ?? ''}"?`}
-                subtitle="This will replace the preset with your current settings."
+                ariaLabel={_(msg`Overwrite preset`)}
+                title={formatOverwritePresetTitle(selectedPreset ? translatePresetName(selectedPreset, _) : '', _)}
+                subtitle={_(msg`This will replace the preset with your current settings.`)}
                 icon={<Save className="h-4 w-4" />}
                 iconTone="accent"
                 zIndexClassName="z-[300]"
-                closeAriaLabel="Cancel overwrite"
+                closeAriaLabel={_(msg`Cancel overwrite`)}
                 onClose={() => setConfirmId(null)}
                 actions={(
                     <>
@@ -462,7 +472,7 @@ export function PresetSelector({
                             className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
                             onClick={() => setConfirmId(null)}
                         >
-                            Cancel
+                            <Trans>Cancel</Trans>
                         </button>
                         <button
                             type="button"
@@ -480,26 +490,26 @@ export function PresetSelector({
                             }}
                         >
                             <Save className="h-3.5 w-3.5" />
-                            Save
+                            <Trans>Save</Trans>
                         </button>
                     </>
                 )}
             >
                 <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                    Overwrite the preset <strong style={{ color: 'var(--text-strong)' }}>{selectedPreset?.name ?? ''}</strong> with the current scene settings?
+                    <Trans>Overwrite the preset <strong style={{ color: 'var(--text-strong)' }}>{selectedPreset ? translatePresetName(selectedPreset, _) : ''}</strong> with the current scene settings?</Trans>
                 </p>
             </StructuredDialogModal>
 
             {/* ── Delete Preset Modal ────────────────────────────────────── */}
             <StructuredDialogModal
                 open={deleteConfirmId !== null && selectedPreset !== null && deleteConfirmId === selectedPreset.id}
-                ariaLabel="Delete preset"
-                title={`Delete "${selectedPreset?.name ?? ''}"?`}
-                subtitle="This action cannot be undone."
+                ariaLabel={_(msg`Delete preset`)}
+                title={formatDeletePresetTitle(selectedPreset ? translatePresetName(selectedPreset, _) : '', _)}
+                subtitle={_(msg`This action cannot be undone.`)}
                 icon={<Trash2 className="h-4 w-4" />}
                 iconTone="warning"
                 zIndexClassName="z-[300]"
-                closeAriaLabel="Cancel delete"
+                closeAriaLabel={_(msg`Cancel delete`)}
                 onClose={() => setDeleteConfirmId(null)}
                 actions={(
                     <>
@@ -508,7 +518,7 @@ export function PresetSelector({
                             className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
                             onClick={() => setDeleteConfirmId(null)}
                         >
-                            Cancel
+                            <Trans>Cancel</Trans>
                         </button>
                         <button
                             type="button"
@@ -527,22 +537,22 @@ export function PresetSelector({
                             }}
                         >
                             <Trash2 className="h-3.5 w-3.5" />
-                            Delete
+                            <Trans>Delete</Trans>
                         </button>
                     </>
                 )}
             >
                 <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                    This will permanently remove the preset <strong style={{ color: 'var(--text-strong)' }}>{selectedPreset?.name ?? ''}</strong> and all of its saved settings.
+                    <Trans>This will permanently remove the preset <strong style={{ color: 'var(--text-strong)' }}>{selectedPreset ? translatePresetName(selectedPreset, _) : ''}</strong> and all of its saved settings.</Trans>
                 </p>
             </StructuredDialogModal>
 
             {/* ── Restore Defaults Modal ──────────────────────────────────── */}
             <StructuredDialogModal
                 open={restoreConfirmOpen}
-                ariaLabel="Restore factory defaults"
-                title="Restore Factory Defaults?"
-                subtitle="Factory presets will be reset and user presets will be unpinned."
+                ariaLabel={_(msg`Restore factory defaults`)}
+                title={_(msg`Restore Factory Defaults?`)}
+                subtitle={_(msg`Factory presets will be reset and user presets will be unpinned.`)}
                 icon={
                     <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
@@ -551,7 +561,7 @@ export function PresetSelector({
                 }
                 iconTone="warning"
                 zIndexClassName="z-[300]"
-                closeAriaLabel="Cancel restore"
+                closeAriaLabel={_(msg`Cancel restore`)}
                 onClose={() => setRestoreConfirmOpen(false)}
                 actions={(
                     <>
@@ -560,7 +570,7 @@ export function PresetSelector({
                             className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
                             onClick={() => setRestoreConfirmOpen(false)}
                         >
-                            Cancel
+                            <Trans>Cancel</Trans>
                         </button>
                         <button
                             type="button"
@@ -579,13 +589,13 @@ export function PresetSelector({
                                 <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
                                 <path d="M3 3v5h5" />
                             </svg>
-                            Restore
+                            <Trans>Restore</Trans>
                         </button>
                     </>
                 )}
             >
                 <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                    This will reset <strong style={{ color: 'var(--text-strong)' }}>Detail</strong>, <strong style={{ color: 'var(--text-strong)' }}>Structure</strong>, and <strong style={{ color: 'var(--text-strong)' }}>Anchor</strong> to their factory settings and unpin all user presets. Your user presets will <strong style={{ color: 'var(--text-strong)' }}>not</strong> be deleted.
+                    <Trans>This will reset <strong style={{ color: 'var(--text-strong)' }}>Detail</strong>, <strong style={{ color: 'var(--text-strong)' }}>Structure</strong>, and <strong style={{ color: 'var(--text-strong)' }}>Anchor</strong> to their factory settings and unpin all user presets. Your user presets will <strong style={{ color: 'var(--text-strong)' }}>not</strong> be deleted.</Trans>
                 </p>
             </StructuredDialogModal>
 
@@ -614,7 +624,7 @@ export function PresetSelector({
                         }}
                     >
                         <Save className="h-3.5 w-3.5" />
-                        New Preset
+                        <Trans>New Preset</Trans>
                     </button>
 
                     <button
@@ -632,7 +642,7 @@ export function PresetSelector({
                         }}
                     >
                         <Pencil className="h-3.5 w-3.5" />
-                        Rename
+                        <Trans>Rename</Trans>
                     </button>
 
                     {(() => {
@@ -654,7 +664,7 @@ export function PresetSelector({
                                 }}
                             >
                                 <Save className="h-3.5 w-3.5" />
-                                Save Changes
+                                <Trans>Save Changes</Trans>
                             </button>
                         );
                     })()}
@@ -680,7 +690,7 @@ export function PresetSelector({
                                     <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
                                     <path d="M3 3v5h5" />
                                 </svg>
-                                Revert Changes
+                                <Trans>Revert Changes</Trans>
                             </button>
                         );
                     })()}
@@ -710,7 +720,7 @@ export function PresetSelector({
                                         }}
                                     >
                                         <PinOff className="h-3.5 w-3.5" />
-                                        Unpin
+                                        <Trans>Unpin</Trans>
                                     </button>
                                 ) : null}
                                 <div
@@ -731,7 +741,7 @@ export function PresetSelector({
                                         onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                                     >
                                         <Pin className="h-3.5 w-3.5" />
-                                        <span className="flex-1">{isPinned ? 'Move Slot' : 'Pin to Slot'}</span>
+                                        <span className="flex-1">{isPinned ? _(msg`Move Slot`) : _(msg`Pin to Slot`)}</span>
                                         <span className="text-[10px] opacity-50">{openLeft ? '◂' : '▸'}</span>
                                     </button>
                                     {pinSubmenuOpen ? (
@@ -775,9 +785,9 @@ export function PresetSelector({
                                                         >
                                                             {slot}
                                                         </span>
-                                                        <span className="flex-1">Slot {slot}</span>
+                                                        <span className="flex-1">{formatPresetSlotLabel(slot, _)}</span>
                                                         {alreadyPinned ? (
-                                                            <span className="text-[10px] opacity-40">occupied</span>
+                                                            <span className="text-[10px] opacity-40">{_(msg({ message: 'occupied', comment: 'Marks a pin slot already taken by another preset. Lowercase, shown small and dimmed at the end of the row.' }))}</span>
                                                         ) : null}
                                                     </button>
                                                 );
@@ -806,7 +816,7 @@ export function PresetSelector({
                             <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
                             <path d="M3 3v5h5" />
                         </svg>
-                        Restore Defaults
+                        <Trans>Restore Defaults</Trans>
                     </button>
 
                     <div className="my-1 border-t" style={{ borderColor: 'var(--border-subtle)' }} />
@@ -826,7 +836,7 @@ export function PresetSelector({
                         }}
                     >
                         <Trash2 className="h-3.5 w-3.5" />
-                        Delete
+                        <Trans>Delete</Trans>
                     </button>
                 </div>,
                 document.body

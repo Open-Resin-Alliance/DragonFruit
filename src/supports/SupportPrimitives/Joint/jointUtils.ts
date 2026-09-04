@@ -327,7 +327,7 @@ export function findClosestSegment(trunk: Trunk, root: Roots, point: Vec3): { se
 import { checkShaftCollision } from '../../PlacementLogic/CollisionUtils';
 import { calculateSafeOffset } from '../../PlacementLogic/CollisionAvoidance';
 import { updateCurvesAtJoint } from '../../Curves/curveUtils';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 
 import { clampShaftAngle } from '../../PlacementLogic/ShaftAngleConstraint';
 

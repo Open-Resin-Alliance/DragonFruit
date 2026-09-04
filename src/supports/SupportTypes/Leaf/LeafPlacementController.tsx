@@ -9,7 +9,7 @@ import type { Vec3, Knot, Joint, Segment } from '../../types';
 import { leafPlacementStore, useLeafPlacementState } from './leafPlacementState';
 import { LEAF_HOTKEY_REARM_EVENT } from './useLeafPlacement';
 import { buildLeafData } from './leafBuilder';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from '../Twig/twigTaper';
 import { SUPPORT_ADD_LEAF } from '../../history/actionTypes';

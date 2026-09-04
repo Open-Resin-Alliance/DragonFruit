@@ -268,7 +268,7 @@ test('Kickstand click-commit tests', async (t) => {
     kickstandPlacementStore.reset();
 
     // Enable grid and set spacing to 2mm
-    const { updateGridSettings } = require('../Settings');
+    const { updateGridSettings } = require('../Settings/state');
     updateGridSettings({ enabled: true, spacingMm: 2.0 });
 
     // Place an existing root at { x: 4, y: 4, z: 0 } which is close to proposed { x: 5, y: 5, z: 0 }

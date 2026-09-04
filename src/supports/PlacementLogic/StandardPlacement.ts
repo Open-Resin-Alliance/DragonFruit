@@ -2,7 +2,7 @@ import { Vec3, LimitationCode, WarningCode } from '../types';
 import type { SupportTipProfile } from '../SupportPrimitives/ContactCone/types';
 import { getSocketPosition } from '../SupportPrimitives/ContactCone';
 import { calculateDiskThickness } from '../SupportPrimitives/ContactDisk/contactDiskUtils';
-import { getSettings } from '../Settings';
+import { getSettings } from '../Settings/state';
 import { resolveConeAxisPolicy } from './ConeAxisPolicy';
 
 export interface TrunkPlacementInput {

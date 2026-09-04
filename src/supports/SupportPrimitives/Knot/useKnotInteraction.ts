@@ -7,7 +7,7 @@ import { Branch, Brace, Knot, Roots, Trunk, Twig, Stick, Vec3 } from '../../type
 import { getKickstandSnapshot } from '../../SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
 import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints, projectOntoSegment, shouldStayOnCurrentSegment } from './knotUtils';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 import { solveKnotConstraint } from '../../PlacementLogic/JointConstraintSolver';
 import { ElasticChainInitialState, ElasticChainResult, solveElasticChain } from '../../PlacementLogic/ElasticChainSolver';
 import { getFinalSocketPosition, getSocketPosition } from '../ContactCone';

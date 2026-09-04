@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { Vec3 } from '../types';
 import { calculateStandardPlacement, TrunkPlacementInput, TrunkPlacementResult } from './StandardPlacement';
 import { checkShaftCollision } from './CollisionUtils';
-import { getSettings } from '../Settings';
+import { getSettings } from '../Settings/state';
 import { gridNodeKeyFromXY, gridSnappedXYFromKey } from './Grid/gridMath';
 import { buildNearestCandidateNodeKeys } from './Grid/nearestCandidateNodeKeys';
 import {

@@ -2,7 +2,7 @@ import type { Knot, Roots, Trunk, Vec3 } from '../../types';
 import type { TrunkBuildResult } from '../../SupportTypes/Trunk/trunkBuilder';
 import type { SnappedTrunkRouteResult } from '../../SupportTypes/Trunk/trunkRouteTypes';
 import { buildBranchData } from '../../SupportTypes/Branch/branchBuilder';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 import {
     getDefaultSnappedValidity,
     getResolvedSnappedNodeKey,

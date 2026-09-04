@@ -60,7 +60,7 @@ import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls
 import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { LayerSlider } from '@/components/controls/LayerSlider';
 import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
-import { SupportSidebar } from '@/supports/Settings';
+import { SupportSidebar } from '@/supports/Settings/SupportSidebar';
 import { useLeafPlacementState } from '@/supports/SupportTypes/Leaf/leafPlacementState';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { ExportManager } from '@/features/export/logic/ExportManager';
@@ -79,6 +79,7 @@ import {
   resolveModelActionTargetIds,
 } from '@/features/scene/modelActionTargets';
 import { buildLiftDropUpdates } from '@/features/scene/selectionLiftDrop';
+import { dropOverlaySupportedFormats, dropOverlayUnsupportedFormats } from '@/features/scene/sceneImportMessages';
 import {
   buildCenterSelectionUpdates,
   buildSelectionPositionUpdates,
@@ -8154,7 +8155,7 @@ export default function Home() {
     if (scene.importProgress.active) {
       return {
         active: true,
-        label: scene.importProgress.label || (scene.importProgress.type === 'scene' ? 'Loading Scene…' : 'Loading Mesh…'),
+        label: scene.importProgress.label || (scene.importProgress.type === 'scene' ? _(msg`Loading Scene…`) : _(msg`Loading Mesh…`)),
         detail: scene.importProgress.detail,
         progress: scene.importProgress.progress,
       };
@@ -8163,8 +8164,8 @@ export default function Home() {
     if (scene.pluginImportPhase === 'processing') {
       return {
         active: true,
-        label: 'Loading Scene…',
-        detail: 'Converting support data and model metadata',
+        label: _(msg`Loading Scene…`),
+        detail: _(msg`Converting support data and model metadata`),
         progress: null as number | null,
       };
     }
@@ -8175,7 +8176,7 @@ export default function Home() {
       detail: '',
       progress: null as number | null,
     };
-  }, [nativePickerPreparationState, scene.importProgress, scene.pluginImportPhase]);
+  }, [nativePickerPreparationState, scene.importProgress, scene.pluginImportPhase, _]);
 
   const showInlineEmptyLoading = scene.models.length === 0 && (importOverlayState.active || pendingStartupSceneHandoff);
   const [holdEmptyStateSceneImportUi, setHoldEmptyStateSceneImportUi] = React.useState(false);
@@ -8201,10 +8202,10 @@ export default function Home() {
   const showSceneImportOverlay = scene.models.length > 0 && importOverlayState.active && !holdEmptyStateSceneImportUi;
   const showEmptySceneDialog = scene.models.length === 0;
   const emptyStateLoadingLabel = pendingStartupSceneHandoff
-    ? 'Opening scene…'
+    ? _(msg`Opening scene…`)
     : importOverlayState.label;
   const emptyStateLoadingDetail = pendingStartupSceneHandoff
-    ? 'Letting DragonFruit finish its startup animation before loading your scene.'
+    ? _(msg`Letting DragonFruit finish its startup animation before loading your scene.`)
     : importOverlayState.detail;
 
   const renderId = useRef(0);
@@ -10295,12 +10296,12 @@ export default function Home() {
                 }}
               >
                 <div className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  {isPrepareDragUnsupported ? 'Unsupported file format' : 'Drop supported files to import'}
+                  {isPrepareDragUnsupported ? _(msg`Unsupported file format`) : _(msg`Drop supported files to import`)}
                 </div>
                 <div className="mt-2 text-sm" style={{ color: 'var(--text-muted)' }}>
                   {isPrepareDragUnsupported
-                    ? `Please use: ${['STL', 'OBJ', '3MF', ...sceneFileExtensionLabelsValue].join(', ')}`
-                    : `Supported: ${['STL', 'OBJ', '3MF', ...sceneFileExtensionLabelsValue].join(', ')}`}
+                    ? dropOverlayUnsupportedFormats(['STL', 'OBJ', '3MF', ...sceneFileExtensionLabelsValue].join(', '), _)
+                    : dropOverlaySupportedFormats(['STL', 'OBJ', '3MF', ...sceneFileExtensionLabelsValue].join(', '), _)}
                 </div>
               </div>
             </div>

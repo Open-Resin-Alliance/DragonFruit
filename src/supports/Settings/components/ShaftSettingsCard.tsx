@@ -4,6 +4,8 @@ import React from 'react';
 import { ShaftProfile } from '../types';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 
 interface ShaftSettingsCardProps {
     shaft: ShaftProfile;
@@ -11,15 +13,16 @@ interface ShaftSettingsCardProps {
 }
 
 export function ShaftSettingsCard({ shaft, onChange }: ShaftSettingsCardProps) {
+    const { _ } = useLingui();
     return (
         <div className="bg-neutral-750 rounded p-1 mb-1">
             <div className="flex items-center justify-between mb-1">
-                <span className="text-xs font-semibold text-neutral-300">Shaft</span>
+                <span className="text-xs font-semibold text-neutral-300">{_(msg`Shaft`)}</span>
                 <span className="text-[9px] text-neutral-500 uppercase tracking-wide">{shaft.shape}</span>
             </div>
             <div className="grid grid-cols-2 gap-1.5 mb-1.5">
                 <label className="flex flex-col gap-0.5">
-                    <span className="text-[9px] text-neutral-400">Diameter</span>
+                    <span className="text-[9px] text-neutral-400">{_(msg`Diameter`)}</span>
                     <NumberInput
                         value={shaft.diameterMm}
                         onChange={(val) => onChange({ diameterMm: val })}
@@ -27,7 +30,7 @@ export function ShaftSettingsCard({ shaft, onChange }: ShaftSettingsCardProps) {
                     />
                 </label>
                 <label className="flex flex-col gap-0.5">
-                    <span className="text-[9px] text-neutral-400">Max Angle</span>
+                    <span className="text-[9px] text-neutral-400">{_(msg`Max Angle`)}</span>
                     <NumberInput
                         value={shaft.maxAngleDeg ?? 80}
                         onChange={(val) => onChange({ maxAngleDeg: val })}
