@@ -309,6 +309,10 @@ msgstr ""
 msgid "Auto"
 msgstr ""
 
+#: src/supports/autoBracing/autoBraceMessages.ts:25
+msgid "Auto Brace complete: {generated, plural, one {# brace generated} other {# braces generated}}, {removed, plural, one {# legacy brace removed} other {# legacy braces removed}}."
+msgstr ""
+
 #: src/supports/Settings/SupportSidebar.tsx:608
 msgid "Auto Brace failed. Check console for details."
 msgstr ""
@@ -2573,6 +2577,10 @@ msgstr ""
 #: src/features/slicing/components/SlicingPanel.tsx:1571
 #: src/features/slicing/components/SlicingPanel.tsx:1573
 msgid "No Edge Blur"
+msgstr ""
+
+#: src/supports/autoBracing/autoBraceMessages.ts:20
+msgid "No eligible supports found for Auto Bracing."
 msgstr ""
 
 #: src/components/settings/ExperimentsSettingsTab.tsx:188

@@ -309,6 +309,10 @@ msgstr "Autoriza a DragonFruit para que pueda guardar las copias en tu repositor
 msgid "Auto"
 msgstr "Automático"
 
+#: src/supports/autoBracing/autoBraceMessages.ts:25
+msgid "Auto Brace complete: {generated, plural, one {# brace generated} other {# braces generated}}, {removed, plural, one {# legacy brace removed} other {# legacy braces removed}}."
+msgstr "Arriostrado automático completado: {generated, plural, one {# arriostre generado} other {# arriostres generados}}, {removed, plural, one {# arriostre antiguo eliminado} other {# arriostres antiguos eliminados}}."
+
 #: src/supports/Settings/SupportSidebar.tsx:608
 msgid "Auto Brace failed. Check console for details."
 msgstr "El arriostrado automático ha fallado. Mira la consola para más detalles."
@@ -2575,6 +2579,10 @@ msgstr "Sin arriostrado"
 #: src/features/slicing/components/SlicingPanel.tsx:1573
 msgid "No Edge Blur"
 msgstr "Sin desenfoque de borde"
+
+#: src/supports/autoBracing/autoBraceMessages.ts:20
+msgid "No eligible supports found for Auto Bracing."
+msgstr "No se han encontrado soportes aptos para el arriostrado automático."
 
 #: src/components/settings/ExperimentsSettingsTab.tsx:188
 msgid "No experiments are available in this build."

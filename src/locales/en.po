@@ -309,6 +309,10 @@ msgstr "Authorize DragonFruit so backups can be saved into your private reposito
 msgid "Auto"
 msgstr "Auto"
 
+#: src/supports/autoBracing/autoBraceMessages.ts:25
+msgid "Auto Brace complete: {generated, plural, one {# brace generated} other {# braces generated}}, {removed, plural, one {# legacy brace removed} other {# legacy braces removed}}."
+msgstr "Auto Brace complete: {generated, plural, one {# brace generated} other {# braces generated}}, {removed, plural, one {# legacy brace removed} other {# legacy braces removed}}."
+
 #: src/supports/Settings/SupportSidebar.tsx:608
 msgid "Auto Brace failed. Check console for details."
 msgstr "Auto Brace failed. Check console for details."
@@ -2575,6 +2579,10 @@ msgstr "No Brace"
 #: src/features/slicing/components/SlicingPanel.tsx:1573
 msgid "No Edge Blur"
 msgstr "No Edge Blur"
+
+#: src/supports/autoBracing/autoBraceMessages.ts:20
+msgid "No eligible supports found for Auto Bracing."
+msgstr "No eligible supports found for Auto Bracing."
 
 #: src/components/settings/ExperimentsSettingsTab.tsx:188
 msgid "No experiments are available in this build."
