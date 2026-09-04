@@ -75,8 +75,10 @@ For release-style builds and bundles:
 
 1. **Frontend build:** Run `npm run build` (or `npm run build:tauri` for prepared Tauri frontend artifacts).
 2. **Desktop build:** Build desktop binaries with `npm run tauri:build`.
-3. **Bundle targets:** Use `npm run tauri:bundle` (builds Windows, Linux, and a
-   universal macOS DMG) or platform-specific scripts:
+3. **Bundle targets:** Use `npm run tauri:bundle`, which builds this machine's
+   own target (a universal DMG on macOS). Other targets need cross toolchains
+   that CI has and a laptop usually does not — pass `--only=<triple,...>` if
+   yours is set up for one. Or use the platform-specific scripts:
    - `npm run tauri:bundle:windows`
    - `npm run tauri:bundle:linux`
    - `npm run tauri:bundle:macos:universal` — **canonical macOS / release target.**
