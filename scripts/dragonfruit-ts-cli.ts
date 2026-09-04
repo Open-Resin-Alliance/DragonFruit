@@ -40,14 +40,27 @@ import type {
   Vec3,
   SupportEntity,
 } from '../src/supports/types';
+// Reuse the app's exact AA physics so `--aa-preset` matches the UI byte-for-byte.
+import { computePhysicalAaConfig, type AaPreset } from '../src/features/slicing/autoAaPhysics';
 
 // ---------------------------------------------------------------------------
 // VOXL File I/O
 // ---------------------------------------------------------------------------
 
+// Pre-decoded embedded mesh bytes (STL) from the most recently loaded VOXL,
+// keyed by model id. Populated by loadVoxl for `embedded-chunk`/`embedded-file`
+// models; the slice path prefers these over hitting the filesystem.
+let LOADED_MESH_BYTES = new Map<string, Uint8Array>();
+// Pre-decoded full-resolution original mesh bytes (ORIG chunk), keyed by model
+// id. Present only for VOXLs saved with "Save original model along with
+// decimated"; the slice path prefers these over the decimated MESH bytes so it
+// slices the same geometry the GUI would.
+let LOADED_ORIG_BYTES = new Map<string, Uint8Array>();
 function loadVoxl(path: string): VoxlDocumentV1 {
   const raw = readFileSync(path);
   const result = parseVoxlAuto(raw);
+  LOADED_MESH_BYTES = result.meshBytes;
+  LOADED_ORIG_BYTES = result.originalMeshBytes ?? new Map();
   return result.document;
 }
 
@@ -1184,7 +1197,10 @@ function sceneArrange(args: ReturnType<typeof parseArgs>): void {
  * Same logic as cli.rs load_binary_stl.
  */
 function loadBinaryStl(path: string): Float32Array {
-  const data = readFileSync(path);
+  return parseBinaryStl(readFileSync(path));
+}
+
+function parseBinaryStl(data: Buffer): Float32Array {
   if (data.length < 84) throw new Error(`STL file too small: ${data.length} bytes`);
 
   const numTriangles = data.readUInt32LE(80);
@@ -1282,15 +1298,245 @@ function writePositionsBin(path: string, positions: Float32Array): void {
   writeFileSync(path, Buffer.from(positions.buffer, positions.byteOffset, positions.byteLength));
 }
 
+/** Shared zero-length array to overwrite a reference we want dropped without a fresh alloc. */
+const EMPTY_F32 = new Float32Array(0);
+
+/**
+ * Best-effort hand of freed memory back to V8/OS. Only actually does anything when
+ * node was started with --expose-gc (the benchmark driver sets that via NODE_OPTIONS);
+ * otherwise it's a no-op and V8 reclaims dropped references on its own under pressure.
+ * Used to keep the CLI's heap small on low-resource machines — geometry buffers are
+ * released the moment the slicing engine no longer needs them.
+ */
+function releaseHeap(): void {
+  const g = (globalThis as { gc?: () => void }).gc;
+  if (typeof g === 'function') g();
+}
+
+// ---------------------------------------------------------------------------
+// NOTE: the functions below (packing, dither policy, pixel pitch) are ported
+// from the UI rather than imported. Reusing the originals directly is deferred
+// as a design decision — the app functions aren't currently exported and their
+// modules pull in the Tauri/THREE dependency chain. A future shared pure-module
+// extraction would let both the UI and this CLI import one source of truth.
+// ---------------------------------------------------------------------------
+// Printer-profile → slice-parameter mapping.
+// Mirrors the UI so `scene slice --printer` behaves like a user picking that
+// printer in the app:
+//   - bit-depth → x-packing : src/features/slicing/rasterLayerZipExport.ts:207
+//   - build volume → dims    : src/features/slicing/sliceExportOrchestrator.ts:111
+//   - pixel pitch            : src/features/slicing/components/SlicingPanel.tsx:1399
+// width_px itself is NOT passed: Rust `slice run` recomputes it from
+// source_width_px + x_packing_mode (main.rs), matching this mapping.
+// ---------------------------------------------------------------------------
+type XPackingMode = 'none' | 'rgb8_div3' | 'gray3_div2';
+
+interface PrinterSliceParams {
+  sourceWidthPx: number;
+  sourceHeightPx: number;
+  xPackingMode: XPackingMode;
+  buildWidthMm: number;
+  buildDepthMm: number;
+  mirrorX: boolean;
+  mirrorY: boolean;
+  outputExt: string;
+  formatVersion?: string;
+  /** Physical XY pixel pitch (mm), honoring non-square pixels. */
+  pitchXMm: number;
+  pitchYMm: number;
+  name: string;
+}
+
+function resolvePrinterProfile(raw: unknown, wantId?: string): any {
+  // App-exported bundles wrap the profile as { version, printer, materials, … };
+  // unwrap so downstream reads (.display, .buildVolumeMm, .name, …) hit the real object.
+  const unwrap = (p: any) => (p && p.printer && p.display == null ? p.printer : p);
+  const list = (Array.isArray(raw) ? raw : [raw]).map(unwrap);
+  if (wantId) {
+    const hit = list.find(
+      (p) => p?.id === wantId || p?.name === wantId || p?.officialPresetId === wantId,
+    );
+    if (!hit) {
+      throw new Error(
+        `Printer '${wantId}' not found (have: ${list.map((p) => p?.id ?? p?.name).join(', ')})`,
+      );
+    }
+    return hit;
+  }
+  if (list.length !== 1) {
+    throw new Error(`Printer profile has ${list.length} entries; pass --printer-id to choose one`);
+  }
+  return list[0];
+}
+
+function resolveBitDepth(printer: any): number {
+  const explicit = Number(printer?.bitDepth?.bits);
+  if (Number.isFinite(explicit) && explicit > 0) return Math.round(explicit);
+  // Fallback fingerprint / divisibility — mirrors rasterLayerZipExport.ts:221-251.
+  const fp = [printer?.name, printer?.manufacturer, printer?.officialPresetId, printer?.id]
+    .filter((v) => typeof v === 'string' && v.length)
+    .join(' ')
+    .toLowerCase();
+  if (/\b3\s*[-_ ]?bit\b|\b3b\b|16k3b|gray3/.test(fp)) return 3;
+  if (/\b8\s*[-_ ]?bit\b|\b8b\b|rgb8/.test(fp)) return 8;
+  const resX = Math.max(1, Math.round(Number(printer?.display?.resolutionX) || 0));
+  const by2 = resX % 2 === 0;
+  const by3 = resX % 3 === 0;
+  if (by2 && !by3) return 3;
+  if (by3 && !by2) return 8;
+  if (by2 && by3) return /rgb|color/.test(fp) ? 8 : 3;
+  return 3; // NanoDLP failsafe
+}
+
+function outputFormatToExt(fmt: unknown): string {
+  const f = String(fmt ?? '').toLowerCase();
+  if (f.includes('ctb')) return '.ctb';
+  if (f.includes('nanodlp') || f === '') return '.nanodlp';
+  return f.startsWith('.') ? f : `.${f}`;
+}
+
+// Physical XY pixel pitch (mm). Prefers explicit pixelSize (µm) for non-square
+// pixels; falls back to buildVolume ÷ resolution. Matches SlicingPanel.tsx:1399.
+function resolvePixelPitchMm(printer: any): { x: number; y: number } {
+  const pxX = Number(printer?.pixelSize?.x);
+  const pxY = Number(printer?.pixelSize?.y);
+  if (Number.isFinite(pxX) && Number.isFinite(pxY) && pxX > 0 && pxY > 0) {
+    return { x: pxX / 1000, y: pxY / 1000 }; // µm → mm
+  }
+  const resX = Number(printer?.display?.resolutionX);
+  const resY = Number(printer?.display?.resolutionY);
+  const buildW = Number(printer?.buildVolumeMm?.width);
+  const buildD = Number(printer?.buildVolumeMm?.depth);
+  const pitchX = Number.isFinite(resX) && Number.isFinite(buildW) && resX > 0 && buildW > 0 ? buildW / resX : null;
+  const pitchY = Number.isFinite(resY) && Number.isFinite(buildD) && resY > 0 && buildD > 0 ? buildD / resY : null;
+  return { x: pitchX ?? pitchY ?? 0.05, y: pitchY ?? pitchX ?? 0.05 };
+}
+
+interface DitherPolicy {
+  enabled: boolean;
+  bitDepth: number;
+  deviceGamma: number;
+}
+
+// Faithful port of sliceExportOrchestrator.ts:resolveDitherPolicy (line ~443).
+// A known non-8-bit panel (e.g. 3-bit mono) FORCES dithering on, with the
+// panel bit depth as the target — this is why "some printers utilize dithering".
+// Material defaults / explicit overrides only apply when the panel isn't a
+// known low-bit-depth display.
+function resolveDitherPolicy(
+  printer: any,
+  overrides: { enabled?: boolean; bitDepth?: number; gamma?: number; material?: any },
+): DitherPolicy {
+  const aa = overrides.material?.antiAliasingSettings ?? {};
+  const materialEnabled = aa.ditherEnabled ?? false;
+  const materialBitDepth = aa.ditherBitDepth ?? 3;
+  const materialGamma = aa.ditherDeviceGamma ?? 3.0;
+
+  const configuredEnabled = overrides.enabled ?? materialEnabled;
+  const configuredBitDepth = overrides.bitDepth ?? materialBitDepth;
+  const configuredGamma = overrides.gamma ?? materialGamma;
+
+  const raw = Number(printer?.bitDepth?.bits);
+  const printerBitDepth = Number.isFinite(raw) ? Math.round(raw) : null;
+  const hasKnownNon8BitDisplay = printerBitDepth != null && printerBitDepth > 0 && printerBitDepth !== 8;
+  const derivedBitDepth = printerBitDepth != null && printerBitDepth > 0
+    ? Math.max(2, Math.min(7, printerBitDepth))
+    : Math.max(2, Math.min(7, Math.round(configuredBitDepth)));
+
+  return {
+    enabled: hasKnownNon8BitDisplay ? true : configuredEnabled,
+    bitDepth: derivedBitDepth,
+    deviceGamma: Math.max(0.5, Math.min(4.0, Number(configuredGamma))),
+  };
+}
+
+function derivePrinterSliceParams(printer: any): PrinterSliceParams {
+  const d = printer?.display ?? {};
+  const sourceWidthPx = Math.max(1, Math.round(Number(d.resolutionX)));
+  const sourceHeightPx = Math.max(1, Math.round(Number(d.resolutionY)));
+  const bitDepth = resolveBitDepth(printer);
+  const xPackingMode: XPackingMode = bitDepth === 8 ? 'rgb8_div3' : 'gray3_div2';
+  const bv = printer?.buildVolumeMm ?? {};
+  const pitch = resolvePixelPitchMm(printer);
+  return {
+    sourceWidthPx,
+    sourceHeightPx,
+    xPackingMode,
+    buildWidthMm: Math.max(1, Number(bv.width) || 218),
+    buildDepthMm: Math.max(1, Number(bv.depth) || 122),
+    mirrorX: Boolean(d.mirrorX),
+    mirrorY: Boolean(d.mirrorY),
+    outputExt: outputFormatToExt(d.outputFormat),
+    formatVersion: typeof d.formatVersion === 'string' ? d.formatVersion : undefined,
+    pitchXMm: pitch.x,
+    pitchYMm: pitch.y,
+    name: String(printer?.name ?? printer?.id ?? 'printer'),
+  };
+}
+
 function sceneSlice(args: ReturnType<typeof parseArgs>): void {
   const voxlPath = args.positional[0];
-  if (!voxlPath) throw new Error('Usage: scene slice <scene.voxl> --o <output.nanodlp> [--mesh-dir <dir>]');
+  if (!voxlPath) {
+    throw new Error(
+      'Usage: scene slice <scene.voxl> --o <output> [--mesh-dir <dir>]\n'
+      + '  [--printer <profile.json>] [--printer-id <id>]  drive resolution/packing/build/mirror/format/pitch\n'
+      + '  [--aa-preset sharp|balanced|smooth|raw]          named AA (via computePhysicalAaConfig)\n'
+      + '  [--dither on|off] [--dither-bit-depth N] [--dither-device-gamma G] [--material <profile.json>]\n'
+      + '  [--layer-height 0.05] [--build-width-mm N] [--build-depth-mm N]',
+    );
+  }
 
   const output = requireFlag(args.flags, 'o');
   const meshDir = optionalFlag(args.flags, 'mesh-dir') ?? dirname(resolve(voxlPath));
   const layerHeight = optionalFlag(args.flags, 'layer-height') ?? '0.05';
-  const buildWidth = optionalFlag(args.flags, 'build-width-mm') ?? '218.0';
-  const buildDepth = optionalFlag(args.flags, 'build-depth-mm') ?? '122.0';
+  const aaPreset = optionalFlag(args.flags, 'aa-preset') as AaPreset | 'raw' | undefined; // sharp|balanced|smooth|raw
+
+  // Printer profile drives resolution, packing, build dims, mirror, format, and
+  // pixel pitch — just like selecting that printer in the UI.
+  const printerPath = optionalFlag(args.flags, 'printer');
+  let p: PrinterSliceParams | null = null;
+  let printer: any = null;
+  if (printerPath) {
+    const rawPrinter = JSON.parse(readFileSync(resolve(printerPath), 'utf-8'));
+    printer = resolvePrinterProfile(rawPrinter, optionalFlag(args.flags, 'printer-id'));
+    p = derivePrinterSliceParams(printer);
+    console.error(
+      `scene slice: printer '${p.name}' -> ${p.sourceWidthPx}x${p.sourceHeightPx} ${p.xPackingMode} `
+      + `build ${p.buildWidthMm}x${p.buildDepthMm}mm pitch ${p.pitchXMm.toFixed(4)}x${p.pitchYMm.toFixed(4)}mm fmt ${p.outputExt}`,
+    );
+  }
+  const buildWidth = optionalFlag(args.flags, 'build-width-mm') ?? String(p?.buildWidthMm ?? 218.0);
+  const buildDepth = optionalFlag(args.flags, 'build-depth-mm') ?? String(p?.buildDepthMm ?? 122.0);
+
+  // Resolve AA from the named preset using the app's exact physics function.
+  let aa: ReturnType<typeof computePhysicalAaConfig> | null = null;
+  if (aaPreset && aaPreset !== 'raw') {
+    if (!p) throw new Error('--aa-preset requires --printer (pixel pitch comes from the printer profile)');
+    aa = computePhysicalAaConfig(aaPreset, p.pitchXMm, Number(layerHeight), p.pitchYMm);
+    console.error(
+      `scene slice: AA '${aaPreset}' -> ${aa.aaSteps}x ${aa.antiAliasingMode} `
+      + `blur=${aa.blurBrushRadiusPx}px zblur=${aa.zBlurRadiusLayers} lookback=${aa.zBlendLookBack}`,
+    );
+  }
+
+  // Resolve dithering the way the UI does — a low-bit-depth panel forces it on.
+  let dither: DitherPolicy | null = null;
+  if (printer) {
+    const materialPath = optionalFlag(args.flags, 'material');
+    const material = materialPath ? JSON.parse(readFileSync(resolve(materialPath), 'utf-8')) : undefined;
+    const ditherFlag = optionalFlag(args.flags, 'dither'); // 'on' | 'off' | undefined
+    const bitDepthFlag = optionalFlag(args.flags, 'dither-bit-depth');
+    const gammaFlag = optionalFlag(args.flags, 'dither-device-gamma');
+    dither = resolveDitherPolicy(printer, {
+      enabled: ditherFlag === 'on' ? true : ditherFlag === 'off' ? false : undefined,
+      bitDepth: bitDepthFlag ? Number(bitDepthFlag) : undefined,
+      gamma: gammaFlag ? Number(gammaFlag) : undefined,
+      material,
+    });
+    console.error(
+      `scene slice: dither ${dither.enabled ? `on (${dither.bitDepth}-bit, gamma ${dither.deviceGamma})` : 'off'}`,
+    );
+  }
 
   const doc = loadVoxl(voxlPath);
   const visibleModels = doc.models.filter((m) => m.visible);
@@ -1304,21 +1550,50 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
   let totalTriangles = 0;
 
   for (const model of visibleModels) {
-    const meshFileName = model.mesh.fileName ?? model.name + '.stl';
-    // Try mesh-dir, then absolute path, then cwd
-    let meshPath: string | null = null;
-    const candidates = [
-      resolve(meshDir, meshFileName),
-      meshFileName,
-      resolve(meshFileName),
-    ];
-    for (const c of candidates) {
-      try { statSync(c); meshPath = c; break; } catch { /* try next */ }
-    }
-    if (!meshPath) throw new Error(`Mesh file not found for model '${model.name}': tried ${candidates.join(', ')}`);
+    let positions: Float32Array;
 
-    console.error(`  loading ${model.name}: ${meshPath}`);
-    const positions = loadBinaryStl(meshPath);
+    // Mesh modifiers (hollowing / hole punches) are reconstructed by the codec
+    // from the MODL JSON + the HSRC/CAVT/PSRC snapshot chunks. Only a modifier
+    // that is *baked into geometry* affects what we slice — its result already
+    // lives in the MESH chunk, so we slice MESH as-is and never re-apply the
+    // snapshot chunks. Unbaked hollowing / hole punches are ignored (the GUI
+    // bakes those via desktop IPC before slicing; headless we take the stored
+    // geometry as given).
+    const mm = model.meshModifiers;
+    const hollow = mm?.hollowing;
+    const modifiersBaked = Boolean((hollow?.enabled && hollow.bakedIntoGeometry) || mm?.holePunchesBakedIntoGeometry);
+
+    // Geometry source: prefer the full-res ORIG chunk, EXCEPT when a modifier is
+    // baked in — ORIG is the pristine pre-modifier original and would slice the
+    // solid / un-punched shape, so a baked model reads the modified MESH chunk.
+    const meshBytes = LOADED_MESH_BYTES.get(model.id);
+    const origBytes = LOADED_ORIG_BYTES.get(model.id);
+    const embedded = modifiersBaked ? (meshBytes ?? origBytes) : (origBytes ?? meshBytes);
+    if (embedded) {
+      // `embedded-chunk`/`embedded-file`: the codec already decoded the geometry
+      // to STL bytes — no filesystem lookup needed.
+      positions = parseBinaryStl(Buffer.from(embedded.buffer, embedded.byteOffset, embedded.byteLength));
+      const src = embedded === origBytes ? 'orig' : 'mesh';
+      console.error(`  loading ${model.name}: <embedded ${src}${modifiersBaked ? ', baked-modifiers' : ''}>`);
+    } else if (model.mesh.mode === 'external-file' || model.mesh.fileName) {
+      const meshFileName = model.mesh.fileName ?? model.name + '.stl';
+      // Try mesh-dir, then absolute path, then cwd
+      let meshPath: string | null = null;
+      const candidates = [
+        resolve(meshDir, meshFileName),
+        meshFileName,
+        resolve(meshFileName),
+      ];
+      for (const c of candidates) {
+        try { statSync(c); meshPath = c; break; } catch { /* try next */ }
+      }
+      if (!meshPath) throw new Error(`Mesh file not found for model '${model.name}': tried ${candidates.join(', ')}`);
+
+      console.error(`  loading ${model.name}: ${meshPath}`);
+      positions = loadBinaryStl(meshPath);
+    } else {
+      throw new Error(`Model '${model.name}' has mesh.mode='${model.mesh.mode}' but no embedded bytes and no fileName`);
+    }
 
     // Apply full scene transform (position + rotation + scale)
     applyVoxlTransform(positions, model.transform);
@@ -1334,14 +1609,22 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
     totalTriangles += positions.length / 9;
   }
 
-  // Phase 2: Merge into single positions buffer
+  // Phase 2: Merge into single positions buffer, releasing each per-model source
+  // array the moment it has been copied. Peak heap is then ~one merged copy plus
+  // the single model being copied, not (all sources + merged) — matters on
+  // low-resource machines where the scene's geometry may already be a large slice
+  // of available RAM.
   const totalFloats = allPositions.reduce((sum, p) => sum + p.length, 0);
-  const merged = new Float32Array(totalFloats);
+  let merged: Float32Array = new Float32Array(totalFloats);
   let writeOffset = 0;
-  for (const p of allPositions) {
+  for (let i = 0; i < allPositions.length; i++) {
+    const p = allPositions[i];
     merged.set(p, writeOffset);
     writeOffset += p.length;
+    allPositions[i] = EMPTY_F32; // drop the per-model copy immediately
   }
+  allPositions.length = 0;
+  releaseHeap();
 
   // Phase 3: Write merged positions.bin
   const tmpDir = `/tmp/df-scene-slice-${Date.now()}`;
@@ -1350,9 +1633,16 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
   writePositionsBin(mergedPath, merged);
   console.error(`  merged: ${totalTriangles} triangles -> ${mergedPath}`);
 
+  // Hand-off complete: positions.bin on disk now owns the geometry, and the
+  // slicing engine (Rust) reads it from there — node holds nothing the engine
+  // needs. Drop the merged copy (the last large buffer) before shelling out so
+  // the process sits near-idle in RAM during the blocking slice.
+  merged = EMPTY_F32;
+  releaseHeap();
+
   // Phase 4: Shell out to Rust slicer
   const rustCli = resolve(dirname(new URL(import.meta.url).pathname), '../rust/dragonfruit-cli/target/release/dragonfruit-cli');
-  const sliceCmd = [
+  const argv = [
     rustCli,
     'slice', 'run',
     mergedPath,
@@ -1360,8 +1650,29 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
     '--layer-height', layerHeight,
     '--build-width-mm', buildWidth,
     '--build-depth-mm', buildDepth,
-    '--json',
-  ].join(' ');
+  ];
+  if (p) {
+    argv.push('--source-width-px', String(p.sourceWidthPx));
+    argv.push('--source-height-px', String(p.sourceHeightPx));
+    argv.push('--x-packing-mode', p.xPackingMode);
+    if (p.mirrorX) argv.push('--mirror-x');
+    if (p.mirrorY) argv.push('--mirror-y');
+    if (p.formatVersion) argv.push('--format-version', p.formatVersion);
+  }
+  if (aa) {
+    argv.push('--anti-aliasing', `${aa.aaSteps}x`);
+    argv.push('--anti-aliasing-mode', aa.antiAliasingMode); // Coverage | Blur | Vertical2
+    argv.push('--blur-brush-radius-px', String(aa.blurBrushRadiusPx));
+    argv.push('--z-blur-radius-layers', String(aa.zBlurRadiusLayers));
+    argv.push('--z-blend-look-back', String(aa.zBlendLookBack));
+  }
+  if (dither?.enabled) {
+    argv.push('--dither');
+    argv.push('--dither-bit-depth', String(dither.bitDepth));
+    argv.push('--dither-device-gamma', String(dither.deviceGamma));
+  }
+  argv.push('--json');
+  const sliceCmd = argv.join(' ');
 
   console.error(`  slicing: ${sliceCmd}`);
   const result = execSync(sliceCmd, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
@@ -1372,6 +1683,11 @@ function sceneSlice(args: ReturnType<typeof parseArgs>): void {
   if (jsonOutput(args.flags)) {
     // Parse and augment the Rust output with scene info
     const sliceResult = JSON.parse(result);
+    // Surface the named preset in the AA block — the Rust engine only knows the
+    // resolved level/mode, but the preset name is what a user reads in the log.
+    if (sliceResult.anti_aliasing && typeof sliceResult.anti_aliasing === 'object') {
+      sliceResult.anti_aliasing = { preset: aaPreset ?? 'raw', ...sliceResult.anti_aliasing };
+    }
     sliceResult.scene = {
       voxl: resolve(voxlPath),
       models: visibleModels.length,

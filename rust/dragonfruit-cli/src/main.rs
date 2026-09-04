@@ -365,6 +365,18 @@ enum SliceCommands {
         /// Minimum AA alpha threshold (percent, 0-100)
         #[arg(long, default_value = "0.0")]
         min_aa_alpha: f32,
+        /// Enable Floyd-Steinberg dithering (low-bit-depth panels, e.g. 3-bit mono)
+        #[arg(long)]
+        dither: bool,
+        /// Dither target bit depth (2-7); defaults to the panel bit depth when dithering
+        #[arg(long)]
+        dither_bit_depth: Option<u32>,
+        /// Device panel gamma used by the dithering pass
+        #[arg(long, default_value = "3.0")]
+        dither_device_gamma: f64,
+        /// Periodic RSS/CPU sampling interval in ms (0 disables the time series)
+        #[arg(long, default_value = "250")]
+        sample_interval_ms: u64,
         /// Metadata JSON string
         #[arg(long, default_value = "{}")]
         metadata_json: String,
@@ -1048,6 +1060,74 @@ fn cmd_rle_subtract(mask_a: &PathBuf, mask_b: &PathBuf, output: &PathBuf) -> Res
 // Slice command implementations — wraps engine::slice_with_progress_v3_to_path
 // ===========================================================================
 
+/// Whole-process CPU seconds (user+system, aggregated across all threads).
+fn cpu_total_seconds() -> f64 {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
+        return 0.0;
+    }
+    let u = unsafe { usage.assume_init() };
+    u.ru_utime.tv_sec as f64 + u.ru_utime.tv_usec as f64 / 1e6
+        + u.ru_stime.tv_sec as f64 + u.ru_stime.tv_usec as f64 / 1e6
+}
+
+/// Slicer-process CPU + RSS. Peak RSS is the kernel high-water mark (ru_maxrss),
+/// so it captures transient peaks without a sampler thread. CPU time aggregates
+/// all rayon worker threads, so cpu_percent can exceed 100% under parallelism.
+/// `samples` is the periodic RSS/CPU time series gathered during the run.
+fn capture_resources(
+    wall_s: f64,
+    samples: Vec<serde_json::Value>,
+    sample_interval_ms: u64,
+) -> serde_json::Value {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+    if rc != 0 {
+        return serde_json::json!({ "error": "getrusage failed" });
+    }
+    let u = unsafe { usage.assume_init() };
+    let cpu_user_s = u.ru_utime.tv_sec as f64 + u.ru_utime.tv_usec as f64 / 1e6;
+    let cpu_sys_s = u.ru_stime.tv_sec as f64 + u.ru_stime.tv_usec as f64 / 1e6;
+    let cpu_total_s = cpu_user_s + cpu_sys_s;
+
+    // ru_maxrss: kilobytes on Linux, bytes on macOS.
+    #[cfg(target_os = "macos")]
+    let peak_rss_bytes = u.ru_maxrss as u64;
+    #[cfg(not(target_os = "macos"))]
+    let peak_rss_bytes = (u.ru_maxrss as u64) * 1024;
+
+    // Peak CPU% across the sampled series (transient spikes the average hides).
+    let peak_sample_cpu = samples
+        .iter()
+        .filter_map(|s| s.get("cpu_percent").and_then(|v| v.as_f64()))
+        .fold(0.0_f64, f64::max);
+
+    serde_json::json!({
+        "cpu_user_s": cpu_user_s,
+        "cpu_system_s": cpu_sys_s,
+        "cpu_total_s": cpu_total_s,
+        "cpu_percent": if wall_s > 0.0 { cpu_total_s / wall_s * 100.0 } else { 0.0 },
+        "peak_sample_cpu_percent": peak_sample_cpu,
+        "peak_rss_bytes": peak_rss_bytes,
+        "end_rss_bytes": read_vmrss_bytes().unwrap_or(0),
+        "sample_interval_ms": sample_interval_ms,
+        "sample_count": samples.len(),
+        "samples": samples,
+    })
+}
+
+/// Current resident set size from /proc/self/status (Linux). Returns None elsewhere.
+fn read_vmrss_bytes() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+            return Some(kb * 1024);
+        }
+    }
+    None
+}
+
 fn cmd_slice_run(
     input: &PathBuf,
     output: &PathBuf,
@@ -1073,6 +1153,10 @@ fn cmd_slice_run(
     mirror_y: bool,
     format_version: &Option<String>,
     min_aa_alpha: f32,
+    dither: bool,
+    dither_bit_depth: Option<u32>,
+    dither_device_gamma: f64,
+    sample_interval_ms: u64,
     metadata_json: &str,
     json_output: bool,
 ) -> Result<(), String> {
@@ -1184,9 +1268,9 @@ fn cmd_slice_run(
         zaa_kernel: None,
         zaa_pattern: None,
         zaa_duplicate_z: None,
-        dither_enabled: false,
-        dither_bit_depth: None,
-        dither_device_gamma: 3.0,
+        dither_enabled: dither,
+        dither_bit_depth,
+        dither_device_gamma,
         triangles_xyz: flat,
         metadata_json: metadata_json.to_string(),
         format_version: format_version.clone(),
@@ -1194,10 +1278,69 @@ fn cmd_slice_run(
         ..Default::default()
     };
 
+    // Periodic RSS/CPU sampler: a background thread records the process's
+    // resident memory and CPU% every `sample_interval_ms` for the duration of
+    // the slice, so the run can be diagnosed over time (not just peak/total).
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    let samples = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+    let stop = Arc::new(AtomicBool::new(false));
+    let sampler = if sample_interval_ms > 0 {
+        let samples = Arc::clone(&samples);
+        let stop = Arc::clone(&stop);
+        let interval = std::time::Duration::from_millis(sample_interval_ms.max(10));
+        let start = Instant::now();
+        // Optional sidecar: stream each sample to disk (flushed per line) so the series
+        // survives a kill that prevents the final --json emit — e.g. a cgroup OOM under a
+        // MemoryMax cap. Enabled by the DF_RESOURCE_LOG env var (set by the bench harness).
+        let log_path = std::env::var_os("DF_RESOURCE_LOG").map(PathBuf::from);
+        Some(std::thread::spawn(move || {
+            use std::io::Write;
+            let mut log = log_path.and_then(|p| match std::fs::File::create(&p) {
+                Ok(f) => Some(f),
+                Err(e) => { eprintln!("resource-log: cannot create {}: {e}", p.display()); None }
+            });
+            let mut last = Instant::now();
+            let mut last_cpu = cpu_total_seconds();
+            while !stop.load(Ordering::Relaxed) {
+                std::thread::sleep(interval);
+                let now = Instant::now();
+                let cpu = cpu_total_seconds();
+                let dt = now.duration_since(last).as_secs_f64();
+                let cpu_pct = if dt > 0.0 { (cpu - last_cpu) / dt * 100.0 } else { 0.0 };
+                let rss = read_vmrss_bytes().unwrap_or(0);
+                let sample = serde_json::json!({
+                    "t_ms": start.elapsed().as_millis() as u64,
+                    "rss_bytes": rss,
+                    "rss_mb": rss as f64 / 1_048_576.0,
+                    "cpu_percent": cpu_pct,
+                });
+                if let Some(f) = log.as_mut() {
+                    let _ = writeln!(f, "{}", serde_json::to_string(&sample).unwrap());
+                    let _ = f.flush(); // per-line flush: a mid-run kill keeps everything so far
+                }
+                samples.lock().unwrap().push(sample);
+                last = now;
+                last_cpu = cpu;
+            }
+        }))
+    } else {
+        None
+    };
+
     let t0 = Instant::now();
-    let perf = slice_with_progress_v3_to_path(&job, output, None, None)
-        .map_err(|e| format!("Slice failed: {e}"))?;
+    let slice_result = slice_with_progress_v3_to_path(&job, output, None, None);
     let wall_s = t0.elapsed().as_secs_f64();
+
+    // Stop the sampler regardless of slice success, then surface any error.
+    stop.store(true, Ordering::Relaxed);
+    if let Some(handle) = sampler {
+        let _ = handle.join();
+    }
+    let samples_vec = Arc::try_unwrap(samples)
+        .map(|m| m.into_inner().unwrap())
+        .unwrap_or_default();
+    let perf = slice_result.map_err(|e| format!("Slice failed: {e}"))?;
 
     let result = serde_json::json!({
         "output": output.display().to_string(),
@@ -1207,8 +1350,14 @@ fn cmd_slice_run(
         "build_width_mm": build_width_mm,
         "build_depth_mm": build_depth_mm,
         "resolution_px": [source_width_px, source_height_px],
+        "x_packing_mode": x_packing_mode,
         "model_triangle_count": job.model_triangle_count,
         "mesh_encoding": mesh_encoding,
+        "anti_aliasing": { "level": anti_aliasing, "mode": anti_aliasing_mode,
+            "blur_brush_radius_px": blur_brush_radius_px,
+            "z_blur_radius_layers": z_blur_radius_layers,
+            "z_blend_look_back": z_blend_look_back },
+        "dither": { "enabled": dither, "bit_depth": dither_bit_depth, "device_gamma": dither_device_gamma },
         "total_s": perf.total_s(),
         "wall_s": wall_s,
         "layers_per_second": perf.layers_per_second(),
@@ -1219,7 +1368,18 @@ fn cmd_slice_run(
             "render_ns": perf.render_ns,
             "png_encode_ns": perf.png_encode_ns,
             "archive_encode_ns": perf.archive_encode_ns,
+            "z_blend_backward_ns": perf.z_blend_backward_ns,
+            "z_blend_forward_ns": perf.z_blend_forward_ns,
+            "cross_blend_ns": perf.cross_blend_ns,
+            "cross_blend_touched_pixels": perf.cross_blend_touched_pixels,
+            "cross_blend_contributing_layers": perf.cross_blend_contributing_layers,
+            "post_blur_ns": perf.post_blur_ns,
+            "support_merge_ns": perf.support_merge_ns,
+            "daa_post_threads": perf.daa_post_threads,
+            "daa_post_buffer_depth": perf.daa_post_buffer_depth,
+            "layers": perf.layers,
         },
+        "resources": capture_resources(wall_s, samples_vec, sample_interval_ms),
     });
 
     if json_output {
@@ -1304,6 +1464,7 @@ fn cmd_print_inspect(input: &PathBuf, json_output: bool) -> Result<(), String> {
 
     let total_entries = archive.len();
     let mut layer_count = 0u32;
+    let mut numeric_layer_count = 0u32;
     let mut total_uncompressed = 0u64;
     let mut entries_info: Vec<serde_json::Value> = Vec::new();
     let mut manifest: Option<serde_json::Value> = None;
@@ -1318,6 +1479,13 @@ fn cmd_print_inspect(input: &PathBuf, json_output: bool) -> Result<(), String> {
 
             if name.ends_with(".png") {
                 layer_count += 1;
+                // Numeric-stemmed PNGs (e.g. "1.png") are true layers; named ones
+                // like "3d.png"/"preview.png" are thumbnails. Used for the bench
+                // correctness gate (numeric count must equal reported layers).
+                let stem = &name[..name.len() - 4];
+                if !stem.is_empty() && stem.bytes().all(|b| b.is_ascii_digit()) {
+                    numeric_layer_count += 1;
+                }
             }
             if name == "manifest.json" || name == "metadata.json" {
                 manifest_index = Some(i);
@@ -1352,6 +1520,7 @@ fn cmd_print_inspect(input: &PathBuf, json_output: bool) -> Result<(), String> {
             "format": "zip",
             "total_entries": total_entries,
             "layer_count": layer_count,
+            "numeric_layer_count": numeric_layer_count,
             "total_uncompressed_bytes": total_uncompressed,
             "compression_ratio": format!("{:.2}", compression_ratio),
         });
@@ -1761,14 +1930,16 @@ fn main() {
                 anti_aliasing_mode, blur_brush_radius_px, blur_brush_kernel, blur_brush_sigma_x,
                 blur_brush_sigma_y, z_blur_radius_layers, z_blur_kernel, z_blur_sigma,
                 z_blend_look_back, aa_on_supports, x_packing_mode, mirror_x, mirror_y,
-                format_version, min_aa_alpha, metadata_json, json } =>
+                format_version, min_aa_alpha, dither, dither_bit_depth, dither_device_gamma,
+                sample_interval_ms, metadata_json, json } =>
                 cmd_slice_run(&input, &output, layer_height, build_width_mm, build_depth_mm,
                     source_width_px, source_height_px, &png_compression, &anti_aliasing,
                     &anti_aliasing_mode, blur_brush_radius_px, &blur_brush_kernel,
                     blur_brush_sigma_x, blur_brush_sigma_y, z_blur_radius_layers,
                     &z_blur_kernel, z_blur_sigma, z_blend_look_back, aa_on_supports,
                     &x_packing_mode, mirror_x, mirror_y, &format_version,
-                    min_aa_alpha, &metadata_json, json),
+                    min_aa_alpha, dither, dither_bit_depth, dither_device_gamma,
+                    sample_interval_ms, &metadata_json, json),
             SliceCommands::Formats => { cmd_slice_formats(); Ok(()) },
             SliceCommands::PreviewLayer { input, layer, output } =>
                 extract_layer_png(&input, layer, &output),

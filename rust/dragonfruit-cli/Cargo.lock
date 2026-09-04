@@ -309,6 +309,7 @@ dependencies = [
  "dragonfruit-islands",
  "dragonfruit-slicing-engine",
  "flate2",
+ "libc",
  "libdeflater",
  "proptest",
  "serde",
@@ -320,7 +321,6 @@ dependencies = [
 name = "dragonfruit-islands"
 version = "0.1.0"
 dependencies = [
- "clap",
  "dragonfruit-slicing-engine",
  "indexmap",
  "log",
