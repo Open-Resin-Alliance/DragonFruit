@@ -22,7 +22,7 @@ import {
 import { Branch, Knot } from '../../types';
 import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints, projectOntoSegment } from './knotUtils';
 import { ElasticChainInitialState, solveElasticChain } from '../../PlacementLogic/ElasticChainSolver';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 import { getSocketPosition } from '../ContactCone';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { clearKnotDragPreview, emitKnotDragPreview, useActiveKnotDragPreview } from '../../interaction/knotDragPreview';

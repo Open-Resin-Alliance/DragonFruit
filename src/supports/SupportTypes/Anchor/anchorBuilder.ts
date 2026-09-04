@@ -3,7 +3,7 @@ import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/Con
 import type { SupportData } from '../../rendering/SupportBuilder';
 import type * as THREE from 'three';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 import { resolveConeAxisPolicy } from '../../PlacementLogic/ConeAxisPolicy';
 import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
 import { v4 as uuidv4 } from 'uuid';

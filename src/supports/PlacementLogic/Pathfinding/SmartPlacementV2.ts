@@ -20,7 +20,7 @@ import {
     type TrunkPlacementInput,
     type TrunkPlacementResult,
 } from '../StandardPlacement';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 import { gridNodeKeyFromXY, gridSnappedXYFromKey } from '../Grid/gridMath';
 import { buildNearestCandidateNodeKeys } from '../Grid/nearestCandidateNodeKeys';
 import { onSDFMatrixDrift, SDFCache } from './SDFCache';

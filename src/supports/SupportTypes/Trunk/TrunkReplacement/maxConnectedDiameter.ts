@@ -2,7 +2,7 @@ import type { Branch, Knot, Leaf, Roots, SupportState, Trunk } from '../../../ty
 import { getJointDiameter } from '../../../constants';
 import { splitShaft } from '../../../SupportPrimitives/Joint/jointUtils';
 import { getTrunkSegmentEndpoints } from '../../../SupportPrimitives/Knot/knotUtils';
-import { getSettings } from '../../../Settings';
+import { getSettings } from '../../../Settings/state';
 
 function maxNum(a: number, b: number) {
     return a > b ? a : b;

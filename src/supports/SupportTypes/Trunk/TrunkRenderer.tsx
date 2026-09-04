@@ -15,7 +15,7 @@ import { selectPrimitiveById } from '../../interaction/shared/selection/selectio
 import { useHighlight } from '../../interaction/useHighlight';
 import { usePartDragUpdate } from '../../interaction/partDragPreview';
 import { getSnapshot, updateTrunk } from '../../state';
-import { subscribeToSettings, getSettingsSnapshot } from '../../Settings';
+import { subscribeToSettings, getSettingsSnapshot } from '../../Settings/state';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 interface TrunkRendererProps {

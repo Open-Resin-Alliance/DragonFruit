@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { ContactDisk, Joint, Segment, Twig, Vec3, LimitationCode } from '../../types';
 import type { ContactDiskProfile } from '../../SupportPrimitives/ContactCone/types';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 import { twigDiskJointStandoff } from './twigJointStandoff';
 import { twigJointDiameterForLocalDiameter } from './twigTaper';
 import { isShaftBlocked, isCollisionFrustumBlocked } from '../../PlacementLogic/CollisionAvoidance';

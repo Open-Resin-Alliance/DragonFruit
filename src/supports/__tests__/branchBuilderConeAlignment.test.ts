@@ -7,7 +7,7 @@ import { buildBranchData } from '../SupportTypes/Branch/branchBuilder';
 import { calculateDiskThickness } from '../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getFinalSocketPosition } from '../SupportPrimitives/ContactCone/contactConeUtils';
 import { isCollisionFrustumBlocked, isCollisionSegmentBlocked } from '../PlacementLogic/CollisionAvoidance';
-import { getSettings } from '../Settings';
+import { getSettings } from '../Settings/state';
 import type { ContactCone } from '../SupportPrimitives/ContactCone/types';
 import type { Knot, Vec3 } from '../types';
 

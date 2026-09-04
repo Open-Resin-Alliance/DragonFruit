@@ -14,7 +14,7 @@ import { useHighlight } from '../../interaction/useHighlight';
 import { usePartDragUpdate } from '../../interaction/partDragPreview';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { getSnapshot, updateBranch } from '../../state';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 import { decodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { buildBranchData, remapBranchGeometryIds } from './branchBuilder';

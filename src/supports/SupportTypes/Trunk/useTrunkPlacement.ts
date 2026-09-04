@@ -10,7 +10,7 @@ import type { SupportData } from '../../rendering/SupportBuilder';
 import type { Anchor, Branch, ContactDisk, Leaf, LimitationCode, Stick, Twig, WarningCode } from '../../types';
 import type { ContactCone } from '../../SupportPrimitives/ContactCone/types';
 import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 import { decideGridPlacement } from '../../PlacementLogic/Grid';
 import { ANCHOR_HEIGHT_THRESHOLD_MM } from '../../autoSupport/constants';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';

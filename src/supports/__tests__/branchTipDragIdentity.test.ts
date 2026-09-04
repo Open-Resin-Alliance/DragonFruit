@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { buildBranchData, remapBranchGeometryIds } from '../SupportTypes/Branch/branchBuilder';
-import { getSettings } from '../Settings';
+import { getSettings } from '../Settings/state';
 import { decodeSupportSettingsHex } from '../Settings/supportSettingsCodec';
 import type { Branch, Knot } from '../types';
 

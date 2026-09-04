@@ -3,7 +3,7 @@ import type { Leaf, Knot, Vec3 } from '../../types';
 import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
 import type { SupportData } from '../../rendering/SupportBuilder';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 import { applySizingOverridesToSettings } from '../../autoSupport/parameterSizing';
 import { encodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
 import { v4 as uuidv4 } from 'uuid';

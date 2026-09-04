@@ -9,7 +9,7 @@ import { RootsRenderer } from '../SupportPrimitives/Roots/RootsRenderer';
 import { ContactConeRenderer, getSocketPosition, getFinalSocketPosition } from '../SupportPrimitives/ContactCone';
 import { ContactDiskRenderer } from '../SupportPrimitives/ContactDisk';
 import { KnotRenderer } from '../SupportPrimitives/Knot/KnotRenderer';
-import { getSettings } from '../Settings';
+import { getSettings } from '../Settings/state';
 import { useSyncExternalStore } from 'react';
 
 /**

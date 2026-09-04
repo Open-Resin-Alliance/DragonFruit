@@ -13,7 +13,7 @@ import { getFinalSocketPosition, getSocketPosition } from '../../SupportPrimitiv
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
 import { getJointDiameter } from '../../constants';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 import { applySizingOverridesToSettings } from '../../autoSupport/parameterSizing';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { calculateStandardPlacement, type TrunkPlacementResult } from '../../PlacementLogic/StandardPlacement';
