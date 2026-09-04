@@ -6,6 +6,7 @@ import ReactDOM from 'react-dom';
 import { Check, Save, RotateCcw, Sparkles, Wrench, WandSparkles, Sailboat, Grid3X3, Pickaxe } from 'lucide-react';
 import { usePresetHotkeys } from '@/hotkeys/usePresetHotkeys';
 import { useLingui } from '@lingui/react';
+import { formatAutoBraceStatus } from '../autoBracing/autoBraceMessages';
 import { msg } from '@lingui/core/macro';
 import {
     getSettings,
@@ -596,12 +597,11 @@ export function SupportSidebar() {
     const handleAutoBrace = React.useCallback(() => {
         try {
             const result = runAutoBracing();
-            if (!result.changed) {
-                setAutoBraceStatus({ kind: 'warning', message: result.message });
-            } else if (result.skippedSupportCount > 0) {
-                setAutoBraceStatus({ kind: 'warning', message: result.message });
+            const message = formatAutoBraceStatus(result, _);
+            if (!result.changed || result.skippedSupportCount > 0) {
+                setAutoBraceStatus({ kind: 'warning', message });
             } else {
-                setAutoBraceStatus({ kind: 'success', message: result.message });
+                setAutoBraceStatus({ kind: 'success', message });
             }
         } catch (err) {
             console.error('[SupportSidebar] Auto Brace failed:', err);

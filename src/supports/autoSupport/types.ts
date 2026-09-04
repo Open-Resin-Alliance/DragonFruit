@@ -201,6 +201,26 @@ export interface SizingDebugInfo {
     tipContactRange: { min: number; max: number; avg: number };
 }
 
+/**
+ * Outcome of an auto-place run, as a code rather than a sentence.
+ *
+ * The engine has no business producing display copy: it is imported by the unit
+ * tests, which run under tsx with no Lingui macro transform, and a localized
+ * string here would also freeze the language at call time. Callers turn the code
+ * and the counts below into text.
+ */
+export type AutoPlaceStatus =
+    /** Supports were placed; see the counts and `analytics`. */
+    | 'placed'
+    /** No island survived the area/angle filters, so there was nothing to try. */
+    | 'no-candidates'
+    /** Every candidate collapsed into another during deduplication. */
+    | 'all-deduplicated'
+    /** Every candidate position already carries a support. */
+    | 'already-supported'
+    /** Auto-support is switched off in the settings. */
+    | 'disabled';
+
 /** Result returned by the auto-place orchestrator. */
 export interface AutoPlaceResult {
     placedTrunks: number;
@@ -211,8 +231,8 @@ export interface AutoPlaceResult {
     rejectedCandidates: number;
     /** Whether any supports were actually added/removed. */
     changed: boolean;
-    /** Human-readable summary for UI feedback. */
-    message: string;
+    /** What happened, as a code the UI resolves into text. */
+    status: AutoPlaceStatus;
     /** Detailed analytics (undefined for no-op runs). */
     analytics?: AutoPlaceAnalytics;
 }
@@ -236,6 +256,6 @@ export interface AutoSupportPlan {
     kickstand: KickstandState;
     /** Placement + coverage analytics. */
     analytics: AutoPlaceAnalytics;
-    /** Counts/message — what the panel reports. */
+    /** Counts/status — what the panel reports. */
     result: AutoPlaceResult;
 }
