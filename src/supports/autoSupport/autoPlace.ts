@@ -1,4 +1,10 @@
 import { footprintX, footprintY } from '@/volumeAnalysis/Islands/voxelFootprint';
+
+// NOTE: the status strings below stay untranslated on purpose. This module is
+// imported directly by the unit tests, which run under tsx with no Lingui macro
+// transform, so `@lingui/core/macro` cannot be imported here. Translating them
+// means turning these result messages into codes the UI resolves — a change to
+// the engine's contract, not an i18n edit.
 import * as THREE from 'three';
 import { quantizeToScale } from '@/utils/math';
 

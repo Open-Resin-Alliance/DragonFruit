@@ -1,6 +1,8 @@
 "use client";
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import ReactDOM from 'react-dom';
 import { Settings2 } from 'lucide-react';
 import { SupportAnatomyPreviewCanvas } from './SupportAnatomyPreviewCanvas';
@@ -13,6 +15,7 @@ function PreviewContextMenu({
     position: { x: number; y: number } | null;
     onClose: () => void;
 }) {
+    const { _ } = useLingui();
     const previewState = React.useSyncExternalStore(subscribeToAnatomyPreviewState, getAnatomyPreviewState, getAnatomyPreviewState);
 
     React.useEffect(() => {
@@ -43,7 +46,7 @@ function PreviewContextMenu({
                 background: 'color-mix(in srgb, var(--surface-0), #000 10%)',
             }}
             role="menu"
-            aria-label="Anatomy preview context menu"
+            aria-label={_(msg`Anatomy preview context menu`)}
             onPointerDown={(event) => event.stopPropagation()}
         >
             <button
@@ -59,7 +62,7 @@ function PreviewContextMenu({
                 <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                     <Settings2 className="h-3.5 w-3.5" />
                 </span>
-                <span>{previewState.showTuner ? 'Hide Tuner' : 'Show Tuner'}</span>
+                <span>{previewState.showTuner ? _(msg`Hide Tuner`) : _(msg`Show Tuner`)}</span>
             </button>
         </div>
     );

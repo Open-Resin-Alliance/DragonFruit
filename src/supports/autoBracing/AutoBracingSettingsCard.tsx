@@ -1,6 +1,8 @@
 "use client";
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Button, Toast, ToastViewport } from '@/components/atoms';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
@@ -38,6 +40,7 @@ export function AutoBracingSettingsCard({
     onAutoBrace,
     status,
 }: AutoBracingSettingsCardProps) {
+    const { _ } = useLingui();
     const ToggleButton = ({
         checked,
         onChange,
@@ -102,7 +105,7 @@ export function AutoBracingSettingsCard({
             {/* Row 1: Brace Diameter | Max Brace Distance */}
             <div className="grid grid-cols-2 gap-1.5 items-start">
                 <label className="space-y-1 min-w-0">
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Brace Diameter</div>
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>{_(msg`Brace Diameter`)}</div>
                     <div className="relative">
                         <NumberInput
                             value={settings.braceDiameterMm}
@@ -115,7 +118,7 @@ export function AutoBracingSettingsCard({
                     </div>
                 </label>
                 <label className="space-y-1 min-w-0">
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Max Brace Distance</div>
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>{_(msg`Max Brace Distance`)}</div>
                     <div className="relative">
                         <NumberInput
                             value={settings.maxBraceLengthMm}
@@ -132,7 +135,7 @@ export function AutoBracingSettingsCard({
             {/* Row 2: Initial Distance | Repeat Interval */}
             <div className="grid grid-cols-2 gap-1.5 items-start">
                 <label className="space-y-1 min-w-0">
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Initial Distance</div>
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>{_(msg`Initial Distance`)}</div>
                     <div className="relative">
                         <NumberInput
                             value={settings.initialDistanceMm}
@@ -145,7 +148,7 @@ export function AutoBracingSettingsCard({
                     </div>
                 </label>
                 <label className="space-y-1 min-w-0">
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Repeat Interval</div>
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>{_(msg`Repeat Interval`)}</div>
                     <div className="relative">
                         <NumberInput
                             value={settings.patternIntervalMm}
@@ -167,7 +170,7 @@ export function AutoBracingSettingsCard({
 
             {/* Row 4: Seed Spacing (full width) */}
             <label className="space-y-1 min-w-0">
-                <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Cluster Spacing</div>
+                <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>{_(msg`Cluster Spacing`)}</div>
                 <div className="grid grid-cols-3 gap-1.5">
                     {([['Low', 2], ['Mid', 5], ['High', 10]] as const).map(([label, value]) => {
                         const isActive = settings.seedSpacingMm === value;
@@ -219,7 +222,7 @@ export function AutoBracingSettingsCard({
                     <path d="M8 6l2-2" />
                     <path d="M16 16l2 2" />
                 </svg>
-                Apply Auto Brace
+                {_(msg`Apply Auto Brace`)}
             </button>
         </div>
     );

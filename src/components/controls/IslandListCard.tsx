@@ -1,5 +1,8 @@
 
 import React, { useState } from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Plural } from '@lingui/react/macro';
 import type { Island } from '@/volumeAnalysis/IslandScan/types';
 import { IslandHierarchyModal } from '@/components/modals/IslandHierarchyModal';
 import { ChevronRight, Network } from 'lucide-react';
@@ -29,6 +32,7 @@ export function IslandListCard({
   layerHeightMm,
   zOffsetMm,
 }: IslandListCardProps) {
+  const { _ } = useLingui();
   const cardRef = React.useRef<HTMLDivElement | null>(null);
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -96,7 +100,7 @@ export function IslandListCard({
                 )}
               </svg>
             </IconButton>
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Island IDs</h3>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Island IDs`)}</h3>
           </>
         )}
         right={(
@@ -105,7 +109,7 @@ export function IslandListCard({
             variant="accent"
             size="sm"
             className={compactHeader ? '!h-9 !px-2 !py-0 text-[12px] font-semibold' : '!h-9 !px-2.5 !py-0 text-[12px] font-semibold'}
-            title="View island hierarchy tree"
+            title={_(msg`View island hierarchy tree`)}
           >
             <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
               {!compactHeader && (
@@ -119,7 +123,7 @@ export function IslandListCard({
                   <Network className="h-3.5 w-3.5" style={{ color: 'var(--accent-secondary-contrast)' }} />
                 </span>
               )}
-              <span className="leading-none" style={{ color: 'var(--accent-secondary-contrast)' }}>Hierarchy</span>
+              <span className="leading-none" style={{ color: 'var(--accent-secondary-contrast)' }}>{_(msg`Hierarchy`)}</span>
               {!compactHeader && (
                 <ChevronRight className="h-3.5 w-3.5 shrink-0" style={{ color: 'color-mix(in srgb, var(--accent-secondary-contrast), transparent 18%)' }} />
               )}
@@ -133,11 +137,11 @@ export function IslandListCard({
           {/* Summary stats */}
           <div className="grid grid-cols-2 gap-1.5">
             <div className="rounded p-1" style={{ background: 'var(--surface-1)' }}>
-              <div className="ui-meta">Total Islands</div>
+              <div className="ui-meta">{_(msg`Total Islands`)}</div>
               <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{islands.length}</div>
             </div>
             <div className="rounded p-1" style={{ background: 'var(--surface-1)' }}>
-              <div className="ui-meta">Active</div>
+              <div className="ui-meta">{_(msg`Active`)}</div>
               <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{activeIslands.length}</div>
             </div>
           </div>
@@ -150,14 +154,14 @@ export function IslandListCard({
               onChange={(e) => onShowMergedChange(e.target.checked)}
               className="ui-checkbox"
             />
-            <span className="ui-meta">Show child islands</span>
+            <span className="ui-meta">{_(msg`Show child islands`)}</span>
           </label>
 
           {/* Search and sort */}
           <div className="space-y-1">
             <Input
               type="text"
-              placeholder="Search island ID..."
+              placeholder={_(msg`Search island ID…`)}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full !h-8 px-2 text-sm no-spinners"
@@ -167,19 +171,19 @@ export function IslandListCard({
                 onClick={() => setSortBy('id')}
                 className={`ui-button flex-1 !h-8 px-2 py-0 text-[11px] ${sortBy === 'id' ? 'ui-button-primary' : 'ui-button-secondary'}`}
               >
-                ID
+                {_(msg({ message: 'ID', comment: 'Sort order for the island list: by island id. One of three narrow buttons (ID / Volume / Layers).' }))}
               </button>
               <button
                 onClick={() => setSortBy('volume')}
                 className={`ui-button flex-1 !h-8 px-2 py-0 text-[11px] ${sortBy === 'volume' ? 'ui-button-primary' : 'ui-button-secondary'}`}
               >
-                Volume
+                {_(msg({ message: 'Volume', comment: 'Sort order for the island list: by island volume. One of three narrow buttons (ID / Volume / Layers).' }))}
               </button>
               <button
                 onClick={() => setSortBy('layers')}
                 className={`ui-button flex-1 !h-8 px-2 py-0 text-[11px] ${sortBy === 'layers' ? 'ui-button-primary' : 'ui-button-secondary'}`}
               >
-                Layers
+                {_(msg({ message: 'Layers', comment: 'Sort order for the island list: by layer span. One of three narrow buttons (ID / Volume / Layers).' }))}
               </button>
             </div>
           </div>
@@ -187,7 +191,7 @@ export function IslandListCard({
           {/* Island list */}
           <div className="space-y-1 max-h-[30rem] overflow-y-auto custom-scrollbar">
             <div className="ui-meta px-1">
-              {sortedIslands.length} island{sortedIslands.length !== 1 ? 's' : ''}
+              <Plural value={sortedIslands.length} one="# island" other="# islands" />
             </div>
             {sortedIslands.map((island) => {
               const layerSpan = island.lastLayer - island.firstLayer + 1;
@@ -264,7 +268,7 @@ export function IslandListCard({
               className="w-full !h-8 px-2.5 py-0 text-[11px]"
               size="sm"
             >
-              Clear Selection
+              {_(msg`Clear Selection`)}
             </Button>
           )}
         </div>

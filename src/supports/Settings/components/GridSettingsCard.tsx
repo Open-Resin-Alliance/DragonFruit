@@ -3,6 +3,8 @@
 import React from 'react';
 import { GridSettings } from '../types';
 import { NumberInput } from '@/components/ui/NumberInput';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 
 interface GridSettingsCardProps {
     grid: GridSettings;
@@ -10,6 +12,7 @@ interface GridSettingsCardProps {
 }
 
 export function GridSettingsCard({ grid, onChange }: GridSettingsCardProps) {
+    const { _ } = useLingui();
     const unitHint = (unit: string) => (
         <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>{unit}</span>
     );
@@ -38,7 +41,7 @@ export function GridSettingsCard({ grid, onChange }: GridSettingsCardProps) {
                             color: 'var(--text-muted)',
                         }}
                 >
-                    <span className="text-[12px] font-semibold uppercase tracking-wide">{enabled ? 'On' : 'Off'}</span>
+                    <span className="text-[12px] font-semibold uppercase tracking-wide">{enabled ? _(msg({ message: 'On', comment: 'Toggle state shown uppercase on a wide switch row in the support settings.' })) : _(msg({ message: 'Off', comment: 'Toggle state shown uppercase on a wide switch row in the support settings.' }))}</span>
                     <span
                         className="inline-flex h-5 w-9 rounded-full p-0.5 transition-colors"
                         style={{ background: enabled ? 'var(--accent)' : 'var(--surface-2)' }}
@@ -50,7 +53,7 @@ export function GridSettingsCard({ grid, onChange }: GridSettingsCardProps) {
             {/* Always show grid options, but disable if grid is off */}
             <div className={`grid grid-cols-1 gap-1.5 ${!enabled ? 'opacity-80' : ''}`}>
                 <label className="flex flex-col gap-0.5 w-full">
-                    <span className="text-[11px] font-medium" style={{ color: !enabled ? 'color-mix(in srgb, var(--text-muted), black 32%)' : 'var(--text-muted)' }}>Spacing</span>
+                    <span className="text-[11px] font-medium" style={{ color: !enabled ? 'color-mix(in srgb, var(--text-muted), black 32%)' : 'var(--text-muted)' }}>{_(msg`Spacing`)}</span>
                     <div className="relative">
                         <NumberInput
                             value={grid.spacingMm}

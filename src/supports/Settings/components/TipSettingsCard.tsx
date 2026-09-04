@@ -4,6 +4,8 @@ import React from 'react';
 import { TipProfile } from '../types';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 
 interface TipSettingsCardProps {
     tip: TipProfile;
@@ -14,6 +16,7 @@ import { subscribeToAnatomyPreviewState, getAnatomyPreviewState, setAnatomyPrevi
 import { useSyncExternalStore } from 'react';
 
 export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
+    const { _ } = useLingui();
     const previewState = useSyncExternalStore(subscribeToAnatomyPreviewState, getAnatomyPreviewState, getAnatomyPreviewState);
     const activeKey = previewState.activeSettingKey;
 
@@ -28,7 +31,7 @@ export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
     return (
         <div className="bg-neutral-750 rounded p-1 mb-1">
             <div className="flex items-center justify-between mb-1">
-                <span className="text-[11px] font-semibold text-neutral-300">Tip</span>
+                <span className="text-[11px] font-semibold text-neutral-300">{_(msg`Tip`)}</span>
                 <span className="text-[11px] text-neutral-500 uppercase tracking-wide">{tip.shape}</span>
             </div>
 
@@ -37,7 +40,7 @@ export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
                 <SelectDropdown
                     value={tip.type || 'disk'}
                     onChange={(value) => onChange({ type: value as any })}
-                    options={[{ value: 'disk', label: 'Contact Disk' }]}
+                    options={[{ value: 'disk', label: _(msg`Contact Disk`) }]}
                     className="space-y-0"
                     selectClassName="w-full px-1.5 py-1 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none"
                     onFocus={() => setAnatomyPreviewActiveSettingKey('tip.type')}
@@ -47,16 +50,16 @@ export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
 
             <div className="mb-1.5">
                 <div className="flex items-center justify-between mb-1">
-                    <span className="text-[11px] text-neutral-400">Cone Angle Mode</span>
+                    <span className="text-[11px] text-neutral-400">{_(msg`Cone Angle Mode`)}</span>
                     <span className="text-[11px] text-neutral-500 uppercase tracking-wide">{tip.coneAngleMode ?? 'normal'}</span>
                 </div>
                 <SelectDropdown
                     value={tip.coneAngleMode ?? 'normal'}
                     onChange={(value) => onChange({ coneAngleMode: value as any })}
                     options={[
-                        { value: 'normal', label: 'Normal' },
-                        { value: 'locked', label: 'Locked' },
-                        { value: 'adaptive', label: 'Adaptive' },
+                        { value: 'normal', label: _(msg`Normal`) },
+                        { value: 'locked', label: _(msg`Locked`) },
+                        { value: 'adaptive', label: _(msg`Adaptive`) },
                     ]}
                     className="space-y-0"
                     selectClassName="w-full px-1.5 py-1 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none"
@@ -68,7 +71,7 @@ export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
             {(tip.coneAngleMode ?? 'normal') === 'adaptive' && (
                 <div className="mb-1.5">
                     <div className="flex items-center justify-between mb-1">
-                        <span className="text-[11px] text-neutral-400">Adaptive Offset (deg)</span>
+                        <span className="text-[11px] text-neutral-400">{_(msg`Adaptive Offset (deg)`)}</span>
                         <span className="text-[11px] text-neutral-500 uppercase tracking-wide">+{tip.adaptiveConeAngleOffsetDeg ?? 30}</span>
                     </div>
                     <NumberInput
@@ -88,7 +91,7 @@ export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
 
             <div className="grid grid-cols-3 gap-1.5">
                 <label className="flex flex-col gap-0.5">
-                    <span className="text-[11px] text-neutral-400">Contact</span>
+                    <span className="text-[11px] text-neutral-400">{_(msg`Contact`)}</span>
                     <NumberInput
                         value={tip.contactDiameterMm}
                         onChange={(val) => onChange({ contactDiameterMm: val })}
@@ -98,7 +101,7 @@ export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
                     />
                 </label>
                 <label className="flex flex-col gap-0.5">
-                    <span className="text-[11px] text-neutral-400">Body</span>
+                    <span className="text-[11px] text-neutral-400">{_(msg`Body`)}</span>
                     <NumberInput
                         value={tip.bodyDiameterMm}
                         onChange={(val) => onChange({ bodyDiameterMm: val })}
@@ -108,7 +111,7 @@ export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
                     />
                 </label>
                 <label className="flex flex-col gap-0.5">
-                    <span className="text-[11px] text-neutral-400">Length</span>
+                    <span className="text-[11px] text-neutral-400">{_(msg`Length`)}</span>
                     <NumberInput
                         value={tip.lengthMm}
                         onChange={(val) => onChange({ lengthMm: val })}

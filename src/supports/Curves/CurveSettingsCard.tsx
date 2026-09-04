@@ -1,4 +1,6 @@
 import React, { useSyncExternalStore } from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import type { SupportState } from '../types';
 import { subscribe, getSnapshot, updateTrunk } from '../state';
 import { updateCurveTension, removeCurveAtJoint, updateSegmentTension, removeSegmentCurve, updateSegmentBias } from './curveUtils';
@@ -72,15 +74,16 @@ export function getCurveSettingsSelection(state: SupportState): CurveSelectionSt
 }
 
 export function CurveSettingsCard({ embedded = false }: { embedded?: boolean }) {
+    const { _ } = useLingui();
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const selection = getCurveSettingsSelection(state);
 
     if (!selection) {
         return (
             <div className="space-y-2 p-3 rounded-md border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Curve Settings</div>
+                <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>{_(msg`Curve Settings`)}</div>
                 <div className="text-[12px]" style={{ color: 'var(--text-muted)' }}>
-                    Select a curve segment or joint in the viewport to adjust tension, bias, and remove curves.
+                    {_(msg`Select a curve segment or joint in the viewport to adjust tension, bias, and remove curves.`)}
                 </div>
             </div>
         );
@@ -157,7 +160,7 @@ export function CurveSettingsCard({ embedded = false }: { embedded?: boolean }) 
     const content = (
         <div className="space-y-3">
             <div className="flex justify-between items-center">
-                <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Curve Settings</div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>{_(msg`Curve Settings`)}</div>
                 <div className="text-[11px] font-semibold" style={{ color: 'var(--accent)' }}>{selectedLabel}</div>
             </div>
 
@@ -167,7 +170,7 @@ export function CurveSettingsCard({ embedded = false }: { embedded?: boolean }) 
 
             <div className="space-y-2">
                 <div className="space-y-1 min-w-0">
-                    <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Tension</div>
+                    <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>{_(msg`Tension`)}</div>
                     <div className="flex gap-2 items-center">
                         <input
                             type="range"
@@ -183,7 +186,7 @@ export function CurveSettingsCard({ embedded = false }: { embedded?: boolean }) 
                 </div>
 
                 <div className="space-y-1 min-w-0">
-                    <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Bias (Bottom - Top)</div>
+                    <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>{_(msg`Bias (Bottom - Top)`)}</div>
                     <div className="flex gap-2 items-center">
                         <input
                             type="range"
@@ -206,7 +209,7 @@ export function CurveSettingsCard({ embedded = false }: { embedded?: boolean }) 
                         size="md"
                         className="w-full h-9 text-[12px] font-semibold"
                     >
-                        Remove Curve
+                        {_(msg`Remove Curve`)}
                     </Button>
                 </div>
             </div>
@@ -219,7 +222,7 @@ export function CurveSettingsCard({ embedded = false }: { embedded?: boolean }) 
 
     return (
         <div className="absolute top-20 left-[340px] bg-zinc-900/90 backdrop-blur-sm border border-zinc-700/50 p-4 rounded-lg shadow-xl w-64 pointer-events-auto z-50">
-            <h3 className="text-zinc-200 font-medium mb-3 text-sm">Curve Settings</h3>
+            <h3 className="text-zinc-200 font-medium mb-3 text-sm">{_(msg`Curve Settings`)}</h3>
             {content}
         </div>
     );

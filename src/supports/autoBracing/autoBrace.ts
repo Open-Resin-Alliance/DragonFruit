@@ -1,4 +1,10 @@
 import * as THREE from 'three';
+
+// NOTE: the status strings below stay untranslated on purpose. This module is
+// imported directly by the unit tests, which run under tsx with no Lingui macro
+// transform, so `@lingui/core/macro` cannot be imported here. Translating them
+// means turning these result messages into codes the UI resolves — a change to
+// the engine's contract, not an i18n edit.
 import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { getSettings } from '../Settings/state';
 import {
@@ -420,7 +426,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
             removedBraceCount: 0,
             skippedSupportCount: trunkSamples.length,
             changed: false,
-            message: "No eligible supports found for Auto Bracing.",
+            message: 'No eligible supports found for Auto Bracing.',
         };
     }
 
@@ -1009,7 +1015,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
         changed,
         message: changed
             ? `Auto Brace complete: generated ${generatedBraceCount} brace(s), removed ${removedBraceCount} legacy brace(s).`
-            : "No eligible supports found for Auto Bracing.",
+            : 'No eligible supports found for Auto Bracing.',
     };
 }
 

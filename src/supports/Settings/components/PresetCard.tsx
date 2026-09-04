@@ -1,5 +1,8 @@
 "use client";
 
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { translatePresetName } from '@/supports/Settings/presetMessages';
 import React, { useState, useRef, useEffect } from 'react';
 import { SupportPreset } from '../types';
 import { setAnatomyPreviewActiveSettingKey, setAnatomyPreviewActiveSettingValue } from '../AnatomyPreview/previewState';
@@ -13,6 +16,7 @@ interface PresetCardProps {
 }
 
 export function PresetCard({ preset, isActive, onClick, onSave, onRename }: PresetCardProps) {
+    const { _ } = useLingui();
     const [isRenaming, setIsRenaming] = useState(false);
     const [tempName, setTempName] = useState(preset.name);
     const inputRef = useRef<HTMLInputElement>(null);
@@ -72,7 +76,7 @@ export function PresetCard({ preset, isActive, onClick, onSave, onRename }: Pres
                     e.stopPropagation();
                     onSave();
                 }}
-                title="Save current settings to this preset"
+                title={_(msg`Save current settings to this preset`)}
                 className="absolute top-1 right-1 w-5.5 h-5.5 flex items-center justify-center rounded transition-all opacity-0 group-hover:opacity-100 z-10"
                 style={{ color: 'var(--text-muted)' }}
             >
@@ -98,7 +102,7 @@ export function PresetCard({ preset, isActive, onClick, onSave, onRename }: Pres
                     />
                 ) : (
                     <div className="w-full font-semibold text-[1.05rem] truncate select-none text-center" style={{ color: 'var(--text-strong)' }}>
-                        {preset.name}
+                        {translatePresetName(preset, _)}
                     </div>
                 )}
             </div>
@@ -108,7 +112,7 @@ export function PresetCard({ preset, isActive, onClick, onSave, onRename }: Pres
             {/* Stats: Diameter | Length | Trunk */}
             <div className="w-full flex items-center gap-0 text-[11px] font-mono leading-none px-0.5" style={{ color: 'var(--text-muted)' }}>
                 <div
-                    title="Contact Diameter"
+                    title={_(msg`Contact Diameter`)}
                     className="flex-1 flex justify-center items-center gap-px whitespace-nowrap w-0 transition-colors"
                     style={{ color: 'var(--text-muted)' }}
                     onMouseEnter={() => {
@@ -125,7 +129,7 @@ export function PresetCard({ preset, isActive, onClick, onSave, onRename }: Pres
                 </div>
                 <div className="w-px h-2.5 flex-shrink-0" style={{ background: 'var(--border-subtle)' }} />
                 <div
-                    title="Contact Cone Length"
+                    title={_(msg`Contact Cone Length`)}
                     className="flex-1 flex justify-center items-center gap-px whitespace-nowrap w-0 transition-colors"
                     style={{ color: 'var(--text-muted)' }}
                     onMouseEnter={() => {
@@ -142,7 +146,7 @@ export function PresetCard({ preset, isActive, onClick, onSave, onRename }: Pres
                 </div>
                 <div className="w-px h-2.5 flex-shrink-0" style={{ background: 'var(--border-subtle)' }} />
                 <div
-                    title="Trunk Diameter"
+                    title={_(msg`Trunk Diameter`)}
                     className="flex-1 flex justify-center items-center gap-px whitespace-nowrap w-0 transition-colors"
                     style={{ color: 'var(--text-muted)' }}
                     onMouseEnter={() => {

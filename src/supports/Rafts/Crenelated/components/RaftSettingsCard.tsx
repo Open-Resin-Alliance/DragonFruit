@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import { RaftSettings } from '../RaftTypes';
 
 type RaftSettingsCardProps = {
@@ -14,6 +16,7 @@ export function RaftSettingsCard({
   settings,
   onSettingsChange
 }: RaftSettingsCardProps) {
+  const { _ } = useLingui();
   const raftEnabled = settings.bottomMode !== 'off';
   const [expanded, setExpanded] = useState(raftEnabled);
   
@@ -76,7 +79,7 @@ export function RaftSettingsCard({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
             </svg>
           </button>
-          <h3 className="text-sm font-semibold text-neutral-200">Raft Settings</h3>
+          <h3 className="text-sm font-semibold text-neutral-200">{_(msg`Raft Settings`)}</h3>
         </div>
         <label className="flex items-center gap-2 cursor-pointer">
           <input
@@ -85,7 +88,7 @@ export function RaftSettingsCard({
             onChange={(e) => updateSetting('bottomMode', e.target.checked ? 'solid' : 'off')}
             className="w-4 h-4 rounded border-neutral-600 bg-neutral-700 text-blue-500 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0"
           />
-          <span className="text-xs text-neutral-400">Enabled</span>
+          <span className="text-xs text-neutral-400">{_(msg`Enabled`)}</span>
         </label>
       </div>
 
@@ -95,7 +98,7 @@ export function RaftSettingsCard({
           {/* Raft Thickness */}
           <div className="space-y-1">
             <label className="text-xs text-neutral-400 flex justify-between">
-              <span>Raft Thickness</span>
+              <span>{_(msg`Raft Thickness`)}</span>
               <div className="flex items-center gap-1">
                 <input
                   ref={thicknessRef}
@@ -133,7 +136,7 @@ export function RaftSettingsCard({
           {/* Edge Chamfer Angle */}
           <div className="space-y-1">
             <label className="text-xs text-neutral-400 flex justify-between">
-              <span>Edge Chamfer Angle</span>
+              <span>{_(msg`Edge Chamfer Angle`)}</span>
               <div className="flex items-center gap-1">
                 <input
                   ref={chamferRef}
@@ -171,7 +174,7 @@ export function RaftSettingsCard({
           {/* Wall Height */}
           <div className="space-y-1">
             <label className="text-xs text-neutral-400 flex justify-between">
-              <span>Wall Height</span>
+              <span>{_(msg`Wall Height`)}</span>
               <div className="flex items-center gap-1">
                 <input
                   ref={wallHeightRef}
@@ -209,7 +212,7 @@ export function RaftSettingsCard({
           {/* Wall Thickness */}
           <div className="space-y-1">
             <label className="text-xs text-neutral-400 flex justify-between">
-              <span>Wall Thickness</span>
+              <span>{_(msg`Wall Thickness`)}</span>
               <div className="flex items-center gap-1">
                 <input
                   ref={wallThicknessRef}
@@ -253,13 +256,13 @@ export function RaftSettingsCard({
                 onChange={(e) => updateSetting('showFootprintBorder', e.target.checked)}
                 className="w-4 h-4 rounded border-neutral-600 bg-neutral-700 text-blue-500 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0"
               />
-              <span className="text-xs text-neutral-400">Show Footprint Border</span>
+              <span className="text-xs text-neutral-400">{_(msg`Show Footprint Border`)}</span>
             </label>
             
             {settings.showFootprintBorder && (
               <div className="space-y-1 ml-6">
                 <label className="text-xs text-neutral-400 flex justify-between">
-                  <span>Border Margin</span>
+                  <span>{_(msg`Border Margin`)}</span>
                   <div className="flex items-center gap-1">
                     <input
                       ref={borderMarginRef}

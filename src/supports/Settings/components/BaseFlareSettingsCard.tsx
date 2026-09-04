@@ -3,6 +3,8 @@
 import React from 'react';
 import { BaseFlareProfile } from '../types';
 import { NumberInput } from '@/components/ui/NumberInput';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 
 interface BaseFlareSettingsCardProps {
     baseFlare: BaseFlareProfile;
@@ -10,13 +12,14 @@ interface BaseFlareSettingsCardProps {
 }
 
 export function BaseFlareSettingsCard({ baseFlare, onChange }: BaseFlareSettingsCardProps) {
+    const { _ } = useLingui();
     return (
         <div className="bg-neutral-750 rounded p-1 mb-1">
             <div className="flex items-center justify-between mb-1">
-                <span className="text-xs font-semibold text-neutral-300">Base Flare</span>
+                <span className="text-xs font-semibold text-neutral-300">{_(msg`Base Flare`)}</span>
                 <label className="flex items-center gap-2 cursor-pointer">
                     <span className="text-[9px] text-neutral-500 uppercase tracking-wide">
-                        {baseFlare.enabled ? 'on' : 'off'}
+                        {baseFlare.enabled ? _(msg({ message: 'on', comment: 'Lowercase on/off marker next to a small toggle in the support settings cards.' })) : _(msg({ message: 'off', comment: 'Lowercase on/off marker next to a small toggle in the support settings cards.' }))}
                     </span>
                     <input
                         type="checkbox"
@@ -29,7 +32,7 @@ export function BaseFlareSettingsCard({ baseFlare, onChange }: BaseFlareSettings
             {baseFlare.enabled && (
                 <div className="grid grid-cols-2 gap-1.5">
                     <label className="flex flex-col gap-0.5">
-                        <span className="text-[9px] text-neutral-400">Diameter</span>
+                        <span className="text-[9px] text-neutral-400">{_(msg`Diameter`)}</span>
                         <NumberInput
                             value={baseFlare.diameterMm}
                             onChange={(val) => onChange({ diameterMm: val })}
@@ -37,7 +40,7 @@ export function BaseFlareSettingsCard({ baseFlare, onChange }: BaseFlareSettings
                         />
                     </label>
                     <label className="flex flex-col gap-0.5">
-                        <span className="text-[9px] text-neutral-400">Height</span>
+                        <span className="text-[9px] text-neutral-400">{_(msg`Height`)}</span>
                         <NumberInput
                             value={baseFlare.heightMm}
                             onChange={(val) => onChange({ heightMm: val })}
