@@ -1,7 +1,7 @@
 {
       "_comment": "Directories under lint control for scripts/check-lint-clean.mjs. The repo still carries thousands of pre-existing ESLint problems, so `npm run lint` cannot gate CI as a whole. Instead each directory is cleaned once and then listed here, and CI refuses any new error OR warning inside it. Add a directory only when `npx eslint <dir> --max-warnings 0` already passes; never remove one to make a build go green.",
       "directories": [
-            "plugins/athena",
+            "plugins",
             "src/app/api/backups",
             "src/components/analysis",
             "src/components/atoms",
