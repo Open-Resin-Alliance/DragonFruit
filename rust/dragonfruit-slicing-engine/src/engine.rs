@@ -28,6 +28,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -3902,21 +3903,42 @@ fn atomic_max(cell: &AtomicUsize, val: usize) {
     }
 }
 
-// 3DAA Stats: process resident set size in MB from /proc/self/statm (field 2).
+// 3DAA Stats: process resident set size in MB.
+//
+// Was /proc/self/statm, which exists only on Linux — on macOS and Windows this
+// silently reported 0 MB, so the stats line lied on two of the three platforms
+// we ship. sysinfo reports the same figure everywhere.
+//
+// The System is reused: this runs every 32 emitted layers, and building a fresh
+// one per call would allocate its way into the very RSS it is measuring.
 fn diag_read_rss_mb() -> f64 {
-    std::fs::read_to_string("/proc/self/statm")
-        .ok()
-        .and_then(|s| s.split_whitespace().nth(1).map(|v| v.to_string()))
-        .and_then(|v| v.parse::<u64>().ok())
-        .map(|pages| (pages * 4096) as f64 / 1_048_576.0)
+    static SYS: OnceLock<Mutex<sysinfo::System>> = OnceLock::new();
+    let Ok(pid) = sysinfo::get_current_pid() else {
+        return 0.0;
+    };
+    let Ok(mut sys) = SYS.get_or_init(|| Mutex::new(sysinfo::System::new())).lock() else {
+        return 0.0;
+    };
+    sys.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&[pid]),
+        false,
+        sysinfo::ProcessRefreshKind::nothing().with_memory(),
+    );
+    sys.process(pid)
+        .map(|proc| proc.memory() as f64 / 1_048_576.0)
         .unwrap_or(0.0)
 }
 
 /// Best-effort currently-available physical RAM, in bytes. `None` when the
 /// platform can't be queried, so callers fall back to a fixed cap (issue #386).
 fn available_ram_bytes() -> Option<u64> {
-    let mut sys = sysinfo::System::new_all();
-    sys.refresh_memory();
+    // Ask for the RAM figures and nothing else: System::new_all() enumerates
+    // every process, disk, network and component on the machine to read one
+    // number, and then refresh_memory() went over the memory again.
+    let sys = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::nothing()
+            .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
+    );
     Some(sys.available_memory())
 }
 
@@ -5736,6 +5758,29 @@ mod tests {
                 .iter()
                 .any(|run| run.value > 0 && run.value < 255),
             "support-only layers should retain grayscale AA runs when support AA is enabled"
+        );
+    }
+
+    /// The RSS diagnostic used to read /proc/self/statm, so it silently reported
+    /// 0 MB on macOS and Windows. Any running process has a non-zero resident
+    /// set, so this fails on any platform where the reading is broken again.
+    #[test]
+    fn diag_rss_is_reported_on_every_platform() {
+        let rss = super::diag_read_rss_mb();
+        assert!(
+            rss > 0.0,
+            "resident set size reported as {rss} MB; the platform reading is broken"
+        );
+    }
+
+    /// A zero here silently disables the #386 RAM-aware cap on in-flight
+    /// post tasks, so the narrowed sysinfo refresh must still return a figure.
+    #[test]
+    fn available_ram_is_reported() {
+        let available = super::available_ram_bytes();
+        assert!(
+            available.is_some_and(|bytes| bytes > 0),
+            "available RAM reported as {available:?}; the 3DAA gate would fall back to no budget"
         );
     }
 }
