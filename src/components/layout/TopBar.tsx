@@ -34,6 +34,7 @@ import {
 import type { View3DSettings } from '@/components/settings/view3dPreferences';
 import type { SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
 import { useSceneFileInputAccept } from '@/features/plugins/pluginFileTypeExtensions';
+import { formatTopbarPrinterAriaLabel, formatTopbarPrinterTitle } from '@/components/layout/topBarMessages';
 
 interface TopBarProps {
   meshColor: string;
@@ -528,7 +529,7 @@ export function TopBar({
     if (topbarUsesFleetLabelOrder) {
       const profileName = activePrinterProfile?.name ?? _(msg`Select profile`);
       const printerName = topbarFleetPrinterName ?? _(msg`No active printer`);
-      return _(msg({ message: `Printer profile: ${profileName} • Active printer: ${printerName}`, comment: '"Printer profile" is the saved configuration (material, output format, etc.); "Active printer" is the physical network device currently connected under that profile. The two are distinct concepts that happen to both contain the word "printer".' }));
+      return formatTopbarPrinterTitle(profileName, printerName, _);
     }
     return activePrinterProfile ? _(msg`Printer profile: ${activePrinterProfile.name}`) : _(msg`Select printer profile`);
   }, [_, activePrinterProfile, topbarFleetPrinterName, topbarUsesFleetLabelOrder]);
@@ -536,7 +537,7 @@ export function TopBar({
     if (topbarUsesFleetLabelOrder) {
       const profileName = activePrinterProfile?.name ?? _(msg`Select profile`);
       const printerName = topbarFleetPrinterName ?? _(msg`No active printer`);
-      return _(msg({ message: `Printer profile ${profileName}, active printer ${printerName}`, comment: 'Same distinction as the title tooltip above (profile = saved configuration, printer = connected physical device), phrased for screen readers without the bullet separator.' }));
+      return formatTopbarPrinterAriaLabel(profileName, printerName, _);
     }
     return activePrinterProfile ? _(msg`Printer profile ${activePrinterProfile.name}`) : _(msg`Select printer profile`);
   }, [_, activePrinterProfile, topbarFleetPrinterName, topbarUsesFleetLabelOrder]);

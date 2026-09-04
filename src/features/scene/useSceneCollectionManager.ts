@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useLingui } from '@lingui/react';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { loadMeshGeometry, load3mfGeometryMergedWithSplitData, processGeometry, type GeometryWithBounds, type ProcessGeometryOptions } from '@/hooks/useStlGeometry';
@@ -18,6 +19,37 @@ import type { PluginFileTypeHandler } from '@/features/plugins/pluginFileTypeBri
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  importDetailAutoRepairingFile,
+  importDetailAutoRepairingMesh,
+  importDetailClassifyingFile,
+  importDetailClassifyingMesh,
+  importDetailFinalizing,
+  importDetailFinalizingModel,
+  importDetailIndexedFile,
+  importDetailInspectingFile,
+  importDetailInspectingMesh,
+  importDetailLoadingFile,
+  importDetailPreparing,
+  importDetailPreparingGeometry,
+  importDetailProcessedCount,
+  importDetailRecombiningGeometry,
+  importDetailSeparatingGeometry,
+  importDetailVoxlAutoRepairing,
+  importDetailVoxlClassifying,
+  importDetailVoxlInspecting,
+  importDetailVoxlModel,
+  importLabelAutoRepairing,
+  importLabelClassifying,
+  importLabelFileType,
+  importLabelInspecting,
+  importLabelLoadingMesh,
+  importLabelMergingSupports,
+  importLabelScanningSupports,
+  importLabelScenes,
+  importLabelSplittingSupports,
+  importLabelVoxlScene,
+} from '@/features/scene/sceneImportMessages';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
 import { getKickstandSnapshot, setKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import type { KickstandState } from '@/supports/SupportTypes/Kickstand/types';
@@ -1101,6 +1133,8 @@ function scheduleChunkStoreSweep(getModels: () => LoadedModel[]): void {
 }
 
 export function useSceneCollectionManager() {
+  const { _ } = useLingui();
+
   type ScenePluginImportEntry = {
     pluginId: string;
     fileType: PluginFileTypeDefinition;
@@ -2210,8 +2244,8 @@ export function useSceneCollectionManager() {
     setImportProgress({
       active: true,
       type: 'mesh',
-      label: files.length > 1 ? 'Loading Mesh Files…' : 'Loading Mesh…',
-      detail: files.length > 1 ? `Preparing 0/${files.length}` : 'Preparing Geometry…',
+      label: importLabelLoadingMesh(files.length, _),
+      detail: files.length > 1 ? importDetailPreparing(0, files.length, _) : importDetailPreparingGeometry(_),
       progress: null,
     });
 
@@ -2266,10 +2300,10 @@ export function useSceneCollectionManager() {
         setImportProgress({
           active: true,
           type: 'mesh',
-          label: files.length > 1 ? 'Loading Mesh Files…' : 'Loading Mesh…',
+          label: importLabelLoadingMesh(files.length, _),
           detail: files.length > 1
-            ? `${i + 1}/${files.length}: ${file.name}`
-            : `Loading ${file.name}`,
+            ? importDetailIndexedFile(i + 1, files.length, file.name, _)
+            : importDetailLoadingFile(file.name, _),
           progress: null,
         });
 
@@ -2287,10 +2321,10 @@ export function useSceneCollectionManager() {
                 setImportProgress({
                   active: true,
                   type: 'mesh',
-                  label: files.length > 1 ? 'Auto-Repairing Meshes…' : 'Auto-Repairing Mesh…',
+                  label: importLabelAutoRepairing(files.length, _),
                   detail: files.length > 1
-                    ? `${i + 1}/${files.length}: ${file.name}`
-                    : `Auto-Repairing ${file.name}`,
+                    ? importDetailIndexedFile(i + 1, files.length, file.name, _)
+                    : importDetailAutoRepairingFile(file.name, _),
                   progress: null,
                 });
                 return;
@@ -2300,10 +2334,10 @@ export function useSceneCollectionManager() {
                 setImportProgress({
                   active: true,
                   type: 'mesh',
-                  label: files.length > 1 ? 'Inspecting Meshes…' : 'Inspecting Mesh…',
+                  label: importLabelInspecting(files.length, _),
                   detail: files.length > 1
-                    ? `${i + 1}/${files.length}: ${file.name}`
-                    : `Inspecting ${file.name}`,
+                    ? importDetailIndexedFile(i + 1, files.length, file.name, _)
+                    : importDetailInspectingFile(file.name, _),
                   progress: null,
                 });
                 return;
@@ -2313,10 +2347,10 @@ export function useSceneCollectionManager() {
                 setImportProgress({
                   active: true,
                   type: 'mesh',
-                  label: files.length > 1 ? 'Classifying Mesh Shells…' : 'Classifying Mesh Shell…',
+                  label: importLabelClassifying(files.length, _),
                   detail: files.length > 1
-                    ? `${i + 1}/${files.length}: ${file.name}`
-                    : `Classifying ${file.name}`,
+                    ? importDetailIndexedFile(i + 1, files.length, file.name, _)
+                    : importDetailClassifyingFile(file.name, _),
                   progress: null,
                 });
               }
@@ -2330,10 +2364,10 @@ export function useSceneCollectionManager() {
                 setImportProgress({
                   active: true,
                   type: 'mesh',
-                  label: files.length > 1 ? 'Auto-Repairing Meshes…' : 'Auto-Repairing Mesh…',
+                  label: importLabelAutoRepairing(files.length, _),
                   detail: files.length > 1
-                    ? `${i + 1}/${files.length}: ${file.name}`
-                    : `Auto-Repairing ${file.name}`,
+                    ? importDetailIndexedFile(i + 1, files.length, file.name, _)
+                    : importDetailAutoRepairingFile(file.name, _),
                   progress: null,
                 });
               }
@@ -2449,10 +2483,10 @@ export function useSceneCollectionManager() {
         setImportProgress({
           active: true,
           type: 'mesh',
-          label: files.length > 1 ? 'Loading Mesh Files…' : 'Loading Mesh…',
+          label: importLabelLoadingMesh(files.length, _),
           detail: files.length > 1
-            ? `${Math.min(i + 1, files.length)}/${files.length} processed`
-            : 'Finalizing Model…',
+            ? importDetailProcessedCount(Math.min(i + 1, files.length), files.length, _)
+            : importDetailFinalizingModel(_),
           progress: null,
         });
       }
@@ -2495,7 +2529,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, requestMeshRepairConfirmation, trackRecentOpenedFiles, waitForUiYield]);
+  }, [_, defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, requestMeshRepairConfirmation, trackRecentOpenedFiles, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -3367,8 +3401,8 @@ export function useSceneCollectionManager() {
     setImportProgress({
       active: true,
       type: 'mesh',
-      label: 'Splitting Supports…',
-      detail: 'Separating model and support geometry…',
+      label: importLabelSplittingSupports(_),
+      detail: importDetailSeparatingGeometry(_),
       progress: null,
     });
     await waitForUiYield();
@@ -3389,7 +3423,7 @@ export function useSceneCollectionManager() {
       totalTriangleCount: totalTris,
     } = split;
 
-    setImportProgress((p) => ({ ...p, detail: 'Finalizing…' }));
+    setImportProgress((p) => ({ ...p, detail: importDetailFinalizing(_) }));
     await waitForUiYield();
 
     // Tag the support geometry so the renderer uses orange hover/select tints
@@ -3519,7 +3553,7 @@ export function useSceneCollectionManager() {
     } finally {
       setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
     }
-  }, [pushSceneSnapshotHistory, setImportProgress, waitForUiYield, emitSceneImportReport]);
+  }, [_, pushSceneSnapshotHistory, setImportProgress, waitForUiYield, emitSceneImportReport]);
 
   /** Re-combines split model and support geometries back into a single model,
    *  transforming the supports to align with any model movement/rotation. */
@@ -3527,8 +3561,8 @@ export function useSceneCollectionManager() {
     setImportProgress({
       active: true,
       type: 'mesh',
-      label: 'Merging Supports…',
-      detail: 'Recombining model and support geometry…',
+      label: importLabelMergingSupports(_),
+      detail: importDetailRecombiningGeometry(_),
       progress: null,
     });
     await waitForUiYield();
@@ -3720,7 +3754,7 @@ export function useSceneCollectionManager() {
     } finally {
       setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
     }
-  }, [pushSceneSnapshotHistory, setImportProgress, waitForUiYield, emitSceneImportReport]);
+  }, [_, pushSceneSnapshotHistory, setImportProgress, waitForUiYield, emitSceneImportReport]);
 
   const scanModelForSupportsInPlace = useCallback(async (modelId: string): Promise<boolean> => {
     const model = modelsRef.current.find(m => m.id === modelId);
@@ -3729,8 +3763,8 @@ export function useSceneCollectionManager() {
     setImportProgress({
       active: true,
       type: 'mesh',
-      label: 'Scanning for Supports…',
-      detail: `Classifying ${model.name}`,
+      label: importLabelScanningSupports(_),
+      detail: importDetailClassifyingFile(model.name, _),
       progress: null,
     });
     await waitForUiYield();
@@ -3775,7 +3809,7 @@ export function useSceneCollectionManager() {
     } finally {
       setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
     }
-  }, [clearSceneImportReport, emitSceneImportReport, setImportProgress, waitForUiYield]);
+  }, [_, clearSceneImportReport, emitSceneImportReport, setImportProgress, waitForUiYield]);
 
   const renameGroup = useCallback((groupId: string, nextName: string) => {
     const trimmed = nextName.trim();
@@ -4695,7 +4729,7 @@ export function useSceneCollectionManager() {
       setImportProgress({
         active: true,
         type: 'scene',
-        label: `Importing ${pluginImport.fileType.displayName}…`,
+        label: importLabelFileType(pluginImport.fileType.displayName, _),
         detail: file.name,
         progress: null,
       });
@@ -4740,10 +4774,10 @@ export function useSceneCollectionManager() {
               setImportProgress({
                 active: true,
                 type: 'scene',
-                label: `Importing ${pluginImport.fileType.displayName}…`,
+                label: importLabelFileType(pluginImport.fileType.displayName, _),
                 detail: normalizedPayloads.length > 1
-                  ? `Auto-Repairing Mesh ${processedItems.length + 1}/${normalizedPayloads.length}`
-                  : `Auto-Repairing ${file.name}`,
+                  ? importDetailAutoRepairingMesh(processedItems.length + 1, normalizedPayloads.length, _)
+                  : importDetailAutoRepairingFile(file.name, _),
                 progress: null,
               });
               return;
@@ -4753,10 +4787,10 @@ export function useSceneCollectionManager() {
               setImportProgress({
                 active: true,
                 type: 'scene',
-                label: `Importing ${pluginImport.fileType.displayName}…`,
+                label: importLabelFileType(pluginImport.fileType.displayName, _),
                 detail: normalizedPayloads.length > 1
-                  ? `Inspecting Mesh ${processedItems.length + 1}/${normalizedPayloads.length}`
-                  : `Inspecting ${file.name}`,
+                  ? importDetailInspectingMesh(processedItems.length + 1, normalizedPayloads.length, _)
+                  : importDetailInspectingFile(file.name, _),
                 progress: null,
               });
               return;
@@ -4766,10 +4800,10 @@ export function useSceneCollectionManager() {
               setImportProgress({
                 active: true,
                 type: 'scene',
-                label: `Importing ${pluginImport.fileType.displayName}…`,
+                label: importLabelFileType(pluginImport.fileType.displayName, _),
                 detail: normalizedPayloads.length > 1
-                  ? `Classifying Mesh ${processedItems.length + 1}/${normalizedPayloads.length}`
-                  : `Classifying ${file.name}`,
+                  ? importDetailClassifyingMesh(processedItems.length + 1, normalizedPayloads.length, _)
+                  : importDetailClassifyingFile(file.name, _),
                 progress: null,
               });
             }
@@ -4931,7 +4965,7 @@ export function useSceneCollectionManager() {
         });
       }
     }
-  }, [emitSceneImportReport, findFreeSpotCentersForModels, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
+  }, [_, emitSceneImportReport, findFreeSpotCentersForModels, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
 
   const handleImportVoxlFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     if (!options?.suppressRecentTracking) {
@@ -4942,7 +4976,7 @@ export function useSceneCollectionManager() {
       setImportProgress({
         active: true,
         type: 'scene',
-        label: 'Importing VOXL Scene…',
+        label: importLabelVoxlScene(_),
         detail: file.name,
         progress: null,
       });
@@ -5007,8 +5041,8 @@ export function useSceneCollectionManager() {
         setImportProgress({
           active: true,
           type: 'scene',
-          label: 'Importing VOXL Scene…',
-          detail: `Model ${i + 1}/${document.models.length}: ${model.name}`,
+          label: importLabelVoxlScene(_),
+          detail: importDetailVoxlModel(i + 1, document.models.length, model.name, _),
           progress: null,
         });
 
@@ -5071,8 +5105,8 @@ export function useSceneCollectionManager() {
                 setImportProgress({
                   active: true,
                   type: 'scene',
-                  label: 'Importing VOXL Scene…',
-                  detail: `Auto-Repairing Mesh ${i + 1}/${document.models.length}: ${model.name}`,
+                  label: importLabelVoxlScene(_),
+                  detail: importDetailVoxlAutoRepairing(i + 1, document.models.length, model.name, _),
                   progress: null,
                 });
                 return;
@@ -5082,8 +5116,8 @@ export function useSceneCollectionManager() {
                 setImportProgress({
                   active: true,
                   type: 'scene',
-                  label: 'Importing VOXL Scene…',
-                  detail: `Inspecting Mesh ${i + 1}/${document.models.length}: ${model.name}`,
+                  label: importLabelVoxlScene(_),
+                  detail: importDetailVoxlInspecting(i + 1, document.models.length, model.name, _),
                   progress: null,
                 });
                 return;
@@ -5093,8 +5127,8 @@ export function useSceneCollectionManager() {
                 setImportProgress({
                   active: true,
                   type: 'scene',
-                  label: 'Importing VOXL Scene…',
-                  detail: `Classifying Mesh ${i + 1}/${document.models.length}: ${model.name}`,
+                  label: importLabelVoxlScene(_),
+                  detail: importDetailVoxlClassifying(i + 1, document.models.length, model.name, _),
                   progress: null,
                 });
               }
@@ -5307,7 +5341,7 @@ export function useSceneCollectionManager() {
         });
       }
     }
-  }, [cloneGeometryWithBounds, emitSceneImportReport, findFreeSpotCentersForModels, isModelFootprintInsidePlate, requestSceneImportPlacementChoice, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
+  }, [_, cloneGeometryWithBounds, emitSceneImportReport, findFreeSpotCentersForModels, isModelFootprintInsidePlate, requestSceneImportPlacementChoice, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
 
   const importSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     const extension = getSceneExtension(file.name);
@@ -5341,8 +5375,8 @@ export function useSceneCollectionManager() {
     setImportProgress({
       active: true,
       type: 'scene',
-      label: 'Importing Scenes…',
-      detail: `Preparing 0/${files.length}`,
+      label: importLabelScenes(_),
+      detail: importDetailPreparing(0, files.length, _),
       progress: null,
     });
 
@@ -5355,8 +5389,8 @@ export function useSceneCollectionManager() {
       setImportProgress({
         active: true,
         type: 'scene',
-        label: 'Importing Scenes…',
-        detail: `${i + 1}/${files.length}: ${file.name}`,
+        label: importLabelScenes(_),
+        detail: importDetailIndexedFile(i + 1, files.length, file.name, _),
         progress: null,
       });
 
@@ -5387,7 +5421,7 @@ export function useSceneCollectionManager() {
       emitSceneImportReport(`Scene import failed for all ${files.length} files.`, 'error');
     }
     return successCount > 0;
-  }, [emitSceneImportReport, getSceneExtension, importSceneFile, trackRecentOpenedFiles, waitForUiYield]);
+  }, [_, emitSceneImportReport, getSceneExtension, importSceneFile, trackRecentOpenedFiles, waitForUiYield]);
 
   const onImportSceneChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {

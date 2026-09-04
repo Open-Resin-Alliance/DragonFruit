@@ -17,6 +17,15 @@ import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useUpdateChecker } from '@/features/updater/useUpdateChecker';
 import type { UpdateState } from '@/features/updater/useUpdateChecker';
 import { isAllowSameVersionEnabled, enableAllowSameVersionForSession } from '@/features/updater/debugForceSession';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import {
+  formatUpdateDownloadedBytes,
+  formatUpdateReadyToInstall,
+  formatUpdateVersionChip,
+  formatUpdateVersionReady,
+} from '@/features/updater/updaterMessages';
 
 // Helpers
 // ---------------------------------------------------------------------------
@@ -58,6 +67,7 @@ function ProgressBar({ pct }: { pct: number }) {
 // ---------------------------------------------------------------------------
 
 function IdleState({ onCheck }: { onCheck: () => void }) {
+  const { _ } = useLingui();
   return (
     <div className="grid grid-cols-2 gap-2">
       <button
@@ -66,16 +76,16 @@ function IdleState({ onCheck }: { onCheck: () => void }) {
         className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
       >
         <RotateCcw className="h-3.5 w-3.5" />
-        Check for Updates
+        <Trans>Check for Updates</Trans>
       </button>
       <button
         type="button"
         disabled
         className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 opacity-50 cursor-not-allowed"
-        title="No update available"
+        title={_(msg`No update available`)}
       >
         <Download className="h-3.5 w-3.5" />
-        Install
+        <Trans>Install</Trans>
       </button>
     </div>
   );
@@ -97,10 +107,10 @@ function CheckingState() {
         </span>
         <span className="min-w-0">
           <span className="block text-lg font-bold" style={{ color: 'var(--text-strong)' }}>
-            Checking for Updates…
+            <Trans>Checking for Updates…</Trans>
           </span>
           <span className="block text-sm mt-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>
-            Querying GitHub releases
+            <Trans>Querying GitHub releases</Trans>
           </span>
         </span>
       </div>
@@ -124,10 +134,10 @@ function UpToDateState({ onCheck }: { onCheck: () => void }) {
         </span>
         <span className="min-w-0">
           <span className="block text-lg font-bold" style={{ color: 'var(--accent-secondary)' }}>
-            Up to date
+            <Trans>Up to date</Trans>
           </span>
           <span className="block text-sm mt-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>
-            You’re on the latest version
+            <Trans>You’re on the latest version</Trans>
           </span>
         </span>
       </div>
@@ -137,7 +147,7 @@ function UpToDateState({ onCheck }: { onCheck: () => void }) {
         className="ui-button ui-button-secondary !h-10 px-8 text-sm inline-flex items-center justify-center gap-1.5"
       >
         <RotateCcw className="h-4 w-4" />
-        Check Again
+        <Trans>Check Again</Trans>
       </button>
     </div>
   );
@@ -152,6 +162,7 @@ function AvailableState({
   onDownload: () => void;
   onCheck: () => void;
 }) {
+  const { _ } = useLingui();
   const info = s.info;
   const [showWarning, setShowWarning] = React.useState(false);
 
@@ -170,14 +181,12 @@ function AvailableState({
         </span>
         <span className="min-w-0">
           <span className="block text-base font-bold" style={{ color: 'var(--accent-secondary)' }}>
-            Update Available
+            <Trans>Update Available</Trans>
           </span>
           <span className="block text-xs mt-1 font-medium" style={{ color: 'var(--text-muted)' }}>
-            {info.version === info.currentVersion ? (
-              <>Version {info.version}</>
-            ) : (
-              <>Version {info.version} • update ready</>
-            )}
+            {info.version === info.currentVersion
+              ? formatUpdateVersionChip(info.version, _)
+              : formatUpdateVersionReady(info.version, _)}
           </span>
         </span>
       </div>
@@ -204,7 +213,7 @@ function AvailableState({
           className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
         >
           <RotateCcw className="h-3.5 w-3.5" />
-          Check for Updates
+          <Trans>Check for Updates</Trans>
         </button>
         <button
           type="button"
@@ -219,7 +228,7 @@ function AvailableState({
           }}
         >
           <ExternalLink className="h-3.5 w-3.5" />
-          View on GitHub
+          <Trans>View on GitHub</Trans>
         </button>
         <button
           type="button"
@@ -232,37 +241,37 @@ function AvailableState({
           }}
         >
           <Download className="h-3.5 w-3.5" />
-          Install
+          <Trans>Install</Trans>
         </button>
       </div>
       <StructuredDialogModal
         open={showWarning}
-        ariaLabel="Confirm update and restart"
-        title="Update & Restart?"
-        subtitle={`Version ${info.version} is ready to install`}
+        ariaLabel={_(msg`Confirm update and restart`)}
+        title={_(msg`Update & Restart?`)}
+        subtitle={formatUpdateReadyToInstall(info.version, _)}
         icon={<Download className="h-4 w-4" />}
         iconTone="warning"
         onClose={() => setShowWarning(false)}
         onBackdropClick={() => setShowWarning(false)}
         actions={
           <>
-            <button type="button" onClick={() => setShowWarning(false)} className="ui-button ui-button-secondary !h-9 px-4 text-xs">Cancel</button>
-            <button type="button" onClick={async () => { setShowWarning(false); try { await (window as unknown as { __df_flushAutosave?: () => Promise<void> }).__df_flushAutosave?.(); } catch {} try { await new Promise<void>((r) => setTimeout(r, 400)); } catch {} onDownload(); }} className="ui-button !h-9 px-4 text-xs inline-flex items-center justify-center gap-1.5" style={{ borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)', background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)', color: 'var(--accent)' }}>Update & Restart</button>
+            <button type="button" onClick={() => setShowWarning(false)} className="ui-button ui-button-secondary !h-9 px-4 text-xs">{_(msg`Cancel`)}</button>
+            <button type="button" onClick={async () => { setShowWarning(false); try { await (window as unknown as { __df_flushAutosave?: () => Promise<void> }).__df_flushAutosave?.(); } catch {} try { await new Promise<void>((r) => setTimeout(r, 400)); } catch {} onDownload(); }} className="ui-button !h-9 px-4 text-xs inline-flex items-center justify-center gap-1.5" style={{ borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)', background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)', color: 'var(--accent)' }}>{_(msg`Update & Restart`)}</button>
           </>
         }
       >
         <div className="space-y-3 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
           <p>
-            DragonFruit will <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>download, verify and install</span> the update, then restart automatically.
+            <Trans>DragonFruit will <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>download, verify and install</span> the update, then restart automatically.</Trans>
           </p>
           <p>
-            Please <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>save your scene and any unsaved progress</span> before continuing.
+            <Trans>Please <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>save your scene and any unsaved progress</span> before continuing.</Trans>
           </p>
           <p
             className="pt-3 mt-1 border-t text-sm font-semibold leading-relaxed"
             style={{ borderColor: 'var(--border-subtle)', color: 'color-mix(in srgb, var(--danger), white 32%)' }}
           >
-            Unsaved changes may be lost.
+            <Trans>Unsaved changes may be lost.</Trans>
           </p>
         </div>
       </StructuredDialogModal>
@@ -275,6 +284,7 @@ function DownloadingState({
 }: {
   state: UpdateState & { status: 'downloading' };
 }) {
+  const { _ } = useLingui();
   const { contentLength, downloaded } = s.progress;
   const pct = contentLength > 0
     ? ((downloaded / contentLength) * 100).toFixed(1)
@@ -295,10 +305,10 @@ function DownloadingState({
         </span>
         <span className="min-w-0">
           <span className="block text-lg font-bold" style={{ color: 'var(--text-strong)' }}>
-            Downloading Update
+            <Trans>Downloading Update</Trans>
           </span>
           <span className="block text-sm mt-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>
-            {formatBytes(downloaded)} / {formatBytes(contentLength)} ({pct}%)
+            {formatUpdateDownloadedBytes(formatBytes(downloaded), formatBytes(contentLength), pct, _)}
           </span>
         </span>
       </div>
@@ -325,10 +335,10 @@ function InstallingState() {
         </span>
         <span className="min-w-0">
           <span className="block text-lg font-bold" style={{ color: 'var(--text-strong)' }}>
-            Installing Update…
+            <Trans>Installing Update…</Trans>
           </span>
           <span className="block text-sm mt-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>
-            The update is being installed. DragonFruit will restart automatically.
+            <Trans>The update is being installed. DragonFruit will restart automatically.</Trans>
           </span>
         </span>
       </div>
@@ -358,7 +368,7 @@ function InstalledState() {
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-            Update installed. DragonFruit will restart.
+            <Trans>Update installed. DragonFruit will restart.</Trans>
           </span>
         </span>
       </div>
@@ -387,11 +397,10 @@ function ExternalState() {
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-            Managed by Flatpak
+            <Trans>Managed by Flatpak</Trans>
           </span>
           <span className="block text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-            DragonFruit for Linux ships as a Flatpak, so updates are installed
-            outside the app.
+            <Trans>DragonFruit for Linux ships as a Flatpak, so updates are installed outside the app.</Trans>
           </span>
         </span>
         <button
@@ -405,7 +414,7 @@ function ExternalState() {
           }}
         >
           <ExternalLink className="h-3.5 w-3.5" />
-          Releases
+          <Trans>Releases</Trans>
         </button>
       </div>
       <code
@@ -449,7 +458,7 @@ function ErrorState({
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-            Update Failed
+            <Trans>Update Failed</Trans>
           </span>
           <span className="block text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
             {message}
@@ -466,7 +475,7 @@ function ErrorState({
           }}
         >
           <RotateCcw className="h-3 w-3" />
-          Retry
+          <Trans>Retry</Trans>
         </button>
       </div>
     </div>
