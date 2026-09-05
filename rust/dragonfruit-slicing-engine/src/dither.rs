@@ -28,7 +28,18 @@ pub struct DitherPaletteV3 {
 
 impl DitherPaletteV3 {
     /// Create and precompute a new dithering palette with binned lookup structures.
+    ///
+    /// `bit_depth` must already be in the 2..=7 range dithering is defined for;
+    /// callers get that from [`SliceJobV3::effective_dither_bit_depth`], which
+    /// declines to dither at all outside it. The clamp below is only a last-resort
+    /// guard against a palette with 1 or 256 levels — reaching it means the caller
+    /// skipped that gate, so it trips a debug assertion rather than quietly
+    /// degrading the layer.
     pub fn new(lut: &[u8; 256], gamma: f64, bit_depth: u32) -> Self {
+        debug_assert!(
+            (2..=7).contains(&bit_depth),
+            "dither bit depth {bit_depth} is outside the 2..=7 range dithering is defined for",
+        );
         let bit_depth = bit_depth.clamp(2, 7);
         let mut source_energy = [0.0f32; 256];
         for i in 0..256 {

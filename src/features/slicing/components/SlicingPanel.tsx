@@ -1183,10 +1183,22 @@ export function SlicingPanel({
     if (Math.round(printerBitDepth) >= 8) return null;
     return Math.max(2, Math.min(7, Math.round(printerBitDepth)));
   }, [activePrinterProfile?.bitDepth?.bits]);
-  const autoDitherRequiredForPrinter = printerDitherBitDepth != null && printerDitherBitDepth !== 8;
+  // Raw declared depth, kept separate from the clamped dither depth above so the
+  // UI can tell "8-bit or deeper panel" apart from "printer declares nothing".
+  const printerPanelBitDepth = useMemo<number | null>(() => {
+    const printerBitDepth = Number(activePrinterProfile?.bitDepth?.bits);
+    if (!Number.isFinite(printerBitDepth) || printerBitDepth <= 0) return null;
+    return Math.round(printerBitDepth);
+  }, [activePrinterProfile?.bitDepth?.bits]);
+  const autoDitherRequiredForPrinter = printerDitherBitDepth != null;
+  // An 8-bit (or deeper) panel emits every grayscale level on its own, so
+  // dithering there can only quantize the layer below the panel's resolution.
+  const ditherForcedOffForPrinter = printerPanelBitDepth != null && printerPanelBitDepth >= 8;
   const effectiveDitherEnabledForSlice = autoDitherRequiredForPrinter
     ? true
-    : profileAntiAliasingSettings.ditherEnabled;
+    : ditherForcedOffForPrinter
+      ? false
+      : profileAntiAliasingSettings.ditherEnabled;
   const effectiveDitherBitDepthForSlice = printerDitherBitDepth
     ?? Math.max(2, Math.min(7, Math.round(profileAntiAliasingSettings.ditherBitDepth ?? 3)));
   const effectiveDitherDeviceGammaForSlice = Math.max(
@@ -3772,6 +3784,7 @@ export function SlicingPanel({
               <MaterialAntiAliasingSection
                 draft={materialAaEditorDraft}
                 printerDitherBitDepth={printerDitherBitDepth}
+                printerPanelBitDepth={printerPanelBitDepth}
                 onChange={(next) => {
                   setMaterialAaEditorDraft((current) => {
                     if (!current) return current;
@@ -3843,6 +3856,7 @@ export function SlicingPanel({
                 draft={editingSessionAaOverrideDraft}
                 lockActivationToggles
                 printerDitherBitDepth={printerDitherBitDepth}
+                printerPanelBitDepth={printerPanelBitDepth}
                 onChange={(next) => {
                   setEditingSessionAaOverrideDraft((current) => {
                     if (!current) return current;
