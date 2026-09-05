@@ -1761,8 +1761,7 @@ fn rasterize_vertical_aa_streaming_v3(
     let blur_sigma_x = job.blur_brush_sigma_x();
     let blur_sigma_y = job.blur_brush_sigma_y();
     let tail_cure_lut = job.normalized_tail_cure_lut();
-    let dither_palette = if job.dither_enabled {
-        let bit_depth = job.dither_bit_depth.unwrap_or(3);
+    let dither_palette = if let Some(bit_depth) = job.effective_dither_bit_depth() {
         let active_lut = job.normalized_tail_cure_lut().unwrap_or_else(|| {
             let mut identity = [0u8; 256];
             for (i, v) in identity.iter_mut().enumerate() {
@@ -4075,8 +4074,7 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
         job.z_blur_sigma(),
     );
     let tail_cure_lut = job.normalized_tail_cure_lut();
-    let dither_palette = if job.dither_enabled {
-        let bit_depth = job.dither_bit_depth.unwrap_or(3);
+    let dither_palette = if let Some(bit_depth) = job.effective_dither_bit_depth() {
         let active_lut = job.normalized_tail_cure_lut().unwrap_or_else(|| {
             let mut identity = [0u8; 256];
             for (i, v) in identity.iter_mut().enumerate() {
@@ -4625,8 +4623,10 @@ pub fn slice_and_rasterize_rle_encoded_v3(
     // downstream encoders (CTB threshold, 1-bit PNG) undo any multi-level
     // output, making the Floyd-Steinberg pass pure overhead.
     let output_is_binary = job.produces_binary_output();
-    let dither_palette = if job.dither_enabled && !output_is_binary {
-        let bit_depth = job.dither_bit_depth.unwrap_or(3);
+    let dither_palette = if let Some(bit_depth) = job
+        .effective_dither_bit_depth()
+        .filter(|_| !output_is_binary)
+    {
         let active_lut = job.normalized_tail_cure_lut().unwrap_or_else(|| {
             let mut identity = [0u8; 256];
             for (i, v) in identity.iter_mut().enumerate() {
@@ -4651,7 +4651,7 @@ pub fn slice_and_rasterize_rle_encoded_v3(
             ) -> Result<Vec<u8>, SlicerV3Error>
             + Send
             + Sync,
-    > = if ssaa_factor > 1 || blur_radius > 0 || (job.dither_enabled && !output_is_binary) {
+    > = if ssaa_factor > 1 || blur_radius > 0 || dither_palette.is_some() {
         let super_width = raster_job.effective_render_width_px() as usize;
         let super_height = raster_job.source_height_px as usize;
         let out_width = job.effective_render_width_px() as usize;

@@ -364,6 +364,26 @@ impl SliceJobV3 {
         self.z_blur_sigma.max(0.05)
     }
 
+    /// Bit depth the dither palette should target, or `None` when dithering must
+    /// not run at all.
+    ///
+    /// Dithering exists to fake grey levels the panel cannot emit, so it is only
+    /// meaningful below 8 bits. A job that declares 8 bits or more gets `None`
+    /// instead of a palette clamped down to 7, which would quantize the layer
+    /// *below* the panel's own resolution. A missing bit depth also disables it:
+    /// substituting a default would silently quantize to a depth nobody asked for.
+    #[inline]
+    pub fn effective_dither_bit_depth(&self) -> Option<u32> {
+        if !self.dither_enabled {
+            return None;
+        }
+        match self.dither_bit_depth {
+            Some(bits) if bits >= 8 => None,
+            Some(bits) => Some(bits.max(2)),
+            None => None,
+        }
+    }
+
     #[inline]
     pub fn normalized_custom_cure_lut(&self) -> Option<[u8; 256]> {
         let custom = self.z_blend_custom_lut.as_ref()?;
@@ -391,7 +411,43 @@ impl SliceJobV3 {
 
 #[cfg(test)]
 mod tests {
-    use super::dynamic_minimum_alpha_lut;
+    use super::{dynamic_minimum_alpha_lut, SliceJobV3};
+
+    fn dither_job(enabled: bool, bit_depth: Option<u32>) -> SliceJobV3 {
+        SliceJobV3 {
+            dither_enabled: enabled,
+            dither_bit_depth: bit_depth,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn effective_dither_bit_depth_passes_through_low_bit_depths() {
+        assert_eq!(dither_job(true, Some(3)).effective_dither_bit_depth(), Some(3));
+        assert_eq!(dither_job(true, Some(7)).effective_dither_bit_depth(), Some(7));
+        // Below the 2-bit floor there is no meaningful palette; clamp up rather
+        // than build one with a single level.
+        assert_eq!(dither_job(true, Some(1)).effective_dither_bit_depth(), Some(2));
+    }
+
+    #[test]
+    fn effective_dither_bit_depth_refuses_to_dither_at_8_bits_or_deeper() {
+        // Clamping 8 down to 7 would quantize a panel that can already emit
+        // every grey level, so the whole dither pass is skipped instead.
+        assert_eq!(dither_job(true, Some(8)).effective_dither_bit_depth(), None);
+        assert_eq!(dither_job(true, Some(10)).effective_dither_bit_depth(), None);
+        assert_eq!(dither_job(true, Some(12)).effective_dither_bit_depth(), None);
+    }
+
+    #[test]
+    fn effective_dither_bit_depth_refuses_to_guess_a_missing_depth() {
+        assert_eq!(dither_job(true, None).effective_dither_bit_depth(), None);
+    }
+
+    #[test]
+    fn effective_dither_bit_depth_is_none_when_dithering_is_off() {
+        assert_eq!(dither_job(false, Some(3)).effective_dither_bit_depth(), None);
+    }
 
     #[test]
     fn dynamic_minimum_alpha_lut_maps_nonzero_to_minimum_window() {
