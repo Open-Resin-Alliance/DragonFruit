@@ -1,4 +1,4 @@
-import { RleLabels } from '../islandVolume/steps/voxelization/rle';
+import { RleLabels } from '../IslandScan/rle';
 
 export interface Kingdom {
     id: number;

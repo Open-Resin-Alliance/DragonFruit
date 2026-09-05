@@ -21,8 +21,6 @@ import IslandSurfaceDotsOverlay from '@/components/scene/IslandSurfaceDotsOverla
 import { IslandOverhangOverlay } from '@/components/scene/IslandOverhangOverlay';
 import type { DetectedIsland } from '@/volumeAnalysis/Islands/types';
 import { IslandVoxelVisualization } from '@/components/scene/IslandVoxelVisualization';
-import { IslandExpansionVisualization } from '@/components/scene/IslandExpansionVisualization';
-import { MeshClassificationRenderer } from '@/components/scene/MeshClassificationRenderer';
 import { IslandIdLabels } from '@/components/scene/IslandIdLabels';
 import { ScreenSpaceGizmo as UnifiedGizmo } from '@/components/gizmo';
 import { warmTransformGizmoGeometryCache } from '@/components/gizmo/gizmoGeometryCache';
@@ -31,9 +29,7 @@ import { PickingDebugOverlay } from '@/components/picking';
 import { SelectionProvider, SelectionManager, SelectionSpotlight } from '@/components/selection';
 import type { SelectionHighlightMode } from '@/components/selection';
 import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
-import type { ScanResults } from '@/volumeAnalysis/islandVolume/steps/voxelization/ScanOrchestrator';
-import type { BasinFillSimulator } from '@/volumeAnalysis/islandVolume/steps/expansion/BasinFillSimulator';
-import type { BasinFillProxy } from '@/volumeAnalysis/islandVolume/steps/expansion/BasinFillProxy';
+import type { ScanResults } from '@/volumeAnalysis/IslandScan/ScanOrchestrator';
 import type { TransformMode, ModelTransform } from '@/hooks/useModelTransform';
 import type { Segment, SupportMode } from '@/supports/types';
 import type { ContactCone } from '@/supports/SupportPrimitives/ContactCone/types';
@@ -517,11 +513,6 @@ export function SceneCanvas({
   hoverTintStrength,
   selectedTintStrength,
   children,
-  expansionSimulator,
-  showExpansion,
-  classificationFaceLabels,
-  classificationGeometry,
-  showClassification,
   view3dSettings,
   supportRenderRefreshNonce = 0,
   gizmoResetNonce = 0,
@@ -714,14 +705,6 @@ export function SceneCanvas({
 
   children?: React.ReactNode;
 
-  // Expansion Visuals
-  expansionSimulator?: BasinFillSimulator | BasinFillProxy | null;
-  showExpansion?: boolean;
-
-  // Classification Visuals
-  classificationFaceLabels?: Int32Array;
-  classificationGeometry?: THREE.BufferGeometry;
-  showClassification?: boolean;
   view3dSettings?: View3DSettings;
   supportRenderRefreshNonce?: number;
   gizmoResetNonce?: number;
@@ -7247,15 +7230,6 @@ export function SceneCanvas({
                 zOffset={scanBBox?.min.z ?? 0}
                 clipLower={clipLower}
                 clipUpper={clipUpper}
-              />
-
-              <IslandExpansionVisualization simulator={expansionSimulator ?? null} transform={transform} enabled={showExpansion ?? false} />
-
-              <MeshClassificationRenderer
-                geometry={classificationGeometry}
-                faceLabels={classificationFaceLabels}
-                transform={transform}
-                visible={showClassification ?? false}
               />
 
               {scanResults && (
