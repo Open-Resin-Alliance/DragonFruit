@@ -677,72 +677,6 @@ export class ExportManager {
   }
 
   /**
-   * Streams a 3MF ZIP directly to the native file system using append_mesh_stage_chunk.
-   *
-   * Three sequential writes to the same path:
-   *   1. Preamble  — local headers for the two small metadata files + their data +
-   *                  the model local header (flag bit 3, CRC/sizes = 0).
-   *   2. XML chunks — streamed one 4 MB chunk at a time, never all in memory at once.
-   *   3. Postamble — data descriptor + central directory + end-of-central-directory.
-   *
-   * append_mesh_stage_chunk truncates the file on the first call to a given path and
-   * appends on all subsequent calls, so the three sequential writeChunkedToNativePath
-   * calls are always correct.
-   */
-  private static async streamZipToNativePath(
-    nativePath: string,
-    ctName: Uint8Array, ctData: Uint8Array,
-    relsName: Uint8Array, relsData: Uint8Array,
-    modelName: Uint8Array,
-    xmlChunks: Uint8Array[], xmlCrc32: number, xmlTotalBytes: number,
-  ): Promise<void> {
-    const ctCrc   = this.crc32(ctData);
-    const relsCrc = this.crc32(relsData);
-    const ctHeader    = this.buildLocalFileHeader(ctName,    ctCrc,   ctData.length,   false);
-    const relsHeader  = this.buildLocalFileHeader(relsName,  relsCrc, relsData.length, false);
-    const modelHeader = this.buildLocalFileHeader(modelName, 0, 0, true);
-
-    const ctOffset    = 0;
-    const relsOffset  = ctHeader.length + ctData.length;
-    const modelOffset = relsOffset + relsHeader.length + relsData.length;
-
-    // ── 1. Preamble (truncates the output file) ──
-    const preambleSize = ctHeader.length + ctData.length + relsHeader.length + relsData.length + modelHeader.length;
-    const preamble = new Uint8Array(preambleSize);
-    let p = 0;
-    preamble.set(ctHeader,    p); p += ctHeader.length;
-    preamble.set(ctData,      p); p += ctData.length;
-    preamble.set(relsHeader,  p); p += relsHeader.length;
-    preamble.set(relsData,    p); p += relsData.length;
-    preamble.set(modelHeader, p);
-    await writeChunkedToNativePath(nativePath, preamble);
-
-    // ── 2. XML chunks (appended sequentially) ──
-    for (const chunk of xmlChunks) {
-      await writeChunkedToNativePath(nativePath, chunk);
-    }
-
-    // ── 3. Postamble: data descriptor + central dir + EOCD ──
-    const cdOffset = modelOffset + modelHeader.length + xmlTotalBytes + 16;
-    const dataDesc = this.buildDataDescriptor(xmlCrc32, xmlTotalBytes);
-    const cdCt     = this.buildCentralDirEntry(ctName,    ctCrc,    ctData.length,   ctOffset,    false);
-    const cdRels   = this.buildCentralDirEntry(relsName,  relsCrc,  relsData.length, relsOffset,  false);
-    const cdModel  = this.buildCentralDirEntry(modelName, xmlCrc32, xmlTotalBytes,   modelOffset, true);
-    const cdSize   = cdCt.length + cdRels.length + cdModel.length;
-    const eocd     = this.buildEocd(3, cdSize, cdOffset);
-
-    const postambleSize = dataDesc.length + cdCt.length + cdRels.length + cdModel.length + eocd.length;
-    const postamble = new Uint8Array(postambleSize);
-    p = 0;
-    postamble.set(dataDesc, p); p += dataDesc.length;
-    postamble.set(cdCt,     p); p += cdCt.length;
-    postamble.set(cdRels,   p); p += cdRels.length;
-    postamble.set(cdModel,  p); p += cdModel.length;
-    postamble.set(eocd,     p);
-    await writeChunkedToNativePath(nativePath, postamble);
-  }
-
-  /**
    * Builds the 3MF model XML in fixed-size chunks (4 MB each) to avoid a single
    * large pre-allocation.
    *
@@ -751,10 +685,8 @@ export class ExportManager {
    * reliably throws `RangeError: Array buffer allocation failed` on constrained
    * heap environments.
    *
-   * Callers either stream the returned chunks directly to a native file
-   * (Tauri / streamZipToNativePath) or fold them into a Blob (browser /
-   * buildBlobZip).  Neither path ever requires a single contiguous buffer for
-   * the full model XML.
+   * The caller folds the returned chunks into a Blob (`buildBlobZip`), which
+   * never requires a single contiguous buffer for the full model XML.
    */
   private static async buildMinimal3mfXmlChunks(
     objects: THREE.Object3D[],
@@ -936,8 +868,6 @@ export class ExportManager {
   private static async export3mf(
     objects: THREE.Object3D[],
     filename: string,
-    prePickedNativePath: string | null,
-    useNativeWrite: boolean,
   ): Promise<string | null> {
     const enc = new TextEncoder();
     const ctName    = enc.encode('[Content_Types].xml');
@@ -953,16 +883,6 @@ export class ExportManager {
     for (const chunk of xmlChunks) xmlCrcState = this.updateCrc32(xmlCrcState, chunk);
     const xmlCrc32 = (xmlCrcState ^ 0xffffffff) >>> 0;
 
-    if (prePickedNativePath && useNativeWrite) {
-      await this.streamZipToNativePath(
-        prePickedNativePath,
-        ctName, ctData, relsName, relsData, modelName,
-        xmlChunks, xmlCrc32, xmlTotalBytes,
-      );
-      return prePickedNativePath;
-    }
-
-    // Browser fallback: Blob-based ZIP.
     const zipBlob = this.buildBlobZip(
       ctName, ctData, relsName, relsData, modelName,
       xmlChunks, xmlCrc32, xmlTotalBytes,
@@ -1204,7 +1124,7 @@ export class ExportManager {
 
     // ── Browser / fallback: JS-based serializers ──
     if (options.format === '3mf') {
-      return this.export3mf(exportObjects, options.filename, null, false);
+      return this.export3mf(exportObjects, options.filename);
     }
 
     const stlBytes = this.buildBinaryStl(exportObjects);
