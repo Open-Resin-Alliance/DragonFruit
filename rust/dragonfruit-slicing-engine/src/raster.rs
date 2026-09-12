@@ -10,17 +10,15 @@ use rayon::prelude::*;
 
 #[inline]
 fn edge_x_cmp(a: f32, b: f32) -> std::cmp::Ordering {
-    match (a.is_finite(), b.is_finite()) {
-        (true, true) => a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal),
-        (true, false) => std::cmp::Ordering::Less,
-        (false, true) => std::cmp::Ordering::Greater,
-        (false, false) => std::cmp::Ordering::Equal,
-    }
+    a.total_cmp(&b)
 }
 
 #[inline]
 fn active_edge_cmp(a: &ActiveEdge, b: &ActiveEdge) -> std::cmp::Ordering {
-    edge_x_cmp(a.x, b.x)
+    match edge_x_cmp(a.x, b.x) {
+        std::cmp::Ordering::Equal => edge_x_cmp(b.dx_dy, a.dx_dy), // Descending slope
+        other => other,
+    }
 }
 
 #[inline]
@@ -488,8 +486,12 @@ fn build_row_spans_nonzero_inner(
         let pos_overlap = spans_overlap_px(&pos_spans, prev);
         let neg_overlap = spans_overlap_px(&neg_spans, prev);
 
-        let choose_pos = if pos_overlap != neg_overlap {
-            pos_overlap > neg_overlap
+        let pos_score = 2 * (pos_overlap as i64) - (spans_total_px(&pos_spans) as i64);
+        let neg_score = 2 * (neg_overlap as i64) - (spans_total_px(&neg_spans) as i64);
+
+        let has_overlap = pos_overlap > 0 || neg_overlap > 0;
+        let choose_pos = if has_overlap && pos_score != neg_score {
+            pos_score > neg_score
         } else if pos_pairs != neg_pairs {
             pos_pairs > neg_pairs
         } else {
@@ -1969,7 +1971,7 @@ fn build_scanline_segment_index_z_perturbed(
                 let pos = write_offsets[y];
                 indexed[pos] = ActiveEdge {
                     x,
-                    dx_dy: 0.0,
+                    dx_dy: seg.dx_dy / f_steps,
                     wind: seg.wind,
                     end_exclusive: y + 1,
                 };
@@ -2121,9 +2123,11 @@ fn rasterize_layer_with_stats_impl(
         0
     };
     let mut prev_spans: Vec<RowSpan> = Vec::new();
+    let mut prev_spans_by_sample = vec![Vec::<RowSpan>::new(); aa_steps];
 
     for y in y_start..y_end_exclusive {
         let physical_y = y / aa_steps;
+        let sample_idx = y % aa_steps;
 
         if physical_y != current_physical_y {
             if aa_enabled && current_physical_y < height {
@@ -2185,14 +2189,24 @@ fn rasterize_layer_with_stats_impl(
             );
         }
         if active_edges.is_empty() {
-            prev_spans.clear();
+            if use_z_perturbation {
+                prev_spans_by_sample[sample_idx].clear();
+            } else {
+                prev_spans.clear();
+            }
             continue;
         }
 
         let row_start = physical_y * width;
 
+        let history = if use_z_perturbation {
+            Some(&prev_spans_by_sample[sample_idx] as &[RowSpan])
+        } else {
+            Some(&prev_spans as &[RowSpan])
+        };
+
         let spans =
-            build_row_spans_nonzero_ctx(&active_edges, width, !aa_enabled, Some(&prev_spans));
+            build_row_spans_nonzero_ctx(&active_edges, width, !aa_enabled, history);
 
         for span in spans.iter().copied() {
             if !aa_enabled {
@@ -2245,7 +2259,11 @@ fn rasterize_layer_with_stats_impl(
             max_y = max_y.max(physical_y as i32);
         }
 
-        prev_spans = spans;
+        if use_z_perturbation {
+            prev_spans_by_sample[sample_idx] = spans;
+        } else {
+            prev_spans = spans;
+        }
 
         for edge in &mut active_edges {
             edge.x += edge.dx_dy;
@@ -2681,9 +2699,10 @@ pub fn rasterize_layer_rle(
             }};
         }
 
-        let mut prev_spans: Vec<RowSpan> = Vec::new();
+        let mut prev_spans_by_sample = vec![Vec::<RowSpan>::new(); aa_steps];
         for y in y_start..y_end_exclusive {
             let physical_y = y / aa_steps;
+            let sample_idx = y % aa_steps;
 
             if physical_y != current_physical_y {
                 flush_up_to!(physical_y);
@@ -2701,12 +2720,12 @@ pub fn rasterize_layer_rle(
                 );
             }
             if active_edges.is_empty() {
-                prev_spans.clear();
+                prev_spans_by_sample[sample_idx].clear();
                 continue;
             }
 
             let spans =
-                build_row_spans_nonzero_ctx(&active_edges, width, false, Some(&prev_spans));
+                build_row_spans_nonzero_ctx(&active_edges, width, false, Some(&prev_spans_by_sample[sample_idx]));
             for span in spans.iter().copied() {
                 let left_i = span.a.floor() as i32;
                 let right_i = span.b.ceil() as i32 - 1;
@@ -2751,7 +2770,7 @@ pub fn rasterize_layer_rle(
                 max_y = max_y.max(physical_y as i32);
             }
 
-            prev_spans = spans;
+            prev_spans_by_sample[sample_idx] = spans;
 
             for edge in &mut active_edges {
                 edge.x += edge.dx_dy;
@@ -3208,8 +3227,10 @@ pub fn rasterize_layer_rle_block(
             }};
         }
 
+        let mut prev_spans_by_sample = vec![Vec::<RowSpan>::new(); aa_steps];
         for y in y_start..y_end_exclusive {
             let physical_y = y / aa_steps;
+            let sample_idx = y % aa_steps;
 
             if physical_y != current_physical_y {
                 flush_up_to!(physical_y);
@@ -3227,11 +3248,17 @@ pub fn rasterize_layer_rle_block(
                 );
             }
             if active_edges.is_empty() {
+                prev_spans_by_sample[sample_idx].clear();
                 continue;
             }
 
-            let spans = build_row_spans_nonzero_ctx(&active_edges, full_width, false, None);
-            for span in spans {
+            let spans = build_row_spans_nonzero_ctx(
+                &active_edges,
+                full_width,
+                false,
+                Some(&prev_spans_by_sample[sample_idx]),
+            );
+            for span in spans.iter().copied() {
                 // Clamp the fractional span to the window. The cut edge
                 // becomes a full-coverage boundary, so pixel values inside
                 // the window match the full-width raster exactly.
@@ -3286,6 +3313,8 @@ pub fn rasterize_layer_rle_block(
                     max_y = max_y.max(physical_y as i32);
                 }
             }
+
+            prev_spans_by_sample[sample_idx] = spans;
 
             for edge in &mut active_edges {
                 edge.x += edge.dx_dy;
@@ -3376,6 +3405,7 @@ pub fn rasterize_layer_rle_block(
         }};
     }
 
+    let mut prev_spans: Vec<RowSpan> = Vec::new();
     for y in y_start..y_end_exclusive {
         let physical_y = y;
 
@@ -3395,12 +3425,13 @@ pub fn rasterize_layer_rle_block(
             );
         }
         if active_edges.is_empty() {
+            prev_spans.clear();
             continue;
         }
 
-        let spans = build_row_spans_nonzero_ctx(&active_edges, full_width, true, None);
+        let spans = build_row_spans_nonzero_ctx(&active_edges, full_width, true, Some(&prev_spans));
 
-        for span in spans {
+        for span in spans.iter().copied() {
             let s = span.start.max(wstart);
             let e = span.end.min(wend - 1);
             if s > e {
@@ -3415,6 +3446,8 @@ pub fn rasterize_layer_rle_block(
             min_y = min_y.min(physical_y as i32);
             max_y = max_y.max(physical_y as i32);
         }
+
+        prev_spans = spans;
 
         for edge in &mut active_edges {
             edge.x += edge.dx_dy;
@@ -5412,5 +5445,70 @@ mod tests {
         assert_eq!(ssaa_stats.max_x, base_stats.max_x);
         assert_eq!(ssaa_stats.min_y, base_stats.min_y);
         assert_eq!(ssaa_stats.max_y, base_stats.max_y);
+    }
+
+    #[test]
+    fn test_perturbed_intersection_tie_breaker_and_history() {
+        use super::{active_edge_cmp, ActiveEdge};
+        use std::cmp::Ordering;
+
+        let edge_a = ActiveEdge {
+            x: 10.0,
+            dx_dy: 1.0,
+            wind: 1,
+            end_exclusive: 2,
+        };
+        let edge_b = ActiveEdge {
+            x: 10.0,
+            dx_dy: 2.0,
+            wind: -1,
+            end_exclusive: 2,
+        };
+
+        // Descending slope tie-breaker: larger dx_dy (edge_b) sorts before smaller (edge_a).
+        // That means b < a, so active_edge_cmp(a, b) should be Ordering::Greater.
+        assert_eq!(active_edge_cmp(&edge_a, &edge_b), Ordering::Greater);
+        assert_eq!(active_edge_cmp(&edge_b, &edge_a), Ordering::Less);
+
+        let edge_c = ActiveEdge {
+            x: 10.0,
+            dx_dy: 1.0,
+            wind: 1,
+            end_exclusive: 2,
+        };
+        assert_eq!(active_edge_cmp(&edge_a, &edge_c), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_defective_mesh_symmetric_difference_score() {
+        use super::{build_row_spans_nonzero_ctx, ActiveEdge, RowSpan};
+
+        // Simulated defective row edges (missing exit edge for Model 1):
+        // Model 1 was supposed to be 10..20, but the exit is missing.
+        // Model 2 is at 40..50 (healthy).
+        // Active edges:
+        // x = 10, wind = 1
+        // x = 40, wind = 1
+        // x = 50, wind = -1
+        let active_edges = vec![
+            ActiveEdge { x: 10.0, dx_dy: 0.0, wind: 1, end_exclusive: 1 },
+            ActiveEdge { x: 40.0, dx_dy: 0.0, wind: 1, end_exclusive: 1 },
+            ActiveEdge { x: 50.0, dx_dy: 0.0, wind: -1, end_exclusive: 1 },
+        ];
+
+        // Previous row was healthy: Model 1 at 10..20, Model 2 at 40..50.
+        let prev_spans = vec![
+            RowSpan { a: 10.0, b: 20.0, start: 10, end: 20 },
+            RowSpan { a: 40.0, b: 50.0, start: 40, end: 50 },
+        ];
+
+        let spans = build_row_spans_nonzero_ctx(&active_edges, 100, false, Some(&prev_spans));
+
+        // Under our new symmetric difference score, the positive option [40..50] (Score = 10)
+        // should win over the negative option [10..40] (which fills the gap and has Score = -10).
+        // Thus, spans should be [40..50], NOT [10..40].
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start, 40);
+        assert_eq!(spans[0].end, 49);
     }
 }
